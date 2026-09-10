@@ -27,42 +27,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
         private ServiceBusClient _sbClient;
         private ServiceBusProcessor _processor;
-        private TeamsLoadContext _teamsLoadContext;
         private ILogger _logger;
         private ImportAppIndentityOAuthContext _auth;
         private string _thisTenantId = null;
-        private ManualGraphCallClient _graphCallClient;
+        private CallRecordImporter _callRecordImporter;
         private bool _isInitialised = false;
 
         public ServiceBusClient ServiceBusClient => _sbClient;
-        public static CallQueueProcessor _singleton = null;
-        private static readonly SemaphoreSlim _singletonInitLock = new SemaphoreSlim(1, 1);
-        public static async Task<CallQueueProcessor> GetCallQueueProcessor(AppConfig config, string thisTenantId, ManualGraphCallClient graphCallClient)
-        {
-            if (_singleton != null)
-            {
-                return _singleton;
-            }
 
-            await _singletonInitLock.WaitAsync();
-            try
-            {
-                if (_singleton == null)
-                {
-                    var instance = new CallQueueProcessor(config, thisTenantId);
-                    await instance.Init(graphCallClient);
-                    _singleton = instance;
-                }
-            }
-            finally
-            {
-                _singletonInitLock.Release();
-            }
-
-            return _singleton;
-        }
-
-        private CallQueueProcessor(AppConfig config, string thisTenantId)
+        /// <summary>
+        /// Creates a processor for the calls queue. The caller owns the instance and must keep it for
+        /// the lifetime of the process: the Service Bus listener has to survive across import cycles.
+        /// (This replaces a process-wide static singleton - see issue #378.)
+        /// </summary>
+        public CallQueueProcessor(AppConfig config, string thisTenantId)
         {
             // Use seperate telemetry context from rest of the importer
             _logger = new AnalyticsLogger(config.AppInsightsConnectionString, "Office365CallsImporter");
@@ -118,17 +96,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             await _auth.InitClientCredential();
             var graphClient = GraphServiceClientFactory.CreateWithTimeout(_auth.Creds, TimeSpan.FromHours(1));
 
-            _teamsLoadContext = new TeamsLoadContext(graphClient);
+            var teamsLoadContext = new TeamsLoadContext(graphClient);
 
             // Use manual graph call client if provided (for testing), or create a new one if not
-            if (manualGraphCallClient == null)
-            {
-                _graphCallClient = new ManualGraphCallClient(_auth, _logger);
-            }
-            else
-            {
-                _graphCallClient = manualGraphCallClient;
-            }
+            var graphCallClient = manualGraphCallClient ?? new ManualGraphCallClient(_auth, _logger);
+
+            _callRecordImporter = new CallRecordImporter(
+                new GraphCallRecordSourceLoader(graphCallClient, teamsLoadContext, _logger, _thisTenantId),
+                new SqlCallRecordPersistenceManager(_logger),
+                _logger);
+
             _isInitialised = true;
         }
 
@@ -164,6 +141,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
         public static async Task AddChangeMsgToQueue(List<GraphChangeNotification> changes, ILogger logger, ServiceBusSender sbSender)
         {
+            await AddChangeMsgToQueue(changes, logger, new ServiceBusCallNotificationQueueSender(sbSender));
+        }
+
+        /// <summary>
+        /// Queue each notification for processing. Takes the queue as a port so the dispatch can be
+        /// tested without Service Bus. See issue #378.
+        /// </summary>
+        public static async Task AddChangeMsgToQueue(List<GraphChangeNotification> changes, ILogger logger, ICallNotificationQueueSender queue)
+        {
             foreach (var change in changes)
             {
                 string callId = change.ResourceData.Id;
@@ -178,7 +164,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 }
 
                 var json = JsonConvert.SerializeObject(change);
-                await sbSender.SendMessageAsync(new ServiceBusMessage(json));
+                await queue.SendAsync(json);
             }
         }
 
@@ -246,7 +232,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
         async Task<bool> ProcessGraphChange(GraphChangeNotification graphChangeNotification)
         {
-            var call = await LoadAndSaveCallRecordFromChangeNotification(graphChangeNotification);
+            var call = await _callRecordImporter.ImportFromNotification(graphChangeNotification);
 
             if (call != null)
             {
@@ -259,35 +245,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             {
                 return false;
             }
-        }
-
-
-        async Task<CallRecordDTO> LoadAndSaveCallRecordFromChangeNotification(GraphChangeNotification change)
-        {
-            string callId = change?.ResourceData.Id;
-            if (string.IsNullOrEmpty(callId))
-            {
-                _logger.LogInformation("ServiceBus error: couldn't find call ID in JSon. Ignoring event.");
-                return null;
-            }
-
-            CallRecordDTO callResponse = null;
-            using (var db = new AnalyticsEntitiesContext())
-            {
-                callResponse = await CallRecordDTO.LoadFromGraphByID(callId, _graphCallClient, _teamsLoadContext, this._logger, this._thisTenantId);
-                if (callResponse == null)
-                {
-                    _logger.LogWarning($"Could not load call record '{callId}' from Graph. Skipping.");
-                    return null;
-                }
-
-                if (!string.IsNullOrEmpty(callResponse.OrganizerEmail))
-                {
-                    await callResponse.SaveOrReplaceCallRecord(new TeamsAndCallsDBLookupManager(db), _logger);
-                }
-            }
-
-            return callResponse;
         }
 
 

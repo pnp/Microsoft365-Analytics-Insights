@@ -72,6 +72,15 @@ namespace CloudInstallEngine
                 throw new InstallException($"No configuration by name '{key}'");
             }
         }
+
+        /// <summary>
+        /// Reads a setting that a task can work without, returning null when it is absent. Lets a new
+        /// optional setting be added without breaking every caller that does not supply it.
+        /// </summary>
+        internal string GetOptionalConfigValue(string key)
+        {
+            return base.ContainsKey(key) ? base[key] : null;
+        }
         internal string GetNameConfigValue()
         {
             return GetConfigValue(CONFIG_KEY_NAME);

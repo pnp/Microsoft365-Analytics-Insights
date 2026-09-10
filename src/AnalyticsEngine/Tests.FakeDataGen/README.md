@@ -8,12 +8,36 @@ stress runs land in the same shape and can be re-run side-by-side.
 
 ## Usage
 
+For a rounded demo rather than an importer stress test:
+
+```
+Tests.FakeDataGen.exe demo --database ContosoDemo_Example
+Tests.FakeDataGen.exe demo --help
+```
+
+This non-interactive command creates a **new LocalDB-only** target, applies the
+existing schema, and generates current overlapping licence assignments, daily
+workload coverage (including explicit zero rows), Copilot adoption and official
+D28 snapshots, metadata-only prompt/response pairs, SharePoint/web facts, and
+complete-week Power BI profiles. It never reads a configured production connection.
+Exact completed reruns are read-only no-ops; other existing targets are refused.
+`--preview` runs the same generator without SQL. Fix `--as-of` and `--seed` for
+reproducibility. `--help` lists all flags and the deliberately unsupported datasets.
+The operator guide lives in the wiki: [Synthetic demo data](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Synthetic-demo-data).
+
+The same demo is the **first option on the interactive menu**, so it can be run
+without knowing any of the flags - see
+[Full synthetic demo](#full-synthetic-demo-contoso) below.
+
+The older, independent interactive generator/stress-test menu is still available:
+
 ```
 Tests.FakeDataGen.exe "<SQL Connection String>"
 ```
 
 The connection string is optional. Options that need SQL will refuse to run
-without one; stress tests that work in-memory still run.
+without one; stress tests that work in-memory still run. The synthetic demo
+option never uses it - it always creates its own new LocalDB database.
 
 The first time a menu option that needs the database runs in a session, the
 host invokes `App.ControlPanel.Engine.DatabaseUpgrader.CheckDbUpgraded` against
@@ -28,17 +52,20 @@ When launched, an interactive menu is shown:
 
 ```
 DATA GENERATION
-  1. Generate fake Copilot activity
-  2. Generate fake O365 audit activity
-  3. Generate combined profiling data (O365 + Copilot)
+  1. Generate a complete synthetic demo database (Contoso, new LocalDB database)
+  2. Generate fake Copilot activity
+  3. Generate fake O365 audit activity
+  4. Generate combined profiling data (O365 + Copilot)
+  5. Generate fake Copilot prompt history (AI interaction history)
 
 STRESS TESTS
-  4. ActivityAPI import stress test
-  5. ActivityAPI import stress test (DB-backed, COLD+WARM)
-  6. Copilot event import stress test
-  7. Power Platform event import stress test
-  8. Sent email importer stress test
-  9. User activity data stress test (profiling SQL inputs)
+  6. ActivityAPI import stress test
+  7. ActivityAPI import stress test (DB-backed, COLD+WARM)
+  8. Copilot event import stress test
+  9. Copilot Adoption page performance test (read-only, before/after)
+  10. Power Platform event import stress test
+  11. Sent email importer stress test
+  12. User activity data stress test (profiling SQL inputs)
 
   0. Exit
 ```
@@ -50,7 +77,8 @@ Tests.FakeDataGen/
 ├── Program.cs                # menu + dispatcher
 ├── App.config                # EF + Azure binding redirects
 ├── Copilot/                  # realistic Copilot data generators
-│   └── SQL/                  # hand-run scripts (see "Shaping an existing demo database")
+│   └── SQL/                  # refusal-only compatibility stub for the retired shaper
+├── Demo/                     # safe single-command + menu generator, calendar, plan and bounded SQL sink
 ├── Generation/               # shared synthetic activity helpers
 ├── Office365/                # O365 audit activity generator
 ├── Seeding/                  # shared user / license / lookup seed data
@@ -67,9 +95,9 @@ Tests.FakeDataGen/
     └── FakeLoaders/          # fakes only used by stress tests
 ```
 
-`Seeding` is intentionally shared: every data generator and stress test that
-needs prerequisite metadata calls `UserMetadataSeeder` so the same lookup tables,
-departments, license catalogue, etc. are populated everywhere. Users are made as
+`Seeding` is intentionally shared: legacy generators and stress tests call
+`UserMetadataSeeder`; the new `demo` command uses the same `SeedDataCatalogue`
+through its new-target-only bounded sink. Users are made as
 realistic as a live tenant: `SeedDataCatalogue` assigns each user a coherent geo
 locale (country / state / city / office / usage location / postal code all agree,
 across 21 countries incl. non-Latin values), a job title that fits its department,
@@ -77,6 +105,81 @@ a company, a realistic account-enabled state, a UPN on one of several tenant
 domains, and a manager in their own company.
 
 ## Data generation
+
+### Full synthetic demo (Contoso)
+
+Menu option 1 is the interactive front end for the `demo` command. It asks for
+the values the flags carry - preview or a new database name, then optionally
+population size, SKU count, history length, end date, seed, Copilot licence
+percentage, activity mix, weekly profile compilation, SQL batch size and a JSON
+summary path. Every question that shapes the data offers the command line's own
+default, so pressing Enter through the prompts produces exactly the documented
+`demo` data set. The only menu-invented default is the timestamped target name,
+because the command line has no default target.
+
+Before it starts, it prints a summary and the **equivalent command line**, which
+records exactly what was chosen:
+
+```
+Equivalent command line: Tests.FakeDataGen.exe demo --database ContosoDemo_20260901_134530
+  --as-of 2026-09-01 --users 1000 --skus 50 --days 180 --seed 42 --copilot-percent 60
+  --mix 30,35,20,8,7 --batch-size 250
+```
+
+`--as-of` is always emitted explicitly, so the line still describes the same
+window on a later day. To generate another copy from it, give `--database` (and
+`--output`, if one was chosen) new names: a completed target is a read-only
+no-op and an existing summary file is never overwritten. The default target name
+is timestamped because demo targets are never reset.
+
+The menu option only chooses flag values: `DemoCommand` still parses and
+validates them, so the LocalDB-only rule, the `ContosoDemo_` name restriction,
+the refusal of unmarked or changed targets and the read-only no-op on an
+identical rerun apply exactly as they do on the command line. It ignores the
+connection string the tool was started with.
+
+#### Viewing it in the portal
+
+A finished run prints the two settings a web application needs:
+
+```
+  connectionStrings   SPOInsightsEntities = Server=(localdb)\MSSQLLocalDB;Database=ContosoDemo_X;Integrated Security=True
+  appSettings         ImportJobSettings = GraphUsersMetadata=True;GraphUsageReports=True;GraphCopilotUsageReports=True;Copilot=True;CopilotInteractionHistory=True;ActivityLog=True;WebTraffic=True
+```
+
+**The portal decides which workloads it can measure from `ImportJobSettings`, not
+from the rows in the database**, and every one of those flags is opt-in with a
+default of `false`. Without `GraphCopilotUsageReports=True` the Licence
+assignments report renders Copilot as *"Not measured"* for every user even though
+the database is full of Copilot activity: the Copilot audit and interaction
+sources are positive evidence only and never produce activity bands. No
+generated data can change that, so the generator prints the setting instead.
+
+It then runs the Licence assignments report's **own coverage query** against the
+finished database and prints what the portal will be able to measure:
+
+```
+Default reporting period 2026-08-03 to 2026-08-30, licence "Contoso Demo Workplace" (40 users):
+  teams      available        40 measured, 0 unknown
+  ...
+  copilot    available        24 measured, 16 unknown
+```
+
+Copilot unknowns are expected and correct: the official per-user report covers
+Copilot-licensed users only. *Every* user unknown is the symptom to look for.
+
+Two further things are worth knowing when a workload reads as unmeasured:
+
+- The official Copilot report is a **rolling 28-day** snapshot, and nothing in
+  this product imports a `report_period_days = 7` row, so Copilot licence bands
+  are only produced for a **28-day** reporting period. Other periods report
+  `missingCoverage`, which the portal shows as "Not measured". This applies to
+  real tenants too, not just the demo.
+- The demo warms its rolling Copilot counters up over the 28 days *before* the
+  window starts, so the official report rows cover the whole generated window.
+  Before that warm-up existed they began 27 days in, which left short-history
+  demos (`--days 31` to `--days 35`) with no Copilot coverage at all while the
+  M365 workloads still measured fine.
 
 ### Copilot activity
 
@@ -157,44 +260,13 @@ while adding SharePoint, OneDrive, Outlook, and Teams profiling sources.
 
 ### Shaping an existing demo database
 
-`Copilot/SQL/ShapeCopilotAdoptionDemo.sql` does for a database that **already has
-data** what `CopilotAdoptionScenarioGenerator` does while one is being generated:
-it reshapes Copilot activity so every figure on the Copilot Adoption page tells one
-coherent story, with headline numbers you can dial. Use it to prepare a demo or a
-screenshot without regenerating the database.
-
-```
-sqlcmd -S <server> -d <demo database> -E -i ShapeCopilotAdoptionDemo.sql -b
-```
-
-It refuses to run until `@ConfirmDemoDatabase` is set to `1` — it rewrites licence
-assignments and audit-event timestamps, so it must never touch a customer database.
-Seat count, reporting window, band mix and the size of the unlicensed "proven
-demand" cohort are all parameters at the top of the file; everything else
-(departments, population, agents) is read from the target database, so the script
-is portable across demo tenants.
-
-Nothing is deleted. Existing interactions are re-dated into each user's own
-history — or pushed past the 365-day history horizon for the cohorts that must look
-untouched — so no child rows are orphaned, and planted rows are tagged with a
-distinctive `copilot_log_version` so a re-run replaces them rather than stacking a
-second cohort on top. At the defaults it produces 150 licences, 86% adoption, 61%
-habitual, 21 reclaimable licences, 18 unlicensed Copilot Chat users, an agent
-inventory containing all four health verdicts, and six-month trend series that rise
-towards the present.
-
-Targets are expressed in the three signals `CopilotAdoptionScoring` measures —
-distinct active dates, interactions per active date, and distinct `app_host` values
-— so the bands come out of the real scoring code. Keep the persona table in the
-script in step with `CopilotAdoptionOptions` if those weights or thresholds change.
-
-Two things to know when checking the result:
-
-- The KPI cards and the adoption funnel are built from the same
-  `CopilotAdoptionSummary`, so they cannot disagree. Two screenshots that look
-  inconsistent were taken with different values of the **period** drop-down.
-- `CopilotAdoptionAPIController` caches each analysis for 10 minutes, so recycle the
-  site or wait before taking screenshots.
+`Copilot/SQL/ShapeCopilotAdoptionDemo.sql` is now a **refusal-only compatibility
+stub**. Run the `demo` command against a new name instead. The new command reuses
+`CopilotAdoptionPersonas` and the real adoption scorer instead of maintaining a
+second scoring implementation in SQL. It adds the script's useful shaping to the
+wider demo dataset without carrying forward its destructive rewrite path.
+The legacy menu's random-volume generators remain available for their original
+stress-testing purposes; they do not have the new command's target safeguards.
 
 ## Stress tests
 
@@ -210,12 +282,13 @@ behaviour, verbosity) and reports:
 
 | # | Test | Purpose |
 | - | ---- | ------- |
-| 4 | `ActivityAPIStressTest` | Drives the ActivityAPI ingestion pipeline with fake loaders to detect leaks and benchmark the batch save path. |
-| 5 | `ActivityApiDbStressTest` | Drives the real SQL persistence path through repeatable cold and warm scenarios. |
-| 6 | `CopilotStressTest` | Exercises `CopilotAuditEventManager` at scale and validates the accessed-resources SQL path under load. |
-| 7 | `PowerPlatformStressTest` | Exercises `PowerPlatformAuditEventManager` across the four Power Platform workloads (Power Apps, Power Automate, Power BI, Copilot Studio). |
-| 8 | `SentEmailImporterStressTest` | Exercises sent-email persistence and sentiment-scoring boundaries with synthetic messages. |
-| 9 | `UserActivityStressTest` | Bulk-loads the user + license + per-workload activity tables so the profiling SQL in `App.ControlPanel.Engine/SqlExtentions/Profiling-03-CreateSchema.sql` can be exercised against realistic volumes. After the seed, optionally invokes `[profiling].[usp_CompileWeekly]` to roll the daily rows into the weekly profiling tables straight away (the same proc that `WebJob.Office365ActivityImporter/AutomationPS/ProfilingJobs/Weekly.ps1` runs on schedule). |
+| 6 | `ActivityAPIStressTest` | Drives the ActivityAPI ingestion pipeline with fake loaders to detect leaks and benchmark the batch save path. |
+| 7 | `ActivityApiDbStressTest` | Drives the real SQL persistence path through repeatable cold and warm scenarios. |
+| 8 | `CopilotStressTest` | Exercises `CopilotAuditEventManager` at scale and validates the accessed-resources SQL path under load. |
+| 9 | `CopilotAdoptionPerfTest` | Read-only before/after timing of the Copilot Adoption page's analysis against an existing database. |
+| 10 | `PowerPlatformStressTest` | Exercises `PowerPlatformAuditEventManager` across the four Power Platform workloads (Power Apps, Power Automate, Power BI, Copilot Studio). |
+| 11 | `SentEmailImporterStressTest` | Exercises sent-email persistence and sentiment-scoring boundaries with synthetic messages. |
+| 12 | `UserActivityStressTest` | Bulk-loads the user + license + per-workload activity tables so the profiling SQL in `App.ControlPanel.Engine/SqlExtentions/Profiling-03-CreateSchema.sql` can be exercised against realistic volumes. After the seed, optionally invokes `[profiling].[usp_CompileWeekly]` to roll the daily rows into the weekly profiling tables straight away (the same proc that `WebJob.Office365ActivityImporter/AutomationPS/ProfilingJobs/Weekly.ps1` runs on schedule). |
 
 ### Adding a new stress test
 

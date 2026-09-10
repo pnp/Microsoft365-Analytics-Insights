@@ -20,14 +20,37 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
     public class BlobCommitTracker
     {
         private readonly IProcessedBlobStore _store;
+        private readonly IActivityMetadataRecoveryStore _metadataRecoveryStore;
         private readonly ILogger _logger;
         private readonly ConcurrentDictionary<string, int> _remaining = new ConcurrentDictionary<string, int>();
+        private readonly ConcurrentDictionary<string, byte> _metadataRecoveryPending;
+        private readonly bool _markProcessed;
         private long _markedDone;
 
         public BlobCommitTracker(IProcessedBlobStore store, ILogger logger)
+            : this(store, logger, markProcessed: true)
+        {
+        }
+
+        internal BlobCommitTracker(IProcessedBlobStore store, ILogger logger, bool markProcessed)
+            : this(store, logger, store as IActivityMetadataRecoveryStore, null, markProcessed)
+        {
+        }
+
+        internal BlobCommitTracker(IProcessedBlobStore store, ILogger logger,
+            IActivityMetadataRecoveryStore metadataRecoveryStore,
+            IEnumerable<string> metadataRecoveryPending,
+            bool markProcessed)
         {
             _store = store;
+            _metadataRecoveryStore = metadataRecoveryStore;
             _logger = logger;
+            _metadataRecoveryPending = new ConcurrentDictionary<string, byte>(
+                (metadataRecoveryPending ?? Enumerable.Empty<string>())
+                    .Where(id => !string.IsNullOrEmpty(id))
+                    .Distinct()
+                    .Select(id => new KeyValuePair<string, byte>(id, 0)));
+            _markProcessed = markProcessed;
         }
 
         public long MarkedDone => Interlocked.Read(ref _markedDone);
@@ -72,6 +95,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
 
         private async Task MarkAsync(IReadOnlyCollection<string> blobIds)
         {
+            if (!_markProcessed) return;
+
             // Best-effort: a checkpoint write failure must not fail the import. If we fail to record a blob,
             // it is simply re-processed next cycle (its events dedup against audit_events), which is safe.
             try
@@ -82,6 +107,22 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
             catch (Exception ex)
             {
                 _logger?.LogWarning(ex, $"Blob checkpoint: failed to record {blobIds.Count} processed blob(s); they will be re-processed next cycle.");
+                return;
+            }
+
+            var recovered = blobIds.Where(id => _metadataRecoveryPending.TryRemove(id, out _)).ToList();
+            if (recovered.Count == 0 || _metadataRecoveryStore == null) return;
+
+            try
+            {
+                await _metadataRecoveryStore.ClearMetadataRecoveryPendingAsync(recovered);
+            }
+            catch (Exception ex)
+            {
+                // The processed marker is already durable, so a stale pending marker is harmless: the
+                // processed id filters the blob before the recovery marker is consulted next cycle.
+                _logger?.LogWarning(ex,
+                    $"Blob checkpoint: failed to clear {recovered.Count} metadata-recovery marker(s) after recording the blobs as processed; stale markers are harmless.");
             }
         }
     }

@@ -448,13 +448,13 @@ export default function OpportunitiesPanel({
                   </td>
                   <td className={`${table.td} ${table.tdNumeric}`}>
                     {formatCount(row.teamsMessages)}
-                    <Text size={100} block className={styles.muted}>
+                    <Text size={100} block className={table.tdSub}>
                       {formatCount(row.teamsMeetings)} mtgs
                     </Text>
                   </td>
                   <td className={`${table.td} ${table.tdNumeric}`}>
                     {formatCount(row.emailsSent)}
-                    <Text size={100} block className={styles.muted}>
+                    <Text size={100} block className={table.tdSub}>
                       {formatCount(row.emailsRead)} read
                     </Text>
                   </td>

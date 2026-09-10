@@ -1,6 +1,7 @@
 using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
+using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Microsoft.Graph.Models.ODataErrors;
@@ -10,6 +11,7 @@ using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders;
+using WebJob.Office365ActivityImporter.Engine.AgentCosts;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
@@ -30,10 +32,18 @@ namespace WebJob.Office365ActivityImporter
         private ManualGraphCallClient _manualGraphCallClient = null;
         private GraphUserGroupsCache _graphUserGroupsCache = null;
         private readonly ISingleDateStore _activityReportsLastImportedStore;
+        // Per-report completion stamps. Like the store above this MUST be process-lifetime: a fresh instance
+        // per cycle would always look "never completed" and empty the finalized-date skip list every run.
+        private readonly IReportCompletionStore _reportCompletionStore;
         private readonly IImportLastRunStore _graphLastRunStore;
         private readonly ISentEmailMailboxSkipList _sentEmailMailboxSkipList;
 
         public ProgramTasks(AnalyticsLogger logger, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null, IImportLastRunStore graphLastRunStore = null, ISentEmailMailboxSkipList sentEmailMailboxSkipList = null)
+            : this(logger, settings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList, reportCompletionStore: null)
+        {
+        }
+
+        public ProgramTasks(AnalyticsLogger logger, AppConfig settings, ISingleDateStore activityReportsLastImportedStore, IImportLastRunStore graphLastRunStore, ISentEmailMailboxSkipList sentEmailMailboxSkipList, IReportCompletionStore reportCompletionStore)
         {
             _graphAppIndentityOAuthContext = new GraphAppIndentityOAuthContext(logger, settings.ClientID, settings.TenantGUID.ToString(), settings.ClientSecret, settings.KeyVaultUrl, settings.UseClientCertificate);
             _logger = logger;
@@ -41,11 +51,17 @@ namespace WebJob.Office365ActivityImporter
             _activityReportsLastImportedStore = activityReportsLastImportedStore;
             _graphLastRunStore = graphLastRunStore;
             _sentEmailMailboxSkipList = sentEmailMailboxSkipList;
+            _reportCompletionStore = reportCompletionStore;
         }
 
-        internal async Task ProcessCallQueueAndWebhook(Uri webHookUrl)
+        /// <summary>
+        /// Start listening for queued call notifications and make sure the Graph webhook subscription
+        /// is in place. The processor is owned by the caller because it must outlive a single import
+        /// cycle - Program.cs creates it once for the process (see issue #378).
+        /// </summary>
+        internal async Task ProcessCallQueueAndWebhook(Uri webHookUrl, CallQueueProcessor callQueueProcessor)
         {
-            var callQueueProcessor = await CallQueueProcessor.GetCallQueueProcessor(_settings, _settings.TenantGUID.ToString(), null);
+            if (callQueueProcessor is null) throw new ArgumentNullException(nameof(callQueueProcessor));
 
             // Fire and forget calls SB receiver
             _ = callQueueProcessor.BeginProcessCallsQueue();
@@ -65,7 +81,7 @@ namespace WebJob.Office365ActivityImporter
 
             await InitAuth();
 
-            var graphReader = new GraphImporter(_logger, _graphUserGroupsCache, _graphAppIndentityOAuthContext, _graphClient, _settings, _activityReportsLastImportedStore, _graphLastRunStore, _sentEmailMailboxSkipList);
+            var graphReader = new GraphImporter(_logger, _graphUserGroupsCache, _graphAppIndentityOAuthContext, _graphClient, _settings, _activityReportsLastImportedStore, _graphLastRunStore, _sentEmailMailboxSkipList, clock: null, reportCompletionStore: _reportCompletionStore);
 
             try
             {
@@ -106,6 +122,87 @@ namespace WebJob.Office365ActivityImporter
         }
 
         /// <summary>
+        /// Optional agent-cost imports: billed Copilot Studio Copilot Credits, and daily Azure spend from
+        /// Microsoft Cost Management.
+        /// </summary>
+        /// <remarks>
+        /// <para>Does not call <see cref="InitAuth"/>: neither import touches Graph. Each builds its own
+        /// OAuth context for its own audience, and does so <b>inside the lazy factory</b> so a deployment with
+        /// these toggles off never acquires a token for an API it does not use.</para>
+        /// <para>Never throws - <see cref="AgentCostImportPhase"/> already turns failures into a log row and
+        /// an <c>agent_cost_import_log</c> entry, but this is called from the cycle after the Copilot repair
+        /// step, so it must not be able to abort a cycle that has already done useful work.</para>
+        /// </remarks>
+        internal async Task ImportAgentCosts()
+        {
+            if (!_settings.ImportJobSettings.CopilotStudioCredits && !_settings.ImportJobSettings.AzureCostManagement)
+            {
+                // Nothing enabled: stay silent rather than logging two "skipping" lines every cycle for the
+                // majority of deployments that will never turn these on.
+                return;
+            }
+
+            try
+            {
+                var store = new SqlAgentCostStore(DefaultAnalyticsDbContextFactory.Instance, _logger);
+
+                var phase = new AgentCostImportPhase(
+                    _logger,
+                    _settings,
+                    // The same process-lifetime last-run store the Graph sections use. It is a generic
+                    // key/value stamp keyed by cadence key, not Graph-specific, and it must outlive a cycle:
+                    // ProgramTasks is rebuilt every cycle, so a store created here would forget every stamp
+                    // and the daily gate would never fire.
+                    _graphLastRunStore,
+                    creditImporterFactory: () =>
+                    {
+                        var auth = new PowerPlatformAppIndentityOAuthContext(_logger, _settings.ClientID,
+                            _settings.TenantGUID.ToString(), _settings.ClientSecret, _settings.KeyVaultUrl,
+                            _settings.UseClientCertificate);
+
+                        var httpClient = new ConfidentialClientApplicationThrottledHttpClient(auth, false, _logger);
+
+                        return new CopilotStudioCreditImporter(
+                            _logger,
+                            new PowerPlatformLicensingCreditSource(httpClient, _logger),
+                            store,
+                            _settings.CopilotStudioCreditsTrailingWindowDays,
+                            clock: null,
+                            // Links per-user credits to dbo.users on the Entra object id the user import
+                            // already stores in azure_ad_id, falling back to a directory lookup for anyone
+                            // not imported yet. The Graph client is the same one the user import uses, so
+                            // this needs no additional permission.
+                            userResolver: new AgentCostUserResolver(
+                                new SqlAgentCostUserLinkStore(DefaultAnalyticsDbContextFactory.Instance, _logger),
+                                _manualGraphCallClient == null ? null : new GraphEntraUserLookup(_manualGraphCallClient, _logger),
+                                _logger));
+                    },
+                    azureCostImporterFactory: () =>
+                    {
+                        var auth = new AzureManagementAppIndentityOAuthContext(_logger, _settings.ClientID,
+                            _settings.TenantGUID.ToString(), _settings.ClientSecret, _settings.KeyVaultUrl,
+                            _settings.UseClientCertificate);
+
+                        var httpClient = new ConfidentialClientApplicationThrottledHttpClient(auth, false, _logger);
+
+                        return new AzureCostImporter(
+                            _logger,
+                            new AzureCostManagementSource(httpClient, _settings.AzureCostImport, _logger),
+                            store,
+                            _settings.AzureCostImport);
+                    });
+
+                await phase.RunAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.TrackException(ex);
+                _logger.LogError(ex, $"Agent cost import phase failed to run: {ex.Message}. "
+                    + "No other import is affected; it will be retried on the next cycle.");
+            }
+        }
+
+        /// <summary>
         /// Activity API
         /// </summary>
         internal async Task DownloadActivityData()
@@ -121,18 +218,23 @@ namespace WebJob.Office365ActivityImporter
 
                 if (spFilterList.OrgUrlConfigs.Count == 0)
                 {
-                    _logger.LogCritical("FATAL ERROR: No org URLs found in database! " +
-                        "This means everything would be ignored for SharePoint audit data. Add at least one URL to the org_urls table for this to work.");
-
-                    return;
-
+                    if (_settings.ImportJobSettings.ActivityLog)
+                    {
+                        _logger.LogWarning("No org URLs found in database. SharePoint/OneDrive audit events will be treated as out of scope; non-SharePoint Activity API workloads can still import.");
+                    }
+                    else
+                    {
+                        _logger.LogInformation("No org URLs found in database. Continuing because only non-SharePoint Activity API workloads are enabled.");
+                    }
                 }
+                else
+                {
+                    _logger.LogInformation("\nBeginning import. Filtering for SharePoint events below these URLs:");
 
-                _logger.LogInformation("\nBeginning import. Filtering for SharePoint events below these URLs:");
-
-                // Print URLs
-                spFilterList.Print(_logger);
-                Console.WriteLine();
+                    // Print URLs
+                    spFilterList.Print(_logger);
+                    Console.WriteLine();
+                }
 
                 _logger.LogInformation($"Starting activity import for {spFilterList.OrgUrlConfigs.Count} url filters");
 
@@ -143,12 +245,11 @@ namespace WebJob.Office365ActivityImporter
                 // Concurrent-save mode is opt-in and OFF by default (1 = the original strictly-serial save).
                 // Set AUDIT_MAX_CONCURRENT_SAVES > 1 to let batches commit in parallel (sharded staging;
                 // shared-table writes still serialised). Validate in a non-production environment before use.
-                int maxConcurrentSaves = 1;
-                var concurrentSavesEnv = Environment.GetEnvironmentVariable("AUDIT_MAX_CONCURRENT_SAVES");
-                if (!string.IsNullOrWhiteSpace(concurrentSavesEnv) && int.TryParse(concurrentSavesEnv.Trim(), out int parsedConcurrentSaves) && parsedConcurrentSaves > 1)
+                var maxConcurrentSaves = ImportRuntimeOptions.ResolveMaxConcurrentSaves(
+                    Environment.GetEnvironmentVariable(ImportRuntimeOptions.MaxConcurrentSavesEnvVariable));
+                if (maxConcurrentSaves > ImportRuntimeOptions.DefaultMaxConcurrentSaves)
                 {
-                    maxConcurrentSaves = parsedConcurrentSaves;
-                    _logger.LogInformation($"Activity import: concurrent-save mode enabled (AUDIT_MAX_CONCURRENT_SAVES={maxConcurrentSaves}).");
+                    _logger.LogInformation($"Activity import: concurrent-save mode enabled ({ImportRuntimeOptions.MaxConcurrentSavesEnvVariable}={maxConcurrentSaves}).");
                 }
 
                 var importer = new ActivityWebImporter(_settings, _logger, MAX_IMPORTS_PER_BATCH, maxConcurrentSaves);
@@ -157,13 +258,11 @@ namespace WebJob.Office365ActivityImporter
                 // audit_events for every batch, which materialised ~the whole in-window event set each time -
                 // the dominant save cost at scale). Set AUDIT_PERBATCH_DEDUP_CACHE=true to restore the old
                 // per-batch build without a redeploy if the new path ever misbehaves.
-                bool usePerBatchDedupCache = false;
-                var perBatchCacheEnv = Environment.GetEnvironmentVariable("AUDIT_PERBATCH_DEDUP_CACHE");
-                if (!string.IsNullOrWhiteSpace(perBatchCacheEnv) &&
-                    (perBatchCacheEnv.Trim() == "1" || perBatchCacheEnv.Trim().Equals("true", StringComparison.OrdinalIgnoreCase)))
+                var usePerBatchDedupCache = ImportRuntimeOptions.ResolveUsePerBatchDedupCache(
+                    Environment.GetEnvironmentVariable(ImportRuntimeOptions.PerBatchDedupCacheEnvVariable));
+                if (usePerBatchDedupCache)
                 {
-                    usePerBatchDedupCache = true;
-                    _logger.LogWarning("Activity import: per-batch dedup cache ENABLED (AUDIT_PERBATCH_DEDUP_CACHE) - reverts the per-cycle cache optimisation; expect slower saves on large tables.");
+                    _logger.LogWarning($"Activity import: per-batch dedup cache ENABLED ({ImportRuntimeOptions.PerBatchDedupCacheEnvVariable}) - reverts the per-cycle cache optimisation; expect slower saves on large tables.");
                 }
 
                 var sqlAdaptor = new ActivityReportSqlPersistenceManager(spFilterList, _graphUserGroupsCache, _logger, _settings, maxConcurrentSaves, usePerBatchDedupCache);

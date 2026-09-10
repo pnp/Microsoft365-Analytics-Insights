@@ -400,9 +400,8 @@ namespace Tests.FakeDataGen.StressTests.LoadTest
                 var telemetry = AnalyticsLogger.ConsoleOnlyTracer();
                 var appConfig = FakeAppConfigFactory.Create();
                 var loader = new FakeSentEmailSourceLoader(messagesPerUser, 3, 500, 70);
-                Func<AnalyticsEntitiesContext> dbFactory = () => new AnalyticsEntitiesContext(_connectionString, true, true);
                 var importer = new SentEmailImporter(telemetry, appConfig, loader,
-                    NullSentEmailSentimentScorer.Instance, dbFactory);
+                    NullSentEmailSentimentScorer.Instance, new ConnectionStringAnalyticsDbContextFactory(_connectionString));
 
                 GcReset();
                 var sampler = new CpuSampler(100, _importerProc, _sqlProc);

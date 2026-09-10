@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using DataUtils;
 using DataUtils.Sql.Inserts;
 using Microsoft.Extensions.Logging;
@@ -18,14 +18,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
     public class PowerPlatformAuditEventManager : IDisposable
     {
         private readonly ILogger _logger;
-        private readonly ProjectResourceReader _rr;
-
-        private readonly InsertBatch<PowerAppLogTempEntity> _appInserts;
-        private readonly InsertBatch<PowerAppShareLogTempEntity> _appShareInserts;
-        private readonly InsertBatch<PowerAutomateFlowLogTempEntity> _flowInserts;
-        private readonly InsertBatch<PowerAutomateFlowShareLogTempEntity> _flowShareInserts;
-        private readonly InsertBatch<PowerBILogTempEntity> _powerBiInserts;
-        private readonly InsertBatch<CopilotStudioLogTempEntity> _copilotStudioInserts;
+        private readonly IPowerPlatformStagingWriter _stagingWriter;
 
         private int _totalAppCount;
         private int _totalAppShareCount;
@@ -34,16 +27,23 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
         private int _totalPowerBiCount;
         private int _totalCopilotStudioCount;
 
+        /// <summary>
+        /// Production entry point: builds the SQL staging writer from a connection string. Kept as a thin
+        /// overload so SaveSession.Init() and every other existing call site is unchanged. See issue #367.
+        /// </summary>
         public PowerPlatformAuditEventManager(string connectionString, ILogger logger)
+            : this(new SqlPowerPlatformStagingWriter(connectionString, logger), logger)
         {
-            _rr = new ProjectResourceReader(System.Reflection.Assembly.GetExecutingAssembly());
+        }
+
+        /// <summary>
+        /// Testable entry point: the adaptation rules run against any <see cref="IPowerPlatformStagingWriter"/>,
+        /// so client-type normalisation, connector joining and share expansion can be asserted with no database.
+        /// </summary>
+        internal PowerPlatformAuditEventManager(IPowerPlatformStagingWriter stagingWriter, ILogger logger)
+        {
+            _stagingWriter = stagingWriter ?? throw new ArgumentNullException(nameof(stagingWriter));
             _logger = logger;
-            _appInserts = new InsertBatch<PowerAppLogTempEntity>(connectionString, logger);
-            _appShareInserts = new InsertBatch<PowerAppShareLogTempEntity>(connectionString, logger);
-            _flowInserts = new InsertBatch<PowerAutomateFlowLogTempEntity>(connectionString, logger);
-            _flowShareInserts = new InsertBatch<PowerAutomateFlowShareLogTempEntity>(connectionString, logger);
-            _powerBiInserts = new InsertBatch<PowerBILogTempEntity>(connectionString, logger);
-            _copilotStudioInserts = new InsertBatch<CopilotStudioLogTempEntity>(connectionString, logger);
         }
 
         public int StagedAppCount => _totalAppCount;
@@ -61,7 +61,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
                 return Task.CompletedTask;
             }
 
-            _appInserts.Rows.Add(new PowerAppLogTempEntity
+            _stagingWriter.StagePowerApp(new PowerAppLogTempEntity
             {
                 EventId = baseOfficeEvent.Id,
                 AppId = auditRecord.AppName,
@@ -81,7 +81,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
                 foreach (var p in auditRecord.Permissions)
                 {
                     if (string.IsNullOrEmpty(p?.PrincipalName)) continue;
-                    _appShareInserts.Rows.Add(new PowerAppShareLogTempEntity
+                    _stagingWriter.StagePowerAppShare(new PowerAppShareLogTempEntity
                     {
                         EventId = baseOfficeEvent.Id,
                         AppId = auditRecord.AppName,
@@ -111,7 +111,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
                 return Task.CompletedTask;
             }
 
-            _flowInserts.Rows.Add(new PowerAutomateFlowLogTempEntity
+            _stagingWriter.StageFlow(new PowerAutomateFlowLogTempEntity
             {
                 EventId = baseOfficeEvent.Id,
                 FlowId = auditRecord.FlowId,
@@ -129,7 +129,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
                 foreach (var p in auditRecord.Permissions)
                 {
                     if (string.IsNullOrEmpty(p?.PrincipalName)) continue;
-                    _flowShareInserts.Rows.Add(new PowerAutomateFlowShareLogTempEntity
+                    _stagingWriter.StageFlowShare(new PowerAutomateFlowShareLogTempEntity
                     {
                         EventId = baseOfficeEvent.Id,
                         FlowId = auditRecord.FlowId,
@@ -161,7 +161,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
                 return Task.CompletedTask;
             }
 
-            _powerBiInserts.Rows.Add(new PowerBILogTempEntity
+            _stagingWriter.StagePowerBi(new PowerBILogTempEntity
             {
                 EventId = baseOfficeEvent.Id,
                 WorkspaceId = auditRecord.WorkspaceId,
@@ -192,7 +192,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
                 return Task.CompletedTask;
             }
 
-            _copilotStudioInserts.Rows.Add(new CopilotStudioLogTempEntity
+            _stagingWriter.StageCopilotStudio(new CopilotStudioLogTempEntity
             {
                 EventId = baseOfficeEvent.Id,
                 BotId = auditRecord.BotId,
@@ -237,31 +237,15 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform
                 $"{_totalFlowCount} flow events, {_totalFlowShareCount} flow shares, {_totalPowerBiCount} Power BI events, " +
                 $"{_totalCopilotStudioCount} Copilot Studio events.");
 
-            await _appInserts.SaveToStagingTable(GetSql(ActivityImportConstants.STAGING_TABLE_POWER_APP, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform.SQL.insert_power_app_events_from_staging_table.sql"));
-            await _appShareInserts.SaveToStagingTable(GetSql(ActivityImportConstants.STAGING_TABLE_POWER_APP_SHARE, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform.SQL.insert_power_app_share_events_from_staging_table.sql"));
-            await _flowInserts.SaveToStagingTable(GetSql(ActivityImportConstants.STAGING_TABLE_POWER_AUTOMATE, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform.SQL.insert_power_automate_events_from_staging_table.sql"));
-            await _flowShareInserts.SaveToStagingTable(GetSql(ActivityImportConstants.STAGING_TABLE_POWER_AUTOMATE_SHARE, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform.SQL.insert_power_automate_share_events_from_staging_table.sql"));
-            await _powerBiInserts.SaveToStagingTable(GetSql(ActivityImportConstants.STAGING_TABLE_POWER_BI, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform.SQL.insert_power_bi_events_from_staging_table.sql"));
-            await _copilotStudioInserts.SaveToStagingTable(GetSql(ActivityImportConstants.STAGING_TABLE_COPILOT_STUDIO, "WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform.SQL.insert_copilot_studio_events_from_staging_table.sql"));
+            // The staging tables and merge scripts now live in the writer (see #367).
+            await _stagingWriter.CommitAllChanges();
 
-            _appInserts.Rows.Clear();
-            _appShareInserts.Rows.Clear();
-            _flowInserts.Rows.Clear();
-            _flowShareInserts.Rows.Clear();
-            _powerBiInserts.Rows.Clear();
-            _copilotStudioInserts.Rows.Clear();
             _totalAppCount = 0;
             _totalAppShareCount = 0;
             _totalFlowCount = 0;
             _totalFlowShareCount = 0;
             _totalPowerBiCount = 0;
             _totalCopilotStudioCount = 0;
-        }
-
-        private string GetSql(string tempTableName, string embeddedScriptName)
-        {
-            return _rr.ReadResourceString(embeddedScriptName)
-                .Replace(ActivityImportConstants.STAGING_TABLE_VARNAME, tempTableName);
         }
 
         public void Dispose()

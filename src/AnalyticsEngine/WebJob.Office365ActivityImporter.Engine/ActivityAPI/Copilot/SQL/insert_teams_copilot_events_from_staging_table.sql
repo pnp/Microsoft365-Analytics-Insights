@@ -20,3 +20,8 @@ insert into copilot_event_meetings (copilot_chat_id, meeting_id)
 		and online_meetings.name = imports.meeting_name
 		and online_meetings.created = CAST(imports.meeting_created_utc AS datetime)		
 	left join copilot_agents on copilot_agents.[agent_id] = imports.[agent_id]
+	where not exists (
+		select 1
+		from copilot_event_meetings existing
+		where existing.copilot_chat_id = imports.event_id
+	)

@@ -53,7 +53,7 @@ namespace Tests.UnitTests
             var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
 
             // Assert
-            // 3 messages ◊ 2 credits = 6 credits
+            // 3 messages ÔøΩ 2 credits = 6 credits
             Assert.AreEqual(6, cost.TotalCredits);
             Assert.AreEqual(3, cost.GenerativeAnswers);
             Assert.AreEqual(0, cost.TenantGraphGroundedAnswers);
@@ -82,13 +82,13 @@ namespace Tests.UnitTests
             var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
 
             // Assert
-            // 3 messages ◊ (2 credits generative + 10 credits tenant graph) = 36 credits
+            // 3 messages ÔøΩ (2 credits generative + 10 credits tenant graph) = 36 credits
             Assert.AreEqual(36, cost.TotalCredits);
             Assert.AreEqual(3, cost.GenerativeAnswers);
             Assert.AreEqual(3, cost.TenantGraphGroundedAnswers);
             Assert.AreEqual(0, cost.DeepReasoningActions);
-            Assert.AreEqual(6, cost.CreditBreakdown["Generative Answers"]); // 3 ◊ 2
-            Assert.AreEqual(30, cost.CreditBreakdown["Tenant Graph Grounding"]); // 3 ◊ 10
+            Assert.AreEqual(6, cost.CreditBreakdown["Generative Answers"]); // 3 ÔøΩ 2
+            Assert.AreEqual(30, cost.CreditBreakdown["Tenant Graph Grounding"]); // 3 ÔøΩ 10
         }
 
         [TestMethod]
@@ -132,8 +132,8 @@ namespace Tests.UnitTests
             var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
 
             // Assert
-            // 3 messages ◊ 2 credits (generative) = 6 credits
-            // 3 messages ◊ 10 credits (tenant graph) = 30 credits
+            // 3 messages ÔøΩ 2 credits (generative) = 6 credits
+            // 3 messages ÔøΩ 10 credits (tenant graph) = 30 credits
             // 1 deep reasoning agent action = 5 credits
             // Total = 41 credits
             Assert.AreEqual(41, cost.TotalCredits);
@@ -166,7 +166,7 @@ namespace Tests.UnitTests
             var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
 
             // Assert
-            // 2 messages ◊ 2 credits (generative) = 4 credits
+            // 2 messages ÔøΩ 2 credits (generative) = 4 credits
             // 1 deep reasoning agent action = 5 credits
             // Total = 9 credits
             Assert.AreEqual(9, cost.TotalCredits);
@@ -194,7 +194,7 @@ namespace Tests.UnitTests
             var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
 
             // Assert
-            // 1 message ◊ (2 + 10) = 12 credits
+            // 1 message ÔøΩ (2 + 10) = 12 credits
             Assert.AreEqual(12, cost.TotalCredits);
             Assert.AreEqual(1, cost.TenantGraphGroundedAnswers);
         }
@@ -240,10 +240,310 @@ namespace Tests.UnitTests
             var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
 
             // Assert
-            // Still just 1 message ◊ (2 + 10) = 12 credits (not multiplied by resource count)
+            // Still just 1 message ÔøΩ (2 + 10) = 12 credits (not multiplied by resource count)
             Assert.AreEqual(12, cost.TotalCredits);
             Assert.AreEqual(4, cost.ResourceTypeBreakdown.Values.Sum()); // 4 resources for reference
         }
+
+        #region Tenant graph grounding - issue #469
+
+        [TestMethod]
+        public void Copilot_CostEstimation_CitationWithNoOtherEvidence_IsStillTenantGrounded()
+        {
+            // The reported defect. CITATION is one of the commonest values Microsoft puts in
+            // AccessedResources[].Type, and it was absent from the old allowlist, so a conversation
+            // grounded on a cited document fell through to "likely web search only" and was estimated
+            // at 2 credits per response instead of 12.
+            var json = @"{
+                'Messages': [
+                    { 'Id': '1', 'isPrompt': true },
+                    { 'Id': '2', 'isPrompt': false }
+                ],
+                'AccessedResources': [
+                    { 'Type': 'CITATION', 'Name': 'Quarterly review' }
+                ]
+            }";
+
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+
+            Assert.AreEqual(1, cost.TenantGraphGroundedAnswers,
+                "A citation with nothing to say it came from outside the tenant must not be waved through.");
+            Assert.AreEqual(12, cost.TotalCredits);
+
+            // And the estimate says out loud that it rests on an assumption rather than on evidence.
+            Assert.AreEqual("UnclassifiedResource", cost.TenantGraphGroundingBasis);
+            Assert.AreEqual(1, cost.UnclassifiedResources);
+        }
+
+        [TestMethod]
+        public void Copilot_CostEstimation_CitationOnATenantUrl_IsGroundedOnEvidenceNotAssumption()
+        {
+            // The same value, but this time the record proves where the resource lives. The credits are
+            // identical; what changes is that the estimate is now evidence-based, which is the whole
+            // reason the basis is recorded.
+            var json = @"{
+                'Messages': [
+                    { 'Id': '1', 'isPrompt': false }
+                ],
+                'AccessedResources': [
+                    {
+                        'Type': 'CITATION',
+                        'SiteUrl': 'https://contoso.sharepoint.com/sites/sales/Shared Documents/ŒöŒ±ŒªŒ∑ŒºŒ≠œÅŒ± Œ∫œåœÉŒºŒµ.pdf'
+                    }
+                ]
+            }";
+
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+
+            Assert.AreEqual(1, cost.TenantGraphGroundedAnswers);
+            Assert.AreEqual(12, cost.TotalCredits);
+            Assert.AreEqual("TenantResource", cost.TenantGraphGroundingBasis);
+            Assert.AreEqual(0, cost.UnclassifiedResources);
+        }
+
+        [TestMethod]
+        public void Copilot_CostEstimation_CitationWithAListItemId_IsGroundedOnEvidence()
+        {
+            // Microsoft documents listItemUniqueId as the unique identifier for a SharePoint item, so
+            // a real one is positive evidence even when the record carries no SiteUrl at all.
+            var json = @"{
+                'Messages': [
+                    { 'Id': '1', 'isPrompt': false }
+                ],
+                'AccessedResources': [
+                    { 'Type': 'CITATION', 'listItemUniqueId': '11111111-2222-3333-4444-555555555555' }
+                ]
+            }";
+
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+
+            Assert.AreEqual("TenantResource", cost.TenantGraphGroundingBasis);
+            Assert.AreEqual(0, cost.UnclassifiedResources);
+        }
+
+        [TestMethod]
+        public void Copilot_CostEstimation_AllZeroIdentifiersAreNotEvidence()
+        {
+            // The payload uses an all-zero GUID as a placeholder where a resource has no such
+            // identifier. Accepting it would make the evidence check true for essentially every
+            // resource, which would be a different way of getting the same answer wrong.
+            var json = @"{
+                'Messages': [
+                    { 'Id': '1', 'isPrompt': false }
+                ],
+                'AccessedResources': [
+                    {
+                        'Type': 'CITATION',
+                        'listItemUniqueId': '00000000-0000-0000-0000-000000000000',
+                        'SensitivityLabelId': '00000000-0000-0000-0000-000000000000'
+                    }
+                ]
+            }";
+
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+
+            Assert.AreEqual("UnclassifiedResource", cost.TenantGraphGroundingBasis,
+                "A placeholder identifier is not evidence that the resource belongs to the tenant.");
+            Assert.AreEqual(1, cost.UnclassifiedResources);
+        }
+
+        [TestMethod]
+        public void Copilot_CostEstimation_UnknownFutureType_DoesNotMeanWebSearchOnly()
+        {
+            // AccessedResources[].Type is an open string with no published enumeration, so Microsoft
+            // can add a value at any time. The estimate must not quietly pick the cheaper answer for
+            // one - that is the failure mode that hid #469 for so long.
+            var json = @"{
+                'Messages': [
+                    { 'Id': '1', 'isPrompt': false },
+                    { 'Id': '2', 'isPrompt': false }
+                ],
+                'AccessedResources': [
+                    { 'Type': 'SomeTypeMicrosoftAddedLater' }
+                ]
+            }";
+
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+
+            Assert.AreEqual(2, cost.TenantGraphGroundedAnswers);
+            Assert.AreEqual(24, cost.TotalCredits);
+            Assert.AreNotEqual("ExternalOnly", cost.TenantGraphGroundingBasis,
+                "An unrecognised type is not evidence of web-only grounding.");
+            Assert.AreEqual(1, cost.UnclassifiedResources);
+        }
+
+        [TestMethod]
+        public void Copilot_CostEstimation_WebSearchQueryOnly_IsTheOnlyWebOnlyCase()
+        {
+            // The one case the old comment claimed for everything it did not recognise: every resource
+            // is positively identified as grounding from outside the tenant.
+            var json = @"{
+                'Messages': [
+                    { 'Id': '1', 'isPrompt': false }
+                ],
+                'AccessedResources': [
+                    { 'Type': 'WebSearchQuery' },
+                    { 'Type': 'WebSearchQuery' }
+                ],
+                'AISystemPlugin': [{ 'Id': 'BingWebSearch', 'Name': 'BuiltIn' }]
+            }";
+
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+
+            Assert.AreEqual(0, cost.TenantGraphGroundedAnswers);
+            Assert.AreEqual(2, cost.TotalCredits);
+            Assert.AreEqual("ExternalOnly", cost.TenantGraphGroundingBasis);
+            Assert.AreEqual(0, cost.UnclassifiedResources);
+        }
+
+        [TestMethod]
+        public void Copilot_CostEstimation_OneTenantResourceAmongWebResults_IsGrounded()
+        {
+            // Microsoft's own schema example shows a web-search plugin alongside an accessed Microsoft
+            // 365 document, so web grounding never rules tenant grounding out.
+            var json = @"{
+                'Messages': [
+                    { 'Id': '1', 'isPrompt': false }
+                ],
+                'AccessedResources': [
+                    { 'Type': 'WebSearchQuery' },
+                    { 'Type': 'docx', 'SiteUrl': 'https://contoso.sharepoint.com/sites/sales/doc.docx' }
+                ],
+                'AISystemPlugin': [{ 'Id': 'BingWebSearch', 'Name': 'BuiltIn' }]
+            }";
+
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+
+            Assert.AreEqual(1, cost.TenantGraphGroundedAnswers);
+            Assert.AreEqual("TenantResource", cost.TenantGraphGroundingBasis);
+        }
+
+        [TestMethod]
+        public void Copilot_CostEstimation_APlainWebPageIsNotTenantGrounding()
+        {
+            // The counterweight to charging the unknown case: a resource whose SiteUrl resolves to a
+            // host that is not the tenant's is positively OUTSIDE the tenant, and charging it would
+            // swap one systematic error for the opposite one.
+            var json = @"{
+                'Messages': [
+                    { 'Id': '1', 'isPrompt': true },
+                    { 'Id': '2', 'isPrompt': false }
+                ],
+                'AccessedResources': [
+                    { 'Type': 'WebPage', 'SiteUrl': 'https://www.example.com/an/article' }
+                ]
+            }";
+
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+
+            Assert.AreEqual(0, cost.TenantGraphGroundedAnswers);
+            Assert.AreEqual(2, cost.TotalCredits);
+            Assert.AreEqual("ExternalOnly", cost.TenantGraphGroundingBasis);
+            Assert.AreEqual(0, cost.UnclassifiedResources);
+        }
+
+        [TestMethod]
+        public void Copilot_CostEstimation_TheSameTypeWithNoUrlStaysUnclassified()
+        {
+            // Same unrecognised type as the test above, minus the one field that placed it. Knowing
+            // where a resource lives and knowing nothing about it must not produce the same answer -
+            // that conflation is what #469 is.
+            var json = @"{
+                'Messages': [
+                    { 'Id': '1', 'isPrompt': true },
+                    { 'Id': '2', 'isPrompt': false }
+                ],
+                'AccessedResources': [
+                    { 'Type': 'WebPage' }
+                ]
+            }";
+
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+
+            Assert.AreEqual("UnclassifiedResource", cost.TenantGraphGroundingBasis);
+            Assert.AreEqual(1, cost.UnclassifiedResources);
+            Assert.AreEqual(1, cost.TenantGraphGroundedAnswers);
+        }
+
+        [TestMethod]
+        public void Copilot_CostEstimation_NoAccessedResources_IsNotCharged()
+        {
+            var json = @"{
+                'Messages': [
+                    { 'Id': '1', 'isPrompt': false }
+                ],
+                'AccessedResources': []
+            }";
+
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+
+            Assert.AreEqual(0, cost.TenantGraphGroundedAnswers);
+            Assert.AreEqual("NoResources", cost.TenantGraphGroundingBasis);
+        }
+
+        [TestMethod]
+        public void Copilot_CostEstimation_SovereignCloudSharePointIsRecognisedAsTenantEvidence()
+        {
+            // The second, independent gap in #469. The old check matched the substring "sharepoint.com"
+            // only, so every SharePoint reference in a GCC High, DoD or 21Vianet tenant missed. The
+            // basis is what proves the fix: an unrecognised host would also be charged now, so
+            // asserting the credits alone would pass either way.
+            var urls = new[]
+            {
+                "https://contoso.sharepoint.us/sites/ops/doc.docx",
+                "https://contoso.sharepoint-mil.us/sites/ops/doc.docx",
+                "https://contoso.dps.mil/sites/ops/doc.docx",
+                "https://contoso.sharepoint.cn/sites/ops/doc.docx",
+            };
+
+            foreach (var url in urls)
+            {
+                var json = @"{
+                    'Messages': [ { 'Id': '1', 'isPrompt': false } ],
+                    'AccessedResources': [ { 'Type': 'CITATION', 'SiteUrl': '" + url + @"' } ]
+                }";
+
+                var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+
+                Assert.AreEqual("TenantResource", cost.TenantGraphGroundingBasis, url);
+                Assert.AreEqual(12, cost.TotalCredits, url);
+            }
+        }
+
+        [TestMethod]
+        public void Copilot_CostEstimation_LookalikeHostIsNotTenantEvidence()
+        {
+            // The old check was a substring test over the whole URL, so this host passed it.
+            var json = @"{
+                'Messages': [ { 'Id': '1', 'isPrompt': false } ],
+                'AccessedResources': [
+                    { 'Type': 'CITATION', 'SiteUrl': 'https://sharepoint.com.example.invalid/pretend/doc.docx' }
+                ]
+            }";
+
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: true);
+
+            Assert.AreNotEqual("TenantResource", cost.TenantGraphGroundingBasis,
+                "A host that merely contains a Microsoft domain is not evidence of tenant content.");
+        }
+
+        [TestMethod]
+        public void Copilot_CostEstimation_NonCustomAgent_MakesNoGroundingDecision()
+        {
+            // Standard Microsoft 365 Copilot is not billed in credits, so no grounding decision is
+            // made at all - which is a different statement from "we looked and found nothing".
+            var json = @"{
+                'Messages': [ { 'Id': '1', 'isPrompt': false } ],
+                'AccessedResources': [ { 'Type': 'CITATION' } ]
+            }";
+
+            var cost = CopilotCreditEstimation.Analyze(json, isCustomAgent: false);
+
+            Assert.AreEqual(0, cost.TotalCredits);
+            Assert.AreEqual("NotAssessed", cost.TenantGraphGroundingBasis);
+        }
+
+        #endregion
 
         [TestMethod]
         public void Copilot_CostEstimation_NullOrEmptyInput_ReturnsZero()
@@ -321,7 +621,14 @@ namespace Tests.UnitTests
             Assert.AreEqual(2, cost.ResourceTypeBreakdown["docx"]);
             Assert.AreEqual(1, cost.ResourceTypeBreakdown["xlsx"]);
             Assert.AreEqual(1, cost.ResourceTypeBreakdown["pptx"]);
-            Assert.AreEqual(1, cost.ResourceTypeBreakdown["WebPage"]); // Empty type defaults to WebPage
+
+            // A resource with no type is counted as unknown, NOT as a web page. Microsoft's Type field
+            // is not a content taxonomy, so its absence says nothing about where the resource came
+            // from - and labelling it "WebPage" is the same category error as #468/#469, in the
+            // diagnostic breakdown instead of in the billing.
+            Assert.AreEqual(1, cost.ResourceTypeBreakdown["(unknown)"]);
+            Assert.IsFalse(cost.ResourceTypeBreakdown.ContainsKey("WebPage"),
+                "A missing resource type must not be reported as a web page.");
         }
 
         [TestMethod]
@@ -1076,7 +1383,7 @@ namespace Tests.UnitTests
 
                 // Assert - Verify cost calculation
                 var cost = CopilotCreditEstimation.Analyze(auditLogContent.ParsedAuditEvent, isCustomAgent: true);
-                // 2 messages ◊ (2 generative + 10 tenant graph) + 5 deep reasoning = 29 credits
+                // 2 messages ÔøΩ (2 generative + 10 tenant graph) + 5 deep reasoning = 29 credits
                 Assert.AreEqual(29, cost.TotalCredits);
                 Assert.AreEqual(1, cost.DeepReasoningActions);
                 Assert.IsTrue(cost.ModelsUsed.Contains("DEEP_LEO"));

@@ -1,7 +1,10 @@
 ﻿using Common.Entities.Config;
 using DataUtils;
 using System;
+using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Web.Http.ExceptionHandling;
+using Web.AnalyticsWeb.Models.CopilotAdoption;
 
 namespace Web.AnalyticsWeb
 {
@@ -21,14 +24,15 @@ namespace Web.AnalyticsWeb
     /// </summary>
     public static class WebExceptionTelemetry
     {
-        /// <summary>
-        /// Marker written into <see cref="Exception.Data"/> once an exception has been reported.
-        /// </summary>
-        private const string ReportedKey = "AnalyticsWeb.TelemetryReported";
+        private const int Unreported = 0;
+        private const int Reporting = 1;
+        private const int Reported = 2;
+        private static readonly ConditionalWeakTable<Exception, StrongBox<int>> ReportStates =
+            new ConditionalWeakTable<Exception, StrongBox<int>>();
 
         /// <summary>
-        /// Records that this exception has already been sent to Application Insights, so the Web API
-        /// exception logger does not report it a second time.
+        /// Records that this exception has already been sent to Application Insights, so another
+        /// telemetry path does not report it a second time.
         /// </summary>
         /// <remarks>
         /// The Copilot adoption analysis is SHARED: one background run can have many HTTP requests
@@ -43,23 +47,63 @@ namespace Web.AnalyticsWeb
 
             try
             {
-                ex.Data[ReportedKey] = true;
+                Interlocked.Exchange(ref ReportState(ex).Value, Reported);
             }
             catch (Exception)
             {
-                // Some exception types expose a fixed IDictionary. Not worth failing over.
+                // Telemetry bookkeeping must not make the original failure worse.
             }
         }
 
-        private static bool AlreadyReported(Exception ex)
+        internal static bool TryClaim(Exception ex)
+        {
+            if (ex == null) return false;
+
+            try
+            {
+                if (AnyClaimedOrReported(ex)) return false;
+                return Interlocked.CompareExchange(
+                           ref ReportState(ex).Value,
+                           Reporting,
+                           Unreported)
+                       == Unreported;
+            }
+            catch (Exception)
+            {
+                // If the dedup marker itself fails, prefer a possible duplicate over silent loss.
+                return true;
+            }
+        }
+
+        internal static void ReleaseClaim(Exception ex)
+        {
+            if (ex == null) return;
+
+            try
+            {
+                Interlocked.CompareExchange(
+                    ref ReportState(ex).Value,
+                    Unreported,
+                    Reporting);
+            }
+            catch (Exception)
+            {
+                // Best effort only.
+            }
+        }
+
+        private static bool AnyClaimedOrReported(Exception ex)
         {
             for (var current = ex; current != null; current = current.InnerException)
             {
-                if (current.Data != null && current.Data.Contains(ReportedKey)) return true;
+                if (Volatile.Read(ref ReportState(current).Value) != Unreported) return true;
             }
 
             return false;
         }
+
+        private static StrongBox<int> ReportState(Exception ex) =>
+            ReportStates.GetValue(ex, _ => new StrongBox<int>(Unreported));
 
         /// <summary>
         /// Reports an unhandled exception. Never throws: telemetry must not turn one failure into two,
@@ -72,23 +116,43 @@ namespace Web.AnalyticsWeb
         /// </param>
         public static void Report(Exception ex, string context)
         {
-            if (ex == null || AlreadyReported(ex)) return;
+            Report(ex, context, ctx =>
+            {
+                var config = new AppConfig();
+                return new AnalyticsLogger(config.AppInsightsConnectionString, ctx);
+            });
+        }
+
+        internal static void Report(
+            Exception ex,
+            string context,
+            Func<string, AnalyticsLogger> loggerFactory)
+        {
+            if (!TryClaim(ex)) return;
 
             try
             {
-                var config = new AppConfig();
-                var logger = new AnalyticsLogger(config.AppInsightsConnectionString, context);
+                var logger = loggerFactory(context);
+                CopilotAdoptionExceptionCorrelation.TryGetRunId(ex, out var runId);
+                var properties = string.IsNullOrEmpty(runId)
+                    ? null
+                    : new System.Collections.Generic.Dictionary<string, string>
+                    {
+                        { "RunId", runId },
+                    };
 
-                logger.TrackException(ex);
+                logger.TrackException(ex, properties, runId);
 
                 // The exception telemetry carries the type and stack, but a searchable line of text is
                 // what an operator actually greps for when a customer reports "it just returns a 500".
-                logger.LogError($"Unhandled web request error in {context}: {ex.GetBaseException().Message}");
+                var correlation = string.IsNullOrEmpty(runId) ? string.Empty : $" RunId {runId}.";
+                logger.LogError($"Unhandled web request error in {context}.{correlation} {ex.GetBaseException().Message}");
 
                 MarkReported(ex);
             }
             catch (Exception)
             {
+                ReleaseClaim(ex);
                 // Deliberately swallowed - see above.
             }
         }

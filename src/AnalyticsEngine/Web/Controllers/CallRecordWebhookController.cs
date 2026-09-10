@@ -38,13 +38,10 @@ namespace Web.AnalyticsWeb.Controllers
                 int invalidChangeMsgs = 0;
 
                 // Verify each msg is legit - compare ClientState to app secret
-                foreach (var change in changeMsg.Notifications)
-                {
-                    if (change.ClientState == config.ClientSecret)
-                        changes.Add(change);
-                    else invalidChangeMsgs++;
+                var selection = CallNotificationRules.SelectValidNotifications(changeMsg.Notifications, config.ClientSecret);
+                changes = selection.Valid;
+                invalidChangeMsgs = selection.InvalidCount;
 
-                }
                 logger.LogInformation($"{nameof(CallRecordWebhookController)} invoked. {changes.Count} valid changes; {invalidChangeMsgs} invalid changes.");
 
                 // Service Bus is required to dispatch call notifications. If it's not configured, the calls feature is disabled.

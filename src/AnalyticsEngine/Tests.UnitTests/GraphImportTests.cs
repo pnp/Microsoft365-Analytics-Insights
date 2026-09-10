@@ -195,9 +195,9 @@ namespace Tests.UnitTests
                 var callCountInitial = await db.CallRecords.CountAsync();
                 using (var client = new ManualGraphCallClient(server, logger))
                 {
-                    using (var callProcessor = await CallQueueProcessor.GetCallQueueProcessor(config,
-                        config.TenantGUID.ToString(), client))
+                    using (var callProcessor = new CallQueueProcessor(config, config.TenantGUID.ToString()))
                     {
+                        await callProcessor.Init(client);
                         callProcessor.CallProcessed += CallProcessor_CallProcessed;
 
                         // Start listening to SB

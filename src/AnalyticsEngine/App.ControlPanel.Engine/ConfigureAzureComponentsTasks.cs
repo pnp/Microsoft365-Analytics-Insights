@@ -7,7 +7,9 @@ using Azure.ResourceManager.AppService.Models;
 using Azure.ResourceManager.Automation;
 using Azure.ResourceManager.KeyVault;
 using Azure.ResourceManager.Resources;
+using Azure.ResourceManager.Sql;
 using Azure.ResourceManager.Storage;
+using CloudInstallEngine.Azure;
 using CloudInstallEngine.Models;
 using Microsoft.Extensions.Logging;
 using System;
@@ -38,36 +40,110 @@ namespace App.ControlPanel.Engine
         /// <summary>
         /// Install configure & software on App Service, update target DB. 
         /// </summary>
-        public async Task RunPostCreatePaaSTasks(WebSiteResource webApp, DatabasePaaSInfo dbInfo, StorageAccountResource storage, AutomationAccountResource automationAccount,
+        public async Task RunPostCreatePaaSTasks(WebSiteResource webApp, AppServicePlanResource appServicePlan, DatabasePaaSInfo dbInfo, StorageAccountResource storage, AutomationAccountResource automationAccount,
             AppInsightsInfo appInsights,
             RedisInstallResult redis, CognitiveServicesInfo cognitiveServicesInfo,
-            KeyVaultResource keyVault, string serviceBusConnectionString, SubscriptionResource subscription)
+            KeyVaultResource keyVault, string serviceBusConnectionString, SubscriptionResource subscription,
+            SqlServerResource sqlServer = null)
         {
             // Configure app-service connection-strings, etc
-            await ConfigureWebApp(webApp, dbInfo, storage, redis, cognitiveServicesInfo, appInsights, serviceBusConnectionString, keyVault);
+            await ConfigureWebApp(webApp, appServicePlan, dbInfo, storage, redis, cognitiveServicesInfo, appInsights, serviceBusConnectionString, keyVault);
 
             // Download/extract the release while the App Service is still available. Kudu/SCM
             // rejects deployments while the site resource is stopped.
             var solutionSources = await GetSolutionFromSource(subscription, automationAccount, downloadReleaseOnly: true);
 
-            // Stop the runtime while applying database changes so the existing website/WebJobs
-            // cannot use a partially upgraded schema.
-            if (this.Config.TasksConfig.InstallLatestSolutionContent)
+            // Prove SQL is reachable BEFORE taking the site offline, self-healing a stale firewall rule if
+            // that is what is blocking us. Previously the site was stopped first and the connectivity test ran
+            // inside the database step, so a firewall rejection left the customer's web app stopped with no
+            // attempt to restart it (issue #326). VerifySQL caches success, so the test inside the database
+            // step below becomes a no-op.
+            var repairFirewall = BuildFirewallRepairCallback(sqlServer);
+            var sqlReachable = await VerifySqlWithFirewallSelfHeal(dbInfo.ConnectionString, repairFirewall);
+
+            // Terminate here rather than carrying a "SQL is broken" flag through the rest of the method. The
+            // database step would fail anyway, but only after more work had been done, and the App Service
+            // would have been stopped for it - which is the outage this whole change exists to prevent.
+            if (!sqlReachable && Config.TasksConfig.UpgradeSchema)
             {
-                _logger.LogInformation("Stopping app-service during database upgrade...");
-                await webApp.StopAsync();
+                throw new UnexpectedInstallException(
+                    "SQL Server is not reachable from this host, so the database upgrade cannot run. The App Service has " +
+                    "deliberately NOT been stopped, so the existing deployment keeps running on its current schema. " +
+                    "Fix the connectivity problem reported above and re-run the installer.");
+            }
+
+            // Give the App Service's managed identity access to the database. Only needed when the database
+            // authenticates with Microsoft Entra ID - a SQL-authentication deployment already has its login
+            // in the connection string, and creating a redundant contained user there would be noise. Done
+            // BEFORE the schema upgrade so the site comes back up with working access. See issue #117.
+            if (sqlReachable && dbInfo.AuthMethod == SqlConnectionAuthMethod.EntraId)
+            {
+                await GrantAppServiceDatabaseAccess(webApp, dbInfo);
+                await GrantAutomationAccountDatabaseAccess(automationAccount, dbInfo);
             }
 
             // Find downloaded installer app
             var installerExeFile = GetInstallerExe(solutionSources.GetSolutionComponentLocation(SoftwareComponent.ControlPanel));
 
-            var sqlInstallerTasks = new SqlInstallerTasks(Config, installerExeFile, dbInfo, _logger, _installedByUsername, _configPassword, async (connectionString) => await VerifySQL(connectionString));
-            await sqlInstallerTasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(installerExeFile, _installLogEvents);
+            // Stop the runtime while applying database changes so the existing website/WebJobs
+            // cannot use a partially upgraded schema.
+            var stopAttempted = false;
+            Exception upgradeFailure = null;
+            try
+            {
+                if (this.Config.TasksConfig.InstallLatestSolutionContent)
+                {
+                    _logger.LogInformation("Stopping app-service during database upgrade...");
+
+                    // Set BEFORE awaiting: Azure can complete the stop server-side while the client sees a
+                    // timeout or transport error, so "the call threw" does not mean "the site is still up".
+                    // Assuming it stopped is the safe assumption - a redundant start is harmless.
+                    stopAttempted = true;
+                    await webApp.StopAsync();
+                }
+
+                var sqlInstallerTasks = new SqlInstallerTasks(Config, installerExeFile, dbInfo, _logger, _installedByUsername, _configPassword,
+                    async (connectionString) => await VerifySqlWithFirewallSelfHeal(connectionString, repairFirewall));
+                await sqlInstallerTasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(installerExeFile, _installLogEvents);
+            }
+            catch (Exception ex)
+            {
+                upgradeFailure = ex;
+            }
+
+            // Whatever happened above, bring the site back. A database step that turns out to be impossible
+            // must never leave the customer's web app stopped.
+            if (stopAttempted)
+            {
+                try
+                {
+                    await webApp.StartAsync();
+                    _logger.LogInformation("App Service started for SCM HTTPS deployment");
+                }
+                catch (Exception startEx)
+                {
+                    if (upgradeFailure == null)
+                    {
+                        // Nothing to mask, and the site is down - this must be fatal, not a swallowed warning,
+                        // or the install would carry on deploying content to a stopped site and report success.
+                        throw new UnexpectedInstallException(
+                            "The database step completed but the App Service could not be restarted afterwards: " +
+                            $"{startEx.Message}. Start the App Service in the Azure portal, then re-run the installer.");
+                    }
+
+                    _logger.LogError($"IMPORTANT: could not restart the App Service after the database step: {startEx.Message}. " +
+                        "Start it by hand in the Azure portal.");
+                }
+            }
+
+            if (upgradeFailure != null)
+            {
+                // Rethrow preserving the original stack, now that the site is back up.
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(upgradeFailure).Throw();
+            }
 
             if (this.Config.TasksConfig.InstallLatestSolutionContent)
             {
-                await webApp.StartAsync();
-                _logger.LogInformation("App Service started for SCM HTTPS deployment");
                 await InstallSolutionContent(solutionSources, subscription, automationAccount);
             }
 
@@ -86,6 +162,162 @@ namespace App.ControlPanel.Engine
                     _logger.LogInformation("Skipping SharePoint web components (AITracker / SPFx) install because 'Update solution with latest release' is not selected.");
                 }
             }
+        }
+
+        /// <summary>
+        /// Grants the App Service's system-assigned managed identity access to the analytics database.
+        /// </summary>
+        /// <remarks>
+        /// Azure SQL has no ARM role that confers data-plane access, so "give the App Service its own
+        /// permissions" means creating a contained database user for its identity - which is why this is a
+        /// T-SQL step rather than another role assignment in <c>ResourceSecurityInstallJob</c>. Best-effort:
+        /// a failure is reported with the manual remedy but does not abort the install. See issue #117.
+        /// </remarks>
+        private async Task GrantAppServiceDatabaseAccess(WebSiteResource webApp, DatabasePaaSInfo dbInfo)
+        {
+            if (webApp == null) return;
+
+            // Re-read the site: when this run was the one that turned the system-assigned identity on, the
+            // cached ARM payload predates it and its PrincipalId would still be null.
+            WebSiteResource current;
+            try
+            {
+                current = await webApp.GetAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Could not re-read the App Service to find its managed identity: {ex.Message}");
+                current = webApp;
+            }
+
+            var principalId = current?.Data?.Identity?.PrincipalId;
+            if (principalId == null || principalId == Guid.Empty)
+            {
+                _logger.LogWarning(
+                    "The App Service has no system-assigned managed identity, so it cannot be granted database access. " +
+                    "The web application will not be able to connect to a database that has SQL authentication disabled. " +
+                    "Re-run the installer to create the identity.");
+                return;
+            }
+
+            var task = new SqlIdentityAccessTask(_logger);
+            await task.GrantDatabaseAccessAsync(
+                dbInfo.ConnectionString,
+                current.Data.Name,
+                principalId.Value,
+                SqlContainedUserScript.AppServiceRoles);
+        }
+
+        /// <summary>
+        /// Grants the Automation account's managed identity access to the analytics database.
+        /// </summary>
+        /// <remarks>
+        /// The Graph usage-report maintenance runbooks connect to the database directly. With SQL
+        /// authentication they use the stored "SQLCredential"; with Microsoft Entra ID there is no
+        /// credential to store, so they authenticate as the Automation account and need a contained user.
+        /// They run Ola Hallengren's IndexOptimize and create/drop objects in the profiling schema, so
+        /// db_owner is the role that actually covers what they do. See issue #117.
+        /// </remarks>
+        private async Task GrantAutomationAccountDatabaseAccess(AutomationAccountResource automationAccount, DatabasePaaSInfo dbInfo)
+        {
+            if (automationAccount == null) return;
+
+            AutomationAccountResource current;
+            try
+            {
+                current = await automationAccount.GetAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Could not re-read the Automation account to find its managed identity: {ex.Message}");
+                current = automationAccount;
+            }
+
+            var principalId = current?.Data?.Identity?.PrincipalId;
+            if (principalId == null || principalId == Guid.Empty)
+            {
+                _logger.LogWarning(
+                    "The Automation account has no system-assigned managed identity, so the Graph usage-report maintenance " +
+                    "runbooks will not be able to connect to a database that has SQL authentication disabled.");
+                return;
+            }
+
+            var task = new SqlIdentityAccessTask(_logger);
+            await task.GrantDatabaseAccessAsync(
+                dbInfo.ConnectionString,
+                current.Data.Name,
+                principalId.Value,
+                new[] { "db_owner" });
+        }
+
+        /// <summary>
+        /// Builds the delegate that repairs the installer's own SQL firewall rule for a given client IP, or
+        /// null when self-healing must not be attempted.
+        /// </summary>
+        /// <remarks>
+        /// Returns null on a private-only deployment: Azure rejects firewall edits there with
+        /// <c>DenyPublicEndpointEnabled</c>, and a public firewall rule is the wrong answer anyway - the
+        /// existing VNet guidance is what the operator needs. Also null when no ARM server resource was
+        /// supplied, so nothing changes for callers that have not been updated.
+        /// </remarks>
+        private Func<string, Task<bool>> BuildFirewallRepairCallback(SqlServerResource sqlServer)
+        {
+            if (sqlServer == null) return null;
+
+            if (PrivateNetworkGuidance.IsPrivateNetworkOnly(Config))
+            {
+                _logger.LogInformation(
+                    "Public network access is disabled for this deployment, so the SQL Server firewall rule will not be " +
+                    "auto-repaired - Azure rejects firewall edits on a private-only server, and connectivity is expected " +
+                    "to come via the private endpoint.");
+                return null;
+            }
+
+            return async (clientIp) =>
+            {
+                try
+                {
+                    var rules = sqlServer.GetSqlFirewallRules();
+
+                    var existing = rules
+                        .Where(r => r.Data.Name == AzurePaaSInstallJob.INSTALLER_FIREWALL_RULE_NAME)
+                        .Select(r => new SqlFirewallRuleRange(r.Data.Name, r.Data.StartIPAddress, r.Data.EndIPAddress))
+                        .SingleOrDefault();
+
+                    if (!SqlFirewallRules.CanSafelyReplaceWithSingleAddress(existing))
+                    {
+                        // An admin widened our rule into a range. Narrowing it to one address would revoke
+                        // access for every other address it covers - worse than the problem being fixed.
+                        _logger.LogError(
+                            $"SQL Server firewall rule '{AzurePaaSInstallJob.INSTALLER_FIREWALL_RULE_NAME}' has been widened to the " +
+                            $"range {existing.StartIp} - {existing.EndIp}. The installer will NOT narrow it to {clientIp}, because " +
+                            "that would revoke access for every other address in that range. Extend the range to include " +
+                            $"{clientIp} (or add a separate rule for it) and re-run the installer.");
+                        return false;
+                    }
+
+                    await rules.CreateOrUpdateAsync(
+                        WaitUntil.Completed,
+                        AzurePaaSInstallJob.INSTALLER_FIREWALL_RULE_NAME,
+                        new SqlFirewallRuleData
+                        {
+                            Name = AzurePaaSInstallJob.INSTALLER_FIREWALL_RULE_NAME,
+                            StartIPAddress = clientIp,
+                            EndIPAddress = clientIp,
+                        });
+
+                    _logger.LogInformation(
+                        $"SQL Server firewall rule '{AzurePaaSInstallJob.INSTALLER_FIREWALL_RULE_NAME}' updated to allow {clientIp}.");
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        $"Could not update the SQL Server firewall rule to allow {clientIp}: {ex.Message}. " +
+                        $"Add a rule named '{AzurePaaSInstallJob.INSTALLER_FIREWALL_RULE_NAME}' for {clientIp} by hand and re-run the installer.");
+                    return false;
+                }
+            };
         }
 
         FileInfo GetInstallerExe(LocalStorageBlobInfo localStorageBlobInfo)
@@ -156,7 +388,7 @@ namespace App.ControlPanel.Engine
             await installJob.Install();
         }
 
-        async Task ConfigureWebApp(WebSiteResource webApp, DatabasePaaSInfo backendInfo,
+        async Task ConfigureWebApp(WebSiteResource webApp, AppServicePlanResource appServicePlan, DatabasePaaSInfo backendInfo,
             StorageAccountResource storage,
             RedisInstallResult redis,
             CognitiveServicesInfo cognitiveServicesInfo,
@@ -253,12 +485,38 @@ namespace App.ControlPanel.Engine
             }
             connectionStrings.Properties.Add("Redis", new ConnStringValueTypePair(redisConnectionString, ConnectionStringType.Custom));
 
-            await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = new SiteConfigProperties { Use32BitWorkerProcess = false, IsAlwaysOn = true } });
+            var siteConfig = BuildPostCreateSiteConfig(appServicePlan?.Data?.Sku);
+            try
+            {
+                await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = siteConfig });
+            }
+            catch (RequestFailedException ex) when (AppServicePlanCapabilities.IsPlanCapabilityConflict(ex))
+            {
+                _logger.LogWarning(AppServicePlanCapabilities.BuildAlwaysOnUnsupportedWarning(appServicePlan?.Data?.Name ?? Config.AppServicePlanName, appServicePlan?.Data?.Sku));
+                await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = BuildPostCreateSiteConfig(appServicePlan?.Data?.Sku, includePlanSensitiveSettings: false) });
+            }
             await PreserveUnmanagedAppSettingsAsync(webApp, appSettings);
             await webApp.UpdateApplicationSettingsAsync(appSettings);
             await webApp.UpdateConnectionStringsAsync(connectionStrings);
 
             _logger.LogInformation("App Service connection-strings & app-settings configured");
+        }
+
+        public static SiteConfigProperties BuildPostCreateSiteConfig(AppServiceSkuDescription appServicePlanSku, bool includePlanSensitiveSettings = true)
+        {
+            var siteConfig = new SiteConfigProperties();
+
+            if (includePlanSensitiveSettings && AppServicePlanCapabilities.SupportsAlwaysOn(appServicePlanSku))
+            {
+                siteConfig.IsAlwaysOn = true;
+            }
+
+            if (includePlanSensitiveSettings && AppServicePlanCapabilities.Supports64BitWorkerProcess(appServicePlanSku))
+            {
+                siteConfig.Use32BitWorkerProcess = false;
+            }
+
+            return siteConfig;
         }
 
         /// <summary>

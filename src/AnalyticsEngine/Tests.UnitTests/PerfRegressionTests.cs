@@ -20,7 +20,7 @@ namespace Tests.UnitTests
     ///   - SentEmailImporter.ImportSentEmails (user chunk loop)
     ///   - SentEmailSentimentScorer.ScoreAsync (sentiment batch loop)
     ///   - UserInsertProcessor.BulkInsertUsers (Phase-1 bulk insert loop)
-    ///   - UserLicenseProcessor.ProcessSKUsForAllUsers (SQL DELETE batch loop)
+    ///   - SqlUserLicenseStore add/remove batching (licence-lookup write loops)
     /// so a regression in the slicing arithmetic would normally surface only at
     /// 200k-user scale. Locking the invariant here makes any off-by-one obvious.
     /// </summary>
@@ -43,7 +43,7 @@ namespace Tests.UnitTests
                 (Total: 200,  ChunkSize: 25),    // many full chunks (SentEmailImporter default)
                 (Total: 199,  ChunkSize: 25),    // many chunks + short trailer
                 (Total: 1000, ChunkSize: 1000),  // exact single chunk (RELOAD_BATCH_SIZE)
-                (Total: 9999, ChunkSize: 1000),  // many chunks + 999-element trailer (UserLicenseProcessor)
+                (Total: 9999, ChunkSize: 1000),  // many chunks + 999-element trailer (SqlUserLicenseStore)
                 (Total: 10000,ChunkSize: 10000), // exact one chunk at SqlBulkCopy batch size
             })
             {

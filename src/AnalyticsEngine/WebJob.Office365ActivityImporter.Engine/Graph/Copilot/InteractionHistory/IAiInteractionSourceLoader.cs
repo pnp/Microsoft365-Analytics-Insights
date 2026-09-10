@@ -32,6 +32,35 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
         Task<AiInteractionLoadResult> LoadInteractionsForUserAsync(Common.Entities.User user, DateTime fromUtc, DateTime toUtc);
     }
 
+    /// <summary>
+    /// What could be established about the runtime identity's <c>AiEnterpriseInteraction.Read.All</c> grant.
+    /// </summary>
+    /// <remarks>
+    /// The importer only needs a yes/no ("should I run?"), which
+    /// <see cref="IAiInteractionSourceLoader.HasInteractionReadAccessAsync"/> gives it. The installer's Test
+    /// Configuration needs the distinction: telling an admin a permission is definitely missing when the
+    /// check merely could not run sends them to re-consent something they may already hold (issue #329).
+    /// </remarks>
+    public enum InteractionReadAccess
+    {
+        /// <summary>The token carries <c>AiEnterpriseInteraction.Read.All</c>. The import will run.</summary>
+        Granted,
+
+        /// <summary>The token was read successfully and does not carry the permission.</summary>
+        NotGranted,
+
+        /// <summary>
+        /// The token could not be acquired or its permissions could not be read, so neither answer is proven.
+        /// </summary>
+        Unknown,
+
+        /// <summary>
+        /// There was no app identity to inspect at all. The importer treats this as "carry on and let the
+        /// per-user calls report the truth"; a verifier must not treat it as a pass.
+        /// </summary>
+        NoIdentityToInspect,
+    }
+
     /// <summary>Outcome of loading one user's interactions.</summary>
     public class AiInteractionLoadResult
     {

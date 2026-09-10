@@ -294,7 +294,14 @@ namespace Tests.FakeDataGen.Copilot
 
         private Url GetOrCreateUrl(AnalyticsEntitiesContext db, string fullUrl)
         {
-            var url = db.urls.Local.FirstOrDefault(u => u.FullUrl == fullUrl)
+            // The Local lookup is an in-memory C# comparison, so it must be told to ignore case
+            // explicitly: the database collation is case-insensitive and dbo.urls.full_url is now
+            // UNIQUE, so ".../Foo.docx" and ".../foo.docx" are the SAME row as far as SQL Server is
+            // concerned. An ordinal Local match would miss the pending entity, add a second one, and
+            // then IGNORE_DUP_KEY would silently skip the insert - which EF6 sees as "0 rows affected"
+            // and reports as a DbUpdateConcurrencyException. The DbSet query below is translated to SQL
+            // and is already case-insensitive, so it is deliberately left alone.
+            var url = db.urls.Local.FirstOrDefault(u => string.Equals(u.FullUrl, fullUrl, StringComparison.OrdinalIgnoreCase))
                       ?? db.urls.FirstOrDefault(u => u.FullUrl == fullUrl);
 
             if (url == null)

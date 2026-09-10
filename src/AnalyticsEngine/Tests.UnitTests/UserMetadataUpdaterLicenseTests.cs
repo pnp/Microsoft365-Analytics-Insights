@@ -144,6 +144,23 @@ namespace Tests.UnitTests
             var updaterNoLicenses = new UserMetadataUpdater(logger, config, updatedFakeLoader);
             await updaterNoLicenses.InsertAndUpdateDatabaseFromExternalUsers();
 
+            using (var afterEmptySkuList = new AnalyticsEntitiesContext())
+            {
+                // Since issue #392 an EMPTY tenant SKU list is deliberately treated as a Graph or
+                // permissions failure, not as "this tenant holds no licences": reconciling against it
+                // would delete every licence row in the tenant, which is the outage being fixed. The
+                // licence must therefore survive this run untouched.
+                var stillLicensed = await afterEmptySkuList.users.Include(u => u.LicenseLookups).Where(u => u.UserPrincipalName == userUpn).FirstOrDefaultAsync();
+                Assert.AreEqual(1, stillLicensed.LicenseLookups.Count,
+                    "An empty tenant SKU list must NOT wipe existing licences - it is far more likely to be a transient Graph failure than a tenant that genuinely holds none.");
+            }
+
+            // The realistic way a user loses their last licence: the tenant still subscribes to the
+            // SKU, that user simply stops appearing in its member list.
+            var skuStillSubscribed = new List<SubscribedSku> { new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPartNumber } };
+            var seatRemovedLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skuStillSubscribed, new Dictionary<Guid, List<Microsoft.Graph.Models.User>>());
+            await new UserMetadataUpdater(logger, config, seatRemovedLoader).InsertAndUpdateDatabaseFromExternalUsers();
+
             using (var finalVerifyDb = new AnalyticsEntitiesContext())
             {
                 var dbUserFinal = await finalVerifyDb.users.Include(u => u.LicenseLookups).Where(u => u.UserPrincipalName == userUpn).FirstOrDefaultAsync();
@@ -272,8 +289,10 @@ namespace Tests.UnitTests
                 Assert.IsNotNull(licenseType); licenseTypeId = licenseType.ID;
             }
 
-            var emptySkus = new List<SubscribedSku>();
-            var updatedFakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, emptySkus, new Dictionary<Guid, List<Microsoft.Graph.Models.User>>());
+            // The tenant still subscribes to the SKU; nobody holds it any more. (An EMPTY SKU list is
+            // deliberately treated as a Graph failure since issue #392, so it would not exercise this.)
+            var skuWithNoUsers = new List<SubscribedSku> { new SubscribedSku { SkuId = skuId, SkuPartNumber = skuPartNumber } };
+            var updatedFakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skuWithNoUsers, new Dictionary<Guid, List<Microsoft.Graph.Models.User>>());
             var updaterNoLicenses = new UserMetadataUpdater(logger, config, updatedFakeLoader);
             await updaterNoLicenses.InsertAndUpdateDatabaseFromExternalUsers();
 

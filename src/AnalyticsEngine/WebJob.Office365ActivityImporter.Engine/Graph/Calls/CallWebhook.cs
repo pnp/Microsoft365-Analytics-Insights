@@ -1,12 +1,10 @@
 using Azure.Identity;
 using Common.Entities.Config;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
-using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.ODataErrors;
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
 
@@ -17,18 +15,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
     /// </summary>
     public class CallWebhook
     {
-        public GraphServiceClient Client { get; set; }
+        private readonly ICallRecordSubscriptionManager _subscriptions;
+        private readonly IClock _clock;
+
         public ILogger Telemetry { get; set; }
 
         public CallWebhook(AppConfig o365DownloadSettings, ILogger logger)
             : this(o365DownloadSettings?.TenantGUID.ToString(), o365DownloadSettings?.ClientID, o365DownloadSettings?.ClientSecret, logger) { }
 
         public CallWebhook(string tenantId, string clientId, string secret, ILogger logger)
-        {
-            var cred = new ClientSecretCredential(tenantId, clientId, secret);
+            : this(new GraphCallRecordSubscriptionManager(new GraphServiceClient(new ClientSecretCredential(tenantId, clientId, secret))), logger, SystemClock.Instance) { }
 
+        /// <summary>
+        /// Constructor taking the Graph subscription API as a port and the clock as a dependency, so
+        /// the create/renew decision and the failure reporting can be tested without Graph.
+        /// See issue #378.
+        /// </summary>
+        public CallWebhook(ICallRecordSubscriptionManager subscriptions, ILogger logger, IClock clock)
+        {
+            _subscriptions = subscriptions ?? throw new ArgumentNullException(nameof(subscriptions));
             this.Telemetry = logger ?? throw new ArgumentNullException(nameof(logger));
-            this.Client = new GraphServiceClient(cred);
+            _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         }
 
         // Graph Application permission required to subscribe to /communications/callRecords. Surfaced in error
@@ -38,27 +45,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         // Grep-friendly tag so the calls-webhook lifecycle is easy to filter in App Insights traces.
         private const string LOG_TAG = "[Calls Webhook]";
 
-        // The Graph resource path we subscribe to for Teams call records.
-        private const string CALL_RECORDS_RESOURCE = "/communications/callRecords";
-
         public async Task CreateOrUpdateWebhook(Uri webAppUrl, string secret)
         {
             // https://docs.microsoft.com/en-us/graph/api/resources/webhooks?view=graph-rest-1.0
-            var matchingSubs = await FindCallRecordsSubscriptions(webAppUrl);
+            var matchingSubs = await _subscriptions.FindCallRecordSubscriptions(webAppUrl);
+            var action = CallSubscriptionRules.Decide(matchingSubs, _clock.UtcNow);
 
-            if (matchingSubs.Count == 0)
+            if (action.Kind == CallSubscriptionActionKind.Create)
             {
                 Telemetry.LogInformation($"{LOG_TAG} No subscription found for call-records, for URL '{webAppUrl}'. Creating...");
                 try
                 {
-                    var result = await this.Client.Subscriptions.PostAsync(new Subscription()
-                    {
-                        NotificationUrl = webAppUrl.ToString(),
-                        Resource = CALL_RECORDS_RESOURCE,
-                        ClientState = secret,
-                        ChangeType = "created",
-                        ExpirationDateTime = DateTime.UtcNow.AddDays(2)        // the max Graph will permit - https://docs.microsoft.com/en-us/graph/api/resources/subscription?view=graph-rest-beta#properties
-                    });
+                    var result = await _subscriptions.CreateSubscription(webAppUrl, secret, action.ExpiryUtc);
                     Telemetry.LogInformation($"{LOG_TAG} Created subscription id '{result.Id}' for webhook at '{webAppUrl}'. Teams call records will start importing as calls end.");
                 }
                 catch (ODataError ex)
@@ -70,15 +68,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             else
             {
                 // https://docs.microsoft.com/en-us/graph/api/subscription-update?view=graph-rest-beta&tabs=http
-                var existingSubId = matchingSubs.First().Id;
+                var existingSubId = action.ExistingSubscriptionId;
                 try
                 {
-                    var result = await this.Client.Subscriptions[existingSubId].PatchAsync(
-                        new Subscription
-                        {
-                            ExpirationDateTime = DateTime.UtcNow.AddDays(2)
-                        }
-                    );
+                    var result = await _subscriptions.RenewSubscription(existingSubId, action.ExpiryUtc);
                     Telemetry.LogInformation($"{LOG_TAG} Renewed subscription id '{result.Id}' for webhook at '{webAppUrl}'. New expiry: {result.ExpirationDateTime:u}.");
                 }
                 catch (ODataError ex)
@@ -90,36 +83,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         }
 
         /// <summary>
-        /// Walk every subscriptions page (the default Graph page size may not include the
-        /// call-records subscription when the tenant has many subscriptions) and return those
-        /// matching the call-records resource for this web-app's notification URL.
-        /// </summary>
-        private async Task<List<Subscription>> FindCallRecordsSubscriptions(Uri webAppUrl)
-        {
-            var matchingSubs = new List<Subscription>();
-            var firstPage = await this.Client.Subscriptions.GetAsync();
-            if (firstPage != null)
-            {
-                var iterator = PageIterator<Subscription, SubscriptionCollectionResponse>.CreatePageIterator(
-                    this.Client,
-                    firstPage,
-                    sub =>
-                    {
-                        if (sub.Resource == CALL_RECORDS_RESOURCE && sub.NotificationUrl == webAppUrl.ToString())
-                        {
-                            matchingSubs.Add(sub);
-                        }
-
-                        return true;
-                    });
-
-                await iterator.IterateAsync();
-            }
-
-            return matchingSubs;
-        }
-
-        /// <summary>
         /// Read-only check of the current call-records webhook subscription, for status display
         /// (e.g. the web homepage). Does NOT create or renew anything. Returns whether a matching
         /// subscription currently exists and, if so, when it expires. Any Graph error is allowed to
@@ -127,13 +90,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// </summary>
         public async Task<CallRecordSubscriptionInfo> GetCallRecordsSubscriptionInfo(Uri webAppUrl)
         {
-            var matchingSubs = await FindCallRecordsSubscriptions(webAppUrl);
+            var matchingSubs = await _subscriptions.FindCallRecordSubscriptions(webAppUrl);
 
             // If more than one matches (shouldn't normally happen), report the one that expires
             // latest - that's the subscription keeping the webhook alive.
-            var current = matchingSubs
-                .OrderByDescending(s => s.ExpirationDateTime ?? DateTimeOffset.MinValue)
-                .FirstOrDefault();
+            var current = CallSubscriptionRules.SelectCurrentForStatus(matchingSubs);
 
             if (current == null)
             {
@@ -151,8 +112,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// <summary>
         /// Emit a single, actionable critical log so operators can immediately tell:
         ///   (a) that the Teams calls import is broken,
-        ///   (b) what Graph returned (status + message), and
-        ///   (c) for the common 403 case, exactly which Graph Application permission to grant.
+        ///   (b) what Graph returned (status + message),
+        ///   (c) for the common 403 case, exactly which Graph Application permission to grant, and
+        ///   (d) for a failed validation callback, that the fault is at OUR endpoint rather than in
+        ///       Graph permissions - see issue #273.
         /// The exception is then re-thrown by the caller so Program.cs's outer catch also runs
         /// TrackException, surfacing it in App Insights' Failures blade.
         /// </summary>
@@ -167,7 +130,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 : "Graph call failed before a status code was returned.";
             var graphError = ex.Error?.Message ?? ex.Message;
 
-            if (statusCode == (int)HttpStatusCode.Forbidden)
+            var validation = CallSubscriptionRules.ClassifyValidationCallbackFailure(graphError);
+
+            if (validation.IsValidationCallbackFailure)
+            {
+                Telemetry.LogCritical(
+                    $"{LOG_TAG} Couldn't {action} for call-records at '{webAppUrl}'. {statusLine} " +
+                    BuildValidationCallbackDiagnosis(validation, webAppUrl) +
+                    $" Until this is fixed, NO Teams call records will be imported. Graph error: '{graphError}'");
+            }
+            else if (statusCode == (int)HttpStatusCode.Forbidden)
             {
                 Telemetry.LogCritical(
                     $"{LOG_TAG} Couldn't {action} for call-records at '{webAppUrl}'. {statusLine} " +
@@ -185,6 +157,51 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                     $"{LOG_TAG} Couldn't {action} for call-records at '{webAppUrl}'. {statusLine} " +
                     $"Until this is fixed, NO Teams call records will be imported. Graph error: '{graphError}'");
             }
+        }
+
+        /// <summary>
+        /// The operator-facing explanation of a failed validation callback. Deliberately lists the
+        /// candidate causes rather than asserting one: which it is can only be established against the
+        /// affected deployment, and naming the wrong one sends an admin down a days-long dead end.
+        /// </summary>
+        private static string BuildValidationCallbackDiagnosis(SubscriptionValidationFailure validation, Uri webAppUrl)
+        {
+            // Common to both variants: say plainly which way the failing request travelled, because the
+            // direction is the single most misunderstood thing about this error.
+            var diagnosis =
+                "This is NOT a Graph permission problem. Graph accepted the request and then called BACK to " +
+                $"this deployment's notification endpoint '{webAppUrl}' to validate it, and that callback failed. " +
+                $"The endpoint must be reachable from the public internet (Graph calls from Microsoft's own IP " +
+                $"ranges, not from your network), must accept the request ANONYMOUSLY, and must answer 200 OK " +
+                $"echoing the 'validationToken' query parameter. ";
+
+            if (validation.TimedOut)
+            {
+                diagnosis +=
+                    "Graph gave up waiting for a response, which usually means App Service cold start: the first " +
+                    "request after an idle period or a deploy can take far longer than Graph's validation window. " +
+                    "Check: (1) is 'Always On' enabled on the App Service plan; (2) does the site stay warm between " +
+                    "import cycles; (3) does the endpoint respond quickly when called from outside your network.";
+            }
+            else
+            {
+                var returned = string.IsNullOrEmpty(validation.EndpointStatus)
+                    ? "a non-200 response"
+                    : $"'{validation.EndpointStatus}'";
+
+                diagnosis +=
+                    $"The endpoint returned {returned} to Graph. Check, in order: " +
+                    "(1) App Service access restrictions / IP allow-list, or a private endpoint with public network " +
+                    "access disabled - any of these refuse Graph before the request reaches the app; " +
+                    "(2) an authentication layer in front of the endpoint (App Service Authentication / 'Easy Auth' " +
+                    "with 'require authentication', a WAF, or an App Gateway / Front Door rule) - the validation " +
+                    "handshake is unauthenticated by design and any challenge fails it; " +
+                    "(3) that the notification URL above matches the deployed hostname. " +
+                    "Note that the installer's own webhook warm-up POST proves only that the endpoint answers from " +
+                    "the network the installer ran on - it does not prove Graph can reach it.";
+            }
+
+            return diagnosis;
         }
     }
 }

@@ -2,9 +2,7 @@ using Common.Entities;
 using DataUtils;
 using System;
 using System.Collections.Generic;
-using System.Data;
 using System.Data.Entity;
-using System.Data.SqlClient;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -26,6 +24,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <summary>
         /// Process existing users in batches to reduce memory pressure
         /// </summary>
+        /// <param name="prepareBatch">
+        /// Called once with each batch before it is processed, so the caller can resolve everything
+        /// the batch will need in bulk - in production that is <c>UserDataMapper</c> prefetching the
+        /// batch's managers in a single query instead of one query per user (#371). Optional; pass
+        /// null to skip.
+        /// </param>
         public async Task<int> ProcessExistingUsersInBatches(
             AnalyticsEntitiesContext db,
             List<GraphUser> allActiveGraphUsers,
@@ -33,6 +37,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             Dictionary<string, Common.Entities.User> dbUsersByUpn,
             Dictionary<string, Common.Entities.User> dbUsersByAadId,
             Func<GraphUser, Common.Entities.User, Task> updateAction,
+            Func<List<GraphUser>, Task> prepareBatch,
             int batchSize = DEFAULT_BATCH_SIZE)
         {
             _logger.LogInformation($"User import - updating {userUpnsToProcess.Count.ToString("N0")} existing users in batches...");
@@ -47,6 +52,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 var batchCount = Math.Min(batchSize, batchedGraphUsers.Count - i);
                 var batch = batchedGraphUsers.GetRange(i, batchCount);
+
+                if (prepareBatch != null)
+                {
+                    await prepareBatch(batch);
+                }
 
                 // CRITICAL: Ensure all entities in the dictionaries that might be referenced
                 // by this batch are properly attached BEFORE processing
@@ -163,10 +173,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     return tracked.Entity;
                 }
 
-                // If still can't find, try Find() as last resort
+                // If still can't find, load the row as a last resort. Find() cannot Include the
+                // licence graph; on the per-user licence path that could hand
+                // ProcessUserLicenses a tracked User with an empty LicenseLookups list.
                 if (user.ID > 0)
                 {
-                    var found = db.users.Find(user.ID);
+                    var found = db.users
+                        .Include(u => u.LicenseLookups)
+                        .FirstOrDefault(u => u.ID == user.ID);
                     if (found != null)
                     {
                         return found;
@@ -234,6 +248,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Pre-warms all lookup caches then builds a DataTable with resolved FK IDs,
         /// bulk-copies to a temp table, and executes a single UPDATE ... FROM JOIN.
         /// </summary>
+        /// <param name="bulkUpdateWriter">
+        /// Where each resolved batch is written. In production this is
+        /// <see cref="SqlUserBulkUpdateWriter"/>, which is the original <c>SqlBulkCopy</c> code
+        /// relocated unchanged; injecting it lets the batching and foreign-key resolution above be
+        /// tested without a SQL Server (#371).
+        /// </param>
         public async Task<int> BulkUpdateExistingUsers(
             AnalyticsEntitiesContext db,
             List<GraphUser> allActiveGraphUsers,
@@ -241,7 +261,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             Dictionary<string, Common.Entities.User> dbUsersByUpn,
             Dictionary<string, Common.Entities.User> dbUsersByAadId,
             Dictionary<string, GraphUser> graphUsersByAadId,
-            UserMetadataCache userMetaCache)
+            UserMetadataCache userMetaCache,
+            IUserBulkUpdateWriter bulkUpdateWriter)
         {
             var graphUsersToUpdate = new List<GraphUser>(userUpnsToProcess.Count);
             foreach (var u in allActiveGraphUsers)
@@ -265,7 +286,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             db.ChangeTracker.DetectChanges();
             await db.SaveChangesAsync();
 
-            var connectionString = db.Database.Connection.ConnectionString;
             int totalProcessed = 0;
             const int BULK_BATCH_SIZE = 50000;
 
@@ -274,9 +294,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var batchCount = Math.Min(BULK_BATCH_SIZE, graphUsersToUpdate.Count - i);
                 var batch = graphUsersToUpdate.GetRange(i, batchCount);
 
-                using (var dataTable = BuildUpdateDataTable(batch, lookupMaps, dbUsersByAadId, dbUsersByUpn, graphUsersByAadId))
+                // Read per batch, exactly as the inlined table builder used to: on a tenant large
+                // enough to need more than one batch the later batches carry a later last_updated.
+                // Local time, not UTC - see the note on UserBulkUpdateRules.BuildUpdateTable.
+                var now = DateTime.Now;
+
+                using (var dataTable = UserBulkUpdateRules.BuildUpdateTable(
+                    batch, lookupMaps, dbUsersByAadId, dbUsersByUpn, graphUsersByAadId, now))
                 {
-                    await ExecuteBulkUpdate(connectionString, dataTable);
+                    await bulkUpdateWriter.ExecuteAsync(dataTable);
                 }
 
                 totalProcessed += batchCount;
@@ -343,202 +369,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         private static void AddNormalized(string raw, HashSet<string> set)
         {
-            var name = StringUtils.EnsureMaxLength(raw?.Trim(), 100);
-            if (!string.IsNullOrEmpty(name))
+            // Same normalisation the mapping rule applies, so the pre-warmed cache keys and the
+            // foreign keys resolved later cannot drift apart (#371).
+            var name = UserMetadataMappingRules.NormaliseLookupName(raw);
+            if (name != null)
                 set.Add(name);
-        }
-
-        private DataTable BuildUpdateDataTable(
-            List<GraphUser> graphUsers,
-            LookupEntityMaps maps,
-            Dictionary<string, Common.Entities.User> dbUsersByAadId,
-            Dictionary<string, Common.Entities.User> dbUsersByUpn,
-            Dictionary<string, GraphUser> graphUsersByAadId)
-        {
-            var dt = new DataTable();
-            dt.Columns.Add("id", typeof(int));
-            dt.Columns.Add("azure_ad_id", typeof(string));
-            dt.Columns.Add("account_enabled", typeof(bool));
-            dt.Columns.Add("mail", typeof(string));
-            dt.Columns.Add("postalcode", typeof(string));
-            dt.Columns.Add("department_id", typeof(int));
-            dt.Columns.Add("job_title_id", typeof(int));
-            dt.Columns.Add("office_location_id", typeof(int));
-            dt.Columns.Add("usage_location_id", typeof(int));
-            dt.Columns.Add("country_or_region_id", typeof(int));
-            dt.Columns.Add("state_or_province_id", typeof(int));
-            dt.Columns.Add("company_name_id", typeof(int));
-            dt.Columns.Add("manager_id", typeof(int));
-            dt.Columns.Add("last_updated", typeof(DateTime));
-
-            var now = DateTime.Now;
-
-            foreach (var graphUser in graphUsers)
-            {
-                var upn = graphUser.UserPrincipalName;
-                if (string.IsNullOrEmpty(upn))
-                    continue;
-
-                // Find the DB user to get the PK
-                if (!dbUsersByUpn.TryGetValue(upn, out var dbUser) || dbUser.ID == 0)
-                    continue;
-
-                var row = dt.NewRow();
-                row["id"] = dbUser.ID;
-                row["azure_ad_id"] = (object)graphUser.Id ?? DBNull.Value;
-                row["account_enabled"] = graphUser.AccountEnabled.HasValue ? (object)graphUser.AccountEnabled.Value : DBNull.Value;
-                row["mail"] = (object)graphUser.Mail ?? DBNull.Value;
-                row["postalcode"] = (object)graphUser.PostalCode ?? DBNull.Value;
-                row["department_id"] = ResolveLookupId(graphUser.Department, maps.Departments);
-                row["job_title_id"] = ResolveLookupId(graphUser.JobTitle, maps.JobTitles);
-                row["office_location_id"] = ResolveLookupId(graphUser.OfficeLocation, maps.OfficeLocations);
-                row["usage_location_id"] = ResolveLookupId(graphUser.UsageLocation, maps.UsageLocations);
-                row["country_or_region_id"] = ResolveLookupId(graphUser.Country, maps.Countries);
-                row["state_or_province_id"] = ResolveLookupId(graphUser.State, maps.StatesOrProvinces);
-                row["company_name_id"] = ResolveLookupId(graphUser.CompanyName, maps.CompanyNames);
-                row["manager_id"] = ResolveManagerId(graphUser, dbUsersByAadId, dbUsersByUpn, graphUsersByAadId);
-                row["last_updated"] = now;
-
-                dt.Rows.Add(row);
-            }
-
-            return dt;
-        }
-
-        private static object ResolveLookupId<T>(string rawValue, Dictionary<string, T> map) where T : AbstractEFEntityWithName
-        {
-            var name = StringUtils.EnsureMaxLength(rawValue?.Trim(), 100);
-            if (!string.IsNullOrEmpty(name) && map.TryGetValue(name, out var entity) && entity.ID > 0)
-                return entity.ID;
-            return DBNull.Value;
-        }
-
-        private static object ResolveManagerId(
-            GraphUser graphUser,
-            Dictionary<string, Common.Entities.User> dbUsersByAadId,
-            Dictionary<string, Common.Entities.User> dbUsersByUpn,
-            Dictionary<string, GraphUser> graphUsersByAadId)
-        {
-            if (graphUser.DefaultManagerInfo?.Id == null)
-                return DBNull.Value;
-
-            var mgrAadId = graphUser.DefaultManagerInfo.Id;
-
-            if (dbUsersByAadId.TryGetValue(mgrAadId, out var manager) && manager.ID > 0)
-                return manager.ID;
-
-            if (graphUsersByAadId != null &&
-                graphUsersByAadId.TryGetValue(mgrAadId, out var mgrGraph) &&
-                !string.IsNullOrEmpty(mgrGraph.UserPrincipalName) &&
-                dbUsersByUpn.TryGetValue(mgrGraph.UserPrincipalName, out var mgrByUpn) && mgrByUpn.ID > 0)
-            {
-                return mgrByUpn.ID;
-            }
-
-            return DBNull.Value;
-        }
-
-        private static async Task ExecuteBulkUpdate(string connectionString, DataTable dataTable)
-        {
-            if (dataTable.Rows.Count == 0)
-                return;
-
-            using (var connection = new SqlConnection(connectionString))
-            {
-                await connection.OpenAsync();
-
-                using (var cmd = new SqlCommand(CREATE_TEMP_TABLE_SQL, connection))
-                {
-                    cmd.CommandTimeout = 600;
-                    await cmd.ExecuteNonQueryAsync();
-                }
-
-                using (var bulkCopy = new SqlBulkCopy(connection))
-                {
-                    bulkCopy.DestinationTableName = "#user_updates";
-                    bulkCopy.BatchSize = 10000;
-                    bulkCopy.BulkCopyTimeout = 600;
-
-                    bulkCopy.ColumnMappings.Add("id", "id");
-                    bulkCopy.ColumnMappings.Add("azure_ad_id", "azure_ad_id");
-                    bulkCopy.ColumnMappings.Add("account_enabled", "account_enabled");
-                    bulkCopy.ColumnMappings.Add("mail", "mail");
-                    bulkCopy.ColumnMappings.Add("postalcode", "postalcode");
-                    bulkCopy.ColumnMappings.Add("department_id", "department_id");
-                    bulkCopy.ColumnMappings.Add("job_title_id", "job_title_id");
-                    bulkCopy.ColumnMappings.Add("office_location_id", "office_location_id");
-                    bulkCopy.ColumnMappings.Add("usage_location_id", "usage_location_id");
-                    bulkCopy.ColumnMappings.Add("country_or_region_id", "country_or_region_id");
-                    bulkCopy.ColumnMappings.Add("state_or_province_id", "state_or_province_id");
-                    bulkCopy.ColumnMappings.Add("company_name_id", "company_name_id");
-                    bulkCopy.ColumnMappings.Add("manager_id", "manager_id");
-                    bulkCopy.ColumnMappings.Add("last_updated", "last_updated");
-
-                    await bulkCopy.WriteToServerAsync(dataTable);
-                }
-
-                using (var cmd = new SqlCommand(UPDATE_FROM_TEMP_SQL, connection))
-                {
-                    cmd.CommandTimeout = 600;
-                    await cmd.ExecuteNonQueryAsync();
-                }
-
-                using (var cmd = new SqlCommand("DROP TABLE #user_updates", connection))
-                {
-                    await cmd.ExecuteNonQueryAsync();
-                }
-            }
-        }
-
-        private const string CREATE_TEMP_TABLE_SQL = @"
-            CREATE TABLE #user_updates (
-                id              INT          NOT NULL,
-                azure_ad_id     NVARCHAR(450) NULL,
-                account_enabled BIT           NULL,
-                mail            NVARCHAR(450) NULL,
-                postalcode      NVARCHAR(50)  NULL,
-                department_id   INT           NULL,
-                job_title_id    INT           NULL,
-                office_location_id INT        NULL,
-                usage_location_id  INT        NULL,
-                country_or_region_id INT      NULL,
-                state_or_province_id INT      NULL,
-                company_name_id INT           NULL,
-                manager_id      INT           NULL,
-                last_updated    DATETIME      NOT NULL
-            )";
-
-        private const string UPDATE_FROM_TEMP_SQL = @"
-            UPDATE u
-            SET u.azure_ad_id            = t.azure_ad_id,
-                u.account_enabled        = t.account_enabled,
-                u.mail                   = t.mail,
-                u.postalcode             = t.postalcode,
-                u.department_id          = t.department_id,
-                u.job_title_id           = t.job_title_id,
-                u.office_location_id     = t.office_location_id,
-                u.usage_location_id      = t.usage_location_id,
-                u.country_or_region_id   = t.country_or_region_id,
-                u.state_or_province_id   = t.state_or_province_id,
-                u.company_name_id        = t.company_name_id,
-                u.manager_id             = t.manager_id,
-                u.last_updated           = t.last_updated
-            FROM dbo.users u
-            INNER JOIN #user_updates t ON u.id = t.id";
-
-        /// <summary>
-        /// Holds entity-reference dictionaries for each lookup type.
-        /// Entity IDs are valid after the context has been saved.
-        /// </summary>
-        internal class LookupEntityMaps
-        {
-            public Dictionary<string, UserDepartment> Departments = new Dictionary<string, UserDepartment>(StringComparer.OrdinalIgnoreCase);
-            public Dictionary<string, UserJobTitle> JobTitles = new Dictionary<string, UserJobTitle>(StringComparer.OrdinalIgnoreCase);
-            public Dictionary<string, UserOfficeLocation> OfficeLocations = new Dictionary<string, UserOfficeLocation>(StringComparer.OrdinalIgnoreCase);
-            public Dictionary<string, UserUsageLocation> UsageLocations = new Dictionary<string, UserUsageLocation>(StringComparer.OrdinalIgnoreCase);
-            public Dictionary<string, CountryOrRegion> Countries = new Dictionary<string, CountryOrRegion>(StringComparer.OrdinalIgnoreCase);
-            public Dictionary<string, StateOrProvince> StatesOrProvinces = new Dictionary<string, StateOrProvince>(StringComparer.OrdinalIgnoreCase);
-            public Dictionary<string, CompanyName> CompanyNames = new Dictionary<string, CompanyName>(StringComparer.OrdinalIgnoreCase);
         }
 
         #endregion
