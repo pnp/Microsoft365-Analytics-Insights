@@ -72,15 +72,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         /// </summary>
         void ReleaseSavedRows();
 
+        /// <summary>Current tracked usage-report entity count, for save-stage diagnostics.</summary>
+        int TrackedEntityCount { get; }
+
         /// <summary>
         /// Enter a bulk-write scope, restoring whatever was changed when disposed. For the SQL adapter
         /// that means turning EF6 change auto-detection off, without which adding a day's rows is
         /// O(n^2) - and restoring the PREVIOUS value, not a hard-coded "on", because the context may
         /// have been handed in with it already off.
         /// </summary>
-        /// <summary>Current tracked usage-report entity count, for save-stage diagnostics.</summary>
-        int TrackedEntityCount { get; }
-
         IDisposable BeginBulkWrite();
     }
 

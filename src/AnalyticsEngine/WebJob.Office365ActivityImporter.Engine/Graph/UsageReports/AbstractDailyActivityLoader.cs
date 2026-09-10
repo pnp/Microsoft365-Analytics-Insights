@@ -249,6 +249,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
             Telemetry.LogInformation($"Saving {loaderType} for {LoadedReportPages.Keys.Count} dates");
 
+            // Compute total once. The previous "LoadedReportPages.SelectMany(r => r.Value).Count()"
+            // call ran on every 1000-row progress print, making progress O(n^2).
             var totalReports = LoadedReportPages.Sum(kv => kv.Value.Count);
             if (instrumentationEnabled)
             {
@@ -261,6 +263,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 });
             }
 
+            // Persist one day at a time, committing in fixed-size batches. Previously every row across every date
+            // was added to a single context and committed in ONE SaveChangesAsync, and every existing row across
+            // the whole date range was pre-loaded and tracked. At ~200k users x up to 28 days EF6 builds an
+            // insert/update command tree for every pending row at once and throws OutOfMemoryException on a small
+            // App Service. Reading only one day at a time and flushing in batches keeps the command-tree build
+            // bounded; auto change-detection is turned off so adding a day's rows stays O(n) instead of O(n^2).
+            // AssociatedLookupId is [NotMapped] (it maps to UserID / YammerGroupID per subclass), so existing
+            // rows can only be filtered in SQL by the mapped Date column - we key them by lookup id in memory.
             var store = StoreFor(db);
             try
             {
@@ -274,6 +284,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                         existingLoadWatch?.Stop();
 
                         var existingByLookupId = new Dictionary<int, TReportDbType>();
+                        // Graph returns one row per lookup per date; last wins if the DB somehow has duplicates.
                         foreach (var existingRow in existingRows)
                         {
                             existingByLookupId[existingRow.AssociatedLookupId] = existingRow;
@@ -300,6 +311,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                             dateMetrics?.RecordInputRow();
                             totals?.RecordInputRow();
 
+                            // A usage-report row with no user/group identifier (e.g. a Graph row with a null
+                            // userPrincipalName when report anonymisation is enabled on the tenant) can't be matched
+                            // to a DB lookup. Skip it rather than NRE / ArgumentNullException deeper in the loop.
                             if (string.IsNullOrWhiteSpace(reportPage.LookupFieldValue))
                             {
                                 dateMetrics?.RecordMissingLookupValue();
@@ -308,6 +322,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                                 continue;
                             }
 
+                            // Usually an Entra ID group-membership check for a group filter.
                             var scopeTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
                             var inScope = await IdInScope(reportPage.LookupFieldValue);
                             if (instrumentationEnabled)
@@ -380,6 +395,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                                 totals.ProjectionMs += elapsed;
                             }
 
+                            // Auto-detect is off, so state the change explicitly. Only write when something actually
+                            // changed: existing rows for finalized days re-fetched by the recent-window rule are almost
+                            // always identical to what's stored, so dirty-checking skips the vast majority of UPDATEs -
+                            // the dominant cost of this import at large-tenant scale.
                             bool willWrite;
                             var dirtyTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
                             if (isNewLog)
@@ -551,6 +570,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             try
             {
                 stats?.AddSynchronizationWait(ElapsedMillisecondsSince(lockStart));
+                // Re-check in case another thread populated it while we were resolving.
                 lookupId = userEmailToDbIdCache.GetCachedIdForName<TReportDbType>(reportPage.LookupFieldValue);
                 if (lookupId == null)
                 {
