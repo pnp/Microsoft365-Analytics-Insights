@@ -1,6 +1,5 @@
 ﻿using Common.Entities;
 using Common.Entities.Entities;
-using Common.Entities.Entities.AuditLog;
 using DataUtils;
 using DataUtils.Sql;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -13,169 +12,124 @@ using WebJob.AppInsightsImporter.Engine.Sql;
 
 namespace Tests.UnitTests
 {
+    /// <summary>
+    /// Asserts the invariant introduced by issue #167: <c>dbo.urls.full_url</c> is UNIQUE, so duplicate URL
+    /// lookups can no longer be created.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This class previously inserted two <c>urls</c> rows with the same <c>full_url</c> and asserted that
+    /// <c>ImportDbHacks.CleanDuplicateUrls</c> consolidated them. That premise is now false by design - the
+    /// unique index rejects the second row - so the test has been turned around to prove the constraint
+    /// rather than the clean-up.
+    /// </para>
+    /// <para>
+    /// The de-duplication behaviour itself is not lost: it is covered far more thoroughly by
+    /// <see cref="UniqueUrlsFullUrlIndexMigrationTests"/>, which runs the migration's real SQL from a
+    /// pre-migration (non-unique) state, including reference repointing, collision pruning and non-ASCII
+    /// URLs. <c>CleanDuplicateUrls</c> has no production caller and is now only a one-time safeguard for
+    /// databases that predate the migration.
+    /// </para>
+    /// </remarks>
     [TestClass]
     public class DuplicateUrlTests
     {
-
+        /// <summary>
+        /// The index is UNIQUE, so a second row with the same full_url must not be created. Because it is
+        /// built WITH (IGNORE_DUP_KEY = ON), SQL Server skips the duplicate instead of aborting the whole
+        /// statement - which is the point: a concurrent check-then-insert race in the importer loses only
+        /// the duplicate, not every other new URL in the same batch.
+        /// </summary>
         [TestMethod]
-        public async Task InsertAndCleanDuplicateUrlTests()
+        public async Task DuplicateUrl_CannotBeCreated()
         {
             using (var db = new AnalyticsEntitiesContext())
             {
-                // Make sure we have the right DB schema
+                var url = "http://whatever/" + DateTime.Now.Ticks;
+
+                db.urls.Add(new Url { FullUrl = url });
+                await db.SaveChangesAsync();
+
+                Assert.AreEqual(1, db.urls.Count(u => u.FullUrl == url));
+
+                // A second insert of the same URL, issued the way the importer's staging merge does (raw
+                // SQL, several rows in one statement). The duplicate is skipped; the other row still lands.
+                var brandNew = "http://whatever/other/" + DateTime.Now.Ticks;
+                await db.Database.ExecuteSqlCommandAsync(
+                    System.Data.Entity.TransactionalBehavior.DoNotEnsureTransaction,
+                    @"INSERT INTO dbo.urls (full_url) SELECT @p0 UNION ALL SELECT @p1;", url, brandNew);
+
+                Assert.AreEqual(1, db.urls.Count(u => u.FullUrl == url),
+                    "The unique index must have prevented a second row for the same URL.");
+                Assert.AreEqual(1, db.urls.Count(u => u.FullUrl == brandNew),
+                    "IGNORE_DUP_KEY must let the rest of the statement succeed - otherwise a single racing "
+                    + "duplicate would lose every other new URL in the same import batch.");
+            }
+        }
+
+        /// <summary>
+        /// The URL lookup is case-insensitive under the database collation, which is what the unique index
+        /// enforces and what the staging merges already assume when they join on
+        /// <c>urls.full_url = imports.url</c>.
+        /// </summary>
+        [TestMethod]
+        public async Task UrlsDifferingOnlyByCase_AreTheSameUrl()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var url = "http://whatever/CaseTest" + DateTime.Now.Ticks;
+
+                db.urls.Add(new Url { FullUrl = url });
+                await db.SaveChangesAsync();
+
+                await db.Database.ExecuteSqlCommandAsync(
+                    System.Data.Entity.TransactionalBehavior.DoNotEnsureTransaction,
+                    @"INSERT INTO dbo.urls (full_url) VALUES (@p0);", url.ToUpperInvariant());
+
+                Assert.AreEqual(1, db.urls.Count(u => u.FullUrl == url),
+                    "A case-only variant is the same URL under this collation, so it must not create a row.");
+            }
+        }
+
+        /// <summary>
+        /// The end-to-end consequence of #167 for the hits import: with duplicate URLs impossible, two
+        /// page-views for the same URL import as two hits against ONE url row.
+        /// </summary>
+        [TestMethod]
+        public async Task TwoPageViewsForOneUrl_ImportAgainstASingleUrlRow()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
                 await ImportDbHacks.CleanDuplicateHitsAndCreateIX_PageRequestID(db);
 
-
-                var URL_DUP = "http://whatever/" + DateTime.Now.Ticks;
-
-                // Insert x2 duplicate URLs
-                var urlDup1 = new Url() { FullUrl = URL_DUP };
-                var urlDup2 = new Url() { FullUrl = URL_DUP, MetadataLastRefreshed = DateTime.Now };
-                db.urls.Add(urlDup1);
-                await db.SaveChangesAsync();
-
-                db.urls.Add(urlDup2);
-                await db.SaveChangesAsync();
-                Console.WriteLine($"Inserted duplicate URLs: {urlDup1.ID} and {urlDup2.ID}");
-
-                var randoUser = new User
-                {
-                    UserPrincipalName = "user" + DateTime.Now.Ticks + "@example.com",
-                };
-
-                // Insert linked data to the URLs. These should be all the entities that reference URLs in the database.
-                var spEvent = new SharePointEventMetadata
-                {
-                    url = urlDup2,
-                    AuditEvent = new CommonAuditEvent
-                    {
-                        Id = Guid.NewGuid(),
-                        Operation = new EventOperation
-                        {
-                            Name = "Op" + DateTime.Now.Ticks
-                        },
-                        User = randoUser,
-                        TimeStamp = DateTime.Now,
-                    },
-                };
-                db.sharepoint_events.Add(spEvent);
-
-                var copilotEvent = new CopilotEventMetadataFile
-                {
-                    FileExtension = new SPEventFileExtension { extension_name = "Ext" + DateTime.Now.Ticks },
-                    FileName = new SPEventFileName { Name = "File" + DateTime.Now.Ticks },
-                    Url = urlDup2,
-                    Site = new Site { UrlBase = "http://site" + DateTime.Now.Ticks },
-                    RelatedChat = new CopilotChat
-                    {
-                        AppHost = "AppHost" + DateTime.Now.Ticks,
-                        AuditEvent = new CommonAuditEvent
-                        {
-                            Id = Guid.NewGuid(),
-                            Operation = new EventOperation
-                            {
-                                Name = "Dup Url Op " + DateTime.Now.Ticks
-                            },
-                            User = randoUser,
-                            TimeStamp = DateTime.Now,
-                        }
-                    }
-                };
-                db.CopilotEventMetadataFiles.Add(copilotEvent);
-
-                var pageComment = new PageComment
-                {
-                    Url = urlDup2,
-                    Comment = "Comment" + DateTime.Now.Ticks,
-                    User = randoUser,
-                    Created = DateTime.Now,
-                };
-                db.UrlComments.Add(pageComment);
-
-                var pageLike = new PageLike
-                {
-                    Url = urlDup2,
-                    User = randoUser,
-                    Created = DateTime.Now,
-                };
-                db.UrlLikes.Add(pageLike);
-
-                var pagePropVal = new FileMetadataPropertyValue
-                {
-                    Url = urlDup2,
-                    Field = new FileMetadataFieldName { Name = "Prop" + DateTime.Now.Ticks },
-                    Updated = DateTime.Now,
-                };
-                db.FileMetadataPropertyValues.Add(pagePropVal);
-                await db.SaveChangesAsync();
-
-                var duplicateHitsInSingleBatch = new PageViewCollection();
-
+                var url = "http://whatever/" + DateTime.Now.Ticks;
                 var hitsPreInsert = db.hits.Count();
 
-                // Add 2 hits with same URL but different request IDs
-                duplicateHitsInSingleBatch.Rows.Add(new PageViewAppInsightsQueryResult
+                var pageViews = new PageViewCollection();
+                for (var i = 0; i < 2; i++)
                 {
-                    Url = URL_DUP,
-                    CustomProperties = new PageViewCustomProps
+                    pageViews.Rows.Add(new PageViewAppInsightsQueryResult
                     {
-                        PageRequestId = Guid.NewGuid(),
-                        SessionId = Guid.NewGuid().ToString()
-                    },
-                    AppInsightsTimestamp = DateTime.Now,
-                    Browser = "Whatevs",
-                    DeviceModel = "Whoever",
-                    Username = "bob",
-                    ClientOS = "Win"
-                });
-                duplicateHitsInSingleBatch.Rows.Add(new PageViewAppInsightsQueryResult
-                {
-                    Url = URL_DUP,
-                    CustomProperties = new PageViewCustomProps
-                    {
-                        PageRequestId = Guid.NewGuid(),
-                        SessionId = Guid.NewGuid().ToString()
-                    },
-                    AppInsightsTimestamp = DateTime.Now,
-                    Browser = "Whatevs",
-                    DeviceModel = "Whoever",
-                    Username = "bob",
-                    ClientOS = "Win"
-                });
+                        Url = url,
+                        CustomProperties = new PageViewCustomProps
+                        {
+                            PageRequestId = Guid.NewGuid(),
+                            SessionId = Guid.NewGuid().ToString()
+                        },
+                        AppInsightsTimestamp = DateTime.Now,
+                        Browser = "Whatevs",
+                        DeviceModel = "Whoever",
+                        Username = "bob",
+                        ClientOS = "Win"
+                    });
+                }
 
-                // Saving hits while the duplicate URL still exists no longer throws (issue #165): the
-                // merge now keeps exactly one row per page_request_id, so a duplicate dimension lookup
-                // can't break the unique IX_PageRequestID. Each of the 2 page-views is imported once.
-                await duplicateHitsInSingleBatch.SaveToSQL(db, AnalyticsLogger.ConsoleOnlyTracer());
+                await pageViews.SaveToSQL(db, AnalyticsLogger.ConsoleOnlyTracer());
 
-                // Cleanup duplicate URLs - consolidates the 2 url rows into 1 and repoints all FKs.
-                await ImportDbHacks.CleanDuplicateUrls(db);
-
-                var hitsPostInsert = db.hits.Count();
-
-                // Find the resources we created above to make sure they still exist (or not)
-                var urlDup1Check = db.urls.FirstOrDefault(u => u.ID == urlDup1.ID);
-                var urlDup2Check = db.urls.FirstOrDefault(u => u.ID == urlDup2.ID);
-                Assert.IsNotNull(urlDup1Check, "URL 1 should still exist after cleanup");
-                Assert.IsNull(urlDup2Check, "URL 2 should not exist after cleanup");
-
-                var spEventCheck = db.sharepoint_events.FirstOrDefault(e => e.AuditEvent.Id == spEvent.AuditEvent.Id);
-                Assert.IsNotNull(spEventCheck, "SharePoint event should exist after cleanup");
-
-                var copilotEventCheck = db.CopilotEventMetadataFiles.FirstOrDefault(e => e.RelatedChat.AuditEvent.Id == copilotEvent.RelatedChat.AuditEvent.Id);
-                Assert.IsNotNull(copilotEventCheck, "Copilot event should exist after cleanup");
-
-                var pageCommentCheck = db.UrlComments.FirstOrDefault(c => c.ID == pageComment.ID);
-                Assert.IsNotNull(pageCommentCheck, "Page comment should exist after cleanup");
-
-                var pageLikeCheck = db.UrlLikes.FirstOrDefault(l => l.ID == pageLike.ID);
-                Assert.IsNotNull(pageLikeCheck, "Page like should exist after cleanup");
-
-                var pagePropValCheck = db.FileMetadataPropertyValues.FirstOrDefault(p => p.ID == pagePropVal.ID);
-                Assert.IsNotNull(pagePropValCheck, "Page property value should exist after cleanup");
-
-                Assert.IsTrue(hitsPostInsert == hitsPreInsert + duplicateHitsInSingleBatch.Rows.Count,
-                    "Hits count should increase by " + duplicateHitsInSingleBatch.Rows.Count + " after saving duplicate hits");
+                Assert.AreEqual(1, db.urls.Count(u => u.FullUrl == url),
+                    "The importer must create exactly one url lookup for the URL.");
+                Assert.AreEqual(hitsPreInsert + 2, db.hits.Count(),
+                    "Both page-views should be imported.");
             }
         }
     }
