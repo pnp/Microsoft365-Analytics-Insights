@@ -65,7 +65,7 @@ Each supported workload (`Constants.cs → ActivityImportConstants.WORKLOAD_*`) 
 | `SharePoint` / `OneDrive` | `SharePointAuditLogContent` | Org-URL whitelist (at persistence layer) |
 | `Exchange` | `ExchangeAuditLogContent` | None |
 | `AzureActiveDirectory` | `AzureADAuditLogContent` | None |
-| `MicrosoftStream` | `StreamAuditLogContent` | None |
+| `MicrosoftStream` | `GeneralAuditLogContent` | None (Stream Classic is retired; its dedicated tables were removed, so records are stored as generic events) |
 | `Copilot` | `CopilotAuditLogContent` | None (custom parser from JSON string) |
 | `PowerPlatform` (RecordType 256) | → `PowerPlatformAdminActivityRecordContent.ToWorkloadSpecificContent()` | Requires a supported resource identity |
 | `PowerApps` (legacy) | `PowerAppsAuditLogContent` | None |
@@ -170,6 +170,11 @@ subclass implements `ProcessExtendedProperties(SaveSession, CommonAuditEvent, IL
 - **Power Platform subclasses**: delegates to `PowerPlatformAuditEventManager` which stages
   into its own workload-specific temp tables and runs the corresponding merge SQL.
 - **Copilot**: delegates to `CopilotAuditEventManager` similarly.
+- **General**: stamps the workload and the raw record JSON onto the `event_meta_general` row.
+- **Exchange / Entra ID**: nothing. Their `event_meta_*` rows are written entirely by the merge SQL.
+  These used to persist the record's `ExtendedProperties` bag into `audit_event_prop_names` /
+  `audit_event_prop_vals` / `audit_event_*_props`; those tables were retired (nothing read them back)
+  by the `RetireUnusedAuditYammerStreamTables` migration.
 
 ---
 
