@@ -72,11 +72,24 @@ namespace App.ControlPanel.Controls
         private void ImportJobSettingsSelection_Load(object sender, System.EventArgs e)
         {
             grpProductCfgInsights.Dock = DockStyle.Fill;
-            grpProductCfgInsights.SizeChanged += (s, args) => LayoutCopilotColumn();
-            lblCopilotDesc.SizeChanged += (s, args) => LayoutCopilotColumn();
-            FontChanged += (s, args) => LayoutCopilotColumn();
+
+            // Wired here, not in the constructor, and only once. lblCopilotDesc is anchored to the
+            // group box's right edge, and setting its Height before the group box has been docked to
+            // its real width freezes the anchor at the designer width - so the note stops shrinking
+            // with the column and runs off the edge. Load runs after the dock, but it also runs again
+            // on every handle recreation, hence the latch.
+            if (!_copilotColumnWired)
+            {
+                _copilotColumnWired = true;
+                grpProductCfgInsights.SizeChanged += (s, args) => LayoutCopilotColumn();
+                lblCopilotDesc.SizeChanged += (s, args) => LayoutCopilotColumn();
+                FontChanged += (s, args) => LayoutCopilotColumn();
+            }
+
             LayoutCopilotColumn();
         }
+
+        private bool _copilotColumnWired;
 
         /// <summary>
         /// Sizes the grey interaction-history note to the text it actually holds, then slides the
