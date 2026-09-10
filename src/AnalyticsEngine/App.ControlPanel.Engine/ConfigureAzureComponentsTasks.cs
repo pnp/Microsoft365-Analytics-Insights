@@ -40,14 +40,14 @@ namespace App.ControlPanel.Engine
         /// <summary>
         /// Install configure & software on App Service, update target DB. 
         /// </summary>
-        public async Task RunPostCreatePaaSTasks(WebSiteResource webApp, DatabasePaaSInfo dbInfo, StorageAccountResource storage, AutomationAccountResource automationAccount,
+        public async Task RunPostCreatePaaSTasks(WebSiteResource webApp, AppServicePlanResource appServicePlan, DatabasePaaSInfo dbInfo, StorageAccountResource storage, AutomationAccountResource automationAccount,
             AppInsightsInfo appInsights,
             RedisInstallResult redis, CognitiveServicesInfo cognitiveServicesInfo,
             KeyVaultResource keyVault, string serviceBusConnectionString, SubscriptionResource subscription,
             SqlServerResource sqlServer = null)
         {
             // Configure app-service connection-strings, etc
-            await ConfigureWebApp(webApp, dbInfo, storage, redis, cognitiveServicesInfo, appInsights, serviceBusConnectionString, keyVault);
+            await ConfigureWebApp(webApp, appServicePlan, dbInfo, storage, redis, cognitiveServicesInfo, appInsights, serviceBusConnectionString, keyVault);
 
             // Download/extract the release while the App Service is still available. Kudu/SCM
             // rejects deployments while the site resource is stopped.
@@ -292,7 +292,7 @@ namespace App.ControlPanel.Engine
             await installJob.Install();
         }
 
-        async Task ConfigureWebApp(WebSiteResource webApp, DatabasePaaSInfo backendInfo,
+        async Task ConfigureWebApp(WebSiteResource webApp, AppServicePlanResource appServicePlan, DatabasePaaSInfo backendInfo,
             StorageAccountResource storage,
             RedisInstallResult redis,
             CognitiveServicesInfo cognitiveServicesInfo,
@@ -389,12 +389,38 @@ namespace App.ControlPanel.Engine
             }
             connectionStrings.Properties.Add("Redis", new ConnStringValueTypePair(redisConnectionString, ConnectionStringType.Custom));
 
-            await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = new SiteConfigProperties { Use32BitWorkerProcess = false, IsAlwaysOn = true } });
+            var siteConfig = BuildPostCreateSiteConfig(appServicePlan?.Data?.Sku);
+            try
+            {
+                await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = siteConfig });
+            }
+            catch (RequestFailedException ex) when (AppServicePlanCapabilities.IsPlanCapabilityConflict(ex))
+            {
+                _logger.LogWarning(AppServicePlanCapabilities.BuildAlwaysOnUnsupportedWarning(appServicePlan?.Data?.Name ?? Config.AppServicePlanName, appServicePlan?.Data?.Sku));
+                await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = BuildPostCreateSiteConfig(appServicePlan?.Data?.Sku, includePlanSensitiveSettings: false) });
+            }
             await PreserveUnmanagedAppSettingsAsync(webApp, appSettings);
             await webApp.UpdateApplicationSettingsAsync(appSettings);
             await webApp.UpdateConnectionStringsAsync(connectionStrings);
 
             _logger.LogInformation("App Service connection-strings & app-settings configured");
+        }
+
+        public static SiteConfigProperties BuildPostCreateSiteConfig(AppServiceSkuDescription appServicePlanSku, bool includePlanSensitiveSettings = true)
+        {
+            var siteConfig = new SiteConfigProperties();
+
+            if (includePlanSensitiveSettings && AppServicePlanCapabilities.SupportsAlwaysOn(appServicePlanSku))
+            {
+                siteConfig.IsAlwaysOn = true;
+            }
+
+            if (includePlanSensitiveSettings && AppServicePlanCapabilities.Supports64BitWorkerProcess(appServicePlanSku))
+            {
+                siteConfig.Use32BitWorkerProcess = false;
+            }
+
+            return siteConfig;
         }
 
         /// <summary>
