@@ -115,6 +115,7 @@
     <Compile Include="Config\ImportConfig.cs" />
     <Compile Include="Config\UserGroupsFilterModel.cs" />
     <Compile Include="Entities\AuditLog\CopilotEvents.cs" />
+    <Compile Include="Entities\AuditLog\DlpEvents.cs" />
     <Compile Include="Entities\Copilot\CopilotInteractionHistory.cs" />
     <Compile Include="Entities\Email\EmailAddress.cs" />
     <Compile Include="Entities\Email\SentEmail.cs" />
@@ -417,6 +418,10 @@
       <DependentUpon>202609090519337_AgentCostTables.cs</DependentUpon>
     </Compile>
     <Compile Include="Migrations\202608310800001_ColumnstoreUsageReportMetrics.cs" />
+    <Compile Include="Migrations\202609100900001_DlpCopilotImpact.cs" />
+    <Compile Include="Migrations\202609100900001_DlpCopilotImpact.Designer.cs">
+      <DependentUpon>202609100900001_DlpCopilotImpact.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202608310800001_ColumnstoreUsageReportMetrics.Designer.cs">
       <DependentUpon>202608310800001_ColumnstoreUsageReportMetrics.cs</DependentUpon>
     </Compile>
@@ -628,6 +633,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202608310800001_ColumnstoreUsageReportMetrics.resx">
       <DependentUpon>202608310800001_ColumnstoreUsageReportMetrics.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609100900001_DlpCopilotImpact.resx">
+      <DependentUpon>202609100900001_DlpCopilotImpact.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\v1-0-5.resx">
       <DependentUpon>v1-0-5.cs</DependentUpon>

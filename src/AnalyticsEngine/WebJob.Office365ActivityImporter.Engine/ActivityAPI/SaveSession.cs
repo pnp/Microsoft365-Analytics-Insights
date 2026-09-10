@@ -7,6 +7,7 @@ using Microsoft.Graph;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform;
 
 namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
@@ -18,6 +19,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
     {
         private CopilotAuditEventManager _copilotEventResolver = null;
         private PowerPlatformAuditEventManager _powerPlatformEventResolver = null;
+        private DlpAuditEventManager _dlpEventResolver = null;
         private GraphAppIndentityOAuthContext _authContext;
         private readonly ICopilotMetadataLoader _injectedCopilotLoader;
         private readonly ILogger _logger;
@@ -59,10 +61,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             }
             _copilotEventResolver = new CopilotAuditEventManager(_appConfig.ConnectionStrings.DatabaseConnectionString, loader, _logger, _appConfig.ResolveCopilotResourceMetadata);
             _powerPlatformEventResolver = new PowerPlatformAuditEventManager(_appConfig.ConnectionStrings.DatabaseConnectionString, _logger);
+            _dlpEventResolver = new DlpAuditEventManager(_appConfig.ConnectionStrings.DatabaseConnectionString, _logger);
         }
 
         public CopilotAuditEventManager CopilotEventResolver => _copilotEventResolver ?? throw new Exception("Session not initialised");
         public PowerPlatformAuditEventManager PowerPlatformEventResolver => _powerPlatformEventResolver ?? throw new Exception("Session not initialised");
+        public DlpAuditEventManager DlpEventResolver => _dlpEventResolver ?? throw new Exception("Session not initialised");
         public SharePointLookupManager SharePointLookupManager { get; set; }
         public StreamLookupManager StreamLookupManager { get; set; }
 
@@ -90,6 +94,10 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
         /// last <see cref="CommitAllChanges"/> call.</summary>
         public double LastEfSaveChangesMs { get; private set; }
 
+        /// <summary>Time (ms) spent in the DLP commit (its two staging-table merges) during the last
+        /// <see cref="CommitAllChanges"/> call.</summary>
+        public double LastDlpCommitMs { get; private set; }
+
         public async Task CommitAllChanges()
         {
             // Copilot commit = staging-table load + the shared accessed-resource/agents merge SQL. Timed on its
@@ -98,6 +106,20 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             await _copilotEventResolver.CommitAllChanges();
             swCopilot.Stop();
             LastCopilotCommitMs = swCopilot.Elapsed.TotalMilliseconds;
+
+            // DLP commit. Deliberately AFTER the Copilot commit: copilot_dlp_events.copilot_chat_id is a
+            // foreign key to copilot_chats, and those rows are created by the Copilot merge above. Both
+            // DLP merges also INNER JOIN their parent (copilot_chats / audit_events) rather than assuming
+            // it exists - which is safe because audit_events is written by the staging merge BEFORE the
+            // metadata pass runs: SaveMetadataAsync re-reads the just-saved events out of the database to
+            // build eventsJustSavedById, and only events found there reach ProcessExtendedProperties.
+            // Runs unconditionally because it serves two independently-toggled sources - Copilot-embedded
+            // DLP (which needs no DLP permission) and the DLP.All feed - and with nothing staged the
+            // merges return before opening a connection.
+            var swDlp = System.Diagnostics.Stopwatch.StartNew();
+            await _dlpEventResolver.CommitAllChanges();
+            swDlp.Stop();
+            LastDlpCommitMs = swDlp.Elapsed.TotalMilliseconds;
 
             // Power Platform commit (6 staging-table merges). Skipped when the workload is disabled - no PP
             // events are staged in that case, so this just avoids running the merges against empty tables.

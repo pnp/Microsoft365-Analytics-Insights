@@ -104,6 +104,11 @@
     <Compile Include="AgentCosts\PowerPlatformLicensingCreditSource.cs" />
     <Compile Include="AgentCosts\SqlAgentCostStore.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\IPowerPlatformStagingWriter.cs" />
+    <Compile Include="ActivityAPI\Dlp\CopilotDlpRules.cs" />
+    <Compile Include="ActivityAPI\Dlp\DlpAuditEventManager.cs" />
+    <Compile Include="ActivityAPI\Dlp\IDlpStagingWriter.cs" />
+    <Compile Include="ActivityAPI\Dlp\StagingClasses.cs" />
+    <Compile Include="Entities\Serialisation\DlpAuditLogContent.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditLogFilter.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\StagingClasses.cs" />
     <Compile Include="ActivityAPI\Interfaces.cs" />
@@ -318,6 +323,8 @@
     <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_automate_events_from_staging_table.sql" />
     <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_automate_share_events_from_staging_table.sql" />
     <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_bi_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\Dlp\SQL\insert_copilot_dlp_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\Dlp\SQL\insert_dlp_rule_matches_from_staging_table.sql" />
     <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_copilot_studio_events_from_staging_table.sql" />
     <Content Include="Resources\Insert Activity from Staging Table.sql" />
   </ItemGroup>

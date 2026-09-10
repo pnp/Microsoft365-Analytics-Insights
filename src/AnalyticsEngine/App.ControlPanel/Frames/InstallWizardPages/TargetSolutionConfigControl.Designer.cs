@@ -49,6 +49,7 @@
             this.chkPowerPlatform = new System.Windows.Forms.CheckBox();
             this.chkCopilotUsageReports = new System.Windows.Forms.CheckBox();
             this.chkCopilotInteractionHistory = new System.Windows.Forms.CheckBox();
+            this.chkDlp = new System.Windows.Forms.CheckBox();
             this.chkCopilotStudioCredits = new System.Windows.Forms.CheckBox();
             this.chkAzureCostManagement = new System.Windows.Forms.CheckBox();
             this.pictureBoxCopilot = new System.Windows.Forms.PictureBox();
@@ -88,6 +89,7 @@
             this.grpProductCfgInsights.Controls.Add(this.chkPowerPlatform);
             this.grpProductCfgInsights.Controls.Add(this.chkCopilotUsageReports);
             this.grpProductCfgInsights.Controls.Add(this.chkCopilotInteractionHistory);
+            this.grpProductCfgInsights.Controls.Add(this.chkDlp);
             this.grpProductCfgInsights.Controls.Add(this.chkCopilotStudioCredits);
             this.grpProductCfgInsights.Controls.Add(this.chkAzureCostManagement);
             this.grpProductCfgInsights.Controls.Add(this.chkWeb);
@@ -332,6 +334,17 @@
             this.chkCopilotInteractionHistory.Text = "Copilot AI interaction history (tenant-wide unless scoped)";
             this.chkCopilotInteractionHistory.UseVisualStyleBackColor = true;
             // 
+            // chkDlp
+            // 
+            this.chkDlp.AutoSize = true;
+            this.chkDlp.Location = new System.Drawing.Point(356, 136);
+            this.chkDlp.Margin = new System.Windows.Forms.Padding(2);
+            this.chkDlp.Name = "chkDlp";
+            this.chkDlp.Size = new System.Drawing.Size(300, 17);
+            this.chkDlp.TabIndex = 28;
+            this.chkDlp.Text = "DLP policy events (needs ActivityFeed.ReadDlp permission)";
+            this.chkDlp.UseVisualStyleBackColor = true;
+            // 
             // chkCopilotStudioCredits
             // 
             this.chkCopilotStudioCredits.AutoSize = true;
@@ -339,7 +352,7 @@
             this.chkCopilotStudioCredits.Margin = new System.Windows.Forms.Padding(2);
             this.chkCopilotStudioCredits.Name = "chkCopilotStudioCredits";
             this.chkCopilotStudioCredits.Size = new System.Drawing.Size(280, 17);
-            this.chkCopilotStudioCredits.TabIndex = 28;
+            this.chkCopilotStudioCredits.TabIndex = 29;
             this.chkCopilotStudioCredits.Text = "Copilot Studio credits (per agent and per person - needs extra role)";
             this.chkCopilotStudioCredits.UseVisualStyleBackColor = true;
             // 
@@ -350,7 +363,7 @@
             this.chkAzureCostManagement.Margin = new System.Windows.Forms.Padding(2);
             this.chkAzureCostManagement.Name = "chkAzureCostManagement";
             this.chkAzureCostManagement.Size = new System.Drawing.Size(280, 17);
-            this.chkAzureCostManagement.TabIndex = 29;
+            this.chkAzureCostManagement.TabIndex = 30;
             this.chkAzureCostManagement.Text = "Azure costs (needs AzureCostScopes app setting)";
             this.chkAzureCostManagement.UseVisualStyleBackColor = true;
             // 
@@ -410,6 +423,7 @@
         private System.Windows.Forms.CheckBox chkPowerPlatform;
         private System.Windows.Forms.CheckBox chkCopilotUsageReports;
         private System.Windows.Forms.CheckBox chkCopilotInteractionHistory;
+        private System.Windows.Forms.CheckBox chkDlp;
         private System.Windows.Forms.CheckBox chkCopilotStudioCredits;
         private System.Windows.Forms.CheckBox chkAzureCostManagement;
     }

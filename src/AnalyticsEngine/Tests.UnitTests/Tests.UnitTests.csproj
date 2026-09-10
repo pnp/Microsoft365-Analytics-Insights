@@ -242,6 +242,9 @@
     <Compile Include="CopilotUsageReportPolicyTests.cs" />
     <Compile Include="Constants.cs" />
     <Compile Include="CopilotTests.cs" />
+    <Compile Include="DlpCopilotTests.cs" />
+    <Compile Include="DlpApiContractTests.cs" />
+    <Compile Include="DlpApiSqlIntegrationTests.cs" />
     <Compile Include="CopilotInteractionHistoryTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeCopilotEventAdaptor.cs" />
     <Compile Include="FakeLoaderClasses\InMemoryCopilotUsagePersistenceManager.cs" />
