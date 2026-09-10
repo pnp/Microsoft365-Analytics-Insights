@@ -249,14 +249,20 @@ namespace Tests.UnitTests.InstallTests
             }
         }
 
+        /// <summary>
+        /// Only managed files count. A release note or config that merely mentions the type must not be
+        /// read as the capability being present - so here the marker exists ONLY in a non-managed file,
+        /// and every managed file is free of it.
+        /// </summary>
         [TestMethod]
         public void Probe_IgnoresNonManagedFiles()
         {
             using (var folder = new TempFolder())
             {
-                // A config/readme mentioning the type must not count as the capability being present.
-                folder.WriteBinary("readme.txt", "This release adds AzureSqlTokenAuth support.");
-                folder.WriteBinary("Other.dll", "no marker");
+                folder.WriteBinary("readme.txt", "This release adds " + DownloadedBuildCapabilityProbe.EntraSqlAuthMarker + " support.");
+                folder.WriteBinary("release-notes.md", DownloadedBuildCapabilityProbe.EntraSqlAuthMarker);
+                folder.WriteBinary("Other.dll", "no marker in any assembly");
+                folder.WriteBinary("AnalyticsInstaller.exe", "no marker in any assembly");
 
                 Assert.AreEqual(DownloadedBuildCapability.NotSupported,
                     DownloadedBuildCapabilityProbe.SupportsEntraSqlAuth(folder.Info));
