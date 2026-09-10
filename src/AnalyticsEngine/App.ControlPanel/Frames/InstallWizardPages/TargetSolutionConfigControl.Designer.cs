@@ -28,7 +28,9 @@
         /// </summary>
         private void InitializeComponent()
         {
+            this.components = new System.ComponentModel.Container();
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(TargetSolutionConfigControl));
+            this.toolTipTargets = new System.Windows.Forms.ToolTip(this.components);
             this.pnlSolutionSelectionContainer = new System.Windows.Forms.Panel();
             this.grpProductCfgInsights = new System.Windows.Forms.GroupBox();
             this.label3 = new System.Windows.Forms.Label();
@@ -271,7 +273,7 @@
             this.lblCopilotDesc.ForeColor = System.Drawing.SystemColors.GrayText;
             this.lblCopilotDesc.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
-            this.lblCopilotDesc.Location = new System.Drawing.Point(356, 142);
+            this.lblCopilotDesc.Location = new System.Drawing.Point(356, 204);
             this.lblCopilotDesc.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
             this.lblCopilotDesc.Name = "lblCopilotDesc";
             this.lblCopilotDesc.Size = new System.Drawing.Size(328, 66);
@@ -284,10 +286,12 @@
             this.chkCopilot.AutoSize = true;
             this.chkCopilot.Location = new System.Drawing.Point(356, 76);
             this.chkCopilot.Margin = new System.Windows.Forms.Padding(2);
+            this.chkCopilot.MaximumSize = new System.Drawing.Size(290, 0);
             this.chkCopilot.Name = "chkCopilot";
             this.chkCopilot.Size = new System.Drawing.Size(120, 17);
             this.chkCopilot.TabIndex = 23;
             this.chkCopilot.Text = "Copilot interactions";
+            this.toolTipTargets.SetToolTip(this.chkCopilot, "Imports Microsoft 365 Copilot interaction events from the Office 365 audit log.");
             this.chkCopilot.UseVisualStyleBackColor = true;
             // 
             // chkSentEmails
@@ -317,10 +321,12 @@
             this.chkCopilotUsageReports.AutoSize = true;
             this.chkCopilotUsageReports.Location = new System.Drawing.Point(356, 96);
             this.chkCopilotUsageReports.Margin = new System.Windows.Forms.Padding(2);
+            this.chkCopilotUsageReports.MaximumSize = new System.Drawing.Size(290, 0);
             this.chkCopilotUsageReports.Name = "chkCopilotUsageReports";
-            this.chkCopilotUsageReports.Size = new System.Drawing.Size(250, 17);
+            this.chkCopilotUsageReports.Size = new System.Drawing.Size(213, 17);
             this.chkCopilotUsageReports.TabIndex = 26;
             this.chkCopilotUsageReports.Text = "Copilot usage reports (Microsoft Graph)";
+            this.toolTipTargets.SetToolTip(this.chkCopilotUsageReports, "Imports the aggregated Microsoft 365 Copilot usage reports from Microsoft Graph.");
             this.chkCopilotUsageReports.UseVisualStyleBackColor = true;
             // 
             // chkCopilotInteractionHistory
@@ -328,10 +334,13 @@
             this.chkCopilotInteractionHistory.AutoSize = true;
             this.chkCopilotInteractionHistory.Location = new System.Drawing.Point(356, 116);
             this.chkCopilotInteractionHistory.Margin = new System.Windows.Forms.Padding(2);
+            this.chkCopilotInteractionHistory.MaximumSize = new System.Drawing.Size(290, 0);
             this.chkCopilotInteractionHistory.Name = "chkCopilotInteractionHistory";
-            this.chkCopilotInteractionHistory.Size = new System.Drawing.Size(280, 17);
+            this.chkCopilotInteractionHistory.Size = new System.Drawing.Size(244, 17);
             this.chkCopilotInteractionHistory.TabIndex = 27;
-            this.chkCopilotInteractionHistory.Text = "Copilot AI interaction history (tenant-wide unless scoped)";
+            this.chkCopilotInteractionHistory.Text = "Copilot AI interaction history (tenant-wide)";
+            this.toolTipTargets.SetToolTip(this.chkCopilotInteractionHistory, "Imports Copilot AI interaction history from Microsoft Graph. This is tenant-wide u" +
+                    "nless it is scoped to specific users or groups.");
             this.chkCopilotInteractionHistory.UseVisualStyleBackColor = true;
             // 
             // chkDlp
@@ -339,32 +348,41 @@
             this.chkDlp.AutoSize = true;
             this.chkDlp.Location = new System.Drawing.Point(356, 136);
             this.chkDlp.Margin = new System.Windows.Forms.Padding(2);
+            this.chkDlp.MaximumSize = new System.Drawing.Size(290, 0);
             this.chkDlp.Name = "chkDlp";
-            this.chkDlp.Size = new System.Drawing.Size(300, 17);
+            this.chkDlp.Size = new System.Drawing.Size(216, 17);
             this.chkDlp.TabIndex = 28;
-            this.chkDlp.Text = "DLP policy events (needs ActivityFeed.ReadDlp permission)";
+            this.chkDlp.Text = "DLP policy events (needs permission)";
+            this.toolTipTargets.SetToolTip(this.chkDlp, "Imports Data Loss Prevention policy events. Needs the ActivityFeed.ReadDlp permiss" +
+                    "ion granted to the app registration.");
             this.chkDlp.UseVisualStyleBackColor = true;
             // 
             // chkCopilotStudioCredits
             // 
             this.chkCopilotStudioCredits.AutoSize = true;
-            this.chkCopilotStudioCredits.Location = new System.Drawing.Point(356, 212);
+            this.chkCopilotStudioCredits.Location = new System.Drawing.Point(356, 156);
             this.chkCopilotStudioCredits.Margin = new System.Windows.Forms.Padding(2);
+            this.chkCopilotStudioCredits.MaximumSize = new System.Drawing.Size(290, 0);
             this.chkCopilotStudioCredits.Name = "chkCopilotStudioCredits";
-            this.chkCopilotStudioCredits.Size = new System.Drawing.Size(280, 17);
+            this.chkCopilotStudioCredits.Size = new System.Drawing.Size(233, 17);
             this.chkCopilotStudioCredits.TabIndex = 29;
-            this.chkCopilotStudioCredits.Text = "Copilot Studio credits (per agent and per person - needs extra role)";
+            this.chkCopilotStudioCredits.Text = "Copilot Studio credits (needs extra role)";
+            this.toolTipTargets.SetToolTip(this.chkCopilotStudioCredits, "Imports Copilot Studio credit consumption per agent and per person. Needs an extra" +
+                    " role granted to the app registration.");
             this.chkCopilotStudioCredits.UseVisualStyleBackColor = true;
             // 
             // chkAzureCostManagement
             // 
             this.chkAzureCostManagement.AutoSize = true;
-            this.chkAzureCostManagement.Location = new System.Drawing.Point(356, 232);
+            this.chkAzureCostManagement.Location = new System.Drawing.Point(356, 176);
             this.chkAzureCostManagement.Margin = new System.Windows.Forms.Padding(2);
+            this.chkAzureCostManagement.MaximumSize = new System.Drawing.Size(290, 0);
             this.chkAzureCostManagement.Name = "chkAzureCostManagement";
-            this.chkAzureCostManagement.Size = new System.Drawing.Size(280, 17);
+            this.chkAzureCostManagement.Size = new System.Drawing.Size(184, 17);
             this.chkAzureCostManagement.TabIndex = 30;
-            this.chkAzureCostManagement.Text = "Azure costs (needs AzureCostScopes app setting)";
+            this.chkAzureCostManagement.Text = "Azure costs (needs app setting)";
+            this.toolTipTargets.SetToolTip(this.chkAzureCostManagement, "Imports Azure Cost Management data. Needs the AzureCostScopes app setting to be co" +
+                    "nfigured on the web job.");
             this.chkAzureCostManagement.UseVisualStyleBackColor = true;
             // 
             // lblGUITargetsHeader
@@ -426,5 +444,6 @@
         private System.Windows.Forms.CheckBox chkDlp;
         private System.Windows.Forms.CheckBox chkCopilotStudioCredits;
         private System.Windows.Forms.CheckBox chkAzureCostManagement;
+        private System.Windows.Forms.ToolTip toolTipTargets;
     }
 }
