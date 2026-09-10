@@ -1,8 +1,9 @@
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Migrations;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System.Collections.Generic;
 using System.Data.Entity;
+using System.Data.SqlClient;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -36,9 +37,55 @@ namespace Tests.UnitTests
 
         private const string PlainUrl = "https://contoso.sharepoint.com/sites/example/Doc.docx";
 
+        /// <summary>
+        /// Leaves dbo.urls fully migrated after every test in this class.
+        /// </summary>
+        /// <remarks>
+        /// These tests deliberately put dbo.urls back into its pre-migration shape (non-unique index,
+        /// duplicate rows) and they share a database with the whole suite. Anything that ends without
+        /// re-applying the migration - a test that asserts the migration was refused, or one that failed
+        /// part-way - hands the next test a dbo.urls that still accepts duplicates, and
+        /// DuplicateUrlTests / EntityTests.URLsTest then fail purely because of execution order.
+        ///
+        /// Restoring here rather than at the end of each test means a failing test cannot leak either.
+        /// </remarks>
+        [TestCleanup]
+        public void RestoreSharedSchema()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                RunMigrationAsync(db).GetAwaiter().GetResult();
+            }
+        }
+
         private static Task<int> ExecAsync(AnalyticsEntitiesContext db, string sql)
         {
             return db.Database.ExecuteSqlCommandAsync(TransactionalBehavior.DoNotEnsureTransaction, sql);
+        }
+
+        /// <summary>
+        /// Runs the migration's real SQL with its concurrency gate switched off.
+        /// </summary>
+        /// <remarks>
+        /// The migration refuses to run when another session holds write locks in the database, because
+        /// it deletes rows and repoints references across separately committed statements. That is
+        /// correct for a customer upgrade and wrong for these tests: a test run has other pooled
+        /// connections open, so the gate fires and the test fails with "ABORTED - N other session(s) are
+        /// holding write locks" instead of exercising the de-duplication it is about.
+        ///
+        /// The opt-out goes in the SAME batch on purpose - session context is per-connection, and EF
+        /// hands each ExecuteSqlCommand a pooled connection, so setting it separately would not reliably
+        /// still be set when the migration ran.
+        ///
+        /// The gate itself is covered by
+        /// <see cref="Migration_Aborts_WhenAnotherSessionHoldsWriteLocks"/>, so switching it off here
+        /// does not leave the behaviour untested.
+        /// </remarks>
+        private static Task<int> RunMigrationAsync(AnalyticsEntitiesContext db)
+        {
+            return ExecAsync(db,
+                "EXEC sp_set_session_context N'UniqueUrlsFullUrlIndex_SkipConcurrencyCheck', 1;\r\n"
+                + UniqueUrlsFullUrlIndex.Up_Sql);
         }
 
         private static Task<T> ScalarAsync<T>(AnalyticsEntitiesContext db, string sql)
@@ -102,7 +149,7 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
                 await InsertUrlAsync(db, PlainUrl);
                 await InsertUrlAsync(db, PlainUrl);
 
-                await ExecAsync(db, UniqueUrlsFullUrlIndex.Up_Sql);
+                await RunMigrationAsync(db);
 
                 var remaining = await ScalarAsync<int>(db,
                     $"SELECT COUNT(*) FROM dbo.urls WHERE full_url = N'{PlainUrl}'");
@@ -134,7 +181,7 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
                 await ExecAsync(db,
                     $"INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) SELECT {dupId}, MIN(id), N'x', GETUTCDATE() FROM dbo.file_field_definitions");
 
-                await ExecAsync(db, UniqueUrlsFullUrlIndex.Up_Sql);
+                await RunMigrationAsync(db);
 
                 var orphans = await ScalarAsync<int>(db,
                     @"SELECT COUNT(*) FROM dbo.file_metadata_property_values f
@@ -175,7 +222,7 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
                        INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) VALUES ({dupId}, @f, N'freshest', '2026-01-01T00:00:00');");
 
                 // Must not throw.
-                await ExecAsync(db, UniqueUrlsFullUrlIndex.Up_Sql);
+                await RunMigrationAsync(db);
 
                 var rows = await db.Database.SqlQuery<string>(
                     $"SELECT field_value FROM dbo.file_metadata_property_values WHERE url_id = {keepId}").ToListAsync();
@@ -206,7 +253,7 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
                        INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) VALUES ({keepId}, @f, N'keep-me', '2026-01-01T00:00:00');
                        INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) VALUES ({dupId}, @f, N'collides', '2026-01-01T00:00:00');");
 
-                await ExecAsync(db, UniqueUrlsFullUrlIndex.Up_Sql);
+                await RunMigrationAsync(db);
 
                 var rows = await db.Database.SqlQuery<string>(
                     $"SELECT field_value FROM dbo.file_metadata_property_values WHERE url_id = {keepId}").ToListAsync();
@@ -229,7 +276,7 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
                 await InsertUrlAsync(db, GreekUrl);
                 await InsertUrlAsync(db, GreekUrl);
 
-                await ExecAsync(db, UniqueUrlsFullUrlIndex.Up_Sql);
+                await RunMigrationAsync(db);
 
                 var survivors = await db.Database.SqlQuery<string>(
                     $"SELECT full_url FROM dbo.urls WHERE full_url = N'{GreekUrl.Replace("'", "''")}'").ToListAsync();
@@ -254,7 +301,7 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
                 await InsertUrlAsync(db, PlainUrl);
                 await InsertUrlAsync(db, PlainUrl.ToUpperInvariant().Replace("HTTPS://CONTOSO.SHAREPOINT.COM/SITES/EXAMPLE/", "https://contoso.sharepoint.com/sites/example/"));
 
-                await ExecAsync(db, UniqueUrlsFullUrlIndex.Up_Sql);
+                await RunMigrationAsync(db);
 
                 var remaining = await ScalarAsync<int>(db,
                     $"SELECT COUNT(*) FROM dbo.urls WHERE full_url = N'{PlainUrl}'");
@@ -274,11 +321,11 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
                 await InsertUrlAsync(db, PlainUrl);
                 await InsertUrlAsync(db, PlainUrl);
 
-                await ExecAsync(db, UniqueUrlsFullUrlIndex.Up_Sql);
+                await RunMigrationAsync(db);
                 var afterFirst = await ScalarAsync<int>(db, "SELECT COUNT(*) FROM dbo.urls");
 
                 // Must not throw and must change nothing.
-                await ExecAsync(db, UniqueUrlsFullUrlIndex.Up_Sql);
+                await RunMigrationAsync(db);
                 var afterSecond = await ScalarAsync<int>(db, "SELECT COUNT(*) FROM dbo.urls");
 
                 Assert.AreEqual(afterFirst, afterSecond, "Re-running an applied migration must be a no-op.");
@@ -297,7 +344,7 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
                 await InsertUrlAsync(db, PlainUrl);
                 await InsertUrlAsync(db, GreekUrl);
 
-                await ExecAsync(db, UniqueUrlsFullUrlIndex.Up_Sql);
+                await RunMigrationAsync(db);
 
                 var count = await ScalarAsync<int>(db,
                     "SELECT COUNT(*) FROM dbo.urls WHERE full_url LIKE N'https://contoso.sharepoint.com/sites/example/%'");
@@ -317,7 +364,7 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
                 await ResetToPreMigrationStateAsync(db);
 
                 await InsertUrlAsync(db, PlainUrl);
-                await ExecAsync(db, UniqueUrlsFullUrlIndex.Up_Sql);
+                await RunMigrationAsync(db);
 
                 var brandNew = "https://contoso.sharepoint.com/sites/example/BrandNew.docx";
 
@@ -330,6 +377,68 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
                     "The duplicate must have been skipped, not inserted.");
                 Assert.AreEqual(1, await ScalarAsync<int>(db, $"SELECT COUNT(*) FROM dbo.urls WHERE full_url = N'{brandNew}'"),
                     "The other row in the same statement must still have been inserted.");
+            }
+        }
+
+        [TestMethod]
+        public async Task Migration_Aborts_WhenAnotherSessionHoldsWriteLocks()
+        {
+            // The other direction of the gate that RunMigrationAsync switches off. The migration deletes
+            // rows and repoints references across separately committed statements, so a writer racing it
+            // can have rows cascade-deleted or orphaned. It must therefore refuse to start - and, just as
+            // importantly, refuse BEFORE changing anything.
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                await EnsureSchemaAsync(db);
+                await ResetToPreMigrationStateAsync(db);
+
+                await InsertUrlAsync(db, PlainUrl);
+                await InsertUrlAsync(db, PlainUrl);
+
+                var before = await ScalarAsync<int>(db, $"SELECT COUNT(*) FROM dbo.urls WHERE full_url = N'{PlainUrl}'");
+                Assert.AreEqual(2, before, "Pre-condition: two duplicate rows to be removed.");
+
+                // A genuinely concurrent writer: a second connection with an uncommitted INSERT, which
+                // leaves real write-intent locks in this database for as long as it stays open.
+                var cs = db.Database.Connection.ConnectionString;
+                using (var blocker = new SqlConnection(cs))
+                {
+                    await blocker.OpenAsync();
+                    using (var tx = blocker.BeginTransaction())
+                    {
+                        using (var cmd = blocker.CreateCommand())
+                        {
+                            cmd.Transaction = tx;
+                            cmd.CommandText =
+                                "INSERT INTO dbo.urls (full_url) VALUES (N'https://contoso.sharepoint.com/sites/example/Blocker.docx');";
+                            await cmd.ExecuteNonQueryAsync();
+                        }
+
+                        SqlException caught = null;
+                        try
+                        {
+                            await ExecAsync(db, UniqueUrlsFullUrlIndex.Up_Sql);
+                        }
+                        catch (SqlException ex)
+                        {
+                            caught = ex;
+                        }
+
+                        Assert.IsNotNull(caught, "The migration must refuse to run while another session holds write locks.");
+                        StringAssert.Contains(caught.Message, "ABORTED",
+                            "The abort must say so plainly enough for an admin to act on it.");
+
+                        tx.Rollback();
+                    }
+                }
+
+                // Nothing may have changed: the gate runs before any mutation.
+                var after = await ScalarAsync<int>(db, $"SELECT COUNT(*) FROM dbo.urls WHERE full_url = N'{PlainUrl}'");
+                Assert.AreEqual(2, after, "The aborted run must not have deleted anything.");
+                Assert.IsFalse(await IndexIsUniqueAsync(db), "The aborted run must not have rebuilt the index.");
+
+                // RestoreSharedSchema puts the database back afterwards - this is the one test in the
+                // class that deliberately ends with the migration NOT applied.
             }
         }
 
