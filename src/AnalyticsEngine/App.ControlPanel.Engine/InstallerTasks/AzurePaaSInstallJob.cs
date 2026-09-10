@@ -602,7 +602,19 @@ namespace App.ControlPanel.Engine.InstallerTasks
         }
 
         // Task results, typed
-        public AutomationAccountResource CreatedAutomationAccount => GetTaskResult<AutomationAccountResource>(_automationAccountTask);
+
+        /// <summary>
+        /// The Automation account, or null when this install did not create one.
+        /// </summary>
+        /// <remarks>
+        /// The Automation account task is only registered when the Graph usage-reports import is enabled,
+        /// and that setting defaults to off - so on most installs there is no task to read a result from.
+        /// Every consumer already treats null as "no Automation account" (RunPostCreatePaaSTasks skips the
+        /// contained-user grant, and AppServiceContentInstallJob skips the runbook install), so this returns
+        /// null to match, exactly as CognitiveServicesInfo / SBQueueWithConnectionString / VNet do.
+        /// </remarks>
+        public AutomationAccountResource CreatedAutomationAccount =>
+            _automationAccountTask != null ? GetTaskResult<AutomationAccountResource>(_automationAccountTask) : null;
 
         public SqlServerResource CreatedSqlServer => GetTaskResult<SqlServerResource>(_sqlServerTask);
         public SqlDatabaseResource CreatedSqlDatabase => GetTaskResult<SqlDatabaseResource>(_sqlDatabaseTask);
