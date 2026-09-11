@@ -511,21 +511,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// </summary>
         async Task DetectSqlAuthMethod()
         {
-            var haveSqlCredentials = !string.IsNullOrWhiteSpace(_config.SQLServerAdminUsername)
-                && !string.IsNullOrWhiteSpace(_config.SQLServerAdminPassword);
-
-            SqlServerAuthState state = null;
-            try
-            {
-                state = await SqlServerAuthReader.ReadAsync(CreatedSqlServer, Logger);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning($"Could not read the SQL Server's authentication configuration: {ex.Message}");
-            }
-
-            _sqlAuthDecision = SqlServerAuthDetection.Decide(state, haveSqlCredentials, _config.SqlAuthMode);
-            Logger.LogInformation($"SQL authentication: {_sqlAuthDecision.Reason}");
+            _sqlAuthDecision = await SqlServerAuthReader.DetectAsync(
+                CreatedSqlServer, _config.SQLServerAdminPassword, _config.SqlAuthMode, Logger);
 
             await RepairAutomationSqlCredentialIfNeeded();
         }
