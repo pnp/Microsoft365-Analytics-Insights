@@ -23,6 +23,7 @@ namespace App.ControlPanel
         public SqlDatabaseUsersForm(IEnumerable<SqlDatabaseUser> users)
         {
             InitializeComponent();
+            UseApplicationIcon();
 
             // Copied, not referenced: Cancel has to leave the caller's list untouched.
             _users = new BindingList<SqlDatabaseUser>((users ?? Enumerable.Empty<SqlDatabaseUser>())
@@ -51,6 +52,32 @@ namespace App.ControlPanel
 
         /// <summary>The edited list. Only meaningful once the dialog returns <see cref="DialogResult.OK"/>.</summary>
         public List<SqlDatabaseUser> DatabaseUsers { get; private set; } = new List<SqlDatabaseUser>();
+
+        /// <summary>
+        /// Shows the installer's own icon in the title bar instead of the default WinForms one.
+        /// </summary>
+        /// <remarks>
+        /// Read from the assembly that defines this form rather than a file next to it, so it cannot break
+        /// if <c>office_icon.ico</c> is not copied to the output directory - and rather than
+        /// <c>Application.ExecutablePath</c>, which returns whatever process is hosting the form and so
+        /// picks up the wrong icon under a test harness. Best-effort: a failure just leaves the default
+        /// icon, which is not worth failing a dialog over.
+        /// </remarks>
+        private void UseApplicationIcon()
+        {
+            try
+            {
+                var installerExe = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                if (!string.IsNullOrEmpty(installerExe))
+                {
+                    Icon = System.Drawing.Icon.ExtractAssociatedIcon(installerExe);
+                }
+            }
+            catch (Exception)
+            {
+                // Keep the default icon.
+            }
+        }
 
         private void btnOk_Click(object sender, EventArgs e)
         {

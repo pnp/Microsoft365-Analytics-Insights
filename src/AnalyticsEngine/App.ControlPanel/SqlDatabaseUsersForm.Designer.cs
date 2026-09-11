@@ -38,7 +38,7 @@ namespace App.ControlPanel
             // 
             this.lblIntro.Location = new System.Drawing.Point(12, 9);
             this.lblIntro.Name = "lblIntro";
-            this.lblIntro.Size = new System.Drawing.Size(660, 60);
+            this.lblIntro.Size = new System.Drawing.Size(660, 88);
             this.lblIntro.TabIndex = 0;
             this.lblIntro.Text = "People listed here get their own access to the analytics database, as contained da" +
                 "tabase users granted db_owner. The installer creates them on every run.\r\n\r\nDo NOT" +
@@ -58,10 +58,10 @@ namespace App.ControlPanel
             this.colLogin,
             this.colObjectId,
             this.colPrincipalType});
-            this.gridUsers.Location = new System.Drawing.Point(12, 75);
+            this.gridUsers.Location = new System.Drawing.Point(12, 105);
             this.gridUsers.Name = "gridUsers";
             this.gridUsers.RowHeadersWidth = 25;
-            this.gridUsers.Size = new System.Drawing.Size(660, 250);
+            this.gridUsers.Size = new System.Drawing.Size(660, 255);
             this.gridUsers.TabIndex = 1;
             // 
             // colLogin
@@ -88,7 +88,7 @@ namespace App.ControlPanel
             // btnOk
             // 
             this.btnOk.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
-            this.btnOk.Location = new System.Drawing.Point(516, 375);
+            this.btnOk.Location = new System.Drawing.Point(516, 425);
             this.btnOk.Name = "btnOk";
             this.btnOk.Size = new System.Drawing.Size(75, 23);
             this.btnOk.TabIndex = 2;
@@ -100,7 +100,7 @@ namespace App.ControlPanel
             // 
             this.btnCancel.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
             this.btnCancel.DialogResult = System.Windows.Forms.DialogResult.Cancel;
-            this.btnCancel.Location = new System.Drawing.Point(597, 375);
+            this.btnCancel.Location = new System.Drawing.Point(597, 425);
             this.btnCancel.Name = "btnCancel";
             this.btnCancel.Size = new System.Drawing.Size(75, 23);
             this.btnCancel.TabIndex = 3;
@@ -111,7 +111,7 @@ namespace App.ControlPanel
             // 
             this.lblHint.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)
             | System.Windows.Forms.AnchorStyles.Right)));
-            this.lblHint.Location = new System.Drawing.Point(12, 332);
+            this.lblHint.Location = new System.Drawing.Point(12, 370);
             this.lblHint.Name = "lblHint";
             this.lblHint.Size = new System.Drawing.Size(660, 36);
             this.lblHint.TabIndex = 4;
@@ -124,7 +124,7 @@ namespace App.ControlPanel
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.CancelButton = this.btnCancel;
-            this.ClientSize = new System.Drawing.Size(684, 410);
+            this.ClientSize = new System.Drawing.Size(684, 460);
             this.Controls.Add(this.lblHint);
             this.Controls.Add(this.btnCancel);
             this.Controls.Add(this.btnOk);
@@ -132,7 +132,7 @@ namespace App.ControlPanel
             this.Controls.Add(this.lblIntro);
             this.MinimizeBox = false;
             this.MaximizeBox = false;
-            this.MinimumSize = new System.Drawing.Size(560, 340);
+            this.MinimumSize = new System.Drawing.Size(600, 430);
             this.Name = "SqlDatabaseUsersForm";
             this.ShowInTaskbar = false;
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;

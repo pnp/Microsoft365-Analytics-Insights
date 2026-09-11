@@ -178,7 +178,7 @@
             // chkSqlEntraAuth
             // 
             this.chkSqlEntraAuth.AutoSize = true;
-            this.chkSqlEntraAuth.Location = new System.Drawing.Point(64, 359);
+            this.chkSqlEntraAuth.Location = new System.Drawing.Point(64, 377);
             this.chkSqlEntraAuth.Name = "chkSqlEntraAuth";
             this.chkSqlEntraAuth.Size = new System.Drawing.Size(520, 17);
             this.chkSqlEntraAuth.TabIndex = 178;
@@ -189,7 +189,7 @@
             // 
             // btnSqlDatabaseUsers
             // 
-            this.btnSqlDatabaseUsers.Location = new System.Drawing.Point(64, 412);
+            this.btnSqlDatabaseUsers.Location = new System.Drawing.Point(64, 434);
             this.btnSqlDatabaseUsers.Name = "btnSqlDatabaseUsers";
             this.btnSqlDatabaseUsers.Size = new System.Drawing.Size(170, 23);
             this.btnSqlDatabaseUsers.TabIndex = 179;
@@ -200,14 +200,14 @@
             // lblSqlDatabaseUsers
             // 
             this.lblSqlDatabaseUsers.AutoSize = true;
-            this.lblSqlDatabaseUsers.Location = new System.Drawing.Point(240, 417);
+            this.lblSqlDatabaseUsers.Location = new System.Drawing.Point(240, 439);
             this.lblSqlDatabaseUsers.Name = "lblSqlDatabaseUsers";
             this.lblSqlDatabaseUsers.Size = new System.Drawing.Size(0, 13);
             this.lblSqlDatabaseUsers.TabIndex = 180;
             // 
             // txtSQLServerPassword
             // 
-            this.txtSQLServerPassword.Location = new System.Drawing.Point(438, 382);
+            this.txtSQLServerPassword.Location = new System.Drawing.Point(438, 400);
             this.txtSQLServerPassword.Name = "txtSQLServerPassword";
             this.txtSQLServerPassword.PasswordChar = '*';
             this.txtSQLServerPassword.Size = new System.Drawing.Size(150, 20);
@@ -217,7 +217,7 @@
             // lblGUIAzureSQLPassword
             // 
             this.lblGUIAzureSQLPassword.AutoSize = true;
-            this.lblGUIAzureSQLPassword.Location = new System.Drawing.Point(352, 385);
+            this.lblGUIAzureSQLPassword.Location = new System.Drawing.Point(352, 403);
             this.lblGUIAzureSQLPassword.Name = "lblGUIAzureSQLPassword";
             this.lblGUIAzureSQLPassword.Size = new System.Drawing.Size(56, 13);
             this.lblGUIAzureSQLPassword.TabIndex = 165;
@@ -225,7 +225,7 @@
             // 
             // txtSQLServerUsername
             // 
-            this.txtSQLServerUsername.Location = new System.Drawing.Point(156, 382);
+            this.txtSQLServerUsername.Location = new System.Drawing.Point(156, 400);
             this.txtSQLServerUsername.Name = "txtSQLServerUsername";
             this.txtSQLServerUsername.Size = new System.Drawing.Size(150, 20);
             this.txtSQLServerUsername.TabIndex = 153;
@@ -234,7 +234,7 @@
             // lblGUIAzureSQLUsername
             // 
             this.lblGUIAzureSQLUsername.AutoSize = true;
-            this.lblGUIAzureSQLUsername.Location = new System.Drawing.Point(62, 385);
+            this.lblGUIAzureSQLUsername.Location = new System.Drawing.Point(62, 403);
             this.lblGUIAzureSQLUsername.Name = "lblGUIAzureSQLUsername";
             this.lblGUIAzureSQLUsername.Size = new System.Drawing.Size(90, 13);
             this.lblGUIAzureSQLUsername.TabIndex = 164;
@@ -407,7 +407,7 @@
             this.Controls.Add(this.picRedis);
             this.Controls.Add(this.picStorage);
             this.Name = "AzureStorageConfigControl";
-            this.Size = new System.Drawing.Size(606, 445);
+            this.Size = new System.Drawing.Size(606, 470);
             ((System.ComponentModel.ISupportInitialize)(this.picServiceBus)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.picSQL)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.picRedis)).EndInit();
