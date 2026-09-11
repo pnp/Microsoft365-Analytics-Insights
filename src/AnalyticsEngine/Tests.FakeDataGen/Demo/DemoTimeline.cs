@@ -24,6 +24,12 @@ namespace Tests.FakeDataGen.Demo
         internal const int WarmupDays = 28;
 
         public static readonly string[] Hosts = { "bizchat", "Teams", "Word", "Outlook", "Excel", "PowerPoint", "OneNote", "cowork" };
+
+        /// <summary>
+        /// Highest agent id <see cref="Agent"/> can return. Ids 1-4 are the custom Copilot Studio agents and
+        /// 5 is the Microsoft 365 Copilot Cowork surface; 0 means the turn used no agent.
+        /// </summary>
+        internal const int MaxAgentId = 5;
         public static readonly string[] ReportApps =
             { "Any App", "Copilot Chat (work)", "Microsoft Teams", "Word", "Outlook", "Excel", "PowerPoint", "OneNote", "Copilot agents" };
         private readonly DemoOptions _options;

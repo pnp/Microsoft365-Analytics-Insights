@@ -42,6 +42,13 @@ namespace Tests.FakeDataGen.Demo
         private readonly DemoOptions _options;
         public IReadOnlyList<DemoSku> Skus { get; }
 
+        /// <summary>
+        /// The Entra object id written to <c>dbo.users.azure_ad_id</c>. Shared rather than restated because
+        /// the agent-cost data joins to a user on exactly this value, and a second copy of the expression
+        /// would be a silent way for the two to drift apart.
+        /// </summary>
+        internal static string AzureAdObjectId(int seed, int userId) => DemoRandom.Id(seed, 1, userId).ToString();
+
         public DemoPopulation(DemoOptions options)
         {
             _options = options;
