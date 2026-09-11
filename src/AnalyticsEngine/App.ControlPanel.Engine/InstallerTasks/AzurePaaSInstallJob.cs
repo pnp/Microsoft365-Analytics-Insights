@@ -41,6 +41,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         private TaskConfig _sqlServerConfig;
         private TaskConfig _automationAccountConfig;
         private SqlAuthDecision _sqlAuthDecision;
+        private Guid _installerObjectId = Guid.Empty;
         private readonly KeyVaultTask _keyVaultTask;
 
         private readonly AppServicePlanTask _appServicePlanTask;
@@ -511,10 +512,48 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// </summary>
         async Task DetectSqlAuthMethod()
         {
+            _installerObjectId = await ResolveInstallerObjectId();
+
             _sqlAuthDecision = await SqlServerAuthReader.DetectAsync(
-                CreatedSqlServer, _config.SQLServerAdminPassword, _config.SqlAuthMode, Logger);
+                CreatedSqlServer, _config.SQLServerAdminPassword, _config.SqlAuthMode, Logger,
+                _installerObjectId,
+                _config.SQLEntraDatabaseUsers != null && _config.SQLEntraDatabaseUsers.Count > 0);
 
             await RepairAutomationSqlCredentialIfNeeded();
+        }
+
+        /// <summary>
+        /// Object ID of the installer's own service principal, or <see cref="Guid.Empty"/> when it cannot be
+        /// resolved.
+        /// </summary>
+        /// <remarks>
+        /// Needed to answer "is the installer this server's Microsoft Entra administrator?" before anything
+        /// tries to sign in. Never fatal: not knowing simply means the question goes unanswered and the
+        /// install proceeds exactly as it did before, rather than blocking on a diagnostic.
+        /// </remarks>
+        async Task<Guid> ResolveInstallerObjectId()
+        {
+            var account = _config.InstallerAccount;
+            if (account == null
+                || string.IsNullOrWhiteSpace(account.DirectoryId)
+                || string.IsNullOrWhiteSpace(account.ClientId)
+                || string.IsNullOrWhiteSpace(account.Secret))
+            {
+                return Guid.Empty;
+            }
+
+            try
+            {
+                var raw = await ServicePrincipalResolver.GetObjectIdFromClientCredentials(
+                    account.DirectoryId, account.ClientId, account.Secret);
+
+                Guid parsed;
+                return Guid.TryParse(raw, out parsed) ? parsed : Guid.Empty;
+            }
+            catch (Exception)
+            {
+                return Guid.Empty;
+            }
         }
 
         /// <summary>
@@ -613,6 +652,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// run. See issue #117.
         /// </summary>
         public SqlAuthDecision SqlAuthDecision => _sqlAuthDecision;
+
+        /// <summary>
+        /// Object ID of the installer's own service principal, or <see cref="Guid.Empty"/> when it could not
+        /// be resolved. Used to explain - and repair - a SQL login rejection. See issue #117.
+        /// </summary>
+        public Guid InstallerObjectId => _installerObjectId;
 
         public DatabasePaaSInfo DatabasePaaSInfo => new DatabasePaaSInfo(CreatedSqlServer, CreatedSqlDatabase, _config)
         {

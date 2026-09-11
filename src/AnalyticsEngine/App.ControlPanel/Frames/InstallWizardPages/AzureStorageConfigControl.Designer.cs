@@ -41,6 +41,8 @@
             this.chkServiceBusEnabled = new System.Windows.Forms.CheckBox();
             this.lblGUIAzureHeaderSQL = new System.Windows.Forms.Label();
             this.chkSqlEntraAuth = new System.Windows.Forms.CheckBox();
+            this.btnSqlDatabaseUsers = new System.Windows.Forms.Button();
+            this.lblSqlDatabaseUsers = new System.Windows.Forms.Label();
             this.txtSQLServerPassword = new System.Windows.Forms.TextBox();
             this.lblGUIAzureSQLPassword = new System.Windows.Forms.Label();
             this.txtSQLServerUsername = new System.Windows.Forms.TextBox();
@@ -176,7 +178,7 @@
             // chkSqlEntraAuth
             // 
             this.chkSqlEntraAuth.AutoSize = true;
-            this.chkSqlEntraAuth.Location = new System.Drawing.Point(64, 359);
+            this.chkSqlEntraAuth.Location = new System.Drawing.Point(64, 377);
             this.chkSqlEntraAuth.Name = "chkSqlEntraAuth";
             this.chkSqlEntraAuth.Size = new System.Drawing.Size(520, 17);
             this.chkSqlEntraAuth.TabIndex = 178;
@@ -185,9 +187,27 @@
             this.chkSqlEntraAuth.UseVisualStyleBackColor = true;
             this.chkSqlEntraAuth.CheckedChanged += new System.EventHandler(this.chkSqlEntraAuth_CheckedChanged);
             // 
+            // btnSqlDatabaseUsers
+            // 
+            this.btnSqlDatabaseUsers.Location = new System.Drawing.Point(64, 434);
+            this.btnSqlDatabaseUsers.Name = "btnSqlDatabaseUsers";
+            this.btnSqlDatabaseUsers.Size = new System.Drawing.Size(170, 23);
+            this.btnSqlDatabaseUsers.TabIndex = 179;
+            this.btnSqlDatabaseUsers.Text = "SQL database users...";
+            this.btnSqlDatabaseUsers.UseVisualStyleBackColor = true;
+            this.btnSqlDatabaseUsers.Click += new System.EventHandler(this.btnSqlDatabaseUsers_Click);
+            // 
+            // lblSqlDatabaseUsers
+            // 
+            this.lblSqlDatabaseUsers.AutoSize = true;
+            this.lblSqlDatabaseUsers.Location = new System.Drawing.Point(240, 439);
+            this.lblSqlDatabaseUsers.Name = "lblSqlDatabaseUsers";
+            this.lblSqlDatabaseUsers.Size = new System.Drawing.Size(0, 13);
+            this.lblSqlDatabaseUsers.TabIndex = 180;
+            // 
             // txtSQLServerPassword
             // 
-            this.txtSQLServerPassword.Location = new System.Drawing.Point(438, 382);
+            this.txtSQLServerPassword.Location = new System.Drawing.Point(438, 400);
             this.txtSQLServerPassword.Name = "txtSQLServerPassword";
             this.txtSQLServerPassword.PasswordChar = '*';
             this.txtSQLServerPassword.Size = new System.Drawing.Size(150, 20);
@@ -197,7 +217,7 @@
             // lblGUIAzureSQLPassword
             // 
             this.lblGUIAzureSQLPassword.AutoSize = true;
-            this.lblGUIAzureSQLPassword.Location = new System.Drawing.Point(352, 385);
+            this.lblGUIAzureSQLPassword.Location = new System.Drawing.Point(352, 403);
             this.lblGUIAzureSQLPassword.Name = "lblGUIAzureSQLPassword";
             this.lblGUIAzureSQLPassword.Size = new System.Drawing.Size(56, 13);
             this.lblGUIAzureSQLPassword.TabIndex = 165;
@@ -205,7 +225,7 @@
             // 
             // txtSQLServerUsername
             // 
-            this.txtSQLServerUsername.Location = new System.Drawing.Point(156, 382);
+            this.txtSQLServerUsername.Location = new System.Drawing.Point(156, 400);
             this.txtSQLServerUsername.Name = "txtSQLServerUsername";
             this.txtSQLServerUsername.Size = new System.Drawing.Size(150, 20);
             this.txtSQLServerUsername.TabIndex = 153;
@@ -214,7 +234,7 @@
             // lblGUIAzureSQLUsername
             // 
             this.lblGUIAzureSQLUsername.AutoSize = true;
-            this.lblGUIAzureSQLUsername.Location = new System.Drawing.Point(62, 385);
+            this.lblGUIAzureSQLUsername.Location = new System.Drawing.Point(62, 403);
             this.lblGUIAzureSQLUsername.Name = "lblGUIAzureSQLUsername";
             this.lblGUIAzureSQLUsername.Size = new System.Drawing.Size(90, 13);
             this.lblGUIAzureSQLUsername.TabIndex = 164;
@@ -366,6 +386,8 @@
             this.Controls.Add(this.lblGUIAzureServiceBusName);
             this.Controls.Add(this.lblGUIAzureHeaderSQL);
             this.Controls.Add(this.chkSqlEntraAuth);
+            this.Controls.Add(this.btnSqlDatabaseUsers);
+            this.Controls.Add(this.lblSqlDatabaseUsers);
             this.Controls.Add(this.txtSQLServerPassword);
             this.Controls.Add(this.lblGUIAzureSQLPassword);
             this.Controls.Add(this.txtSQLServerUsername);
@@ -385,7 +407,7 @@
             this.Controls.Add(this.picRedis);
             this.Controls.Add(this.picStorage);
             this.Name = "AzureStorageConfigControl";
-            this.Size = new System.Drawing.Size(606, 409);
+            this.Size = new System.Drawing.Size(606, 470);
             ((System.ComponentModel.ISupportInitialize)(this.picServiceBus)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.picSQL)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.picRedis)).EndInit();
@@ -410,6 +432,8 @@
         private System.Windows.Forms.Label lblGUIAzureHeaderSQL;
         private System.Windows.Forms.TextBox txtSQLServerPassword;
         private System.Windows.Forms.CheckBox chkSqlEntraAuth;
+        private System.Windows.Forms.Button btnSqlDatabaseUsers;
+        private System.Windows.Forms.Label lblSqlDatabaseUsers;
         private System.Windows.Forms.Label lblGUIAzureSQLPassword;
         private System.Windows.Forms.TextBox txtSQLServerUsername;
         private System.Windows.Forms.Label lblGUIAzureSQLUsername;
