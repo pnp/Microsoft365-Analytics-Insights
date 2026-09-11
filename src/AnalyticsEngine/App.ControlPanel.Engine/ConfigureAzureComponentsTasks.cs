@@ -67,9 +67,9 @@ namespace App.ControlPanel.Engine
             if (!sqlReachable && Config.TasksConfig.UpgradeSchema)
             {
                 throw new UnexpectedInstallException(
-                    "SQL Server is not reachable from this host, so the database upgrade cannot run. The App Service has " +
+                    "The SQL connection test failed, so the database upgrade cannot run. The App Service has " +
                     "deliberately NOT been stopped, so the existing deployment keeps running on its current schema. " +
-                    "Fix the connectivity problem reported above and re-run the installer.");
+                    "Fix the authentication or connectivity problem reported above and re-run the installer.");
             }
 
             // Give the App Service's managed identity access to the database. Only needed when the database
