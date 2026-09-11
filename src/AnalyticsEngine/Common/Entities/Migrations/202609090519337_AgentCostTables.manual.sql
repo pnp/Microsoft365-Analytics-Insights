@@ -64,6 +64,33 @@ SET NOCOUNT ON;
 SET QUOTED_IDENTIFIER ON;
 GO
 
+/* =====================================================================================================
+   PRE-FLIGHT - runs BEFORE anything is created.
+
+   sqlcmd and SSMS do NOT stop at a severity-16 error: they abandon the failing batch and carry on with
+   the next one. So a RAISERROR alone does not prevent an out-of-order run - it just prints a message and
+   then creates the tables anyway. The database would end up carrying this migration's schema WITHOUT a
+   __MigrationHistory row, and the next installer run would then fail in EF's own CreateTable with
+   "There is already an object named 'copilot_studio_credit_daily'", stranding the upgrade.
+
+   SET NOEXEC ON is what makes the failure real: every following batch is compiled but not executed, and
+   the SET NOEXEC OFF at the very end of the script restores the session. This is the same mechanism the
+   later scripts in this release use.
+   ===================================================================================================== */
+IF OBJECT_ID(N'dbo.__MigrationHistory', N'U') IS NULL
+BEGIN
+    RAISERROR('AgentCostTables: dbo.__MigrationHistory does not exist - this does not look like an Analytics database. Nothing has been changed.', 16, 1) WITH NOWAIT;
+    SET NOEXEC ON;
+END
+
+IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202608310800001_ColumnstoreUsageReportMetrics')
+   AND NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609090519337_AgentCostTables')
+BEGIN
+    RAISERROR('AgentCostTables: prerequisite migration 202608310800001_ColumnstoreUsageReportMetrics is not stamped in __MigrationHistory. Run the manual scripts in migration-id order. Nothing has been changed.', 16, 1) WITH NOWAIT;
+    SET NOEXEC ON;
+END
+GO
+
 DECLARE @migration nvarchar(200) = N'202609090519337_AgentCostTables';
 DECLARE @msg nvarchar(500);
 DECLARE @start datetime2 = SYSUTCDATETIME();
@@ -254,4 +281,9 @@ BEGIN
 END
 ELSE
     RAISERROR('AgentCostTables: already recorded in __MigrationHistory, nothing to do.', 0, 1) WITH NOWAIT;
+GO
+
+-- Restore the session. SET statements still execute under NOEXEC, so this is reached even when the
+-- pre-flight above turned NOEXEC on and skipped everything in between.
+SET NOEXEC OFF;
 GO

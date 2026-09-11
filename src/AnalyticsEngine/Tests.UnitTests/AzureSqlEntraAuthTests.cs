@@ -27,7 +27,7 @@ namespace Tests.UnitTests
         const string AzureSqlNoLogin = "data source=contoso-sql.database.windows.net;initial catalog=analytics;persist security info=False;MultipleActiveResultSets=True;Encrypt=True";
         // A deliberately non-palindromic GUID: the SID conversion is endian-sensitive, and a symmetrical
         // value would let a byte-order bug pass.
-        static readonly Guid AppServiceIdentity = new Guid("0f8fad5b-d9cb-469f-a165-70867728950e");
+        static readonly Guid AppServiceIdentity = new Guid("0a1b2c3d-4e5f-6789-abcd-ef0123456789");
 
         [TestCleanup]
         public void Cleanup()
@@ -403,8 +403,8 @@ namespace Tests.UnitTests
         [TestMethod]
         public void ToSqlSid_KnownGuid_MatchesSqlServersExpectedByteOrder()
         {
-            // 0f8fad5b-d9cb-469f-a165-70867728950e: first three groups are byte-reversed, the last two are not.
-            Assert.AreEqual("0x5BAD8F0FCBD99F46A16570867728950E", SqlContainedUserScript.ToSqlSid(AppServiceIdentity));
+            // 0a1b2c3d-4e5f-6789-abcd-ef0123456789: first three groups are byte-reversed, the last two are not.
+            Assert.AreEqual("0x3D2C1B0A5F4E8967ABCDEF0123456789", SqlContainedUserScript.ToSqlSid(AppServiceIdentity));
         }
 
         [TestMethod]
