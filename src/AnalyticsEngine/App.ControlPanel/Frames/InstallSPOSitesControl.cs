@@ -103,6 +103,7 @@ namespace App.ControlPanel.Frames
                 SQLServerDatabaseName = azureStorageConfigControl1.SQLDb,
                 SQLServerAdminUsername = azureStorageConfigControl1.SQLServerUsername,
                 SQLServerAdminPassword = azureStorageConfigControl1.SQLServerPassword,
+                SqlAuthMode = azureStorageConfigControl1.SqlAuthMode,
                 ServiceBusName = azureStorageConfigControl1.ServiceBusName,
                 ServiceBusEnabled = azureStorageConfigControl1.ServiceBusEnabled,
                 RedisName = azureStorageConfigControl1.RedisName,
@@ -189,6 +190,7 @@ namespace App.ControlPanel.Frames
             azureStorageConfigControl1.SQLServerName = config.SQLServerName;
             azureStorageConfigControl1.SQLServerPassword = config.SQLServerAdminPassword;
             azureStorageConfigControl1.SQLServerUsername = config.SQLServerAdminUsername;
+            azureStorageConfigControl1.SqlAuthMode = config.SqlAuthMode;
             azureStorageConfigControl1.StorageAccount = config.StorageAccountName;
             // Take the region from the picker rather than the raw config: the picker rejects a value that is
             // not a known Azure region (it falls back to its "no region" placeholder), and the preview label

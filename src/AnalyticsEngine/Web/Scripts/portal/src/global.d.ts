@@ -20,6 +20,8 @@ declare global {
     o365AnalyticsCopilotAdoptionAPI: string;
     /** Base endpoint for the Licence activity API (availability, overview, users, Excel export). */
     o365AnalyticsLicenceActivityAPI: string;
+    /** Base endpoint for the Agent costs API (Copilot Studio credits + Azure Cost Management). */
+    o365AnalyticsAgentCostsAPI: string;
     /** Endpoint for the system-health ("is it working?") API. */
     o365AnalyticsHealthAPI: string;
     /** Endpoint for the "is there a newer release?" check. */

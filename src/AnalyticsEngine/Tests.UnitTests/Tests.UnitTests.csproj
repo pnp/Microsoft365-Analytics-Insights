@@ -63,6 +63,8 @@
     <Compile Include="SentEmailMailboxSkipListTests.cs" />
     <Compile Include="InstallTests\VNetIntegrationTests.cs" />
     <Compile Include="InstallTests\AppInsightsArmTemplateTests.cs" />
+    <Compile Include="InstallTests\AppServicePlanCapabilitiesTests.cs" />
+    <Compile Include="InstallTests\ManagedIdentityPlannerTests.cs" />
     <Compile Include="UserImportCaseSensitivityTests.cs" />
     <Compile Include="UserLicenseRefreshTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeUserPipelinePorts.cs" />
@@ -141,6 +143,11 @@
     <Compile Include="ActivityImportCacheProviderTests.cs" />
     <Compile Include="ActivityImportCacheWindowTests.cs" />
     <Compile Include="ActivityImporterTests.cs" />
+    <Compile Include="AgentCostApiContractTests.cs" />
+    <Compile Include="AgentCostImportTests.cs" />
+    <Compile Include="AgentCostUserResolutionTests.cs" />
+    <Compile Include="AgentCostSqlIntegrationTests.cs" />
+    <Compile Include="AzureSqlEntraAuthTests.cs" />
     <Compile Include="ActivityReportLoaderTimeoutTests.cs" />
     <Compile Include="ActivityReportSetMinMaxTests.cs" />
     <Compile Include="ActivitySaveConcurrencyPolicyTests.cs" />
@@ -208,6 +215,7 @@
     <Compile Include="FakeLoaderClasses\FakeOrgUrlStore.cs" />
     <Compile Include="FakeLoaderClasses\FakeCallsPorts.cs" />
     <Compile Include="FakeLoaderClasses\FakeGraphImportSections.cs" />
+    <Compile Include="GraphBoundedRequestAndDeltaTests.cs" />
     <Compile Include="GraphImportOrchestrationTests.cs" />
     <Compile Include="GraphImportSectionCompositionTests.cs" />
     <Compile Include="ImportRuntimeOptionsTests.cs" />
@@ -236,6 +244,9 @@
     <Compile Include="CopilotUsageReportPolicyTests.cs" />
     <Compile Include="Constants.cs" />
     <Compile Include="CopilotTests.cs" />
+    <Compile Include="DlpCopilotTests.cs" />
+    <Compile Include="DlpApiContractTests.cs" />
+    <Compile Include="DlpApiSqlIntegrationTests.cs" />
     <Compile Include="CopilotInteractionHistoryTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeCopilotEventAdaptor.cs" />
     <Compile Include="FakeLoaderClasses\InMemoryCopilotUsagePersistenceManager.cs" />
@@ -271,6 +282,8 @@
     <Compile Include="AddAuditEventsOperationFKMigrationTests.cs" />
     <Compile Include="ShrinkUrlsFullUrlColumnMigrationTests.cs" />
     <Compile Include="StagingColumnSqlTypeOverrideTests.cs" />
+    <Compile Include="RetireImportDbHacksMigrationTests.cs" />
+    <Compile Include="UniqueUrlsFullUrlIndexMigrationTests.cs" />
     <Compile Include="UrlFullUrlMigrationPipelineTests.cs" />
     <Compile Include="IndexUsageReportSnapshotsMigrationTests.cs" />
     <Compile Include="CopilotUsagePersistencePortTests.cs" />
@@ -315,6 +328,7 @@
     <Compile Include="InstallTests\FakeInstallClasses.cs" />
     <Compile Include="InstallTests\ImportToggleVerificationCoverageTests.cs" />
     <Compile Include="InstallTests\InstallEngineTests.cs" />
+    <Compile Include="InstallTests\InstallFailureDiagnosisTests.cs" />
     <Compile Include="InstallTests\KeyVaultFirewallConfigTaskTests.cs" />
     <Compile Include="InstallTests\ServiceBusNamespaceInstallTaskTests.cs" />
     <Compile Include="InstallTests\RbacPermissionProbeTests.cs" />
@@ -330,8 +344,8 @@
     </Compile>
     <Compile Include="Program.cs" />
     <Compile Include="TeamsTests.cs" />
+    <Compile Include="RetireUnusedAuditYammerStreamTablesMigrationTests.cs" />
     <Compile Include="UserDataLookupTests.cs" />
-    <Compile Include="StreamTests.cs" />
     <Compile Include="UserGroupsCacheTests.cs" />
     <Compile Include="UserGroupsFilterModelTests.cs" />
     <Compile Include="SiteIdToUrlCacheTests.cs" />
@@ -523,3 +537,5 @@
     <TransformXml Source="App.Template.config" Transform="App.$(Configuration).config" Destination="App.config" />
   </Target>
 </Project>
+
+

@@ -69,6 +69,63 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         }
 
         /// <summary>
+        /// Classify a Graph subscription error as a failure of Graph's <b>validation callback</b> to our
+        /// notification endpoint, rather than a failure of the Graph call itself. See issue #273.
+        /// </summary>
+        /// <remarks>
+        /// When a subscription is created or renewed, Graph POSTs a validation request to the
+        /// notification URL and expects an anonymous 200 OK echoing the <c>validationToken</c>. If that
+        /// callback fails, Graph rejects the subscription with a <b>400 Bad Request</b> whose message
+        /// describes what happened at <i>our</i> endpoint.
+        ///
+        /// This distinction matters because the message is actively misleading: the common variant reads
+        /// "HTTP status code is 'Forbidden'", where the <c>Forbidden</c> is what our endpoint returned to
+        /// Graph - it is NOT the tenant refusing a Graph permission. An admin who reads the raw message
+        /// goes and re-checks <see cref="CallWebhook.REQUIRED_GRAPH_PERMISSION"/>, which is the wrong
+        /// place: a genuine permission problem surfaces as a 403 from Graph itself, not as a 400 wrapping
+        /// our own status code.
+        /// </remarks>
+        public static SubscriptionValidationFailure ClassifyValidationCallbackFailure(string graphErrorMessage)
+        {
+            if (string.IsNullOrWhiteSpace(graphErrorMessage)) return SubscriptionValidationFailure.NotAValidationFailure;
+
+            // Graph's wording for both variants starts the same way; match on that stem so a later
+            // rewording of the tail does not silently drop us back to the generic message.
+            if (graphErrorMessage.IndexOf("Subscription validation request", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                return SubscriptionValidationFailure.NotAValidationFailure;
+            }
+
+            var timedOut = graphErrorMessage.IndexOf("timed out", StringComparison.OrdinalIgnoreCase) >= 0;
+
+            return new SubscriptionValidationFailure
+            {
+                IsValidationCallbackFailure = true,
+                TimedOut = timedOut,
+                EndpointStatus = timedOut ? null : ExtractEndpointStatus(graphErrorMessage),
+            };
+        }
+
+        /// <summary>
+        /// Pull the status our endpoint returned out of Graph's message, e.g. the <c>Forbidden</c> in
+        /// "HTTP status code is 'Forbidden'". Returns null when Graph did not include one.
+        /// </summary>
+        private static string ExtractEndpointStatus(string graphErrorMessage)
+        {
+            const string marker = "HTTP status code is";
+            var markerAt = graphErrorMessage.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (markerAt < 0) return null;
+
+            var openQuote = graphErrorMessage.IndexOf('\'', markerAt + marker.Length);
+            if (openQuote < 0) return null;
+
+            var closeQuote = graphErrorMessage.IndexOf('\'', openQuote + 1);
+            if (closeQuote <= openQuote + 1) return null;
+
+            return graphErrorMessage.Substring(openQuote + 1, closeQuote - openQuote - 1);
+        }
+
+        /// <summary>
         /// Which subscription to report on a status page when several match. The one expiring latest is
         /// the one actually keeping the webhook alive, so that is the one whose expiry an operator
         /// needs to see.
@@ -85,6 +142,26 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
     {
         Create,
         Renew
+    }
+
+    /// <summary>
+    /// The outcome of <see cref="CallSubscriptionRules.ClassifyValidationCallbackFailure"/>. See issue #273.
+    /// </summary>
+    public class SubscriptionValidationFailure
+    {
+        public static readonly SubscriptionValidationFailure NotAValidationFailure = new SubscriptionValidationFailure();
+
+        /// <summary>Graph's validation callback to our notification endpoint is what failed.</summary>
+        public bool IsValidationCallbackFailure { get; set; }
+
+        /// <summary>Graph gave up waiting rather than getting a response it disliked.</summary>
+        public bool TimedOut { get; set; }
+
+        /// <summary>
+        /// The status our endpoint returned to Graph (e.g. "Forbidden"), when Graph reported one.
+        /// Null for the timeout variant, and when Graph did not name a status.
+        /// </summary>
+        public string EndpointStatus { get; set; }
     }
 
     /// <summary>What <see cref="CallSubscriptionRules.Decide"/> decided to do.</summary>

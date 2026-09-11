@@ -2,6 +2,7 @@
 using System.Data;
 using System.Data.SqlClient;
 using System.Threading.Tasks;
+using DataUtils.Sql;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
@@ -37,7 +38,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             if (userUpdates.Rows.Count == 0)
                 return;
 
-            using (var connection = new SqlConnection(_connectionString))
+            using (var connection = AzureSqlTokenAuth.CreateConnection(_connectionString))
             {
                 await connection.OpenAsync();
 

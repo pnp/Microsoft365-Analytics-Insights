@@ -43,10 +43,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
 
             // v4 used graphClient.HttpProvider.OverallTimeout = 1h directly. HttpProvider is gone
-            // in v5+, so we build a HttpClient with the desired timeout and inject it into the
-            // GraphServiceClient. /users/delta over a 200k-tenant can comfortably exceed the
-            // default 100s timeout - the explicit 1h timeout is load-bearing.
-            var graphServiceClient = GraphServiceClientFactory.CreateWithTimeout(creds, TimeSpan.FromHours(1));
+            // in v5+, so we build a HttpClient that keeps Kiota's service-directed Retry-After
+            // handling but caps any single stalled HTTP request. /users/delta over a 200k-user
+            // tenant can legitimately take longer than the framework default 100s across all pages;
+            // the budget is therefore per request, not per full tenant traversal.
+            var graphServiceClient = GraphServiceClientFactory.CreateForUserImport(creds, _logger);
 
             _userLoader = new GraphUserLoader(manualGraphCallClient, deltaProvider, _logger, graphServiceClient);
             _contextFactory = DefaultAnalyticsDbContextFactory.Instance;

@@ -1,4 +1,5 @@
 ﻿using App.ControlPanel.Engine;
+using Common.Entities.Installer;
 using System;
 using System.Windows.Forms;
 
@@ -17,6 +18,21 @@ namespace App.ControlPanel.Frames.InstallWizard
         public string SQLServerName { get { return txtSQLServerName.Text; } set { txtSQLServerName.Text = value; } }
         public string SQLServerPassword { get { return txtSQLServerPassword.Text; } set { txtSQLServerPassword.Text = value; } }
         public string SQLServerUsername { get { return txtSQLServerUsername.Text; } set { txtSQLServerUsername.Text = value; } }
+
+        /// <summary>
+        /// Whether to authenticate to Azure SQL with Microsoft Entra ID instead of the deprecated SQL
+        /// administrator login. Only applied when the installer CREATES the SQL server - an existing
+        /// server's authentication is detected and left alone. See issue #117.
+        /// </summary>
+        public SqlServerAuthMode SqlAuthMode
+        {
+            get { return chkSqlEntraAuth.Checked ? SqlServerAuthMode.EntraId : SqlServerAuthMode.SqlLogin; }
+            set
+            {
+                chkSqlEntraAuth.Checked = value == SqlServerAuthMode.EntraId;
+                UpdateResponsiveUIControls();
+            }
+        }
         public string StorageAccount { get { return txtStorageAccount.Text; } set { txtStorageAccount.Text = value; } }
         public string RedisName { get { return txtRedisName.Text; } set { txtRedisName.Text = value; } }
         public string ServiceBusName { get { return txtServiceBusName.Text; } set { txtServiceBusName.Text = value; } }
@@ -55,6 +71,20 @@ namespace App.ControlPanel.Frames.InstallWizard
             // Disable SB name fields when Service Bus is disabled
             txtServiceBusName.Enabled = chkServiceBusEnabled.Checked;
             lblServiceBusName.Enabled = chkServiceBusEnabled.Checked;
+
+            // The SQL administrator login is deprecated: grey it out when Microsoft Entra ID authentication
+            // is selected, rather than removing it, because an install pointed at an existing
+            // SQL-authentication server still needs it.
+            var sqlLoginInUse = !chkSqlEntraAuth.Checked;
+            txtSQLServerUsername.Enabled = sqlLoginInUse;
+            txtSQLServerPassword.Enabled = sqlLoginInUse;
+            lblGUIAzureSQLUsername.Enabled = sqlLoginInUse;
+            lblGUIAzureSQLPassword.Enabled = sqlLoginInUse;
+        }
+
+        private void chkSqlEntraAuth_CheckedChanged(object sender, EventArgs e)
+        {
+            UpdateResponsiveUIControls();
         }
 
         /// <summary>

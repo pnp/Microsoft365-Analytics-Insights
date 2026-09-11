@@ -13,12 +13,12 @@ namespace DataUtils.Http
     /// </summary>
     public class ConfidentialClientApplicationThrottledHttpClient : AutoThrottleHttpClient
     {
-        public ConfidentialClientApplicationThrottledHttpClient(HttpMessageHandler server, ILogger logger) : base(server, logger)
+        public ConfidentialClientApplicationThrottledHttpClient(HttpMessageHandler server, ILogger logger, IAutoThrottleHttpClientClock clock = null) : base(server, logger, clock)
         {
         }
 
-        public ConfidentialClientApplicationThrottledHttpClient(ImportAppIndentityOAuthContext appIndentity, bool ignoreRetryHeader, ILogger logger)
-            : base(ignoreRetryHeader, logger, new ConfidentialClientApplicationHttpHandler(appIndentity))
+        public ConfidentialClientApplicationThrottledHttpClient(ImportAppIndentityOAuthContext appIndentity, bool ignoreRetryHeader, ILogger logger, IAutoThrottleHttpClientClock clock = null)
+            : base(ignoreRetryHeader, logger, new ConfidentialClientApplicationHttpHandler(appIndentity), clock)
         {
         }
     }

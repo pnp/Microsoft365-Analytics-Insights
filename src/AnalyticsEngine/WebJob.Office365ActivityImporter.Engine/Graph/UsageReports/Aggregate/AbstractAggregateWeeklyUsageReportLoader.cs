@@ -75,16 +75,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
         public abstract string ReportName { get; }
 
         public async Task<int> LoadAndSaveLastWeeksReportsIfRefreshOnDay(DayOfWeek uptoDay)
+            => (await LoadAndSaveLastWeeksReportsIfRefreshOnDayWithResult(uptoDay)).ItemsSaved;
+
+        public virtual async Task<WeeklyUsageReportSaveResult> LoadAndSaveLastWeeksReportsIfRefreshOnDayWithResult(DayOfWeek uptoDay)
         {
             Telemetry.LogInformation($"Loading {GetType().Name} and saving reports refreshed on a {uptoDay}");
 
             var report = await LoadReportData();
             Telemetry.LogInformation($"Loaded {report.Count()} items for {ReportName} reports");
 
-            return await SaveLoadedReportsIfRefreshOnDay(uptoDay, report);
+            return await SaveLoadedReportsIfRefreshOnDayWithResult(uptoDay, report);
         }
 
         public async Task<int> SaveLoadedReportsIfRefreshOnDay(DayOfWeek uptoDay, IEnumerable<T> data)
+            => (await SaveLoadedReportsIfRefreshOnDayWithResult(uptoDay, data)).ItemsSaved;
+
+        public virtual async Task<WeeklyUsageReportSaveResult> SaveLoadedReportsIfRefreshOnDayWithResult(DayOfWeek uptoDay, IEnumerable<T> data)
         {
             // Materialise once so we can both hand the full set to BeginSaveAsync (for bulk pre-loading)
             // and iterate it below.
@@ -134,7 +140,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
                     Telemetry.LogInformation($"Saving {itemsSaved} items to SQL for {ReportName} reports");
                     await CommitAllChanges();
                 }
-                return itemsSaved;
+                return new WeeklyUsageReportSaveResult(itemsSaved, alreadyUpToDate, notRefreshedOnDay);
             }
             finally
             {
@@ -155,5 +161,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
         protected virtual Task EndSaveAsync() => Task.CompletedTask;
 
         public abstract Task<AggregateResourceUsageDetail<T>> LoadReportDataForUrl(string requestUrl);
+    }
+
+    public sealed class WeeklyUsageReportSaveResult
+    {
+        public WeeklyUsageReportSaveResult(int itemsSaved, int alreadyUpToDate, int notRefreshedOnDay)
+        {
+            ItemsSaved = itemsSaved;
+            AlreadyUpToDate = alreadyUpToDate;
+            NotRefreshedOnDay = notRefreshedOnDay;
+        }
+
+        public int ItemsSaved { get; }
+        public int AlreadyUpToDate { get; }
+        public int NotRefreshedOnDay { get; }
+        public bool ObservedRefreshDayReport => ItemsSaved + AlreadyUpToDate > 0;
     }
 }

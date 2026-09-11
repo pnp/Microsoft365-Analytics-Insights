@@ -131,6 +131,70 @@ namespace Common.Entities
         [ImportProp]
         public bool CopilotInteractionHistory { get; set; } = false;
 
+        /// <summary>
+        /// Import Microsoft Purview Data Loss Prevention events from the Office 365 Management Activity
+        /// API's separate <c>DLP.All</c> content type.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Opt-in and off by default because it needs its OWN Entra application permission -
+        /// <c>ActivityFeed.ReadDlp</c> ("Read DLP policy events") - which is separate from the
+        /// <c>ActivityFeed.Read</c> grant the other audit imports use and needs its own admin consent.
+        /// A tenant that enables this without granting that permission does not break the rest of the
+        /// import: the DLP subscription is treated as optional and dropped for the cycle with a warning
+        /// (see <c>ActivitySubscriptionManager</c>).
+        /// </para>
+        /// <para>
+        /// IMPORTANT - this toggle is NOT what powers Copilot DLP reporting. DLP policies scoped to the
+        /// "Microsoft 365 Copilot and Copilot Chat" location do not emit records on this feed at all, and
+        /// the records that do arrive here carry no agent identity (<c>UserKey</c> is always the literal
+        /// "DlpAgent"). Copilot's own block signal is embedded in the CopilotInteraction record and is
+        /// imported under <see cref="Copilot"/>. This toggle adds the tenant-wide policy picture -
+        /// Exchange, SharePoint/OneDrive and Endpoint DLP - alongside it.
+        /// </para>
+        /// </remarks>
+        [ImportProp]
+        public bool ImportDlp { get; set; } = false;
+
+        /// <summary>
+        /// Import <b>billed</b> Microsoft Copilot Studio consumption (Copilot Credits) from the Power Platform
+        /// licensing API - what Microsoft actually charged, per agent and per day.
+        /// </summary>
+        /// <remarks>
+        /// <para>Distinct from <see cref="ImportPowerPlatform"/>, which imports Copilot Studio <i>activity</i>
+        /// from the Audit.General feed, and from the per-conversation credit <i>estimate</i> this product
+        /// derives from Copilot audit events. This one is the vendor's own billing figure.</para>
+        /// <para>Opt-in and off by default. It needs a token for the <c>api.powerplatform.com</c> audience
+        /// <b>and</b> a Power Platform RBAC role assignment on the service principal, which the installer does
+        /// not create. Note that Microsoft has not confirmed application-only access to the licensing
+        /// entitlement routes, so on some tenants this may require a signed-in administrator and will report
+        /// an authorisation failure instead of importing.</para>
+        /// <para>Imports both the per-agent view and, where the tenant's API offers it, the per-user view
+        /// Microsoft added in July 2026. The per-user figures come from Microsoft directly - nothing is
+        /// apportioned or inferred - but they are a separate endpoint rather than a breakdown of the
+        /// per-agent one, so the two totals are not guaranteed to reconcile exactly.</para>
+        /// </remarks>
+        [ImportProp]
+        public bool CopilotStudioCredits { get; set; } = false;
+
+        /// <summary>
+        /// Import daily Azure spend from Microsoft Cost Management, so agent workloads billed directly to an
+        /// Azure subscription can be reported alongside the rest of the data.
+        /// </summary>
+        /// <remarks>
+        /// <para>Opt-in and off by default. It needs a token for the <c>management.azure.com</c> audience, the
+        /// <c>Cost Management Reader</c> role on each scope, and at least one scope in the
+        /// <c>AzureCostScopes</c> App Service application setting - without that the import declines to run
+        /// rather than guessing a subscription.</para>
+        /// <para>Which meters are imported is <b>configured, not compiled in</b>. Microsoft Cowork - the
+        /// workload this was built for - is billed through Copilot Credits managed in the Microsoft 365 admin
+        /// centre, and Microsoft publishes no Azure meter name for it, so there is no correct value to ship.
+        /// With no filter set, every meter at the scope is imported.</para>
+        /// <para>Azure billing is resource-scoped, so no per-user attribution is possible.</para>
+        /// </remarks>
+        [ImportProp]
+        public bool AzureCostManagement { get; set; } = false;
+
         IEnumerable<PropertyInfo> GetImportProps()
         {
             return this.GetType().GetProperties().Where(p => Attribute.IsDefined(p, typeof(ImportPropAttribute)));
@@ -188,8 +252,16 @@ namespace Common.Entities
         public const string CONTENT_TYPE_AUDIT_SHAREPOINT = "Audit.SharePoint";
 
         /// <summary>
+        /// Office 365 Management Activity API content-type for Data Loss Prevention events across all
+        /// workloads. Needs the separate <c>ActivityFeed.ReadDlp</c> application permission.
+        /// https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-reference
+        /// </summary>
+        public const string CONTENT_TYPE_DLP_ALL = "DLP.All";
+
+        /// <summary>
         /// True when any enabled workload needs the Office 365 Management Activity API. SharePoint audit
-        /// events use Audit.SharePoint; Microsoft 365 Copilot and Power Platform both use Audit.General.
+        /// events use Audit.SharePoint; Microsoft 365 Copilot and Power Platform both use Audit.General;
+        /// Data Loss Prevention uses DLP.All.
         /// </summary>
         /// <remarks>
         /// Derived from the [ImportProp] toggles, so it is deliberately not persisted: this type is
@@ -199,14 +271,14 @@ namespace Common.Entities
         /// BaseSolutionInstallConfig.ConfigSchemaVersion.
         /// </remarks>
         [Newtonsoft.Json.JsonIgnore]
-        public bool UsesActivityApi => ActivityLog || Copilot || ImportPowerPlatform;
+        public bool UsesActivityApi => ActivityLog || Copilot || ImportPowerPlatform || ImportDlp;
 
         /// <summary>
         /// Builds the "ContentTypesListAsString" value (the Office 365 Management Activity API feeds
         /// to subscribe to) from the enabled audit-based imports: <see cref="Copilot"/> and
         /// <see cref="ImportPowerPlatform"/> =&gt; Audit.General, <see cref="ActivityLog"/> (SharePoint audit)
-        /// =&gt; Audit.SharePoint. Falls back to Audit.SharePoint when no audit source is selected so the
-        /// runtime always has a valid (if unused) workload list.
+        /// =&gt; Audit.SharePoint, <see cref="ImportDlp"/> =&gt; DLP.All. Falls back to Audit.SharePoint when no
+        /// audit source is selected so the runtime always has a valid (if unused) workload list.
         /// </summary>
         public string ToActivityApiContentTypesString()
         {
@@ -214,7 +286,23 @@ namespace Common.Entities
             // Copilot and Power Platform are both delivered via the Audit.General feed.
             if (Copilot || ImportPowerPlatform) types.Add(CONTENT_TYPE_AUDIT_GENERAL);
             if (ActivityLog) types.Add(CONTENT_TYPE_AUDIT_SHAREPOINT);
+            if (ImportDlp) types.Add(CONTENT_TYPE_DLP_ALL);
             return types.Count > 0 ? string.Join(SEP, types) : CONTENT_TYPE_AUDIT_SHAREPOINT;
+        }
+
+        /// <summary>
+        /// Content types whose subscription is allowed to fail without failing the whole import.
+        /// </summary>
+        /// <remarks>
+        /// DLP.All needs the separate <c>ActivityFeed.ReadDlp</c> permission, so an admin who ticks the
+        /// DLP import but has not yet consented to that grant would otherwise take down SharePoint,
+        /// Copilot and Power Platform importing along with it. The other feeds stay mandatory: if
+        /// Audit.SharePoint or Audit.General cannot be subscribed, the import genuinely cannot do its job
+        /// and must say so loudly rather than quietly returning nothing.
+        /// </remarks>
+        public static bool IsOptionalContentType(string contentType)
+        {
+            return string.Equals(contentType, CONTENT_TYPE_DLP_ALL, StringComparison.OrdinalIgnoreCase);
         }
         public bool HaveSomethingToDo()
         {

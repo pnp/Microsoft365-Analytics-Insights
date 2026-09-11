@@ -50,21 +50,6 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
     }
 
     /// <summary>
-    /// SQL <see cref="IImportDbMaintenance"/>: the duplicate-hit cleanup and the page-request-id index.
-    /// </summary>
-    public sealed class SqlImportDbMaintenance : IImportDbMaintenance
-    {
-        private readonly AnalyticsEntitiesContext _db;
-
-        public SqlImportDbMaintenance(AnalyticsEntitiesContext db)
-        {
-            _db = db ?? throw new ArgumentNullException(nameof(db));
-        }
-
-        public Task RunStartupMaintenanceAsync() => ImportDbHacks.CleanDuplicateHitsAndCreateIX_PageRequestID(_db);
-    }
-
-    /// <summary>
     /// SQL <see cref="IAppInsightsDayPersistenceManager"/>, calling the existing save extensions verbatim.
     /// </summary>
     public sealed class SqlAppInsightsDayPersistenceManager : IAppInsightsDayPersistenceManager

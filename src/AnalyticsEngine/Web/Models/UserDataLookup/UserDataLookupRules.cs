@@ -83,7 +83,6 @@ namespace Web.AnalyticsWeb.Models.UserDataLookup
         public const string CatAuditExchange = "audit-exchange";
         public const string CatAuditEntra = "audit-entra";
         public const string CatAuditGeneral = "audit-general";
-        public const string CatAuditStream = "audit-stream";
         public const string CatPowerAppEvents = "powerapp-events";
         public const string CatFlowEvents = "flow-events";
         public const string CatPowerBiEvents = "powerbi-events";
@@ -137,9 +136,6 @@ namespace Web.AnalyticsWeb.Models.UserDataLookup
             new UserDataCategoryMeta { Key = CatAuditGeneral, Label = "General audit", SupportsDetail = true,
                 Table = "event_meta_general", ViaAuditEvent = true, WorkloadFlags = new[] { Wf.Copilot },
                 Description = "Other 'general' workload audit events (Audit.General feed)." },
-            new UserDataCategoryMeta { Key = CatAuditStream, Label = "Stream events", SupportsDetail = true,
-                Table = "event_meta_stream", ViaAuditEvent = true, WorkloadFlags = new[] { Wf.Copilot },
-                Description = "Microsoft Stream audit events." },
             new UserDataCategoryMeta { Key = CatPowerAppEvents, Label = "Power Apps events", SupportsDetail = true,
                 Table = "event_meta_power_app", ViaAuditEvent = true, WorkloadFlags = new[] { Wf.Copilot },
                 Description = "Power Apps launch / usage events (Audit.General feed)." },

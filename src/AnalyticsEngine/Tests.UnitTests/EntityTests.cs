@@ -500,12 +500,23 @@ namespace Tests.UnitTests
 
 
         /// <summary>
-        /// Not in use as no index, due to varchar(max) not being possible for unique indexes
+        /// dbo.urls.full_url is UNIQUE as of migration UniqueUrlsFullUrlIndex (#167), so a second row
+        /// with the same URL can no longer be created. This test was dormant for years - full_url was
+        /// nvarchar(max), which cannot be a unique index key - and is live again now that
+        /// ShrinkUrlsFullUrlColumn narrowed it to nvarchar(850) and UniqueUrlsFullUrlIndex made the
+        /// index unique.
+        ///
+        /// The index is created WITH (IGNORE_DUP_KEY = ON), so SQL Server does not raise a duplicate-key
+        /// error: it silently skips the offending row. EF6 then sees an INSERT that affected zero rows
+        /// and raises DbUpdateConcurrencyException, which derives from DbUpdateException - so the insert
+        /// still fails loudly on this code path, just not with the error you might expect.
         /// </summary>
-        [Obsolete()]
+        [TestMethod]
         public void URLsTest()
         {
-            const string NAME = "http://whatevs";
+            // Unique per run: EntityTests share a database, so a fixed literal would collide with a
+            // previous run's leftovers now that the column is unique.
+            string NAME = "http://whatevs/" + DateTime.Now.Ticks;
             using (AnalyticsEntitiesContext db = new AnalyticsEntitiesContext())
             {
                 Url existing = db.urls.Where(r => r.FullUrl == NAME).FirstOrDefault();
@@ -521,7 +532,6 @@ namespace Tests.UnitTests
                 db.urls.Add(u);
                 db.SaveChanges();
 
-
                 // Expect error
                 existing = new Url();
                 existing.FullUrl = NAME;
@@ -529,12 +539,21 @@ namespace Tests.UnitTests
                 try
                 {
                     db.SaveChanges();
-                    Assert.Fail("Shouldn't have worked");
+                    Assert.Fail("A second dbo.urls row with the same full_url should not be possible - "
+                        + "IX_urls_full_url is UNIQUE as of UniqueUrlsFullUrlIndex.");
                 }
                 catch (DbUpdateException)
                 {
-                    // Good
+                    // Good - IGNORE_DUP_KEY skipped the row, so EF saw 0 rows affected.
                 }
+            }
+
+            // Leave the shared database as we found it.
+            using (AnalyticsEntitiesContext db = new AnalyticsEntitiesContext())
+            {
+                var toRemove = db.urls.Where(r => r.FullUrl == NAME).ToList();
+                db.urls.RemoveRange(toRemove);
+                db.SaveChanges();
             }
         }
 

@@ -102,7 +102,6 @@ namespace Web.AnalyticsWeb.Models.UserDataLookup
                         AuditExchange = db.exchange_events.Count(c => c.AuditEvent.UserId == userId),
                         AuditEntra = db.azure_ad_events.Count(c => c.AuditEvent.UserId == userId),
                         AuditGeneral = db.general_audit_events.Count(c => c.AuditEvent.UserId == userId),
-                        AuditStream = db.StreamEvents.Count(c => c.AuditEvent.UserId == userId),
                         PowerAppEvents = db.power_app_events.Count(c => c.AuditEvent.UserId == userId),
                         FlowEvents = db.power_automate_flow_events.Count(c => c.AuditEvent.UserId == userId),
                         PowerBiEvents = db.power_bi_events.Count(c => c.AuditEvent.UserId == userId),
@@ -212,8 +211,6 @@ namespace Web.AnalyticsWeb.Models.UserDataLookup
                     return db.azure_ad_events.Where(c => c.AuditEvent.UserId == userId).CountAsync();
                 case UserDataLookupRules.CatAuditGeneral:
                     return db.general_audit_events.Where(c => c.AuditEvent.UserId == userId).CountAsync();
-                case UserDataLookupRules.CatAuditStream:
-                    return db.StreamEvents.Where(c => c.AuditEvent.UserId == userId).CountAsync();
                 case UserDataLookupRules.CatPowerAppEvents:
                     return db.power_app_events.Where(c => c.AuditEvent.UserId == userId).CountAsync();
                 case UserDataLookupRules.CatFlowEvents:
@@ -376,8 +373,6 @@ namespace Web.AnalyticsWeb.Models.UserDataLookup
                     return await AuditChildDetailAsync(db.azure_ad_events.Where(c => c.AuditEvent.UserId == userId), take);
                 case UserDataLookupRules.CatAuditGeneral:
                     return await AuditChildDetailAsync(db.general_audit_events.Where(c => c.AuditEvent.UserId == userId), take);
-                case UserDataLookupRules.CatAuditStream:
-                    return await AuditChildDetailAsync(db.StreamEvents.Where(c => c.AuditEvent.UserId == userId), take);
                 case UserDataLookupRules.CatPowerAppEvents:
                     return await AuditChildDetailAsync(db.power_app_events.Where(c => c.AuditEvent.UserId == userId), take);
                 case UserDataLookupRules.CatFlowEvents:
@@ -464,7 +459,6 @@ namespace Web.AnalyticsWeb.Models.UserDataLookup
                 { UserDataLookupRules.CatAuditExchange, c.AuditExchange },
                 { UserDataLookupRules.CatAuditEntra, c.AuditEntra },
                 { UserDataLookupRules.CatAuditGeneral, c.AuditGeneral },
-                { UserDataLookupRules.CatAuditStream, c.AuditStream },
                 { UserDataLookupRules.CatPowerAppEvents, c.PowerAppEvents },
                 { UserDataLookupRules.CatFlowEvents, c.FlowEvents },
                 { UserDataLookupRules.CatPowerBiEvents, c.PowerBiEvents },
@@ -500,7 +494,6 @@ namespace Web.AnalyticsWeb.Models.UserDataLookup
             public int AuditExchange { get; set; }
             public int AuditEntra { get; set; }
             public int AuditGeneral { get; set; }
-            public int AuditStream { get; set; }
             public int PowerAppEvents { get; set; }
             public int FlowEvents { get; set; }
             public int PowerBiEvents { get; set; }

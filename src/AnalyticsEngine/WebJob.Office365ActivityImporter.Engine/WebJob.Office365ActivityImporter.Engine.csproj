@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
@@ -89,7 +89,26 @@
     <Compile Include="ActivityAPI\Rules\ActivityStagingRules.cs" />
     <Compile Include="ActivityAPI\Rules\CopilotPrewarmPolicy.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditEventManager.cs" />
+    <Compile Include="AgentCosts\AgentCostImportPhase.cs" />
+    <Compile Include="AgentCosts\AgentCostRowHasher.cs" />
+    <Compile Include="AgentCosts\AgentCostUserResolver.cs" />
+    <Compile Include="AgentCosts\GraphEntraUserLookup.cs" />
+    <Compile Include="AgentCosts\SqlAgentCostUserLinkStore.cs" />
+    <Compile Include="AgentCosts\UserResolution.cs" />
+    <Compile Include="AgentCosts\AzureCostImporter.cs" />
+    <Compile Include="AgentCosts\AzureCostManagementSource.cs" />
+    <Compile Include="AgentCosts\AzureCostQueryParser.cs" />
+    <Compile Include="AgentCosts\CopilotStudioCreditImporter.cs" />
+    <Compile Include="AgentCosts\CopilotStudioCreditParser.cs" />
+    <Compile Include="AgentCosts\Interfaces.cs" />
+    <Compile Include="AgentCosts\PowerPlatformLicensingCreditSource.cs" />
+    <Compile Include="AgentCosts\SqlAgentCostStore.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\IPowerPlatformStagingWriter.cs" />
+    <Compile Include="ActivityAPI\Dlp\CopilotDlpRules.cs" />
+    <Compile Include="ActivityAPI\Dlp\DlpAuditEventManager.cs" />
+    <Compile Include="ActivityAPI\Dlp\IDlpStagingWriter.cs" />
+    <Compile Include="ActivityAPI\Dlp\StagingClasses.cs" />
+    <Compile Include="Entities\Serialisation\DlpAuditLogContent.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditLogFilter.cs" />
     <Compile Include="ActivityAPI\PowerPlatform\StagingClasses.cs" />
     <Compile Include="ActivityAPI\Interfaces.cs" />
@@ -125,7 +144,6 @@
     <Compile Include="Entities\Serialisation\GeneralAuditLogContent.cs" />
     <Compile Include="Entities\Serialisation\PowerPlatformAuditLogContent.cs" />
     <Compile Include="Entities\Serialisation\SharePointAuditLogContent.cs" />
-    <Compile Include="Entities\Serialisation\StreamAuditLogContent.cs" />
     <Compile Include="Entities\Serialisation\UsageReports\AppPlatformUserActivityDetail.cs" />
     <Compile Include="Entities\Serialisation\TeamsDeviceUsageUserDetail.cs" />
     <Compile Include="Entities\Serialisation\UsageReports\Abstract.cs" />
@@ -141,6 +159,7 @@
     <Compile Include="Entities\MessageCognitiveStats.cs" />
     <Compile Include="Entities\WebActivityReportSet.cs" />
     <Compile Include="ExceptionHandler.cs" />
+    <Compile Include="Graph\BoundedGraphRequestHandler.cs" />
     <Compile Include="Graph\DeltaValueProvider.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\AiInteractionModels.cs" />
     <Compile Include="Graph\Copilot\InteractionHistory\CopilotInteractionHistoryImporter.cs" />
@@ -185,6 +204,7 @@
     <Compile Include="Graph\UsageReports\AbstractDailyActivityLoader.cs" />
     <Compile Include="Graph\UsageReports\IUsageReportStorageInspector.cs" />
     <Compile Include="Graph\UsageReports\IUsageReportStore.cs" />
+    <Compile Include="Graph\UsageReports\UsageReportSaveInstrumentation.cs" />
     <Compile Include="Graph\UsageReports\Rules\UsageReportRefreshPolicy.cs" />
     <Compile Include="Graph\Calls\CallQueueProcessor.cs" />
     <Compile Include="Graph\Calls\CallRecordAdapters.cs" />
@@ -203,6 +223,7 @@
     <Compile Include="Graph\Teams\Extensions\ItemBodyExtensions.cs" />
     <Compile Include="Graph\Teams\GraphReadExceptions.cs" />
     <Compile Include="Graph\BearerTokenAuthenticationProvider.cs" />
+    <Compile Include="Graph\GraphRequestBudgetOptions.cs" />
     <Compile Include="Graph\GraphServiceClientFactory.cs" />
     <Compile Include="Graph\ManualGraphCallClient.cs" />
     <Compile Include="Graph\Teams\O365Team.cs" />
@@ -304,6 +325,8 @@
     <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_automate_events_from_staging_table.sql" />
     <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_automate_share_events_from_staging_table.sql" />
     <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_bi_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\Dlp\SQL\insert_copilot_dlp_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\Dlp\SQL\insert_dlp_rule_matches_from_staging_table.sql" />
     <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_copilot_studio_events_from_staging_table.sql" />
     <Content Include="Resources\Insert Activity from Staging Table.sql" />
   </ItemGroup>
@@ -375,3 +398,4 @@
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
+

@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Configuration;
 using System.Data.SqlClient;
+using System.Text.RegularExpressions;
 
 namespace Tests.UnitTests
 {
@@ -56,6 +58,65 @@ namespace Tests.UnitTests
         }
 
         public void Execute(string sql) => ExecuteOn(ConnectionString, sql);
+
+        /// <summary>
+        /// Runs a GO-separated script the way a DBA's client would: one connection for the whole script,
+        /// batch by batch, with <c>QUOTED_IDENTIFIER</c> pinned to <paramref name="quotedIdentifierOn"/>
+        /// for the session.
+        /// </summary>
+        /// <remarks>
+        /// The manual upgrade scripts are the path CI otherwise never executes - the tests run the
+        /// migration's <c>Up_Sql</c> through SqlClient instead, which is a different client with different
+        /// defaults. sqlcmd defaults <c>QUOTED_IDENTIFIER</c> to OFF while SSMS and SqlClient default it
+        /// ON, and <c>CREATE</c>/<c>ALTER VIEW</c> permanently captures whichever was in force. Passing
+        /// <c>false</c> therefore reproduces the by-hand upgrade rather than approximating it.
+        ///
+        /// Unlike sqlcmd this does NOT continue past a failed batch: a severity-16 <c>RAISERROR</c>
+        /// surfaces as a <see cref="SqlException"/> so a test cannot pass while the script is reporting
+        /// that it refused to stamp.
+        /// </remarks>
+        public void ExecuteScript(string sql, bool quotedIdentifierOn)
+        {
+            using (var connection = new SqlConnection(ConnectionString))
+            {
+                connection.Open();
+
+                using (var session = new SqlCommand(
+                    quotedIdentifierOn ? "SET QUOTED_IDENTIFIER ON;" : "SET QUOTED_IDENTIFIER OFF;", connection))
+                {
+                    session.ExecuteNonQuery();
+                }
+
+                foreach (var batch in SplitOnGo(sql))
+                {
+                    using (var command = new SqlCommand(batch, connection) { CommandTimeout = 0 })
+                    {
+                        command.ExecuteNonQuery();
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Splits on the <c>GO</c> batch separator. <c>GO</c> is a client-side convention rather than
+        /// T-SQL, so it has to be handled here exactly as sqlcmd does: alone on its line, any case.
+        /// </summary>
+        /// <remarks>
+        /// The <c>\r?</c> is load-bearing. These scripts are CRLF, and in .NET multiline mode <c>$</c>
+        /// matches immediately before the <c>\n</c> - so without it the trailing <c>\r</c> sits between
+        /// <c>GO</c> and the anchor, nothing matches, and the whole script is sent as one batch that
+        /// fails with "Incorrect syntax near 'GO'".
+        /// </remarks>
+        private static IEnumerable<string> SplitOnGo(string sql)
+        {
+            foreach (var batch in Regex.Split(sql, @"^[ \t]*GO[ \t]*\r?$", RegexOptions.Multiline | RegexOptions.IgnoreCase))
+            {
+                if (!string.IsNullOrWhiteSpace(batch))
+                {
+                    yield return batch;
+                }
+            }
+        }
 
         /// <summary>
         /// True when <paramref name="index"/> exists on <paramref name="table"/> with

@@ -1,5 +1,4 @@
-﻿using Common.Entities.Entities.AuditLog;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
@@ -135,72 +134,6 @@ namespace Common.Entities
         #endregion
 
         #region Event-Specific Lookups
-
-        public static AuditPropertyValue GetAuditPropertyValue(string propVal, AnalyticsEntitiesContext db)
-        {
-            if (string.IsNullOrEmpty(propVal))
-            {
-                throw new ArgumentNullException("propVal");
-            }
-
-            AuditPropertyValue val = db.audit_event_prop_vals.Where(v => v.value == propVal).FirstOrDefault();
-            if (val == null)
-            {
-                val = new AuditPropertyValue();
-                val.value = propVal;
-                db.audit_event_prop_vals.Add(val);
-            }
-
-            return val;
-        }
-
-
-        public static AuditPropertyName GetAuditPropertyName(string propName, AnalyticsEntitiesContext db)
-        {
-            if (string.IsNullOrEmpty(propName))
-            {
-                throw new ArgumentNullException("propName");
-            }
-
-            AuditPropertyName name = db.audit_event_prop_names.Where(v => v.name == propName).FirstOrDefault();
-            if (name == null)
-            {
-                name = new AuditPropertyName();
-                name.name = propName;
-                db.audit_event_prop_names.Add(name);
-            }
-
-            return name;
-        }
-
-
-        List<AuditPropertyName> _propNameCache = null;
-        public List<AuditPropertyName> GetAuditPropertyNames()
-        {
-            if (this._propNameCache == null)
-            {
-                _propNameCache = _db.audit_event_prop_names.ToList();
-            }
-
-            return this._propNameCache;
-
-        }
-
-        #region audit_event_prop_vals
-
-        List<AuditPropertyValue> _propValCache = null;
-        public List<AuditPropertyValue> GetPropVals()
-        {
-            if (this._propValCache == null)
-            {
-                _propValCache = _db.audit_event_prop_vals.ToList();
-            }
-
-            return this._propValCache;
-
-        }
-
-        #endregion
 
         public SPEventFileName GetOrCreateEventFilename(string filename)
         {

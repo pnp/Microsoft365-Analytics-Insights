@@ -27,11 +27,26 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
         /// JSON deserialisation exceptions are intentionally not caught here - the caller already
         /// logs them with the originating workload name and continues to the next record.
         /// </summary>
-        public static AbstractAuditLogContent Dispatch(JToken reportItem, WorkloadOnlyAuditLogContent logBase, ILogger logger, bool importPowerPlatform = true, bool importCopilot = true)
+        public static AbstractAuditLogContent Dispatch(JToken reportItem, WorkloadOnlyAuditLogContent logBase, ILogger logger, bool importPowerPlatform = true, bool importCopilot = true, bool importDlp = true)
         {
             if (reportItem == null || logBase == null)
             {
                 return null;
+            }
+
+            // Data Loss Prevention records MUST be matched before any workload route below. A DLP record
+            // carries the workload where the match was DETECTED - "SharePoint", "Exchange", "Endpoint" -
+            // so the SharePoint/Exchange routes further down would otherwise claim it and silently drop
+            // every PolicyDetails field. Its RecordType is what identifies it.
+            // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-schema#dlp-schema
+            if (ActivityImportConstants.DlpRecordTypes.IsDlpRecord(logBase.RecordType))
+            {
+                if (!importDlp)
+                {
+                    return null;
+                }
+
+                return reportItem.ToObject<DlpAuditLogContent>();
             }
 
             // Copilot Studio authoring records publish a top-level BotId. Route by that documented
@@ -92,11 +107,15 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
                 return reportItem.ToObject<AzureADAuditLogContent>();
             }
 
-            // Workload "MicrosoftStream" -> AuditLogRecordType 32 MicrosoftStream.
+            // Workload "MicrosoftStream" -> AuditLogRecordType 32 MicrosoftStream. Microsoft Stream (Classic)
+            // is retired, and the Stream-specific tables (stream_videos / event_meta_stream) it fed were
+            // retired with it. Any remaining record is still captured as a generic event: the staging merge
+            // writes an event_meta_general row for the workload, and GeneralAuditLogContent stores the raw
+            // record JSON against it.
             // https://learn.microsoft.com/en-us/office/office-365-management-api/office-365-management-activity-api-schema#auditlogrecordtype
             if (logBase.Workload == ActivityImportConstants.WORKLOAD_STREAM)
             {
-                return reportItem.ToObject<StreamAuditLogContent>();
+                return reportItem.ToObject<GeneralAuditLogContent>();
             }
 
             // Workload "Copilot" (M365 Copilot user interactions) -> AuditLogRecordType 261

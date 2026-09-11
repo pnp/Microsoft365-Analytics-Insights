@@ -264,11 +264,17 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 // the event has only been added to an in-memory queue whose worker can drop it. Marking
                 // here would suppress reporting by waiting requests without anything having confirmed
                 // the failure was reported. An accepted failure may therefore be reported by a waiting
-                // request as well as by the sink; removing that duplicate needs delivery acknowledgement
-                // from the sink - see issue #454.
+                // request if it wins the atomic report claim before the sink worker writes it.
                 if (!telemetry.QueueFailure(ex))
                 {
-                    _reportUnqueuedFailure(ex, "CopilotAdoption background analysis");
+                    try
+                    {
+                        _reportUnqueuedFailure(ex, "CopilotAdoption background analysis");
+                    }
+                    catch (Exception)
+                    {
+                        // Failure telemetry is best-effort and must never replace the analysis fault.
+                    }
                 }
 
                 throw;

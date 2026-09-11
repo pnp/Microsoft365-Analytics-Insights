@@ -114,12 +114,34 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
         }
 
         /// <summary>
-        /// Return the database to the fully-migrated state (shrunk column + index) so other tests
-        /// and the migration history aren't surprised by leftover legacy schema.
+        /// Return the database to the fully-migrated state so other tests and the migration history
+        /// aren't surprised by leftover legacy schema.
         /// </summary>
+        /// <remarks>
+        /// This has to apply BOTH migrations. <see cref="ShrinkUrlsFullUrlColumn"/> creates
+        /// IX_urls_full_url as a NON-unique index, which was the fully-migrated state when this class
+        /// was written; it no longer is, because UniqueUrlsFullUrlIndex (#167) makes that index UNIQUE
+        /// with IGNORE_DUP_KEY = ON.
+        ///
+        /// These tests run against the SHARED unit-test database, so restoring only the older shape
+        /// leaves dbo.urls able to hold duplicate URLs again and silently breaks every later test that
+        /// depends on the constraint - DuplicateUrlTests and EntityTests.URLsTest both fail with
+        /// "expected 1 row, actual 2", and only when they happen to run after this class.
+        /// </remarks>
         private static async Task RestoreMigratedStateAsync(AnalyticsEntitiesContext db)
         {
             await ExecAsync(db, ShrinkUrlsFullUrlColumn.Up_Sql);
+
+            // UniqueUrlsFullUrlIndex refuses to run when another session holds write locks, which is a
+            // real possibility inside a test run. Opt out for this restore: we are deliberately putting
+            // the shared schema back, not performing a customer upgrade.
+            //
+            // Sent as ONE batch on purpose - session context is per-connection and EF hands each
+            // ExecuteSqlCommand a pooled connection, so setting it in a separate call would not
+            // reliably still be set when the migration SQL ran.
+            await ExecAsync(db,
+                "EXEC sp_set_session_context N'UniqueUrlsFullUrlIndex_SkipConcurrencyCheck', 1;\r\n"
+                + UniqueUrlsFullUrlIndex.Up_Sql);
         }
 
         [TestMethod]

@@ -375,6 +375,15 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 catch (RequestFailedException ex) when (ex.Status == 403 && ex.ErrorCode == "Forbidden")
                 {
                     lastForbidden = ex;
+
+                    // Key Vault's message is the only thing that says WHICH kind of 403 this is, and it
+                    // used to be discarded - leaving the final error listing both possible causes without
+                    // choosing. Logged once, on the first attempt, so the retry lines stay readable.
+                    if (attempt == 0)
+                    {
+                        _logger.LogInformation($"Key vault said: {KeyVaultForbiddenClassifier.FirstLine(ex.Message)}");
+                    }
+
                     if (attempt < _retryDelaysSeconds.Length)
                     {
                         var delaySeconds = _retryDelaysSeconds[attempt];
@@ -385,9 +394,37 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 }
             }
 
-            // All retries exhausted. Re-read the vault's current PublicNetworkAccess from ARM so we can
-            // distinguish "policy intentionally blocks public access" (soft warning — only matters on secret
-            // rotation) from "something else is genuinely wrong" (error worth investigating).
+            // All retries exhausted. Decide from Key Vault's own message whether the caller was refused by
+            // networking or by permissions - the two need opposite remedies. This is deliberately checked
+            // BEFORE the ARM re-read below: in a tenant where Azure Policy forces publicNetworkAccess back
+            // to 'Disabled', the re-read races the policy's remediation and can still report 'Enabled',
+            // which is exactly how a policy-blocked write got reported as a hard error.
+            var vaultSaid = KeyVaultForbiddenClassifier.FirstLine(lastForbidden?.Message);
+            var reason = KeyVaultForbiddenClassifier.Classify(lastForbidden);
+
+            if (reason == KeyVaultForbiddenReason.NetworkBlocked)
+            {
+                _logger.LogWarning(
+                    $"Key vault '{vault.Data.Name}' secret '{name}' was not updated: the vault refused the installer on networking grounds, not permissions. " +
+                    $"Key vault said: {vaultSaid} " +
+                    $"This is expected where public network access is switched off (often enforced by Azure Policy, which can revert the setting even after the installer changes it) or where the vault firewall does not list this host's address. " +
+                    $"Any existing value in the vault remains valid, so this only matters if the runtime app-registration secret has actually changed. " +
+                    $"To update it, run the installer from inside the VNet / over the private endpoint, or temporarily allow public access and re-run.");
+                return vault;
+            }
+
+            if (reason == KeyVaultForbiddenReason.PermissionDenied)
+            {
+                _logger.LogError(
+                    $"Could not add secret '{name}' to key vault '{vault.Data.Name}' after {_retryDelaysSeconds.Length + 1} attempts: the installer reached the vault but is not permitted to write secrets. " +
+                    $"Key vault said: {vaultSaid} " +
+                    $"Grant the installer's app registration 'Set' on secrets (vault Access policies blade, or the 'Key Vault Secrets Officer' role when the vault uses RBAC) and re-run. " +
+                    $"App-registration secrets in the vault may now be out of date.");
+                return vault;
+            }
+
+            // Unrecognised 403. Re-read the vault's current PublicNetworkAccess from ARM as a second
+            // opinion, so a policy-blocked write is still reported as a soft warning rather than an error.
             string publicAccess = null;
             try
             {
@@ -410,6 +447,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             // Other 403 (policy lag past retry window, network ACL deny, etc.) — surface as Error.
             _logger.LogError(
                 $"Could not add secret '{name}' to key vault '{vault.Data.Name}' after {_retryDelaysSeconds.Length + 1} attempts (last error: 403 Forbidden, ErrorCode='{lastForbidden?.ErrorCode}'). " +
+                (vaultSaid != null ? $"Key vault said: {vaultSaid} " : string.Empty) +
                 $"Likely causes: access policy / RBAC propagation lag (longer than the {(_retryDelaysSeconds.Length + 1)}-attempt retry window) or a vault firewall rule rejecting the runner IP — check the vault's Networking blade. " +
                 $"App-registration secrets in the vault may now be out of date — re-run the installer once the underlying cause is resolved.");
             return vault;

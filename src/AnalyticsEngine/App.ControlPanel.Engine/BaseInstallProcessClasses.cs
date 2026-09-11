@@ -1,6 +1,8 @@
 ﻿using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.Models;
+using Azure.Identity;
 using CloudInstallEngine.Azure;
+using DataUtils.Sql;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -21,6 +23,29 @@ namespace App.ControlPanel.Engine
             // Tee everything logged during the install into _installLogEvents so the full log can be
             // registered into sys_configs.messages, while still forwarding to the on-screen logger.
             _logger = new InstallLogCapturingLogger(logger, _installLogEvents);
+
+            RegisterEntraSqlCredential(config);
+        }
+
+        /// <summary>
+        /// Makes the installer's own service principal available for Microsoft Entra ID authentication to
+        /// Azure SQL. Needed because the installer runs on an operator's machine, which has no managed
+        /// identity, and because it is the principal the installer assigns as the SQL server's Entra
+        /// administrator. Harmless when the database still uses SQL authentication: the credential is only
+        /// consulted for a connection string that carries no login. See issue #117.
+        /// </summary>
+        static void RegisterEntraSqlCredential(SolutionInstallConfig config)
+        {
+            var account = config?.InstallerAccount;
+            if (account == null
+                || string.IsNullOrWhiteSpace(account.DirectoryId)
+                || string.IsNullOrWhiteSpace(account.ClientId)
+                || string.IsNullOrWhiteSpace(account.Secret))
+            {
+                return;
+            }
+
+            AzureSqlTokenAuth.SetCredential(new ClientSecretCredential(account.DirectoryId, account.ClientId, account.Secret));
         }
 
         protected List<InstallLogEventArgs> _installLogEvents = new List<InstallLogEventArgs>();
@@ -182,7 +207,23 @@ namespace App.ControlPanel.Engine
         /// <summary>Opens a connection and runs a trivial query. Returns the SqlException rather than logging it.</summary>
         async Task<(bool ok, SqlException error)> TrySqlConnection(string connectionString)
         {
-            using (var conn = new SqlConnection(connectionString))
+            // AzureSqlTokenAuth attaches a Microsoft Entra ID access token when the connection string has
+            // no user id/password - i.e. when the server has SQL authentication disabled. For every
+            // existing SQL-authentication deployment this behaves exactly like new SqlConnection(). See #117.
+            SqlConnection conn;
+            try
+            {
+                conn = AzureSqlTokenAuth.CreateConnection(connectionString);
+            }
+            catch (Exception ex)
+            {
+                // Token acquisition failed, so there is no SqlException to report. Say what actually went
+                // wrong rather than letting an unrelated-looking exception escape to the generic handler.
+                _logger.LogError("Could not authenticate to Azure SQL with Microsoft Entra ID: " + ex.Message);
+                return (false, null);
+            }
+
+            using (conn)
             {
                 try
                 {
