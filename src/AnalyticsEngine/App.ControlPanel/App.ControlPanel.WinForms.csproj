@@ -197,6 +197,12 @@
       <DependentUpon>ProxyConfigForm.cs</DependentUpon>
     </Compile>
     <Compile Include="SolutionInstallerLogger.cs" />
+    <Compile Include="SqlDatabaseUsersForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="SqlDatabaseUsersForm.Designer.cs">
+      <DependentUpon>SqlDatabaseUsersForm.cs</DependentUpon>
+    </Compile>
     <Compile Include="TestSettingsForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -266,6 +272,9 @@
     </Compile>
     <EmbeddedResource Include="ProxyConfigForm.resx">
       <DependentUpon>ProxyConfigForm.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="SqlDatabaseUsersForm.resx">
+      <DependentUpon>SqlDatabaseUsersForm.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="TestSettingsForm.resx">
       <DependentUpon>TestSettingsForm.cs</DependentUpon>

@@ -44,7 +44,7 @@ namespace App.ControlPanel.Engine
             AppInsightsInfo appInsights,
             RedisInstallResult redis, CognitiveServicesInfo cognitiveServicesInfo,
             KeyVaultResource keyVault, string serviceBusConnectionString, SubscriptionResource subscription,
-            SqlServerResource sqlServer = null)
+            SqlServerResource sqlServer = null, SqlAuthDecision sqlAuthDecision = null, Guid installerObjectId = default(Guid))
         {
             // Configure app-service connection-strings, etc
             await ConfigureWebApp(webApp, appServicePlan, dbInfo, storage, redis, cognitiveServicesInfo, appInsights, serviceBusConnectionString, keyVault);
@@ -59,7 +59,13 @@ namespace App.ControlPanel.Engine
             // attempt to restart it (issue #326). VerifySQL caches success, so the test inside the database
             // step below becomes a no-op.
             var repairFirewall = BuildFirewallRepairCallback(sqlServer);
-            var sqlReachable = await VerifySqlWithFirewallSelfHeal(dbInfo.ConnectionString, repairFirewall);
+            var repairEntraAccess = BuildEntraAccessRepairCallback(dbInfo, installerObjectId);
+
+            // Computed even when no repair is possible: a headless run cannot self-heal, but it still needs
+            // to be told which administrator assignment locked the installer out.
+            var entraLockoutRemedy = SqlServerAuthDetection.GetInstallerLockoutRemedy(sqlAuthDecision?.ServerState, installerObjectId);
+
+            var sqlReachable = await VerifySqlWithFirewallSelfHeal(dbInfo.ConnectionString, repairFirewall, repairEntraAccess, entraLockoutRemedy);
 
             // Terminate here rather than carrying a "SQL is broken" flag through the rest of the method. The
             // database step would fail anyway, but only after more work had been done, and the App Service
@@ -80,6 +86,7 @@ namespace App.ControlPanel.Engine
             {
                 await GrantAppServiceDatabaseAccess(webApp, dbInfo);
                 await GrantAutomationAccountDatabaseAccess(automationAccount, dbInfo);
+                await GrantConfiguredDatabaseUsers(dbInfo);
             }
 
             // Find downloaded installer app
@@ -248,6 +255,66 @@ namespace App.ControlPanel.Engine
                 current.Data.Name,
                 principalId.Value,
                 new[] { "db_owner" });
+        }
+
+        /// <summary>
+        /// Grants the Microsoft Entra users and groups configured in the installer their own access to the
+        /// analytics database.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Only reached on a database that authenticates with Microsoft Entra ID, and that is a hard
+        /// requirement rather than tidiness: SQL Server refuses to create an external (<c>TYPE = E</c>) user
+        /// unless the connection creating it is itself Entra-authenticated. Over a SQL login the statement
+        /// fails with "Only connections established with Active Directory accounts can create other Active
+        /// Directory users" - and on such a server nobody is locked out anyway, because the SQL
+        /// administrator login still works.
+        /// </para>
+        /// <para>
+        /// This is the supported alternative to reassigning the server's Entra administrator, which Azure
+        /// permits only one of and which would evict the installer's service principal. See issue #117.
+        /// </para>
+        /// </remarks>
+        private async Task GrantConfiguredDatabaseUsers(DatabasePaaSInfo dbInfo)
+        {
+            var configured = Config.SQLEntraDatabaseUsers;
+            if (configured == null || configured.Count == 0) return;
+
+            var resolver = new GraphEntraPrincipalResolver(_logger, Config.InstallerAccount, Config.RuntimeAccountOffice365);
+            var task = new SqlDatabaseUserGrantTask(_logger, resolver);
+
+            await task.GrantConfiguredUsersAsync(dbInfo.ConnectionString, configured);
+        }
+
+        /// <summary>
+        /// Builds the delegate that repairs the installer's own database access after SQL rejects its
+        /// service principal, or null when that self-healing must not be attempted.
+        /// </summary>
+        /// <remarks>
+        /// Null in three cases, each of which would otherwise make things worse rather than better: a
+        /// SQL-authentication deployment (there is no token principal to grant, and the login/password in
+        /// the connection string is the thing to fix); an unresolvable installer object ID (there is no SID
+        /// to create a user for); and a non-interactive process, where prompting for a sign-in nobody can
+        /// complete would hang a scripted install instead of failing it cleanly.
+        /// </remarks>
+        private Func<Task<bool>> BuildEntraAccessRepairCallback(DatabasePaaSInfo dbInfo, Guid installerObjectId)
+        {
+            if (dbInfo == null || dbInfo.AuthMethod != SqlConnectionAuthMethod.EntraId) return null;
+            if (installerObjectId == Guid.Empty) return null;
+
+            var account = Config.InstallerAccount;
+            if (account == null || string.IsNullOrWhiteSpace(account.ClientId)) return null;
+
+            if (!SqlEntraAccessBootstrap.CanPromptForSignIn())
+            {
+                _logger.LogInformation(
+                    "This process cannot prompt for an interactive sign-in, so the installer will not try to repair its own " +
+                    "database access if SQL Server rejects it.");
+                return null;
+            }
+
+            return () => SqlEntraAccessBootstrap.TryRepairInstallerAccessAsync(
+                dbInfo.ConnectionString, account.DirectoryId, installerObjectId, account.ClientId, _logger);
         }
 
         /// <summary>

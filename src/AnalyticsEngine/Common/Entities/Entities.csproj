@@ -125,6 +125,7 @@
     <Compile Include="Entities\UsageReports\SharePointSitesFileWeeklyStats.cs" />
     <Compile Include="Installer\BaseConfig.cs" />
     <Compile Include="Installer\BaseSolutionInstallConfig.cs" />
+    <Compile Include="Installer\SqlDatabaseUser.cs" />
     <Compile Include="Installer\TargetSolutionConfig.cs" />
     <Compile Include="LookupCaches\Discrete\CallModalityCache.cs" />
     <Compile Include="LookupCaches\Discrete\CallTypeCache.cs" />

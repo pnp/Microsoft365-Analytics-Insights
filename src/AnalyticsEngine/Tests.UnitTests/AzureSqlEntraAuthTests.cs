@@ -354,8 +354,14 @@ namespace Tests.UnitTests
         /// The default install: the installer makes its own service principal the Entra administrator, so the
         /// solution works but no person can sign in to query the database by hand.
         /// </summary>
+        /// <remarks>
+        /// The remedy must NOT be "assign yourself as the Entra administrator". Azure permits exactly one,
+        /// so doing that evicts the installer's principal and breaks the next schema upgrade - which is
+        /// precisely the failure this guidance was rewritten to stop causing. "Set admin" may still appear,
+        /// but only as the thing not to do.
+        /// </remarks>
         [TestMethod]
-        public void InteractiveAdminWarning_ApplicationAdministrator_Warns()
+        public void InteractiveAdminWarning_ApplicationAdministrator_WarnsAndDoesNotRecommendReassigningTheAdmin()
         {
             var state = new SqlServerAuthState
             {
@@ -368,9 +374,40 @@ namespace Tests.UnitTests
             var warning = SqlServerAuthDetection.GetInteractiveAdminWarning(state, EntraDecision);
 
             Assert.IsNotNull(warning);
-            StringAssert.Contains(warning, "Set admin");
             StringAssert.Contains(warning, "You don't have access to this database");
             StringAssert.Contains(warning, "Because SQL authentication is disabled");
+
+            // The supported route: contained database users, configured in the installer.
+            StringAssert.Contains(warning, SqlServerAuthDetection.DatabaseUsersConfigUiName);
+            StringAssert.Contains(warning, "contained database user");
+
+            // And an explicit prohibition on the thing that breaks the next upgrade.
+            StringAssert.Contains(warning, "Do NOT reassign");
+            StringAssert.Contains(warning, "only ONE");
+            Assert.IsFalse(warning.Contains("so prefer a group"),
+                "Recommending a group administrator was the old guidance; the fix is a contained user, not a different administrator.");
+        }
+
+        /// <summary>
+        /// When people are already configured the install is about to grant them itself, so the warning must
+        /// report that rather than ask an operator to go and do something.
+        /// </summary>
+        [TestMethod]
+        public void InteractiveAdminWarning_WithConfiguredDatabaseUsers_SaysTheInstallWillGrantThem()
+        {
+            var state = new SqlServerAuthState
+            {
+                EntraOnlyAuthEnabled = true,
+                HasEntraAdmin = true,
+                EntraAdminPrincipalType = "Application",
+            };
+
+            var warning = SqlServerAuthDetection.GetInteractiveAdminWarning(state, EntraDecision, hasConfiguredDatabaseUsers: true);
+
+            Assert.IsNotNull(warning);
+            StringAssert.Contains(warning, "will be granted access during this run");
+            Assert.IsFalse(warning.Contains("Do NOT reassign"),
+                "Nothing is being asked of the operator, so the prohibition is noise here.");
         }
 
         /// <summary>
@@ -516,6 +553,339 @@ namespace Tests.UnitTests
             };
 
             Assert.IsNull(SqlServerAuthDetection.GetInteractiveAdminWarning(state, EntraDecision));
+        }
+
+        #endregion
+
+        #region Installer lockout diagnosis
+
+        static readonly Guid InstallerSp = new Guid("11111111-1111-1111-1111-111111111111");
+        static readonly Guid SomebodyElse = new Guid("22222222-2222-2222-2222-222222222222");
+
+        /// <summary>
+        /// The healthy shape: the installer IS the administrator, so it can sign in and there is nothing to
+        /// say. Matching on the object ID rather than the login is the point - a login is a display name.
+        /// </summary>
+        [TestMethod]
+        public void InstallerLockoutWarning_InstallerIsTheAdministrator_IsSilent()
+        {
+            var state = new SqlServerAuthState
+            {
+                EntraOnlyAuthEnabled = true,
+                HasEntraAdmin = true,
+                EntraAdminSid = InstallerSp,
+                EntraAdminPrincipalType = "Application",
+                EntraAdminLogin = "the-installer-app",
+            };
+
+            Assert.IsNull(SqlServerAuthDetection.GetInstallerLockoutWarning(state, EntraDecision, InstallerSp));
+        }
+
+        /// <summary>
+        /// The failure this whole change exists for: somebody assigned a named user as the server's Entra
+        /// administrator, which Azure treats as replacing the installer's service principal, and the next
+        /// upgrade fails with a login error naming no principal at all.
+        /// </summary>
+        [TestMethod]
+        public void InstallerLockoutWarning_AdministratorReassignedToAPerson_Warns()
+        {
+            var state = new SqlServerAuthState
+            {
+                EntraOnlyAuthEnabled = true,
+                HasEntraAdmin = true,
+                EntraAdminSid = SomebodyElse,
+                EntraAdminPrincipalType = "User",
+                EntraAdminLogin = "dba@contoso.com",
+            };
+
+            var warning = SqlServerAuthDetection.GetInstallerLockoutWarning(state, EntraDecision, InstallerSp);
+
+            Assert.IsNotNull(warning);
+            StringAssert.Contains(warning, "dba@contoso.com");
+            StringAssert.Contains(warning, InstallerSp.ToString());
+            StringAssert.Contains(warning, "only ONE administrator per server");
+            StringAssert.Contains(warning, "<token-identified principal>");
+        }
+
+        /// <summary>
+        /// A group administrator may well contain the installer principal, which cannot be checked from ARM.
+        /// The warning must say so rather than predict a failure that will probably not happen.
+        /// </summary>
+        [TestMethod]
+        public void InstallerLockoutWarning_GroupAdministrator_IsHedged()
+        {
+            var state = new SqlServerAuthState
+            {
+                EntraOnlyAuthEnabled = true,
+                HasEntraAdmin = true,
+                EntraAdminSid = SomebodyElse,
+                EntraAdminPrincipalType = "Group",
+                EntraAdminLogin = "sql-admins",
+            };
+
+            var warning = SqlServerAuthDetection.GetInstallerLockoutWarning(state, EntraDecision, InstallerSp);
+
+            Assert.IsNotNull(warning);
+            StringAssert.Contains(warning, "security group");
+            StringAssert.Contains(warning, "member of it");
+            Assert.IsFalse(warning.Contains("will fail with"),
+                "A group administrator may contain the installer principal, so failure must not be asserted.");
+        }
+
+        [TestMethod]
+        public void InstallerLockoutWarning_NoAdministratorAtAll_Warns()
+        {
+            var state = new SqlServerAuthState { EntraOnlyAuthEnabled = true, HasEntraAdmin = false };
+
+            var warning = SqlServerAuthDetection.GetInstallerLockoutWarning(state, EntraDecision, InstallerSp);
+
+            Assert.IsNotNull(warning);
+            StringAssert.Contains(warning, "no Microsoft Entra administrator assigned at all");
+        }
+
+        /// <summary>
+        /// Never guess. Without the installer's own object ID the comparison is meaningless, and on the SQL
+        /// login path there is no token principal involved at all.
+        /// </summary>
+        [TestMethod]
+        public void InstallerLockoutWarning_UnknowableOrIrrelevant_IsSilent()
+        {
+            var mismatched = new SqlServerAuthState
+            {
+                HasEntraAdmin = true,
+                EntraAdminSid = SomebodyElse,
+                EntraAdminPrincipalType = "User",
+            };
+
+            Assert.IsNull(SqlServerAuthDetection.GetInstallerLockoutWarning(mismatched, EntraDecision, Guid.Empty),
+                "Without the installer's object ID there is nothing to compare.");
+            Assert.IsNull(SqlServerAuthDetection.GetInstallerLockoutWarning(mismatched, SqlLoginDecision, InstallerSp),
+                "A SQL login does not authenticate as the installer's service principal.");
+            Assert.IsNull(SqlServerAuthDetection.GetInstallerLockoutWarning(null, EntraDecision, InstallerSp),
+                "An uninspectable server produces no claim either way.");
+        }
+
+        /// <summary>
+        /// After SQL has actually rejected the principal the ambiguity is gone, so the remedy states the
+        /// cause outright and offers both routes back - without ever recommending the admin reassignment
+        /// that caused it.
+        /// </summary>
+        [TestMethod]
+        public void InstallerLockoutRemedy_NamesBothRoutesBack()
+        {
+            var state = new SqlServerAuthState
+            {
+                EntraOnlyAuthEnabled = true,
+                HasEntraAdmin = true,
+                EntraAdminSid = SomebodyElse,
+                EntraAdminPrincipalType = "User",
+                EntraAdminLogin = "dba@contoso.com",
+            };
+
+            var remedy = SqlServerAuthDetection.GetInstallerLockoutRemedy(state, InstallerSp);
+
+            StringAssert.Contains(remedy, "dba@contoso.com");
+            StringAssert.Contains(remedy, InstallerSp.ToString());
+            StringAssert.Contains(remedy, "sign in when prompted");
+            StringAssert.Contains(remedy, "administrator again");
+            StringAssert.Contains(remedy, SqlServerAuthDetection.DatabaseUsersConfigUiName);
+        }
+
+        /// <summary>Still useful when the server could not be inspected or the object ID is unknown.</summary>
+        [TestMethod]
+        public void InstallerLockoutRemedy_WithoutServerState_StillExplainsItself()
+        {
+            var remedy = SqlServerAuthDetection.GetInstallerLockoutRemedy(null, Guid.Empty);
+
+            Assert.IsFalse(string.IsNullOrWhiteSpace(remedy));
+            StringAssert.Contains(remedy, "no Microsoft Entra administrator assigned");
+            Assert.IsFalse(remedy.Contains("()"), "An unresolved object ID must not leave empty brackets in the text.");
+        }
+
+        #endregion
+
+        #region Configured database users
+
+        [TestMethod]
+        public void SqlDatabaseUser_ValidatesLoginAndObjectId()
+        {
+            Assert.IsNull(new SqlDatabaseUser { Login = "dba@contoso.com" }.GetValidationError(),
+                "A login alone is enough - the object ID is resolved from it.");
+
+            Assert.IsNull(new SqlDatabaseUser
+            {
+                Login = "dba@contoso.com",
+                ObjectId = "22222222-2222-2222-2222-222222222222",
+            }.GetValidationError());
+
+            StringAssert.Contains(new SqlDatabaseUser { Login = "dba@contoso.com", ObjectId = "not-a-guid" }.GetValidationError(),
+                "not a valid Microsoft Entra object ID");
+
+            StringAssert.Contains(new SqlDatabaseUser { Login = " " }.GetValidationError(),
+                "needs a login");
+
+            // An all-zero GUID is what an unpopulated field serialises to, and it is not a real principal.
+            StringAssert.Contains(new SqlDatabaseUser
+            {
+                Login = "dba@contoso.com",
+                ObjectId = "00000000-0000-0000-0000-000000000000",
+            }.GetValidationError(), "not a valid Microsoft Entra object ID");
+        }
+
+        [TestMethod]
+        public void SqlDatabaseUser_ParsesObjectIdAndPrincipalType()
+        {
+            Guid parsed;
+
+            Assert.IsTrue(new SqlDatabaseUser { ObjectId = " 22222222-2222-2222-2222-222222222222 " }.TryGetObjectId(out parsed));
+            Assert.AreEqual(SomebodyElse, parsed);
+
+            Assert.IsFalse(new SqlDatabaseUser().TryGetObjectId(out parsed));
+            Assert.AreEqual(Guid.Empty, parsed);
+
+            Assert.IsTrue(new SqlDatabaseUser { PrincipalType = "group" }.IsGroup, "Principal type is compared case-insensitively.");
+            Assert.IsFalse(new SqlDatabaseUser { PrincipalType = "User" }.IsGroup);
+            Assert.IsFalse(new SqlDatabaseUser { PrincipalType = null }.IsGroup);
+        }
+
+        /// <summary>
+        /// The list is persisted in the saved installer config, so it has to survive a JSON round trip - and
+        /// a config written before the property existed must still load, granting nobody.
+        /// </summary>
+        [TestMethod]
+        public void SqlDatabaseUsers_RoundTripThroughConfigJson()
+        {
+            var config = new BaseSolutionInstallConfig();
+            config.SQLEntraDatabaseUsers.Add(new SqlDatabaseUser
+            {
+                Login = "Καλημέρα κόσμε",
+                ObjectId = "22222222-2222-2222-2222-222222222222",
+                PrincipalType = SqlDatabaseUser.PrincipalTypeGroup,
+            });
+
+            var json = Newtonsoft.Json.JsonConvert.SerializeObject(config);
+            var loaded = Newtonsoft.Json.JsonConvert.DeserializeObject<BaseSolutionInstallConfig>(json);
+
+            Assert.AreEqual(1, loaded.SQLEntraDatabaseUsers.Count);
+            Assert.AreEqual("Καλημέρα κόσμε", loaded.SQLEntraDatabaseUsers[0].Login,
+                "A group display name is customer text and can be non-Latin.");
+            Assert.IsTrue(loaded.SQLEntraDatabaseUsers[0].IsGroup);
+
+            var legacy = Newtonsoft.Json.JsonConvert.DeserializeObject<BaseSolutionInstallConfig>("{}");
+            Assert.IsNotNull(legacy.SQLEntraDatabaseUsers);
+            Assert.AreEqual(0, legacy.SQLEntraDatabaseUsers.Count,
+                "A config written before this property existed must load and grant nobody.");
+        }
+
+        /// <summary>
+        /// Adding a persisted property to the saved config schema requires the schema version to move, or
+        /// config compatibility cannot be reasoned about across upgrades.
+        /// </summary>
+        [TestMethod]
+        public void ConfigSchemaVersion_WasBumpedForTheDatabaseUsersList()
+        {
+            Assert.IsTrue(new BaseSolutionInstallConfig().ConfigSchemaVersion >= new Version(2, 6, 0),
+                "SQLEntraDatabaseUsers is a new persisted property, so CONFIG_VERSION must be at least 2.6.0.");
+        }
+
+        class StubPrincipalResolver : App.ControlPanel.Engine.InstallerTasks.IEntraPrincipalResolver
+        {
+            private readonly System.Collections.Generic.Dictionary<string, Guid?> _answers;
+
+            public StubPrincipalResolver(System.Collections.Generic.Dictionary<string, Guid?> answers)
+            {
+                _answers = answers;
+            }
+
+            public int Calls { get; private set; }
+
+            public System.Threading.Tasks.Task<Guid?> ResolveObjectIdAsync(SqlDatabaseUser user, CancellationToken cancellationToken)
+            {
+                Calls++;
+
+                Guid? answer;
+                if (!_answers.TryGetValue(user.Login ?? string.Empty, out answer))
+                {
+                    throw new InvalidOperationException("directory read denied");
+                }
+
+                return System.Threading.Tasks.Task.FromResult(answer);
+            }
+        }
+
+        /// <summary>
+        /// An explicit object ID must be used as-is. That is the escape hatch for a tenant whose app
+        /// registrations have no directory-read permission, so it has to work without Graph being consulted
+        /// at all.
+        /// </summary>
+        [TestMethod]
+        public async System.Threading.Tasks.Task ResolveUsers_ExplicitObjectId_SkipsTheDirectoryLookup()
+        {
+            var resolver = new StubPrincipalResolver(new System.Collections.Generic.Dictionary<string, Guid?>());
+            var task = new App.ControlPanel.Engine.InstallerTasks.SqlDatabaseUserGrantTask(
+                Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, resolver);
+
+            var resolved = await task.ResolveUsersAsync(new[]
+            {
+                new SqlDatabaseUser { Login = "dba@contoso.com", ObjectId = "22222222-2222-2222-2222-222222222222" },
+            });
+
+            Assert.AreEqual(1, resolved.Count);
+            Assert.AreEqual(SomebodyElse, resolved[0].Value);
+            Assert.AreEqual(0, resolver.Calls, "A supplied object ID must not trigger a Graph call.");
+        }
+
+        /// <summary>
+        /// One unusable entry - malformed, unresolvable, or a directory read the app registration is not
+        /// permitted to make - must not cost everybody else their access.
+        /// </summary>
+        [TestMethod]
+        public async System.Threading.Tasks.Task ResolveUsers_BadEntriesAreSkippedWithoutLosingTheGoodOnes()
+        {
+            var resolver = new StubPrincipalResolver(new System.Collections.Generic.Dictionary<string, Guid?>
+            {
+                { "found@contoso.com", SomebodyElse },
+                { "missing@contoso.com", null },
+            });
+
+            var task = new App.ControlPanel.Engine.InstallerTasks.SqlDatabaseUserGrantTask(
+                Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, resolver);
+
+            var resolved = await task.ResolveUsersAsync(new[]
+            {
+                null,
+                new SqlDatabaseUser { Login = "   " },                                             // no login at all
+                new SqlDatabaseUser { Login = "bad@contoso.com", ObjectId = "not-a-guid" },        // malformed object ID
+                new SqlDatabaseUser { Login = "missing@contoso.com" },                             // not in the directory
+                new SqlDatabaseUser { Login = "denied@contoso.com" },                              // lookup throws
+                new SqlDatabaseUser { Login = "found@contoso.com" },                               // fine
+            });
+
+            Assert.AreEqual(1, resolved.Count, "Only the resolvable entry should survive.");
+            Assert.AreEqual("found@contoso.com", resolved[0].Key.Login);
+            Assert.AreEqual(SomebodyElse, resolved[0].Value);
+        }
+
+        /// <summary>Nothing configured is the default, and must be a silent no-op rather than an error.</summary>
+        [TestMethod]
+        public async System.Threading.Tasks.Task ResolveUsers_EmptyList_IsANoOp()
+        {
+            var task = new App.ControlPanel.Engine.InstallerTasks.SqlDatabaseUserGrantTask(
+                Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, null);
+
+            Assert.AreEqual(0, (await task.ResolveUsersAsync(null)).Count);
+            Assert.AreEqual(0, (await task.ResolveUsersAsync(new SqlDatabaseUser[0])).Count);
+        }
+
+        /// <summary>
+        /// Humans are granted db_owner: they are the deployment's own administrators, and read-only access
+        /// would not let them run the shipped reporting procedures.
+        /// </summary>
+        [TestMethod]
+        public void DatabaseUserRoles_AreDbOwner()
+        {
+            CollectionAssert.AreEqual(new[] { "db_owner" },
+                System.Linq.Enumerable.ToArray(App.ControlPanel.Engine.InstallerTasks.SqlDatabaseUserGrantTask.DatabaseUserRoles));
         }
 
         #endregion

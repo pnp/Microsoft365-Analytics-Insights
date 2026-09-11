@@ -20,16 +20,24 @@ namespace App.ControlPanel.Engine.InstallerTasks
     public static class SqlServerAuthReader
     {
         public static async Task<SqlAuthDecision> DetectAsync(SqlServerResource sqlServer, string sqlPassword,
-            SqlServerAuthMode configuredMode, ILogger logger)
+            SqlServerAuthMode configuredMode, ILogger logger, Guid installerObjectId = default(Guid),
+            bool hasConfiguredDatabaseUsers = false)
         {
             if (sqlServer == null) throw new ArgumentNullException(nameof(sqlServer));
 
             var state = await ReadAsync(sqlServer, logger);
             var decision = SqlServerAuthDetection.Decide(state,
                 state.HasSqlAdminLogin && !string.IsNullOrWhiteSpace(sqlPassword), configuredMode);
+            decision.ServerState = state;
             logger?.LogInformation($"SQL authentication: {decision.Reason}");
 
-            var noInteractiveAdmin = SqlServerAuthDetection.GetInteractiveAdminWarning(state, decision);
+            // Said BEFORE anything tries to connect: without it, a server whose administrator was reassigned
+            // to a person looks completely healthy for several minutes and then fails with a login error
+            // that names no principal at all.
+            var lockout = SqlServerAuthDetection.GetInstallerLockoutWarning(state, decision, installerObjectId);
+            if (!string.IsNullOrEmpty(lockout)) logger?.LogWarning(lockout);
+
+            var noInteractiveAdmin = SqlServerAuthDetection.GetInteractiveAdminWarning(state, decision, hasConfiguredDatabaseUsers);
             if (!string.IsNullOrEmpty(noInteractiveAdmin)) logger?.LogWarning(noInteractiveAdmin);
 
             return decision;
@@ -85,6 +93,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 var childSid = admin.Value.Data.Sid;
                 state.HasEntraAdmin = childSid.HasValue;
                 state.EntraAdminLogin = admin.Value.Data.Login;
+                state.EntraAdminSid = childSid;
 
                 if (childSid.HasValue && embeddedAdminSid.HasValue && embeddedAdminSid.Value == childSid.Value)
                 {

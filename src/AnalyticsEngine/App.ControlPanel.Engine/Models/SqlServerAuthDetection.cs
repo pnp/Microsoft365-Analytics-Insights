@@ -37,6 +37,18 @@ namespace App.ControlPanel.Engine.Entities
         public string EntraAdminLogin { get; set; }
 
         /// <summary>
+        /// Object (principal) ID of the Entra administrator, read from the authoritative
+        /// <c>administrators/ActiveDirectory</c> child resource. Null when the server has no Entra
+        /// administrator.
+        /// </summary>
+        /// <remarks>
+        /// This is what makes "can the installer actually sign in?" answerable before trying: the installer
+        /// knows its own service principal's object ID, so it can compare the two. A login name cannot be
+        /// used for that - it is a display name, so it is neither stable nor unique.
+        /// </remarks>
+        public Guid? EntraAdminSid { get; set; }
+
+        /// <summary>
         /// Principal type of the Entra administrator - "User", "Group" or "Application". An
         /// <c>Application</c> administrator is a service principal, which no person can sign in as.
         /// Null when the server has no Entra administrator or Azure did not report the type.
@@ -159,7 +171,12 @@ namespace App.ControlPanel.Engine.Entities
         /// say nothing rather than guess.
         /// </param>
         /// <param name="decision">The authentication method chosen for this run.</param>
-        public static string GetInteractiveAdminWarning(SqlServerAuthState serverState, SqlAuthDecision decision)
+        /// <param name="hasConfiguredDatabaseUsers">
+        /// Whether the installer config already lists people to grant database access to. When it does, the
+        /// install is about to fix this by itself, so the warning says so instead of asking for action.
+        /// </param>
+        public static string GetInteractiveAdminWarning(SqlServerAuthState serverState, SqlAuthDecision decision,
+            bool hasConfiguredDatabaseUsers = false)
         {
             if (decision == null || !decision.UsesEntraId) return null;
             if (serverState == null) return null;
@@ -194,14 +211,112 @@ namespace App.ControlPanel.Engine.Entities
                       : " SQL authentication is still enabled on this server, but Azure reports no SQL administrator login, " +
                         "so there is no alternative way in either.");
 
+            // Deliberately does NOT tell anyone to reassign the server's Entra administrator. Azure permits
+            // only one, so "Set admin" to a named user silently evicts the installer's service principal and
+            // breaks every future schema upgrade - which is exactly what happened to the deployment this
+            // guidance was rewritten for. Data access for people is a contained-user grant, which leaves the
+            // administrator alone, and the installer performs it because it is the only identity that can
+            // sign in as that administrator.
+            var remedy = hasConfiguredDatabaseUsers
+                ? " The database users configured in this installer will be granted access during this run, so the people " +
+                  "listed there will be able to query the database with their own Microsoft Entra account once it finishes."
+                : $" To give people access, add them to '{DatabaseUsersConfigUiName}' in the installer and re-run it: the " +
+                  "installer signs in as the administrator and creates a contained database user for each one. " +
+                  "Do NOT reassign the server's Microsoft Entra administrator to do this. Azure permits only ONE " +
+                  "administrator per server, so replacing this service principal - for example via SQL Server > Settings > " +
+                  "Microsoft Entra ID > Set admin - removes the identity that applies schema upgrades, and your next upgrade " +
+                  "will fail with \"Login failed for user '<token-identified principal>'\".";
+
             return opening +
                 " This does not affect the solution's own database access: the App Service and Automation account " +
-                "authenticate as themselves." + consequence +
-                " If you want to browse or query the data with your own Microsoft Entra account, assign a Microsoft Entra " +
-                "administrator in the Azure portal: SQL Server > Settings > Microsoft Entra ID > Set admin, and pick a user " +
-                "or a security group. Azure permits only ONE Entra administrator per server, so prefer a group - replacing " +
-                "an application administrator with a single user would leave the installer unable to apply future schema " +
-                "upgrades unless that service principal is a member of it.";
+                "authenticate as themselves." + consequence + remedy;
+        }
+
+        /// <summary>
+        /// Name of the installer setting that lists the people to grant database access to. Kept in one
+        /// place so the warning text and the UI cannot drift apart.
+        /// </summary>
+        public const string DatabaseUsersConfigUiName = "Azure Config > SQL database users";
+
+        /// <summary>
+        /// Warns, before anything tries to connect, that this run will authenticate to SQL as the installer's
+        /// service principal but that principal is not the server's Microsoft Entra administrator.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Deliberately a warning rather than a hard stop, because a mismatch is not proof of lockout: the
+        /// administrator may be a security <em>group</em> that contains the installer principal, and the
+        /// principal may already have a contained user in the database from an earlier run. Only an actual
+        /// login failure proves it, which is what <see cref="GetInstallerLockoutRemedy"/> is for.
+        /// </para>
+        /// <para>
+        /// Worth saying up front all the same: without it the operator gets several minutes of apparently
+        /// healthy install followed by a bare <c>Login failed for user '&lt;token-identified principal&gt;'</c>,
+        /// which names no principal and suggests nothing actionable.
+        /// </para>
+        /// </remarks>
+        /// <param name="installerObjectId">
+        /// Object ID of the installer's own service principal, or <see cref="Guid.Empty"/> when it could not
+        /// be resolved - in which case nothing is said rather than guessed.
+        /// </param>
+        public static string GetInstallerLockoutWarning(SqlServerAuthState serverState, SqlAuthDecision decision, Guid installerObjectId)
+        {
+            if (decision == null || !decision.UsesEntraId) return null;
+            if (serverState == null) return null;
+            if (installerObjectId == Guid.Empty) return null;
+
+            // We are the administrator, so there is nothing to worry about.
+            if (serverState.EntraAdminSid.HasValue && serverState.EntraAdminSid.Value == installerObjectId) return null;
+
+            if (!serverState.HasEntraAdmin)
+            {
+                return "This run will authenticate to SQL Server with Microsoft Entra ID, but the server has no Microsoft Entra " +
+                       "administrator assigned at all. Unless the installer's service principal already has a contained user in " +
+                       "the database, it will not be able to sign in and the schema upgrade cannot run.";
+            }
+
+            var isGroup = string.Equals(serverState.EntraAdminPrincipalType, "Group", StringComparison.OrdinalIgnoreCase);
+
+            return "This run will authenticate to SQL Server with Microsoft Entra ID as the installer's service principal " +
+                   $"(object ID '{installerObjectId}'), which is NOT this server's Microsoft Entra administrator" +
+                   $"{FormatAdminLogin(serverState.EntraAdminLogin)}. " +
+                   (isGroup
+                       ? "The administrator is a security group, so this is fine as long as the installer's service principal is " +
+                         "a member of it - which cannot be verified from here."
+                       : "That normally means the administrator was reassigned to a named user after the install, which Azure " +
+                         "treats as replacing the previous one because it permits only ONE administrator per server. Unless the " +
+                         "installer's service principal already has a contained user in the database, the schema upgrade will " +
+                         "fail with \"Login failed for user '<token-identified principal>'\".");
+        }
+
+        /// <summary>
+        /// The actionable explanation for a login failure that has already happened, once SQL has actually
+        /// rejected the installer's service principal.
+        /// </summary>
+        /// <remarks>
+        /// Separate from <see cref="GetInstallerLockoutWarning"/> because by this point the ambiguity is
+        /// gone - the principal demonstrably cannot sign in - so this states the cause outright and names
+        /// both routes back: let the installer repair it with an administrator sign-in, or restore the
+        /// administrator assignment it expects.
+        /// </remarks>
+        public static string GetInstallerLockoutRemedy(SqlServerAuthState serverState, Guid installerObjectId)
+        {
+            var adminDescription = serverState != null && serverState.HasEntraAdmin
+                ? $"This server's Microsoft Entra administrator is{FormatAdminLogin(serverState.EntraAdminLogin)}"
+                : "This server has no Microsoft Entra administrator assigned";
+
+            var identity = installerObjectId == Guid.Empty
+                ? "the installer's service principal"
+                : $"the installer's service principal (object ID '{installerObjectId}')";
+
+            return $"SQL Server rejected {identity}, so it has no access to this database. {adminDescription}, which is a " +
+                   "different principal. Azure permits only ONE Microsoft Entra administrator per SQL server, so assigning a " +
+                   "named user as administrator removes the installer's principal and with it the ability to apply schema " +
+                   "upgrades. Fix it either by letting the installer repair its own access - sign in when prompted as a " +
+                   "Microsoft Entra administrator of this server and it will create the contained database user it needs - or " +
+                   "by making the installer's service principal the server's Microsoft Entra administrator again. To give " +
+                   $"people access to query the data, use '{DatabaseUsersConfigUiName}' rather than reassigning the " +
+                   "administrator.";
         }
 
         static string FormatAdminLogin(string login)
@@ -221,6 +336,13 @@ namespace App.ControlPanel.Engine.Entities
 
         public SqlConnectionAuthMethod Method { get; }
         public string Reason { get; }
+
+        /// <summary>
+        /// What Azure reported about the server this decision was made from, or null when it could not be
+        /// inspected. Carried along so a later failure can be explained in terms of the actual server
+        /// configuration - which administrator is assigned - instead of a bare login error.
+        /// </summary>
+        public SqlServerAuthState ServerState { get; set; }
 
         public bool UsesEntraId => Method == SqlConnectionAuthMethod.EntraId;
     }
