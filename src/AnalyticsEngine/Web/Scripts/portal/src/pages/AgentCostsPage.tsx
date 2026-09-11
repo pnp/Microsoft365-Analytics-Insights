@@ -425,8 +425,8 @@ export default function AgentCostsPage() {
     <>
       <div className={styles.header}>
         <div>
-          <Title3>Agent costs</Title3>
-          <Body1 className={styles.intro}>
+          <Title3 block>Agent costs</Title3>
+          <Body1 block className={styles.intro}>
             What Microsoft charged for your Copilot Studio agents, broken down as far as the billing data allows -
             by agent, environment, harness, billing feature, AI model, tool, knowledge source and, where Microsoft
             reports it, by person.
