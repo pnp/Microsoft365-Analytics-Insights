@@ -266,6 +266,7 @@ ELSE EXEC sys.sp_addextendedproperty @name=@name, @value=@value;";
                                 var column = table.Columns[i];
                                 var p = column.Size == 0 ? command.Parameters.Add(name, column.Type)
                                     : command.Parameters.Add(name, column.Type, column.Size);
+                                if (column.Precision > 0) { p.Precision = column.Precision; p.Scale = column.Scale; }
                                 p.Value = row[i] ?? DBNull.Value;
                             }
                             sql.Append(")");

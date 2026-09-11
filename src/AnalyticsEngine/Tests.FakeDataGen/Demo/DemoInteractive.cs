@@ -80,8 +80,9 @@ namespace Tests.FakeDataGen.Demo
             prompt.Write(string.Empty);
             prompt.Write("Generates the same rounded, entirely synthetic Contoso data set as");
             prompt.Write("'Tests.FakeDataGen.exe demo': licences, daily workload activity, Copilot adoption");
-            prompt.Write("and D28 snapshots, metadata-only interactions, SharePoint facts and weekly Power BI");
-            prompt.Write("profiles. No prompt or response text is generated.");
+            prompt.Write("and D28 snapshots, metadata-only interactions, SharePoint facts, billed Copilot");
+            prompt.Write("Studio credits and Azure agent spend, and weekly Power BI profiles. No prompt or");
+            prompt.Write("response text is generated.");
             prompt.Write(string.Empty);
             prompt.Write(@"It only ever creates a NEW database on (localdb)\MSSQLLocalDB. It ignores the");
             prompt.Write("connection string this tool was started with, never writes to an existing database,");

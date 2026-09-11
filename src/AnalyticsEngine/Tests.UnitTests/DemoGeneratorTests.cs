@@ -1,4 +1,5 @@
 using Common.Entities.CopilotAdoption;
+using Common.Entities.Entities.AgentCosts;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
 using System;
@@ -456,6 +457,256 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void AgentCosts_FollowTheGeneratedAgentTrafficAndCoverEveryBillingDimension()
+        {
+            var options = Options();
+            var sink = Generate(options, t => t == DemoTables.Chats || t == DemoTables.StudioCredits);
+            var credits = sink.For(DemoTables.StudioCredits);
+            Assert.IsTrue(credits.Count > 0, "The demo must bill the agent traffic it generated.");
+
+            // What the audit half of the demo says happened, so the billing half can be checked against it
+            // rather than against itself. Cowork is excluded: it is not a Copilot Studio agent.
+            var traffic = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal);
+            foreach (var chat in sink.For(DemoTables.Chats))
+            {
+                if (chat[Col(DemoTables.Chats, "agent_id")] == null) continue;
+                int agent = (int)chat[Col(DemoTables.Chats, "agent_id")];
+                if (agent > DemoAgentCosts.Agents.Length) continue;
+                string key = TrafficKey(DemoAgentCosts.Agents[agent - 1].AgentId,
+                    ((DateTime)chat[Col(DemoTables.Chats, "time_stamp")]).Date);
+                if (!traffic.TryGetValue(key, out var users)) traffic.Add(key, users = new HashSet<int>());
+                users.Add((int)chat[Col(DemoTables.Chats, "user_id")]);
+            }
+            Assert.IsTrue(traffic.Count > 0, "This population must use agents, or the check below proves nothing.");
+
+            var billedDays = new HashSet<string>(StringComparer.Ordinal);
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            var harnesses = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var row in credits)
+            {
+                var date = (DateTime)row[Col(DemoTables.StudioCredits, "usage_date")];
+                var agentId = (string)row[Col(DemoTables.StudioCredits, "agent_id")];
+                string key = TrafficKey(agentId, date);
+                Assert.IsTrue(traffic.ContainsKey(key), "Billed credits must have real synthetic usage behind them.");
+                billedDays.Add(key);
+
+                var feature = (string)row[Col(DemoTables.StudioCredits, "feature_name")];
+                Assert.AreEqual(CopilotStudioHarnessClassifier.Classify(feature),
+                    (string)row[Col(DemoTables.StudioCredits, "harness")],
+                    "The demo must classify a harness exactly as the importer would.");
+                harnesses.Add((string)row[Col(DemoTables.StudioCredits, "harness")]);
+
+                int users = (int)row[Col(DemoTables.StudioCredits, "distinct_users")];
+                Assert.IsTrue(users >= 1 && users <= traffic[key].Count,
+                    "A slice cannot have been used by more people than used the agent that day.");
+
+                var billed = (decimal)row[Col(DemoTables.StudioCredits, "billed_credits")];
+                Assert.IsTrue(billed > 0m, "A zero-credit row is not something the API reports.");
+                var waived = row[Col(DemoTables.StudioCredits, "non_billed_credits")];
+                if (waived != null) Assert.IsTrue((decimal)waived <= billed);
+
+                Assert.IsTrue((DateTime)row[Col(DemoTables.StudioCredits, "last_refreshed_utc")]
+                    <= (DateTime)row[Col(DemoTables.StudioCredits, "imported_utc")],
+                    "Microsoft cannot have refreshed a row after we read it.");
+
+                // The (usage_date, dimension_hash) unique index is the upsert key: a duplicate here would
+                // fail the insert against the real schema rather than merely look odd.
+                Assert.IsTrue(keys.Add(date.ToString("yyyy-MM-dd") + "|"
+                    + (string)row[Col(DemoTables.StudioCredits, "dimension_hash")]), "Duplicate upsert key.");
+            }
+            CollectionAssert.AreEquivalent(traffic.Keys.ToList(), billedDays.ToList(),
+                "Every agent-day of synthetic usage must produce billed credits, and no other day may.");
+
+            // The page pivots on harness, and two of the three values it can show are only reachable through
+            // the feature names below - an all-"StandardOrCopilotChat" demo would never exercise them.
+            CollectionAssert.IsSubsetOf(
+                new[] { CopilotStudioHarness.StandardOrCopilotChat, CopilotStudioHarness.GitHubCopilot, CopilotStudioHarness.Unknown },
+                DemoAgentCosts.Agents.SelectMany(a => a.Slices)
+                    .Select(s => CopilotStudioHarnessClassifier.Classify(s.FeatureName)).Distinct().ToList());
+            Assert.IsTrue(harnesses.Contains(CopilotStudioHarness.StandardOrCopilotChat));
+
+            // Every filter the page offers must have something behind it somewhere in the window.
+            foreach (var column in new[] { "environment_id", "channel_id", "llm_model", "tool_invoked", "knowledge_sources" })
+            {
+                Assert.IsTrue(credits.Any(r => r[Col(DemoTables.StudioCredits, column)] != null),
+                    "No value was generated for the filter dimension " + column);
+            }
+        }
+
+        [TestMethod]
+        public void AgentCostUserRows_AreOnePerPersonPerDayAndResolveToRealUsersExceptTheDepartedOne()
+        {
+            var options = Options();
+            var sink = Generate(options, t => t == DemoTables.StudioUserCredits || t == DemoTables.Users);
+            var rows = sink.For(DemoTables.StudioUserCredits);
+            Assert.IsTrue(rows.Count > 0);
+
+            var objectIdsByUser = sink.For(DemoTables.Users)
+                .ToDictionary(r => (int)r[Col(DemoTables.Users, "id")], r => (string)r[Col(DemoTables.Users, "azure_ad_id")]);
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            int unresolved = 0;
+            foreach (var row in rows)
+            {
+                var date = (DateTime)row[Col(DemoTables.StudioUserCredits, "usage_date")];
+                var objectId = (string)row[Col(DemoTables.StudioUserCredits, "entra_object_id")];
+                var userId = (int?)row[Col(DemoTables.StudioUserCredits, "user_id")];
+
+                if (userId.HasValue) Assert.AreEqual(objectIdsByUser[userId.Value], objectId,
+                    "The billing identifier must be the same Entra object id the user import stored.");
+                else { Assert.AreEqual(DemoAgentCosts.DepartedEntraObjectId, objectId); unresolved++; }
+
+                Assert.IsNull(row[Col(DemoTables.StudioUserCredits, "agent_id")],
+                    "The per-user endpoint reports no agent, so inventing one would misrepresent the source.");
+                Assert.AreEqual(DemoAgentCosts.UserCreditUnit, (string)row[Col(DemoTables.StudioUserCredits, "unit")]);
+                Assert.IsTrue((decimal)row[Col(DemoTables.StudioUserCredits, "billed_credits")] > 0m);
+                Assert.IsTrue(keys.Add(date.ToString("yyyy-MM-dd") + "|"
+                    + (string)row[Col(DemoTables.StudioUserCredits, "dimension_hash")]), "Duplicate upsert key.");
+            }
+            Assert.IsTrue(unresolved > 0, "The report has an unresolved-user path; the demo must exercise it.");
+            Assert.IsTrue(rows.Count > unresolved, "Most billed people must still resolve to a user.");
+        }
+
+        [TestMethod]
+        public void AzureCosts_BillFixedMetersEveryDayAndTokenMetersOnlyWhereThereWasTraffic()
+        {
+            var options = Options();
+            var sink = Generate(options, t => t == DemoTables.AzureCosts || t == DemoTables.StudioCredits);
+            var rows = sink.For(DemoTables.AzureCosts);
+            Assert.IsTrue(rows.Count > 0);
+
+            int fixedMeters = DemoAgentCosts.AzureMeters.Count(m => m.CostPerDay > 0m);
+            var byDate = rows.GroupBy(r => (DateTime)r[Col(DemoTables.AzureCosts, "usage_date")]).ToList();
+            Assert.AreEqual(options.Days, byDate.Count,
+                "Deployed resources cost money on every day of the window, including weekends.");
+
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var day in byDate)
+            {
+                Assert.IsTrue(day.Count() >= fixedMeters, "Every fixed meter bills every day.");
+                bool estimated = day.Key >= options.AsOf.AddDays(-DemoAgentCosts.EstimatedTrailingDays);
+                foreach (var row in day)
+                {
+                    Assert.AreEqual(estimated, (bool)row[Col(DemoTables.AzureCosts, "is_estimated")],
+                        "Only the days Microsoft has not closed yet are estimates.");
+                    Assert.AreEqual(DemoAgentCosts.Currency, (string)row[Col(DemoTables.AzureCosts, "currency")]);
+                    Assert.IsTrue((decimal)row[Col(DemoTables.AzureCosts, "cost")] > 0m);
+                    Assert.IsTrue(((string)row[Col(DemoTables.AzureCosts, "resource_id")])
+                        .StartsWith(DemoAgentCosts.Scope + "/resourceGroups/", StringComparison.Ordinal));
+                    Assert.IsTrue(keys.Add(day.Key.ToString("yyyy-MM-dd") + "|"
+                        + (string)row[Col(DemoTables.AzureCosts, "row_hash")]), "Duplicate upsert key.");
+                }
+            }
+
+            // Token meters follow usage. A day with no agent traffic must not invent inference spend.
+            var busyDates = new HashSet<DateTime>(sink.For(DemoTables.StudioCredits)
+                .Select(r => (DateTime)r[Col(DemoTables.StudioCredits, "usage_date")]));
+            var tokenMeter = DemoAgentCosts.AzureMeters.First(m => m.CostPerDay == 0m && m.CostPerTurn > 0m).MeterName;
+            foreach (var day in byDate)
+            {
+                bool billedTokens = day.Any(r => (string)r[Col(DemoTables.AzureCosts, "meter_name")] == tokenMeter);
+                Assert.AreEqual(busyDates.Contains(day.Key), billedTokens,
+                    "Inference meters must appear exactly on the days the agents were used.");
+            }
+
+            // More than one value on every Azure pivot the report offers, or its pickers are dead ends.
+            foreach (var column in new[] { "resource_group", "service_name", "meter_category", "meter_sub_category", "meter_name", "resource_id" })
+                Assert.IsTrue(rows.Select(r => (string)r[Col(DemoTables.AzureCosts, column)]).Distinct().Count() > 1, column);
+        }
+
+        [TestMethod]
+        public void CapacitySnapshotsAndImportLogs_ReportAnHonestEntitlementAndACleanRun()
+        {
+            var options = Options();
+            var sink = Generate(options, t => t == DemoTables.StudioCapacity || t == DemoTables.AgentCostImports
+                || t == DemoTables.StudioCredits);
+
+            var capacity = sink.For(DemoTables.StudioCapacity);
+            Assert.AreEqual(options.Days, capacity.Count, "One entitlement snapshot per day.");
+            var entitled = (decimal)capacity[0][Col(DemoTables.StudioCapacity, "entitled")];
+            Assert.IsTrue(entitled > 0m);
+            foreach (var row in capacity)
+            {
+                var consumed = (decimal)row[Col(DemoTables.StudioCapacity, "consumed")];
+                var available = (decimal)row[Col(DemoTables.StudioCapacity, "available")];
+                var overage = (decimal)row[Col(DemoTables.StudioCapacity, "pay_as_you_go_consumed")];
+                Assert.AreEqual(entitled, (decimal)row[Col(DemoTables.StudioCapacity, "entitled")],
+                    "Purchased capacity does not move day to day.");
+                Assert.AreEqual("MonthToDate", (string)row[Col(DemoTables.StudioCapacity, "consumption_type")]);
+                Assert.AreEqual(overage > 0m ? "Overage" : "WithinCapacity", (string)row[Col(DemoTables.StudioCapacity, "status")]);
+                Assert.AreEqual(Math.Max(0m, entitled - consumed), available);
+                Assert.IsTrue((DateTime)row[Col(DemoTables.StudioCapacity, "snapshot_utc")]
+                    >= (DateTime)row[Col(DemoTables.StudioCapacity, "consumption_as_of")],
+                    "Consumption is always as of a day we have already reached.");
+            }
+
+            // Month-to-date restarts with the calendar month rather than running away over the window.
+            var consumedByDate = capacity.ToDictionary(
+                r => (DateTime)r[Col(DemoTables.StudioCapacity, "consumption_as_of")],
+                r => (decimal)r[Col(DemoTables.StudioCapacity, "consumed")]);
+            foreach (var pair in consumedByDate)
+            {
+                var previous = pair.Key.AddDays(-1);
+                if (pair.Key.Day == 1 || !consumedByDate.ContainsKey(previous)) continue;
+                Assert.IsTrue(pair.Value >= consumedByDate[previous], "Month-to-date consumption cannot fall mid-month.");
+            }
+            Assert.IsTrue(consumedByDate.Any(p => p.Key.Day == 1 && p.Value < entitled));
+
+            var logs = sink.For(DemoTables.AgentCostImports);
+            var names = new[]
+            {
+                AgentCostImportNames.CopilotStudioCredits, AgentCostImportNames.CopilotStudioUserCredits,
+                AgentCostImportNames.CopilotStudioCapacity, AgentCostImportNames.AzureCostManagement,
+            };
+            CollectionAssert.AreEquivalent(names,
+                logs.Select(r => (string)r[Col(DemoTables.AgentCostImports, "import_name")]).Distinct().ToList(),
+                "Every agent-cost import needs a log row, or the report cannot tell 'never ran' from 'nothing to import'.");
+            Assert.AreEqual(names.Length * DemoAgentCosts.ImportLogDays, logs.Count);
+            foreach (var row in logs)
+            {
+                Assert.IsNull(row[Col(DemoTables.AgentCostImports, "error")], "The demo's imports all succeeded.");
+                Assert.AreEqual((int)row[Col(DemoTables.AgentCostImports, "rows_read")],
+                    (int)row[Col(DemoTables.AgentCostImports, "rows_saved")]);
+            }
+
+            // The report reads this setting, not the rows, to decide whether to explain an empty page.
+            var settings = new Common.Entities.ImportTaskSettings(DemoPortalReadiness.RequiredImportJobSettings);
+            Assert.IsTrue(settings.CopilotStudioCredits);
+            Assert.IsTrue(settings.AzureCostManagement);
+        }
+
+        [TestMethod]
+        public void PopulationThatNeverUsesAnAgent_IsBilledForInfrastructureButNeverForCredits()
+        {
+            var options = Options("--mix", "0,0,0,100,0");
+            var sink = Generate(options, t => t == DemoTables.StudioCredits || t == DemoTables.StudioUserCredits
+                || t == DemoTables.StudioCapacity || t == DemoTables.AzureCosts || t == DemoTables.AgentCostImports);
+
+            Assert.AreEqual(0, sink.For(DemoTables.StudioCredits).Count, "No usage, no billed credits.");
+            Assert.AreEqual(0, sink.For(DemoTables.StudioUserCredits).Count);
+            Assert.AreEqual(0, sink.For(DemoTables.StudioCapacity).Count,
+                "An entitlement this product never observed must not be invented.");
+
+            // Azure is the deliberate exception: the resources exist and are billed whether or not anyone
+            // talks to the agents. The log rows are written too, so the page can say the import ran cleanly
+            // and simply found nothing rather than leaving an unexplained zero.
+            Assert.IsTrue(sink.For(DemoTables.AzureCosts).Count > 0);
+            Assert.IsTrue(sink.For(DemoTables.AgentCostImports).Count > 0);
+            Assert.IsTrue(sink.For(DemoTables.AgentCostImports)
+                .Where(r => (string)r[Col(DemoTables.AgentCostImports, "import_name")] == AgentCostImportNames.CopilotStudioCredits)
+                .All(r => (int)r[Col(DemoTables.AgentCostImports, "rows_saved")] == 0));
+        }
+
+        private static string TrafficKey(string agentId, DateTime date) =>
+            agentId + "|" + date.ToString("yyyy-MM-dd");
+
+        private static int Col(DemoTable table, string column)
+        {
+            for (int i = 0; i < table.Columns.Count; i++)
+                if (table.Columns[i].Name == column) return i;
+            throw new InvalidOperationException("No column " + column + " on " + table.Name);
+        }
+
+        [TestMethod]
         public void DeclaredRows_StayWithinParameterAndTextLimitsAndPreserveUnicode()
         {
             var sink = Generate(Options(), _ => true);
@@ -474,6 +725,9 @@ namespace Tests.UnitTests
             }
             Assert.IsTrue(sink.For(DemoTables.Urls).Any(r => ((string)r[1]).Contains("Καλημέρα")));
             Assert.IsTrue(sink.For(DemoTables.States).Any(r => (string)r[1] == "Αττική"));
+            Assert.IsTrue(sink.For(DemoTables.StudioCredits)
+                .Any(r => ((string)r[Col(DemoTables.StudioCredits, "knowledge_sources")] ?? string.Empty).Contains("Καλημέρα")),
+                "A knowledge source is customer-named text, so the demo must prove that column carries Unicode.");
             Assert.ThrowsException<InvalidOperationException>(() => DemoTables.WebCities.ValidateValues(new object[] { 1, "Αθήνα" }));
             DemoTables.States.ValidateValues(new object[] { 1, "Αττική" });
         }
