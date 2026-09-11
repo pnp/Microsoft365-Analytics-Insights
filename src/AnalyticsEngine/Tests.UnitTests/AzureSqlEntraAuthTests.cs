@@ -370,6 +370,54 @@ namespace Tests.UnitTests
             Assert.IsNotNull(warning);
             StringAssert.Contains(warning, "Set admin");
             StringAssert.Contains(warning, "You don't have access to this database");
+            StringAssert.Contains(warning, "Because SQL authentication is disabled");
+        }
+
+        /// <summary>
+        /// A mixed-authentication server is reachable: Decide picks Entra whenever it is configured and the
+        /// server has an Entra administrator, even though SQL logins still work. The warning must not claim
+        /// SQL authentication is disabled there, because it is not.
+        /// </summary>
+        [TestMethod]
+        public void InteractiveAdminWarning_MixedAuthServer_DoesNotClaimSqlAuthIsDisabled()
+        {
+            var state = new SqlServerAuthState
+            {
+                EntraOnlyAuthEnabled = false,
+                HasSqlAdminLogin = true,
+                HasEntraAdmin = true,
+                EntraAdminPrincipalType = "Application",
+                EntraAdminLogin = "some-other-app",
+            };
+
+            var warning = SqlServerAuthDetection.GetInteractiveAdminWarning(state, EntraDecision);
+
+            Assert.IsNotNull(warning);
+            StringAssert.Contains(warning, "SQL authentication is still enabled");
+            Assert.IsFalse(warning.Contains("Because SQL authentication is disabled"),
+                "A mixed-authentication server still accepts the SQL administrator login.");
+        }
+
+        /// <summary>
+        /// The administrator is only known to be an application, not known to be OUR application - an
+        /// operator can configure a different one, and an existing server may already have its own.
+        /// </summary>
+        [TestMethod]
+        public void InteractiveAdminWarning_DoesNotAssertWhichApplicationIsAdministrator()
+        {
+            var state = new SqlServerAuthState
+            {
+                EntraOnlyAuthEnabled = true,
+                HasEntraAdmin = true,
+                EntraAdminPrincipalType = "Application",
+                EntraAdminLogin = "some-unrelated-automation-app",
+            };
+
+            var warning = SqlServerAuthDetection.GetInteractiveAdminWarning(state, EntraDecision);
+
+            StringAssert.Contains(warning, "some-unrelated-automation-app");
+            Assert.IsFalse(warning.Contains("is the installer's own service principal"),
+                "The warning must not assert an identity it has not verified.");
         }
 
         [TestMethod]

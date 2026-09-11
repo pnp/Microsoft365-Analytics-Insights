@@ -172,22 +172,33 @@ namespace App.ControlPanel.Engine.Entities
             }
 
             var opening = serverState.HasEntraAdmin
-                ? "This SQL Server's only Microsoft Entra administrator is an application (the installer's own service " +
-                  $"principal{FormatAdminLogin(serverState.EntraAdminLogin)}), which nobody can sign in as."
+                ? "This SQL Server's only Microsoft Entra administrator is an application" +
+                  $"{FormatAdminLogin(serverState.EntraAdminLogin)}, which nobody can sign in as. On a new install this is " +
+                  "normally the installer's own service principal, which must keep access so it can apply future schema upgrades."
                 : "This SQL Server has no Microsoft Entra administrator assigned.";
+
+            // Only a server with SQL authentication actually disabled leaves an operator with no way in at
+            // all. On a mixed-auth server the SQL administrator login still works, so say so rather than
+            // overstate the problem.
+            var consequence = serverState.EntraOnlyAuthEnabled
+                ? " Because SQL authentication is disabled on this server, no person can sign in to the database, so " +
+                  "querying it by hand - for example with the Azure portal's Query Editor, SSMS or Azure Data Studio - " +
+                  "will be refused with \"You don't have access to this database\". That message reports a successful " +
+                  "sign-in and blames database permissions, which is misleading: the real cause is that you are not an " +
+                  "administrator of the server."
+                : " SQL authentication is still enabled on this server, so the SQL administrator login continues to work. " +
+                  "Signing in with Microsoft Entra ID will be refused with \"You don't have access to this database\" - a " +
+                  "misleading message, because the real cause is that you are not a Microsoft Entra administrator of the " +
+                  "server rather than anything to do with database permissions.";
 
             return opening +
                 " The solution itself is unaffected and will keep importing: the App Service and Automation account " +
-                "authenticate as themselves. But because SQL authentication is disabled, no person can sign in to the " +
-                "database, so querying it by hand - for example with the Azure portal's Query Editor, SSMS or Azure Data " +
-                "Studio - will be refused with \"You don't have access to this database\". That message reports a " +
-                "successful sign-in and blames database permissions, which is misleading: the real cause is that you are " +
-                "not an administrator of the server. " +
-                "If you want to browse or query the data yourself, assign a Microsoft Entra administrator in the Azure " +
-                "portal: SQL Server > Settings > Microsoft Entra ID > Set admin, and pick a user or a security group. " +
-                "Azure permits only ONE Entra administrator per server, so prefer a group - replacing this application " +
-                "administrator with a single user would leave the installer unable to apply future schema upgrades unless " +
-                "that service principal is a member of it.";
+                "authenticate as themselves." + consequence +
+                " If you want to browse or query the data with your own Microsoft Entra account, assign a Microsoft Entra " +
+                "administrator in the Azure portal: SQL Server > Settings > Microsoft Entra ID > Set admin, and pick a user " +
+                "or a security group. Azure permits only ONE Entra administrator per server, so prefer a group - replacing " +
+                "an application administrator with a single user would leave the installer unable to apply future schema " +
+                "upgrades unless that service principal is a member of it.";
         }
 
         static string FormatAdminLogin(string login)

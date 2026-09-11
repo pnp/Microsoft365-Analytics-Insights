@@ -52,9 +52,11 @@ namespace App.ControlPanel.Engine.InstallerTasks
             };
 
             // The principal type is only carried on the server payload's embedded administrator, not on the
-            // authoritative child resource read below. Keep it, but discard it if the two disagree about who
-            // the administrator is - that means the embedded copy is stale and its type cannot be trusted.
-            var embeddedAdminLogin = data.Administrators?.Login;
+            // authoritative child resource read below. Correlate the two by object ID (SID) rather than by
+            // login: a login is a display name, so it is neither stable nor unique, and two administrators
+            // that merely share one are not the same principal. Requiring both SIDs to be present and equal
+            // also stops a pair of absent values matching each other.
+            var embeddedAdminSid = data.Administrators?.Sid;
             var embeddedPrincipalType = data.Administrators?.PrincipalType?.ToString();
 
             // Always read the authoritative child, even when the embedded administrator says true:
@@ -80,11 +82,11 @@ namespace App.ControlPanel.Engine.InstallerTasks
             try
             {
                 var admin = await sqlServer.GetSqlServerAzureADAdministrators().GetAsync("ActiveDirectory");
-                state.HasEntraAdmin = admin.Value.Data.Sid.HasValue;
+                var childSid = admin.Value.Data.Sid;
+                state.HasEntraAdmin = childSid.HasValue;
                 state.EntraAdminLogin = admin.Value.Data.Login;
 
-                if (state.HasEntraAdmin
-                    && string.Equals(state.EntraAdminLogin, embeddedAdminLogin, StringComparison.OrdinalIgnoreCase))
+                if (childSid.HasValue && embeddedAdminSid.HasValue && embeddedAdminSid.Value == childSid.Value)
                 {
                     state.EntraAdminPrincipalType = embeddedPrincipalType;
                 }
