@@ -26,7 +26,8 @@ namespace Tests.FakeDataGen.Demo
         /// </summary>
         internal const string RequiredImportJobSettings =
             "GraphUsersMetadata=True;GraphUsageReports=True;GraphCopilotUsageReports=True;"
-            + "Copilot=True;CopilotInteractionHistory=True;ActivityLog=True;WebTraffic=True;ImportDlp=True";
+            + "Copilot=True;CopilotInteractionHistory=True;ActivityLog=True;WebTraffic=True;ImportDlp=True;"
+            + "CopilotStudioCredits=True;AzureCostManagement=True";
 
         internal static void PrintPortalSetup(string database, Action<string> write)
         {
@@ -41,6 +42,9 @@ namespace Tests.FakeDataGen.Demo
             write("assignments report shows Copilot as \"Not measured\" for every user even though this");
             write("database is full of Copilot activity: the audit and interaction sources are positive");
             write("evidence only and never produce activity bands.");
+            write("Likewise the Agent costs report leads with \"Neither agent cost import is switched on\"");
+            write("until CopilotStudioCredits and AzureCostManagement are set, no matter how much billing");
+            write("data the database holds - that banner is read from this setting, never from the rows.");
         }
 
         /// <summary>

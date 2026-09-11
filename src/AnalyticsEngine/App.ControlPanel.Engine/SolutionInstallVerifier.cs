@@ -152,7 +152,9 @@ namespace App.ControlPanel.Engine
                 }
                 else
                 {
-                    var decision = await SqlServerAuthReader.DetectAsync(sqlServer, sqlPassword, Config.SqlAuthMode, _logger);
+                    var decision = await SqlServerAuthReader.DetectAsync(sqlServer, sqlPassword, Config.SqlAuthMode, _logger,
+                        await ResolveInstallerObjectIdForDiagnostics(),
+                        Config.SQLEntraDatabaseUsers != null && Config.SQLEntraDatabaseUsers.Count > 0);
                     sqlInfo = new SqlDetails
                     {
                         SqlFqdn = sqlServer.Data.FullyQualifiedDomainName,
@@ -174,10 +176,43 @@ namespace App.ControlPanel.Engine
         }
 
         /// <summary>
+        /// Object ID of the installer's own service principal, for diagnostics only.
+        /// </summary>
+        /// <remarks>
+        /// Lets the SQL authentication report say whether the installer is actually this server's Microsoft
+        /// Entra administrator, which is the difference between "will connect" and "will be rejected with a
+        /// login error naming no principal". Never fatal - a failure here just means the question goes
+        /// unanswered, so a configuration test is not broken by a diagnostic.
+        /// </remarks>
+        async Task<Guid> ResolveInstallerObjectIdForDiagnostics()
+        {
+            var account = Config?.InstallerAccount;
+            if (account == null
+                || string.IsNullOrWhiteSpace(account.DirectoryId)
+                || string.IsNullOrWhiteSpace(account.ClientId)
+                || string.IsNullOrWhiteSpace(account.Secret))
+            {
+                return Guid.Empty;
+            }
+
+            try
+            {
+                var raw = await ServicePrincipalResolver.GetObjectIdFromClientCredentials(
+                    account.DirectoryId, account.ClientId, account.Secret);
+
+                Guid parsed;
+                return Guid.TryParse(raw, out parsed) ? parsed : Guid.Empty;
+            }
+            catch (Exception)
+            {
+                return Guid.Empty;
+            }
+        }
+
+        /// <summary>
         /// Do we have enough config to autodetect SQL connectivity details?
         /// </summary>
-        public static bool ConfigIsReadyForSqlAutodetection(SolutionInstallConfig config)
-        {
+        public static bool ConfigIsReadyForSqlAutodetection(SolutionInstallConfig config)        {
             if (config == null) return false;
 
             var installerAccErrors = config.InstallerAccount?.GetValidationErrors();

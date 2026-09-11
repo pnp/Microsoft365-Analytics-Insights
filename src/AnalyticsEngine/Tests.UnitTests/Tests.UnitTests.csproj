@@ -163,10 +163,14 @@
     <Compile Include="AppInsightsSavePortTests.cs" />
     <Compile Include="AppInsightsSearchRulesTests.cs" />
     <Compile Include="CopilotDroppedAuditFieldsTests.cs" />
+    <Compile Include="DemoAgentCostReportTests.cs" />
     <Compile Include="DemoGeneratorTests.cs" />
     <Compile Include="DemoGeneratorSqlTests.cs" />
     <Compile Include="DemoLicenceActivityCoverageTests.cs" />
     <Compile Include="DemoInteractiveTests.cs" />
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoAgentCosts.cs">
+      <Link>DemoGenerator\DemoAgentCosts.cs</Link>
+    </Compile>
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoCalendar.cs">
       <Link>DemoGenerator\DemoCalendar.cs</Link>
     </Compile>

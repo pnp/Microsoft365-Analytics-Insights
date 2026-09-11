@@ -93,7 +93,9 @@ namespace App.ControlPanel.Engine
                     azureBackeEndCreationJob.CognitiveServicesInfo,
                     azureBackeEndCreationJob.KeyVault,
                     azureBackeEndCreationJob.SBQueueWithConnectionString?.ConnectionString, azureBackeEndCreationJob.Subscription,
-                    azureBackeEndCreationJob.CreatedSqlServer
+                    azureBackeEndCreationJob.CreatedSqlServer,
+                    azureBackeEndCreationJob.SqlAuthDecision,
+                    azureBackeEndCreationJob.InstallerObjectId
                 );
 
                 ct.ThrowIfCancellationRequested();

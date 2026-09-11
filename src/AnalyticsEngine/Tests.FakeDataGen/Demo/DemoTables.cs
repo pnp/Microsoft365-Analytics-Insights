@@ -10,7 +10,20 @@ namespace Tests.FakeDataGen.Demo
         public string Name { get; }
         public SqlDbType Type { get; }
         public int Size { get; }
-        public DemoColumn(string name, SqlDbType type, int size = 0) { Name = name; Type = type; Size = size; }
+
+        /// <summary>
+        /// Declared precision and scale for a <see cref="SqlDbType.Decimal"/> column. Stated rather than
+        /// left to ADO.NET inference because a decimal parameter whose scale is narrower than the value
+        /// silently truncates, and a money figure that quietly loses its fractional part is exactly the
+        /// kind of wrong number nobody notices on a cost report.
+        /// </summary>
+        public byte Precision { get; }
+        public byte Scale { get; }
+
+        public DemoColumn(string name, SqlDbType type, int size = 0, byte precision = 0, byte scale = 0)
+        {
+            Name = name; Type = type; Size = size; Precision = precision; Scale = scale;
+        }
     }
 
     internal sealed class DemoTable
@@ -19,11 +32,13 @@ namespace Tests.FakeDataGen.Demo
         public bool SupplyIdentity { get; }
         public IReadOnlyList<DemoColumn> Columns { get; }
         private readonly int[] _textColumns;
+        private readonly int[] _decimalColumns;
         public DemoTable(string name, bool identity, params DemoColumn[] columns)
         {
             Name = name; SupplyIdentity = identity; Columns = columns;
             _textColumns = Enumerable.Range(0, columns.Length).Where(i =>
                 columns[i].Type == SqlDbType.VarChar || columns[i].Type == SqlDbType.NVarChar).ToArray();
+            _decimalColumns = Enumerable.Range(0, columns.Length).Where(i => columns[i].Type == SqlDbType.Decimal).ToArray();
         }
         public int BatchLimit(int requested) => Math.Min(requested, 2000 / Columns.Count);
 
@@ -37,6 +52,15 @@ namespace Tests.FakeDataGen.Demo
                     throw new InvalidOperationException("Generated text exceeds the declared column width: " + Name + "." + Columns[i].Name);
                 if (Columns[i].Type == SqlDbType.VarChar && text.Any(c => c > 127))
                     throw new InvalidOperationException("Non-ASCII synthetic text cannot be stored safely in " + Name + "." + Columns[i].Name);
+            }
+            foreach (int i in _decimalColumns)
+            {
+                if (values[i] == null) continue;
+                if (!(values[i] is decimal number))
+                    throw new InvalidOperationException("A decimal column needs a decimal value: " + Name + "." + Columns[i].Name);
+                if (decimal.Round(number, Columns[i].Scale) != number)
+                    throw new InvalidOperationException("Generated value would be truncated by the column's scale: "
+                        + Name + "." + Columns[i].Name);
             }
         }
     }
@@ -60,6 +84,9 @@ namespace Tests.FakeDataGen.Demo
         private static DemoColumn A(string name, int size) => new DemoColumn(name, SqlDbType.VarChar, size);
         private static DemoColumn G(string name) => new DemoColumn(name, SqlDbType.UniqueIdentifier);
         private static DemoColumn F(string name) => new DemoColumn(name, SqlDbType.Float);
+
+        /// <summary>A money / credit column. Every agent-cost decimal in the schema is decimal(18,6).</summary>
+        private static DemoColumn M(string name) => new DemoColumn(name, SqlDbType.Decimal, 0, 18, 6);
         private static DemoTable T(string name, bool identity, params DemoColumn[] columns)
         {
             var table = new DemoTable(name, identity, columns);
@@ -165,5 +192,33 @@ namespace Tests.FakeDataGen.Demo
         public static readonly DemoTable CopilotCounts = T("copilot_user_count_log", false,
             D("report_refresh_date"), D("report_date"), N("report_type", 20), I("report_period_days"), N("app_name"),
             I("enabled_users"), I("active_users"), L("prompts_submitted"), F("average_prompts_submitted"));
+
+        // Agent costs. Declared last because copilot_studio_credit_user_daily has a foreign key into
+        // dbo.users, and the declaration order is also the SQL buffer-flush order.
+        //
+        // The identity columns are deliberately NOT supplied: unlike the dimension tables nothing references
+        // these rows by id, so letting SQL Server assign them keeps the generator out of the way of the real
+        // importers' own numbering.
+        public static readonly DemoTable StudioCredits = T("copilot_studio_credit_daily", false,
+            D("usage_date"), N("environment_id", 200), N("environment_name", 255), N("agent_id", 200),
+            N("agent_name", 255), N("harness", 50), N("feature_name", 200), N("channel_id", 200),
+            N("llm_model", 200), N("tool_invoked", 400), N("knowledge_sources", 400),
+            M("billed_credits"), M("non_billed_credits"), I("distinct_users"), D("last_refreshed_utc"),
+            N("dimension_hash", 64), D("imported_utc"));
+        public static readonly DemoTable StudioUserCredits = T("copilot_studio_credit_user_daily", false,
+            D("usage_date"), N("entra_object_id", 200), I("user_id"), N("environment_id", 200),
+            N("environment_name", 255), N("agent_id", 200), M("billed_credits"), N("unit", 50),
+            N("dimension_hash", 64), D("imported_utc"));
+        public static readonly DemoTable StudioCapacity = T("copilot_studio_credit_capacity", false,
+            D("snapshot_utc"), D("consumption_as_of"), M("entitled"), M("consumed"), N("consumption_type", 50),
+            M("allocated"), M("available"), M("pay_as_you_go_consumed"), N("status", 50));
+        public static readonly DemoTable AzureCosts = T("azure_cost_daily", false,
+            D("usage_date"), N("scope", 400), N("subscription_id", 100), N("resource_id", 850),
+            N("resource_group", 255), N("service_name", 255), N("meter_category", 255),
+            N("meter_sub_category", 255), N("meter_name", 255), M("cost"), N("currency", 10),
+            M("quantity"), B("is_estimated"), N("row_hash", 64), D("imported_utc"));
+        public static readonly DemoTable AgentCostImports = T("agent_cost_import_log", false,
+            N("import_name", 100), D("imported_utc"), D("window_from"), D("window_to"),
+            I("rows_read"), I("rows_saved"), N("error", 1000));
     }
 }
