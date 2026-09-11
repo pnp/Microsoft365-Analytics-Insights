@@ -33,7 +33,13 @@ namespace Common.Entities.Installer
         //          Copilot Credits, and daily Azure spend from Microsoft Cost Management).
         //          2.4.0 -> 2.5.0 added ImportTaskSettings.ImportDlp (opt-in Microsoft Purview DLP import
         //          from the DLP.All content type; needs the separate ActivityFeed.ReadDlp permission).
-        const string CONFIG_VERSION = "2.5.0";
+        //          2.5.0 -> 2.6.0 added SQLEntraDatabaseUsers (Microsoft Entra users/groups the installer
+        //          grants a contained database user). Additive: an older config with no such property
+        //          grants nobody, exactly as before. Exists because Azure permits only ONE Entra
+        //          administrator per SQL server, so handing out data access by reassigning the
+        //          administrator evicts the installer's service principal and breaks the next schema
+        //          upgrade. See issue #117.
+        const string CONFIG_VERSION = "2.6.0";
 
         public BaseSolutionInstallConfig()
         {
@@ -113,6 +119,27 @@ namespace Common.Entities.Installer
         /// Principal type of the configured Entra administrator - "User", "Group" or "Application".
         /// </summary>
         public string SQLEntraAdminPrincipalType { get; set; } = "User";
+
+        /// <summary>
+        /// Microsoft Entra users and groups to give direct query access to the analytics database, as
+        /// contained database users.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// This is the supported way to let people read the data on a server that uses Microsoft Entra ID
+        /// authentication. The tempting alternative - assigning yourself as the server's Entra administrator
+        /// in the portal - does not work here: Azure permits exactly ONE administrator per server, and it is
+        /// the installer's own service principal, so replacing it removes the identity that applies schema
+        /// upgrades and the next upgrade fails with
+        /// <c>Login failed for user '&lt;token-identified principal&gt;'</c>.
+        /// </para>
+        /// <para>
+        /// The installer applies these grants itself on every run, because on an Entra-only server it is the
+        /// only thing that can authenticate as the administrator. Empty by default, which grants nobody and
+        /// matches the behaviour of every config written before this property existed.
+        /// </para>
+        /// </remarks>
+        public List<SqlDatabaseUser> SQLEntraDatabaseUsers { get; set; } = new List<SqlDatabaseUser>();
 
         public bool CognitiveServicesEnabled { get; set; } = true;
         public string CognitiveServiceName { get; set; } = string.Empty;
