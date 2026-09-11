@@ -126,15 +126,30 @@ BEGIN
     ;WITH canon AS (
         SELECT id, MIN(id) OVER (PARTITION BY full_url) AS canonical_id
         FROM dbo.urls
+    ), dup_groups AS (
+        SELECT DISTINCT canonical_id FROM canon WHERE id <> canonical_id
+    ), mapped AS (
+        -- Every row landing in a group that HAS duplicates, INCLUDING rows already pointing at the
+        -- canonical url. Those must be counted: the migration ranks the whole post-remap partition
+        -- together (see the ranked CTE in the migration's Up_Sql), so a canonical-side row and a
+        -- repointed row with the same field_id collide and one of them is deleted. Counting only the
+        -- repointed side - as this query used to - reports 0 pruned rows for the commonest collision
+        -- there is: one property row on the canonical url and one on its duplicate.
+        SELECT cn.canonical_id, f.field_id,
+               CASE WHEN cn.id = cn.canonical_id THEN 0 ELSE 1 END AS is_repointed
+        FROM dbo.file_metadata_property_values f
+        JOIN canon cn ON cn.id = f.url_id
+        JOIN dup_groups g ON g.canonical_id = cn.canonical_id
     )
     SELECT
         child_table       = 'dbo.file_metadata_property_values',
-        rows_to_repoint   = COUNT_BIG(*),
-        rows_pruned       = COUNT_BIG(*) - COUNT(DISTINCT CAST(cn.canonical_id AS varchar(20))
-                                                 + ':' + CAST(f.field_id AS varchar(20)))
-    FROM dbo.file_metadata_property_values f
-    JOIN canon cn ON cn.id = f.url_id
-    WHERE cn.id <> cn.canonical_id;
+        rows_to_repoint   = (SELECT COUNT_BIG(*) FROM mapped WHERE is_repointed = 1),
+        -- total - distinct post-remap keys = rows the unique index cannot hold, i.e. rows deleted.
+        -- ISNULL because a UNIQUE index treats NULLs as equal but COUNT(DISTINCT) discards them.
+        rows_pruned       = (SELECT COUNT_BIG(*)
+                                    - COUNT(DISTINCT CAST(canonical_id AS varchar(20))
+                                            + ':' + ISNULL(CAST(field_id AS varchar(20)), '<null>'))
+                             FROM mapped);
 END
 
 IF OBJECT_ID(N'dbo.hits_clicked_elements') IS NOT NULL
@@ -142,16 +157,24 @@ BEGIN
     ;WITH canon AS (
         SELECT id, MIN(id) OVER (PARTITION BY full_url) AS canonical_id
         FROM dbo.urls
+    ), dup_groups AS (
+        SELECT DISTINCT canonical_id FROM canon WHERE id <> canonical_id
+    ), mapped AS (
+        -- See the note above: canonical-side rows take part in the collision and must be counted.
+        SELECT cn.canonical_id, h.hit_id, h.[timestamp],
+               CASE WHEN cn.id = cn.canonical_id THEN 0 ELSE 1 END AS is_repointed
+        FROM dbo.hits_clicked_elements h
+        JOIN canon cn ON cn.id = h.url_id
+        JOIN dup_groups g ON g.canonical_id = cn.canonical_id
     )
     SELECT
         child_table       = 'dbo.hits_clicked_elements',
-        rows_to_repoint   = COUNT_BIG(*),
-        rows_pruned       = COUNT_BIG(*) - COUNT(DISTINCT CAST(cn.canonical_id AS varchar(20))
-                                                 + ':' + CAST(h.hit_id AS varchar(20))
-                                                 + ':' + CONVERT(varchar(30), h.[timestamp], 126))
-    FROM dbo.hits_clicked_elements h
-    JOIN canon cn ON cn.id = h.url_id
-    WHERE cn.id <> cn.canonical_id;
+        rows_to_repoint   = (SELECT COUNT_BIG(*) FROM mapped WHERE is_repointed = 1),
+        rows_pruned       = (SELECT COUNT_BIG(*)
+                                    - COUNT(DISTINCT CAST(canonical_id AS varchar(20))
+                                            + ':' + ISNULL(CAST(hit_id AS varchar(20)), '<null>')
+                                            + ':' + ISNULL(CONVERT(varchar(30), [timestamp], 126), '<null>'))
+                             FROM mapped);
 END
 
 /* --------------------------------------------------------------------------------------------

@@ -32,9 +32,22 @@ GO
 
 DECLARE @prev nvarchar(255) = N'202609090647151_AgentCostUserCredits';
 
-IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = @prev)
+/* A severity-16 RAISERROR does NOT stop sqlcmd or SSMS - they abandon the failing batch and continue
+   with the next one. Without SET NOEXEC ON this "pre-flight" printed a message and then created every
+   DLP table anyway, leaving the schema applied but unstamped; the next installer run would then fail in
+   EF's own CreateTable with "There is already an object named 'dlp_policies'" and strand the upgrade.
+   SET NOEXEC OFF at the end of the script restores the session. */
+IF OBJECT_ID(N'dbo.__MigrationHistory', N'U') IS NULL
 BEGIN
-    RAISERROR('PREREQUISITE MISSING: migration %s is not stamped in __MigrationHistory. Run the manual scripts in migration-id order.', 16, 1, @prev);
+    RAISERROR('DlpCopilotImpact: dbo.__MigrationHistory does not exist - this does not look like an Analytics database. Nothing has been changed.', 16, 1) WITH NOWAIT;
+    SET NOEXEC ON;
+END
+
+IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = @prev)
+   AND NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609100900001_DlpCopilotImpact')
+BEGIN
+    RAISERROR('PREREQUISITE MISSING: migration %s is not stamped in __MigrationHistory. Run the manual scripts in migration-id order. Nothing has been changed.', 16, 1, @prev);
+    SET NOEXEC ON;
 END
 GO
 
@@ -335,4 +348,9 @@ SET @b64 = @b64 + 's6U12Ee15HLEeKVRs3E3Inq/n5y5SvoiRpb4TaeaXGXTpHBhmkiSnVBFrpgeG
         RAISERROR('Already stamped - nothing to do.', 0, 1) WITH NOWAIT;
     END
 END
+GO
+
+-- Restore the session. SET statements still execute under NOEXEC, so this is reached even when the
+-- pre-flight above turned NOEXEC on and skipped everything in between.
+SET NOEXEC OFF;
 GO

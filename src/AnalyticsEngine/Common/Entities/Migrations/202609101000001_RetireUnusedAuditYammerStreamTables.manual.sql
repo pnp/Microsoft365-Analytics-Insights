@@ -128,6 +128,29 @@ SET NOCOUNT ON;
 SET QUOTED_IDENTIFIER ON;
 GO
 
+/* =====================================================================================================
+   PRE-FLIGHT - runs BEFORE anything is dropped.
+
+   This script DROPS TABLES, and a drop is not reversible. A severity-16 RAISERROR does not stop sqlcmd
+   or SSMS - they abandon the failing batch and continue - so the predecessor check that used to live
+   next to the __MigrationHistory stamp at the end of this script came far too late: by then the tables
+   were already gone. SET NOEXEC ON turns the check into a real stop; SET NOEXEC OFF at the very end of
+   the script restores the session.
+   ===================================================================================================== */
+IF OBJECT_ID(N'dbo.__MigrationHistory', N'U') IS NULL
+BEGIN
+    RAISERROR('RetireUnusedAuditYammerStreamTables: dbo.__MigrationHistory does not exist - this does not look like an Analytics database. Nothing has been changed.', 16, 1) WITH NOWAIT;
+    SET NOEXEC ON;
+END
+
+IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609100900001_DlpCopilotImpact')
+   AND NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609101000001_RetireUnusedAuditYammerStreamTables')
+BEGIN
+    RAISERROR('RetireUnusedAuditYammerStreamTables: prerequisite migration 202609100900001_DlpCopilotImpact is not stamped in __MigrationHistory. Run the manual scripts in migration-id order. Nothing has been changed.', 16, 1) WITH NOWAIT;
+    SET NOEXEC ON;
+END
+GO
+
 SET NOCOUNT ON;
 
 DECLARE @migration nvarchar(100) = N'RetireUnusedAuditYammerStreamTables';
@@ -531,4 +554,9 @@ SET @model = @model + 0x4C84105F15074628EA5F476AB3590FF9C042B387B25FB9DA484D7C15
 END
 ELSE
     RAISERROR('RetireUnusedAuditYammerStreamTables: already recorded in __MigrationHistory.', 0, 1) WITH NOWAIT;
+GO
+
+-- Restore the session. SET statements still execute under NOEXEC, so this is reached even when the
+-- pre-flight above turned NOEXEC on and skipped everything in between.
+SET NOEXEC OFF;
 GO
