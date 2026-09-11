@@ -35,6 +35,13 @@ namespace App.ControlPanel.Engine.Entities
 
         /// <summary>Login name of the Entra administrator, for logging. Never a secret.</summary>
         public string EntraAdminLogin { get; set; }
+
+        /// <summary>
+        /// Principal type of the Entra administrator - "User", "Group" or "Application". An
+        /// <c>Application</c> administrator is a service principal, which no person can sign in as.
+        /// Null when the server has no Entra administrator or Azure did not report the type.
+        /// </summary>
+        public string EntraAdminPrincipalType { get; set; }
     }
 
     /// <summary>
@@ -120,6 +127,72 @@ namespace App.ControlPanel.Engine.Entities
         public static bool ShouldProvisionWithEntraAuth(bool serverAlreadyExists, SqlServerAuthMode configuredMode)
         {
             return !serverAlreadyExists && configuredMode == SqlServerAuthMode.EntraId;
+        }
+
+        /// <summary>
+        /// Warns when Microsoft Entra ID authentication is in use but no <em>person</em> can sign in to the
+        /// database, so an operator who tries to browse the data by hand is refused.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// This is the normal outcome of a default install, not a failure. Azure allows exactly one Entra
+        /// administrator per SQL server, and the installer makes itself that administrator because it is the
+        /// identity that has to sign in to apply the schema upgrade. The solution therefore works perfectly -
+        /// but the administrator is a service principal, and nobody can authenticate interactively as one.
+        /// </para>
+        /// <para>
+        /// The symptom is unhelpfully worded: the Azure portal's Query Editor reports
+        /// <c>"You don't have access to this database"</c> and says the account "was authenticated
+        /// successfully, but it doesn't have permission to access this database", which reads like a missing
+        /// database role rather than a missing server administrator.
+        /// </para>
+        /// <para>Returns null when there is nothing to warn about. Pure, so it is unit testable.</para>
+        /// <para>
+        /// An administrator whose principal type Azure did not report is assumed to be a principal that can
+        /// sign in, consistent with the "authentication will not be guessed" rule this class follows: the
+        /// case the warning exists for - a server the installer created and made itself the administrator of -
+        /// always reports <c>Application</c>, because the installer is what set it.
+        /// </para>
+        /// </remarks>
+        /// <param name="serverState">
+        /// What Azure reports about the server, or null when it could not be inspected - in which case we
+        /// say nothing rather than guess.
+        /// </param>
+        /// <param name="decision">The authentication method chosen for this run.</param>
+        public static string GetInteractiveAdminWarning(SqlServerAuthState serverState, SqlAuthDecision decision)
+        {
+            if (decision == null || !decision.UsesEntraId) return null;
+            if (serverState == null) return null;
+
+            // A human or a group containing humans can sign in, so there is nothing to say.
+            if (serverState.HasEntraAdmin
+                && !string.Equals(serverState.EntraAdminPrincipalType, "Application", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            var opening = serverState.HasEntraAdmin
+                ? "This SQL Server's only Microsoft Entra administrator is an application (the installer's own service " +
+                  $"principal{FormatAdminLogin(serverState.EntraAdminLogin)}), which nobody can sign in as."
+                : "This SQL Server has no Microsoft Entra administrator assigned.";
+
+            return opening +
+                " The solution itself is unaffected and will keep importing: the App Service and Automation account " +
+                "authenticate as themselves. But because SQL authentication is disabled, no person can sign in to the " +
+                "database, so querying it by hand - for example with the Azure portal's Query Editor, SSMS or Azure Data " +
+                "Studio - will be refused with \"You don't have access to this database\". That message reports a " +
+                "successful sign-in and blames database permissions, which is misleading: the real cause is that you are " +
+                "not an administrator of the server. " +
+                "If you want to browse or query the data yourself, assign a Microsoft Entra administrator in the Azure " +
+                "portal: SQL Server > Settings > Microsoft Entra ID > Set admin, and pick a user or a security group. " +
+                "Azure permits only ONE Entra administrator per server, so prefer a group - replacing this application " +
+                "administrator with a single user would leave the installer unable to apply future schema upgrades unless " +
+                "that service principal is a member of it.";
+        }
+
+        static string FormatAdminLogin(string login)
+        {
+            return string.IsNullOrWhiteSpace(login) ? string.Empty : $", '{login}'";
         }
     }
 

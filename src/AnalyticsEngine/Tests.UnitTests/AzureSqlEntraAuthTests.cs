@@ -345,6 +345,108 @@ namespace Tests.UnitTests
 
         #endregion
 
+        #region No interactive administrator warning
+
+        static SqlAuthDecision EntraDecision => new SqlAuthDecision(SqlConnectionAuthMethod.EntraId, "test");
+        static SqlAuthDecision SqlLoginDecision => new SqlAuthDecision(SqlConnectionAuthMethod.SqlLogin, "test");
+
+        /// <summary>
+        /// The default install: the installer makes its own service principal the Entra administrator, so the
+        /// solution works but no person can sign in to query the database by hand.
+        /// </summary>
+        [TestMethod]
+        public void InteractiveAdminWarning_ApplicationAdministrator_Warns()
+        {
+            var state = new SqlServerAuthState
+            {
+                EntraOnlyAuthEnabled = true,
+                HasEntraAdmin = true,
+                EntraAdminPrincipalType = "Application",
+                EntraAdminLogin = "00000000-0000-0000-0000-000000000000",
+            };
+
+            var warning = SqlServerAuthDetection.GetInteractiveAdminWarning(state, EntraDecision);
+
+            Assert.IsNotNull(warning);
+            StringAssert.Contains(warning, "Set admin");
+            StringAssert.Contains(warning, "You don't have access to this database");
+        }
+
+        [TestMethod]
+        public void InteractiveAdminWarning_NoAdministratorAtAll_Warns()
+        {
+            var state = new SqlServerAuthState { EntraOnlyAuthEnabled = true, HasEntraAdmin = false };
+
+            var warning = SqlServerAuthDetection.GetInteractiveAdminWarning(state, EntraDecision);
+
+            Assert.IsNotNull(warning);
+            StringAssert.Contains(warning, "no Microsoft Entra administrator");
+        }
+
+        /// <summary>
+        /// A user or a group administrator can sign in, so there is nothing to warn about. A group is the
+        /// shape we actually recommend, so it must not warn either.
+        /// </summary>
+        [TestMethod]
+        public void InteractiveAdminWarning_UserOrGroupAdministrator_IsSilent()
+        {
+            foreach (var principalType in new[] { "User", "Group", "group" })
+            {
+                var state = new SqlServerAuthState
+                {
+                    EntraOnlyAuthEnabled = true,
+                    HasEntraAdmin = true,
+                    EntraAdminPrincipalType = principalType,
+                    EntraAdminLogin = "dba-team@contoso.com",
+                };
+
+                Assert.IsNull(SqlServerAuthDetection.GetInteractiveAdminWarning(state, EntraDecision),
+                    $"A '{principalType}' administrator can sign in, so no warning should be produced.");
+            }
+        }
+
+        /// <summary>
+        /// On the SQL-login path the operator already has a username and password, so none of this applies.
+        /// </summary>
+        [TestMethod]
+        public void InteractiveAdminWarning_SqlLoginPath_IsSilent()
+        {
+            var state = new SqlServerAuthState { HasEntraAdmin = false, HasSqlAdminLogin = true };
+
+            Assert.IsNull(SqlServerAuthDetection.GetInteractiveAdminWarning(state, SqlLoginDecision));
+        }
+
+        /// <summary>Never guess: an uninspectable server produces no claim either way.</summary>
+        [TestMethod]
+        public void InteractiveAdminWarning_UnknownServerState_IsSilent()
+        {
+            Assert.IsNull(SqlServerAuthDetection.GetInteractiveAdminWarning(null, EntraDecision));
+            Assert.IsNull(SqlServerAuthDetection.GetInteractiveAdminWarning(new SqlServerAuthState(), null));
+        }
+
+        /// <summary>
+        /// Azure does not always report a principal type. Consistent with the "authentication will not be
+        /// guessed" rule elsewhere in this reader, an administrator of unknown type is assumed to be a real
+        /// principal that can sign in, so we stay silent rather than tell an operator who already has a
+        /// working administrator to go and set one. The case this warning exists for - a server the
+        /// installer itself created - always reports the type, because the installer sets it.
+        /// </summary>
+        [TestMethod]
+        public void InteractiveAdminWarning_UnknownPrincipalType_IsSilent()
+        {
+            var state = new SqlServerAuthState
+            {
+                EntraOnlyAuthEnabled = true,
+                HasEntraAdmin = true,
+                EntraAdminPrincipalType = null,
+                EntraAdminLogin = "someone@contoso.com",
+            };
+
+            Assert.IsNull(SqlServerAuthDetection.GetInteractiveAdminWarning(state, EntraDecision));
+        }
+
+        #endregion
+
         #region Contained-user T-SQL
 
         /// <summary>

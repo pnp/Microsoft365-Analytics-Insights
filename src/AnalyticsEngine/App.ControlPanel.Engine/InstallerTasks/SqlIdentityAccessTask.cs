@@ -28,6 +28,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var decision = SqlServerAuthDetection.Decide(state,
                 state.HasSqlAdminLogin && !string.IsNullOrWhiteSpace(sqlPassword), configuredMode);
             logger?.LogInformation($"SQL authentication: {decision.Reason}");
+
+            var noInteractiveAdmin = SqlServerAuthDetection.GetInteractiveAdminWarning(state, decision);
+            if (!string.IsNullOrEmpty(noInteractiveAdmin)) logger?.LogWarning(noInteractiveAdmin);
+
             return decision;
         }
 
@@ -46,6 +50,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
             {
                 HasSqlAdminLogin = !string.IsNullOrWhiteSpace(data.AdministratorLogin),
             };
+
+            // The principal type is only carried on the server payload's embedded administrator, not on the
+            // authoritative child resource read below. Keep it, but discard it if the two disagree about who
+            // the administrator is - that means the embedded copy is stale and its type cannot be trusted.
+            var embeddedAdminLogin = data.Administrators?.Login;
+            var embeddedPrincipalType = data.Administrators?.PrincipalType?.ToString();
 
             // Always read the authoritative child, even when the embedded administrator says true:
             // that value can disagree after authentication is changed through the portal/CLI.
@@ -72,6 +82,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 var admin = await sqlServer.GetSqlServerAzureADAdministrators().GetAsync("ActiveDirectory");
                 state.HasEntraAdmin = admin.Value.Data.Sid.HasValue;
                 state.EntraAdminLogin = admin.Value.Data.Login;
+
+                if (state.HasEntraAdmin
+                    && string.Equals(state.EntraAdminLogin, embeddedAdminLogin, StringComparison.OrdinalIgnoreCase))
+                {
+                    state.EntraAdminPrincipalType = embeddedPrincipalType;
+                }
             }
             catch (RequestFailedException ex) when (ex.Status == 404)
             {
