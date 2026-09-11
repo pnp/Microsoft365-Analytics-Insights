@@ -111,18 +111,43 @@ DECLARE @sql nvarchar(max);
 DECLARE @rows bigint;
 DECLARE @total bigint = 0;
 
+/* Is there any work to do at all? Deliberately computed BEFORE the concurrency gate below, and using
+   exactly the predicate the ""already applied"" branch further down uses, so the two can never disagree.
+
+   An already-applied database needs no mutation, so a live writer is no reason to refuse: there is
+   nothing for it to race. Gating the check on this is what keeps the migration a genuine no-op on
+   re-run. It matters most on the MANUAL path, where the gate's abort is a RETURN in the same batch as
+   the __MigrationHistory stamp - so aborting on a database whose schema work had already completed
+   would leave it complete but UNSTAMPED, and an unstamped migration blocks every later script in the
+   chain. Refusing to stamp a database that is already in the target state is the same class of mistake
+   as DenormaliseCopilotChatUserAndTime's data-state guard, and this is what prevents it. */
+DECLARE @workRequired bit =
+    CASE
+        WHEN OBJECT_ID(N'dbo.urls', N'U') IS NULL THEN 0
+        WHEN NOT EXISTS (SELECT 1 FROM sys.columns
+                         WHERE object_id = OBJECT_ID(N'dbo.urls') AND name = N'full_url') THEN 0
+        WHEN EXISTS (SELECT 1 FROM sys.indexes
+                     WHERE object_id = OBJECT_ID(N'dbo.urls') AND name = @ix
+                       AND is_unique = 1 AND ignore_dup_key = 1) THEN 0
+        ELSE 1
+    END;
+
 SET @msg = @migration + N': EngineEdition=' + CAST(@edition AS nvarchar(10)) + N'; ONLINE index build '
     + CASE WHEN @canOnline = 1 THEN N'will be attempted (with offline fallback).'
            ELSE N'is not supported on this edition - the rebuild also locks dbo.urls for its duration.' END;
 RAISERROR(@msg, 0, 1) WITH NOWAIT;
 
--- Unconditional, and deliberately NOT softened on ONLINE-capable editions. ONLINE affects only the index
--- BUILD; the de-duplication that precedes it repoints references and deletes rows across several separately
--- committed statements, so a writer that inserts a reference to a duplicate URL after that table has been
--- repointed but before the URL row is deleted can have its row cascade-deleted (file_metadata_property_values,
--- page_comments, page_likes and copilot_event_files all cascade from urls) or left orphaned (the legacy
--- event_meta_sharepoint reference has no FK at all).
-RAISERROR('UniqueUrlsFullUrlIndex: STOP THE IMPORTER before running this. It de-duplicates dbo.urls by repointing references and deleting rows across several committed statements, which is not safe against concurrent writers - an ONLINE index build does not change that.', 0, 1) WITH NOWAIT;
+-- Unconditional on ONLINE-capable editions, but NOT on an already-applied database: ONLINE affects only
+-- the index BUILD; the de-duplication that precedes it repoints references and deletes rows across
+-- several separately committed statements, so a writer that inserts a reference to a duplicate URL after
+-- that table has been repointed but before the URL row is deleted can have its row cascade-deleted
+-- (file_metadata_property_values, page_comments, page_likes and copilot_event_files all cascade from
+-- urls) or left orphaned (the legacy event_meta_sharepoint reference has no FK at all). None of that can
+-- happen when there is nothing to de-duplicate, so the warning is suppressed on a re-run.
+IF @workRequired = 1
+    RAISERROR('UniqueUrlsFullUrlIndex: STOP THE IMPORTER before running this. It de-duplicates dbo.urls by repointing references and deleting rows across several committed statements, which is not safe against concurrent writers - an ONLINE index build does not change that.', 0, 1) WITH NOWAIT;
+ELSE
+    RAISERROR('UniqueUrlsFullUrlIndex: dbo.urls is already in the target state, so there is nothing to de-duplicate and no concurrency risk; the writer check below is skipped.', 0, 1) WITH NOWAIT;
 
 /* -------------------------------------------------------------------------------------------------
    Concurrency check. The warning above used to be the only protection; this turns it into an actual
@@ -159,7 +184,7 @@ DECLARE @skipConcurrencyCheck bit =
 DECLARE @recentImports bigint = 0;
 DECLARE @activeWriters bigint = 0;
 
-IF @skipConcurrencyCheck = 0
+IF @workRequired = 1 AND @skipConcurrencyCheck = 0
 BEGIN
     -- The tables a concurrent writer could actually corrupt: dbo.urls, everything with a foreign key to
     -- it, and the legacy non-FK reference. Built from the catalogue rather than hard-coded, so it stays
@@ -241,7 +266,10 @@ BEGIN
             + N'statements, so running it against a live writer can cascade-delete or orphan that writer''s '
             + N'rows. Stop the Office365ActivityImporter / AppInsightsImporter web-jobs, wait for the current '
             + N'cycle to finish, then re-run. Nothing has been changed. '
-            + N'(To override once you have confirmed the importer is stopped, set @skipConcurrencyCheck = 1 at the top of this script.)';
+            + N'This gate is reached only when there is de-duplication work left to do, so an already-migrated '
+            + N'database is never blocked by it. To override once you have confirmed the importer is stopped, '
+            + N'run  EXEC sp_set_session_context N''UniqueUrlsFullUrlIndex_SkipConcurrencyCheck'', 1;  on the same '
+            + N'session first - this works for the installer / DatabaseUpgrader path as well as for sqlcmd.';
         RAISERROR(@msg, 16, 1) WITH NOWAIT;
         RETURN;
     END

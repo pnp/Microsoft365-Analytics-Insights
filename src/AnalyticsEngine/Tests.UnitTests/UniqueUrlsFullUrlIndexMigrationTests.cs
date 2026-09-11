@@ -453,6 +453,60 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
         }
 
         [TestMethod]
+        public async Task Migration_DoesNotAbort_WhenTheWorkIsAlreadyDone_EvenWithAConcurrentWriter()
+        {
+            // The POSITIVE direction of the gate covered by
+            // Migration_Aborts_WhenAnotherSessionHoldsWriteLocks. A guard tested only against the state it
+            // was written to catch looks perfect and blocks every healthy upgrade, so this asserts the
+            // other half: on a database that is ALREADY in the target state there is nothing to
+            // de-duplicate, therefore nothing a writer can race, therefore no reason to refuse.
+            //
+            // This is not cosmetic. In the manual upgrade script the gate's abort is a RETURN in the same
+            // batch as the __MigrationHistory stamp, so aborting here would leave a database whose schema
+            // work had completed recorded as NOT migrated - and because the manual scripts form a
+            // prerequisite chain, that unstamped migration would block every later script in the release.
+            // That is precisely the DenormaliseCopilotChatUserAndTime failure mode.
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                await EnsureSchemaAsync(db);
+
+                // Fully migrated starting point (RestoreSharedSchema leaves the suite here anyway, but
+                // this test must not depend on execution order).
+                await RunMigrationAsync(db);
+                Assert.IsTrue(await IndexIsUniqueAsync(db), "Pre-condition: the migration is already applied.");
+                Assert.IsTrue(await IndexIgnoresDuplicateKeysAsync(db), "Pre-condition: IGNORE_DUP_KEY is on.");
+
+                var cs = db.Database.Connection.ConnectionString;
+                using (var blocker = new SqlConnection(cs))
+                {
+                    await blocker.OpenAsync();
+                    using (var tx = blocker.BeginTransaction())
+                    {
+                        using (var cmd = blocker.CreateCommand())
+                        {
+                            cmd.Transaction = tx;
+                            cmd.CommandText =
+                                "INSERT INTO dbo.urls (full_url) VALUES (N'https://contoso.sharepoint.com/sites/example/Writer.docx');";
+                            await cmd.ExecuteNonQueryAsync();
+                        }
+
+                        // Deliberately WITHOUT the skip flag that RunMigrationAsync sets - the gate is
+                        // live, and a live writer is present. LOCK_TIMEOUT so a regression that made this
+                        // block on the writer fails in seconds instead of hanging CI.
+                        await ExecAsync(db, "SET LOCK_TIMEOUT 15000;\r\n" + UniqueUrlsFullUrlIndex.Up_Sql);
+
+                        tx.Rollback();
+                    }
+                }
+
+                Assert.IsTrue(await IndexIsUniqueAsync(db),
+                    "The no-op run must leave the unique index in place.");
+                Assert.IsTrue(await IndexIgnoresDuplicateKeysAsync(db),
+                    "The no-op run must leave IGNORE_DUP_KEY in place.");
+            }
+        }
+
+        [TestMethod]
         public void ManualScriptUsesTheSameSqlAsTheMigration()
         {
             // Rule 7 of the migration conventions: the manual upgrade script must contain the migration's

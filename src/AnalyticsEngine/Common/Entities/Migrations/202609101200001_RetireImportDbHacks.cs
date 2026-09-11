@@ -38,6 +38,22 @@ namespace Common.Entities.Migrations
     /// so there is no before/after query to benchmark. The performance win is the removal of the
     /// per-startup and per-batch work from the importer, which is a code change, not a schema one.
     ///
+    /// UPGRADE COST
+    ///   * Normal case - the App Insights importer has run at some point, so both indexes and the
+    ///     collation are already correct: METADATA ONLY. Every guard is a sys.indexes / sys.columns
+    ///     lookup and neither dbo.hits nor dbo.sessions is touched. Measured at milliseconds, and
+    ///     independent of table size. This is what essentially every upgrading customer gets.
+    ///   * Fresh install, or a deployment that never ran that importer: dbo.hits and dbo.sessions are
+    ///     empty or tiny, so the index builds are instant.
+    ///   * The only slow case is a database that HAS a populated dbo.hits but has lost
+    ///     IX_PageRequestID (a DBA dropped it, or a restore lost it). Then the de-duplication runs, and
+    ///     it re-evaluates ROW_NUMBER() over the whole of dbo.hits once per 20,000-row batch - so its
+    ///     cost is one full pass of dbo.hits per batch of duplicates removed. With no duplicates it is
+    ///     a single pass and nothing is deleted. If you are in that state with a large dbo.hits AND
+    ///     many duplicates, expect this to be the long pole of the upgrade and run it in a maintenance
+    ///     window; the subsequent UNIQUE index build on dbo.hits is ONLINE only on Enterprise / Azure
+    ///     SQL DB / Azure SQL MI and offline (table-locking) everywhere else.
+    ///
     /// IX_ai_session_id IS DELIBERATELY NOT UNIQUE. <c>sessions.ai_session_id</c> can legitimately
     /// duplicate, and the hits merge depends on tolerating that - see the ROW_NUMBER() fan-out defence in
     /// "Migrate Hits Import into Hits.sql" and issue #165. The hack actively rebuilt this index as

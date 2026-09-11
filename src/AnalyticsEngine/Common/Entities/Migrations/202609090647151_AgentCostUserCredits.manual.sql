@@ -71,6 +71,27 @@ SET NOCOUNT ON;
 SET QUOTED_IDENTIFIER ON;
 GO
 
+/* =====================================================================================================
+   PRE-FLIGHT - runs BEFORE anything is created. See the note in
+   202609090519337_AgentCostTables.manual.sql: a severity-16 RAISERROR does not stop sqlcmd, so without
+   SET NOEXEC ON an out-of-order run would create this migration's schema and leave it unstamped, and the
+   next installer run would then fail inside EF's own CreateTable. SET NOEXEC OFF at the end of the
+   script restores the session.
+   ===================================================================================================== */
+IF OBJECT_ID(N'dbo.__MigrationHistory', N'U') IS NULL
+BEGIN
+    RAISERROR('AgentCostUserCredits: dbo.__MigrationHistory does not exist - this does not look like an Analytics database. Nothing has been changed.', 16, 1) WITH NOWAIT;
+    SET NOEXEC ON;
+END
+
+IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609090519337_AgentCostTables')
+   AND NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609090647151_AgentCostUserCredits')
+BEGIN
+    RAISERROR('AgentCostUserCredits: prerequisite migration 202609090519337_AgentCostTables is not stamped in __MigrationHistory. Run the manual scripts in migration-id order. Nothing has been changed.', 16, 1) WITH NOWAIT;
+    SET NOEXEC ON;
+END
+GO
+
 DECLARE @migration nvarchar(200) = N'202609090647151_AgentCostUserCredits';
 DECLARE @msg nvarchar(500);
 
@@ -203,4 +224,9 @@ BEGIN
 END
 ELSE
     RAISERROR('AgentCostUserCredits: already recorded in __MigrationHistory, nothing to do.', 0, 1) WITH NOWAIT;
+GO
+
+-- Restore the session. SET statements still execute under NOEXEC, so this is reached even when the
+-- pre-flight above turned NOEXEC on and skipped everything in between.
+SET NOEXEC OFF;
 GO
