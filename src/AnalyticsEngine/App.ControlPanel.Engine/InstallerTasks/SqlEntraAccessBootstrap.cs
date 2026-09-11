@@ -81,17 +81,19 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// </remarks>
         /// <param name="connectionString">Connection string for the target database. Must be a token-auth one.</param>
         /// <param name="tenantId">Directory the administrator lives in - the installer's own tenant.</param>
-        /// <param name="installerObjectId">Object ID of the installer's service principal.</param>
-        /// <param name="installerLogin">Name to give the contained user; the installer's client ID or app name.</param>
+        /// <param name="installerClientId">
+        /// Application (client) ID of the installer's app registration. This - NOT its object ID - is what
+        /// Azure SQL matches a service principal on.
+        /// </param>
         public static async Task<bool> TryRepairInstallerAccessAsync(string connectionString, string tenantId,
-            Guid installerObjectId, string installerLogin, ILogger logger, CancellationToken cancellationToken = default(CancellationToken))
+            Guid installerClientId, ILogger logger, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (string.IsNullOrWhiteSpace(connectionString)) return false;
 
-            if (installerObjectId == Guid.Empty)
+            if (installerClientId == Guid.Empty)
             {
                 logger?.LogWarning(
-                    "Cannot repair the installer's database access: its service principal object ID could not be resolved.");
+                    "Cannot repair the installer's database access: its application (client) ID is not a valid GUID.");
                 return false;
             }
 
@@ -139,7 +141,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 return false;
             }
 
-            var script = SqlContainedUserScript.CreateUserAndGrantRoles(installerLogin, installerObjectId, InstallerRoles);
+            var script = BuildInstallerUserScript(installerClientId);
 
             try
             {
@@ -181,7 +183,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             }
 
             logger?.LogInformation(
-                $"Created contained database user '{installerLogin}' ({string.Join(", ", InstallerRoles)}) for the installer's " +
+                $"Created contained database user '{installerClientId}' ({string.Join(", ", InstallerRoles)}) for the installer's " +
                 "service principal. The installer can now sign in to apply the schema upgrade, and future runs will not need " +
                 "this sign-in. The SQL Server's Microsoft Entra administrator was NOT changed.");
 
@@ -190,6 +192,24 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
         /// <summary>SQL Server's "Login failed for user" error.</summary>
         public const int SqlLoginFailedErrorNumber = 18456;
+
+        /// <summary>
+        /// Builds the contained-user script for the installer's own service principal.
+        /// </summary>
+        /// <remarks>
+        /// The application (client) ID is deliberately used as BOTH the database user name and the SID.
+        /// The SID part is the one that matters and the one that is easy to get wrong: Azure SQL matches a
+        /// user or group on its object ID, but a service principal - including any managed identity - on
+        /// its <b>application (client) ID</b>. SQL Server does not validate the SID against Entra ID, so
+        /// supplying the object ID instead creates the user successfully and only fails later, at sign-in,
+        /// with <c>Login failed for user '&lt;token-identified principal&gt;'</c>. Separated out so that
+        /// rule is directly testable.
+        /// </remarks>
+        public static string BuildInstallerUserScript(Guid installerClientId)
+        {
+            return SqlContainedUserScript.CreateUserAndGrantRoles(
+                installerClientId.ToString(), installerClientId, InstallerRoles);
+        }
 
         /// <summary>
         /// Gets a SQL access token for a human administrator, preferring the system browser and falling

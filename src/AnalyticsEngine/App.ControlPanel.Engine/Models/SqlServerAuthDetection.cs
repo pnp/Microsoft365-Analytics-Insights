@@ -385,23 +385,36 @@ namespace App.ControlPanel.Engine.Entities
         /// The database user name. For a system-assigned managed identity this is the Azure resource name
         /// (e.g. the App Service name), which is also the identity's display name in Entra ID.
         /// </param>
-        /// <param name="principalObjectId">The Entra object (principal) ID of the identity.</param>
+        /// <param name="principalSid">
+        /// The value Azure SQL matches the sign-in against, and it is NOT the same kind of ID for every
+        /// principal:
+        /// <list type="bullet">
+        /// <item><description>a <b>user</b> or <b>group</b> - its Entra <b>object ID</b>;</description></item>
+        /// <item><description>a <b>service principal</b>, which includes an app registration and any
+        /// managed identity - its <b>application (client) ID</b>.</description></item>
+        /// </list>
+        /// Getting this wrong fails silently: SQL Server does not validate the value against Entra ID, so
+        /// <c>CREATE USER</c> succeeds and only the subsequent sign-in is rejected, with
+        /// <c>Login failed for user '&lt;token-identified principal&gt;'</c> - an error that names no
+        /// principal and looks nothing like a bad SID. See the remarks on
+        /// <see cref="CreateUserAndGrantRoles"/>'s caller and the CREATE USER documentation.
+        /// </param>
         /// <param name="roles">Database roles to add the user to.</param>
-        public static string CreateUserAndGrantRoles(string principalName, Guid principalObjectId, IEnumerable<string> roles)
+        public static string CreateUserAndGrantRoles(string principalName, Guid principalSid, IEnumerable<string> roles)
         {
             if (string.IsNullOrWhiteSpace(principalName))
             {
                 throw new ArgumentException($"'{nameof(principalName)}' cannot be null or empty.", nameof(principalName));
             }
-            if (principalObjectId == Guid.Empty)
+            if (principalSid == Guid.Empty)
             {
-                throw new ArgumentException($"'{nameof(principalObjectId)}' cannot be an empty GUID.", nameof(principalObjectId));
+                throw new ArgumentException($"'{nameof(principalSid)}' cannot be an empty GUID.", nameof(principalSid));
             }
             if (roles == null) throw new ArgumentNullException(nameof(roles));
 
             var quotedName = QuoteIdentifier(principalName);
             var literalName = QuoteLiteral(principalName);
-            var sid = ToSqlSid(principalObjectId);
+            var sid = ToSqlSid(principalSid);
 
             var sql = new System.Text.StringBuilder();
             sql.AppendLine($"IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE [name] = N'{literalName}')");

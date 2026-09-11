@@ -888,6 +888,53 @@ namespace Tests.UnitTests
                 System.Linq.Enumerable.ToArray(App.ControlPanel.Engine.InstallerTasks.SqlDatabaseUserGrantTask.DatabaseUserRoles));
         }
 
+        /// <summary>
+        /// Azure SQL matches a <em>service principal</em> on its application (client) ID, not its object
+        /// ID - unlike a user or group, which it matches on the object ID.
+        /// </summary>
+        /// <remarks>
+        /// Regression test for a failure that looked like a success. SQL Server does not validate the SID
+        /// against Entra ID, so creating the installer's contained user with its object ID reported
+        /// "Created contained database user ..." and the very next connection was still rejected with
+        /// <c>Login failed for user '&lt;token-identified principal&gt;'</c> - an error naming no principal
+        /// and reading like a firewall or password problem.
+        /// </remarks>
+        [TestMethod]
+        public void InstallerContainedUser_UsesTheClientIdAsTheSid_NotTheObjectId()
+        {
+            var clientId = new Guid("33333333-3333-3333-3333-333333333333");
+            var objectId = new Guid("44444444-4444-4444-4444-444444444444");
+
+            var script = App.ControlPanel.Engine.InstallerTasks.SqlEntraAccessBootstrap.BuildInstallerUserScript(clientId);
+
+            StringAssert.Contains(script, SqlContainedUserScript.ToSqlSid(clientId),
+                "Azure SQL identifies a service principal by its application (client) ID.");
+            Assert.IsFalse(script.Contains(SqlContainedUserScript.ToSqlSid(objectId)),
+                "The object ID must never be used as the SID for a service principal - it fails silently at sign-in.");
+            StringAssert.Contains(script, "TYPE = E");
+            StringAssert.Contains(script, "db_owner");
+        }
+
+        /// <summary>
+        /// A configured human or group is the other half of the rule: those ARE matched on the object ID,
+        /// so the resolver must keep passing it straight through.
+        /// </summary>
+        [TestMethod]
+        public async System.Threading.Tasks.Task ConfiguredUsers_KeepUsingTheObjectIdAsTheSid()
+        {
+            var task = new App.ControlPanel.Engine.InstallerTasks.SqlDatabaseUserGrantTask(
+                Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, null);
+
+            var resolved = await task.ResolveUsersAsync(new[]
+            {
+                new SqlDatabaseUser { Login = "dba@contoso.com", ObjectId = SomebodyElse.ToString() },
+            });
+
+            Assert.AreEqual(1, resolved.Count);
+            Assert.AreEqual(SomebodyElse, resolved[0].Value,
+                "A user or group is identified by its Entra object ID, unlike a service principal.");
+        }
+
         #endregion
 
         #region Contained-user T-SQL

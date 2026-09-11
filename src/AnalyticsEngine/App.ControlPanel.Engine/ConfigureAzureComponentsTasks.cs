@@ -300,10 +300,17 @@ namespace App.ControlPanel.Engine
         private Func<Task<bool>> BuildEntraAccessRepairCallback(DatabasePaaSInfo dbInfo, Guid installerObjectId)
         {
             if (dbInfo == null || dbInfo.AuthMethod != SqlConnectionAuthMethod.EntraId) return null;
-            if (installerObjectId == Guid.Empty) return null;
 
             var account = Config.InstallerAccount;
-            if (account == null || string.IsNullOrWhiteSpace(account.ClientId)) return null;
+
+            // Azure SQL matches a service principal on its APPLICATION (client) ID, not its object ID, so
+            // the client ID is what the repair actually needs - the object ID is only used to diagnose
+            // whether we are the server's administrator.
+            Guid installerClientId;
+            if (account == null || !Guid.TryParse((account.ClientId ?? string.Empty).Trim(), out installerClientId) || installerClientId == Guid.Empty)
+            {
+                return null;
+            }
 
             if (!SqlEntraAccessBootstrap.CanPromptForSignIn())
             {
@@ -314,7 +321,7 @@ namespace App.ControlPanel.Engine
             }
 
             return () => SqlEntraAccessBootstrap.TryRepairInstallerAccessAsync(
-                dbInfo.ConnectionString, account.DirectoryId, installerObjectId, account.ClientId, _logger);
+                dbInfo.ConnectionString, account.DirectoryId, installerClientId, _logger);
         }
 
         /// <summary>
