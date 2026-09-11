@@ -394,8 +394,33 @@ namespace Tests.UnitTests
 
             Assert.IsNotNull(warning);
             StringAssert.Contains(warning, "SQL authentication is still enabled");
+            StringAssert.Contains(warning, "remains an option");
             Assert.IsFalse(warning.Contains("Because SQL authentication is disabled"),
                 "A mixed-authentication server still accepts the SQL administrator login.");
+        }
+
+        /// <summary>
+        /// Decide picks Entra whenever it is configured and the server has an Entra administrator, without
+        /// checking for a SQL administrator login. So a mixed-auth server with no SQL login is reachable, and
+        /// the warning must not offer a login that Azure says does not exist.
+        /// </summary>
+        [TestMethod]
+        public void InteractiveAdminWarning_MixedAuthWithNoSqlLogin_DoesNotOfferOne()
+        {
+            var state = new SqlServerAuthState
+            {
+                EntraOnlyAuthEnabled = false,
+                HasSqlAdminLogin = false,
+                HasEntraAdmin = true,
+                EntraAdminPrincipalType = "Application",
+            };
+
+            var warning = SqlServerAuthDetection.GetInteractiveAdminWarning(state, EntraDecision);
+
+            Assert.IsNotNull(warning);
+            StringAssert.Contains(warning, "no SQL administrator login");
+            Assert.IsFalse(warning.Contains("remains an option"),
+                "There is no SQL administrator login to fall back on.");
         }
 
         /// <summary>

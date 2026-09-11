@@ -186,13 +186,16 @@ namespace App.ControlPanel.Engine.Entities
                   "will be refused with \"You don't have access to this database\". That message reports a successful " +
                   "sign-in and blames database permissions, which is misleading: the real cause is that you are not an " +
                   "administrator of the server."
-                : " SQL authentication is still enabled on this server, so the SQL administrator login continues to work. " +
-                  "Signing in with Microsoft Entra ID will be refused with \"You don't have access to this database\" - a " +
+                : " Signing in with Microsoft Entra ID will be refused with \"You don't have access to this database\" - a " +
                   "misleading message, because the real cause is that you are not a Microsoft Entra administrator of the " +
-                  "server rather than anything to do with database permissions.";
+                  "server rather than anything to do with database permissions." +
+                  (serverState.HasSqlAdminLogin
+                      ? " SQL authentication is still enabled on this server, so its SQL administrator login remains an option."
+                      : " SQL authentication is still enabled on this server, but Azure reports no SQL administrator login, " +
+                        "so there is no alternative way in either.");
 
             return opening +
-                " The solution itself is unaffected and will keep importing: the App Service and Automation account " +
+                " This does not affect the solution's own database access: the App Service and Automation account " +
                 "authenticate as themselves." + consequence +
                 " If you want to browse or query the data with your own Microsoft Entra account, assign a Microsoft Entra " +
                 "administrator in the Azure portal: SQL Server > Settings > Microsoft Entra ID > Set admin, and pick a user " +
