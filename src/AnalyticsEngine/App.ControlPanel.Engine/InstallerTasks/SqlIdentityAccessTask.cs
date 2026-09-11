@@ -1,5 +1,7 @@
 using App.ControlPanel.Engine.Entities;
+using Azure;
 using Azure.ResourceManager.Sql;
+using Common.Entities.Installer;
 using DataUtils.Sql;
 using Microsoft.Extensions.Logging;
 using System;
@@ -17,6 +19,18 @@ namespace App.ControlPanel.Engine.InstallerTasks
     /// </summary>
     public static class SqlServerAuthReader
     {
+        public static async Task<SqlAuthDecision> DetectAsync(SqlServerResource sqlServer, string sqlPassword,
+            SqlServerAuthMode configuredMode, ILogger logger)
+        {
+            if (sqlServer == null) throw new ArgumentNullException(nameof(sqlServer));
+
+            var state = await ReadAsync(sqlServer, logger);
+            var decision = SqlServerAuthDetection.Decide(state,
+                state.HasSqlAdminLogin && !string.IsNullOrWhiteSpace(sqlPassword), configuredMode);
+            logger?.LogInformation($"SQL authentication: {decision.Reason}");
+            return decision;
+        }
+
         /// <summary>
         /// Inspects the server. Returns null when there is no server to inspect.
         /// </summary>
@@ -31,51 +45,43 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var state = new SqlServerAuthState
             {
                 HasSqlAdminLogin = !string.IsNullOrWhiteSpace(data.AdministratorLogin),
-                HasEntraAdmin = data.Administrators != null && data.Administrators.Sid.HasValue,
-                EntraAdminLogin = data.Administrators?.Login,
-                EntraOnlyAuthEnabled = data.Administrators?.IsAzureADOnlyAuthenticationEnabled == true,
             };
 
-            // The server payload only reports Entra-only auth when the administrator was set through the
-            // server resource. The authoritative source is the azureADOnlyAuthentications child resource,
-            // which is also where a customer's own portal/CLI change shows up.
-            if (!state.EntraOnlyAuthEnabled)
+            // Always read the authoritative child, even when the embedded administrator says true:
+            // that value can disagree after authentication is changed through the portal/CLI.
+            try
             {
-                try
-                {
-                    foreach (var onlyAuth in sqlServer.GetSqlServerAzureADOnlyAuthentications())
-                    {
-                        if (onlyAuth.Data != null && onlyAuth.Data.IsAzureADOnlyAuthenticationEnabled == true)
-                        {
-                            state.EntraOnlyAuthEnabled = true;
-                            break;
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // A server that has never had it set returns 404/NotFound here. Not an error.
-                    logger?.LogInformation($"Could not read Microsoft Entra-only authentication state for SQL Server '{data.Name}': {ex.Message}");
-                }
+                var onlyAuth = await sqlServer.GetSqlServerAzureADOnlyAuthentications().GetAsync("Default");
+                state.EntraOnlyAuthEnabled = onlyAuth.Value.Data.IsAzureADOnlyAuthenticationEnabled
+                    ?? throw new InvalidOperationException("Azure did not return the SQL Server's Microsoft Entra-only authentication setting.");
+            }
+            catch (RequestFailedException ex) when (ex.Status == 404)
+            {
+                logger?.LogInformation("No Microsoft Entra-only authentication resource exists for this SQL Server; SQL logins are not disabled.");
+            }
+            catch (RequestFailedException ex)
+            {
+                logger?.LogError($"Could not read the SQL Server's Microsoft Entra-only authentication setting (HTTP {ex.Status}). " +
+                    "Verify the installer can read Microsoft.Sql/servers/azureADOnlyAuthentications. Authentication will not be guessed.");
+                throw;
             }
 
-            // Likewise, an administrator assigned separately (portal, CLI, an older install) lives in the
-            // administrators child collection rather than on the server payload.
-            if (!state.HasEntraAdmin)
+            // A separately removed/replaced administrator must not be inferred from the embedded payload.
+            try
             {
-                try
-                {
-                    var admin = sqlServer.GetSqlServerAzureADAdministrators().FirstOrDefault();
-                    if (admin != null && admin.Data != null)
-                    {
-                        state.HasEntraAdmin = true;
-                        state.EntraAdminLogin = admin.Data.Login;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    logger?.LogInformation($"Could not read the Microsoft Entra administrator for SQL Server '{data.Name}': {ex.Message}");
-                }
+                var admin = await sqlServer.GetSqlServerAzureADAdministrators().GetAsync("ActiveDirectory");
+                state.HasEntraAdmin = admin.Value.Data.Sid.HasValue;
+                state.EntraAdminLogin = admin.Value.Data.Login;
+            }
+            catch (RequestFailedException ex) when (ex.Status == 404)
+            {
+                logger?.LogInformation("No Microsoft Entra administrator is configured for this SQL Server.");
+            }
+            catch (RequestFailedException ex)
+            {
+                logger?.LogError($"Could not read the SQL Server's Microsoft Entra administrator (HTTP {ex.Status}). " +
+                    "Verify the installer can read Microsoft.Sql/servers/administrators. Authentication will not be guessed.");
+                throw;
             }
 
             logger?.LogInformation(

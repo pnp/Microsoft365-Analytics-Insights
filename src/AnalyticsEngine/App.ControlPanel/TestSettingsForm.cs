@@ -9,6 +9,7 @@ namespace App.ControlPanel
     public partial class TestSettingsForm : Form
     {
         private InMemoryLogger _logger = new InMemoryLogger();
+        private bool _usesEntraSqlAuth;
         public TestSettingsForm()
         {
             InitializeComponent();
@@ -33,6 +34,11 @@ namespace App.ControlPanel
                 {
                     connectionString = DatabasePaaSInfo.GetConnectionString(txtSqlServer.Text, null, txtSqlUsername.Text, txtSqlPassword.Text);
                 }
+                else if (_usesEntraSqlAuth && txtSqlServer.Text.Length > 0
+                    && txtSqlUsername.Text.Length == 0 && txtSqlPassword.Text.Length == 0)
+                {
+                    connectionString = DatabasePaaSInfo.GetEntraIdConnectionString(txtSqlServer.Text, null);
+                }
                 return new TestConfiguration()
                 {
                     SQLConnectionString = connectionString
@@ -44,6 +50,7 @@ namespace App.ControlPanel
                 if (value != null) defaultConfig = value;
 
                 var sqlConnectionInfo = new System.Data.SqlClient.SqlConnectionStringBuilder(defaultConfig.SQLConnectionString);
+                _usesEntraSqlAuth = DataUtils.Sql.AzureSqlTokenAuth.NeedsAccessToken(defaultConfig.SQLConnectionString);
                 txtSqlServer.Text = sqlConnectionInfo?.DataSource;
                 txtSqlUsername.Text = sqlConnectionInfo?.UserID;
                 txtSqlPassword.Text = sqlConnectionInfo?.Password;
@@ -86,21 +93,9 @@ namespace App.ControlPanel
             if (e.Result is AutodetectedSqlDetails)
             {
                 var r = (AutodetectedSqlDetails)e.Result;
-                var connectionString = string.Empty;
-                if (!string.IsNullOrEmpty(r.Sql?.SqlUsername) && !string.IsNullOrEmpty(r.Sql?.SqlPassword) && !string.IsNullOrEmpty(r.Sql?.SqlFqdn))
-                {
-                    connectionString = DatabasePaaSInfo.GetConnectionString(r.Sql?.SqlFqdn, null, r.Sql?.SqlUsername, r.Sql?.SqlPassword);
-                }
-                else if (!string.IsNullOrEmpty(r.Sql?.SqlFqdn))
-                {
-                    // No SQL login: the server authenticates with Microsoft Entra ID, so the tests connect
-                    // with a token instead of credentials (issue #117).
-                    connectionString = DatabasePaaSInfo.GetEntraIdConnectionString(r.Sql.SqlFqdn, null);
-                }
-
                 this.TestConfiguration = new TestConfiguration
                 {
-                    SQLConnectionString = connectionString
+                    SQLConnectionString = r.Sql?.ConnectionString ?? string.Empty
                 };
 
                 if (r.Sql == null)

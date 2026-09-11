@@ -65,10 +65,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// </summary>
         internal async Task InitDatabaseSchema(List<string> targetSites)
         {
-            // Create DB migration info
-            var upgradeInfo = new DatabaseUpgradeInfo();
-            upgradeInfo.ConnectionString = _dbInfo.ConnectionString;
-            upgradeInfo.OrgURLs = targetSites;
+            var upgradeInfo = CreateDatabaseUpgradeInfo(targetSites);
 
             // A connection string with no login means the SQL server has SQL authentication disabled, so
             // the downloaded app has to authenticate with Microsoft Entra ID. It cannot use a managed
@@ -77,10 +74,6 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var needsEntraAuth = AzureSqlTokenAuth.NeedsAccessToken(upgradeInfo.ConnectionString);
             if (needsEntraAuth)
             {
-                upgradeInfo.EntraTenantId = _config.InstallerAccount?.DirectoryId;
-                upgradeInfo.EntraClientId = _config.InstallerAccount?.ClientId;
-                upgradeInfo.EntraClientSecret = _config.InstallerAccount?.Secret;
-
                 // Stop BEFORE running a build that cannot possibly succeed. Such a build opens the
                 // connection with no credentials and fails inside Entity Framework with an error about the
                 // 'master' database, naming neither Entra ID nor the real cause - and there is no way to
@@ -128,6 +121,22 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 _logger.LogInformation($"Database initialisation completed (exit 0)" + (lastLine != null ? $": {lastLine}" : ".") +
                     $" Full details in Windows application log (event ID {InstallerConstants.EVENT_LOG_CATEGORY_ID}).");
             }
+        }
+
+        internal DatabaseUpgradeInfo CreateDatabaseUpgradeInfo(List<string> targetSites)
+        {
+            var upgradeInfo = new DatabaseUpgradeInfo
+            {
+                ConnectionString = _dbInfo.ConnectionString,
+                OrgURLs = targetSites
+            };
+            if (AzureSqlTokenAuth.NeedsAccessToken(upgradeInfo.ConnectionString))
+            {
+                upgradeInfo.EntraTenantId = _config.InstallerAccount?.DirectoryId;
+                upgradeInfo.EntraClientId = _config.InstallerAccount?.ClientId;
+                upgradeInfo.EntraClientSecret = _config.InstallerAccount?.Secret;
+            }
+            return upgradeInfo;
         }
 
         internal async Task RegisterConfigAndStatus(List<InstallLogEventArgs> installLogEvents, string configPassword)
@@ -181,7 +190,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
             bool sqlTestWorked = await _verifySqlCallback(_dbInfo.ConnectionString);
             if (!sqlTestWorked)
             {
-                _logger.LogInformation("Skipping control-panel app to init/update database due to failed connectivity test. Verify your current IP address is correct in the SQL Server firewall settings", true);
+                _logger.LogError("Skipping control-panel app to init/update database due to a failed SQL connection test. " +
+                    "Fix the authentication or connectivity problem reported above and re-run the installer.");
                 return new ChildResult { Success = false, ExitCode = -1 };
             }
 
