@@ -246,15 +246,32 @@ namespace App.ControlPanel.Engine
 
         void ReportSqlConnectionFailure(string connectionString, SqlException error)
         {
+            if (error == null) return; // Connection/token creation already reported its error.
+
             var dataSource = new SqlConnectionStringBuilder(connectionString).DataSource;
 
             _logger.LogError($"Error testing SQL connection to '{dataSource}': '{error?.Message}'. " +
-                $"Verify network connectivity to server.");
+                GetSqlConnectionFailureGuidance(connectionString, error.Number));
 
-            if (PrivateNetworkGuidance.IsPrivateNetworkOnly(Config))
+            if (error.Number != 18456 && PrivateNetworkGuidance.IsPrivateNetworkOnly(Config))
             {
                 _logger.LogError(PrivateNetworkGuidance.BuildVmOnVNetGuidance("the SQL connectivity test and database schema initialisation", Config.NetworkConfig?.VNetName));
             }
+        }
+
+        internal static string GetSqlConnectionFailureGuidance(string connectionString, int errorNumber)
+        {
+            if (errorNumber != 18456) return "Verify network connectivity to server.";
+
+            return AzureSqlTokenAuth.NeedsAccessToken(connectionString)
+                ? "SQL Server rejected the Microsoft Entra identity. The installer signs in as its app registration, " +
+                  "not the interactive Azure portal user or the App Service managed identity. An Entra administrator " +
+                  "must grant that installer principal access to the target database with schema-upgrade permissions. " +
+                  "If the server permits SQL logins, select SQL Server authentication and supply its administrator password; " +
+                  "SQL passwords cannot be used on an Entra-only server. This is a login failure, not a firewall rejection."
+                : "SQL Server rejected the SQL login. Verify the SQL administrator username/password and access to the " +
+                  "target database, and confirm Microsoft Entra-only authentication is disabled. This is a login failure, " +
+                  "not a firewall rejection.";
         }
 
         #region ExecuteAndReportFailure
