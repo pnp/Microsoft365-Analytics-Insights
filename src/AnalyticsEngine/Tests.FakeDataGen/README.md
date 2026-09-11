@@ -18,8 +18,10 @@ Tests.FakeDataGen.exe demo --help
 This non-interactive command creates a **new LocalDB-only** target, applies the
 existing schema, and generates current overlapping licence assignments, daily
 workload coverage (including explicit zero rows), Copilot adoption and official
-D28 snapshots, metadata-only prompt/response pairs, SharePoint/web facts, and
-complete-week Power BI profiles. It never reads a configured production connection.
+D28 snapshots, metadata-only prompt/response pairs, SharePoint/web facts, detailed
+Teams activity, sent email, Power Platform activity, and complete-week Power BI
+profiles. Actual Power BI report views are separate from these profiling tables.
+It never reads a configured production connection.
 Exact completed reruns are read-only no-ops; other existing targets are refused.
 `--preview` runs the same generator without SQL. Fix `--as-of` and `--seed` for
 reproducibility. `--help` lists all flags and the deliberately unsupported datasets.
@@ -29,7 +31,9 @@ The same demo is the **first option on the interactive menu**, so it can be run
 without knowing any of the flags - see
 [Full synthetic demo](#full-synthetic-demo-contoso) below.
 
-The older, independent interactive generator/stress-test menu is still available:
+Each major area also has a menu entry offering a new database or additive
+generation into an existing **test/demo** database. Supply the existing connection
+when starting the menu:
 
 ```
 Tests.FakeDataGen.exe "<SQL Connection String>"
@@ -37,9 +41,11 @@ Tests.FakeDataGen.exe "<SQL Connection String>"
 
 The connection string is optional. Options that need SQL will refuse to run
 without one; stress tests that work in-memory still run. The synthetic demo
-option never uses it - it always creates its own new LocalDB database.
+option never uses it - it always creates its own new LocalDB database. The
+individual-area entries default to a new target and require explicit confirmation
+before appending to an existing one.
 
-The first time a menu option that needs the database runs in a session, the
+The first time a **legacy generator or database-backed stress test** runs, the
 host invokes `App.ControlPanel.Engine.DatabaseUpgrader.CheckDbUpgraded` against
 the supplied connection string. This applies the Entity Framework migrations
 and the custom SQL scripts under
@@ -48,27 +54,29 @@ stored procedures) so generators and stress tests never run against a stale
 schema. The upgrade is performed once per process; the in-memory
 `ActivityAPIStressTest` skips it because it does not touch SQL.
 
-When launched, an interactive menu is shown:
+The new existing-database path does **not** run that upgrader: it checks the
+schema before inserting, preserves existing users, remaps generated IDs and adds
+a separate synthetic population on each run. No deletes, resets or automatic
+cleanup are performed; committed batches remain after an interrupted append.
 
+The menu has three sections: **Data Generation** (full demo followed by each
+activity area, existing or new DB), **Legacy Generators**, and **Stress Tests**.
+Area keys and display labels come from `DemoAreas.Catalogue`, which also drives
+the command-line selector:
+
+```text
+Tests.FakeDataGen.exe demo --database ContosoDemo_Teams --areas teams
+Tests.FakeDataGen.exe demo --database ContosoDemo_PowerPlatform --areas powerapps,powerautomate,powerbi,copilot-studio
+Tests.FakeDataGen.exe append "<test-database-connection-string>" --areas powerbi --confirm-existing
 ```
-DATA GENERATION
-  1. Generate a complete synthetic demo database (Contoso, new LocalDB database)
-  2. Generate fake Copilot activity
-  3. Generate fake O365 audit activity
-  4. Generate combined profiling data (O365 + Copilot)
-  5. Generate fake Copilot prompt history (AI interaction history)
 
-STRESS TESTS
-  6. ActivityAPI import stress test
-  7. ActivityAPI import stress test (DB-backed, COLD+WARM)
-  8. Copilot event import stress test
-  9. Copilot Adoption page performance test (read-only, before/after)
-  10. Power Platform event import stress test
-  11. Sent email importer stress test
-  12. User activity data stress test (profiling SQL inputs)
-
-  0. Exit
-```
+`--areas all` is the default. Other keys are `directory`, `copilot`,
+`copilot-history`, `outlook`, `sent-email`, `sharepoint`, `web`, `onedrive`,
+`engage`, `office` and `dlp`. DLP includes prerequisite Copilot audit interactions
+and preserves the blocked-versus-audit-only policy scenarios. Shared users/licences and dependent dimensions accompany
+individual areas. Appends skip tenant-wide Copilot count snapshots and global
+profile compilation rather than publishing partial-population totals as tenant
+data. Use a full new demo for a self-contained profiled database.
 
 ## Folder layout
 
@@ -97,7 +105,7 @@ Tests.FakeDataGen/
 
 `Seeding` is intentionally shared: legacy generators and stress tests call
 `UserMetadataSeeder`; the new `demo` command uses the same `SeedDataCatalogue`
-through its new-target-only bounded sink. Users are made as
+through its new-target bounded sink or additive, identity-remapping existing-target sink. Users are made as
 realistic as a live tenant: `SeedDataCatalogue` assigns each user a coherent geo
 locale (country / state / city / office / usage location / postal code all agree,
 across 21 countries incl. non-Latin values), a job title that fits its department,
@@ -144,7 +152,7 @@ A finished run prints the two settings a web application needs:
 
 ```
   connectionStrings   SPOInsightsEntities = Server=(localdb)\MSSQLLocalDB;Database=ContosoDemo_X;Integrated Security=True
-  appSettings         ImportJobSettings = GraphUsersMetadata=True;GraphUsageReports=True;GraphCopilotUsageReports=True;Copilot=True;CopilotInteractionHistory=True;ActivityLog=True;WebTraffic=True
+  appSettings         ImportJobSettings = GraphUsersMetadata=True;GraphUsageReports=True;GraphCopilotUsageReports=True;Copilot=True;CopilotInteractionHistory=True;ActivityLog=True;WebTraffic=True;Calls=True;GraphTeams=True;SentEmails=True;ImportPowerPlatform=True;ImportDlp=True
 ```
 
 **The portal decides which workloads it can measure from `ImportJobSettings`, not
@@ -280,15 +288,15 @@ behaviour, verbosity) and reports:
 
 ### Available stress tests
 
-| # | Test | Purpose |
-| - | ---- | ------- |
-| 6 | `ActivityAPIStressTest` | Drives the ActivityAPI ingestion pipeline with fake loaders to detect leaks and benchmark the batch save path. |
-| 7 | `ActivityApiDbStressTest` | Drives the real SQL persistence path through repeatable cold and warm scenarios. |
-| 8 | `CopilotStressTest` | Exercises `CopilotAuditEventManager` at scale and validates the accessed-resources SQL path under load. |
-| 9 | `CopilotAdoptionPerfTest` | Read-only before/after timing of the Copilot Adoption page's analysis against an existing database. |
-| 10 | `PowerPlatformStressTest` | Exercises `PowerPlatformAuditEventManager` across the four Power Platform workloads (Power Apps, Power Automate, Power BI, Copilot Studio). |
-| 11 | `SentEmailImporterStressTest` | Exercises sent-email persistence and sentiment-scoring boundaries with synthetic messages. |
-| 12 | `UserActivityStressTest` | Bulk-loads the user + license + per-workload activity tables so the profiling SQL in `App.ControlPanel.Engine/SqlExtentions/Profiling-03-CreateSchema.sql` can be exercised against realistic volumes. After the seed, optionally invokes `[profiling].[usp_CompileWeekly]` to roll the daily rows into the weekly profiling tables straight away (the same proc that `WebJob.Office365ActivityImporter/AutomationPS/ProfilingJobs/Weekly.ps1` runs on schedule). |
+| Test | Purpose |
+| ---- | ------- |
+| `ActivityAPIStressTest` | Drives the ActivityAPI ingestion pipeline with fake loaders to detect leaks and benchmark the batch save path. |
+| `ActivityApiDbStressTest` | Drives the real SQL persistence path through repeatable cold and warm scenarios. |
+| `CopilotStressTest` | Exercises `CopilotAuditEventManager` at scale and validates the accessed-resources SQL path under load. |
+| `CopilotAdoptionPerfTest` | Read-only before/after timing of the Copilot Adoption page's analysis against an existing database. |
+| `PowerPlatformStressTest` | Exercises `PowerPlatformAuditEventManager` across Power Apps, Power Automate, Power BI and Copilot Studio. |
+| `SentEmailImporterStressTest` | Exercises sent-email persistence and sentiment-scoring boundaries with synthetic messages. |
+| `UserActivityStressTest` | Loads user/licence/daily workload rows and optionally compiles weekly profiling tables. |
 
 ### Adding a new stress test
 

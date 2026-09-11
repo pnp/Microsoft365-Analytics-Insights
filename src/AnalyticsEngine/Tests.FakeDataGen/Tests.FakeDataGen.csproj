@@ -56,6 +56,7 @@
     <Compile Include="Copilot\CopilotResourceGenerator.cs" />
     <Compile Include="Copilot\CopilotUserManager.cs" />
     <Compile Include="Demo\DemoCalendar.cs" />
+    <Compile Include="Demo\DemoAreas.cs" />
     <Compile Include="Demo\DemoCommand.cs" />
     <Compile Include="Demo\DemoGenerator.cs" />
     <Compile Include="Demo\DemoInteractive.cs" />
@@ -63,8 +64,13 @@
     <Compile Include="Demo\DemoPopulation.cs" />
     <Compile Include="Demo\DemoPortalReadiness.cs" />
     <Compile Include="Demo\DemoTables.cs" />
+    <Compile Include="Demo\DemoCollaborationTables.cs" />
+    <Compile Include="Demo\DemoCollaborationGenerator.cs" />
+    <Compile Include="Demo\DemoPowerPlatformTables.cs" />
+    <Compile Include="Demo\DemoPowerPlatformGenerator.cs" />
     <Compile Include="Demo\DemoTimeline.cs" />
     <Compile Include="Demo\SqlDemoDatabase.cs" />
+    <Compile Include="Demo\SqlExistingDemoDatabase.cs" />
     <Compile Include="Generation\ActivityTimestampGenerator.cs" />
     <Compile Include="Office365\Office365ActivityGenerator.cs" />
     <Compile Include="Office365\Office365ActivityGeneratorConfig.cs" />

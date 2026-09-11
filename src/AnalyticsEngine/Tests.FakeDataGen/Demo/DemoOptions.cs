@@ -12,7 +12,8 @@ namespace Tests.FakeDataGen.Demo
     {
         // Bump when generation rules change: completed targets must not silently reuse an older shape.
         // History: contoso-demo-v2 - Copilot report rows now cover the whole window (28-day warm-up).
-        public const string FormatVersion = "contoso-demo-v2";
+        // History: contoso-demo-v3 - selectable imported workloads and detailed activity.
+        public const string FormatVersion = "contoso-demo-v3";
 
         // Accepted ranges, shared with the interactive menu (DemoInteractive) so the two entry points
         // cannot drift apart and offer a value the other refuses.
@@ -39,11 +40,14 @@ namespace Tests.FakeDataGen.Demo
         public bool Preview { get; private set; }
         public bool Help { get; private set; }
         public bool CompileProfiles { get; private set; } = true;
+        public DemoArea Areas { get; private set; } = DemoArea.All;
+        public bool Includes(DemoArea area) => (Areas & area) != 0;
+        public bool HasAllDailyWorkloads => (Areas & DemoAreas.DailyWorkloads) == DemoAreas.DailyWorkloads;
         public int[] Mix { get; private set; } = new[] { 30, 35, 20, 8, 7 };
         public DateTime Start => AsOf.AddDays(-Days);
         public DateTime ReportEnd => AsOf.AddDays(-3);
 
-        public static DemoOptions Parse(string[] args, DateTime utcToday)
+        public static DemoOptions Parse(string[] args, DateTime utcToday, bool existingTarget = false)
         {
             var result = new DemoOptions { AsOf = DateTime.SpecifyKind(utcToday.Date, DateTimeKind.Utc) };
             var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -60,6 +64,7 @@ namespace Tests.FakeDataGen.Demo
                 switch (key)
                 {
                     case "--database": result.Database = value; break;
+                    case "--areas": result.Areas = DemoAreas.Parse(value); break;
                     case "--output": result.Output = value; break;
                     case "--users": result.Users = Integer(key, value, MinUsers, MaxUsers); break;
                     case "--skus": result.Skus = Integer(key, value, MinSkus, MaxSkus); break;
@@ -81,10 +86,14 @@ namespace Tests.FakeDataGen.Demo
                     default: throw new ArgumentException("Unknown demo option: " + key + ". Use demo --help.");
                 }
             }
-            if (!result.Help && !result.Preview && string.IsNullOrWhiteSpace(result.Database))
+            if (!result.Help && !result.Preview && !existingTarget && string.IsNullOrWhiteSpace(result.Database))
                 throw new ArgumentException("Use --database ContosoDemo_<name> for a NEW local demo database, or --preview for no SQL.");
+            if (existingTarget && result.Database != null)
+                throw new ArgumentException("An existing target cannot also specify --database. Use demo for a new LocalDB target.");
             if (result.Database != null && !IsValidDatabaseName(result.Database))
                 throw new ArgumentException("--database must start with ContosoDemo_ and contain only ASCII letters, digits and underscores.");
+            if (result.Includes(DemoArea.Web) && (long)result.Users * result.Days * 3 > int.MaxValue)
+                throw new ArgumentException("Web activity requires 3 * users * days to fit SQL integer hit IDs. Reduce --users or --days.");
             return result;
         }
 
@@ -109,7 +118,7 @@ namespace Tests.FakeDataGen.Demo
             {
                 // Destination, progress and SQL batch size do not change the generated data.
                 var shape = FormattableString.Invariant(
-                    $"{FormatVersion}|{Users}|{Skus}|{Days}|{Seed}|{AsOf:yyyy-MM-dd}|{CopilotPercent}|{string.Join(",", Mix)}|{CompileProfiles}");
+                    $"{FormatVersion}|{Users}|{Skus}|{Days}|{Seed}|{AsOf:yyyy-MM-dd}|{CopilotPercent}|{string.Join(",", Mix)}|{CompileProfiles}|{DemoAreas.Format(Areas)}");
                 using (var hash = SHA256.Create())
                     return BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(shape))).Replace("-", "").ToLowerInvariant();
             }
@@ -119,12 +128,19 @@ namespace Tests.FakeDataGen.Demo
   Tests.FakeDataGen.exe demo --database ContosoDemo_Example
   Tests.FakeDataGen.exe demo --preview --users 300000 --skus 50 --days 31
   Tests.FakeDataGen.exe demo --database ContosoDemo_Repeatable --as-of 2026-09-01 --seed 42
+  Tests.FakeDataGen.exe demo --database ContosoDemo_Teams --areas teams
+  Tests.FakeDataGen.exe append ""<test-database-connection-string>"" --areas powerapps,powerbi --confirm-existing
 
 Or run Tests.FakeDataGen.exe with no arguments and pick the demo option from the menu: it
 asks for the same values, prints the equivalent command line, and runs this same generator.
 
   --database NAME          NEW database on (localdb)\MSSQLLocalDB only. Required unless preview.
   --preview                Stream the same rows to counters; no SQL, config or external services.
+  --areas LIST             all (default), or comma-separated area keys:
+                           directory,copilot,copilot-history,teams,outlook,sent-email,
+                           sharepoint,web,onedrive,engage,office,powerapps,powerautomate,
+                           powerbi,copilot-studio,dlp. Shared users/licences are prerequisites.
+                           dlp includes the Copilot audit interactions its policy matches need.
   --users N                1..1000000 (default 1000).
   --skus N                 10..1000 (default 50); current assignments, not purchased capacity.
   --days N                 31..730 preceding calendar days (default 180).
@@ -145,13 +161,19 @@ asks for the same values, prints the equivalent command line, and runs this same
 Includes demographics, overlapping/rare SKUs, explicit zero daily workload rows, weekday
 office-hour activity with time zones/leave, Copilot adoption personas/agents/Cowork,
 licensed-only D28 v2 snapshots, paired metadata-only interactions, SharePoint/web facts,
-and complete-week Power BI activity/device profiles. No prompt or response text.
+Teams call/channel detail, sent email, Power Platform audit events and complete-week
+Power BI activity/device profiles. Power BI report views are separate from these profiles.
+No real message, prompt or response text. All text/sentiment is synthetic.
 No schema/config changes; existing schema is applied through DatabaseUpgrader on the NEW DB.
 Exact completed reruns are read-only no-ops. Unmarked, changed or incomplete targets fail;
 choose a new name after a failure. There is deliberately no reset or production-connection option.
+The separate append command requires --confirm-existing and an existing, current-schema
+TEST database. It adds a fresh synthetic population without modifying existing users.
+It never creates/upgrades the target, compiles global profiles or invents tenant-wide
+Copilot totals. Completed batches remain after failure; there is no automatic cleanup.
 Large populations/histories can exceed LocalDB's storage limit: preview the row counts first.
-Not generated: Teams call/channel detail, sent-email sentiment, Power Platform audit events,
-tenant capacity/history, installation/health success logs or cognitive enrichment.
+Not generated: tenant capacity/licence history, installation/health success logs or
+live cognitive enrichment. Demo activity is representative, not an importer load test.
 Full guide: https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Synthetic-demo-data";
     }
 }
