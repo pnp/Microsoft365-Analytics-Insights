@@ -24,15 +24,17 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
         private readonly string _tenantId;
         private readonly bool _importPowerPlatform;
         private readonly bool _importCopilot;
+        private readonly bool _importDlp;
         private int _reportDownloadErrors = 0;
 
-        public ActivityReportWebLoader(AutoThrottleHttpClient httpClient, ILogger logger, string tenantId, bool importPowerPlatform = true, bool importCopilot = true)
+        public ActivityReportWebLoader(AutoThrottleHttpClient httpClient, ILogger logger, string tenantId, bool importPowerPlatform = true, bool importCopilot = true, bool importDlp = true)
         {
             _httpClient = httpClient;
             _logger = logger;
             _tenantId = tenantId;
             _importPowerPlatform = importPowerPlatform;
             _importCopilot = importCopilot;
+            _importDlp = importDlp;
         }
 
         /// <summary>
@@ -73,6 +75,17 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
             using (response)
             {
                 var logs = new WebActivityReportSet();
+
+                try
+                {
+                    response.EnsureSuccessStatusCode();
+                }
+                catch (HttpRequestException ex)
+                {
+                    Interlocked.Increment(ref _reportDownloadErrors);
+                    _logger.LogError(ex, $"Got HTTP error '{ex.Message}' downloading {metadata.ContentUri}. Will try again on next cycle.");
+                    return new WebActivityReportSet { DownloadComplete = false };
+                }
 
                 // Stream one JSON object at a time from the response, so the entire array is never materialised
                 // in memory at once. Each JObject is processed and dropped before the next is read.
@@ -195,7 +208,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Loaders
             // thin IO + batching layer.
             try
             {
-                thisAuditLogReport = AuditLogContentDispatcher.Dispatch(reportItem, logBase, _logger, _importPowerPlatform, _importCopilot);
+                thisAuditLogReport = AuditLogContentDispatcher.Dispatch(reportItem, logBase, _logger, _importPowerPlatform, _importCopilot, _importDlp);
             }
             catch (JsonReaderException ex)
             {

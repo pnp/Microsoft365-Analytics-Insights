@@ -250,8 +250,6 @@ SELECT CASE WHEN EXISTS (
             string[] extensionNames = documents.Select(d => d.Extension).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             string[] fileNames = documents.Select(d => d.FileName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             string[] objectUrls = documents.Select(d => d.ObjectUrl).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            string[] propertyNames = Office365ActivityGeneratorConfig.AuditPropertyNames;
-            string[] propertyValues = Office365ActivityGeneratorConfig.GetAllAuditPropertyValues();
             var siteDefinitions = Office365ActivityGeneratorConfig.GetAllSites();
             string[] siteUrls = siteDefinitions.Select(s => s.Url).ToArray();
 
@@ -322,34 +320,6 @@ SELECT CASE WHEN EXISTS (
                     }
                 }
 
-                var existingPropertyNames = new HashSet<string>(
-                    db.audit_event_prop_names
-                        .Where(p => propertyNames.Contains(p.name))
-                        .Select(p => p.name)
-                        .ToList(),
-                    StringComparer.OrdinalIgnoreCase);
-                foreach (string propertyName in propertyNames)
-                {
-                    if (existingPropertyNames.Add(propertyName))
-                    {
-                        db.audit_event_prop_names.Add(new AuditPropertyName { name = propertyName });
-                    }
-                }
-
-                var existingPropertyValues = new HashSet<string>(
-                    db.audit_event_prop_vals
-                        .Where(p => propertyValues.Contains(p.value))
-                        .Select(p => p.value)
-                        .ToList(),
-                    StringComparer.OrdinalIgnoreCase);
-                foreach (string propertyValue in propertyValues)
-                {
-                    if (existingPropertyValues.Add(propertyValue))
-                    {
-                        db.audit_event_prop_vals.Add(new AuditPropertyValue { value = propertyValue });
-                    }
-                }
-
                 var sitesByUrl = ToDictionaryFirst(
                     db.sites.Where(s => siteUrls.Contains(s.UrlBase)).ToList(),
                     s => s.UrlBase,
@@ -402,8 +372,6 @@ SELECT CASE WHEN EXISTS (
             string[] fileNames = documents.Select(d => d.FileName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             string[] objectUrls = documents.Select(d => d.ObjectUrl).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             string[] siteUrls = Office365ActivityGeneratorConfig.GetAllSites().Select(s => s.Url).ToArray();
-            string[] propertyNames = Office365ActivityGeneratorConfig.AuditPropertyNames;
-            string[] propertyValues = Office365ActivityGeneratorConfig.GetAllAuditPropertyValues();
 
             var lookups = new BatchLookups
             {
@@ -430,15 +398,7 @@ SELECT CASE WHEN EXISTS (
                 EventTypes = ToDictionaryFirst(
                     db.event_types.Where(t => t.type_name == "File").ToList(),
                     t => t.type_name,
-                    t => t),
-                PropertyNameIds = ToDictionaryFirst(
-                    db.audit_event_prop_names.Where(p => propertyNames.Contains(p.name)).ToList(),
-                    p => p.name,
-                    p => p.id),
-                PropertyValueIds = ToDictionaryFirst(
-                    db.audit_event_prop_vals.Where(p => propertyValues.Contains(p.value)).ToList(),
-                    p => p.value,
-                    p => p.id)
+                    t => t)
             };
 
             EnsureAllPresent("event operation", operationNames, lookups.OperationIds.Keys);
@@ -447,8 +407,6 @@ SELECT CASE WHEN EXISTS (
             EnsureAllPresent("URL", objectUrls, lookups.Urls.Keys);
             EnsureAllPresent("site web", siteUrls, lookups.Webs.Keys);
             EnsureAllPresent("event type", new[] { "File" }, lookups.EventTypes.Keys);
-            EnsureAllPresent("audit property name", propertyNames, lookups.PropertyNameIds.Keys);
-            EnsureAllPresent("audit property value", propertyValues, lookups.PropertyValueIds.Keys);
 
             return lookups;
         }
@@ -526,12 +484,6 @@ SELECT CASE WHEN EXISTS (
 
             db.AuditEventsCommon.Add(commonEvent);
             db.exchange_events.Add(metadata);
-            AddExchangeProperty(db, lookups, metadata, "ClientIP",
-                Pick(Office365ActivityGeneratorConfig.ExchangeClientIpValues));
-            AddExchangeProperty(db, lookups, metadata, "ClientInfoString",
-                Pick(Office365ActivityGeneratorConfig.ExchangeClientInfoValues));
-            AddExchangeProperty(db, lookups, metadata, "LogonType",
-                Pick(Office365ActivityGeneratorConfig.LogonTypeValues));
             dailyUsage.RecordExchange(user.Id, timestamp.Date, operation, _random);
         }
 
@@ -556,44 +508,6 @@ SELECT CASE WHEN EXISTS (
 
             db.AuditEventsCommon.Add(commonEvent);
             db.azure_ad_events.Add(metadata);
-            AddAzureAdProperty(db, lookups, metadata, "ResultStatus",
-                Pick(Office365ActivityGeneratorConfig.ResultStatusValues));
-            AddAzureAdProperty(db, lookups, metadata, "AuthenticationMethod",
-                Pick(Office365ActivityGeneratorConfig.AuthenticationMethodValues));
-            AddAzureAdProperty(db, lookups, metadata, "ClientIP",
-                Pick(Office365ActivityGeneratorConfig.AzureAdClientIpValues));
-            AddAzureAdProperty(db, lookups, metadata, "UserAgent",
-                Pick(Office365ActivityGeneratorConfig.UserAgentValues));
-        }
-
-        private static void AddExchangeProperty(
-            AnalyticsEntitiesContext db,
-            BatchLookups lookups,
-            ExchangeEventMetadata parent,
-            string name,
-            string value)
-        {
-            db.audit_event_props.Add(new ExchangeExtendedProperties
-            {
-                ParentEvent = parent,
-                PropNameID = lookups.PropertyNameIds[name],
-                PropValID = lookups.PropertyValueIds[value]
-            });
-        }
-
-        private static void AddAzureAdProperty(
-            AnalyticsEntitiesContext db,
-            BatchLookups lookups,
-            AzureADEventMetadata parent,
-            string name,
-            string value)
-        {
-            db.Set<AzureADExtendedProperties>().Add(new AzureADExtendedProperties
-            {
-                ParentEvent = parent,
-                PropNameID = lookups.PropertyNameIds[name],
-                PropValID = lookups.PropertyValueIds[value]
-            });
         }
 
         private static int AddProfilingSourceRows(
@@ -803,8 +717,6 @@ SELECT CASE WHEN EXISTS (
             public Dictionary<string, Url> Urls { get; set; }
             public Dictionary<string, Web> Webs { get; set; }
             public Dictionary<string, SPEventType> EventTypes { get; set; }
-            public Dictionary<string, int> PropertyNameIds { get; set; }
-            public Dictionary<string, int> PropertyValueIds { get; set; }
         }
 
         private sealed class GenerationCounters

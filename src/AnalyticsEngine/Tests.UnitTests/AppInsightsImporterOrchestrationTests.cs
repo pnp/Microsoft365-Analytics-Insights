@@ -1,4 +1,4 @@
-using Common.Entities.Config;
+﻿using Common.Entities.Config;
 using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -25,7 +25,6 @@ namespace Tests.UnitTests
         private class Harness
         {
             public readonly FakeAppInsightsSourceLoader Source = new FakeAppInsightsSourceLoader();
-            public readonly FakeImportDbMaintenance Maintenance = new FakeImportDbMaintenance();
             public readonly FakeSiteFilterLoader SiteFilters = new FakeSiteFilterLoader();
             public readonly InMemoryHitWatermarkStore Watermark = new InMemoryHitWatermarkStore();
             public readonly InMemoryAppInsightsDayPersistenceManager Persistence = new InMemoryAppInsightsDayPersistenceManager();
@@ -36,7 +35,6 @@ namespace Tests.UnitTests
                 AnalyticsLogger.ConsoleOnlyTracer(),
                 Clock,
                 Source,
-                Maintenance,
                 SiteFilters,
                 Watermark,
                 Persistence).ImportAndSave(saveRestResponses: false, daysBeforeOverride: daysBeforeOverride);
@@ -53,8 +51,6 @@ namespace Tests.UnitTests
 
             await h.RunAsync();
 
-            // Startup maintenance runs exactly once for the whole run, not per day.
-            Assert.AreEqual(1, h.Maintenance.RunCount);
             Assert.AreEqual(1, h.Watermark.ReadCount);
 
             // 8th (the watermark day, rewound a minute), 9th, 10th (today).

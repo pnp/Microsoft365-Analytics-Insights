@@ -266,13 +266,17 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         private readonly BlockingCollection<SinkItem> _queue =
             new BlockingCollection<SinkItem>(new ConcurrentQueue<SinkItem>(), Capacity);
         private readonly Func<ICopilotAdoptionTelemetryWriter> _writerFactory;
+        private readonly Action<Exception, string> _reportDroppedFailure;
         private readonly Thread _worker;
         private int _droppedEvents;
         private int _stopping;
 
-        public QueuedCopilotAdoptionEventSink(Func<ICopilotAdoptionTelemetryWriter> writerFactory)
+        public QueuedCopilotAdoptionEventSink(
+            Func<ICopilotAdoptionTelemetryWriter> writerFactory,
+            Action<Exception, string> reportDroppedFailure = null)
         {
             _writerFactory = writerFactory ?? throw new ArgumentNullException(nameof(writerFactory));
+            _reportDroppedFailure = reportDroppedFailure ?? WebExceptionTelemetry.Report;
             _worker = new Thread(Drain)
             {
                 IsBackground = true,
@@ -351,6 +355,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                             Interlocked.Increment(ref _droppedEvents);
                             Console.WriteLine(
                                 $"Copilot adoption telemetry writer could not start ({ex.GetBaseException().GetType().Name}).");
+                            item.ReportDroppedFailure(_reportDroppedFailure);
                             continue;
                         }
                     }
@@ -364,6 +369,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                         Interlocked.Increment(ref _droppedEvents);
                         Console.WriteLine(
                             $"Copilot adoption telemetry write failed ({ex.GetBaseException().GetType().Name}).");
+                        item.ReportDroppedFailure(_reportDroppedFailure);
                     }
                 }
             }
@@ -392,6 +398,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             private readonly CopilotAdoptionCompletionEvent _completion;
             private readonly CopilotAdoptionFailureEvent _failure;
             private readonly CopilotAdoptionLifecycleEvent _submitted;
+            private int _failureClaimed;
 
             private SinkItem(
                 CopilotAdoptionLifecycleEvent lifecycle,
@@ -433,8 +440,52 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 }
                 if (_failure != null)
                 {
-                    writer.WriteFailure(_failure);
-                    writer.Flush();
+                    if (WebExceptionTelemetry.TryClaim(_failure.Exception))
+                    {
+                        Interlocked.Exchange(ref _failureClaimed, 1);
+                        try
+                        {
+                            writer.WriteFailure(_failure);
+                            writer.Flush();
+                            WebExceptionTelemetry.MarkReported(_failure.Exception);
+                            Interlocked.Exchange(ref _failureClaimed, 0);
+                        }
+                        catch (Exception)
+                        {
+                            ReleaseFailureClaim();
+                            throw;
+                        }
+                    }
+                    else
+                    {
+                        writer.Flush();
+                    }
+                }
+            }
+
+            public void ReportDroppedFailure(Action<Exception, string> reporter)
+            {
+                if (_failure?.Exception == null || reporter == null) return;
+
+                ReleaseFailureClaim();
+
+                try
+                {
+                    reporter(
+                        _failure.Exception,
+                        "CopilotAdoption background analysis telemetry sink");
+                }
+                catch (Exception)
+                {
+                    // The telemetry worker must keep draining even when fallback telemetry fails.
+                }
+            }
+
+            private void ReleaseFailureClaim()
+            {
+                if (Interlocked.Exchange(ref _failureClaimed, 0) == 1)
+                {
+                    WebExceptionTelemetry.ReleaseClaim(_failure.Exception);
                 }
             }
         }

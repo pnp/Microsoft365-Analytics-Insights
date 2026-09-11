@@ -378,7 +378,8 @@ namespace DataUtils
             ImporterHeartbeat,
             CopilotAdoptionAnalysis,
             CopilotAdoptionLifecycle,
-            LicenceActivityLifecycle
+            LicenceActivityLifecycle,
+            UsageReportSaveStage
         }
     }
 }

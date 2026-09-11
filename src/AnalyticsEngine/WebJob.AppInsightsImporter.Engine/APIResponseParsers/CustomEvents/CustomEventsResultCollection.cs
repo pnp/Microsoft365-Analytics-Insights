@@ -75,8 +75,8 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
 
             using (var database = contextFactory.Create())
             {
-                // Hack to change/ensure correct DB schema. Needs moving to a migration
-                await ImportDbHacks.EnsureSessionTableHasRightCollation(database.Database);
+                // The session-table collation and IX_ai_session_id used to be ensured here on every
+                // import batch. They are schema, so they now live in migration RetireImportDbHacks.
 
                 // The section orchestration itself is database-free - see CustomEventSectionSaver (#369).
                 var saver = new CustomEventSectionSaver(logger,

@@ -1,6 +1,7 @@
 ﻿using App.ControlPanel.Engine.Models;
 using Common.Entities;
 using DataUtils;
+using DataUtils.Sql;
 using System;
 using System.Linq;
 
@@ -13,12 +14,46 @@ namespace App.ControlPanel.Engine
     {
         const string SqlResourceNameStart = "App.ControlPanel.Engine.SqlExtentions";
 
+        /// <summary>
+        /// Logged before any connection is opened when the upgrade authenticates with Microsoft Entra ID.
+        /// </summary>
+        /// <remarks>
+        /// Also read back by the parent installer from the child process's captured output
+        /// (<c>SqlInstallerTasks.DownloadedBuildEntraHint</c>) to tell whether the release it downloaded
+        /// supports Entra ID at all, so the two must stay in step. A const rather than a literal for that
+        /// reason.
+        /// </remarks>
+        public const string EntraAuthAnnouncement = "Authenticating to Azure SQL with Microsoft Entra ID";
+
         public static void CheckDbUpgraded(DatabaseUpgradeInfo initInfo, Action<string> log)
         {
             var thisAsembly = System.Reflection.Assembly.GetEntryAssembly();
             var buildLabel = Common.Entities.BuildConstants.BuildLabel;
 
             log?.Invoke($"Build '{buildLabel}' - begin database upgrade.");
+
+            // A connection string with no user id means the server has SQL authentication disabled, so the
+            // upgrade has to authenticate with Microsoft Entra ID. The caller supplies the service principal
+            // to use (see DatabaseUpgradeInfo); registering it here covers both the EF migration pipeline
+            // (via the connection interceptor) and the raw ADO.NET script steps below. See issue #117.
+            if (AzureSqlTokenAuth.NeedsAccessToken(initInfo.ConnectionString))
+            {
+                if (initInfo.HasEntraCredential)
+                {
+                    log?.Invoke($"{EntraAuthAnnouncement} (no SQL login in the connection string).");
+                    AzureSqlTokenAuth.SetCredential(new Azure.Identity.ClientSecretCredential(
+                        initInfo.EntraTenantId, initInfo.EntraClientId, initInfo.EntraClientSecret));
+                }
+                else
+                {
+                    log?.Invoke(
+                        "WARNING: the connection string has no SQL login, so Microsoft Entra ID authentication is required, " +
+                        "but no credential was supplied. When the upgrade was launched by the installer, this means the " +
+                        "downloaded 'latest stable' build predates Microsoft Entra ID support. When the connection string was " +
+                        "entered by hand, use one that includes a SQL login, or run the upgrade from the installer.");
+                }
+            }
+
             log?.Invoke($"[{DateTime.Now}]: Connecting to database @ '{StringUtils.RedactSqlConnectionString(initInfo.ConnectionString)}' with Entity Framework context initializer set to 'MigrateDatabaseToLatestVersion'...");
 
             // Update schema with EF migration

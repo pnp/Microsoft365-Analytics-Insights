@@ -50,9 +50,13 @@ namespace Tests.UnitTests
         // WidenCopilotAccessedResourceDedupIndex / IndexCopilotInteractionKeywordsByKeyword /
         // IndexCopilotInteractionsDedupWindow are three further schema-only index migrations,
         // DenormaliseCopilotChatUserAndTime adds the denormalised user_id / time_stamp columns to
-        // copilot_chats, and ColumnstoreUsageReportMetrics is a schema-only index migration over the
-        // per-user usage-report tables.
-        private const string LatestId = "202608310800001_ColumnstoreUsageReportMetrics";
+        // copilot_chats, ColumnstoreUsageReportMetrics is a schema-only index migration over the
+        // per-user usage-report tables, AgentCostTables / AgentCostUserCredits add the agent-cost
+        // tables, DlpCopilotImpact adds the DLP-impact tables, RetireUnusedAuditYammerStreamTables
+        // drops the unused audit extended-property, Yammer and Stream tables,
+        // UniqueUrlsFullUrlIndex de-duplicates dbo.urls and makes IX_urls_full_url UNIQUE, and
+        // RetireImportDbHacks brings IX_PageRequestID and IX_ai_session_id under the migration chain.
+        private const string LatestId = "202609101200001_RetireImportDbHacks";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

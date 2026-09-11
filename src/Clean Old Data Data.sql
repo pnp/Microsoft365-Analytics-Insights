@@ -25,24 +25,43 @@ set @count = (select count(*) from sessions)
 print 'session count after session clean: ' + cast(@count as nvarchar)
 
 -- Azure AD event props
-delete audit_event_azure_ad_props from audit_event_azure_ad_props
-	inner join event_meta_azure_ad on event_meta_azure_ad.event_id = audit_event_azure_ad_props.event_id
-		inner join audit_events on audit_events.id = event_meta_azure_ad.event_id
-			where audit_events.[time_stamp] < @archiveDateMax
+-- The extended-properties tables (audit_event_azure_ad_props / audit_event_exchange_props and their
+-- audit_event_prop_names / audit_event_prop_vals lookups) are retired: nothing reads them, and the
+-- RetireUnusedAuditYammerStreamTables migration drops them once empty. They are only pruned here while
+-- they are still present. Dynamic SQL keeps this batch parseable on a database where they have gone.
+IF OBJECT_ID('dbo.audit_event_azure_ad_props', 'U') IS NOT NULL
+	EXEC sp_executesql N'
+		delete audit_event_azure_ad_props from audit_event_azure_ad_props
+			inner join event_meta_azure_ad on event_meta_azure_ad.event_id = audit_event_azure_ad_props.event_id
+				inner join audit_events on audit_events.id = event_meta_azure_ad.event_id
+					where audit_events.[time_stamp] < @archiveDateMax',
+		N'@archiveDateMax datetime', @archiveDateMax = @archiveDateMax
 -- Azure AD
 delete event_meta_azure_ad from event_meta_azure_ad
 	inner join audit_events on audit_events.id = event_meta_azure_ad.event_id
 	where audit_events.[time_stamp] < @archiveDateMax
 
 -- Exchange event props
-delete audit_event_exchange_props from audit_event_exchange_props
-	inner join event_meta_exchange on event_meta_exchange.event_id = audit_event_exchange_props.event_id
-		inner join audit_events on audit_events.id = event_meta_exchange.event_id
-			where audit_events.[time_stamp] < @archiveDateMax
+IF OBJECT_ID('dbo.audit_event_exchange_props', 'U') IS NOT NULL
+	EXEC sp_executesql N'
+		delete audit_event_exchange_props from audit_event_exchange_props
+			inner join event_meta_exchange on event_meta_exchange.event_id = audit_event_exchange_props.event_id
+				inner join audit_events on audit_events.id = event_meta_exchange.event_id
+					where audit_events.[time_stamp] < @archiveDateMax',
+		N'@archiveDateMax datetime', @archiveDateMax = @archiveDateMax
 -- Exchange
 delete event_meta_exchange from event_meta_exchange
 	inner join audit_events on audit_events.id = event_meta_exchange.event_id
 	where audit_events.[time_stamp] < @archiveDateMax
+
+-- Microsoft Stream (Classic) audit metadata, retired with stream_videos. Same guard: only present when
+-- the migration found rows and left the table in place.
+IF OBJECT_ID('dbo.event_meta_stream', 'U') IS NOT NULL
+	EXEC sp_executesql N'
+		delete event_meta_stream from event_meta_stream
+			inner join audit_events on audit_events.id = event_meta_stream.event_id
+			where audit_events.[time_stamp] < @archiveDateMax',
+		N'@archiveDateMax datetime', @archiveDateMax = @archiveDateMax
 
 -- SharePoint
 delete [event_meta_sharepoint] from [event_meta_sharepoint]

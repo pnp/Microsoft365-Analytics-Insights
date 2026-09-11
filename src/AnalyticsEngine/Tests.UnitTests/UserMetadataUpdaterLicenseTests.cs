@@ -707,6 +707,61 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task UserMetadataUpdater_DeltaPersistenceFailsAfterDatabaseSave_ReplayIsIdempotent()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var config = new AppConfig();
+
+            var userId = Guid.NewGuid().ToString();
+            var userUpn = $"deltawritefail{DateTime.Now.Ticks}@test.com";
+
+            using (var cleanupDb = new AnalyticsEntitiesContext())
+            {
+                var existingTestUser = await cleanupDb.users
+                    .Include(u => u.LicenseLookups)
+                    .Where(u => u.UserPrincipalName == userUpn)
+                    .FirstOrDefaultAsync();
+                if (existingTestUser != null)
+                {
+                    cleanupDb.UserLicenseTypeLookups.RemoveRange(existingTestUser.LicenseLookups);
+                    cleanupDb.users.Remove(existingTestUser);
+                    await cleanupDb.SaveChangesAsync();
+                }
+            }
+
+            var graphUser = new GraphUser { UserPrincipalName = userUpn, Id = userId, AccountEnabled = true, Mail = userUpn };
+            var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser });
+            fakeLoader.SimulatedNewDeltaToken = "delta-write-that-fails";
+            fakeLoader.ThrowOnCommitDeltaToken = true;
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                async () => await new UserMetadataUpdater(logger, config, fakeLoader).InsertAndUpdateDatabaseFromExternalUsers(),
+                "A delta persistence failure after DB work must remain visible to the caller.");
+
+            Assert.IsNull(await fakeLoader.DeltaValueProvider.GetDeltaToken(),
+                "The pending delta token must not become a recovery checkpoint when persistence fails.");
+
+            using (var verifyDb = new AnalyticsEntitiesContext())
+            {
+                Assert.AreEqual(1, await verifyDb.users.CountAsync(u => u.UserPrincipalName == userUpn),
+                    "The database save already succeeded before the delta write failed; replay must therefore be idempotent rather than assuming rollback.");
+            }
+
+            fakeLoader.ThrowOnCommitDeltaToken = false;
+            fakeLoader.SimulatedNewDeltaToken = "delta-after-idempotent-replay";
+
+            await new UserMetadataUpdater(logger, config, fakeLoader).InsertAndUpdateDatabaseFromExternalUsers();
+
+            using (var verifyDb = new AnalyticsEntitiesContext())
+            {
+                Assert.AreEqual(1, await verifyDb.users.CountAsync(u => u.UserPrincipalName == userUpn),
+                    "Replaying after an uncommitted delta write must update the same user, not insert a duplicate.");
+            }
+
+            Assert.AreEqual("delta-after-idempotent-replay", await fakeLoader.DeltaValueProvider.GetDeltaToken());
+        }
+
+        [TestMethod]
         public async Task UserMetadataUpdater_LicenceRefreshSpansEntireDb_NotJustDeltaUsers()
         {
             // Regression test for the licence-count drift bug seen against tenants
