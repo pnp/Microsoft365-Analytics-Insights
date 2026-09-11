@@ -207,7 +207,7 @@ namespace App.ControlPanel.Engine
                 return;
             }
 
-            var task = new SqlIdentityAccessTask(_logger);
+            var task = new SqlIdentityAccessTask(_logger, BuildPrincipalResolver());
             await task.GrantDatabaseAccessAsync(
                 dbInfo.ConnectionString,
                 current.Data.Name,
@@ -249,12 +249,26 @@ namespace App.ControlPanel.Engine
                 return;
             }
 
-            var task = new SqlIdentityAccessTask(_logger);
+            var task = new SqlIdentityAccessTask(_logger, BuildPrincipalResolver());
             await task.GrantDatabaseAccessAsync(
                 dbInfo.ConnectionString,
                 current.Data.Name,
                 principalId.Value,
                 new[] { "db_owner" });
+        }
+
+        /// <summary>
+        /// Builds the Microsoft Graph resolver used to turn Entra principals into the identifiers Azure SQL
+        /// needs.
+        /// </summary>
+        /// <remarks>
+        /// Both app registrations are offered because neither is guaranteed to hold a directory-read
+        /// permission: the installer account is an Azure Resource Manager identity and often has none,
+        /// while the runtime account already reads user metadata. Whichever works is used.
+        /// </remarks>
+        private GraphEntraPrincipalResolver BuildPrincipalResolver()
+        {
+            return new GraphEntraPrincipalResolver(_logger, Config.InstallerAccount, Config.RuntimeAccountOffice365);
         }
 
         /// <summary>
@@ -280,7 +294,7 @@ namespace App.ControlPanel.Engine
             var configured = Config.SQLEntraDatabaseUsers;
             if (configured == null || configured.Count == 0) return;
 
-            var resolver = new GraphEntraPrincipalResolver(_logger, Config.InstallerAccount, Config.RuntimeAccountOffice365);
+            var resolver = BuildPrincipalResolver();
             var task = new SqlDatabaseUserGrantTask(_logger, resolver);
 
             await task.GrantConfiguredUsersAsync(dbInfo.ConnectionString, configured);

@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace App.ControlPanel.Engine.InstallerTasks
@@ -128,10 +129,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
     public class SqlIdentityAccessTask
     {
         private readonly ILogger _logger;
+        private readonly IEntraPrincipalResolver _resolver;
 
-        public SqlIdentityAccessTask(ILogger logger)
+        public SqlIdentityAccessTask(ILogger logger, IEntraPrincipalResolver resolver = null)
         {
             _logger = logger;
+            _resolver = resolver;
         }
 
         /// <summary>
@@ -139,9 +142,20 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// database roles the runtime needs.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// Best-effort by design: it returns false rather than throwing, because a failure here does not
         /// invalidate the rest of the install and the operator can grant access by hand. It is also
         /// idempotent, so re-running the installer is safe.
+        /// </para>
+        /// <para>
+        /// <paramref name="principalObjectId"/> is what ARM reports for a system-assigned managed identity,
+        /// but it is NOT what Azure SQL matches the sign-in against: a service principal - which a managed
+        /// identity is - is identified by its <b>application (client) ID</b>. The two are different GUIDs,
+        /// and SQL Server does not validate either, so using the object ID produces a user that exists, sits
+        /// in the right roles, and is refused at every sign-in. So the application ID is resolved from
+        /// Microsoft Graph, and when that is not permitted we let SQL Server resolve the name itself with
+        /// <c>FROM EXTERNAL PROVIDER</c> instead of writing an identifier we know to be wrong.
+        /// </para>
         /// </remarks>
         public async Task<bool> GrantDatabaseAccessAsync(string connectionString, string principalName, Guid principalObjectId, IEnumerable<string> roles)
         {
@@ -159,7 +173,30 @@ namespace App.ControlPanel.Engine.InstallerTasks
             }
 
             var roleList = roles == null ? new List<string>() : roles.ToList();
-            var sql = SqlContainedUserScript.CreateUserAndGrantRoles(principalName, principalObjectId, roleList);
+
+            Guid? applicationId = null;
+            if (_resolver != null)
+            {
+                try
+                {
+                    applicationId = await _resolver.ResolveApplicationIdAsync(principalObjectId, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogInformation($"Could not resolve the application ID for '{principalName}': {ex.Message}");
+                }
+            }
+
+            string sql = BuildGrantScript(principalName, applicationId, roleList);
+            if (applicationId == null)
+            {
+                _logger.LogInformation(
+                    $"Could not read the application ID of managed identity '{principalName}' from Microsoft Graph, so SQL Server " +
+                    "will be asked to resolve the name itself. That needs the SQL Server's own identity to hold the Microsoft " +
+                    "Entra 'Directory Readers' role; if it does not, the grant fails with \"Principal could not be found\" and " +
+                    "you should instead grant the installer's app registration 'Application.Read.All' (or 'Directory.Read.All') " +
+                    "and re-run.");
+            }
 
             _logger.LogInformation(
                 $"Granting the App Service managed identity '{principalName}' access to the database " +
@@ -195,6 +232,22 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             _logger.LogInformation($"App Service managed identity '{principalName}' now has database access.");
             return true;
+        }
+
+        /// <summary>
+        /// Chooses how to declare the managed identity's contained user: by its application ID when we
+        /// could read one, otherwise by asking SQL Server to resolve the name itself.
+        /// </summary>
+        /// <remarks>
+        /// Split out so the choice is testable without a database. The object ID is deliberately never a
+        /// candidate - writing it would create a user that exists, holds the right roles, and is refused at
+        /// every sign-in.
+        /// </remarks>
+        public static string BuildGrantScript(string principalName, Guid? applicationId, IEnumerable<string> roles)
+        {
+            return applicationId != null
+                ? SqlContainedUserScript.CreateUserAndGrantRoles(principalName, applicationId.Value, roles)
+                : SqlContainedUserScript.CreateUserFromExternalProviderAndGrantRoles(principalName, roles);
         }
     }
 }

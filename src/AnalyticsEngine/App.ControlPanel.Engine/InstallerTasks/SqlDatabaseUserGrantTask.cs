@@ -25,6 +25,17 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// why rather than throwing, so one unresolvable entry does not abandon the rest.
         /// </summary>
         Task<Guid?> ResolveObjectIdAsync(SqlDatabaseUser user, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Resolves a service principal's application (client) ID from its object ID, or null when it
+        /// cannot be read.
+        /// </summary>
+        /// <remarks>
+        /// Needed because Azure SQL identifies a service principal - including a managed identity - by its
+        /// application ID, while ARM only reports the object ID of a system-assigned identity. The two are
+        /// different GUIDs, and using the wrong one creates a database user that can never sign in.
+        /// </remarks>
+        Task<Guid?> ResolveApplicationIdAsync(Guid servicePrincipalObjectId, CancellationToken cancellationToken);
     }
 
     /// <summary>
@@ -154,7 +165,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
                     foreach (var entry in resolved)
                     {
-                        var sql = SqlContainedUserScript.CreateUserAndGrantRoles(entry.Key.Login, entry.Value, DatabaseUserRoles);
+                        var sql = SqlContainedUserScript.CreateUserAndGrantRoles(
+                            entry.Key.Login, entry.Value, DatabaseUserRoles, entry.Key.IsGroup);
 
                         try
                         {
@@ -306,6 +318,50 @@ namespace App.ControlPanel.Engine.InstallerTasks
         {
             Guid parsed;
             if (!string.IsNullOrWhiteSpace(id) && Guid.TryParse(id, out parsed) && parsed != Guid.Empty) return parsed;
+            return null;
+        }
+
+        /// <summary>
+        /// Reads a service principal's application (client) ID from its object ID.
+        /// </summary>
+        /// <remarks>
+        /// Needs <c>Application.Read.All</c> or <c>Directory.Read.All</c> on one of the candidate app
+        /// registrations. Returns null rather than throwing when neither has it, so the caller can fall
+        /// back to letting SQL Server resolve the name itself.
+        /// </remarks>
+        public async Task<Guid?> ResolveApplicationIdAsync(Guid servicePrincipalObjectId, CancellationToken cancellationToken)
+        {
+            if (servicePrincipalObjectId == Guid.Empty) return null;
+            if (_candidates.Count == 0) return null;
+
+            Exception lastFailure = null;
+
+            foreach (var account in _candidates)
+            {
+                try
+                {
+                    var credential = new Azure.Identity.ClientSecretCredential(account.DirectoryId, account.ClientId, account.Secret);
+                    var graph = new Microsoft.Graph.GraphServiceClient(credential);
+
+                    var sp = await graph.ServicePrincipals[servicePrincipalObjectId.ToString()]
+                        .GetAsync(rc => rc.QueryParameters.Select = new[] { "id", "appId", "displayName" }, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    var appId = ParseId(sp?.AppId);
+                    if (appId != null) return appId;
+                }
+                catch (Exception ex)
+                {
+                    lastFailure = ex;
+                }
+            }
+
+            if (lastFailure != null)
+            {
+                _logger?.LogInformation(
+                    $"Could not read the managed identity's application ID from Microsoft Graph: {lastFailure.Message}");
+            }
+
             return null;
         }
     }

@@ -400,7 +400,13 @@ namespace App.ControlPanel.Engine.Entities
         /// <see cref="CreateUserAndGrantRoles"/>'s caller and the CREATE USER documentation.
         /// </param>
         /// <param name="roles">Database roles to add the user to.</param>
-        public static string CreateUserAndGrantRoles(string principalName, Guid principalSid, IEnumerable<string> roles)
+        /// <param name="isGroup">
+        /// Whether the principal is a Microsoft Entra <b>group</b>, which SQL Server declares as
+        /// <c>TYPE = X</c>. <c>TYPE = E</c> covers a user and a service principal (an application or a
+        /// managed identity).
+        /// </param>
+        public static string CreateUserAndGrantRoles(string principalName, Guid principalSid, IEnumerable<string> roles,
+            bool isGroup = false)
         {
             if (string.IsNullOrWhiteSpace(principalName))
             {
@@ -415,13 +421,74 @@ namespace App.ControlPanel.Engine.Entities
             var quotedName = QuoteIdentifier(principalName);
             var literalName = QuoteLiteral(principalName);
             var sid = ToSqlSid(principalSid);
+            var externalType = isGroup ? "X" : "E";
+
+            var sql = new System.Text.StringBuilder();
+
+            // Repair a user an earlier release created with the wrong identifier. Such a user looks
+            // completely healthy - it exists, it is in the right roles - but its SID corresponds to no
+            // identity that will ever present a token, so every sign-in is refused. Without this the
+            // IF NOT EXISTS below would see it and skip, leaving it broken forever. Only external
+            // principals are touched, so a SQL user that happens to share the name is left alone.
+            sql.AppendLine($"IF EXISTS (SELECT 1 FROM sys.database_principals WHERE [name] = N'{literalName}'");
+            sql.AppendLine($"    AND [type] IN ('E', 'X') AND ([sid] IS NULL OR [sid] <> {sid}))");
+            sql.AppendLine("BEGIN");
+            sql.AppendLine($"    DROP USER {quotedName};");
+            sql.AppendLine("END");
+
+            sql.AppendLine($"IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE [name] = N'{literalName}')");
+            sql.AppendLine("BEGIN");
+            sql.AppendLine($"    CREATE USER {quotedName} WITH SID = {sid}, TYPE = {externalType};");
+            sql.AppendLine("END");
+
+            AppendRoleGrants(sql, quotedName, literalName, roles);
+
+            return sql.ToString();
+        }
+
+        /// <summary>
+        /// Emits an idempotent script that creates the contained user by asking SQL Server to resolve the
+        /// name in Microsoft Entra ID, for when the caller could not determine the principal's identifier
+        /// itself.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The fallback for a managed identity whose application (client) ID could not be read from
+        /// Microsoft Graph. SQL Server resolves the name itself, so the right identifier is guaranteed -
+        /// but only if the server's own identity holds the tenant-wide <b>Directory Readers</b> role,
+        /// which needs a Global Administrator to grant. Without it this fails with
+        /// <c>Principal '...' could not be found</c>.
+        /// </para>
+        /// <para>
+        /// Deliberately does NOT repair an existing user the way the SID form does: with no known-correct
+        /// identifier there is nothing to compare against, and dropping a working user to re-create it
+        /// would interrupt a running App Service for no proven reason.
+        /// </para>
+        /// </remarks>
+        public static string CreateUserFromExternalProviderAndGrantRoles(string principalName, IEnumerable<string> roles)
+        {
+            if (string.IsNullOrWhiteSpace(principalName))
+            {
+                throw new ArgumentException($"'{nameof(principalName)}' cannot be null or empty.", nameof(principalName));
+            }
+            if (roles == null) throw new ArgumentNullException(nameof(roles));
+
+            var quotedName = QuoteIdentifier(principalName);
+            var literalName = QuoteLiteral(principalName);
 
             var sql = new System.Text.StringBuilder();
             sql.AppendLine($"IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE [name] = N'{literalName}')");
             sql.AppendLine("BEGIN");
-            sql.AppendLine($"    CREATE USER {quotedName} WITH SID = {sid}, TYPE = E;");
+            sql.AppendLine($"    CREATE USER {quotedName} FROM EXTERNAL PROVIDER;");
             sql.AppendLine("END");
 
+            AppendRoleGrants(sql, quotedName, literalName, roles);
+
+            return sql.ToString();
+        }
+
+        static void AppendRoleGrants(System.Text.StringBuilder sql, string quotedName, string literalName, IEnumerable<string> roles)
+        {
             foreach (var role in roles)
             {
                 if (string.IsNullOrWhiteSpace(role)) continue;
@@ -440,8 +507,6 @@ namespace App.ControlPanel.Engine.Entities
             // db_datareader/db_datawriter cover tables but not EXECUTE, and the solution ships stored
             // procedures (sp_CreateDimTables and the Power BI refresh procs).
             sql.AppendLine($"GRANT EXECUTE TO {quotedName};");
-
-            return sql.ToString();
         }
 
         /// <summary>

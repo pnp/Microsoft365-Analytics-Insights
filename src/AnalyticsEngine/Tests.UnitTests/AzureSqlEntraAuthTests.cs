@@ -811,6 +811,12 @@ namespace Tests.UnitTests
 
                 return System.Threading.Tasks.Task.FromResult(answer);
             }
+
+            /// <summary>Application ID lookups are not what these tests exercise.</summary>
+            public System.Threading.Tasks.Task<Guid?> ResolveApplicationIdAsync(Guid servicePrincipalObjectId, CancellationToken cancellationToken)
+            {
+                return System.Threading.Tasks.Task.FromResult<Guid?>(null);
+            }
         }
 
         /// <summary>
@@ -933,6 +939,78 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, resolved.Count);
             Assert.AreEqual(SomebodyElse, resolved[0].Value,
                 "A user or group is identified by its Entra object ID, unlike a service principal.");
+        }
+
+        /// <summary>
+        /// A managed identity is a service principal, so its contained user must carry its application
+        /// (client) ID. ARM only reports the object ID of a system-assigned identity, which is a different
+        /// GUID - writing that one produces a user that can never sign in.
+        /// </summary>
+        [TestMethod]
+        public void ManagedIdentityGrant_UsesTheApplicationId_NotTheObjectId()
+        {
+            var objectId = new Guid("55555555-5555-5555-5555-555555555555");
+            var appId = new Guid("66666666-6666-6666-6666-666666666666");
+
+            var script = App.ControlPanel.Engine.InstallerTasks.SqlIdentityAccessTask.BuildGrantScript(
+                "contosoanalytics", appId, SqlContainedUserScript.AppServiceRoles);
+
+            StringAssert.Contains(script, SqlContainedUserScript.ToSqlSid(appId));
+            Assert.IsFalse(script.Contains(SqlContainedUserScript.ToSqlSid(objectId)),
+                "The managed identity's object ID must never be written as the SID.");
+            StringAssert.Contains(script, "TYPE = E");
+            StringAssert.Contains(script, "db_ddladmin");
+        }
+
+        /// <summary>
+        /// When the application ID cannot be read from Graph, fall back to letting SQL Server resolve the
+        /// name - rather than writing an identifier known to be wrong.
+        /// </summary>
+        [TestMethod]
+        public void ManagedIdentityGrant_WithoutAnApplicationId_FallsBackToExternalProvider()
+        {
+            var script = App.ControlPanel.Engine.InstallerTasks.SqlIdentityAccessTask.BuildGrantScript(
+                "contosoanalytics", null, SqlContainedUserScript.AppServiceRoles);
+
+            StringAssert.Contains(script, "FROM EXTERNAL PROVIDER");
+            Assert.IsFalse(script.Contains("WITH SID"),
+                "With no known-correct identifier, none must be guessed.");
+            StringAssert.Contains(script, "db_ddladmin");
+        }
+
+        /// <summary>
+        /// An earlier release wrote object IDs as SIDs, so upgrades inherit users that exist, hold the right
+        /// roles, and are refused at every sign-in. A plain IF NOT EXISTS would see them and skip forever,
+        /// so the script must replace a mismatched one.
+        /// </summary>
+        [TestMethod]
+        public void ContainedUserScript_ReplacesAUserWhoseSidIsWrong()
+        {
+            var appId = new Guid("66666666-6666-6666-6666-666666666666");
+
+            var script = SqlContainedUserScript.CreateUserAndGrantRoles("contosoanalytics", appId, new[] { "db_owner" });
+
+            StringAssert.Contains(script, "DROP USER [contosoanalytics];");
+            StringAssert.Contains(script, $"[sid] <> {SqlContainedUserScript.ToSqlSid(appId)}");
+
+            // Only external principals may be dropped - a SQL user that happens to share the name is not ours.
+            StringAssert.Contains(script, "[type] IN ('E', 'X')");
+        }
+
+        /// <summary>
+        /// SQL Server declares an Entra group as TYPE = X; TYPE = E is a user or service principal. A group
+        /// created as E does not resolve to the group's members.
+        /// </summary>
+        [TestMethod]
+        public void ContainedUserScript_DeclaresGroupsAsTypeX()
+        {
+            var sid = new Guid("77777777-7777-7777-7777-777777777777");
+
+            var group = SqlContainedUserScript.CreateUserAndGrantRoles("Contoso DBAs", sid, new[] { "db_owner" }, isGroup: true);
+            var user = SqlContainedUserScript.CreateUserAndGrantRoles("dba@contoso.com", sid, new[] { "db_owner" }, isGroup: false);
+
+            StringAssert.Contains(group, "TYPE = X");
+            StringAssert.Contains(user, "TYPE = E");
         }
 
         #endregion
