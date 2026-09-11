@@ -253,7 +253,7 @@ JOIN dbo.sessions web ON web.user_id=u.id
 WHERE i.request_id=REPLACE(CONVERT(varchar(36),a.id),'-','')
 AND LEFT(i.graph_interaction_id,32)=i.request_id AND LEN(i.graph_interaction_id)=200
 AND LEFT(s.session_ref,36)=CONVERT(varchar(36),a.id) AND LEN(s.session_ref)=450
-AND LEFT(web.ai_session_id,32)=i.request_id AND LEN(web.ai_session_id)=50;"));
+AND LEFT(web.ai_session_id,32) COLLATE DATABASE_DEFAULT=i.request_id AND LEN(web.ai_session_id)=50;"));
                 }
             });
         }
