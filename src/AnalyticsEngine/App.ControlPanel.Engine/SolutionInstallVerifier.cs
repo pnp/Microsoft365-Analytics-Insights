@@ -1,4 +1,5 @@
 using App.ControlPanel.Engine.Entities;
+using App.ControlPanel.Engine.InstallerTasks;
 using App.ControlPanel.Engine.Models;
 using Azure.Identity;
 using Azure.ResourceManager;
@@ -140,11 +141,6 @@ namespace App.ControlPanel.Engine
         /// </summary>
         public async Task<AutodetectedSqlDetails> GetSqlDetails(string sqlPassword)
         {
-            if (string.IsNullOrEmpty(sqlPassword) && Config.SqlAuthMode != SqlServerAuthMode.EntraId)
-            {
-                throw new ArgumentException($"'{nameof(sqlPassword)}' cannot be null or empty.", nameof(sqlPassword));
-            }
-
             var (testRg, _) = await GetResourceGroupIfValid();
             if (testRg != null)
             {
@@ -156,12 +152,16 @@ namespace App.ControlPanel.Engine
                 }
                 else
                 {
+                    var decision = await SqlServerAuthReader.DetectAsync(sqlServer, sqlPassword, Config.SqlAuthMode, _logger);
                     sqlInfo = new SqlDetails
                     {
                         SqlFqdn = sqlServer.Data.FullyQualifiedDomainName,
-                        SqlPassword = sqlPassword,
-                        SqlUsername = sqlServer.Data.AdministratorLogin
+                        AuthMethod = decision.Method,
+                        SqlPassword = decision.UsesEntraId ? null : sqlPassword,
+                        SqlUsername = decision.UsesEntraId ? null : sqlServer.Data.AdministratorLogin
                     };
+                    if (!decision.UsesEntraId)
+                        DatabasePaaSInfo.EnsureSqlLoginUsable(sqlInfo.SqlFqdn, sqlInfo.SqlUsername, sqlInfo.SqlPassword);
                 }
 
                 return new AutodetectedSqlDetails { Sql = sqlInfo };
@@ -180,16 +180,11 @@ namespace App.ControlPanel.Engine
         {
             if (config == null) return false;
 
-            // A Microsoft Entra ID deployment has no SQL login to supply, so requiring one here would make
-            // autodetection permanently unavailable for it. See issue #117.
-            var haveSqlCredentials = config.SqlAuthMode == SqlServerAuthMode.EntraId
-                || (!string.IsNullOrEmpty(config.SQLServerAdminPassword) && !string.IsNullOrEmpty(config.SQLServerAdminUsername));
-
             var installerAccErrors = config.InstallerAccount?.GetValidationErrors();
             return installerAccErrors != null && installerAccErrors.Count == 0
                 && !string.IsNullOrEmpty(config.ResourceGroupName)
-                && config.Subscription.IsValidSubscription
-                && haveSqlCredentials && !string.IsNullOrEmpty(config.SQLServerName);
+                && config.Subscription != null && config.Subscription.IsValidSubscription
+                && !string.IsNullOrEmpty(config.SQLServerName);
         }
 
         async Task<(ResourceGroupResource, bool)> GetResourceGroupIfValid()

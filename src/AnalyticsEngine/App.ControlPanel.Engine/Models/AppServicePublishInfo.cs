@@ -16,6 +16,11 @@
             public string SqlFqdn { get; set; }
             public string SqlUsername { get; set; }
             public string SqlPassword { get; set; }
+            public Entities.SqlConnectionAuthMethod AuthMethod { get; set; }
+
+            public string ConnectionString => AuthMethod == Entities.SqlConnectionAuthMethod.EntraId
+                ? Entities.DatabasePaaSInfo.GetEntraIdConnectionString(SqlFqdn, null)
+                : Entities.DatabasePaaSInfo.GetConnectionString(SqlFqdn, null, SqlUsername, SqlPassword);
         }
     }
 }
