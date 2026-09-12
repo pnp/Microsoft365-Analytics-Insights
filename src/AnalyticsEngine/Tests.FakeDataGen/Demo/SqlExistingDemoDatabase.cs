@@ -26,6 +26,23 @@ namespace Tests.FakeDataGen.Demo
         private ExistingSink _sink;
         private bool _opened, _ready, _failed, _disposed, _markerInvalidated;
 
+        /// <summary>
+        /// Tables describing the TENANT rather than the appended population, so they are counted and then
+        /// dropped instead of inserted. An append adds a fresh synthetic population to someone else's
+        /// database; it cannot restate that tenant's Copilot totals, its Copilot Credits entitlement, its
+        /// Azure bill or the fact that an import ran. Agent costs also key on (usage_date, dimension_hash),
+        /// which is UNIQUE on copilot_studio_credit_user_daily: a second population regenerates the same
+        /// agent/environment dimensions for the same dates, so appending them is a duplicate-key failure
+        /// rather than more data.
+        /// </summary>
+        private static readonly DemoTable[] TenantWideTables =
+        {
+            DemoTables.CopilotCounts, DemoTables.StudioCredits, DemoTables.StudioUserCredits,
+            DemoTables.StudioCapacity, DemoTables.AzureCosts, DemoTables.AgentCostImports,
+        };
+
+        private static bool IsTenantWide(DemoTable table) => Array.IndexOf(TenantWideTables, table) >= 0;
+
         public SqlExistingDemoDatabase(string connectionString, DemoOptions options, CancellationToken cancellation)
         {
             if (options == null || options.Preview || options.Help)
@@ -76,7 +93,7 @@ namespace Tests.FakeDataGen.Demo
                     Execute(command, command.ExecuteNonQuery);
                 _ready = true;
                 progress?.Invoke("Existing-target append: fresh synthetic users; existing users and activities are never updated.");
-                progress?.Invoke("Tenant-wide Copilot count snapshots will be skipped: this population does not represent the existing tenant.");
+                progress?.Invoke("Tenant-wide Copilot count snapshots, Copilot Studio credits, capacity and Azure agent spend will be skipped: this population does not represent the existing tenant.");
                 if (_options.CompileProfiles)
                     progress?.Invoke("Global weekly profiling is skipped for existing targets; existing profiles are not recomputed.");
                 progress?.Invoke("Batches commit independently." + FailureAdvice);
@@ -117,7 +134,7 @@ namespace Tests.FakeDataGen.Demo
                 var reused = _plans.Values.Sum(p => p.Reused);
                 var skipped = _plans.Values.Sum(p => p.Skipped);
                 progress?.Invoke($"Append verified from committed batches: {inserted:N0} inserted rows; {reused:N0} reused dimension rows.");
-                progress?.Invoke($"Skipped {skipped:N0} tenant-wide Copilot count snapshots; no global profiling or new-demo completion marker was written.");
+                progress?.Invoke($"Skipped {skipped:N0} tenant-wide Copilot count snapshot and agent-cost rows; no global profiling or new-demo completion marker was written.");
                 summary.Rows.Clear();
                 foreach (var plan in _plans.Values.Where(p => p.Received > 0))
                     summary.Rows.Add(plan.Table.Name, plan.Inserted);
@@ -254,7 +271,7 @@ WHERE f.parent_object_id=OBJECT_ID(@table);"))
                     var fk = keys[0];
                     var target = _plans.Values.SingleOrDefault(p => p.Table.Name == fk.Table);
                     if (keys.Length != 1 || fk.Width != 1 || fk.Disabled || fk.Schema != "dbo" || target == null
-                        || target.Order > plan.Order || target.Table == DemoTables.CopilotCounts)
+                        || target.Order > plan.Order || IsTenantWide(target.Table))
                         throw SchemaError(plan.Table, "unsupported foreign-key mapping for " + supplied.Name);
                     int targetIndex = target.Table.Columns.ToList().FindIndex(c => c.Name == fk.TargetColumn);
                     if (targetIndex < 0 || target.Table.Columns[targetIndex].Type != supplied.Type)
@@ -593,7 +610,7 @@ END;", transaction))
                     if (plan.IdentityIndex >= 0 && (!(row[plan.IdentityIndex] is int key) || key <= 0))
                         throw new InvalidOperationException("A positive logical integer identity is required.");
                     plan.Received++;
-                    if (table == DemoTables.CopilotCounts) { plan.Skipped++; return; }
+                    if (IsTenantWide(table)) { plan.Skipped++; return; }
                     if (!Buffers.TryGetValue(table, out var rows))
                         Buffers.Add(table, rows = new List<object[]>(table.BatchLimit(_owner._options.BatchSize)));
                     rows.Add(row);

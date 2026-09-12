@@ -173,7 +173,8 @@ choose a new name after a failure. There is deliberately no reset or production-
 The separate append command requires --confirm-existing and an existing, current-schema
 TEST database. It adds a fresh synthetic population without modifying existing users.
 It never creates/upgrades the target, compiles global profiles or invents tenant-wide
-Copilot totals. Completed batches remain after failure; there is no automatic cleanup.
+Copilot totals, Copilot Studio credits, capacity or Azure agent spend.
+Completed batches remain after failure; there is no automatic cleanup.
 Large populations/histories can exceed LocalDB's storage limit: preview the row counts first.
 Agent costs follow the generated agent traffic, so a population that never uses an agent gets
 no Copilot Studio credits; Azure's fixed meters are still billed because the resources exist.

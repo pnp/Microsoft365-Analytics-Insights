@@ -75,7 +75,8 @@ Tests.FakeDataGen.exe append "<test-database-connection-string>" --areas powerbi
 `copilot-history`, `outlook`, `sent-email`, `sharepoint`, `web`, `onedrive`,
 `engage`, `office` and `dlp`. DLP includes prerequisite Copilot audit interactions
 and preserves the blocked-versus-audit-only policy scenarios. Shared users/licences and dependent dimensions accompany
-individual areas. Appends skip tenant-wide Copilot count snapshots and global
+individual areas. Appends skip tenant-wide Copilot count snapshots, agent costs
+(Copilot Studio credits, the capacity snapshot and Azure agent spend) and global
 profile compilation rather than publishing partial-population totals as tenant
 data. Use a full new demo for a self-contained profiled database.
 
