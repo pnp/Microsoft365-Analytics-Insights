@@ -107,14 +107,20 @@ namespace Tests.UnitTests
 
         static IEnumerable<object[]> AllRepresentativeSecrets => new[]
         {
-            new object[] { GoldenAsciiPlain },
-            new object[] { GoldenGreekPlain },
-            new object[] { GoldenEmptyPlain },
-            new object[] { GoldenSpecialPlain },
-            new object[] { GoldenBlock32Plain },
-            new object[] { GoldenBlock64Plain },
-            new object[] { GoldenLongPlain },
-            new object[] { "a" },
+            new object[] { GoldenAsciiPlain, PassPhrase },
+            new object[] { GoldenGreekPlain, PassPhrase },
+            new object[] { GoldenEmptyPlain, PassPhrase },
+            new object[] { GoldenSpecialPlain, PassPhrase },
+            new object[] { GoldenBlock32Plain, PassPhrase },
+            new object[] { GoldenBlock64Plain, PassPhrase },
+            new object[] { GoldenLongPlain, PassPhrase },
+            new object[] { "a", PassPhrase },
+            // A non-ASCII passphrase must be covered on the WRITE path too, not just when decrypting a
+            // stored vector. The passphrase is UTF8-encoded inside the KDF, so a writer that changed that
+            // conversion would still round-trip in-process and still read every stored vector, while
+            // producing files the shipping build cannot open.
+            new object[] { GoldenUnicodePassPlain, GoldenUnicodePass },
+            new object[] { GoldenGreekPlain, GoldenUnicodePass },
         };
 
         #region old -> new : files already on customer disks must still open
@@ -148,8 +154,16 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// Padding must add a whole extra block when the plaintext is already block-aligned.
+        /// Fixture validation only: confirms the stored vectors themselves carry a whole extra block for
+        /// block-aligned plaintext.
         /// </summary>
+        /// <remarks>
+        /// This deliberately does NOT call <see cref="StringCipher"/> - it is arithmetic over constants,
+        /// and would stay green if today's writer stopped appending the full padding block. Writer
+        /// behaviour for these same aligned inputs is covered by
+        /// <see cref="Encrypt_OutputIsReadableByAnIndependentLegacyDecoder"/>, whose data includes both
+        /// the 32-byte and 64-byte cases.
+        /// </remarks>
         [DataTestMethod]
         [DataRow(GoldenEmptyPlain, GoldenEmptyCipher, 0, DisplayName = "0 bytes -> 1 padding block")]
         [DataRow(GoldenBlock32Plain, GoldenBlock32Cipher, 32, DisplayName = "32 bytes -> 2 blocks")]
@@ -181,14 +195,14 @@ namespace Tests.UnitTests
         /// </remarks>
         [DataTestMethod]
         [DynamicData(nameof(AllRepresentativeSecrets))]
-        public void Encrypt_OutputIsReadableByAnIndependentLegacyDecoder(string secret)
+        public void Encrypt_OutputIsReadableByAnIndependentLegacyDecoder(string secret, string passPhrase)
         {
             if (!LegacyFormatOracle.IsAvailable)
                 Assert.Inconclusive(LegacyFormatOracle.UnavailableReason);
 
-            var cipherText = StringCipher.Encrypt(secret, PassPhrase);
+            var cipherText = StringCipher.Encrypt(secret, passPhrase);
 
-            var decodedByLegacyReader = LegacyFormatOracle.Decrypt(cipherText, PassPhrase);
+            var decodedByLegacyReader = LegacyFormatOracle.Decrypt(cipherText, passPhrase);
 
             Assert.AreEqual(secret, decodedByLegacyReader,
                 "Ciphertext written by this build could not be read by an independent implementation of " +
@@ -267,9 +281,9 @@ namespace Tests.UnitTests
 
         [DataTestMethod]
         [DynamicData(nameof(AllRepresentativeSecrets))]
-        public void EncryptThenDecrypt_RoundTrips(string secret)
+        public void EncryptThenDecrypt_RoundTrips(string secret, string passPhrase)
         {
-            Assert.AreEqual(secret, StringCipher.Decrypt(StringCipher.Encrypt(secret, PassPhrase), PassPhrase));
+            Assert.AreEqual(secret, StringCipher.Decrypt(StringCipher.Encrypt(secret, passPhrase), passPhrase));
         }
 
         /// <summary>
