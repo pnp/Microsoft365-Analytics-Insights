@@ -21,6 +21,13 @@
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Azure.Security.KeyVault.Certificates" Version="4.9.0" />
     <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0">
+      <!-- BouncyCastle's root namespace is "Org", which collides with the solution's own Org entity
+           type in consuming projects (CS0118: 'Org' is a namespace but is used like a type).
+           Only StringCipher's implementation needs it, so keep the compile-time asset private while
+           still flowing the runtime assembly to consumers' output folders. -->
+      <PrivateAssets>compile</PrivateAssets>
+    </PackageReference>
     <PackageReference Include="EntityFramework" Version="6.5.2" />
     <PackageReference Include="Microsoft.ApplicationInsights" Version="2.22.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
