@@ -24,27 +24,61 @@ namespace Tests.FakeDataGen.Demo
         /// The import toggles whose tables this generator actually fills. Deliberately not "everything":
         /// a flag listed here but not generated would send an operator looking for data that is absent.
         /// </summary>
-        internal const string RequiredImportJobSettings =
-            "GraphUsersMetadata=True;GraphUsageReports=True;GraphCopilotUsageReports=True;"
-            + "Copilot=True;CopilotInteractionHistory=True;ActivityLog=True;WebTraffic=True;ImportDlp=True;"
-            + "CopilotStudioCredits=True;AzureCostManagement=True";
+        internal static string RequiredImportJobSettings => ImportSettings(DemoArea.All);
 
-        internal static void PrintPortalSetup(string database, Action<string> write)
+        internal static void PrintPortalSetup(string database, Action<string> write, DemoArea areas = DemoArea.All)
         {
             if (write == null) return;
             write(string.Empty);
             write("To view this data, point a web application at it with:");
             write($"  connectionStrings   SPOInsightsEntities = Server=(localdb)\\MSSQLLocalDB;Database={database};Integrated Security=True");
-            write("  appSettings         ImportJobSettings = " + RequiredImportJobSettings);
+            write("  appSettings         ImportJobSettings = " + ImportSettings(areas));
             write(string.Empty);
             write("Those toggles are how the portal decides which sources exist; they are all opt-in and");
-            write("default to false. In particular, WITHOUT GraphCopilotUsageReports=True the Licence");
-            write("assignments report shows Copilot as \"Not measured\" for every user even though this");
-            write("database is full of Copilot activity: the audit and interaction sources are positive");
-            write("evidence only and never produce activity bands.");
-            write("Likewise the Agent costs report leads with \"Neither agent cost import is switched on\"");
-            write("until CopilotStudioCredits and AzureCostManagement are set, no matter how much billing");
-            write("data the database holds - that banner is read from this setting, never from the rows.");
+            write("default to false.");
+            if ((areas & (DemoArea.Copilot | DemoArea.CopilotHistory)) != 0)
+            {
+                write("In particular, WITHOUT GraphCopilotUsageReports=True the Licence assignments report");
+                write("shows Copilot as \"Not measured\" for every user even though this database is full of");
+                write("Copilot activity: the audit and interaction sources are positive evidence only and");
+                write("never produce activity bands.");
+            }
+            if ((areas & DemoArea.CopilotStudio) != 0)
+            {
+                write("Likewise the Agent costs report leads with \"Neither agent cost import is switched on\"");
+                write("until CopilotStudioCredits and AzureCostManagement are set, no matter how much billing");
+                write("data the database holds - that banner is read from this setting, never from the rows.");
+            }
+            write("Use these flags on the demo portal, not on live import jobs connected to the synthetic database.");
+        }
+
+        internal static string ImportSettings(DemoArea areas)
+        {
+            var flags = new List<string> { "GraphUsersMetadata=True" };
+            if ((areas & DemoAreas.DailyWorkloads) != 0) flags.Add("GraphUsageReports=True");
+            if ((areas & DemoArea.Copilot) != 0)
+            {
+                flags.Add("GraphCopilotUsageReports=True");
+            }
+            if ((areas & (DemoArea.Copilot | DemoArea.Dlp)) != 0) flags.Add("Copilot=True");
+            if ((areas & DemoArea.CopilotHistory) != 0) flags.Add("CopilotInteractionHistory=True");
+            if ((areas & DemoArea.SharePoint) != 0) flags.Add("ActivityLog=True");
+            if ((areas & DemoArea.Web) != 0) flags.Add("WebTraffic=True");
+            if ((areas & DemoArea.Teams) != 0)
+            {
+                flags.Add("Calls=True");
+                flags.Add("GraphTeams=True");
+            }
+            if ((areas & DemoArea.SentEmail) != 0) flags.Add("SentEmails=True");
+            if ((areas & (DemoArea.PowerApps | DemoArea.PowerAutomate | DemoArea.PowerBI | DemoArea.CopilotStudio)) != 0)
+                flags.Add("ImportPowerPlatform=True");
+            if ((areas & DemoArea.Dlp) != 0) flags.Add("ImportDlp=True");
+            if ((areas & DemoArea.CopilotStudio) != 0)
+            {
+                flags.Add("CopilotStudioCredits=True");
+                flags.Add("AzureCostManagement=True");
+            }
+            return string.Join(";", flags);
         }
 
         /// <summary>

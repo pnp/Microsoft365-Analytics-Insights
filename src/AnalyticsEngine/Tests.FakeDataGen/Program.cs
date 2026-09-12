@@ -23,20 +23,28 @@ namespace Tests.FakeDataGen
     internal class Program
     {
         // Menu options are registered up-front so the dispatcher stays in one place.
-        private static readonly List<MenuItem> MenuItems = new List<MenuItem>
+        private static readonly List<MenuItem> MenuItems = CreateMenuItems();
+
+        private static List<MenuItem> CreateMenuItems()
         {
-            // Data generation
-            new MenuItem(DemoInteractive.MenuTitle, MenuCategory.DataGeneration,
-                ctx => DemoInteractive.Run()),
-            new MenuItem("Generate fake Copilot activity", MenuCategory.DataGeneration,
+            var items = new List<MenuItem>
+            {
+                new MenuItem(DemoInteractive.MenuTitle, MenuCategory.DataGeneration, ctx => DemoInteractive.Run())
+            };
+            foreach (var area in DemoAreas.Catalogue)
+                items.Add(new MenuItem(area.Title + " (existing or new DB)", MenuCategory.DataGeneration,
+                    ctx => DemoInteractive.RunArea(area, ctx.ConnectionString)));
+            items.AddRange(new[]
+            {
+            new MenuItem("Generate fake Copilot activity", MenuCategory.LegacyGeneration,
                 ctx => RunCopilotActivityGenerator(ctx.RequireConnectionString())),
-            new MenuItem("Generate fake O365 audit activity", MenuCategory.DataGeneration,
+            new MenuItem("Generate fake O365 audit activity", MenuCategory.LegacyGeneration,
                 ctx => RunOffice365ActivityGenerator(ctx.RequireConnectionString())),
-            new MenuItem("Generate combined profiling data (O365 + Copilot)", MenuCategory.DataGeneration,
+            new MenuItem("Generate combined profiling data (O365 + Copilot)", MenuCategory.LegacyGeneration,
                 ctx => RunCombinedActivityGenerator(ctx.RequireConnectionString())),
-            new MenuItem("Generate fake Copilot prompt history (AI interaction history)", MenuCategory.DataGeneration,
+            new MenuItem("Generate fake Copilot prompt history (AI interaction history)", MenuCategory.LegacyGeneration,
                 ctx => RunCopilotInteractionHistoryGenerator(ctx.RequireConnectionString())),
-            new MenuItem("Generate fake DLP policy activity (Copilot + tenant-wide)", MenuCategory.DataGeneration,
+            new MenuItem("Generate fake DLP policy activity (Copilot + tenant-wide)", MenuCategory.LegacyGeneration,
                 ctx => RunDlpActivityGenerator(ctx.RequireConnectionString())),
 
             // Stress tests
@@ -54,7 +62,9 @@ namespace Tests.FakeDataGen
                 ctx => RunStressTest(new SentEmailImporterStressTest(), ctx)),
             new MenuItem("User activity data stress test (profiling SQL inputs)", MenuCategory.StressTest,
                 ctx => RunStressTest(new UserActivityStressTest(), ctx)),
-        };
+            });
+            return items;
+        }
 
         static void Main(string[] args)
         {
@@ -63,6 +73,16 @@ namespace Tests.FakeDataGen
             if (args.Length > 0 && args[0].Equals("demo", StringComparison.OrdinalIgnoreCase))
             {
                 Environment.ExitCode = DemoCommand.Run(args.Skip(1).ToArray());
+                return;
+            }
+            if (args.Length > 0 && args[0].Equals("append", StringComparison.OrdinalIgnoreCase))
+            {
+                if (args.Length < 2)
+                {
+                    Console.Error.WriteLine("append requires a TEST database connection string and --confirm-existing.");
+                    Environment.ExitCode = 2;
+                }
+                else Environment.ExitCode = DemoCommand.RunExisting(args.Skip(2).ToArray(), args[1]);
                 return;
             }
 
@@ -89,8 +109,8 @@ namespace Tests.FakeDataGen
             else
             {
                 Console.WriteLine("No SQL connection string provided.");
-                Console.WriteLine("The synthetic demo option (which creates its own new LocalDB database) and the");
-                Console.WriteLine("stress tests that don't need SQL will still run; everything else will be disabled.");
+                Console.WriteLine("The full demo and individual activity menus can create a new LocalDB database.");
+                Console.WriteLine("Existing-database appends and legacy generators need a startup connection string.");
                 Console.WriteLine("Usage: Tests.FakeDataGen.exe \"<SQL Connection String>\" [--run <copilot|copilotadoption|activityapi|activityapidb|powerplatform|sentemail|useractivity>]");
                 Console.WriteLine("Safe one-command demo: Tests.FakeDataGen.exe demo --help (or pick it from the menu below)");
             }
@@ -194,6 +214,13 @@ namespace Tests.FakeDataGen
                 index++;
             }
 
+            Console.WriteLine();
+            Console.WriteLine("LEGACY GENERATORS (existing DB only)");
+            foreach (var item in MenuItems.Where(m => m.Category == MenuCategory.LegacyGeneration))
+            {
+                Console.WriteLine($"  {index}. {item.Title}");
+                index++;
+            }
             Console.WriteLine();
             Console.WriteLine("STRESS TESTS");
             foreach (var item in MenuItems.Where(m => m.Category == MenuCategory.StressTest))
@@ -570,6 +597,7 @@ namespace Tests.FakeDataGen
         private enum MenuCategory
         {
             DataGeneration,
+            LegacyGeneration,
             StressTest
         }
 

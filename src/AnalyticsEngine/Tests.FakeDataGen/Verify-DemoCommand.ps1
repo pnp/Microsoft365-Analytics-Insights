@@ -38,6 +38,10 @@ try {
     if ($generated.Status -ne 'Complete' -or $generated.CompletedProfileWeeks -le 0) {
         throw 'One-command generation did not complete its database and Power BI profiles.'
     }
+    foreach ($table in @('call_records', 'sent_emails', 'event_meta_power_app',
+        'event_meta_power_automate_flow', 'event_meta_power_bi', 'event_meta_copilot_studio')) {
+        if ($generated.Rows.$table -le 0) { throw "Full demo did not populate $table." }
+    }
     & $exe @arguments --output "$artifacts\repeat.json"
     Assert-CommandSucceeded
     $repeat = Get-Content "$artifacts\repeat.json" -Raw | ConvertFrom-Json
@@ -45,7 +49,22 @@ try {
 
     & $exe @arguments --seed 43
     if ($LASTEXITCODE -eq 0) { throw 'A changed generation was incorrectly accepted for an existing target.' }
-    Write-Output 'Demo CLI smoke passed: help, preview, new target, profiles, identical rerun and changed-input refusal.'
+
+    $connection = "Server=(localdb)\MSSQLLocalDB;Database=$database;Integrated Security=True;Pooling=False"
+    & $exe append $connection --areas powerbi --users 10 --days 35 --as-of 2026-09-01
+    if ($LASTEXITCODE -eq 0) { throw 'Append accepted an unconfirmed existing target.' }
+    & $exe append $connection --areas powerbi --users 10 --days 35 --as-of 2026-09-01 --confirm-existing --output "$artifacts\appended.json"
+    Assert-CommandSucceeded
+    $appended = Get-Content "$artifacts\appended.json" -Raw | ConvertFrom-Json
+    if ($appended.Status -ne 'Appended' -or $appended.Rows.event_meta_power_bi -le 0 -or $appended.CompletedProfileWeeks -ne 0) {
+        throw 'Individual-area append did not produce Power BI facts without global profiling.'
+    }
+    if ($appended.Rows.teams_user_activity_log -gt 0 -or $appended.Rows.copilot_chats -gt 0) {
+        throw 'Individual Power BI append generated unrelated workload facts.'
+    }
+    & $exe @arguments
+    if ($LASTEXITCODE -eq 0) { throw 'An appended-to demo was incorrectly treated as an unchanged completed target.' }
+    Write-Output 'Demo CLI smoke passed: full workload coverage, rerun safeguards and confirmed individual-area append.'
 }
 finally {
     # Only clean up this run's unpredictable name, and only with the generator's ownership marker.

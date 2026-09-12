@@ -50,6 +50,21 @@ namespace Tests.FakeDataGen.Demo
             }
         }
 
+        public static void RunArea(DemoAreaDescription area, string connectionString)
+        {
+            var prompt = new ConsoleDemoPrompt();
+            prompt.Write(area.Title);
+            bool existing = AskYesNo(prompt, "Append to the existing TEST database supplied at startup (otherwise create a new LocalDB database)?", false);
+            if (existing && string.IsNullOrWhiteSpace(connectionString))
+                throw new InvalidOperationException("No existing database connection was supplied. Restart with a TEST database connection string, or choose a new database.");
+            var args = BuildArgs(prompt, DateTime.UtcNow, area.Area, existing);
+            if (args == null) { prompt.Write("Cancelled. Nothing was changed."); return; }
+            int code = existing
+                ? DemoCommand.RunExisting(args.Concat(new[] { "--confirm-existing" }).ToArray(), connectionString)
+                : DemoCommand.Run(args);
+            if (code != 0) prompt.Write($"Activity generation FAILED (exit code {code}).");
+        }
+
         /// <summary>
         /// Asks for the options, then runs the demo generator. Returns the same exit code the
         /// <c>demo</c> command line returns, or 0 when the user chose not to start.
@@ -73,26 +88,36 @@ namespace Tests.FakeDataGen.Demo
         /// otherwise defaults to the clock: without it the printed line would name a different window when
         /// it is read on a later day.
         /// </summary>
-        internal static string[] BuildArgs(IDemoPrompt prompt, DateTime utcNow)
+        internal static string[] BuildArgs(IDemoPrompt prompt, DateTime utcNow,
+            DemoArea areas = DemoArea.All, bool existing = false)
         {
             var defaults = new DemoOptions();
 
             prompt.Write(string.Empty);
             prompt.Write("Generates the same rounded, entirely synthetic Contoso data set as");
             prompt.Write("'Tests.FakeDataGen.exe demo': licences, daily workload activity, Copilot adoption");
-            prompt.Write("and D28 snapshots, metadata-only interactions, SharePoint facts, billed Copilot");
-            prompt.Write("Studio credits and Azure agent spend, and weekly Power BI profiles. No prompt or");
-            prompt.Write("response text is generated.");
+            prompt.Write("and D28 snapshots, metadata-only interactions, Teams detail, sent email,");
+            prompt.Write("SharePoint/web and Power Platform activity, billed Copilot Studio credits and");
+            prompt.Write("Azure agent spend. No real message, prompt or response text is generated.");
+            prompt.Write("Selected areas: " + DemoAreas.Format(areas) + ". Shared synthetic users/licences are included.");
             prompt.Write(string.Empty);
-            prompt.Write(@"It only ever creates a NEW database on (localdb)\MSSQLLocalDB. It ignores the");
-            prompt.Write("connection string this tool was started with, never writes to an existing database,");
-            prompt.Write("and has no reset option - re-running a completed target is a read-only no-op.");
+            if (existing)
+            {
+                prompt.Write("WARNING: use only a TEST/demo database. This appends a NEW synthetic population.");
+                prompt.Write("Existing users are not changed; no schema upgrade, global profiles or tenant totals.");
+                prompt.Write("Committed batches remain after failure. No automatic cleanup or reset is performed.");
+            }
+            else
+            {
+                prompt.Write(@"It only creates a NEW database on (localdb)\MSSQLLocalDB and ignores the startup");
+                prompt.Write("connection string. There is no reset - an exact completed rerun is a read-only no-op.");
+            }
             prompt.Write(string.Empty);
 
             bool preview = AskYesNo(prompt, "Preview only (count the rows, write no SQL at all)?", false);
 
             string database = null;
-            if (!preview)
+            if (!preview && !existing)
             {
                 database = AskDatabaseName(prompt, DefaultDatabaseName(utcNow));
             }
@@ -105,7 +130,7 @@ namespace Tests.FakeDataGen.Demo
             int copilotPercent = defaults.CopilotPercent;
             int batchSize = defaults.BatchSize;
             string mix = string.Join(",", defaults.Mix);
-            bool compileProfiles = defaults.CompileProfiles;
+            bool compileProfiles = defaults.CompileProfiles && !existing;
             string output = null;
 
             prompt.Write(string.Empty);
@@ -123,9 +148,10 @@ namespace Tests.FakeDataGen.Demo
 
                 if (!preview)
                 {
-                    compileProfiles = AskYesNo(prompt,
-                        "Compile the weekly Power BI profiles afterwards (slower, but the reports need them)?",
-                        compileProfiles);
+                    if (!existing)
+                        compileProfiles = AskYesNo(prompt,
+                            "Compile the weekly Power BI profiles afterwards (slower, but the reports need them)?",
+                            compileProfiles);
                     batchSize = AskInt(prompt, "SQL insert batch size", batchSize,
                         DemoOptions.MinBatchSize, DemoOptions.MaxBatchSize);
                 }
@@ -138,10 +164,15 @@ namespace Tests.FakeDataGen.Demo
             {
                 args.Add("--preview");
             }
-            else
+            else if (!existing)
             {
                 args.Add("--database");
                 args.Add(database);
+            }
+            if (areas != DemoArea.All)
+            {
+                args.Add("--areas");
+                args.Add(DemoAreas.Format(areas));
             }
             args.Add("--as-of");
             args.Add(asOf.ToString(DemoOptions.DateFormat, CultureInfo.InvariantCulture));
@@ -167,6 +198,7 @@ namespace Tests.FakeDataGen.Demo
             prompt.Write("About to generate:");
             prompt.Write("  Target             " + (preview
                 ? "preview only - no database, no rows, no weekly profiles"
+                : existing ? "existing TEST database supplied at startup (additive)"
                 : database + @" (new database on (localdb)\MSSQLLocalDB)"));
             prompt.Write($"  Users / SKUs       {users:N0} / {skus:N0}");
             prompt.Write($"  History            {days:N0} days ending {asOf.ToString(DemoOptions.DateFormat, CultureInfo.InvariantCulture)} (exclusive)");
@@ -179,12 +211,14 @@ namespace Tests.FakeDataGen.Demo
             }
             prompt.Write("  JSON summary       " + (string.IsNullOrEmpty(output) ? "(none)" : output));
             prompt.Write(string.Empty);
-            prompt.Write("Equivalent command line: Tests.FakeDataGen.exe demo " + CommandLine(args));
+            prompt.Write("Equivalent command line: Tests.FakeDataGen.exe " + (existing
+                ? "append \"<test-database-connection-string>\" --confirm-existing "
+                : "demo ") + CommandLine(args));
             prompt.Write(string.Empty);
             prompt.Write("Large populations or long histories can exceed LocalDB's storage limit; preview first if unsure.");
             prompt.Write(string.Empty);
 
-            return AskYesNo(prompt, "Start generating now?", true) ? args.ToArray() : null;
+            return AskYesNo(prompt, "Start generating now?", !existing) ? args.ToArray() : null;
         }
 
         /// <summary>

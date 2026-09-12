@@ -168,8 +168,15 @@
     <Compile Include="DemoGeneratorSqlTests.cs" />
     <Compile Include="DemoLicenceActivityCoverageTests.cs" />
     <Compile Include="DemoInteractiveTests.cs" />
+    <Compile Include="DemoAreaTests.cs" />
+    <Compile Include="DemoExistingDatabaseTests.cs" />
+    <Compile Include="DemoCollaborationTests.cs" />
+    <Compile Include="DemoPowerPlatformTests.cs" />
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoAgentCosts.cs">
       <Link>DemoGenerator\DemoAgentCosts.cs</Link>
+    </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoAreas.cs">
+      <Link>DemoGenerator\DemoAreas.cs</Link>
     </Compile>
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoCalendar.cs">
       <Link>DemoGenerator\DemoCalendar.cs</Link>
@@ -195,11 +202,26 @@
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoTables.cs">
       <Link>DemoGenerator\DemoTables.cs</Link>
     </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCollaborationTables.cs">
+      <Link>DemoGenerator\DemoCollaborationTables.cs</Link>
+    </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCollaborationGenerator.cs">
+      <Link>DemoGenerator\DemoCollaborationGenerator.cs</Link>
+    </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoPowerPlatformTables.cs">
+      <Link>DemoGenerator\DemoPowerPlatformTables.cs</Link>
+    </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoPowerPlatformGenerator.cs">
+      <Link>DemoGenerator\DemoPowerPlatformGenerator.cs</Link>
+    </Compile>
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoTimeline.cs">
       <Link>DemoGenerator\DemoTimeline.cs</Link>
     </Compile>
     <Compile Include="..\Tests.FakeDataGen\Demo\SqlDemoDatabase.cs">
       <Link>DemoGenerator\SqlDemoDatabase.cs</Link>
+    </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\SqlExistingDemoDatabase.cs">
+      <Link>DemoGenerator\SqlExistingDemoDatabase.cs</Link>
     </Compile>
     <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotAdoptionPersonas.cs">
       <Link>DemoGenerator\CopilotAdoptionPersonas.cs</Link>

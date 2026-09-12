@@ -12,6 +12,7 @@ namespace Tests.FakeDataGen.Demo
         public string FormatVersion { get; set; } = DemoOptions.FormatVersion;
         public string Fingerprint { get; set; }
         public string Status { get; set; }
+        public string Areas { get; set; }
         public int Users { get; set; }
         public int Skus { get; set; }
         public int Seed { get; set; }
@@ -56,6 +57,8 @@ namespace Tests.FakeDataGen.Demo
         private readonly CancellationToken _cancellation;
         private IDemoSink _sink;
         private DemoSummary _summary;
+        private DemoCollaborationGenerator _collaboration;
+        private DemoPowerPlatformGenerator _powerPlatform;
         private DemoAgentCosts _agentCosts;
 
         public DemoGenerator(DemoOptions options, CancellationToken cancellation = default(CancellationToken))
@@ -98,9 +101,14 @@ namespace Tests.FakeDataGen.Demo
             }
             foreach (var sku in _population.Skus) summary.CurrentSkuMembers.Add(sku.PartNumber, sku.Members);
             _sink.Flush();
+            _collaboration = new DemoCollaborationGenerator(_options, _population, _calendar, _sink);
+            _collaboration.WriteDimensions();
+            _powerPlatform = new DemoPowerPlatformGenerator(_options, _calendar, _sink);
+            _powerPlatform.WriteDimensions();
+            _sink.Flush();
 
             int progressEvery = Math.Max(1, _options.Users / 20);
-            for (int id = 1; id <= _options.Users; id++)
+            for (int id = 1; id <= _options.Users && _options.Areas != DemoArea.Directory; id++)
             {
                 _cancellation.ThrowIfCancellationRequested();
                 var user = _population.User(id);
@@ -109,9 +117,13 @@ namespace Tests.FakeDataGen.Demo
                 if (id % progressEvery == 0 || id == _options.Users)
                     progress?.Invoke($"Activity: {id:N0}/{_options.Users:N0} users; {summary.TotalRows:N0} source rows.");
             }
-            WriteCopilotCounts();
-            progress?.Invoke("Writing billed Copilot Studio credits, capacity and Azure agent spend...");
-            _agentCosts.Write();
+            _collaboration.WriteSummaries();
+            if (_options.Includes(DemoArea.Copilot)) WriteCopilotCounts();
+            if (_options.Includes(DemoArea.CopilotStudio))
+            {
+                progress?.Invoke("Writing billed Copilot Studio credits, capacity and Azure agent spend...");
+                _agentCosts.Write();
+            }
             _sink.Flush();
             return summary;
         }
@@ -185,7 +197,20 @@ namespace Tests.FakeDataGen.Demo
                 _sink.Write(DemoTables.InteractionApps, i + 1, "IPM.SkypeTeams.Message.Copilot." + DemoTimeline.Hosts[i]);
             _sink.Write(DemoTables.ConversationTypes, 1, "bizchat");
             _sink.Write(DemoTables.ConversationTypes, 2, "appchat");
-            WriteDlpDimensions();
+            if (_options.Includes(DemoArea.Copilot | DemoArea.Dlp))
+            {
+                _sink.Write(DemoTables.CopilotModels, 1, "Contoso demo language model", "Synthetic provider", "1.0");
+                _sink.Write(DemoTables.CopilotModels, 2, "Contoso demo reasoning model", "Synthetic provider", "2.0");
+                _sink.Write(DemoTables.CopilotPlugins, 1, DemoRandom.Id(_options.Seed, 2100, 1).ToString(),
+                    "Contoso knowledge retrieval", "1.0");
+                _sink.Write(DemoTables.CopilotPlugins, 2, DemoRandom.Id(_options.Seed, 2100, 2).ToString(),
+                    "Contoso calendar assistant", "1.0");
+                for (int department = 0; department < SeedDataCatalogue.Departments.Length; department++)
+                    _sink.Write(DemoTables.CopilotMeetings, department + 1, _options.Start,
+                        DemoRandom.Id(_options.Seed, 2101, department + 1).ToString(),
+                        "Contoso " + SeedDataCatalogue.Departments[department] + " weekly sync");
+            }
+            if (_options.Includes(DemoArea.Dlp)) WriteDlpDimensions();
         }
 
         /// <summary>
@@ -293,8 +318,10 @@ namespace Tests.FakeDataGen.Demo
                     }
                     if (reported)
                     {
-                        WriteCopilotEvents(user, timeline, d);
-                        _agentCosts.AddUserAgentDay(user, d, agentTurns);
+                        if (_options.Includes(DemoArea.Copilot | DemoArea.CopilotHistory | DemoArea.Dlp))
+                            WriteCopilotEvents(user, timeline, d);
+                        if (_options.Includes(DemoArea.CopilotStudio))
+                            _agentCosts.AddUserAgentDay(user, d, agentTurns);
                     }
                 }
                 windowTurns += turnWindow[bucket];
@@ -314,17 +341,20 @@ namespace Tests.FakeDataGen.Demo
                     _rollingPrompts[d] += windowTurns;
                 }
                 if (!reported) continue;
-                if (day.SharePointFiles > 0) WriteWebEvents(user, d, day);
+                if (day.SharePointFiles > 0 && _options.Includes(DemoArea.SharePoint | DemoArea.Web))
+                    WriteWebEvents(user, d, day);
+                _collaboration.WriteDay(user, d, day);
+                _powerPlatform.WriteDay(user, d, day);
                 if (date > _options.ReportEnd) continue;
                 int appMask = 0;
                 for (int app = 1; app <= 7; app++) if (appDays[bucket, app] > 0) appMask |= 1 << app;
                 WriteWorkloadRows(user, d, day, lastWorkload, appMask, ref lastOffice, ref lastTeamsDevice);
-                if (user.CopilotLicensed)
+                if (user.CopilotLicensed && _options.Includes(DemoArea.Copilot))
                     _sink.Write(DemoTables.CopilotUsage, user.Id, date, lastApps[0], 28, windowTurns, windowChat, 0,
                         appWindow[0], lastApps[1], lastApps[2], lastApps[3], lastApps[4], lastApps[5], lastApps[6],
                         lastApps[7], lastApps[1], lastApps[8], false);
             }
-            if (user.CopilotLicensed)
+            if (user.CopilotLicensed && _options.Includes(DemoArea.Copilot))
             {
                 var scored = CopilotAdoptionScoring.Score(new LicensedUserUsageRow
                 {
@@ -343,25 +373,25 @@ namespace Tests.FakeDataGen.Demo
             for (int i = 0; i < last.Length; i++) if (totals[i] > 0) last[i] = date;
             int privateChats = day.Messages / 2, posts = day.Messages / 8, replies = day.Messages / 4;
             int organised = day.Meetings / 3, attended = day.Meetings - organised;
-            _sink.Write(DemoTables.Teams, user.Id, date, last[0],
+            if (_options.Includes(DemoArea.Teams)) _sink.Write(DemoTables.Teams, user.Id, date, last[0],
                 privateChats, day.Messages - privateChats - posts - replies, posts, replies, day.Messages / 30,
                 day.Messages / 40, day.Meetings, attended / 3, organised / 3, attended, organised,
                 attended / 3, organised / 3, attended - 2 * (attended / 3), organised - 2 * (organised / 3),
                 day.Meetings * 1500 + day.Messages / 40 * 480, day.Meetings * 900, day.Meetings * 300);
-            _sink.Write(DemoTables.Outlook, user.Id, date, last[1], day.Sent, day.Received, day.Read,
+            if (_options.Includes(DemoArea.Outlook)) _sink.Write(DemoTables.Outlook, user.Id, date, last[1], day.Sent, day.Received, day.Read,
                 day.Sent > 0 ? organised : 0, day.Sent > 0 ? day.Meetings : 0);
-            _sink.Write(DemoTables.SharePoint, user.Id, date, last[2], day.SharePointFiles, day.SharePointFiles / 5,
+            if (_options.Includes(DemoArea.SharePoint)) _sink.Write(DemoTables.SharePoint, user.Id, date, last[2], day.SharePointFiles, day.SharePointFiles / 5,
                 day.SharePointFiles / 6, day.SharePointFiles / 30);
-            _sink.Write(DemoTables.OneDrive, user.Id, date, last[3], day.OneDriveFiles, day.OneDriveFiles / 3,
+            if (_options.Includes(DemoArea.OneDrive)) _sink.Write(DemoTables.OneDrive, user.Id, date, last[3], day.OneDriveFiles, day.OneDriveFiles / 3,
                 day.OneDriveFiles / 8, day.OneDriveFiles / 30);
-            _sink.Write(DemoTables.Engage, user.Id, date, last[4], day.EngageRead / 8, day.EngageRead, day.EngageRead / 4);
+            if (_options.Includes(DemoArea.Engage)) _sink.Write(DemoTables.Engage, user.Id, date, last[4], day.EngageRead / 8, day.EngageRead, day.EngageRead / 4);
 
             bool teams = totals[0] > 0 || (copilotApps & (1 << 2)) != 0;
             bool engage = day.EngageRead > 0, mac = user.Id % 5 == 0, mobile = user.Id % 3 == 0;
             if (teams) lastTeamsDevice = date;
-            _sink.Write(DemoTables.TeamsDevices, user.Id, date, lastTeamsDevice,
+            if (_options.Includes(DemoArea.Teams)) _sink.Write(DemoTables.TeamsDevices, user.Id, date, lastTeamsDevice,
                 teams, false, false, false, teams && mobile && mac, teams && mobile && !mac, teams && mac, teams && !mac);
-            _sink.Write(DemoTables.EngageDevices, user.Id, date, last[4], engage, false,
+            if (_options.Includes(DemoArea.Engage)) _sink.Write(DemoTables.EngageDevices, user.Id, date, last[4], engage, false,
                 engage && mobile && !mac, false, engage && mobile && mac, false);
             bool files = day.SharePointFiles + day.OneDriveFiles > 0;
             bool[] apps =
@@ -380,7 +410,7 @@ namespace Tests.FakeDataGen.Demo
             values.AddRange(apps.Cast<object>());
             foreach (bool device in new[] { !mac, mac, mobile, true })
                 values.AddRange(apps.Select(a => (object)(a && device)));
-            _sink.Write(DemoTables.Platforms, values.ToArray());
+            if (_options.Includes(DemoArea.Office)) _sink.Write(DemoTables.Platforms, values.ToArray());
         }
 
         private void WriteCopilotEvents(DemoUser user, DemoTimeline timeline, int dayIndex)
@@ -388,28 +418,45 @@ namespace Tests.FakeDataGen.Demo
             var day = timeline.Day(dayIndex);
             int sessionId = (user.Id - 1) * _options.Days + dayIndex + 1;
             string thread = "contoso-demo-" + DemoRandom.Id(_options.Seed, 3, user.Id, dayIndex).ToString("N");
-            if (user.CopilotLicensed) _sink.Write(DemoTables.InteractionSessions, sessionId, thread, user.Id);
+            if (user.CopilotLicensed && _options.Includes(DemoArea.CopilotHistory))
+                _sink.Write(DemoTables.InteractionSessions, sessionId, thread, user.Id);
             for (int slot = 0; slot < day.CopilotTurns; slot++)
             {
                 var id = DemoRandom.Id(_options.Seed, 4, user.Id, dayIndex, slot);
                 int host = timeline.HostIndex(dayIndex, slot), agent = timeline.Agent(dayIndex, slot);
                 var time = _calendar.Timestamp(user.Zone, dayIndex, DemoRandom.Value(_options.Seed, user.Id, dayIndex, 50), slot);
-                _sink.Write(DemoTables.Audit, id, user.Id, 1, time);
-                _sink.Write(DemoTables.Chats, id, DemoTimeline.Hosts[host], agent == 0 ? (object)null : agent,
-                    thread, user.Profile.UsageLocation, DemoOptions.FormatVersion, user.Id, time);
-                if (agent > 0 && agent != 5 && slot == 0)
-                    _sink.Write(DemoTables.Resources, id, 1, 1, 1);
-                WriteDlpEvent(user, dayIndex, slot, id, agent, time);
+                if (_options.Includes(DemoArea.Copilot | DemoArea.Dlp))
+                {
+                    _sink.Write(DemoTables.Audit, id, user.Id, 1, time);
+                    _sink.Write(DemoTables.Chats, id, DemoTimeline.Hosts[host], agent == 0 ? (object)null : agent,
+                        thread, user.Profile.UsageLocation, DemoOptions.FormatVersion, user.Id, time);
+                    if (agent > 0 && agent != 5 && slot == 0)
+                        _sink.Write(DemoTables.Resources, id, 1, 1, 1);
+                    if (slot == 0 && user.Id % 3 != 0)
+                        _sink.Write(DemoTables.CopilotEventModels, id, 1 + user.Id % 2);
+                    if (slot == 0 && agent > 0 && user.Id % 2 == 0)
+                        _sink.Write(DemoTables.CopilotEventPlugins, id, 1 + user.Id / 2 % 2);
+                    if (slot == 0 && host == 0 && user.Id % 2 != 0)
+                        _sink.Write(DemoTables.CopilotFileContexts, id, 1, 1, user.Department * 3 + 1, user.Department + 1);
+                    if (slot == 0 && host == 1)
+                        _sink.Write(DemoTables.CopilotMeetingContexts, id, user.Department + 1);
+                    if (_options.Includes(DemoArea.Dlp))
+                        WriteDlpEvent(user, dayIndex, slot, id, agent, time);
+                }
                 // Graph interaction history requires a Copilot licence. Free Chat demand is
                 // visible in the audit source, but must not be invented in that Graph feed.
-                if (!user.CopilotLicensed) continue;
+                if (!user.CopilotLicensed || !_options.Includes(DemoArea.CopilotHistory)) continue;
                 int words = 8 + (int)(DemoRandom.Value(_options.Seed, user.Id, dayIndex, 51 + slot) % 50);
                 int latency = 800 + (int)(DemoRandom.Value(_options.Seed, user.Id, dayIndex, 71 + slot) % 15000);
                 string request = id.ToString("N");
+                object language = user.Id % 3 == 0 ? null : (object)1;
+                object sentiment = language == null ? null : (object)((1 + (user.Id + slot) % 9) / 10.0);
                 _sink.Write(DemoTables.Interactions, request + "-prompt", sessionId, user.Id, request, 1,
-                    host + 1, host == 0 ? 1 : 2, time, words * 6, words, 0, 0, 0, agent > 0 ? 1 : 0, null);
+                    host + 1, host == 0 ? 1 : 2, time, words * 6, words, 0, 0, 0, agent > 0 ? 1 : 0, null,
+                    language, sentiment);
                 _sink.Write(DemoTables.Interactions, request + "-response", sessionId, user.Id, request, 2,
-                    host + 1, host == 0 ? 1 : 2, time.AddMilliseconds(latency), words * 24, words * 4, 0, agent > 0 ? 1 : 0, 0, 0, latency);
+                    host + 1, host == 0 ? 1 : 2, time.AddMilliseconds(latency), words * 24, words * 4, 0, agent > 0 ? 1 : 0, 0, 0, latency,
+                    language, sentiment);
             }
         }
 
@@ -443,9 +490,11 @@ namespace Tests.FakeDataGen.Demo
             _sink.Write(DemoTables.DlpRuleMatches, id, policy + 1, policy + 1, blocked ? 1 : 2, blocked);
         }
 
-        private void WriteWebEvents(DemoUser user, int day, DemoDay activity)        {
+        private void WriteWebEvents(DemoUser user, int day, DemoDay activity)
+        {
             int session = (user.Id - 1) * _options.Days + day + 1, site = user.Department + 1;
-            _sink.Write(DemoTables.Sessions, session, DemoRandom.Id(_options.Seed, 5, user.Id, day).ToString("N"), user.Id);
+            if (_options.Includes(DemoArea.Web))
+                _sink.Write(DemoTables.Sessions, session, DemoRandom.Id(_options.Seed, 5, user.Id, day).ToString("N"), user.Id);
             var start = _calendar.Timestamp(user.Zone, day, DemoRandom.Value(_options.Seed, user.Id, day, 90));
             // A small representative navigation path, not a second copy of every Graph file count.
             for (int page = 0; page < Math.Min(3, activity.SharePointFiles); page++)
@@ -453,13 +502,17 @@ namespace Tests.FakeDataGen.Demo
                 int url = (site - 1) * 3 + page + 1;
                 var stamp = start.AddSeconds(page * 12);
                 var eventId = DemoRandom.Id(_options.Seed, 6, user.Id, day, page);
-                _sink.Write(DemoTables.Audit, eventId, user.Id, page == 2 ? 3 : 2, stamp);
-                _sink.Write(DemoTables.SharePointAudit, eventId, url, 1, page + 1, site, 1);
+                if (_options.Includes(DemoArea.SharePoint))
+                {
+                    _sink.Write(DemoTables.Audit, eventId, user.Id, page == 2 ? 3 : 2, stamp);
+                    _sink.Write(DemoTables.SharePointAudit, eventId, url, 1, page + 1, site, 1);
+                }
                 bool mac = user.Id % 5 == 0, mobile = user.Id % 3 == 0;
-                _sink.Write(DemoTables.Hits, url, stamp, session, page + 1, site, mac ? 3 : 1 + user.Id % 2,
+                if (_options.Includes(DemoArea.Web)) _sink.Write(DemoTables.Hits, url, stamp, session, page + 1, site, mac ? 3 : 1 + user.Id % 2,
                     mobile ? 2 : 1, mobile ? (mac ? 3 : 4) : mac ? 2 : 1, 10.0 + page, 350.0 + user.Id % 500,
                     DemoRandom.Id(_options.Seed, 7, user.Id, day, page),
-                    Lookup(DemoTables.WebCountries, user.Profile.Country), Lookup(DemoTables.WebCities, WebCity(user.Profile.City)));
+                    Lookup(DemoTables.WebCountries, user.Profile.Country), Lookup(DemoTables.WebCities, WebCity(user.Profile.City)),
+                    checked((session - 1) * 3 + page + 1));
             }
         }
 
