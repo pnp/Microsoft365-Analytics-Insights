@@ -93,7 +93,9 @@ namespace App.ControlPanel.Engine
                     azureBackeEndCreationJob.CognitiveServicesInfo,
                     azureBackeEndCreationJob.KeyVault,
                     azureBackeEndCreationJob.SBQueueWithConnectionString?.ConnectionString, azureBackeEndCreationJob.Subscription,
-                    azureBackeEndCreationJob.CreatedSqlServer
+                    azureBackeEndCreationJob.CreatedSqlServer,
+                    azureBackeEndCreationJob.SqlAuthDecision,
+                    azureBackeEndCreationJob.InstallerObjectId
                 );
 
                 ct.ThrowIfCancellationRequested();
@@ -218,14 +220,33 @@ namespace App.ControlPanel.Engine
                     {
                         var response = await httpClient.GetAsync(adminSiteUrl, ct);
                         lastStatus = response.StatusCode;
-                        if (response.StatusCode == HttpStatusCode.OK || response.StatusCode == HttpStatusCode.Moved || response.StatusCode == HttpStatusCode.MovedPermanently)
+                        // Any redirect counts as "the app is serving" - the admin site 302s to the Entra
+                        // sign-in endpoint for an unauthenticated request. HttpClient follows redirects by
+                        // default so this normally sees the final 200, but a redirect it declines to follow
+                        // (e.g. an https -> http downgrade) must not be reported as an install failure.
+                        // The previous test listed Moved and MovedPermanently, which are both 301 and so
+                        // could never match the 302 this site actually returns.
+                        var statusCode = (int)response.StatusCode;
+                        if (response.StatusCode == HttpStatusCode.OK)
                         {
-                            log.LogInformation($"Web-app warmup OK ({(int)response.StatusCode} {response.StatusCode}) on attempt {attempt}.");
+                            log.LogInformation($"Web-app warmup OK ({statusCode} {response.StatusCode}) on attempt {attempt}.");
                             return true;
                         }
-                        if ((int)response.StatusCode < 500)
+                        if (statusCode >= 300 && statusCode < 400)
                         {
-                            log.LogError($"Web-app warmup got unexpected non-success response {(int)response.StatusCode} {response.StatusCode} — check manually that the App Service is started.");
+                            // The app is serving (IIS/ASP.NET started), which is all warm-up needs to prove.
+                            // HttpClient follows redirects by default, so a 3xx surfacing here means the chain
+                            // was NOT followed to completion - most likely the redirect limit was exhausted,
+                            // or it was a scheme downgrade. Accept it, because the old check tested Moved and
+                            // MovedPermanently (both 301) and so could never match the 302 this site returns -
+                            // but say so, since a redirect loop is worth a human look.
+                            log.LogWarning($"Web-app warmup got {statusCode} {response.StatusCode} on attempt {attempt} and the redirect was not followed to completion. " +
+                                $"Treating the App Service as started, but if the admin site is unusable check the app registration's Reply URLs / sign-in configuration for a redirect loop.");
+                            return true;
+                        }
+                        if (statusCode < 500)
+                        {
+                            log.LogError($"Web-app warmup got unexpected non-success response {statusCode} {response.StatusCode} — check manually that the App Service is started.");
                             return false;
                         }
                         // 5xx — keep retrying
@@ -253,8 +274,26 @@ namespace App.ControlPanel.Engine
                 }
 
                 var lastDetail = lastStatus.HasValue ? $"{(int)lastStatus.Value} {lastStatus.Value}" : lastError ?? "no response";
-                log.LogError($"Web-app warmup did not succeed within {totalWarmupSeconds}s — last response was {lastDetail}. " +
-                    $"If the installer is running off-VNet, the App Service's hostname resolves to its private endpoint and the warm-up request can't reach it — try browsing '{adminSiteUrl}' from a machine on the VNet, or temporarily enable Public Network Access on the App Service to verify it started.");
+
+                // Only offer the private-endpoint explanation when this install actually uses a VNet.
+                // Blaming it unconditionally sent operators of ordinary public deployments looking for a
+                // networking fault that did not exist. Equally, when nothing ever answered we cannot claim
+                // the site "is reachable but failing to start" - that is a different diagnosis entirely.
+                string guidance;
+                if (this.Config?.NetworkConfig?.Enabled == true)
+                {
+                    guidance = $"If the installer is running off-VNet, the App Service's hostname resolves to its private endpoint and the warm-up request can't reach it — try browsing '{adminSiteUrl}' from a machine on the VNet, or temporarily enable Public Network Access on the App Service to verify it started.";
+                }
+                else if (lastStatus.HasValue)
+                {
+                    guidance = $"The App Service answered, so it is reachable, but the application is failing to start. Check the startup errors in the App Service's LogFiles/eventlog.xml (Kudu / Advanced Tools), and browse '{adminSiteUrl}' to confirm.";
+                }
+                else
+                {
+                    guidance = $"Nothing answered the warm-up request, so this is a connectivity problem rather than a failed application start — check DNS resolution for '{adminSiteUrl}', any proxy in front of the installer, and that the App Service is started and allows public access.";
+                }
+
+                log.LogError($"Web-app warmup did not succeed within {totalWarmupSeconds}s — last response was {lastDetail}. {guidance}");
                 return false;
             }
         }

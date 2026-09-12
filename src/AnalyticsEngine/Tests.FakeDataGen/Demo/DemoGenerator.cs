@@ -59,6 +59,7 @@ namespace Tests.FakeDataGen.Demo
         private DemoSummary _summary;
         private DemoCollaborationGenerator _collaboration;
         private DemoPowerPlatformGenerator _powerPlatform;
+        private DemoAgentCosts _agentCosts;
 
         public DemoGenerator(DemoOptions options, CancellationToken cancellation = default(CancellationToken))
         {
@@ -76,6 +77,7 @@ namespace Tests.FakeDataGen.Demo
         {
             _summary = summary;
             _sink = destination;
+            _agentCosts = new DemoAgentCosts(_options, destination);
             progress?.Invoke("Writing synthetic dimensions, users and current licence assignments...");
             WriteDimensions();
             _sink.Flush();
@@ -88,7 +90,7 @@ namespace Tests.FakeDataGen.Demo
                 string managerKey = p.Department + "|" + p.Company;
                 int? manager = managers.TryGetValue(managerKey, out int leader) ? (int?)leader : null;
                 if (!manager.HasValue) managers.Add(managerKey, id);
-                _sink.Write(DemoTables.Users, id, user.Upn, user.Upn, DemoRandom.Id(_options.Seed, 1, id).ToString(),
+                _sink.Write(DemoTables.Users, id, user.Upn, user.Upn, DemoPopulation.AzureAdObjectId(_options.Seed, id),
                     p.AccountEnabled, _options.AsOf, p.PostalCode, Lookup(DemoTables.Departments, p.Department),
                     Lookup(DemoTables.Companies, p.Company), Lookup(DemoTables.Jobs, p.JobTitle),
                     Lookup(DemoTables.States, p.StateOrProvince), Lookup(DemoTables.Countries, p.Country),
@@ -117,6 +119,11 @@ namespace Tests.FakeDataGen.Demo
             }
             _collaboration.WriteSummaries();
             if (_options.Includes(DemoArea.Copilot)) WriteCopilotCounts();
+            if (_options.Includes(DemoArea.CopilotStudio))
+            {
+                progress?.Invoke("Writing billed Copilot Studio credits, capacity and Azure agent spend...");
+                _agentCosts.Write();
+            }
             _sink.Flush();
             return summary;
         }
@@ -258,6 +265,10 @@ namespace Tests.FakeDataGen.Demo
             int interactions = 0, prior = 0, active = 0;
             DateTime? first = null, last = null;
             var hosts = new HashSet<int>();
+            // Agent turns for one day, indexed by demo agent id. Reused across days rather than allocated
+            // per day: at the 200k-user design target that is the difference between one allocation per user
+            // and one per user-day.
+            var agentTurns = new int[DemoTimeline.MaxAgentId + 1];
             // Starts before the window so the rolling 28-day Copilot counters below are already full on the
             // window's first day. Warm-up days maintain the counters and last-activity dates but write no
             // rows and do not feed adoption scoring, so the reported window is unchanged by their presence.
@@ -287,6 +298,7 @@ namespace Tests.FakeDataGen.Demo
                         last = date;
                         if (d >= _options.Days - 28) { active++; interactions += day.CopilotTurns; }
                         else prior += day.CopilotTurns;
+                        Array.Clear(agentTurns, 0, agentTurns.Length);
                     }
                     for (int slot = 0; slot < day.CopilotTurns; slot++)
                     {
@@ -295,11 +307,22 @@ namespace Tests.FakeDataGen.Demo
                         appDays[bucket, app] = 1;
                         lastApps[app] = date;
                         if (host == 0) chatWindow[bucket]++;
-                        if (timeline.Agent(d, slot) > 0) { appDays[bucket, 8] = 1; lastApps[8] = date; }
+                        int agent = timeline.Agent(d, slot);
+                        if (agent > 0)
+                        {
+                            appDays[bucket, 8] = 1;
+                            lastApps[8] = date;
+                            if (reported) agentTurns[agent]++;
+                        }
                         if (reported && d >= _options.Days - 28) hosts.Add(host);
                     }
-                    if (reported && _options.Includes(DemoArea.Copilot | DemoArea.CopilotHistory | DemoArea.Dlp))
-                        WriteCopilotEvents(user, timeline, d);
+                    if (reported)
+                    {
+                        if (_options.Includes(DemoArea.Copilot | DemoArea.CopilotHistory | DemoArea.Dlp))
+                            WriteCopilotEvents(user, timeline, d);
+                        if (_options.Includes(DemoArea.CopilotStudio))
+                            _agentCosts.AddUserAgentDay(user, d, agentTurns);
+                    }
                 }
                 windowTurns += turnWindow[bucket];
                 windowChat += chatWindow[bucket];

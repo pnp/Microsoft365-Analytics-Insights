@@ -1,11 +1,14 @@
 using App.ControlPanel.Engine.Entities;
+using Azure;
 using Azure.ResourceManager.Sql;
+using Common.Entities.Installer;
 using DataUtils.Sql;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace App.ControlPanel.Engine.InstallerTasks
@@ -17,6 +20,30 @@ namespace App.ControlPanel.Engine.InstallerTasks
     /// </summary>
     public static class SqlServerAuthReader
     {
+        public static async Task<SqlAuthDecision> DetectAsync(SqlServerResource sqlServer, string sqlPassword,
+            SqlServerAuthMode configuredMode, ILogger logger, Guid installerObjectId = default(Guid),
+            bool hasConfiguredDatabaseUsers = false)
+        {
+            if (sqlServer == null) throw new ArgumentNullException(nameof(sqlServer));
+
+            var state = await ReadAsync(sqlServer, logger);
+            var decision = SqlServerAuthDetection.Decide(state,
+                state.HasSqlAdminLogin && !string.IsNullOrWhiteSpace(sqlPassword), configuredMode);
+            decision.ServerState = state;
+            logger?.LogInformation($"SQL authentication: {decision.Reason}");
+
+            // Said BEFORE anything tries to connect: without it, a server whose administrator was reassigned
+            // to a person looks completely healthy for several minutes and then fails with a login error
+            // that names no principal at all.
+            var lockout = SqlServerAuthDetection.GetInstallerLockoutWarning(state, decision, installerObjectId);
+            if (!string.IsNullOrEmpty(lockout)) logger?.LogWarning(lockout);
+
+            var noInteractiveAdmin = SqlServerAuthDetection.GetInteractiveAdminWarning(state, decision, hasConfiguredDatabaseUsers);
+            if (!string.IsNullOrEmpty(noInteractiveAdmin)) logger?.LogWarning(noInteractiveAdmin);
+
+            return decision;
+        }
+
         /// <summary>
         /// Inspects the server. Returns null when there is no server to inspect.
         /// </summary>
@@ -31,51 +58,58 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var state = new SqlServerAuthState
             {
                 HasSqlAdminLogin = !string.IsNullOrWhiteSpace(data.AdministratorLogin),
-                HasEntraAdmin = data.Administrators != null && data.Administrators.Sid.HasValue,
-                EntraAdminLogin = data.Administrators?.Login,
-                EntraOnlyAuthEnabled = data.Administrators?.IsAzureADOnlyAuthenticationEnabled == true,
             };
 
-            // The server payload only reports Entra-only auth when the administrator was set through the
-            // server resource. The authoritative source is the azureADOnlyAuthentications child resource,
-            // which is also where a customer's own portal/CLI change shows up.
-            if (!state.EntraOnlyAuthEnabled)
+            // The principal type is only carried on the server payload's embedded administrator, not on the
+            // authoritative child resource read below. Correlate the two by object ID (SID) rather than by
+            // login: a login is a display name, so it is neither stable nor unique, and two administrators
+            // that merely share one are not the same principal. Requiring both SIDs to be present and equal
+            // also stops a pair of absent values matching each other.
+            var embeddedAdminSid = data.Administrators?.Sid;
+            var embeddedPrincipalType = data.Administrators?.PrincipalType?.ToString();
+
+            // Always read the authoritative child, even when the embedded administrator says true:
+            // that value can disagree after authentication is changed through the portal/CLI.
+            try
             {
-                try
-                {
-                    foreach (var onlyAuth in sqlServer.GetSqlServerAzureADOnlyAuthentications())
-                    {
-                        if (onlyAuth.Data != null && onlyAuth.Data.IsAzureADOnlyAuthenticationEnabled == true)
-                        {
-                            state.EntraOnlyAuthEnabled = true;
-                            break;
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // A server that has never had it set returns 404/NotFound here. Not an error.
-                    logger?.LogInformation($"Could not read Microsoft Entra-only authentication state for SQL Server '{data.Name}': {ex.Message}");
-                }
+                var onlyAuth = await sqlServer.GetSqlServerAzureADOnlyAuthentications().GetAsync("Default");
+                state.EntraOnlyAuthEnabled = onlyAuth.Value.Data.IsAzureADOnlyAuthenticationEnabled
+                    ?? throw new InvalidOperationException("Azure did not return the SQL Server's Microsoft Entra-only authentication setting.");
+            }
+            catch (RequestFailedException ex) when (ex.Status == 404)
+            {
+                logger?.LogInformation("No Microsoft Entra-only authentication resource exists for this SQL Server; SQL logins are not disabled.");
+            }
+            catch (RequestFailedException ex)
+            {
+                logger?.LogError($"Could not read the SQL Server's Microsoft Entra-only authentication setting (HTTP {ex.Status}). " +
+                    "Verify the installer can read Microsoft.Sql/servers/azureADOnlyAuthentications. Authentication will not be guessed.");
+                throw;
             }
 
-            // Likewise, an administrator assigned separately (portal, CLI, an older install) lives in the
-            // administrators child collection rather than on the server payload.
-            if (!state.HasEntraAdmin)
+            // A separately removed/replaced administrator must not be inferred from the embedded payload.
+            try
             {
-                try
+                var admin = await sqlServer.GetSqlServerAzureADAdministrators().GetAsync("ActiveDirectory");
+                var childSid = admin.Value.Data.Sid;
+                state.HasEntraAdmin = childSid.HasValue;
+                state.EntraAdminLogin = admin.Value.Data.Login;
+                state.EntraAdminSid = childSid;
+
+                if (childSid.HasValue && embeddedAdminSid.HasValue && embeddedAdminSid.Value == childSid.Value)
                 {
-                    var admin = sqlServer.GetSqlServerAzureADAdministrators().FirstOrDefault();
-                    if (admin != null && admin.Data != null)
-                    {
-                        state.HasEntraAdmin = true;
-                        state.EntraAdminLogin = admin.Data.Login;
-                    }
+                    state.EntraAdminPrincipalType = embeddedPrincipalType;
                 }
-                catch (Exception ex)
-                {
-                    logger?.LogInformation($"Could not read the Microsoft Entra administrator for SQL Server '{data.Name}': {ex.Message}");
-                }
+            }
+            catch (RequestFailedException ex) when (ex.Status == 404)
+            {
+                logger?.LogInformation("No Microsoft Entra administrator is configured for this SQL Server.");
+            }
+            catch (RequestFailedException ex)
+            {
+                logger?.LogError($"Could not read the SQL Server's Microsoft Entra administrator (HTTP {ex.Status}). " +
+                    "Verify the installer can read Microsoft.Sql/servers/administrators. Authentication will not be guessed.");
+                throw;
             }
 
             logger?.LogInformation(
@@ -95,10 +129,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
     public class SqlIdentityAccessTask
     {
         private readonly ILogger _logger;
+        private readonly IEntraPrincipalResolver _resolver;
 
-        public SqlIdentityAccessTask(ILogger logger)
+        public SqlIdentityAccessTask(ILogger logger, IEntraPrincipalResolver resolver = null)
         {
             _logger = logger;
+            _resolver = resolver;
         }
 
         /// <summary>
@@ -106,9 +142,20 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// database roles the runtime needs.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// Best-effort by design: it returns false rather than throwing, because a failure here does not
         /// invalidate the rest of the install and the operator can grant access by hand. It is also
         /// idempotent, so re-running the installer is safe.
+        /// </para>
+        /// <para>
+        /// <paramref name="principalObjectId"/> is what ARM reports for a system-assigned managed identity,
+        /// but it is NOT what Azure SQL matches the sign-in against: a service principal - which a managed
+        /// identity is - is identified by its <b>application (client) ID</b>. The two are different GUIDs,
+        /// and SQL Server does not validate either, so using the object ID produces a user that exists, sits
+        /// in the right roles, and is refused at every sign-in. So the application ID is resolved from
+        /// Microsoft Graph, and when that is not permitted we let SQL Server resolve the name itself with
+        /// <c>FROM EXTERNAL PROVIDER</c> instead of writing an identifier we know to be wrong.
+        /// </para>
         /// </remarks>
         public async Task<bool> GrantDatabaseAccessAsync(string connectionString, string principalName, Guid principalObjectId, IEnumerable<string> roles)
         {
@@ -126,7 +173,30 @@ namespace App.ControlPanel.Engine.InstallerTasks
             }
 
             var roleList = roles == null ? new List<string>() : roles.ToList();
-            var sql = SqlContainedUserScript.CreateUserAndGrantRoles(principalName, principalObjectId, roleList);
+
+            Guid? applicationId = null;
+            if (_resolver != null)
+            {
+                try
+                {
+                    applicationId = await _resolver.ResolveApplicationIdAsync(principalObjectId, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogInformation($"Could not resolve the application ID for '{principalName}': {ex.Message}");
+                }
+            }
+
+            string sql = BuildGrantScript(principalName, applicationId, roleList);
+            if (applicationId == null)
+            {
+                _logger.LogInformation(
+                    $"Could not read the application ID of managed identity '{principalName}' from Microsoft Graph, so SQL Server " +
+                    "will be asked to resolve the name itself. That needs the SQL Server's own identity to hold the Microsoft " +
+                    "Entra 'Directory Readers' role; if it does not, the grant fails with \"Principal could not be found\" and " +
+                    "you should instead grant the installer's app registration 'Application.Read.All' (or 'Directory.Read.All') " +
+                    "and re-run.");
+            }
 
             _logger.LogInformation(
                 $"Granting the App Service managed identity '{principalName}' access to the database " +
@@ -162,6 +232,22 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             _logger.LogInformation($"App Service managed identity '{principalName}' now has database access.");
             return true;
+        }
+
+        /// <summary>
+        /// Chooses how to declare the managed identity's contained user: by its application ID when we
+        /// could read one, otherwise by asking SQL Server to resolve the name itself.
+        /// </summary>
+        /// <remarks>
+        /// Split out so the choice is testable without a database. The object ID is deliberately never a
+        /// candidate - writing it would create a user that exists, holds the right roles, and is refused at
+        /// every sign-in.
+        /// </remarks>
+        public static string BuildGrantScript(string principalName, Guid? applicationId, IEnumerable<string> roles)
+        {
+            return applicationId != null
+                ? SqlContainedUserScript.CreateUserAndGrantRoles(principalName, applicationId.Value, roles)
+                : SqlContainedUserScript.CreateUserFromExternalProviderAndGrantRoles(principalName, roles);
         }
     }
 }

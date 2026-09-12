@@ -12,7 +12,9 @@ namespace Tests.FakeDataGen.Demo
     {
         // Bump when generation rules change: completed targets must not silently reuse an older shape.
         // History: contoso-demo-v2 - Copilot report rows now cover the whole window (28-day warm-up).
-        // History: contoso-demo-v3 - selectable imported workloads and detailed activity.
+        //          contoso-demo-v3 - selectable imported workloads and detailed activity, plus agent
+        //                            costs: billed Copilot Studio credits (per agent and per user),
+        //                            the Copilot Credits capacity snapshot and daily Azure agent spend.
         public const string FormatVersion = "contoso-demo-v3";
 
         // Accepted ranges, shared with the interactive menu (DemoInteractive) so the two entry points
@@ -161,9 +163,10 @@ asks for the same values, prints the equivalent command line, and runs this same
 Includes demographics, overlapping/rare SKUs, explicit zero daily workload rows, weekday
 office-hour activity with time zones/leave, Copilot adoption personas/agents/Cowork,
 licensed-only D28 v2 snapshots, paired metadata-only interactions, SharePoint/web facts,
-Teams call/channel detail, sent email, Power Platform audit events and complete-week
-Power BI activity/device profiles. Power BI report views are separate from these profiles.
-No real message, prompt or response text. All text/sentiment is synthetic.
+Teams call/channel detail, sent email, Power Platform audit events, billed Copilot Studio
+credits per agent and per user with a capacity snapshot, daily Azure agent spend, and
+complete-week Power BI activity/device profiles. Power BI report views are separate from
+these profiles. No real message, prompt or response text. All text/sentiment is synthetic.
 No schema/config changes; existing schema is applied through DatabaseUpgrader on the NEW DB.
 Exact completed reruns are read-only no-ops. Unmarked, changed or incomplete targets fail;
 choose a new name after a failure. There is deliberately no reset or production-connection option.
@@ -172,6 +175,8 @@ TEST database. It adds a fresh synthetic population without modifying existing u
 It never creates/upgrades the target, compiles global profiles or invents tenant-wide
 Copilot totals. Completed batches remain after failure; there is no automatic cleanup.
 Large populations/histories can exceed LocalDB's storage limit: preview the row counts first.
+Agent costs follow the generated agent traffic, so a population that never uses an agent gets
+no Copilot Studio credits; Azure's fixed meters are still billed because the resources exist.
 Not generated: tenant capacity/licence history, installation/health success logs or
 live cognitive enrichment. Demo activity is representative, not an importer load test.
 Full guide: https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Synthetic-demo-data";

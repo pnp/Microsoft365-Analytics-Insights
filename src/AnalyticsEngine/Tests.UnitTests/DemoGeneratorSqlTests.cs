@@ -46,6 +46,25 @@ WHERE DATEDIFF(day,'19000101',time_stamp)%7 IN (5,6);"));
                     Assert.AreEqual(13L, Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.urls WHERE full_url LIKE N'%Καλημέρα%';"));
                     Assert.AreEqual(0L, Scalar(connection, @"SELECT COUNT_BIG(*) FROM (
 SELECT user_id,license_type_id FROM dbo.user_license_type_lookups GROUP BY user_id,license_type_id HAVING COUNT_BIG(*)>1) d;"));
+
+                    // Agent costs. These land on tables created only by migrations, carry decimal(18,6)
+                    // money columns, a real foreign key to dbo.users and two unique upsert indexes - none of
+                    // which an in-memory stream can prove.
+                    Assert.IsTrue(Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.copilot_studio_credit_daily;") > 0);
+                    Assert.IsTrue(Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.copilot_studio_credit_user_daily;") > 0);
+                    Assert.IsTrue(Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.azure_cost_daily;") > 0);
+                    Assert.AreEqual(4L, Scalar(connection, "SELECT COUNT_BIG(DISTINCT import_name) FROM dbo.agent_cost_import_log;"));
+                    Assert.AreEqual(0L, Scalar(connection, @"SELECT COUNT_BIG(*) FROM dbo.copilot_studio_credit_daily
+WHERE billed_credits <= 0 OR billed_credits <> ROUND(billed_credits,2);"),
+                        "A decimal parameter with the wrong scale silently truncates the money column.");
+                    Assert.AreEqual(0L, Scalar(connection, @"SELECT COUNT_BIG(*) FROM dbo.copilot_studio_credit_user_daily c
+JOIN dbo.users u ON u.id = c.user_id WHERE u.azure_ad_id <> c.entra_object_id;"),
+                        "The importer resolves a billing row to a user on azure_ad_id, so the demo must agree.");
+                    Assert.AreEqual(1L, Scalar(connection, @"SELECT COUNT_BIG(DISTINCT entra_object_id)
+FROM dbo.copilot_studio_credit_user_daily WHERE user_id IS NULL;"),
+                        "Exactly one synthetic person has left the directory and must still report their spend.");
+                    Assert.IsTrue(Scalar(connection, @"SELECT COUNT_BIG(*) FROM dbo.copilot_studio_credit_daily
+WHERE knowledge_sources LIKE N'%Καλημέρα%';") > 0, "nvarchar knowledge sources must survive the round trip.");
                 }
                 using (var raw = new RawContext(SqlDemoDatabase.LocalConnection(name)))
                 {

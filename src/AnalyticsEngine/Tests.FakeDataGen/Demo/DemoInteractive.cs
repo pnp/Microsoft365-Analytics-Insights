@@ -96,8 +96,9 @@ namespace Tests.FakeDataGen.Demo
             prompt.Write(string.Empty);
             prompt.Write("Generates the same rounded, entirely synthetic Contoso data set as");
             prompt.Write("'Tests.FakeDataGen.exe demo': licences, daily workload activity, Copilot adoption");
-            prompt.Write("and D28 snapshots, Teams detail, sent email, SharePoint/web and Power Platform");
-            prompt.Write("activity. No real message, prompt or response text is generated.");
+            prompt.Write("and D28 snapshots, metadata-only interactions, Teams detail, sent email,");
+            prompt.Write("SharePoint/web and Power Platform activity, billed Copilot Studio credits and");
+            prompt.Write("Azure agent spend. No real message, prompt or response text is generated.");
             prompt.Write("Selected areas: " + DemoAreas.Format(areas) + ". Shared synthetic users/licences are included.");
             prompt.Write(string.Empty);
             if (existing)

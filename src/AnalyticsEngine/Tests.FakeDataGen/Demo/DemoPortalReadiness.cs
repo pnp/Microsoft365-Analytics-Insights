@@ -38,9 +38,16 @@ namespace Tests.FakeDataGen.Demo
             write("default to false.");
             if ((areas & (DemoArea.Copilot | DemoArea.CopilotHistory)) != 0)
             {
-                write("Without official usage-report data and GraphCopilotUsageReports=True, the Licence");
-                write("assignments report cannot measure Copilot activity bands. Audit and interaction");
-                write("history are positive evidence only; they do not replace the official usage feed.");
+                write("In particular, WITHOUT GraphCopilotUsageReports=True the Licence assignments report");
+                write("shows Copilot as \"Not measured\" for every user even though this database is full of");
+                write("Copilot activity: the audit and interaction sources are positive evidence only and");
+                write("never produce activity bands.");
+            }
+            if ((areas & DemoArea.CopilotStudio) != 0)
+            {
+                write("Likewise the Agent costs report leads with \"Neither agent cost import is switched on\"");
+                write("until CopilotStudioCredits and AzureCostManagement are set, no matter how much billing");
+                write("data the database holds - that banner is read from this setting, never from the rows.");
             }
             write("Use these flags on the demo portal, not on live import jobs connected to the synthetic database.");
         }
@@ -66,6 +73,11 @@ namespace Tests.FakeDataGen.Demo
             if ((areas & (DemoArea.PowerApps | DemoArea.PowerAutomate | DemoArea.PowerBI | DemoArea.CopilotStudio)) != 0)
                 flags.Add("ImportPowerPlatform=True");
             if ((areas & DemoArea.Dlp) != 0) flags.Add("ImportDlp=True");
+            if ((areas & DemoArea.CopilotStudio) != 0)
+            {
+                flags.Add("CopilotStudioCredits=True");
+                flags.Add("AzureCostManagement=True");
+            }
             return string.Join(";", flags);
         }
 

@@ -19,9 +19,10 @@ This non-interactive command creates a **new LocalDB-only** target, applies the
 existing schema, and generates current overlapping licence assignments, daily
 workload coverage (including explicit zero rows), Copilot adoption and official
 D28 snapshots, metadata-only prompt/response pairs, SharePoint/web facts, detailed
-Teams activity, sent email, Power Platform activity, and complete-week Power BI
-profiles. Actual Power BI report views are separate from these profiling tables.
-It never reads a configured production connection.
+Teams activity, sent email, Power Platform activity, billed Copilot Studio credits and
+daily Azure agent spend, and complete-week Power BI profiles. Actual Power BI report
+views are separate from these profiling tables. It never reads a configured production
+connection.
 Exact completed reruns are read-only no-ops; other existing targets are refused.
 `--preview` runs the same generator without SQL. Fix `--as-of` and `--seed` for
 reproducibility. `--help` lists all flags and the deliberately unsupported datasets.
@@ -152,7 +153,7 @@ A finished run prints the two settings a web application needs:
 
 ```
   connectionStrings   SPOInsightsEntities = Server=(localdb)\MSSQLLocalDB;Database=ContosoDemo_X;Integrated Security=True
-  appSettings         ImportJobSettings = GraphUsersMetadata=True;GraphUsageReports=True;GraphCopilotUsageReports=True;Copilot=True;CopilotInteractionHistory=True;ActivityLog=True;WebTraffic=True;Calls=True;GraphTeams=True;SentEmails=True;ImportPowerPlatform=True;ImportDlp=True
+  appSettings         ImportJobSettings = GraphUsersMetadata=True;GraphUsageReports=True;GraphCopilotUsageReports=True;Copilot=True;CopilotInteractionHistory=True;ActivityLog=True;WebTraffic=True;Calls=True;GraphTeams=True;SentEmails=True;ImportPowerPlatform=True;ImportDlp=True;CopilotStudioCredits=True;AzureCostManagement=True
 ```
 
 **The portal decides which workloads it can measure from `ImportJobSettings`, not
@@ -160,8 +161,11 @@ from the rows in the database**, and every one of those flags is opt-in with a
 default of `false`. Without `GraphCopilotUsageReports=True` the Licence
 assignments report renders Copilot as *"Not measured"* for every user even though
 the database is full of Copilot activity: the Copilot audit and interaction
-sources are positive evidence only and never produce activity bands. No
-generated data can change that, so the generator prints the setting instead.
+sources are positive evidence only and never produce activity bands. The Agent
+costs page does the same thing more visibly - it leads with *"Neither agent cost
+import is switched on"* until `CopilotStudioCredits` and `AzureCostManagement`
+are set, however much billing data the database holds. No generated data can
+change either, so the generator prints the setting instead.
 
 It then runs the Licence assignments report's **own coverage query** against the
 finished database and prints what the portal will be able to measure:
@@ -188,6 +192,40 @@ Two further things are worth knowing when a workload reads as unmeasured:
   Before that warm-up existed they began 27 days in, which left short-history
   demos (`--days 31` to `--days 35`) with no Copilot coverage at all while the
   M365 workloads still measured fine.
+
+#### Agent costs
+
+The demo fills all four agent-cost tables, so the **Agent costs** page has
+figures on every panel: billed Copilot Studio credits per agent
+(`copilot_studio_credit_daily`), the same spend per person
+(`copilot_studio_credit_user_daily`), a daily Copilot Credits entitlement
+snapshot (`copilot_studio_credit_capacity`), daily Azure spend
+(`azure_cost_daily`) and a clean run per import in `agent_cost_import_log`.
+
+Things worth knowing about that data:
+
+- **The credits are derived from the demo's own agent traffic**, so the agent the
+  Copilot Adoption report shows as busiest is also the one the cost report shows
+  as most expensive. A population that never uses an agent gets no credits, no
+  per-user rows and no capacity snapshot - nothing is invented.
+- **Azure spend is the deliberate exception.** A deployed AI Search index or App
+  Service plan is billed whether or not anybody talks to the agent, so its fixed
+  meters are charged every day and only the token meters follow usage. The last
+  few days are flagged `is_estimated`, as an open Azure billing period is.
+- **The per-agent and per-user totals do not reconcile exactly**, which is the
+  honest shape: Microsoft reports them through different endpoints and neither is
+  a breakdown of the other. The page says so too.
+- The feature names cover all three harness classifications, including one the
+  classifier deliberately does not recognise, so the "unclassified harness"
+  figure is exercised rather than permanently zero. One synthetic person has left
+  the directory, so the unresolved-user path is exercised as well.
+- The credit rates and Azure meter prices are **illustrative, not Microsoft's
+  price list**. They only need to be plausible and stable for the relative
+  figures on the page to make sense.
+- `agent_cost_import_log` rows are written even when there was nothing to
+  import. That is what lets the report tell *"the import has never run"* apart
+  from *"the import ran, succeeded, and this tenant has no Copilot Studio
+  agents"* - two states that otherwise both render as zero.
 
 ### Copilot activity
 

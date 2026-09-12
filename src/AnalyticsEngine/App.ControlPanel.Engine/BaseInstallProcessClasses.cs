@@ -1,4 +1,5 @@
 ﻿using App.ControlPanel.Engine.Entities;
+using App.ControlPanel.Engine.InstallerTasks;
 using App.ControlPanel.Engine.Models;
 using Azure.Identity;
 using CloudInstallEngine.Azure;
@@ -101,7 +102,17 @@ namespace App.ControlPanel.Engine
         /// correct behind NAT, proxies and split-tunnel VPNs. Retries are bounded so a permanently broken
         /// environment cannot loop. See issue #326.
         /// </remarks>
-        public async Task<bool> VerifySqlWithFirewallSelfHeal(string connectionString, Func<string, Task<bool>> repairFirewallForIp)
+        /// <param name="repairEntraAccess">
+        /// Repairs the installer's own Microsoft Entra access to the database - by signing an administrator
+        /// in and creating the contained user it needs - returning whether it succeeded. Null disables that
+        /// self-healing (a headless run, or a SQL-authentication deployment where it makes no sense).
+        /// </param>
+        /// <param name="entraLockoutRemedy">
+        /// Explanation of the login rejection in terms of this server's actual administrator assignment,
+        /// logged before attempting the repair. Optional.
+        /// </param>
+        public async Task<bool> VerifySqlWithFirewallSelfHeal(string connectionString, Func<string, Task<bool>> repairFirewallForIp,
+            Func<Task<bool>> repairEntraAccess = null, string entraLockoutRemedy = null)
         {
             if (string.IsNullOrEmpty(connectionString))
             {
@@ -110,8 +121,10 @@ namespace App.ControlPanel.Engine
             if (_sqlTestDoneAlready) return true;
 
             string repairedForIp = null;
+            var attempt = 0;
+            var entraRepairAttempted = false;
 
-            for (var attempt = 0; ; attempt++)
+            while (true)
             {
                 var (ok, error) = await TrySqlConnection(connectionString);
                 if (ok)
@@ -123,6 +136,44 @@ namespace App.ControlPanel.Engine
                     }
                     _sqlTestDoneAlready = true;
                     return true;
+                }
+
+                // A token-authenticated login rejection is self-healable too, but by a completely different
+                // route to a firewall block: nothing about the network is wrong, the installer's service
+                // principal simply has no user in the database. Attempted once only - a second go would just
+                // ask the operator to sign in again for the same reason.
+                var entraLockout = error != null
+                    && error.Number == SqlEntraAccessBootstrap.SqlLoginFailedErrorNumber
+                    && AzureSqlTokenAuth.NeedsAccessToken(connectionString);
+
+                if (entraLockout && !entraRepairAttempted)
+                {
+                    entraRepairAttempted = true;
+
+                    var repaired = false;
+                    if (repairEntraAccess != null)
+                    {
+                        try
+                        {
+                            repaired = await repairEntraAccess();
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError($"Could not repair the installer's database access: {ex.Message}");
+                        }
+                    }
+
+                    // A contained user takes effect immediately, so retry straight away rather than
+                    // spending one of the firewall backoff waits on it. Nothing is logged as an error on
+                    // this path: the install recovered, so the summary must not report a failure.
+                    if (repaired) continue;
+
+                    // Only now is this genuinely unrecoverable, so explain it in terms of the server's
+                    // actual administrator assignment before the generic connection-failure guidance.
+                    if (!string.IsNullOrEmpty(entraLockoutRemedy)) _logger.LogError(entraLockoutRemedy);
+
+                    ReportSqlConnectionFailure(connectionString, error);
+                    return false;
                 }
 
                 // Only a firewall rejection is self-healable, and only while retries remain.
@@ -201,6 +252,7 @@ namespace App.ControlPanel.Engine
                 var wait = _firewallRepairRetryBackoff[attempt];
                 _logger.LogInformation($"Waiting {wait.TotalSeconds:0}s for the SQL Server firewall change to propagate, then retrying...");
                 await Task.Delay(wait);
+                attempt++;
             }
         }
 
@@ -246,15 +298,32 @@ namespace App.ControlPanel.Engine
 
         void ReportSqlConnectionFailure(string connectionString, SqlException error)
         {
+            if (error == null) return; // Connection/token creation already reported its error.
+
             var dataSource = new SqlConnectionStringBuilder(connectionString).DataSource;
 
             _logger.LogError($"Error testing SQL connection to '{dataSource}': '{error?.Message}'. " +
-                $"Verify network connectivity to server.");
+                GetSqlConnectionFailureGuidance(connectionString, error.Number));
 
-            if (PrivateNetworkGuidance.IsPrivateNetworkOnly(Config))
+            if (error.Number != 18456 && PrivateNetworkGuidance.IsPrivateNetworkOnly(Config))
             {
                 _logger.LogError(PrivateNetworkGuidance.BuildVmOnVNetGuidance("the SQL connectivity test and database schema initialisation", Config.NetworkConfig?.VNetName));
             }
+        }
+
+        internal static string GetSqlConnectionFailureGuidance(string connectionString, int errorNumber)
+        {
+            if (errorNumber != 18456) return "Verify network connectivity to server.";
+
+            return AzureSqlTokenAuth.NeedsAccessToken(connectionString)
+                ? "SQL Server rejected the Microsoft Entra identity. The installer signs in as its app registration, " +
+                  "not the interactive Azure portal user or the App Service managed identity. An Entra administrator " +
+                  "must grant that installer principal access to the target database with schema-upgrade permissions. " +
+                  "If the server permits SQL logins, select SQL Server authentication and supply its administrator password; " +
+                  "SQL passwords cannot be used on an Entra-only server. This is a login failure, not a firewall rejection."
+                : "SQL Server rejected the SQL login. Verify the SQL administrator username/password and access to the " +
+                  "target database, and confirm Microsoft Entra-only authentication is disabled. This is a login failure, " +
+                  "not a firewall rejection.";
         }
 
         #region ExecuteAndReportFailure

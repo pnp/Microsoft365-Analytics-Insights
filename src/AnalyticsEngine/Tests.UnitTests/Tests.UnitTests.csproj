@@ -148,6 +148,7 @@
     <Compile Include="AgentCostUserResolutionTests.cs" />
     <Compile Include="AgentCostSqlIntegrationTests.cs" />
     <Compile Include="AzureSqlEntraAuthTests.cs" />
+    <Compile Include="InstallTests\SqlAuthenticationDetectionTests.cs" />
     <Compile Include="ActivityReportLoaderTimeoutTests.cs" />
     <Compile Include="ActivityReportSetMinMaxTests.cs" />
     <Compile Include="ActivitySaveConcurrencyPolicyTests.cs" />
@@ -162,6 +163,7 @@
     <Compile Include="AppInsightsSavePortTests.cs" />
     <Compile Include="AppInsightsSearchRulesTests.cs" />
     <Compile Include="CopilotDroppedAuditFieldsTests.cs" />
+    <Compile Include="DemoAgentCostReportTests.cs" />
     <Compile Include="DemoGeneratorTests.cs" />
     <Compile Include="DemoGeneratorSqlTests.cs" />
     <Compile Include="DemoLicenceActivityCoverageTests.cs" />
@@ -170,6 +172,9 @@
     <Compile Include="DemoExistingDatabaseTests.cs" />
     <Compile Include="DemoCollaborationTests.cs" />
     <Compile Include="DemoPowerPlatformTests.cs" />
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoAgentCosts.cs">
+      <Link>DemoGenerator\DemoAgentCosts.cs</Link>
+    </Compile>
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoAreas.cs">
       <Link>DemoGenerator\DemoAreas.cs</Link>
     </Compile>
@@ -351,6 +356,7 @@
     <Compile Include="InstallTests\ImportToggleVerificationCoverageTests.cs" />
     <Compile Include="InstallTests\InstallEngineTests.cs" />
     <Compile Include="InstallTests\InstallFailureDiagnosisTests.cs" />
+    <Compile Include="InstallTests\InstallerAuthAndEndpointTests.cs" />
     <Compile Include="InstallTests\KeyVaultFirewallConfigTaskTests.cs" />
     <Compile Include="InstallTests\ServiceBusNamespaceInstallTaskTests.cs" />
     <Compile Include="InstallTests\RbacPermissionProbeTests.cs" />
@@ -559,5 +565,4 @@
     <TransformXml Source="App.Template.config" Transform="App.$(Configuration).config" Destination="App.config" />
   </Target>
 </Project>
-
 

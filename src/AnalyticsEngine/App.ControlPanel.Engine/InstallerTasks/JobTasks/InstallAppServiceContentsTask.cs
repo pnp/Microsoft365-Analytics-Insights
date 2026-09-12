@@ -70,6 +70,30 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 await PublishZipAsync(kuduDetails, deploymentPackage, _proxyConfig);
             }
 
+            // The zip deploy wrote new binaries underneath a running AppDomain, which leaves the old worker
+            // process holding shadow copies of the previous build. The first requests then fail with
+            // ConfigurationErrorsException "Cannot create/shadow copy '<assembly>' when that file already
+            // exists" and the site serves HTTP 500 until the app pool recycles on its own - which looks
+            // exactly like a failed install to the warm-up step that runs next. An explicit restart drops
+            // the old worker deterministically.
+            //
+            // synchronous: true matters. The default is asynchronous, where the await returns as soon as ARM
+            // accepts the request - the warm-up would then race the recycle and could even pass against the
+            // pre-restart worker. softRestart: false is the full restart ("by default the API always restarts
+            // and reprovisions the app"; true would restart only if it judged it necessary).
+            _logger.LogInformation("Restarting App Service so the newly deployed binaries load into a clean worker process...");
+            try
+            {
+                await webApp.Value.RestartAsync(softRestart: false, synchronous: true);
+            }
+            catch (Exception ex)
+            {
+                // Not fatal: the app pool will recycle eventually, and the warm-up that follows retries 5xx
+                // for three minutes. Warn so a 500 during warm-up is attributable rather than mysterious.
+                _logger.LogWarning($"Could not restart the App Service after deployment: {ex.Message}. " +
+                    "The site may return HTTP 500 'Cannot create/shadow copy' errors until its app pool recycles by itself.");
+            }
+
             var url = $"https://{webApp.Value.Data.HostNames.First()}/";
             _logger.LogInformation($"App Service configured & running selected release. URL: {url}");
 
