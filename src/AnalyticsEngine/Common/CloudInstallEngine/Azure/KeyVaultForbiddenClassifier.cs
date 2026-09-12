@@ -61,6 +61,10 @@ namespace CloudInstallEngine.Azure
         static readonly string[] PermissionMarkers =
         {
             "forbiddenbypolicy",
+            // Key Vault's inner error code when the vault uses the RBAC permission model and the caller has
+            // no matching role assignment. Access policies are ignored on such vaults, so this specifically
+            // means "assign a Key Vault data-plane role" rather than "edit the access policies blade".
+            "forbiddenbyrbac",
             "does not have secrets",
             "does not have keys",
             "does not have certificates",

@@ -141,7 +141,9 @@ FROM sys.columns AS c WHERE c.object_id = OBJECT_ID(@table);";
                 if (Convert.ToInt64(Scalar(_connection, "SELECT COUNT_BIG(*) FROM dbo.[" + table.Name + "];")) != expected)
                     throw new InvalidOperationException("Persisted row count differs from the generated stream for " + table.Name);
             }
-            if (_options.CompileProfiles)
+            if (_options.CompileProfiles && !_options.HasAllDailyWorkloads)
+                progress?.Invoke("Weekly cross-workload profiles skipped: select all six daily M365 workloads to compile complete profiles.");
+            if (_options.CompileProfiles && _options.HasAllDailyWorkloads)
             {
                 var monday = _options.Start;
                 while (monday.DayOfWeek != DayOfWeek.Monday) monday = monday.AddDays(1);

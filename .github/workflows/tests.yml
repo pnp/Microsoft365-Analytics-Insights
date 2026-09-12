@@ -216,6 +216,12 @@ jobs:
           # spent and the API answers 403 - failing the required check for reasons unrelated to the change.
           # The built-in token raises it to 5,000/hour. Read-only public metadata; no extra permission needed.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Deliberately a short smoke, not a scale run. Tests.UnitTests links the Tests.FakeDataGen *sources*
+      # (<Compile Include="..\Tests.FakeDataGen\..."/>) rather than referencing the project, so the
+      # solution build above never produces the EXE - this step is what proves the shipped executable
+      # actually starts, resolves its binding redirects and returns the right exit codes.
+      # BuildProjectReferences=false keeps it to that one project, and Verify-DemoCommand.ps1 uses the
+      # smallest generation the CLI accepts so the runner pays only the unavoidable schema-apply cost.
       - name: Build and smoke-test the demo command
         if: needs.setup_tests.outputs.run_dotnet == 'true'
         shell: pwsh
