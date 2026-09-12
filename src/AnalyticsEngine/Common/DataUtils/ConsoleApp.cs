@@ -44,7 +44,7 @@ namespace DataUtils
         {
 
             logger.LogInformation($"Office 365 Advanced Analytics engine START: '{buildLabel}'.");
-            var sqlConnectionInfo = new System.Data.SqlClient.SqlConnectionStringBuilder(efConnectionString);
+            var sqlConnectionInfo = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(efConnectionString);
             logger.LogInformation($"Destination SQL Server='{sqlConnectionInfo.DataSource}', DB='{sqlConnectionInfo.InitialCatalog}'.");
             if (!string.IsNullOrEmpty(userGroupsFilterString))
             {

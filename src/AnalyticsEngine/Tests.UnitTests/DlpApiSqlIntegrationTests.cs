@@ -5,7 +5,7 @@ using Common.Entities.Entities.AuditLog;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Data.Entity.Migrations;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Linq;
 using System.Threading.Tasks;
 using Configuration = Common.Entities.Migrations.Configuration;
@@ -39,14 +39,14 @@ namespace Tests.UnitTests
         private static string _connectionString;
 
         private const string MasterConnection =
-            @"Data Source=(localdb)\MSSQLLocalDB;Initial Catalog=master;Integrated Security=true";
+            @"Data Source=(localdb)\MSSQLLocalDB;Initial Catalog=master;Integrated Security=true;TrustServerCertificate=True";
 
         [ClassInitialize]
         public static void CreateMigratedDatabase(TestContext context)
         {
             _database = "DlpApiIntegration_" + Guid.NewGuid().ToString("N").Substring(0, 12);
             _connectionString =
-                $@"Data Source=(localdb)\MSSQLLocalDB;Initial Catalog={_database};Integrated Security=true;MultipleActiveResultSets=True";
+                $@"Data Source=(localdb)\MSSQLLocalDB;Initial Catalog={_database};Integrated Security=true;MultipleActiveResultSets=True;TrustServerCertificate=True";
 
             Execute(MasterConnection, $"CREATE DATABASE [{_database}];");
 
@@ -54,7 +54,7 @@ namespace Tests.UnitTests
             // rather than a hand-built subset that could omit the very column a query needs.
             var migrationConfig = new Configuration
             {
-                TargetDatabase = new System.Data.Entity.Infrastructure.DbConnectionInfo(_connectionString, "System.Data.SqlClient")
+                TargetDatabase = new System.Data.Entity.Infrastructure.DbConnectionInfo(_connectionString, "Microsoft.Data.SqlClient")
             };
             new DbMigrator(migrationConfig).Update();
         }

@@ -3,7 +3,7 @@ using App.ControlPanel.Engine.Models;
 using System;
 using System.Collections.Generic;
 using System.Data;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -38,6 +38,7 @@ namespace Tests.FakeDataGen.Demo
             IntegratedSecurity = true,
             Pooling = false,
             ConnectTimeout = 30,
+            TrustServerCertificate = true,
             ApplicationName = "Contoso synthetic demo generator"
         }.ConnectionString;
 

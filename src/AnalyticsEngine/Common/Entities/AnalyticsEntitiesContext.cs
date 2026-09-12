@@ -583,12 +583,12 @@ namespace Common.Entities
     /// <summary>
     /// config automatically read by EF
     /// </summary>
-    public class SPOInsightsDBConfiguration : DbConfiguration
+    public class SPOInsightsDBConfiguration : System.Data.Entity.SqlServer.MicrosoftSqlDbConfiguration
     {
         // https://docs.microsoft.com/en-us/ef/ef6/fundamentals/connection-resiliency/retry-logic
         public SPOInsightsDBConfiguration()
         {
-            SetExecutionStrategy("System.Data.SqlClient", () => new System.Data.Entity.SqlServer.SqlAzureExecutionStrategy());
+            SetExecutionStrategy("Microsoft.Data.SqlClient", () => new System.Data.Entity.SqlServer.MicrosoftSqlAzureExecutionStrategy());
 
             // Lets EF connect to an Azure SQL server that has SQL authentication disabled, by attaching a
             // Microsoft Entra ID access token to connections whose connection string carries no

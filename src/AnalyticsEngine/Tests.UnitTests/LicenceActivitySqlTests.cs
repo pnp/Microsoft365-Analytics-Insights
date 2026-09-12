@@ -2,7 +2,7 @@ using Common.Entities.LicenceActivity;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Globalization;
 using System.Linq;
 using System.Threading;
@@ -1326,7 +1326,7 @@ SELECT N'Synthetic limit ' + CAST(n AS nvarchar(10)),
        N'LIMIT_' + CAST(n AS nvarchar(10))
 FROM Numbers;");
 
-                var exception = await Assert.ThrowsExceptionAsync<System.Data.SqlClient.SqlException>(() =>
+                var exception = await Assert.ThrowsExceptionAsync<Microsoft.Data.SqlClient.SqlException>(() =>
                     fixture.Store().LoadOverviewAsync(
                         OverviewQuery(), Sources(usageReports: false),
                         NullLicenceActivityDiagnostics.Instance, CancellationToken.None));

@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Configuration;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Text.RegularExpressions;
 
 namespace Tests.UnitTests
@@ -51,6 +51,11 @@ namespace Tests.UnitTests
 
             var master = new SqlConnectionStringBuilder(configured.ConnectionString) { InitialCatalog = "master" };
             var scratch = new SqlConnectionStringBuilder(configured.ConnectionString) { InitialCatalog = name };
+            if (master.DataSource.IndexOf("(localdb)", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                master.TrustServerCertificate = true;
+                scratch.TrustServerCertificate = true;
+            }
 
             var database = new ScratchDatabase(name, master.ConnectionString, scratch.ConnectionString);
             ExecuteOn(master.ConnectionString, $"CREATE DATABASE [{name}];");

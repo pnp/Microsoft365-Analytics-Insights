@@ -4,7 +4,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Data;
 using System.Data.Entity.Migrations;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 // Aliased rather than imported: an unqualified `using System.Configuration` makes `Configuration`
 // ambiguous with the EF migrations Configuration this file already uses.
 using ConfigurationManager = System.Configuration.ConfigurationManager;

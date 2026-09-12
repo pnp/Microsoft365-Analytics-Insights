@@ -2,21 +2,22 @@ using DataUtils.Sql;
 using System.Data;
 using System.Data.Common;
 using System.Data.Entity.Infrastructure.Interception;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 
 namespace Common.Entities.Sql
 {
     /// <summary>
-    /// Attaches a Microsoft Entra ID access token to every Entity Framework connection that needs one.
+    /// Attaches a Microsoft Entra ID access token to every Entity Framework connection that still uses the legacy token fallback.
     /// </summary>
     /// <remarks>
     /// <para>
     /// An Azure SQL server can be created with SQL authentication disabled, in which case the connection
     /// string has no <c>user id</c> / <c>password</c> and the caller must set
-    /// <see cref="SqlConnection.AccessToken"/> instead. EF6 has no built-in support for that, but it does
-    /// route connection opens through <see cref="DbInterception"/> - including the ones the migration
-    /// pipeline makes for itself, which is the case that matters here, because a schema upgrade opens
-    /// connections EF creates internally rather than the context's own.
+    /// <see cref="SqlConnection.AccessToken"/> instead. The Microsoft.Data.SqlClient provider can handle
+    /// modern Authentication keywords natively, but this compatibility path is deliberately kept for
+    /// existing connection strings. EF routes connection opens through <see cref="DbInterception"/> -
+    /// including the ones the migration pipeline makes for itself, which is the case that matters here,
+    /// because a schema upgrade opens connections EF creates internally rather than the context's own.
     /// </para>
     /// <para>
     /// Deliberately inert unless the connection string genuinely needs a token

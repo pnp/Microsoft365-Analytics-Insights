@@ -410,7 +410,7 @@ namespace WebJob.Office365ActivityImporter
                                  select allDownloads).Count();
                     logger.LogInformation($"Found {count.ToString("n0")} events in table already. Test passed!");
                 }
-                catch (System.Data.SqlClient.SqlException ex)
+                catch (Microsoft.Data.SqlClient.SqlException ex)
                 {
                     logger.LogError(ex, $"Got a SQL error: {ex.Message}");
                     ConsoleApp.BombOut(true);
@@ -426,7 +426,7 @@ namespace WebJob.Office365ActivityImporter
             ConsoleApp.PrintStartupAndLoggingConfig(settings.ConnectionStrings.DatabaseConnectionString, settings.BuildLabel, settings.UserGroupsFilter, logger);
 
             var efConnectionString = ConfigurationManager.ConnectionStrings["SPOInsightsEntities"].ConnectionString;
-            var sqlConnectionInfo = new System.Data.SqlClient.SqlConnectionStringBuilder(efConnectionString);
+            var sqlConnectionInfo = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(efConnectionString);
 
             logger.LogInformation("\nConfigured values:");
 

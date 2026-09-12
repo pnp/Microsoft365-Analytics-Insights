@@ -56,6 +56,12 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.Data.SqlClient">
+      <Version>6.1.4</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFramework.SqlServer">
+      <Version>6.5.2</Version>
+    </PackageReference>
     <PackageReference Include="System.ClientModel">
       <Version>1.15.0</Version>
     </PackageReference>
@@ -97,9 +103,6 @@
     </PackageReference>
     <PackageReference Include="System.Configuration.ConfigurationManager">
       <Version>10.0.11</Version>
-    </PackageReference>
-    <PackageReference Include="System.Data.SqlClient">
-      <Version>4.9.1</Version>
     </PackageReference>
     <PackageReference Include="System.Diagnostics.EventLog">
       <Version>10.0.11</Version>
