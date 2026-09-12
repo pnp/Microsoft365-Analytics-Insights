@@ -155,9 +155,9 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// End to end: a context built from a raw connection string - the shape
-        /// <c>DatabaseUpgrader</c> uses - must be described by EF under a provider name that has a
-        /// migrations SQL generator.
+        /// End to end, using the invariant name a real App Service deployment actually supplies: a context
+        /// built from a raw connection string - the shape <c>DatabaseUpgrader</c> uses - must be described
+        /// by EF under a provider name that has a migrations SQL generator.
         /// </summary>
         [TestMethod]
         public void ContextFromRawConnectionString_ResolvesAMigrationSqlGenerator()
@@ -165,11 +165,17 @@ namespace Tests.UnitTests
             var connectionString =
                 @"Data Source=(localdb)\MSSQLLocalDB;Initial Catalog=UnitTestingAnalytics;Integrated Security=true;TrustServerCertificate=True";
 
+            // Deliberately the LEGACY name, because that is what Azure App Service injects for a
+            // connection string saved as type SQLAzure.
             var info = new DbContextInfo(
                 typeof(AnalyticsEntitiesContext),
-                new DbConnectionInfo(connectionString, ModernInvariantName));
+                new DbConnectionInfo(connectionString, LegacyInvariantName));
 
             var reportedProvider = info.ConnectionProviderName;
+
+            Assert.AreEqual(ModernInvariantName, reportedProvider,
+                "EF must settle on the modern provider name even when handed the legacy one, because " +
+                "provider-specific services are keyed on the modern name.");
 
             var generator = DbConfiguration.DependencyResolver.GetService<Func<MigrationSqlGenerator>>(reportedProvider);
 
