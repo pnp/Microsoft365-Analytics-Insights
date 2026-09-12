@@ -26,7 +26,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
         public override async Task<AppServicePlanResource> ExecuteTaskReturnResult(object contextArg)
         {
             // Get/create plan
-            var plan = Container.GetAppServicePlans().Where(p => p.Data.Name == _config.ResourceName).SingleOrDefault();
+            var plan = Container.GetAppServicePlans().AsEnumerable().Where(p => p.Data.Name == _config.ResourceName).SingleOrDefault();
 
             if (plan == null)
             {

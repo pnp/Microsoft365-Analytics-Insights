@@ -26,7 +26,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var name = _config.GetNameConfigValue();
             var desiredAccess = _allowPublicAccess ? ServiceAccountPublicNetworkAccess.Enabled : ServiceAccountPublicNetworkAccess.Disabled;
 
-            var analytics = Container.GetCognitiveServicesAccounts().Where(s => s.Data.Name == name).SingleOrDefault();
+            var analytics = Container.GetCognitiveServicesAccounts().AsEnumerable().Where(s => s.Data.Name == name).SingleOrDefault();
 
             var logMsg = string.Empty;
             if (analytics == null)

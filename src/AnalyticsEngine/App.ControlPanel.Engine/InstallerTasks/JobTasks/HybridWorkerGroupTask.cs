@@ -44,7 +44,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
             try
             {
                 // Find automation account
-                var automationAccount = Container.GetAutomationAccounts().Where(s => s.Data.Name == automationAccountName).SingleOrDefault();
+                var automationAccount = Container.GetAutomationAccounts().AsEnumerable().Where(s => s.Data.Name == automationAccountName).SingleOrDefault();
                 if (automationAccount == null)
                 {
                     _logger.LogError($"Automation account '{automationAccountName}' not found. Cannot create hybrid worker group.");

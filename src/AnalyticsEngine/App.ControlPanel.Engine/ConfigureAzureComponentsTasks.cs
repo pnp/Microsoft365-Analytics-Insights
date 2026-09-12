@@ -367,7 +367,7 @@ namespace App.ControlPanel.Engine
                 {
                     var rules = sqlServer.GetSqlFirewallRules();
 
-                    var existing = rules
+                    var existing = rules.AsEnumerable()
                         .Where(r => r.Data.Name == AzurePaaSInstallJob.INSTALLER_FIREWALL_RULE_NAME)
                         .Select(r => new SqlFirewallRuleRange(r.Data.Name, r.Data.StartIPAddress, r.Data.EndIPAddress))
                         .SingleOrDefault();

@@ -43,7 +43,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.Tasks
         public override async Task<AutomationAccountResource> ExecuteTaskReturnResult(object contextArg)
         {
             // Get/create app-service with plan
-            var automationAccount = Container.GetAutomationAccounts().Where(s => s.Data.Name == _config.ResourceName).SingleOrDefault();
+            var automationAccount = Container.GetAutomationAccounts().AsEnumerable().Where(s => s.Data.Name == _config.ResourceName).SingleOrDefault();
             if (automationAccount == null)
             {
                 var newAutomationAccountInfo = new AutomationAccountCreateOrUpdateContent()
