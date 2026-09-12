@@ -111,7 +111,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
         List<string> GetAppServiceOutboundIps(string appServiceName)
         {
-            var site = Container.GetWebSites().Where(s => s.Data.Name == appServiceName).SingleOrDefault();
+            var site = Container.GetWebSites().AsEnumerable().Where(s => s.Data.Name == appServiceName).SingleOrDefault();
             if (site == null)
             {
                 _logger.LogWarning($"App Service '{appServiceName}' not found in the resource group; cannot allow its outbound IPs on the Key Vault firewall.");
