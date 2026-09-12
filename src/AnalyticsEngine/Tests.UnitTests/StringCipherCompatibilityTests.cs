@@ -1,8 +1,12 @@
-using App.ControlPanel.Engine;
+﻿using App.ControlPanel.Engine;
 using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -19,36 +23,44 @@ namespace Tests.UnitTests
     /// is doing the opening, and regardless of which .NET runtime that build targets.
     /// </para>
     /// <para>
-    /// The vectors below are <b>stored constants produced by the shipping .NET Framework 4.8 build</b>
-    /// (verified against .NET Framework 4.8.9310.0 using the real DataUtils.dll). That is the whole
-    /// point: a round-trip test - encrypt then decrypt in the same process - passes happily on an
-    /// implementation that is consistently wrong, so it cannot detect a format change. Only a
-    /// ciphertext captured from a previous build can prove that files already on customer disks
-    /// still open.
+    /// Compatibility has two directions and both are tested:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><b>old -> new</b>: the golden vectors. Stored ciphertext constants produced by the
+    /// shipping .NET Framework 4.8 build, which the current implementation must still decrypt.
+    /// These are deliberately captured constants rather than values the test encrypts first,
+    /// because an encrypt-then-decrypt round trip passes on any implementation that is
+    /// <i>consistently</i> wrong.</item>
+    /// <item><b>new -> old</b>: <see cref="LegacyFormatOracle"/>. An independent reimplementation of
+    /// the original format using only BCL primitives, which must be able to read whatever
+    /// <see cref="StringCipher.Encrypt"/> writes today. Without this, an implementation that reads
+    /// the legacy format but <i>writes</i> a new one would leave every golden vector green while
+    /// producing files the shipping installer cannot open.</item>
+    /// </list>
+    /// <para>
+    /// <b>Do not regenerate the golden vectors.</b> If a change makes them fail, the change has
+    /// broken backwards compatibility with every config file in the field - fix the code, not the
+    /// vectors.
     /// </para>
     /// <para>
-    /// <b>Do not regenerate these constants.</b> If a change makes them fail, the change has broken
-    /// backwards compatibility with every config file in the field - fix the code, not the vectors.
-    /// </para>
-    /// <para>
-    /// Why this matters beyond hygiene: the format is Rijndael with a <b>256-bit block</b>, which is
-    /// not AES (AES is Rijndael fixed to a 128-bit block). .NET Framework's RijndaelManaged supports
-    /// it; modern .NET implements RijndaelManaged over AES and throws
-    /// <c>PlatformNotSupportedException: BlockSize must be 128 in this implementation.</c>
-    /// So any port to .NET 10 must keep this exact format while changing the implementation.
+    /// Format: <c>[32 bytes salt][32 bytes IV][ciphertext]</c>, base64.
+    /// KDF: PBKDF2-HMAC-SHA1, 1000 iterations, 256-bit key.
+    /// Cipher: Rijndael with a <b>256-bit block</b> (not AES, which is Rijndael fixed to 128), CBC, PKCS7.
     /// </para>
     /// <para>All values here are synthetic - no real customer password, secret or tenant.</para>
     /// </remarks>
     [TestClass]
     public class StringCipherCompatibilityTests
     {
-        // ---------------------------------------------------------------------------------------
-        // Golden vectors: ciphertext captured from the shipping .NET Framework 4.8 build.
-        // Format: [32 bytes salt][32 bytes IV][ciphertext], base64.
-        // KDF: PBKDF2-HMAC-SHA1, 1000 iterations, 256-bit key. Cipher: Rijndael-256/CBC/PKCS7.
-        // ---------------------------------------------------------------------------------------
-
         const string PassPhrase = "CorrectHorseBattery";
+
+        const int SaltBytes = 32;
+        const int IvBytes = 32;
+        const int BlockBytes = 32;
+
+        // -----------------------------------------------------------------------------------------
+        // Golden vectors - captured from the shipping .NET Framework 4.8.9310.0 build.
+        // -----------------------------------------------------------------------------------------
 
         const string GoldenAsciiPlain = "P@ssw0rd-SQLAdmin-2026";
         const string GoldenAsciiCipher =
@@ -76,13 +88,36 @@ namespace Tests.UnitTests
         const string GoldenUnicodePassCipher =
             "8fUmGwT0FsorqXvHsilEnIIEZXwJaa2Bx/akeVtAk9lntHbTRE7kJTi00NVoqjprpm1MFZYclt3/y5ssKMOMVbkE1R2G+NMtQzGVlG+uNEAxin6NSnlYrtZGFX7Jpf1G";
 
-        // 500 characters - spans many CBC blocks, so a block-size or chaining regression shows here
-        // even if it happens to be invisible on a single-block payload.
+        // Exactly one block (32 UTF8 bytes). PKCS7 must append a WHOLE extra block of padding, so the
+        // payload is 64 bytes. An implementation that skipped the extra block for aligned non-empty
+        // input would corrupt secrets of exactly this length while every other vector stayed green.
+        const string GoldenBlock32Plain = "0123456789abcdef0123456789abcdef";
+        const string GoldenBlock32Cipher =
+            "o1omh7TXxoDrI1bRGlrpuwxdMYg3npgmMQW1veOCl+kuPqRYQP1vJU7coYFswYPb06j00rq6oliN1oyH59InqvLTI2xGJ82CQJeCOlwI2aShRKbR+BThl8tsNJPP3eyqFE4Ktp+4ypc821ox+/leEuYMpYdP0HQpUV79L9h25c0=";
+
+        // Exactly two blocks (64 UTF8 bytes), same reasoning across a multi-block payload.
+        const string GoldenBlock64Plain = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        const string GoldenBlock64Cipher =
+            "j0Q9W41TPX9c/pIR2V2HHsNoxVZAxm7f1H5+ZQbmMrXOb9t5lT5gqMUGU9FufODBG2w4OX30w5gby/eOQ4vymLpQb9yQCkjhSTR8vSopwECem90d1CNBjmVPG2jSjDRaYZ6Y3bHl3v93G9oyR5EurnGsw7kBd9oEimMFoHyFh7kureqf2hL/4xnajOjktxrJNnM44GJbvF3Yn7Tsu2pZ6A==";
+
+        // 500 characters - spans many CBC blocks.
         static readonly string GoldenLongPlain = new string('X', 500);
         const string GoldenLongCipher =
             "OSN54QnqLZF4suJIHpvYgQVSKAqQ5kp36m0ELSvp0tOi8uoM9dH6jcf2lrN+KtvAArxMVDa7tASjqMfTSoDrP1ww6qHjkQ1Z3Wa9FsCQyzTg97Y7s5xikT5IAk6v1Kb4rpO2Qu0PQ5/LEnUVO+Km5xBQvgSms5XSpcDNPDZGNCujnqWRhDsh4swCGWs7HqwbOJ7R8j/lnAY8fQ2YIIoRIddM+ww0qCAaw/CokfAcYYZfB2evQKtyO8AXzXKWCu7/O5dpJpNEbE3CCmXu8pmFKQhZSsrDIXLkRBSWklSfP0+Y83nk16u/9hp7RIxqw97cxhriw3SDxt5G2qnsz5cEKG9m7MizltSeoEDbHTluDS8FaxqZ/J5vEzkC1rNkHCCigza65nFE53E4/HARv2olj8atpHbgiRz+23fYv4gAwMl96NoOMGw/GE0SVcI8YOkBQl0/v7/MNtNDpp8HzUkwP5u1KFJKXNTlmz1dBDG2g9NeTN7wRbd+BQ8cedKmHp/BI6sgo01i7ykGsz0k180ZhHE5I/g1nuD27EpvCyl30LDJqahOF+yH2RdH5mbed/to3PB697MEkyAqQKCknnUAPhVk+MIM+hc3M0k15z4kzMfUq5Ash9cbU8Ojb76MGqfo6mP7T2wJsm6a6tWyg1fShZI688oCbowpet2HSG2Wd4vctMNMqWwsiz5FIVRK0KAWmBABZ5n61wDeRYSrWc4XhQjacaqX6xrDBQjN+i1bTEAyhimc8PwGjCuFGdkoP8Ab";
 
-        #region Golden vectors - files already on customer disks must still open
+        static IEnumerable<object[]> AllRepresentativeSecrets => new[]
+        {
+            new object[] { GoldenAsciiPlain },
+            new object[] { GoldenGreekPlain },
+            new object[] { GoldenEmptyPlain },
+            new object[] { GoldenSpecialPlain },
+            new object[] { GoldenBlock32Plain },
+            new object[] { GoldenBlock64Plain },
+            new object[] { GoldenLongPlain },
+            new object[] { "a" },
+        };
+
+        #region old -> new : files already on customer disks must still open
 
         [DataTestMethod]
         [DataRow(GoldenAsciiCipher, PassPhrase, GoldenAsciiPlain, DisplayName = "ASCII secret")]
@@ -90,6 +125,8 @@ namespace Tests.UnitTests
         [DataRow(GoldenEmptyCipher, PassPhrase, GoldenEmptyPlain, DisplayName = "Empty secret")]
         [DataRow(GoldenSpecialCipher, PassPhrase, GoldenSpecialPlain, DisplayName = "Special characters")]
         [DataRow(GoldenUnicodePassCipher, GoldenUnicodePass, GoldenUnicodePassPlain, DisplayName = "Non-Latin passphrase")]
+        [DataRow(GoldenBlock32Cipher, PassPhrase, GoldenBlock32Plain, DisplayName = "Exactly one block (32 bytes)")]
+        [DataRow(GoldenBlock64Cipher, PassPhrase, GoldenBlock64Plain, DisplayName = "Exactly two blocks (64 bytes)")]
         public void Decrypt_CiphertextFromShippingNetFrameworkBuild_StillOpens(
             string cipherText, string passPhrase, string expectedPlainText)
         {
@@ -100,9 +137,6 @@ namespace Tests.UnitTests
                 "existing customer config - the encryption format must not change.");
         }
 
-        /// <summary>
-        /// Multi-block payload, kept separate because a 500-character DataRow is unreadable inline.
-        /// </summary>
         [TestMethod]
         public void Decrypt_MultiBlockCiphertextFromShippingNetFrameworkBuild_StillOpens()
         {
@@ -113,32 +147,87 @@ namespace Tests.UnitTests
                 "on a single-block secret but corrupt a longer one.");
         }
 
+        /// <summary>
+        /// Padding must add a whole extra block when the plaintext is already block-aligned.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(GoldenEmptyPlain, GoldenEmptyCipher, 0, DisplayName = "0 bytes -> 1 padding block")]
+        [DataRow(GoldenBlock32Plain, GoldenBlock32Cipher, 32, DisplayName = "32 bytes -> 2 blocks")]
+        [DataRow(GoldenBlock64Plain, GoldenBlock64Cipher, 64, DisplayName = "64 bytes -> 3 blocks")]
+        public void GoldenVectors_BlockAlignedPlainText_CarriesAFullPaddingBlock(
+            string plainText, string cipherText, int expectedUtf8Length)
+        {
+            Assert.AreEqual(expectedUtf8Length, Encoding.UTF8.GetByteCount(plainText),
+                "Fixture error: the plaintext is not the length this test assumes.");
+
+            var payload = Convert.FromBase64String(cipherText).Length - SaltBytes - IvBytes;
+
+            Assert.AreEqual(expectedUtf8Length + BlockBytes, payload,
+                "A block-aligned plaintext must be followed by a whole extra block of PKCS7 padding.");
+        }
+
         #endregion
 
-        #region Format invariants - these are what a block-size regression trips
+        #region new -> old : files this build writes must open in the shipping build
 
         /// <summary>
-        /// The wire format is [32 bytes salt][32 bytes IV][ciphertext], and the ciphertext is a whole
-        /// number of 32-byte (256-bit) Rijndael blocks.
+        /// The critical direction that golden vectors alone cannot cover.
         /// </summary>
         /// <remarks>
-        /// This is the assertion that fails loudly if someone "modernises" the cipher to AES: AES has a
-        /// 16-byte block and a 16-byte IV, so both the header size and the block multiple would change
-        /// and every existing config file would become unreadable.
+        /// Decrypts fresh <see cref="StringCipher.Encrypt"/> output using <see cref="LegacyFormatOracle"/>,
+        /// an independent reimplementation of the original format. Without this, an implementation that
+        /// kept legacy decryption as a fallback but wrote a new format would pass every other test here
+        /// while producing config files the currently-shipping installer cannot open.
         /// </remarks>
+        [DataTestMethod]
+        [DynamicData(nameof(AllRepresentativeSecrets))]
+        public void Encrypt_OutputIsReadableByAnIndependentLegacyDecoder(string secret)
+        {
+            if (!LegacyFormatOracle.IsAvailable)
+                Assert.Inconclusive(LegacyFormatOracle.UnavailableReason);
+
+            var cipherText = StringCipher.Encrypt(secret, PassPhrase);
+
+            var decodedByLegacyReader = LegacyFormatOracle.Decrypt(cipherText, PassPhrase);
+
+            Assert.AreEqual(secret, decodedByLegacyReader,
+                "Ciphertext written by this build could not be read by an independent implementation of " +
+                "the original format. A config file saved here would not open in the shipping installer.");
+        }
+
+        /// <summary>
+        /// The oracle must itself be correct, or the test above proves nothing. Verify it against the
+        /// stored vectors, which were produced by the real shipping build.
+        /// </summary>
+        [TestMethod]
+        public void LegacyFormatOracle_ReadsTheStoredGoldenVectors()
+        {
+            if (!LegacyFormatOracle.IsAvailable)
+                Assert.Inconclusive(LegacyFormatOracle.UnavailableReason);
+
+            Assert.AreEqual(GoldenAsciiPlain, LegacyFormatOracle.Decrypt(GoldenAsciiCipher, PassPhrase));
+            Assert.AreEqual(GoldenGreekPlain, LegacyFormatOracle.Decrypt(GoldenGreekCipher, PassPhrase));
+            Assert.AreEqual(GoldenEmptyPlain, LegacyFormatOracle.Decrypt(GoldenEmptyCipher, PassPhrase));
+            Assert.AreEqual(GoldenBlock32Plain, LegacyFormatOracle.Decrypt(GoldenBlock32Cipher, PassPhrase));
+            Assert.AreEqual(GoldenLongPlain, LegacyFormatOracle.Decrypt(GoldenLongCipher, PassPhrase));
+            Assert.AreEqual(GoldenUnicodePassPlain, LegacyFormatOracle.Decrypt(GoldenUnicodePassCipher, GoldenUnicodePass));
+        }
+
+        #endregion
+
+        #region Format invariants
+
         [DataTestMethod]
         [DataRow(GoldenAsciiCipher, DisplayName = "ASCII secret")]
         [DataRow(GoldenGreekCipher, DisplayName = "Non-Latin secret")]
         [DataRow(GoldenEmptyCipher, DisplayName = "Empty secret")]
         [DataRow(GoldenSpecialCipher, DisplayName = "Special characters")]
         [DataRow(GoldenUnicodePassCipher, DisplayName = "Non-Latin passphrase")]
+        [DataRow(GoldenBlock32Cipher, DisplayName = "Exactly one block")]
+        [DataRow(GoldenBlock64Cipher, DisplayName = "Exactly two blocks")]
         [DataRow(GoldenLongCipher, DisplayName = "Multi-block secret")]
         public void GoldenVectors_HaveTheExpected256BitBlockLayout(string cipherText)
         {
-            const int SaltBytes = 32;
-            const int IvBytes = 32;
-            const int BlockBytes = 32;
-
             var raw = Convert.FromBase64String(cipherText);
 
             Assert.IsTrue(raw.Length > SaltBytes + IvBytes,
@@ -147,86 +236,64 @@ namespace Tests.UnitTests
             var payloadLength = raw.Length - SaltBytes - IvBytes;
             Assert.AreEqual(0, payloadLength % BlockBytes,
                 $"Encrypted payload is {payloadLength} bytes, which is not a whole number of 32-byte " +
-                "Rijndael-256 blocks. The cipher is Rijndael with a 256-bit block, NOT AES (which has a " +
-                "16-byte block). Changing this breaks every existing config file.");
+                "Rijndael-256 blocks. The cipher is Rijndael with a 256-bit block, NOT AES (16-byte block).");
         }
 
         /// <summary>
-        /// Freshly written ciphertext must have the same shape as the stored vectors, so that a file
-        /// written by today's build is readable by the build that produced the vectors above.
+        /// Salt and IV must each be random per call. Comparing whole ciphertexts would pass if only one
+        /// of the two varied, so the fields are compared independently.
         /// </summary>
         [TestMethod]
-        public void Encrypt_ProducesTheSameLayoutAsTheShippedFormat()
+        public void Encrypt_RandomisesSaltAndIvIndependentlyOnEveryCall()
         {
-            var raw = Convert.FromBase64String(StringCipher.Encrypt(GoldenAsciiPlain, PassPhrase));
-            var reference = Convert.FromBase64String(GoldenAsciiCipher);
+            const int Samples = 8;
+            var salts = new HashSet<string>();
+            var ivs = new HashSet<string>();
 
-            Assert.AreEqual(reference.Length, raw.Length,
-                "Newly-written ciphertext is a different length to ciphertext written by the shipping " +
-                "build for the same plaintext, so the format has changed.");
-        }
+            for (var i = 0; i < Samples; i++)
+            {
+                var raw = Convert.FromBase64String(StringCipher.Encrypt(GoldenAsciiPlain, PassPhrase));
+                salts.Add(Convert.ToBase64String(raw.Take(SaltBytes).ToArray()));
+                ivs.Add(Convert.ToBase64String(raw.Skip(SaltBytes).Take(IvBytes).ToArray()));
+            }
 
-        /// <summary>
-        /// Salt and IV are random per call, so the same plaintext must never encrypt to the same bytes.
-        /// A regression to a fixed IV would be a real security defect that a round-trip test cannot see.
-        /// </summary>
-        [TestMethod]
-        public void Encrypt_SamePlainTextTwice_ProducesDifferentCiphertext()
-        {
-            var first = StringCipher.Encrypt(GoldenAsciiPlain, PassPhrase);
-            var second = StringCipher.Encrypt(GoldenAsciiPlain, PassPhrase);
-
-            Assert.AreNotEqual(first, second,
-                "Encrypting the same value twice produced identical output, so the salt/IV are no longer " +
-                "random per call.");
+            Assert.AreEqual(Samples, salts.Count, "The salt is not random per call.");
+            Assert.AreEqual(Samples, ivs.Count, "The IV is not random per call.");
         }
 
         #endregion
 
-        #region Round-trip
+        #region Round-trip and wrong password
 
-        [TestMethod]
-        public void EncryptThenDecrypt_RoundTripsEveryRepresentativeSecret()
+        [DataTestMethod]
+        [DynamicData(nameof(AllRepresentativeSecrets))]
+        public void EncryptThenDecrypt_RoundTrips(string secret)
         {
-            foreach (var secret in new[]
-            {
-                GoldenAsciiPlain, GoldenGreekPlain, GoldenEmptyPlain,
-                GoldenSpecialPlain, GoldenLongPlain, "a"
-            })
-            {
-                var cipherText = StringCipher.Encrypt(secret, PassPhrase);
-                Assert.AreEqual(secret, StringCipher.Decrypt(cipherText, PassPhrase),
-                    $"Round-trip failed for a secret of length {secret.Length}.");
-            }
+            Assert.AreEqual(secret, StringCipher.Decrypt(StringCipher.Encrypt(secret, PassPhrase), PassPhrase));
         }
 
         /// <summary>
-        /// The installer relies on a wrong password failing, so it can show "couldn't decrypt" rather
-        /// than silently loading garbage.
+        /// For this fixed vector and this fixed wrong password the outcome is deterministic, so the
+        /// exception can be asserted exactly rather than merely tolerated.
         /// </summary>
+        /// <remarks>
+        /// The format is unauthenticated CBC, so a wrong key yields valid PKCS7 padding roughly 1 time
+        /// in 255 across arbitrary inputs. This test therefore pins one known pair; it is deliberately
+        /// not a claim that every wrong password is reliably detected.
+        /// </remarks>
         [TestMethod]
-        public void Decrypt_WithWrongPassword_DoesNotReturnThePlainText()
+        public void Decrypt_WithWrongPassword_ThrowsCryptographicException()
         {
-            try
-            {
-                var result = StringCipher.Decrypt(GoldenAsciiCipher, "NotThePassword");
-                Assert.AreNotEqual(GoldenAsciiPlain, result,
-                    "Decrypting with the wrong password returned the real secret.");
-            }
-            catch (CryptographicException)
-            {
-                // Expected: PKCS7 padding validation rejects the wrong key.
-            }
+            Assert.ThrowsException<CryptographicException>(
+                () => StringCipher.Decrypt(GoldenAsciiCipher, "NotThePassword"),
+                "A wrong password must fail loudly. The installer relies on this to report 'could not " +
+                "decrypt' rather than loading garbage.");
         }
 
         #endregion
 
-        #region Config level - the shape the installer actually reads and writes
+        #region Config level
 
-        /// <summary>
-        /// Proves the whole config load path decrypts secrets written by the shipping build, not just
-        /// <see cref="StringCipher"/> in isolation.
-        /// </summary>
         [TestMethod]
         public void LoadFromJson_ConfigContainingShippedCiphertext_DecryptsAllSecrets()
         {
@@ -239,17 +306,11 @@ namespace Tests.UnitTests
 
             Assert.IsTrue(result.DecryptedOk,
                 "The installer reported it could not decrypt a config file written by the shipping build.");
-            Assert.AreEqual(GoldenAsciiPlain, result.Config.SQLServerAdminPassword,
-                "SQL admin password did not survive.");
-            Assert.AreEqual(GoldenSpecialPlain, result.Config.InstallerAccount.Secret,
-                "Installer account client secret did not survive.");
-            Assert.AreEqual(GoldenGreekPlain, result.Config.ActivityAccount.Secret,
-                "Activity account client secret did not survive.");
+            Assert.AreEqual(GoldenAsciiPlain, result.Config.SQLServerAdminPassword, "SQL admin password did not survive.");
+            Assert.AreEqual(GoldenSpecialPlain, result.Config.InstallerAccount.Secret, "Installer account secret did not survive.");
+            Assert.AreEqual(GoldenGreekPlain, result.Config.ActivityAccount.Secret, "Activity account secret did not survive.");
         }
 
-        /// <summary>
-        /// Save then load, through the real JSON path.
-        /// </summary>
         [TestMethod]
         public void ToJsonThenLoadFromJson_RoundTripsSecrets()
         {
@@ -267,37 +328,55 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// Secrets must never be written to the file in the clear.
+        /// Secrets must never reach the file in the clear.
         /// </summary>
+        /// <remarks>
+        /// Walks the parsed JSON rather than substring-matching the raw text. A raw
+        /// <c>Contains</c> check is defeated by JSON escaping: a secret containing a quote or
+        /// backslash would appear escaped in the document and the naive check would pass even though
+        /// the secret had leaked.
+        /// </remarks>
         [TestMethod]
         public void ToJson_DoesNotPersistSecretsInPlainText()
         {
             var config = SolutionInstallConfig.NewConfig();
-            config.SQLServerAdminPassword = GoldenAsciiPlain;
-            config.InstallerAccount.Secret = GoldenSpecialPlain;
+            config.SQLServerAdminPassword = GoldenSpecialPlain;
+            config.InstallerAccount.Secret = GoldenGreekPlain;
+            config.ActivityAccount.Secret = GoldenAsciiPlain;
 
             var json = config.ToJson(PassPhrase);
 
-            StringAssert.Contains(json, "SQLServerAdminPasswordHash",
-                "Expected the encrypted property to be persisted.");
-            Assert.IsFalse(json.Contains(GoldenAsciiPlain),
-                "The SQL admin password was written to the config file in plain text.");
-            Assert.IsFalse(json.Contains(GoldenSpecialPlain),
-                "A client secret was written to the config file in plain text.");
+            StringAssert.Contains(json, "SQLServerAdminPasswordHash", "Expected the encrypted property to be persisted.");
+
+            var decodedValues = JObject.Parse(json)
+                .Descendants()
+                .OfType<JValue>()
+                .Where(v => v.Type == JTokenType.String)
+                .Select(v => (string)v.Value)
+                .ToList();
+
+            foreach (var secret in new[] { GoldenSpecialPlain, GoldenGreekPlain, GoldenAsciiPlain })
+            {
+                Assert.IsFalse(decodedValues.Contains(secret),
+                    $"A secret was written to the config file in plain text (as a JSON string value).");
+            }
         }
 
         /// <summary>
-        /// A config saved with one password must not open with another - the installer treats
-        /// <c>DecryptedOk == false</c> as "wrong password" and clears the hashes.
+        /// A config saved with one password must not open with another, and the installer must be told.
         /// </summary>
         [TestMethod]
-        public void LoadFromJson_WithWrongPassword_ReportsFailureRatherThanGarbage()
+        public void LoadFromJson_WithWrongPassword_ReportsDecryptionFailed()
         {
             var config = SolutionInstallConfig.NewConfig();
             config.SQLServerAdminPassword = GoldenAsciiPlain;
+            config.InstallerAccount.Secret = GoldenGreekPlain;
 
             var result = SolutionInstallConfig.LoadFromJson(config.ToJson(PassPhrase), "NotThePassword");
 
+            Assert.IsFalse(result.DecryptedOk,
+                "The installer must report a failed decryption so it can prompt for the password again, " +
+                "rather than silently loading garbage or an empty secret.");
             Assert.AreNotEqual(GoldenAsciiPlain, result.Config.SQLServerAdminPassword,
                 "The wrong password recovered the real SQL admin password.");
         }
@@ -306,11 +385,6 @@ namespace Tests.UnitTests
 
         #region Encoding
 
-        /// <summary>
-        /// The secret is UTF8-encoded before encryption. Pinning that explicitly stops a future change
-        /// to, say, Unicode/UTF-16 - which would round-trip perfectly in-process while making every
-        /// existing non-ASCII secret unreadable.
-        /// </summary>
         [TestMethod]
         public void Decrypt_NonLatinSecret_IsUtf8Encoded()
         {
@@ -323,5 +397,90 @@ namespace Tests.UnitTests
         }
 
         #endregion
+
+        /// <summary>
+        /// An independent implementation of the ORIGINAL on-disk format, written only against BCL
+        /// primitives and deliberately never calling <see cref="StringCipher"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// This is the fixed reference that makes "new -> old" compatibility testable. It must never be
+        /// changed to track a change in <see cref="StringCipher"/>; that would defeat its entire purpose.
+        /// </para>
+        /// <para>
+        /// It relies on <c>RijndaelManaged</c> with a 256-bit block, which only works on .NET Framework -
+        /// on modern .NET that type is implemented over AES and rejects the larger block. That is the very
+        /// defect issue #520 is about, so on any other runtime the oracle reports itself unavailable and
+        /// the tests using it return Inconclusive rather than failing misleadingly.
+        /// </para>
+        /// </remarks>
+        static class LegacyFormatOracle
+        {
+            const int Keysize = 256;
+            const int DerivationIterations = 1000;
+
+            static readonly Lazy<bool> _available = new Lazy<bool>(Probe);
+
+            /// <summary>
+            /// Runtime capability probe rather than a compile-time check. Legacy (non-SDK) csproj files
+            /// do not define NETFRAMEWORK, so a <c>#if</c> here would silently disable these tests - and
+            /// a silently skipped compatibility test is worse than none. Asking the runtime whether it can
+            /// actually build a 256-bit-block Rijndael is also the exact question that matters.
+            /// </summary>
+            static bool Probe()
+            {
+                try
+                {
+                    using (var rijndael = new RijndaelManaged())
+                    {
+                        rijndael.BlockSize = 256;
+                        rijndael.Mode = CipherMode.CBC;
+                        rijndael.Padding = PaddingMode.PKCS7;
+                        using (rijndael.CreateDecryptor(new byte[Keysize / 8], new byte[IvBytes]))
+                        {
+                            return true;
+                        }
+                    }
+                }
+                catch (Exception)
+                {
+                    // Modern .NET implements RijndaelManaged over AES and rejects the 256-bit block.
+                    return false;
+                }
+            }
+
+            public static bool IsAvailable => _available.Value;
+
+            public static string UnavailableReason =>
+                "The legacy-format oracle needs RijndaelManaged with a 256-bit block, which only works on " +
+                ".NET Framework - modern .NET implements that type over AES and rejects the larger block. " +
+                "Run this test on the net48 leg to verify new -> old compatibility.";
+
+            public static string Decrypt(string cipherText, string passPhrase)
+            {
+                var all = Convert.FromBase64String(cipherText);
+                var salt = all.Take(SaltBytes).ToArray();
+                var iv = all.Skip(SaltBytes).Take(IvBytes).ToArray();
+                var payload = all.Skip(SaltBytes + IvBytes).ToArray();
+
+                using (var kdf = new Rfc2898DeriveBytes(passPhrase, salt, DerivationIterations))
+                using (var rijndael = new RijndaelManaged())
+                {
+                    rijndael.BlockSize = 256;
+                    rijndael.Mode = CipherMode.CBC;
+                    rijndael.Padding = PaddingMode.PKCS7;
+
+                    using (var decryptor = rijndael.CreateDecryptor(kdf.GetBytes(Keysize / 8), iv))
+                    using (var input = new MemoryStream(payload))
+                    using (var crypto = new CryptoStream(input, decryptor, CryptoStreamMode.Read))
+                    using (var output = new MemoryStream())
+                    {
+                        // Read to the end rather than trusting a single Read call to return everything.
+                        crypto.CopyTo(output);
+                        return Encoding.UTF8.GetString(output.ToArray());
+                    }
+                }
+            }
+        }
     }
 }
