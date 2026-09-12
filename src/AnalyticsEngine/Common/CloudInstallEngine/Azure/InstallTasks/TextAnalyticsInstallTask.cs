@@ -113,9 +113,32 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     "role on this resource.");
             }
 
+            // Always prefer the resource's own endpoint - the custom-subdomain form,
+            // https://<name>.cognitiveservices.azure.com/. The regional endpoint
+            // (https://<region>.api.cognitive.microsoft.com/) supports API-key auth ONLY: Azure rejects
+            // Entra ID tokens against it with 400 "Please provide a custom subdomain for token
+            // authentication, otherwise API key is required". Hard-coding the regional form therefore
+            // broke the RBAC fallback taken just above when disableLocalAuth = true - the install
+            // succeeded and sentiment/key-phrase enrichment then failed silently at runtime. It also
+            // breaks private endpoints, because the privatelink.cognitiveservices.azure.com zone only
+            // ever resolves the custom-subdomain name.
+            var endpoint = ResolveEndpoint(
+                analytics.Data.Properties?.Endpoint,
+                analytics.Data.Properties?.CustomSubDomainName,
+                analytics.Data.Location.Name,
+                out var usedRegionalFallback);
+
+            if (usedRegionalFallback)
+            {
+                _logger.LogWarning($"Cognitive Service '{name}' reports neither an endpoint nor a custom subdomain, so the regional endpoint '{endpoint}' will be used. " +
+                    "Entra ID (RBAC) authentication does NOT work against regional endpoints — if account keys are disabled on this resource, " +
+                    "set a custom subdomain on it and re-run the installer, or sentiment/key-phrase enrichment will fail with " +
+                    "'Please provide a custom subdomain for token authentication'.");
+            }
+
             var cognitiveServicesInfo = new CognitiveServicesInfo
             {
-                Endpoint = $"https://{analytics.Data.Location.Name}.api.cognitive.microsoft.com/",
+                Endpoint = endpoint,
                 Key = accountKey ?? string.Empty
             };
 
@@ -123,6 +146,41 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
             _logger.LogInformation($"{logMsg}");
             return cognitiveServicesInfo;
+        }
+
+        /// <summary>
+        /// Chooses the Azure AI Language endpoint to hand to the runtime.
+        /// </summary>
+        /// <remarks>
+        /// Order matters. The regional endpoint <c>https://{region}.api.cognitive.microsoft.com/</c> supports
+        /// API-key authentication ONLY — Azure rejects Entra ID tokens against it with HTTP 400
+        /// "Please provide a custom subdomain for token authentication, otherwise API key is required". Since
+        /// the installer falls back to RBAC whenever the resource has <c>disableLocalAuth = true</c>, the
+        /// custom-subdomain endpoint is the only form that works in that configuration. It is also the only
+        /// form a <c>privatelink.cognitiveservices.azure.com</c> private DNS zone can resolve.
+        /// </remarks>
+        /// <param name="usedRegionalFallback">
+        /// True when neither an endpoint nor a custom subdomain was available and the regional form was used
+        /// as a last resort — the caller should warn, because RBAC auth cannot work against it.
+        /// </param>
+        public static string ResolveEndpoint(string reportedEndpoint, string customSubDomain, string location, out bool usedRegionalFallback)
+        {
+            usedRegionalFallback = false;
+
+            if (!string.IsNullOrWhiteSpace(reportedEndpoint))
+            {
+                return reportedEndpoint;
+            }
+
+            // Every path in this task sets CustomSubDomainName, so this is the normal fallback for a freshly
+            // created account whose Endpoint ARM has not populated yet.
+            if (!string.IsNullOrWhiteSpace(customSubDomain))
+            {
+                return $"https://{customSubDomain}.cognitiveservices.azure.com/";
+            }
+
+            usedRegionalFallback = true;
+            return $"https://{location}.api.cognitive.microsoft.com/";
         }
     }
 }
