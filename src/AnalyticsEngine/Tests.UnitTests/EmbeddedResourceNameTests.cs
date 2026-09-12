@@ -34,9 +34,9 @@ namespace Tests.UnitTests
     public class EmbeddedResourceNameTests
     {
         /// <summary>
-        /// The prefix <see cref="DatabaseUpgrader"/> uses to discover SQL upgrade scripts. Kept as a
-        /// literal rather than referencing the private constant, so the test fails if the constant moves
-        /// away from the resources it is meant to match.
+        /// The prefix <see cref="DatabaseUpgrader"/> uses to discover SQL upgrade scripts. The test below
+        /// asserts this matches the production constant, read by reflection - the literal alone would not
+        /// catch the constant drifting away from the files.
         /// </summary>
         const string SqlExtensionsPrefix = "App.ControlPanel.Engine.SqlExtentions";
 
@@ -92,16 +92,37 @@ namespace Tests.UnitTests
         /// <summary>
         /// The upgrade path that fails silently rather than loudly.
         /// </summary>
+        /// <remarks>
+        /// Reads <c>DatabaseUpgrader</c>'s own private constant by reflection rather than using a copy of
+        /// the string. An earlier version of this test used a duplicate literal, which left a hole: change
+        /// only the constant - say, to correct the "SqlExtentions" spelling - and the test would still find
+        /// three resources under the <i>old</i> prefix while the running code found none.
+        /// </remarks>
         [TestMethod]
         public void DatabaseUpgrader_StillFindsItsSqlScriptsByPrefix()
         {
+            var field = typeof(DatabaseUpgrader).GetField(
+                "SqlResourceNameStart", BindingFlags.NonPublic | BindingFlags.Static);
+
+            Assert.IsNotNull(field,
+                "DatabaseUpgrader no longer has a private const 'SqlResourceNameStart'. If it was renamed " +
+                "or moved, update this test to track it - it exists to pin the prefix the upgrade path " +
+                "actually uses.");
+
+            var productionPrefix = (string)field.GetRawConstantValue();
+
+            Assert.AreEqual(SqlExtensionsPrefix, productionPrefix,
+                "DatabaseUpgrader's SQL resource prefix has changed. The embedded scripts are named after " +
+                "the folder they live in, so changing the constant without moving the files - or vice " +
+                "versa - makes the upgrade path find nothing.");
+
             var found = ControlPanelEngine.GetManifestResourceNames()
-                .Where(n => n.StartsWith(SqlExtensionsPrefix))
+                .Where(n => n.StartsWith(productionPrefix))
                 .OrderBy(n => n)
                 .ToList();
 
             Assert.AreEqual(3, found.Count,
-                $"DatabaseUpgrader discovers SQL upgrade scripts with the prefix '{SqlExtensionsPrefix}'. " +
+                $"DatabaseUpgrader discovers SQL upgrade scripts with the prefix '{productionPrefix}'. " +
                 $"It found {found.Count} instead of 3. This does NOT throw at runtime - the upgrade simply " +
                 "applies no scripts, so a customer database is silently left un-upgraded. Found: " +
                 string.Join(", ", found));
