@@ -18,12 +18,20 @@ function Assert-CommandSucceeded {
 try {
     & $exe demo --help
     Assert-CommandSucceeded
-    & $exe demo --preview --users 100 --days 35 --as-of 2026-09-01 --output "$artifacts\preview.json"
+    # Deliberately the smallest shape the parser accepts (--users 1, --days 31). This is a smoke test of
+    # the shipped EXE and its exit codes, not a scale test: measured locally, essentially all of the
+    # wall-clock is the one-off DatabaseUpgrader schema apply on the new LocalDB database (~7s), which no
+    # option can avoid, while dropping 40 users/35 days to the minimum removed ~3s of pure row generation
+    # for no loss of coverage. Generating more only makes CI slower. Scale is covered separately by the
+    # opt-in RUN_DEMO_SCALE benchmark, and generation against the real schema by DemoGeneratorSqlTests.
+    # --as-of stays fixed so the run is reproducible; 31 days still spans three complete profiling weeks,
+    # so the CompletedProfileWeeks assertion below keeps its meaning.
+    & $exe demo --preview --users 1 --days 31 --as-of 2026-09-01 --output "$artifacts\preview.json"
     Assert-CommandSucceeded
     $preview = Get-Content "$artifacts\preview.json" -Raw | ConvertFrom-Json
     if ($preview.Status -ne 'Preview' -or $preview.TotalRows -le 0) { throw 'Preview did not produce a source-row summary.' }
 
-    $arguments = @('demo', '--database', $database, '--users', '40', '--days', '35', '--as-of', '2026-09-01')
+    $arguments = @('demo', '--database', $database, '--users', '1', '--days', '31', '--as-of', '2026-09-01')
     & $exe @arguments --output "$artifacts\generated.json"
     Assert-CommandSucceeded
     $generated = Get-Content "$artifacts\generated.json" -Raw | ConvertFrom-Json
