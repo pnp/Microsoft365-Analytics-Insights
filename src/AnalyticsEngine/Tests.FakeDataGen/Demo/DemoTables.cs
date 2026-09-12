@@ -71,10 +71,11 @@ namespace Tests.FakeDataGen.Demo
         void Flush();
     }
 
-    internal static class DemoTables
+    internal static partial class DemoTables
     {
         // Dependency order is also the SQL buffer-flush order.
-        private static readonly List<DemoTable> Tables = new List<DemoTable>();
+        private static List<DemoTable> _tables;
+        private static List<DemoTable> Tables => _tables ?? (_tables = new List<DemoTable>());
         public static IReadOnlyList<DemoTable> All => Tables;
         private static DemoColumn I(string name) => new DemoColumn(name, SqlDbType.Int);
         private static DemoColumn L(string name) => new DemoColumn(name, SqlDbType.BigInt);
@@ -125,6 +126,8 @@ namespace Tests.FakeDataGen.Demo
         public static readonly DemoTable InteractionTypes = Named("copilot_interaction_types");
         public static readonly DemoTable InteractionApps = Named("copilot_interaction_app_classes");
         public static readonly DemoTable ConversationTypes = Named("copilot_interaction_conversation_types");
+        public static readonly DemoTable Keywords = Named("keywords");
+        public static readonly DemoTable Languages = Named("languages");
         public static readonly DemoTable Users = T("users", true, I("id"), A("user_name", 250), N("mail", 400),
             N("azure_ad_id", 400), B("account_enabled"), D("last_updated"), N("postalcode", 50), I("department_id"),
             I("company_name_id"), I("job_title_id"), I("state_or_province_id"), I("country_or_region_id"),
@@ -152,14 +155,14 @@ namespace Tests.FakeDataGen.Demo
             G("event_id"), I("dlp_policy_id"), I("dlp_rule_id"), I("dlp_action_id"), B("is_blocked"));
         public static readonly DemoTable SharePointAudit = T("event_meta_sharepoint", false, G("event_id"), I("url_id"),
             I("file_extension_id"), I("file_name_id"), I("related_web_id"), I("item_type_id"));
-        public static readonly DemoTable Hits = T("hits", false, I("url_id"), D("hit_timestamp"), I("session_id"),
+        public static readonly DemoTable Hits = T("hits", true, I("url_id"), D("hit_timestamp"), I("session_id"),
             I("page_title_id"), I("web_id"), I("agent_id"), I("device_id"), I("os_id"),
-            F("seconds_on_page"), F("page_load_time"), G("page_request_id"), I("country_id"), I("city_id"));
+            F("seconds_on_page"), F("page_load_time"), G("page_request_id"), I("country_id"), I("city_id"), I("id"));
         public static readonly DemoTable Interactions = T("copilot_interactions", false,
             N("graph_interaction_id", 200), I("session_id"), I("user_id"), N("request_id", 200),
             I("interaction_type_id"), I("app_class_id"), I("conversation_type_id"), D("created_utc"),
             I("body_char_count"), I("body_word_count"), I("attachment_count"), I("link_count"),
-            I("mention_count"), I("context_count"), I("response_latency_ms"));
+            I("mention_count"), I("context_count"), I("response_latency_ms"), I("language_id"), F("sentiment_score"));
         public static readonly DemoTable Teams = Daily("teams_user_activity_log", L("private_chat_count"), L("team_chat_count"),
             L("post_messages"), L("reply_messages"), L("urgent_messages"), L("calls_count"), L("meetings_count"),
             L("adhoc_meetings_attended_count"), L("adhoc_meetings_organized_count"), L("meetings_attended_count"),
@@ -192,6 +195,20 @@ namespace Tests.FakeDataGen.Demo
         public static readonly DemoTable CopilotCounts = T("copilot_user_count_log", false,
             D("report_refresh_date"), D("report_date"), N("report_type", 20), I("report_period_days"), N("app_name"),
             I("enabled_users"), I("active_users"), L("prompts_submitted"), F("average_prompts_submitted"));
+        public static readonly DemoTable CopilotModels = T("copilot_ai_models", true,
+            I("id"), N("name"), N("provider_name"), N("version"));
+        public static readonly DemoTable CopilotPlugins = T("copilot_ai_system_plugins", true,
+            I("id"), N("plugin_id", 255), N("name", 255), N("version", 50));
+        public static readonly DemoTable CopilotEventModels = T("copilot_event_ai_models", false,
+            G("copilot_chat_id"), I("model_id"));
+        public static readonly DemoTable CopilotEventPlugins = T("copilot_event_ai_system_plugins", false,
+            G("copilot_chat_id"), I("ai_system_plugin_id"));
+        public static readonly DemoTable CopilotMeetings = T("online_meetings", true,
+            I("id"), D("created"), N("meeting_id", 200), N("name"));
+        public static readonly DemoTable CopilotFileContexts = T("copilot_event_files", false,
+            G("copilot_chat_id"), I("file_name_id"), I("file_extension_id"), I("url_id"), I("site_id"));
+        public static readonly DemoTable CopilotMeetingContexts = T("copilot_event_meetings", false,
+            G("copilot_chat_id"), I("meeting_id"));
 
         // Agent costs. Declared last because copilot_studio_credit_user_daily has a foreign key into
         // dbo.users, and the declaration order is also the SQL buffer-flush order.
