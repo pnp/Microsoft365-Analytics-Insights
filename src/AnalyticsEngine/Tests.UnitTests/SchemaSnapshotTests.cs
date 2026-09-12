@@ -194,6 +194,181 @@ CREATE TABLE dbo.child (id int NOT NULL, parent_id int NOT NULL);";
             });
         }
 
+        /// <summary>
+        /// The exclusion is qualified by schema, so a history table in the wrong place is still a
+        /// difference rather than being silently waved through.
+        /// </summary>
+        [TestMethod]
+        public void MigrationHistoryTable_InAnUnexpectedSchema_IsNotIgnored()
+        {
+            const string correct = BaseTableConst + "\nCREATE TABLE dbo.__EFMigrationsHistory (MigrationId nvarchar(150) NOT NULL);";
+            const string wrongSchema = BaseTableConst + "\nGO\nCREATE SCHEMA other;\nGO\nCREATE TABLE other.__EFMigrationsHistory (MigrationId nvarchar(150) NOT NULL);";
+
+            WithScripts(correct, wrongSchema, (left, right) =>
+            {
+                var differences = left.DifferencesFrom(right);
+                Assert.IsTrue(differences.Any(d => d.Contains("other.__EFMigrationsHistory")),
+                    "A history table outside dbo must not be swallowed by the exclusion. " +
+                    SchemaSnapshot.Describe(differences));
+            });
+        }
+
+        #region Index options that migrations in this repo actually depend on
+
+        /// <summary>
+        /// The unique index on <c>urls.full_url</c> sets <c>IGNORE_DUP_KEY</c> deliberately, so one racing
+        /// duplicate cannot abort an entire insert batch, and its migration uses <c>ignore_dup_key = 1</c>
+        /// as part of the target-state check. Two indexes differing only in that option are not the same
+        /// index.
+        /// </summary>
+        [TestMethod]
+        public void ChangedIgnoreDupKey_IsDetected()
+        {
+            const string off = "CREATE TABLE dbo.t (a int NOT NULL);CREATE UNIQUE INDEX IX_t ON dbo.t (a) WITH (IGNORE_DUP_KEY = OFF);";
+            const string on = "CREATE TABLE dbo.t (a int NOT NULL);CREATE UNIQUE INDEX IX_t ON dbo.t (a) WITH (IGNORE_DUP_KEY = ON);";
+
+            WithPair(off, on, (left, right) => AssertDetected(left, right, "IGNORE_DUP_KEY(0)"));
+        }
+
+        [TestMethod]
+        public void DisabledIndex_IsDetected()
+        {
+            const string enabled = "CREATE TABLE dbo.t (a int NOT NULL);CREATE INDEX IX_t ON dbo.t (a);";
+            const string disabled = enabled + "ALTER INDEX IX_t ON dbo.t DISABLE;";
+
+            WithPair(enabled, disabled, (left, right) => AssertDetected(left, right, "DISABLED(0)"));
+        }
+
+        #endregion
+
+        #region Constraint state
+
+        /// <summary>
+        /// A migration here creates a foreign key <c>WITH NOCHECK</c> and then runs the expensive
+        /// <c>WITH CHECK CHECK CONSTRAINT</c> specifically to make it trusted. Without this the
+        /// intermediate state would certify as identical to the finished one, even though an untrusted
+        /// constraint is unusable by the optimiser and may be hiding invalid rows.
+        /// </summary>
+        [TestMethod]
+        public void UntrustedForeignKey_IsDetected()
+        {
+            const string trusted = @"
+CREATE TABLE dbo.parent (id int NOT NULL CONSTRAINT PK_parent PRIMARY KEY);
+CREATE TABLE dbo.child (id int NOT NULL, parent_id int NOT NULL);
+ALTER TABLE dbo.child WITH CHECK ADD CONSTRAINT FK_child_parent FOREIGN KEY (parent_id) REFERENCES dbo.parent(id);";
+
+            const string untrusted = @"
+CREATE TABLE dbo.parent (id int NOT NULL CONSTRAINT PK_parent PRIMARY KEY);
+CREATE TABLE dbo.child (id int NOT NULL, parent_id int NOT NULL);
+ALTER TABLE dbo.child WITH NOCHECK ADD CONSTRAINT FK_child_parent FOREIGN KEY (parent_id) REFERENCES dbo.parent(id);";
+
+            WithPair(trusted, untrusted, (left, right) => AssertDetected(left, right, "NOTTRUSTED(0)"));
+        }
+
+        [TestMethod]
+        public void DisabledCheckConstraint_IsDetected()
+        {
+            const string enabled = "CREATE TABLE dbo.t (a int NOT NULL CONSTRAINT CK_t CHECK (a > 0));";
+            const string disabled = enabled + "ALTER TABLE dbo.t NOCHECK CONSTRAINT CK_t;";
+
+            WithPair(enabled, disabled, (left, right) => AssertDetected(left, right, "DISABLED(0)"));
+        }
+
+        /// <summary>
+        /// Constraint names are deliberately not compared, but cardinality is - otherwise a database with
+        /// two structurally identical foreign keys would compare equal to one with a single foreign key.
+        /// </summary>
+        [TestMethod]
+        public void DuplicateStructurallyIdenticalForeignKey_IsDetected()
+        {
+            const string one = @"
+CREATE TABLE dbo.parent (id int NOT NULL CONSTRAINT PK_parent PRIMARY KEY);
+CREATE TABLE dbo.child (id int NOT NULL, parent_id int NOT NULL);
+ALTER TABLE dbo.child ADD CONSTRAINT FK_a FOREIGN KEY (parent_id) REFERENCES dbo.parent(id);";
+
+            const string two = one + "\nALTER TABLE dbo.child ADD CONSTRAINT FK_b FOREIGN KEY (parent_id) REFERENCES dbo.parent(id);";
+
+            WithPair(one, two, (left, right) => AssertDetected(left, right, "count differs"));
+        }
+
+        #endregion
+
+        #region Generated columns
+
+        [TestMethod]
+        public void ChangedIdentitySeedAndIncrement_IsDetected()
+        {
+            const string standard = "CREATE TABLE dbo.t (id int IDENTITY(1,1) NOT NULL);";
+            const string unusual = "CREATE TABLE dbo.t (id int IDENTITY(1000,5) NOT NULL);";
+
+            WithPair(standard, unusual, (left, right) => AssertDetected(left, right, "IDENTITY(1,1)"));
+        }
+
+        [TestMethod]
+        public void ChangedComputedColumnExpression_IsDetected()
+        {
+            const string plus = "CREATE TABLE dbo.t (a int NOT NULL, b AS (a + 1));";
+            const string times = "CREATE TABLE dbo.t (a int NOT NULL, b AS (a * 2));";
+
+            WithPair(plus, times, (left, right) => AssertDetected(left, right, "COMPUTED("));
+        }
+
+        #endregion
+
+        #region Modules - views, procedures, functions
+
+        /// <summary>
+        /// Views are created and later rewritten by migrations in this repository, so a database with a
+        /// missing or stale view must not compare equal to one with the right view.
+        /// </summary>
+        [TestMethod]
+        public void MissingView_IsDetected()
+        {
+            const string withView = BaseTableConst + "\nGO\nCREATE VIEW dbo.v_widgets AS SELECT id FROM dbo.widgets;";
+
+            WithScripts(withView, BaseTableConst, (left, right) => AssertDetected(left, right, "MODULE VIEW dbo.v_widgets"));
+        }
+
+        [TestMethod]
+        public void ChangedViewBody_IsDetected()
+        {
+            const string original = "CREATE TABLE dbo.t (a int NOT NULL, b int NOT NULL);\nGO\nCREATE VIEW dbo.v AS SELECT a FROM dbo.t;";
+            const string altered = "CREATE TABLE dbo.t (a int NOT NULL, b int NOT NULL);\nGO\nCREATE VIEW dbo.v AS SELECT b FROM dbo.t;";
+
+            WithScripts(original, altered, (left, right) => AssertDetected(left, right, "MODULE VIEW dbo.v"));
+        }
+
+        /// <summary>
+        /// Reformatting a view must NOT be reported, or the tool produces noise on every tidy-up and stops
+        /// being trusted. Existing tests in this repo also treat quoted-identifier state as part of a
+        /// view's required state, which is why it is captured separately from the body.
+        /// </summary>
+        [TestMethod]
+        public void ReformattedViewBody_IsNotReported()
+        {
+            const string compact = "CREATE TABLE dbo.t (a int NOT NULL);\nGO\nCREATE VIEW dbo.v AS SELECT a FROM dbo.t;";
+            const string spacedOut = "CREATE TABLE dbo.t (a int NOT NULL);\nGO\nCREATE VIEW dbo.v AS\r\n    SELECT   a\r\n    FROM     dbo.t;";
+
+            WithScripts(compact, spacedOut, (left, right) =>
+            {
+                var differences = left.DifferencesFrom(right);
+                Assert.AreEqual(0, differences.Count,
+                    "Whitespace-only differences in a module body must not be reported. " +
+                    SchemaSnapshot.Describe(differences));
+            });
+        }
+
+        [TestMethod]
+        public void MissingStoredProcedure_IsDetected()
+        {
+            const string withProc = BaseTableConst + "\nGO\nCREATE PROCEDURE dbo.usp_widgets AS SELECT 1;";
+
+            WithScripts(withProc, BaseTableConst, (left, right) => AssertDetected(left, right, "MODULE SQL_STORED_PROCEDURE dbo.usp_widgets"));
+        }
+
+        #endregion
+
+
         const string BaseTableConst = "CREATE TABLE dbo.widgets (id int NOT NULL);";
 
         static void AssertDetected(SchemaSnapshot left, SchemaSnapshot right, string expectedFragment)
@@ -207,20 +382,91 @@ CREATE TABLE dbo.child (id int NOT NULL, parent_id int NOT NULL);";
         }
 
         /// <summary>
-        /// Builds two scratch databases, applies a script to each, and hands back their snapshots.
+        /// Creating a database on LocalDB costs several seconds, and creating two per test dominated the
+        /// runtime of this class. One pair is created for the whole class and emptied between tests
+        /// instead, which is equivalent for these purposes because every test defines its own objects.
+        /// </summary>
+        static ScratchDatabase _left;
+        static ScratchDatabase _right;
+
+        [ClassInitialize]
+        public static void CreateDatabases(TestContext context)
+        {
+            _left = ScratchDatabase.Create("schemaL");
+            _right = ScratchDatabase.Create("schemaR");
+        }
+
+        [ClassCleanup]
+        public static void DropDatabases()
+        {
+            _left?.Dispose();
+            _right?.Dispose();
+        }
+
+        [TestCleanup]
+        public void EmptyDatabases()
+        {
+            _left?.Execute(DropEverythingSql);
+            _right?.Execute(DropEverythingSql);
+        }
+
+        /// <summary>
+        /// Drops every user object, in dependency order: foreign keys, then modules, then tables, then any
+        /// non-default schema.
+        /// </summary>
+        const string DropEverythingSql = @"
+DECLARE @sql nvarchar(max) = N'';
+
+SELECT @sql += 'ALTER TABLE ' + QUOTENAME(s.name) + '.' + QUOTENAME(t.name)
+             + ' DROP CONSTRAINT ' + QUOTENAME(f.name) + ';'
+FROM sys.foreign_keys f
+JOIN sys.tables t ON t.object_id = f.parent_object_id
+JOIN sys.schemas s ON s.schema_id = t.schema_id;
+
+SELECT @sql += 'DROP VIEW ' + QUOTENAME(s.name) + '.' + QUOTENAME(o.name) + ';'
+FROM sys.views o JOIN sys.schemas s ON s.schema_id = o.schema_id WHERE o.is_ms_shipped = 0;
+
+SELECT @sql += 'DROP PROCEDURE ' + QUOTENAME(s.name) + '.' + QUOTENAME(o.name) + ';'
+FROM sys.procedures o JOIN sys.schemas s ON s.schema_id = o.schema_id WHERE o.is_ms_shipped = 0;
+
+SELECT @sql += 'DROP FUNCTION ' + QUOTENAME(s.name) + '.' + QUOTENAME(o.name) + ';'
+FROM sys.objects o JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE o.type IN ('FN','IF','TF') AND o.is_ms_shipped = 0;
+
+SELECT @sql += 'DROP TABLE ' + QUOTENAME(s.name) + '.' + QUOTENAME(t.name) + ';'
+FROM sys.tables t JOIN sys.schemas s ON s.schema_id = t.schema_id WHERE t.is_ms_shipped = 0;
+
+SELECT @sql += 'DROP SCHEMA ' + QUOTENAME(s.name) + ';'
+FROM sys.schemas s
+WHERE s.schema_id BETWEEN 5 AND 16383 AND s.name <> 'dbo';
+
+IF @sql <> N'' EXEC sp_executesql @sql;";
+
+        /// <summary>
+        /// Applies a script to each database and hands back their snapshots.
         /// </summary>
         static void WithPair(string leftScript, string rightScript, System.Action<SchemaSnapshot, SchemaSnapshot> assert)
         {
-            using (var left = ScratchDatabase.Create("schemaL"))
-            using (var right = ScratchDatabase.Create("schemaR"))
-            {
-                left.Execute(leftScript);
-                right.Execute(rightScript);
+            _left.Execute(leftScript);
+            _right.Execute(rightScript);
 
-                assert(
-                    SchemaSnapshot.Capture(left.ConnectionString, "left"),
-                    SchemaSnapshot.Capture(right.ConnectionString, "right"));
-            }
+            assert(
+                SchemaSnapshot.Capture(_left.ConnectionString, "left"),
+                SchemaSnapshot.Capture(_right.ConnectionString, "right"));
+        }
+
+        /// <summary>
+        /// As <see cref="WithPair"/>, but runs the scripts batch by batch so they can contain GO - which
+        /// CREATE VIEW and CREATE PROCEDURE require, since both must be the first statement in a batch.
+        /// </summary>
+        static void WithScripts(string leftScript, string rightScript, System.Action<SchemaSnapshot, SchemaSnapshot> assert)
+        {
+            _left.ExecuteScript(leftScript, quotedIdentifierOn: true);
+            _right.ExecuteScript(rightScript, quotedIdentifierOn: true);
+
+            assert(
+                SchemaSnapshot.Capture(_left.ConnectionString, "left"),
+                SchemaSnapshot.Capture(_right.ConnectionString, "right"));
         }
     }
 }
