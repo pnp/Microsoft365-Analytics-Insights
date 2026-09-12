@@ -604,18 +604,21 @@ namespace Common.Entities
             // type, and every existing deployment already has it, so the running web app and web jobs
             // ask EF for the OLD invariant name no matter what this build prefers.
             //
-            // Without these aliases EF throws "No Entity Framework provider found for the ADO.NET
-            // provider with invariant name 'System.Data.SqlClient'" on the first query after upgrade.
-            // Worse, if the machine-wide factory resolved instead, connections would be
+            // Without an alias EF throws "No Entity Framework provider found for the ADO.NET provider
+            // with invariant name 'System.Data.SqlClient'" on the first query after upgrade. Worse, if
+            // the machine-wide factory resolved instead, connections would be
             // System.Data.SqlClient.SqlConnection and AzureSqlAccessTokenInterceptor - which casts to the
-            // Microsoft.Data.SqlClient type - would silently stop attaching Entra tokens, breaking
-            // token-authenticated installs with no error at the provider layer.
+            // Microsoft.Data.SqlClient type - would silently stop attaching Entra tokens.
             //
-            // So map the legacy name onto the modern provider as well: whichever name arrives, the
-            // connection is a Microsoft.Data.SqlClient one. See issue #511.
-            SetProviderServices(LegacyProviderInvariantName, System.Data.Entity.SqlServer.MicrosoftSqlProviderServices.Instance);
-            SetProviderFactory(LegacyProviderInvariantName, Microsoft.Data.SqlClient.SqlClientFactory.Instance);
+            // The alias is deliberately NOT SetProviderFactory/SetProviderServices. Those also register a
+            // REVERSE IProviderInvariantName lookup keyed on the factory instance, and because the base
+            // class has already registered the modern name, the legacy registration would win and EF would
+            // start calling every Microsoft.Data.SqlClient connection "System.Data.SqlClient". Provider
+            // services such as the migrations SQL generator are keyed on the modern name, so that breaks
+            // DatabaseUpgrader - and therefore every customer schema upgrade - while leaving ordinary
+            // queries working. A forward-only resolver avoids that entirely. See issue #511.
             SetExecutionStrategy(LegacyProviderInvariantName, () => new System.Data.Entity.SqlServer.MicrosoftSqlAzureExecutionStrategy());
+            AddDependencyResolver(new Sql.LegacyProviderNameAliasResolver());
 
             // Lets EF connect to an Azure SQL server that has SQL authentication disabled, by attaching a
             // Microsoft Entra ID access token to connections whose connection string carries no

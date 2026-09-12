@@ -469,6 +469,7 @@
     <Compile Include="Redis\TeamsRedisManager.cs" />
     <Compile Include="AnalyticsEntitiesContext.cs" />
     <Compile Include="Sql\AzureSqlAccessTokenInterceptor.cs" />
+    <Compile Include="Sql\LegacyProviderNameAliasResolver.cs" />
     <Compile Include="IAnalyticsDbContextFactory.cs" />
     <Compile Include="Entities\Url.cs" />
     <Compile Include="Entities\User.cs" />

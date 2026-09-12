@@ -6,6 +6,7 @@ using System.Data.Entity;
 using System.Data.Entity.Core.Common;
 using System.Data.Entity.Infrastructure;
 using System.Data.Entity.Infrastructure.DependencyResolution;
+using System.Data.Entity.Migrations.Sql;
 using System.Data.Entity.SqlServer;
 
 namespace Tests.UnitTests
@@ -113,6 +114,69 @@ namespace Tests.UnitTests
             Assert.IsNotNull(strategy, $"No execution strategy registered for '{invariantName}'.");
             Assert.IsInstanceOfType(strategy(), typeof(MicrosoftSqlAzureExecutionStrategy),
                 $"'{invariantName}' must use the Azure SQL retry strategy.");
+        }
+
+        /// <summary>
+        /// Aliasing the legacy name must not change what EF calls the modern factory.
+        /// </summary>
+        /// <remarks>
+        /// <c>SetProviderFactory</c> registers a reverse <see cref="IProviderInvariantName"/> lookup as
+        /// well as the forward one. If the legacy alias wins that reverse lookup, EF starts describing
+        /// every <c>Microsoft.Data.SqlClient</c> connection as "System.Data.SqlClient" - and provider
+        /// services such as the migrations SQL generator are keyed on the modern name only, so they stop
+        /// resolving. That breaks <c>DatabaseUpgrader</c> and therefore every customer schema upgrade.
+        /// </remarks>
+        [TestMethod]
+        public void ModernFactory_StillReportsTheModernInvariantName()
+        {
+            var invariantName = DbConfiguration.DependencyResolver.GetService<IProviderInvariantName>(
+                Microsoft.Data.SqlClient.SqlClientFactory.Instance);
+
+            Assert.IsNotNull(invariantName, "EF cannot name the Microsoft.Data.SqlClient factory at all.");
+            Assert.AreEqual(ModernInvariantName, invariantName.Name,
+                "EF now reports the Microsoft.Data.SqlClient factory under the legacy invariant name. " +
+                "Provider-specific services - notably the migrations SQL generator - are keyed on the " +
+                "modern name, so this breaks DatabaseUpgrader and every schema upgrade.");
+        }
+
+        /// <summary>
+        /// The consequence of the reverse-lookup mapping, asserted directly: migrations must still be
+        /// generatable for whatever EF decides to call the connection.
+        /// </summary>
+        [TestMethod]
+        public void MigrationSqlGenerator_ResolvesForTheModernProvider()
+        {
+            var generator = DbConfiguration.DependencyResolver.GetService<Func<MigrationSqlGenerator>>(ModernInvariantName);
+
+            Assert.IsNotNull(generator,
+                "No MigrationSqlGenerator for the Microsoft.Data.SqlClient provider. DatabaseUpgrader " +
+                "calls Database.Initialize(true), which runs MigrateDatabaseToLatestVersion - so a " +
+                "customer upgrade with pending migrations would fail.");
+        }
+
+        /// <summary>
+        /// End to end: a context built from a raw connection string - the shape
+        /// <c>DatabaseUpgrader</c> uses - must be described by EF under a provider name that has a
+        /// migrations SQL generator.
+        /// </summary>
+        [TestMethod]
+        public void ContextFromRawConnectionString_ResolvesAMigrationSqlGenerator()
+        {
+            var connectionString =
+                @"Data Source=(localdb)\MSSQLLocalDB;Initial Catalog=UnitTestingAnalytics;Integrated Security=true;TrustServerCertificate=True";
+
+            var info = new DbContextInfo(
+                typeof(AnalyticsEntitiesContext),
+                new DbConnectionInfo(connectionString, ModernInvariantName));
+
+            var reportedProvider = info.ConnectionProviderName;
+
+            var generator = DbConfiguration.DependencyResolver.GetService<Func<MigrationSqlGenerator>>(reportedProvider);
+
+            Assert.IsNotNull(generator,
+                $"EF describes this connection as provider '{reportedProvider}', and no MigrationSqlGenerator " +
+                "is registered for that name. DatabaseUpgrader would fail with 'No MigrationSqlGenerator " +
+                "found for provider' on any upgrade with pending migrations.");
         }
     }
 }
