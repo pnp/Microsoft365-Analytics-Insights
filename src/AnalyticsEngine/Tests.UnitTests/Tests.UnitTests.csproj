@@ -322,6 +322,8 @@
     <Compile Include="UpgradeFromStableTests.cs" />
     <Compile Include="UpdateCheckBuildVersionTests.cs" />
     <Compile Include="ScratchDatabase.cs" />
+    <Compile Include="SchemaSnapshot.cs" />
+    <Compile Include="SchemaSnapshotTests.cs" />
     <Compile Include="StressHarness\ActivityApiDbStressRunner.cs" />
     <Compile Include="StressHarness\ActivityApiDbStressTests.cs" />
     <Compile Include="StressHarness\CountingActivityReportPersistenceManager.cs" />
