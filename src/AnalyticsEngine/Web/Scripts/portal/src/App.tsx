@@ -1,4 +1,4 @@
-import { Suspense, useState } from 'react';
+import { Suspense, useCallback, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
   makeStyles,
@@ -69,6 +69,36 @@ const useStyles = makeStyles({
 });
 
 /**
+ * The route the browser's history is on *right now*.
+ *
+ * `useLocation` reports the last committed render, which lags a navigation that has been pushed
+ * but not yet rendered - pages load lazily, so that gap is real. It therefore cannot answer "are
+ * we already going there?" for a second click, and using it leads to both duplicate history
+ * entries and silently dropped clicks. pushState/replaceState update the URL synchronously, so
+ * under HashRouter the hash always can.
+ *
+ * Parsed the way HashRouter parses it, so a hand-typed `#insights/overview` reads the same as the
+ * canonical `#/insights/overview`. Falls back to the committed path only when there is no fragment
+ * at all - a host that is not hash-routed, where the committed path is the best available answer.
+ */
+function currentRoutePath(committedPath: string): string {
+  const hash = typeof window === 'undefined' ? '' : window.location.hash;
+  if (!hash.startsWith('#')) {
+    if (import.meta.env.DEV && typeof window !== 'undefined') {
+      // Not hash-routed: the committed path is all there is, which is the lagging value this
+      // function exists to avoid. Nav would go back to duplicating history entries and dropping
+      // clicks during an in-flight navigation, silently - so say so rather than degrade quietly.
+      console.warn('[portal] No hash route found - App expects HashRouter. Nav de-duplication is degraded.');
+    }
+    return committedPath;
+  }
+
+  const path = hash.slice(1).split(/[?#]/)[0];
+  if (!path) return '/';
+  return path.startsWith('/') ? path : `/${path}`;
+}
+
+/**
  * App shell: an Office 365-style brand header, an area switcher (Insights / Administration) and a
  * per-area left nav. Uses HashRouter so the whole SPA is served by a single MVC action (no IIS /
  * MVC route changes to add pages).
@@ -85,9 +115,24 @@ export default function App() {
   const currentArea = areaForPath(location.pathname);
   const navGroups = groupedRoutesForArea(currentArea);
 
+  const goTo = useCallback(
+    (target: string) => {
+      // Navigating to the entry history is already on would push an identical entry, so the
+      // browser's Back button would look like it is doing nothing. Anything else navigates: a
+      // click must never be silently dropped, however fast it follows the previous one.
+      if (target === currentRoutePath(location.pathname)) return;
+      navigate(target);
+    },
+    [navigate, location.pathname],
+  );
+
   const onAreaSelect: SelectTabEventHandler = (_event, data) => {
     const area = AREAS.find((a) => a.id === data.value);
-    if (area) navigate(area.homePath);
+    // TabList fires for the already-selected tab too, and re-navigating would bounce the user off
+    // the page they are reading back to the area's home page. Compare against where history
+    // actually is, so a tab click during an in-flight navigation is not discarded.
+    const liveArea = areaForPath(currentRoutePath(location.pathname));
+    if (area && area.id !== liveArea) goTo(area.homePath);
   };
 
   return (
@@ -129,7 +174,7 @@ export default function App() {
           type="inline"
           className={styles.nav}
           selectedValue={location.pathname}
-          onNavItemSelect={(_event, data) => navigate(String(data.value))}
+          onNavItemSelect={(_event, data) => goTo(String(data.value))}
           aria-label={`${AREAS.find((a) => a.id === currentArea)?.label} navigation`}
         >
           <NavDrawerBody>
