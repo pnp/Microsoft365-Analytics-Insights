@@ -104,7 +104,7 @@ namespace Web.AnalyticsWeb.Models
             status.WebAppConfigRedis = string.IsNullOrWhiteSpace(config.ConnectionStrings.RedisConnectionString)
                 ? "(not configured - Teams deep analytics disabled)"
                 : StackExchange.Redis.ConfigurationOptions.Parse(config.ConnectionStrings.RedisConnectionString).SslHost;
-            status.WebAppConfigSQL = new System.Data.SqlClient.SqlConnectionStringBuilder(config.ConnectionStrings.DatabaseConnectionString).DataSource;
+            status.WebAppConfigSQL = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(config.ConnectionStrings.DatabaseConnectionString).DataSource;
             status.WebAppConfigServiceBus = string.IsNullOrWhiteSpace(config.ConnectionStrings.ServiceBusConnectionString)
                 ? "(disabled)"
                 : ServiceBusConnectionStringProperties.Parse(config.ConnectionStrings.ServiceBusConnectionString).Endpoint.ToString();

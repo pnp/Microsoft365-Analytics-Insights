@@ -2,7 +2,7 @@ using Common.Entities;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Diagnostics;
 using Tests.FakeDataGen.Seeding;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.PowerPlatform;

@@ -1,4 +1,4 @@
-using Common.Entities.Config;
+﻿using Common.Entities.Config;
 using Common.Entities.Entities;
 using Common.Entities.Entities.AgentCosts;
 using Common.Entities.Entities.AuditLog;
@@ -583,12 +583,42 @@ namespace Common.Entities
     /// <summary>
     /// config automatically read by EF
     /// </summary>
-    public class SPOInsightsDBConfiguration : DbConfiguration
+    public class SPOInsightsDBConfiguration : System.Data.Entity.SqlServer.MicrosoftSqlDbConfiguration
     {
+        /// <summary>
+        /// The ADO.NET invariant name Azure App Service injects for a connection string saved with type
+        /// <c>SQLAzure</c>, which is how the installer stores <c>SPOInsightsEntities</c>.
+        /// </summary>
+        internal const string LegacyProviderInvariantName = "System.Data.SqlClient";
+
+        internal const string ProviderInvariantName = "Microsoft.Data.SqlClient";
+
         // https://docs.microsoft.com/en-us/ef/ef6/fundamentals/connection-resiliency/retry-logic
         public SPOInsightsDBConfiguration()
         {
-            SetExecutionStrategy("System.Data.SqlClient", () => new System.Data.Entity.SqlServer.SqlAzureExecutionStrategy());
+            SetExecutionStrategy(ProviderInvariantName, () => new System.Data.Entity.SqlServer.MicrosoftSqlAzureExecutionStrategy());
+
+            // Azure App Service rewrites a connection string saved as type SQLAzure into the
+            // SQLAZURECONNSTR_ environment variable and hands it to .NET Framework with
+            // providerName="System.Data.SqlClient". The installer saves SPOInsightsEntities with that
+            // type, and every existing deployment already has it, so the running web app and web jobs
+            // ask EF for the OLD invariant name no matter what this build prefers.
+            //
+            // Without an alias EF throws "No Entity Framework provider found for the ADO.NET provider
+            // with invariant name 'System.Data.SqlClient'" on the first query after upgrade. Worse, if
+            // the machine-wide factory resolved instead, connections would be
+            // System.Data.SqlClient.SqlConnection and AzureSqlAccessTokenInterceptor - which casts to the
+            // Microsoft.Data.SqlClient type - would silently stop attaching Entra tokens.
+            //
+            // The alias is deliberately NOT SetProviderFactory/SetProviderServices. Those also register a
+            // REVERSE IProviderInvariantName lookup keyed on the factory instance, and because the base
+            // class has already registered the modern name, the legacy registration would win and EF would
+            // start calling every Microsoft.Data.SqlClient connection "System.Data.SqlClient". Provider
+            // services such as the migrations SQL generator are keyed on the modern name, so that breaks
+            // DatabaseUpgrader - and therefore every customer schema upgrade - while leaving ordinary
+            // queries working. A forward-only resolver avoids that entirely. See issue #511.
+            SetExecutionStrategy(LegacyProviderInvariantName, () => new System.Data.Entity.SqlServer.MicrosoftSqlAzureExecutionStrategy());
+            AddDependencyResolver(new Sql.LegacyProviderNameAliasResolver());
 
             // Lets EF connect to an Azure SQL server that has SQL authentication disabled, by attaching a
             // Microsoft Entra ID access token to connections whose connection string carries no

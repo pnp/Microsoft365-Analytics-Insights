@@ -3,7 +3,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Configuration;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -220,6 +220,7 @@ VALUES (N'" + RetainedMarker + "');");
                 throw new InvalidOperationException(
                     "Retained licence-activity performance databases are allowed only on LocalDB.");
             builder.InitialCatalog = database;
+            builder.TrustServerCertificate = true;
             return builder;
         }
 

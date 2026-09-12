@@ -213,7 +213,7 @@ UPDATE dbo.teams_user_activity_log SET last_activity_date=NULL WHERE user_id=1;"
                 var pending = fixture.Store(measurements.Instrumentation(includeShowplan: false))
                     .LoadReadModelAsync(Query(), Sources(), null, CancellationToken.None);
                 if (failCoverage)
-                    await Assert.ThrowsExceptionAsync<System.Data.SqlClient.SqlException>(() => pending);
+                    await Assert.ThrowsExceptionAsync<Microsoft.Data.SqlClient.SqlException>(() => pending);
                 else
                     Assert.AreEqual(5, (await pending).BuildOverview(Query(), CancellationToken.None).DistinctAssignedUsers);
                 Assert.AreEqual(0, measurements.ActiveCommands);

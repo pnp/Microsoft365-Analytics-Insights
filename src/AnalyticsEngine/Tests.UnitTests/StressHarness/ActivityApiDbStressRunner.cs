@@ -4,7 +4,7 @@ using Common.Entities;
 using DataUtils;
 using System;
 using System.Configuration;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Diagnostics;
 using System.Reflection;
 using System.Threading;
@@ -37,7 +37,7 @@ namespace Tests.UnitTests.StressHarness
         /// </summary>
         public const string DefaultLocalDbConnectionString =
             "Data Source=(localdb)\\MSSQLLocalDB;Initial Catalog=AuditImporterStressTest;" +
-            "Integrated Security=true;MultipleActiveResultSets=True;App=EntityFramework";
+            "Integrated Security=true;MultipleActiveResultSets=True;TrustServerCertificate=True;App=EntityFramework";
 
         // Delete order (children first) for resetting a non-LocalDB target (best effort).
         private static readonly string[] ImportTablesChildFirst =
@@ -393,11 +393,11 @@ namespace Tests.UnitTests.StressHarness
                     .GetField("_bReadOnly", BindingFlags.Instance | BindingFlags.NonPublic);
                 elemReadOnly?.SetValue(existing, false);
                 existing.ConnectionString = connectionString;
-                existing.ProviderName = "System.Data.SqlClient";
+                existing.ProviderName = "Microsoft.Data.SqlClient";
             }
             else
             {
-                settings.Add(new ConnectionStringSettings(name, connectionString, "System.Data.SqlClient"));
+                settings.Add(new ConnectionStringSettings(name, connectionString, "Microsoft.Data.SqlClient"));
             }
 
             var check = ConfigurationManager.ConnectionStrings[name]?.ConnectionString;

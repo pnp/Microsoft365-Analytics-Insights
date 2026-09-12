@@ -117,7 +117,7 @@ namespace Tests.UnitTests.InstallTests
             var childOutput = "Build 'Build 1825' - begin database upgrade.\r\n"
                 + "Connecting to database @ '...' with Entity Framework context initializer set to 'MigrateDatabaseToLatestVersion'...\r\n"
                 + "Initialise database failed with EF. Exception: 'System.InvalidOperationException: This operation requires a "
-                + "connection to the 'master' database. ---> System.Data.SqlClient.SqlException: Login failed for user ''.";
+                + "connection to the 'master' database. ---> Microsoft.Data.SqlClient.SqlException: Login failed for user ''.";
 
             var hint = SqlInstallerTasks.DownloadedBuildEntraHint(true, childOutput, null);
 

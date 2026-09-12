@@ -26,7 +26,7 @@ namespace Common.Entities.Config
                     HandleSqlTestException(ex, logger);
                     return false;
                 }
-                catch (System.Data.SqlClient.SqlException ex)
+                catch (Microsoft.Data.SqlClient.SqlException ex)
                 {
                     HandleSqlTestException(ex, logger);
                     return false;
