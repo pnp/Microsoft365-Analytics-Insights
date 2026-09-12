@@ -148,6 +148,7 @@
     <Compile Include="AgentCostUserResolutionTests.cs" />
     <Compile Include="AgentCostSqlIntegrationTests.cs" />
     <Compile Include="AzureSqlEntraAuthTests.cs" />
+    <Compile Include="EmbeddedResourceNameTests.cs" />
     <Compile Include="InstallTests\SqlAuthenticationDetectionTests.cs" />
     <Compile Include="ActivityReportLoaderTimeoutTests.cs" />
     <Compile Include="ActivityReportSetMinMaxTests.cs" />
