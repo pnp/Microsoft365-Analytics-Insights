@@ -1,13 +1,11 @@
 using Common.Entities;
 using Common.Entities.Migrations;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Common.Entities.Config;
 using System;
 using System.Data;
 using System.Data.Entity.Migrations;
 using Microsoft.Data.SqlClient;
-// Aliased rather than imported: an unqualified `using System.Configuration` makes `Configuration`
-// ambiguous with the EF migrations Configuration this file already uses.
-using ConfigurationManager = System.Configuration.ConfigurationManager;
 
 namespace Tests.UnitTests
 {
@@ -78,7 +76,7 @@ namespace Tests.UnitTests
                 // CommandTimeout), which is enough to run MigrateDatabaseToLatestVersion and silently jump the
                 // database forward in between MigrateTo(...) and the assertion. The connection string is the
                 // only thing wanted here, so take it from config and never touch EF.
-                var configured = System.Configuration.ConfigurationManager.ConnectionStrings["SPOInsightsEntities"];
+                var configured = AnalyticsConfig.ConnectionStrings["SPOInsightsEntities"];
                 if (configured != null)
                 {
                     _connStr = configured.ConnectionString;

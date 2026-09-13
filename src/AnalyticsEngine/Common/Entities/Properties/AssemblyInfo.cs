@@ -2,6 +2,13 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
+// Declared here, not by the <UserSecretsId> MSBuild property, because this project sets
+// GenerateAssemblyInfo=false - so the SDK never emits the attribute the property would normally
+// produce, and the setting silently has no effect. This is the solution-wide developer secrets store
+// that replaced the gitignored App.Debug.config; AnalyticsConfig reads it from THIS assembly so every
+// executable and the test suite share one set of credentials.
+[assembly: Microsoft.Extensions.Configuration.UserSecrets.UserSecretsId("pnp-m365-analytics-insights")]
+
 // General Information about an assembly is controlled through the following
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.

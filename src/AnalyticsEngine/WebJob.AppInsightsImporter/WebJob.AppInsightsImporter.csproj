@@ -13,8 +13,6 @@
     <!-- Obsolete-crypto and Windows-only warnings are tracked separately; silencing them here
          keeps the framework move readable rather than hiding anything new. -->
     <NoWarn>$(NoWarn);SYSLIB0011;SYSLIB0021;SYSLIB0022;SYSLIB0023;SYSLIB0060;CA1416;NU1510</NoWarn>
-      <!-- App.config is a build output generated from App.Template.config; see AppConfigTransform.targets. -->
-    <GenerateAppConfigFromTemplate>true</GenerateAppConfigFromTemplate>
   </PropertyGroup>
 
   <ItemGroup>
@@ -36,6 +34,11 @@
     <ProjectReference Include="..\WebJob.AppInsightsImporter.Engine\WebJob.AppInsightsImporter.Engine.csproj" />
   </ItemGroup>
 
-  <Import Project="$(MSBuildThisFileDirectory)..\AppConfigTransform.targets" />
+  <!-- Configuration comes from appsettings.json plus environment variables (and user secrets
+       in Development); see AnalyticsConfig. Copied next to the binary because that is where
+       AnalyticsConfig sets its base path. -->
+  <ItemGroup>
+    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 
 </Project>

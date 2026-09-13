@@ -14,7 +14,6 @@
          keeps the framework move readable rather than hiding anything new. -->
     <NoWarn>$(NoWarn);SYSLIB0011;SYSLIB0021;SYSLIB0022;SYSLIB0023;SYSLIB0060;CA1416;NU1510</NoWarn>
     <IsPackable>false</IsPackable>
-    <GenerateAppConfigFromTemplate>true</GenerateAppConfigFromTemplate>
     <!-- A linked Tests.FakeDataGen file carries its own Main; MSTest would add a second. -->
     <GenerateProgramFile>false</GenerateProgramFile>
   </PropertyGroup>
@@ -104,6 +103,12 @@
     <Compile Remove="LicenceActivityPerformanceTests.cs" />
     <Compile Remove="LicenceActivityReadModelCacheTests.cs" />
   </ItemGroup>
-  <Import Project="$(MSBuildThisFileDirectory)..\AppConfigTransform.targets" />
+
+  <!-- Configuration comes from appsettings.json plus environment variables (and user secrets
+       in Development); see AnalyticsConfig. Copied next to the binary because that is where
+       AnalyticsConfig sets its base path. -->
+  <ItemGroup>
+    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 
 </Project>

@@ -2,6 +2,7 @@ using App.ControlPanel.Engine;
 using App.ControlPanel.Engine.Models;
 using Common.Entities;
 using DataUtils;
+using Common.Entities.Config;
 using System;
 using System.Configuration;
 using Microsoft.Data.SqlClient;
@@ -375,35 +376,31 @@ namespace Tests.UnitTests.StressHarness
         }
 
         /// <summary>
-        /// Injects/overrides a runtime connection string in <see cref="ConfigurationManager"/> so
-        /// <c>new AnalyticsEntitiesContext()</c> (name=SPOInsightsEntities) resolves to our target DB.
+        /// Overrides the runtime connection string so <c>new AnalyticsEntitiesContext()</c> resolves to
+        /// our target DB rather than the configured one.
         /// </summary>
+        /// <remarks>
+        /// This used to reach into <c>ConfigurationManager</c>'s internals with reflection, because its
+        /// <c>ConnectionStringSettingsCollection</c> is sealed read-only at runtime. Configuration now
+        /// comes from <see cref="AnalyticsConfig"/>, which supports overriding directly, so the
+        /// reflection is gone.
+        /// <para>
+        /// The check at the end compares against the requested value rather than merely testing for
+        /// non-empty. That matters: an earlier version of this method asserted only non-emptiness and
+        /// therefore passed while silently failing to apply the override, which would have pointed the
+        /// whole stress run at the configured database instead of the scratch one.
+        /// </para>
+        /// </remarks>
         private static void ForceRuntimeConnectionString(string name, string connectionString)
         {
-            var settings = ConfigurationManager.ConnectionStrings;
+            AnalyticsConfig.ConnectionStrings.Add(name, connectionString);
 
-            var collReadOnly = typeof(ConfigurationElementCollection)
-                .GetField("bReadOnly", BindingFlags.Instance | BindingFlags.NonPublic);
-            collReadOnly?.SetValue(settings, false);
-
-            var existing = settings[name];
-            if (existing != null)
+            var check = AnalyticsConfig.ConnectionStrings[name]?.ConnectionString;
+            if (!string.Equals(check, connectionString, StringComparison.Ordinal))
             {
-                var elemReadOnly = typeof(ConfigurationElement)
-                    .GetField("_bReadOnly", BindingFlags.Instance | BindingFlags.NonPublic);
-                elemReadOnly?.SetValue(existing, false);
-                existing.ConnectionString = connectionString;
-                existing.ProviderName = "Microsoft.Data.SqlClient";
-            }
-            else
-            {
-                settings.Add(new ConnectionStringSettings(name, connectionString, "Microsoft.Data.SqlClient"));
-            }
-
-            var check = ConfigurationManager.ConnectionStrings[name]?.ConnectionString;
-            if (string.IsNullOrEmpty(check))
-            {
-                throw new InvalidOperationException($"Failed to set runtime connection string '{name}'.");
+                throw new InvalidOperationException(
+                    $"Failed to set runtime connection string '{name}'. Wanted '{connectionString}' but " +
+                    $"the configuration still reports '{check ?? "(null)"}'.");
             }
         }
 

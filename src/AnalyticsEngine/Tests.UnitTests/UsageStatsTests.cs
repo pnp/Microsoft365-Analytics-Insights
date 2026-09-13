@@ -6,6 +6,7 @@ using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
+using Common.Entities.Config;
 using System;
 using System.Configuration;
 using System.Data.Entity;
@@ -94,10 +95,10 @@ namespace Tests.UnitTests
         {
             public TestConfig()
             {
-                this.CosmosConnectionString = ConfigurationManager.AppSettings.Get("CosmosDb");
-                this.ContainerNameCurrent = ConfigurationManager.AppSettings.Get("CosmosDbTestContainerCurrent");
-                this.ContainerNameHistory = ConfigurationManager.AppSettings.Get("CosmosDbTestContainerHistory");
-                this.DatabaseName = ConfigurationManager.AppSettings.Get("CosmosDbTestDatabaseName");
+                this.CosmosConnectionString = AnalyticsConfig.AppSettings.Get("CosmosDb");
+                this.ContainerNameCurrent = AnalyticsConfig.AppSettings.Get("CosmosDbTestContainerCurrent");
+                this.ContainerNameHistory = AnalyticsConfig.AppSettings.Get("CosmosDbTestContainerHistory");
+                this.DatabaseName = AnalyticsConfig.AppSettings.Get("CosmosDbTestDatabaseName");
             }
             public bool IsValid => !string.IsNullOrEmpty(CosmosConnectionString) && !string.IsNullOrEmpty(DatabaseName) &&
                 !string.IsNullOrEmpty(ContainerNameHistory) && !string.IsNullOrEmpty(ContainerNameCurrent);

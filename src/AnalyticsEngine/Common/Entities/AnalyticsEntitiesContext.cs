@@ -25,12 +25,62 @@ namespace Common.Entities
     public class AnalyticsEntitiesContext : DbContext
     {
         #region Constructors
+
+        /// <summary>The connection string the whole solution stores its data under.</summary>
+        public const string ConnectionStringName = "SPOInsightsEntities";
+
 #if DEBUG
-        public AnalyticsEntitiesContext() : this("name=SPOInsightsEntities", false, true) { }     // Dev build auto-updates schema. THIS IS BAD
+        public AnalyticsEntitiesContext() : this(ConfiguredConnectionString(), false, true) { }     // Dev build auto-updates schema. THIS IS BAD
 #else
 
-        public AnalyticsEntitiesContext() : this("name=SPOInsightsEntities", false, false) { }
+        public AnalyticsEntitiesContext() : this(ConfiguredConnectionString(), false, false) { }
 #endif
+
+        /// <summary>
+        /// The configured database connection string, resolved by us rather than by EF.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// This constructor used to pass EF the literal <c>"name=SPOInsightsEntities"</c> and let EF
+        /// look the name up. That lookup is EF's own, and it goes to
+        /// <c>ConfigurationManager.ConnectionStrings</c> - the App.config/Web.config
+        /// <c>&lt;connectionStrings&gt;</c> section - which no longer exists on this branch. EF cannot
+        /// be pointed at <see cref="AnalyticsConfig"/> for name resolution, so the name has to be
+        /// resolved before EF sees it and handed over as an actual connection string.
+        /// </para>
+        /// <para>
+        /// Resolved per construction rather than cached, because the connection string is legitimately
+        /// swapped at runtime: the integration tests point the context at a scratch database
+        /// (<c>ScratchDatabase</c>, <c>ActivityApiDbStressRunner</c>) by overriding it in
+        /// configuration and then constructing a context.
+        /// </para>
+        /// <para>
+        /// Passed with <c>isConnectionString: false</c> even though it <i>is</i> a connection string,
+        /// which looks wrong and is not. That flag does not tell EF anything - EF already recognises a
+        /// connection string by the <c>=</c> in it - it controls whether this constructor
+        /// <i>reassigns</i> <c>Database.Connection.ConnectionString</c> afterwards. Doing so here would
+        /// break EF migrations: <c>DbMigrator</c> retargets a context at another database by pushing a
+        /// <c>DbConnectionInfo</c> that the base constructor picks up (<c>DbContextInfo</c>), and a
+        /// later assignment silently overwrites it. The migration would then run against the configured
+        /// database instead of the requested one - which is how <c>UpgradeFromStableTests</c> caught it.
+        /// The flag stays meaningful for the callers that pass a connection string <i>and</i> want the
+        /// reassignment.
+        /// </para>
+        /// </remarks>
+        private static string ConfiguredConnectionString()
+        {
+            var configured = AnalyticsConfig.ConnectionStrings[ConnectionStringName];
+            if (configured == null)
+            {
+                throw new System.Configuration.ConfigurationErrorsException(
+                    $"No connection string named '{ConnectionStringName}' is configured. Set it in " +
+                    "appsettings.json, in user secrets, or as the environment variable " +
+                    $"'ConnectionStrings__{ConnectionStringName}' - which is what Azure App Service " +
+                    $"produces from the connection string the installer writes (SQLAZURECONNSTR_{ConnectionStringName}).");
+            }
+
+            return configured.ConnectionString;
+        }
 
 
         /// <summary>

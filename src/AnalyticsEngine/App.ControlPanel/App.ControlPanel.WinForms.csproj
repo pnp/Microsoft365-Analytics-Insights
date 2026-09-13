@@ -23,8 +23,6 @@
          Adding the attributes is worth doing as its own change. -->
     <WarningsNotAsErrors>$(WarningsNotAsErrors);WFO1000</WarningsNotAsErrors>
     <NoWarn>$(NoWarn);WFO1000</NoWarn>
-      <!-- App.config is a build output generated from App.Template.config; see AppConfigTransform.targets. -->
-    <GenerateAppConfigFromTemplate>true</GenerateAppConfigFromTemplate>
   </PropertyGroup>
 
   <ItemGroup>
@@ -43,6 +41,11 @@
     <ProjectReference Include="..\Common\Entities\Entities.csproj" />
   </ItemGroup>
 
-  <Import Project="$(MSBuildThisFileDirectory)..\AppConfigTransform.targets" />
+  <!-- Configuration comes from appsettings.json plus environment variables (and user secrets
+       in Development); see AnalyticsConfig. Copied next to the binary because that is where
+       AnalyticsConfig sets its base path. -->
+  <ItemGroup>
+    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 
 </Project>

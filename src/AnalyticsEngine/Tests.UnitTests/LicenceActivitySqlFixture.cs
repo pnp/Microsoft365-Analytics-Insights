@@ -1,4 +1,5 @@
 using Common.Entities.LicenceActivity;
+using Common.Entities.Config;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -211,7 +212,7 @@ VALUES (N'" + RetainedMarker + "');");
 
         private static SqlConnectionStringBuilder LocalDbConnectionBuilder(string database)
         {
-            var configured = ConfigurationManager.ConnectionStrings["SPOInsightsEntities"];
+            var configured = AnalyticsConfig.ConnectionStrings["SPOInsightsEntities"];
             if (configured == null)
                 throw new InvalidOperationException("The SPOInsightsEntities connection string is required.");
 

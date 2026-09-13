@@ -425,7 +425,7 @@ namespace WebJob.Office365ActivityImporter
         {
             ConsoleApp.PrintStartupAndLoggingConfig(settings.ConnectionStrings.DatabaseConnectionString, settings.BuildLabel, settings.UserGroupsFilter, logger);
 
-            var efConnectionString = ConfigurationManager.ConnectionStrings["SPOInsightsEntities"].ConnectionString;
+            var efConnectionString = AnalyticsConfig.ConnectionStrings["SPOInsightsEntities"].ConnectionString;
             var sqlConnectionInfo = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(efConnectionString);
 
             logger.LogInformation("\nConfigured values:");
