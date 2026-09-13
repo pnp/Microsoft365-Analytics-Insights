@@ -1,0 +1,179 @@
+name: net10 build
+
+# Builds and tests the .NET 10 port on the `net10` branch.
+#
+# Deliberately a SEPARATE workflow from ci.yml / tests.yml rather than extra branches on those:
+#
+#   - ci.yml is the customer release pipeline; it publishes the zips that become GitHub release
+#     assets. Nothing on `net10` may ever reach that path, so the two are kept physically apart and
+#     this workflow publishes no artifacts.
+#
+#   - tests.yml owns the REQUIRED status checks (`test_dotnet (Release)`, `test_aitracker`). Adding
+#     branches or matrix legs there would change those check names and block PRs on dev/main - the
+#     exact failure mode seen in issue #270.
+#
+# The branch is a long-lived mirror of the stable release, so the schedule trigger matters as much as
+# the push one: `net10` rots when `main` moves, not when someone commits here.
+
+on:
+  push:
+    branches:
+      - net10
+    paths:
+      - src/AnalyticsEngine/**
+      - .github/workflows/net10.yml
+  pull_request:
+    branches:
+      - net10
+  schedule:
+    # Monday morning, to surface drift from main before the week's work starts.
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------------------------
+  # How far behind main are we? Runs on every trigger, including the weekly schedule.
+  #
+  # This is the job that protects the branch's whole reason for existing: a parallel branch nobody
+  # syncs is worse than no branch, and the sync is cheap only while the divergence is small.
+  # ---------------------------------------------------------------------------------------------
+  drift_check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
+        with:
+          # Full history: we need to count commits between two branches.
+          fetch-depth: 0
+
+      - name: Measure divergence from main
+        shell: bash
+        env:
+          # Fail past this many commits behind. Generous on purpose: the value that matters is the
+          # number appearing in the summary every week, not the red X.
+          MAX_BEHIND: 75
+        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+          behind=$(git rev-list --count HEAD..origin/main)
+          ahead=$(git rev-list --count origin/main..HEAD)
+
+          {
+            echo "## net10 divergence from main"
+            echo ""
+            echo "| | commits |"
+            echo "|---|---|"
+            echo "| Behind main | **${behind}** |"
+            echo "| Ahead of main (the port itself) | ${ahead} |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$behind" -eq 0 ]; then
+            echo "In step with main." >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "\`net10\` is **${behind}** commit(s) behind \`main\`. Sync it:"
+              echo ""
+              echo '```'
+              echo "git fetch origin && git switch net10 && git merge origin/main"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "behind=${behind} ahead=${ahead}"
+          if [ "$behind" -gt "$MAX_BEHIND" ]; then
+            echo "::error::net10 is ${behind} commits behind main (threshold ${MAX_BEHIND}). Merge main into net10."
+            exit 1
+          elif [ "$behind" -gt 0 ]; then
+            echo "::warning::net10 is ${behind} commits behind main."
+          fi
+
+  # ---------------------------------------------------------------------------------------------
+  # Build every .NET 10 project and run the unit test suite.
+  # ---------------------------------------------------------------------------------------------
+  build_and_test:
+    # windows-latest rather than the windows-2022 pin tests.yml uses: that pin exists for a
+    # hardcoded vstest.console.exe path under VS2022, and this workflow uses `dotnet test` instead.
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '10.0.x'
+
+      # Web.csproj shells out to npm to build the portal SPA, so this job is an npm consumer even
+      # though nothing here mentions npm. Pinned from the repo-root .nvmrc, as every other npm step
+      # in the repo does - never hardcoded.
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: src/AnalyticsEngine/Web/Scripts/portal/package-lock.json
+
+      # The tests that touch SQL use LocalDB, which the windows runner image already provides.
+      - name: Start LocalDB
+        shell: pwsh
+        run: |
+          & sqllocaldb create MSSQLLocalDB -s 2>&1 | Out-Host
+          & sqllocaldb info MSSQLLocalDB | Out-Host
+
+      - name: Build the .NET 10 projects
+        shell: pwsh
+        run: |
+          $projects = @(
+            'Common\DataUtils\DataUtils.csproj'
+            'Common\UsageReporting\UsageReporting.csproj'
+            'Common\CloudInstallEngine\CloudInstallEngine.csproj'
+            'Common\Entities\Entities.csproj'
+            'WebJob.AppInsightsImporter.Engine\WebJob.AppInsightsImporter.Engine.csproj'
+            'WebJob.Office365ActivityImporter.Engine\WebJob.Office365ActivityImporter.Engine.csproj'
+            'WebJob.AppInsightsImporter\WebJob.AppInsightsImporter.csproj'
+            'WebJob.Office365ActivityImporter\WebJob.Office365ActivityImporter.csproj'
+            'App.ControlPanel.Engine\App.ControlPanel.Engine.csproj'
+            'App.ControlPanel\App.ControlPanel.WinForms.csproj'
+            'Web\Web.csproj'
+          )
+
+          $failed = @()
+          foreach ($p in $projects) {
+            Write-Host "::group::$p"
+            dotnet build "src\AnalyticsEngine\$p" -c Release --nologo
+            if ($LASTEXITCODE -ne 0) { $failed += $p }
+            Write-Host "::endgroup::"
+          }
+
+          if ($failed.Count -gt 0) {
+            Write-Host "::error::$($failed.Count) project(s) failed to build: $($failed -join ', ')"
+            exit 1
+          }
+
+      - name: Run the unit tests
+        shell: pwsh
+        env:
+          # Read-only public metadata; raises the anonymous GitHub API rate limit that
+          # DownloadLatestReleaseZipsHaveContent would otherwise hit on a shared runner IP.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dotnet test src\AnalyticsEngine\Tests.UnitTests\Tests.UnitTests.csproj `
+            -c Debug --nologo --logger "trx;LogFileName=net10.trx" --results-directory "$env:RUNNER_TEMP\testresults"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning::Unit tests reported failures. Several tests need credentials or external services that this runner does not have; check the summary below before assuming a regression."
+          }
+
+      # Uploaded for inspection only. Deliberately NOT named like a release artifact: nothing this
+      # workflow produces may ever be mistaken for a customer download.
+      - name: Publish test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: net10-test-results
+          path: ${{ runner.temp }}/testresults/**/*.trx
+          if-no-files-found: ignore
