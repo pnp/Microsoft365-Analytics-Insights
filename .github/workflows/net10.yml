@@ -33,6 +33,25 @@ on:
 permissions:
   contents: read
 
+# The same configuration tests.yml supplies. Without it the integration tests cannot reach their
+# fakes or services and fail in bulk, which would make this workflow permanently red and therefore
+# ignored. Secrets are passed identically; nothing new is exposed.
+env:
+  Solution_Directory: src\AnalyticsEngine\Tests.UnitTests
+  ClientID: ${{ secrets.APP_CLIENTID }}
+  ClientSecret: ${{ secrets.APP_CLIENTSECRET }}
+  TenantGUID: ${{ secrets.APP_TENANTGUID }}
+  TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
+  CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
+  CognitiveKey: ${{ secrets.APP_COGNITIVEKEY }}
+  CosmosDbTestContainerCurrent: stats
+  CosmosDbTestContainerHistory: history
+  CosmosDbTestDatabaseName: UnitTestDevOps
+  CosmosDb: ${{ secrets.APP_COSMOSDB }}
+  redis: "localhost:6379,abortConnect=False"
+  ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
+  Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
+
 jobs:
   # ---------------------------------------------------------------------------------------------
   # How far behind main are we? Runs on every trigger, including the weekly schedule.
@@ -154,6 +173,21 @@ jobs:
             Write-Host "::error::$($failed.Count) project(s) failed to build: $($failed -join ', ')"
             exit 1
           }
+
+      - name: Config substitution - unit tests
+        uses: devops-actions/variable-substitution@452ffbbfb1c26fd5d9aaf24faffb59c5084257e9 # v2.0.0
+        with:
+          files: '${{ env.Solution_Directory }}\App.Release.config'
+
+      - name: Start Redis
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://github.com/tporadowski/redis/releases/download/v5.0.14.1/Redis-x64-5.0.14.1.zip" -OutFile "$env:RUNNER_TEMP\redis.zip"
+          Expand-Archive "$env:RUNNER_TEMP\redis.zip" -DestinationPath "$env:RUNNER_TEMP\redis"
+          Start-Process -FilePath "$env:RUNNER_TEMP\redis\redis-server.exe" -WindowStyle Hidden
+          Start-Sleep -Seconds 3
+          & "$env:RUNNER_TEMP\redis\redis-cli.exe" ping
 
       - name: Run the unit tests
         shell: pwsh
