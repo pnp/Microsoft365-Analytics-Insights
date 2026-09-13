@@ -1,0 +1,82 @@
+<Project>
+
+  <!--
+    Generates App.config from App.Template.config plus the per-configuration transform, which is the
+    repo convention: App.Template.config is the source of truth and App.config is a build output.
+
+    The legacy projects did this with the TransformXml task from Microsoft.WebApplication.targets.
+    That task ships with Visual Studio's web tooling and is not available to `dotnet build`, so an
+    SDK-style project cannot use it without tying the build to a VS install.
+
+    This replaces it with the same underlying engine - Microsoft.Web.Xdt, which is exactly what
+    TransformXml wraps - invoked from an inline task. Same transform semantics, no VS dependency,
+    and it works on a plain `dotnet build`.
+
+    Projects opt in by setting <GenerateAppConfigFromTemplate>true</GenerateAppConfigFromTemplate>.
+  -->
+
+  <ItemGroup Condition="'$(GenerateAppConfigFromTemplate)' == 'true'">
+    <PackageReference Include="Microsoft.Web.Xdt" Version="3.1.0" PrivateAssets="all" />
+  </ItemGroup>
+
+  <UsingTask TaskName="ApplyXdtTransform"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll"
+             Condition="'$(GenerateAppConfigFromTemplate)' == 'true'">
+    <ParameterGroup>
+      <Source ParameterType="System.String" Required="true" />
+      <Transform ParameterType="System.String" Required="true" />
+      <Destination ParameterType="System.String" Required="true" />
+      <XdtAssembly ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        var asm = System.Reflection.Assembly.LoadFrom(XdtAssembly);
+        var docType = asm.GetType("Microsoft.Web.XmlTransform.XmlTransformableDocument");
+        var xfmType = asm.GetType("Microsoft.Web.XmlTransform.XmlTransformation");
+
+        // Plain reflection rather than dynamic: the inline-task compiler has no reference to
+        // Microsoft.CSharp, so dynamic dispatch fails with CS0656 at task-compile time.
+        var doc = System.Activator.CreateInstance(docType);
+        docType.GetProperty("PreserveWhitespace").SetValue(doc, true, null);
+        docType.GetMethod("Load", new System.Type[] { typeof(string) }).Invoke(doc, new object[] { Source });
+
+        var xfm = System.Activator.CreateInstance(xfmType, new object[] { Transform });
+
+        var applied = (bool)xfmType.GetMethod("Apply").Invoke(xfm, new object[] { doc });
+
+        if (!applied)
+        {
+            Log.LogError("XDT transform of '" + Source + "' with '" + Transform + "' failed.");
+        }
+        else
+        {
+            docType.GetMethod("Save", new System.Type[] { typeof(string) }).Invoke(doc, new object[] { Destination });
+            Log.LogMessage(Microsoft.Build.Framework.MessageImportance.Normal,
+                "Generated " + Destination + " from " + Source + " + " + Transform);
+        }
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="GenerateAppConfig"
+          BeforeTargets="PrepareForBuild;BeforeBuild"
+          Condition="'$(GenerateAppConfigFromTemplate)' == 'true'"
+          Inputs="App.Template.config;App.$(Configuration).config"
+          Outputs="App.config">
+
+    <!-- Resolve the XDT assembly from the restored package rather than hardcoding a path. -->
+    <ItemGroup>
+      <_XdtCandidate Include="$(NuGetPackageRoot)microsoft.web.xdt\3.1.0\lib\netstandard2.0\Microsoft.Web.XmlTransform.dll" />
+    </ItemGroup>
+
+    <Error Condition="!Exists('%(_XdtCandidate.FullPath)')"
+           Text="Microsoft.Web.Xdt was not restored, so App.config cannot be generated from App.Template.config. Run a restore first." />
+
+    <ApplyXdtTransform Source="App.Template.config"
+                       Transform="App.$(Configuration).config"
+                       Destination="App.config"
+                       XdtAssembly="%(_XdtCandidate.FullPath)" />
+  </Target>
+
+</Project>
