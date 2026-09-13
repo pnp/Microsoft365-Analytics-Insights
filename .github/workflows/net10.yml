@@ -196,8 +196,12 @@ jobs:
           # DownloadLatestReleaseZipsHaveContent would otherwise hit on a shared runner IP.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Release, not Debug: App.config is generated from App.Template.config plus the matching
+          # per-configuration transform, and App.Debug.config is developer-local and gitignored. A
+          # Debug run on a runner therefore has no App.config at all, so every test needing a
+          # connection string or service endpoint fails for want of configuration.
           dotnet test src\AnalyticsEngine\Tests.UnitTests\Tests.UnitTests.csproj `
-            -c Debug --nologo --logger "trx;LogFileName=net10.trx" --results-directory "$env:RUNNER_TEMP\testresults"
+            -c Release --nologo --logger "trx;LogFileName=net10.trx" --results-directory "$env:RUNNER_TEMP\testresults"
           if ($LASTEXITCODE -ne 0) {
             Write-Host "::warning::Unit tests reported failures - see the uploaded trx. Some tests need services this runner does not have."
           }
