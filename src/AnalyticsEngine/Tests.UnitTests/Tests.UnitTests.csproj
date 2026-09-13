@@ -148,6 +148,7 @@
     <Compile Include="AgentCostUserResolutionTests.cs" />
     <Compile Include="AgentCostSqlIntegrationTests.cs" />
     <Compile Include="AzureSqlEntraAuthTests.cs" />
+    <Compile Include="EfProviderRegistrationTests.cs" />
     <Compile Include="StringCipherCompatibilityTests.cs" />
     <Compile Include="InstallTests\SqlAuthenticationDetectionTests.cs" />
     <Compile Include="ActivityReportLoaderTimeoutTests.cs" />
@@ -504,6 +505,12 @@
     <PackageReference Include="EntityFramework">
       <Version>6.5.2</Version>
     </PackageReference>
+    <PackageReference Include="Microsoft.Data.SqlClient">
+      <Version>6.1.4</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFramework.SqlServer">
+      <Version>6.5.2</Version>
+    </PackageReference>
     <PackageReference Include="Microsoft.ApplicationInsights">
       <Version>2.22.0</Version>
     </PackageReference>
@@ -533,9 +540,6 @@
     </PackageReference>
     <PackageReference Include="Newtonsoft.Json">
       <Version>13.0.4</Version>
-    </PackageReference>
-    <PackageReference Include="System.Data.SqlClient">
-      <Version>4.9.1</Version>
     </PackageReference>
     <PackageReference Include="System.IdentityModel.Tokens.Jwt">
       <Version>8.22.0</Version>
@@ -568,4 +572,3 @@
     <TransformXml Source="App.Template.config" Transform="App.$(Configuration).config" Destination="App.config" />
   </Target>
 </Project>
-

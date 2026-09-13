@@ -49,7 +49,7 @@ namespace App.ControlPanel
                 var defaultConfig = new TestConfiguration();
                 if (value != null) defaultConfig = value;
 
-                var sqlConnectionInfo = new System.Data.SqlClient.SqlConnectionStringBuilder(defaultConfig.SQLConnectionString);
+                var sqlConnectionInfo = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(defaultConfig.SQLConnectionString);
                 _usesEntraSqlAuth = DataUtils.Sql.AzureSqlTokenAuth.NeedsAccessToken(defaultConfig.SQLConnectionString);
                 txtSqlServer.Text = sqlConnectionInfo?.DataSource;
                 txtSqlUsername.Text = sqlConnectionInfo?.UserID;
