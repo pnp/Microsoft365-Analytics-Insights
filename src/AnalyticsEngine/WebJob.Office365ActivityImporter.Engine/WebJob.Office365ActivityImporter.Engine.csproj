@@ -1,407 +1,45 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+<Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
-    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
-    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <ProjectGuid>{1919BDE6-C311-426D-ADB3-A1487133E397}</ProjectGuid>
-    <OutputType>Library</OutputType>
-    <AppDesignerFolder>Properties</AppDesignerFolder>
+    <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>WebJob.Office365ActivityImporter.Engine</RootNamespace>
     <AssemblyName>WebJob.Office365ActivityImporter.Engine</AssemblyName>
-    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
-    <FileAlignment>512</FileAlignment>
-    <TargetFrameworkProfile />
-    <NuGetPackageImportStamp>
-    </NuGetPackageImportStamp>
+    <LangVersion>latest</LangVersion>
+    <!-- Properties\AssemblyInfo.cs is checked in and carries the product version attributes. -->
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- Obsolete-crypto and Windows-only warnings are tracked separately; silencing them here
+         keeps the framework move readable rather than hiding anything new. -->
+    <NoWarn>$(NoWarn);SYSLIB0011;SYSLIB0021;SYSLIB0022;SYSLIB0023;SYSLIB0060;CA1416;NU1510</NoWarn>
   </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
-    <DebugSymbols>true</DebugSymbols>
-    <DebugType>full</DebugType>
-    <Optimize>false</Optimize>
-    <OutputPath>bin\Debug\</OutputPath>
-    <DefineConstants>DEBUG;TRACE</DefineConstants>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
-    <DebugType>pdbonly</DebugType>
-    <Optimize>true</Optimize>
-    <OutputPath>bin\Release\</OutputPath>
-    <DefineConstants>TRACE</DefineConstants>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
-  </PropertyGroup>
-  <PropertyGroup>
-    <SignAssembly>false</SignAssembly>
-  </PropertyGroup>
-  <PropertyGroup>
-    <AssemblyOriginatorKeyFile>..\Certificates\SPOInsightsBinaries.pfx</AssemblyOriginatorKeyFile>
-  </PropertyGroup>
-  <ItemGroup>
-    <Reference Include="Microsoft.CSharp" />
-    <Reference Include="System" />
-    <Reference Include="System.ComponentModel.Composition" />
-    <Reference Include="System.ComponentModel.DataAnnotations" />
-    <Reference Include="System.Configuration" />
-    <Reference Include="System.Data" />
-    <Reference Include="System.Data.DataSetExtensions" />
-    <Reference Include="System.Drawing" />
-    <Reference Include="System.IdentityModel" />
-    <Reference Include="System.Net" />
-    <Reference Include="System.Net.Http.WebRequest" />
-    <Reference Include="System.Numerics" />
-    <Reference Include="System.Runtime.Serialization" />
-    <Reference Include="System.Security" />
-    <Reference Include="System.Web" />
-    <Reference Include="System.Windows.Forms" />
-    <Reference Include="System.Xml" />
-    <Reference Include="System.Xml.Linq" />
-  </ItemGroup>
-  <ItemGroup>
-    <Compile Include="Abstract.cs" />
-    <Compile Include="ActivityAPI\ActivitySubscriptionManager.cs" />
-    <Compile Include="ActivityAPI\AuditFilterConfig.cs" />
-    <Compile Include="ActivityAPI\ActivityImporter.cs" />
-    <Compile Include="ActivityAPI\BlobCheckpoint\AzureTableProcessedBlobStore.cs" />
-    <Compile Include="ActivityAPI\BlobCheckpoint\BlobCommitTracker.cs" />
-    <Compile Include="ActivityAPI\BlobCheckpoint\CheckpointTableClientFactory.cs" />
-    <Compile Include="ActivityAPI\BlobCheckpoint\InMemoryProcessedBlobStore.cs" />
-    <Compile Include="ActivityAPI\BlobCheckpoint\IProcessedBlobStore.cs" />
-    <Compile Include="ActivityAPI\BlobCheckpoint\ProcessedBlobStoreFactory.cs" />
-    <Compile Include="ActivityAPI\AuditTraceConfig.cs" />
-    <Compile Include="ActivityAPI\Copilot\CopilotAuditEventManager.cs" />
-    <Compile Include="ActivityAPI\Copilot\ICopilotStagingWriter.cs" />
-    <Compile Include="ActivityAPI\Copilot\CostEstimate\CopilotCreditEstimation.cs" />
-    <Compile Include="ActivityAPI\Copilot\CostEstimate\Models.cs" />
-    <Compile Include="ActivityAPI\Copilot\GraphCaches.cs" />
-    <Compile Include="ActivityAPI\Copilot\GraphFileMetadataLoader.cs" />
-    <Compile Include="ActivityAPI\Copilot\SpoGraphClient.cs" />
-    <Compile Include="ActivityAPI\Copilot\Models.cs" />
-    <Compile Include="ActivityAPI\Copilot\StagingClasses.cs" />
-    <Compile Include="ActivityAPI\Persistence\ActivityStagingPass.cs" />
-    <Compile Include="ActivityAPI\Persistence\IActivityImportCacheProvider.cs" />
-    <Compile Include="ActivityAPI\Persistence\IActivityStagingWriter.cs" />
-    <Compile Include="ActivityAPI\Persistence\ICopilotMetadataLoaderFactory.cs" />
-    <Compile Include="ActivityAPI\Persistence\ISaveSessionFactory.cs" />
-    <Compile Include="ActivityAPI\Rules\ActivityImportCacheWindow.cs" />
-    <Compile Include="ActivityAPI\Rules\ActivitySaveConcurrencyPolicy.cs" />
-    <Compile Include="ActivityAPI\Rules\ActivityStagingRules.cs" />
-    <Compile Include="ActivityAPI\Rules\CopilotPrewarmPolicy.cs" />
-    <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditEventManager.cs" />
-    <Compile Include="AgentCosts\AgentCostImportPhase.cs" />
-    <Compile Include="AgentCosts\AgentCostRowHasher.cs" />
-    <Compile Include="AgentCosts\AgentCostUserResolver.cs" />
-    <Compile Include="AgentCosts\GraphEntraUserLookup.cs" />
-    <Compile Include="AgentCosts\SqlAgentCostUserLinkStore.cs" />
-    <Compile Include="AgentCosts\UserResolution.cs" />
-    <Compile Include="AgentCosts\AzureCostImporter.cs" />
-    <Compile Include="AgentCosts\AzureCostManagementSource.cs" />
-    <Compile Include="AgentCosts\AzureCostQueryParser.cs" />
-    <Compile Include="AgentCosts\CopilotStudioCreditImporter.cs" />
-    <Compile Include="AgentCosts\CopilotStudioCreditParser.cs" />
-    <Compile Include="AgentCosts\Interfaces.cs" />
-    <Compile Include="AgentCosts\PowerPlatformLicensingCreditSource.cs" />
-    <Compile Include="AgentCosts\SqlAgentCostStore.cs" />
-    <Compile Include="ActivityAPI\PowerPlatform\IPowerPlatformStagingWriter.cs" />
-    <Compile Include="ActivityAPI\Dlp\CopilotDlpRules.cs" />
-    <Compile Include="ActivityAPI\Dlp\DlpAuditEventManager.cs" />
-    <Compile Include="ActivityAPI\Dlp\IDlpStagingWriter.cs" />
-    <Compile Include="ActivityAPI\Dlp\StagingClasses.cs" />
-    <Compile Include="Entities\Serialisation\DlpAuditLogContent.cs" />
-    <Compile Include="ActivityAPI\PowerPlatform\PowerPlatformAuditLogFilter.cs" />
-    <Compile Include="ActivityAPI\PowerPlatform\StagingClasses.cs" />
-    <Compile Include="ActivityAPI\Interfaces.cs" />
-    <Compile Include="ActivityAPI\Loaders\ActivityReportLoader.cs" />
-    <Compile Include="ActivityAPI\Loaders\ActivityWebImporter.cs" />
-    <Compile Include="ActivityAPI\Loaders\AuditLogContentDispatcher.cs" />
-    <Compile Include="ActivityAPI\Loaders\ContentMetaDataLoader.cs" />
-    <Compile Include="ActivityAPI\Loaders\WebContentMetaDataLoader.cs" />
-    <Compile Include="ActivityAPI\ActivityReportSqlPersistenceManager.cs" />
-    <Compile Include="Constants.cs" />
-    <Compile Include="ActivityImportCache.cs" />
-    <Compile Include="ImportLastRunStore.cs" />
-    <Compile Include="ImportRuntimeOptions.cs" />
-    <Compile Include="ActivityReportsCadenceGate.cs" />
-    <Compile Include="Graph\Sections\IGraphImportSection.cs" />
-    <Compile Include="Graph\Sections\IGraphImportSectionFactory.cs" />
-    <Compile Include="Graph\Sections\DelegateGraphImportSection.cs" />
-    <Compile Include="Graph\Sections\ProductionGraphImportSectionFactory.cs" />
-    <Compile Include="Entities\BaseUser.cs" />
-    <Compile Include="Entities\ChatReactions.cs" />
-    <Compile Include="Entities\Serialisation\BaseSerialisationClasses.cs" />
-    <Compile Include="Entities\Serialisation\CallRecord\CallDTOClasses.cs" />
-    <Compile Include="Entities\Serialisation\CallRecord\CallRecordDTO.cs" />
-    <Compile Include="Entities\Serialisation\CallRecord\IdentitySetDTO.cs" />
-    <Compile Include="Entities\Serialisation\CommonAuditLogContent.cs" />
-    <Compile Include="ActivityAPI\ActivityReportSet.cs" />
-    <Compile Include="Entities\ImportStat.cs" />
-    <Compile Include="Entities\ApiSubscription.cs" />
-    <Compile Include="ActivityAPI\SaveSession.cs" />
-    <Compile Include="Entities\Serialisation\AzureADAuditLogContent.cs" />
-    <Compile Include="Entities\Serialisation\CopilotAuditLogContent.cs" />
-    <Compile Include="Entities\Serialisation\ExchangeAuditLogContent.cs" />
-    <Compile Include="Entities\Serialisation\GeneralAuditLogContent.cs" />
-    <Compile Include="Entities\Serialisation\PowerPlatformAuditLogContent.cs" />
-    <Compile Include="Entities\Serialisation\SharePointAuditLogContent.cs" />
-    <Compile Include="Entities\Serialisation\UsageReports\AppPlatformUserActivityDetail.cs" />
-    <Compile Include="Entities\Serialisation\TeamsDeviceUsageUserDetail.cs" />
-    <Compile Include="Entities\Serialisation\UsageReports\Abstract.cs" />
-    <Compile Include="Entities\Serialisation\UsageReports\OneDriveUsageDetail.cs" />
-    <Compile Include="Entities\Serialisation\UsageReports\SharePointUserActivityDetail.cs" />
-    <Compile Include="Entities\Serialisation\UsageReports\OneDriveUserActivityDetail.cs" />
-    <Compile Include="Entities\Serialisation\UsageReports\OutlookUserActivityUserDetail.cs" />
-    <Compile Include="Entities\Serialisation\UsageReports\YammerDeviceActivityDetail.cs" />
-    <Compile Include="Entities\Serialisation\UsageReports\YammerGroupActivityDetail.cs" />
-    <Compile Include="Entities\Serialisation\UsageReports\YammerUserActivityUserDetail.cs" />
-    <Compile Include="Entities\Serialisation\UsageReports\TeamsUserActivityUserDetail.cs" />
-    <Compile Include="Entities\Serialisation\WorkloadOnlyAuditLogContent.cs" />
-    <Compile Include="Entities\MessageCognitiveStats.cs" />
-    <Compile Include="Entities\WebActivityReportSet.cs" />
-    <Compile Include="ExceptionHandler.cs" />
-    <Compile Include="Graph\BoundedGraphRequestHandler.cs" />
-    <Compile Include="Graph\DeltaValueProvider.cs" />
-    <Compile Include="Graph\Copilot\InteractionHistory\AiInteractionModels.cs" />
-    <Compile Include="Graph\Copilot\InteractionHistory\CopilotInteractionHistoryImporter.cs" />
-    <Compile Include="Graph\Copilot\InteractionHistory\GraphAiInteractionSourceLoader.cs" />
-    <Compile Include="Graph\Copilot\InteractionHistory\GraphPilotGroupMemberResolver.cs" />
-    <Compile Include="Graph\Copilot\InteractionHistory\IAiInteractionSourceLoader.cs" />
-    <Compile Include="Graph\Copilot\InteractionHistory\InteractionCognitiveEnricher.cs" />
-    <Compile Include="Graph\Copilot\InteractionHistory\InteractionStatsExtractor.cs" />
-    <Compile Include="Graph\Copilot\InteractionHistory\PilotGroupResolution.cs" />
-    <Compile Include="Graph\Email\DeltaTokenStores.cs" />
-    <Compile Include="Graph\Email\GraphSentEmailSourceLoader.cs" />
-    <Compile Include="Graph\Email\ISentEmailSentimentScorer.cs" />
-    <Compile Include="Graph\Email\ISentEmailSourceLoader.cs" />
-    <Compile Include="Graph\Email\SentEmailImporter.cs" />
-    <Compile Include="Graph\Email\SentEmailMailboxSkipList.cs" />
-    <Compile Include="Graph\Email\SentEmailSentimentScorer.cs" />
-    <Compile Include="Graph\GraphHttpException.cs" />
-    <Compile Include="Graph\GraphResourceNotFoundException.cs" />
-    <Compile Include="Graph\PageableGraphLoaderExtensions.cs" />
-    <Compile Include="Graph\PageableGraphResponse.cs" />
-    <Compile Include="Graph\OfficeLicenseNameResolver.cs" />
-    <Compile Include="Graph\ISiteUrlStore.cs" />
-    <Compile Include="Graph\SPSiteIdToUrlCache.cs" />
-    <Compile Include="Graph\Teams\ChannelWithReactions.cs" />
-    <Compile Include="Graph\Teams\CognitiveHelper.cs" />
-    <Compile Include="Graph\Teams\GraphChannelMessagesSourceLoader.cs" />
-    <Compile Include="Graph\Teams\GraphTeamsGroupSourceLoader.cs" />
-    <Compile Include="Graph\Teams\IChannelMessagesSourceLoader.cs" />
-    <Compile Include="Graph\Teams\ITeamsGroupSourceLoader.cs" />
-    <Compile Include="Graph\Teams\Rules\ChannelMessageScopeRules.cs" />
-    <Compile Include="Graph\Teams\Rules\TeamsCrawlPagingPolicy.cs" />
-    <Compile Include="Graph\Teams\Rules\TeamsCrawlRules.cs" />
-    <Compile Include="Graph\Teams\TeamChannelDeltaTokenCommit.cs" />
-    <Compile Include="Graph\Teams\TeamChannelDeltaTokenStores.cs" />
-    <Compile Include="Graph\Teams\TeamsChannelCrawler.cs" />
-    <Compile Include="Graph\Teams\Extensions\ChatMessageListExtensions.cs" />
-    <Compile Include="Graph\Teams\Extensions\TeamsCognitiveExtensions.cs" />
-    <Compile Include="Graph\Teams\TeamsCrawlConfig.cs" />
-    <Compile Include="Graph\Teams\TeamsFinder.cs" />
-    <Compile Include="Graph\Teams\TeamsImporter.cs" />
-    <Compile Include="Graph\Teams\TeamTokenManager.cs" />
-    <Compile Include="Graph\UsageReports\AbstractDailyActivityLoader.cs" />
-    <Compile Include="Graph\UsageReports\IUsageReportStorageInspector.cs" />
-    <Compile Include="Graph\UsageReports\IUsageReportStore.cs" />
-    <Compile Include="Graph\UsageReports\UsageReportSaveInstrumentation.cs" />
-    <Compile Include="Graph\UsageReports\Rules\UsageReportRefreshPolicy.cs" />
-    <Compile Include="Graph\Calls\CallQueueProcessor.cs" />
-    <Compile Include="Graph\Calls\CallRecordAdapters.cs" />
-    <Compile Include="Graph\Calls\CallRecordImporter.cs" />
-    <Compile Include="Graph\Calls\CallRecordSubscriptionInfo.cs" />
-    <Compile Include="Graph\Calls\CallWebhook.cs" />
-    <Compile Include="Graph\Calls\GraphCallRecordSubscriptionManager.cs" />
-    <Compile Include="Graph\Calls\ICallNotificationQueueSender.cs" />
-    <Compile Include="Graph\Calls\ICallRecordPorts.cs" />
-    <Compile Include="Graph\Calls\ICallRecordSubscriptionManager.cs" />
-    <Compile Include="Graph\Calls\Rules\CallNotificationRules.cs" />
-    <Compile Include="Graph\Calls\Rules\CallSubscriptionRules.cs" />
-    <Compile Include="Graph\Teams\ChannelMessagesLoader.cs" />
-    <Compile Include="Graph\Teams\Extensions\GraphUserExtensions.cs" />
-    <Compile Include="Graph\Teams\Extensions\TeamChannelExtensions.cs" />
-    <Compile Include="Graph\Teams\Extensions\ItemBodyExtensions.cs" />
-    <Compile Include="Graph\Teams\GraphReadExceptions.cs" />
-    <Compile Include="Graph\BearerTokenAuthenticationProvider.cs" />
-    <Compile Include="Graph\GraphRequestBudgetOptions.cs" />
-    <Compile Include="Graph\GraphServiceClientFactory.cs" />
-    <Compile Include="Graph\ManualGraphCallClient.cs" />
-    <Compile Include="Graph\Teams\O365Team.cs" />
-    <Compile Include="Graph\GraphLookupCache.cs" />
-    <Compile Include="Graph\GraphImporter.cs" />
-    <Compile Include="Graph\UsageReports\AbstractUserDailyActivityLoader.cs" />
-    <Compile Include="Graph\UsageReports\ActivityReportLoader.cs" />
-    <Compile Include="Graph\UsageReports\Aggregate\AbstractAggregateWeeklyUsageReportLoader.cs" />
-    <Compile Include="Graph\UsageReports\Aggregate\AbstractModels.cs" />
-    <Compile Include="Graph\UsageReports\Aggregate\ISharePointSiteUsageStore.cs" />
-    <Compile Include="Graph\UsageReports\Aggregate\SharePointSiteUsageDetail.cs" />
-    <Compile Include="Graph\UsageReports\Aggregate\SharePointSitesWeeklyUsageReportLoader.cs" />
-    <Compile Include="Graph\UsageReports\Copilot\CopilotReportRequest.cs" />
-    <Compile Include="Graph\UsageReports\Copilot\CopilotReportSource.cs" />
-    <Compile Include="Graph\UsageReports\Copilot\CopilotUsageUserDetailLoader.cs" />
-    <Compile Include="Graph\UsageReports\Copilot\CopilotUsageReportPolicy.cs" />
-    <Compile Include="Graph\UsageReports\Copilot\ICopilotUsagePersistenceManager.cs" />
-    <Compile Include="Graph\UsageReports\Copilot\SqlCopilotUsagePersistenceManager.cs" />
-    <Compile Include="Graph\UsageReports\Copilot\CopilotUsageUserDetailParser.cs" />
-    <Compile Include="Graph\UsageReports\Copilot\CopilotUserCountReportLoader.cs" />
-    <Compile Include="Graph\UsageReports\Copilot\CopilotUserCountReportParser.cs" />
-    <Compile Include="Graph\UsageReports\OneDriveUsageLoader.cs" />
-    <Compile Include="Graph\UsageReports\SharePointUserActivityLoader.cs" />
-    <Compile Include="Graph\UsageReports\OneDriveUserActivityLoader.cs" />
-    <Compile Include="Graph\UsageReports\AppPlatformUserActivityLoader.cs" />
-    <Compile Include="Graph\UsageReports\TeamsUserDeviceLoader.cs" />
-    <Compile Include="Graph\UsageReports\OutlookUserActivityLoader.cs" />
-    <Compile Include="Graph\UsageReports\YammerGroupUsageLoader.cs" />
-    <Compile Include="Graph\UsageReports\YammerDeviceUsageLoader.cs" />
-    <Compile Include="Graph\UsageReports\YammerUserUsageLoader.cs" />
-    <Compile Include="Graph\UsageReports\TeamsUserUsageLoader.cs" />
-    <Compile Include="Graph\UserActivityLastImportedRedisSingleDateLoader.cs" />
-    <Compile Include="Graph\User\GraphUserGroupsCache.cs" />
-    <Compile Include="Graph\User\GraphUserLoader.cs" />
-    <Compile Include="Graph\User\IUserBulkUpdateWriter.cs" />
-    <Compile Include="Graph\User\IOfficeLicenseNameResolver.cs" />
-    <Compile Include="Graph\User\IUserLicenseStore.cs" />
-    <Compile Include="Graph\User\IUserLookupStore.cs" />
-    <Compile Include="Graph\User\IUserMetadataLoader.cs" />
-    <Compile Include="Graph\User\ManagerPrefetchCache.cs" />
-    <Compile Include="Graph\User\Rules\ManagerResolutionRules.cs" />
-    <Compile Include="Graph\User\Rules\UserBulkUpdateRules.cs" />
-    <Compile Include="Graph\User\Rules\UserImportCommitPolicy.cs" />
-    <Compile Include="Graph\User\SqlUserBulkUpdateWriter.cs" />
-    <Compile Include="Graph\User\SqlUserLicenseStore.cs" />
-    <Compile Include="Graph\User\SqlUserLookupStore.cs" />
-    <Compile Include="Graph\User\UserBatchProcessor.cs" />
-    <Compile Include="Graph\User\Rules\UserMetadataMappingRules.cs" />
-    <Compile Include="Graph\User\UserDataMapper.cs" />
-    <Compile Include="Graph\User\UserGraphResponse.cs" />
-    <Compile Include="Graph\User\UserGroupsCache.cs" />
-    <Compile Include="Graph\User\UserInsertProcessor.cs" />
-    <Compile Include="Graph\User\UserLicenseAssignmentDelta.cs" />
-    <Compile Include="Graph\User\UserLicenseProcessor.cs" />
-    <Compile Include="Graph\User\UserMetadataCache.cs" />
-    <Compile Include="Graph\User\UserMetadataUpdater.cs" />
-    <Compile Include="OAuthContext.cs" />
-    <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="Entities\TimePeriod.cs" />
-    <Compile Include="Properties\Resources.Designer.cs">
-      <AutoGen>True</AutoGen>
-      <DesignTime>True</DesignTime>
-      <DependentUpon>Resources.resx</DependentUpon>
-    </Compile>
-    <Compile Include="RedisSingleDateLoader.cs" />
-    <Compile Include="ReportCompletionStore.cs" />
-    <Compile Include="SingleDateStore.cs" />
-    <Compile Include="StatsUploader\AnonUsageStatsModelLoader.cs" />
-    <Compile Include="StatsUploader\BaseClasses.cs" />
-    <Compile Include="StatsUploader\InMemoryStatsDatesLoader.cs" />
-    <Compile Include="StatsUploader\RedisStatsDatesLoader.cs" />
-    <Compile Include="StatsUploader\UsageStatsManager.cs" />
-    <Compile Include="StatsUploader\SqlUsageStatsBuilder.cs" />
-    <Compile Include="StatsUploader\WebApiStatsUploader.cs" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\Common\DataUtils\DataUtils.csproj">
-      <Project>{b8da83ac-9151-4922-b255-12d105b33dc6}</Project>
-      <Name>DataUtils</Name>
-    </ProjectReference>
-    <ProjectReference Include="..\Common\Entities\Entities.csproj">
-      <Project>{637930bd-073b-421e-9f33-fe90bf2103c5}</Project>
-      <Name>Entities</Name>
-    </ProjectReference>
-    <ProjectReference Include="..\Common\UsageReporting\UsageReporting.csproj">
-      <Project>{A4448200-5DFA-486D-891B-2476B80233F6}</Project>
-      <Name>UsageReporting</Name>
-    </ProjectReference>
-  </ItemGroup>
-  <ItemGroup>
-    <EmbeddedResource Include="ActivityAPI\Copilot\SQL\insert_sp_copilot_events_from_staging_table.sql" />
-    <EmbeddedResource Include="ActivityAPI\Copilot\SQL\insert_teams_copilot_events_from_staging_table.sql" />
-    <EmbeddedResource Include="ActivityAPI\Copilot\SQL\common_upsert_copilot_agents.sql" />
-    <EmbeddedResource Include="ActivityAPI\Copilot\SQL\repair_denormalised_copilot_columns.sql" />
-    <None Include="ActivityAPI\Copilot\SQL\copilot_merge_step_timings.sql" />
-    <EmbeddedResource Include="ActivityAPI\Copilot\SQL\insert_activity_from_staging_table.sql" />
-    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_app_events_from_staging_table.sql" />
-    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_app_share_events_from_staging_table.sql" />
-    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_automate_events_from_staging_table.sql" />
-    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_automate_share_events_from_staging_table.sql" />
-    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_bi_events_from_staging_table.sql" />
-    <EmbeddedResource Include="ActivityAPI\Dlp\SQL\insert_copilot_dlp_events_from_staging_table.sql" />
-    <EmbeddedResource Include="ActivityAPI\Dlp\SQL\insert_dlp_rule_matches_from_staging_table.sql" />
-    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_copilot_studio_events_from_staging_table.sql" />
-    <Content Include="Resources\Insert Activity from Staging Table.sql" />
-  </ItemGroup>
-  <ItemGroup>
-    <EmbeddedResource Include="Properties\Resources.resx">
-      <Generator>ResXFileCodeGenerator</Generator>
-      <LastGenOutput>Resources.Designer.cs</LastGenOutput>
-    </EmbeddedResource>
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="App.config" />
-    <EmbeddedResource Include="Resources\Product_names_and_service_plan_identifiers_for_licensing.csv" />
-    <None Include="Graph\Copilot\InteractionHistory\readme.md" />
-    <None Include="Graph\Email\readme.md" />
-    <None Include="Graph\User\REFACTORING_SUMMARY.md" />
-  </ItemGroup>
-  <ItemGroup>
-    <PackageReference Include="Azure.AI.TextAnalytics">
-      <Version>5.3.0</Version>
-    </PackageReference>
-    <PackageReference Include="Azure.Core">
-      <Version>1.62.0</Version>
-    </PackageReference>
-    <PackageReference Include="Azure.Data.Tables">
-      <Version>12.12.0</Version>
-    </PackageReference>
-    <PackageReference Include="Azure.Identity">
-      <Version>1.21.0</Version>
-    </PackageReference>
-    <PackageReference Include="Azure.Messaging.ServiceBus">
-      <Version>7.20.2</Version>
-    </PackageReference>
-    <PackageReference Include="CsvHelper">
-      <Version>33.1.0</Version>
-    </PackageReference>
-    <PackageReference Include="EntityFramework">
-      <Version>6.5.2</Version>
-    </PackageReference>
-    <PackageReference Include="Microsoft.Data.SqlClient">
-      <Version>6.1.4</Version>
-    </PackageReference>
-    <PackageReference Include="Microsoft.EntityFramework.SqlServer">
-      <Version>6.5.2</Version>
-    </PackageReference>
-    <PackageReference Include="Microsoft.ApplicationInsights">
-      <Version>2.22.0</Version>
-    </PackageReference>
-    <PackageReference Include="Microsoft.CSharp">
-      <Version>4.7.0</Version>
-    </PackageReference>
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions">
-      <Version>10.0.11</Version>
-    </PackageReference>
-    <PackageReference Include="Microsoft.Graph">
-      <Version>6.5.0</Version>
-    </PackageReference>
-    <PackageReference Include="Newtonsoft.Json">
-      <Version>13.0.4</Version>
-    </PackageReference>
-    <PackageReference Include="System.IdentityModel.Tokens.Jwt">
-      <Version>8.22.0</Version>
-    </PackageReference>
-    <PackageReference Include="System.Memory.Data">
-      <Version>10.0.11</Version>
-    </PackageReference>
-    <PackageReference Include="System.Runtime">
-      <Version>4.3.1</Version>
-    </PackageReference>
-    <PackageReference Include="System.Security.Cryptography.Algorithms">
-      <Version>4.3.1</Version>
-    </PackageReference>
-    <PackageReference Include="System.Text.Json">
-      <Version>10.0.11</Version>
-    </PackageReference>
-  </ItemGroup>
-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
-</Project>
 
+  <ItemGroup>
+    <PackageReference Include="Azure.AI.TextAnalytics" Version="5.3.0" />
+    <PackageReference Include="Azure.Core" Version="1.62.0" />
+    <PackageReference Include="Azure.Data.Tables" Version="12.12.0" />
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+    <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.20.2" />
+    <PackageReference Include="CsvHelper" Version="33.1.0" />
+    <PackageReference Include="EntityFramework" Version="6.5.2" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.4" />
+    <PackageReference Include="Microsoft.EntityFramework.SqlServer" Version="6.5.2" />
+    <PackageReference Include="Microsoft.ApplicationInsights" Version="2.22.0" />
+    <PackageReference Include="Microsoft.CSharp" Version="4.7.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Graph" Version="6.5.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.22.0" />
+    <PackageReference Include="System.Memory.Data" Version="10.0.11" />
+    <PackageReference Include="System.Runtime" Version="4.3.1" />
+    <PackageReference Include="System.Security.Cryptography.Algorithms" Version="4.3.1" />
+    <PackageReference Include="System.Text.Json" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Common\DataUtils\DataUtils.csproj" />
+    <ProjectReference Include="..\Common\Entities\Entities.csproj" />
+    <ProjectReference Include="..\Common\UsageReporting\UsageReporting.csproj" />
+  </ItemGroup>
+
+</Project>
