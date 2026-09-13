@@ -32,4 +32,14 @@
     <ProjectReference Include="..\Common\Entities\Entities.csproj" />
   </ItemGroup>
 
+  <!-- SDK-style projects only glob .resx as EmbeddedResource; these .sql/.csv files were explicit
+       <EmbeddedResource> items in the legacy project and are loaded by manifest name at runtime.
+       Losing them is silent - DatabaseUpgrader simply finds no scripts. EmbeddedResourceNameTests
+       pins the resulting names. -->
+  <ItemGroup>
+    <EmbeddedResource Include="**\*.sql" />
+    <EmbeddedResource Include="Resources\**\*.csv" />
+    <None Remove="**\*.sql" />
+    <None Remove="Resources\**\*.csv" />
+  </ItemGroup>
 </Project>

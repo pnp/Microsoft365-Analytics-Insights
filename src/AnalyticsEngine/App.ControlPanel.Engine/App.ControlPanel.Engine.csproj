@@ -1,8 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0-windows</TargetFramework>
-    <UseWindowsForms>true</UseWindowsForms>
+    <TargetFramework>net10.0-windows</TargetFramework><UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>App.ControlPanel.Engine</RootNamespace>
     <AssemblyName>App.ControlPanel.Engine</AssemblyName>
     <LangVersion>latest</LangVersion>
@@ -58,6 +57,14 @@
     <ProjectReference Include="..\Common\Entities\Entities.csproj" />
     <ProjectReference Include="..\WebJob.AppInsightsImporter.Engine\WebJob.AppInsightsImporter.Engine.csproj" />
     <ProjectReference Include="..\WebJob.Office365ActivityImporter.Engine\WebJob.Office365ActivityImporter.Engine.csproj" />
+  </ItemGroup>
+
+  <!-- Explicit rather than globbed: these are loaded by manifest name at runtime and the exact set
+       is pinned by EmbeddedResourceNameTests. -->
+  <ItemGroup>
+    <EmbeddedResource Include="SqlExtentions\Profiling-03-CreateSchema.sql" />
+    <EmbeddedResource Include="SqlExtentions\Profiling-01-CommandExecute.sql" />
+    <EmbeddedResource Include="SqlExtentions\Profiling-02-IndexOptimize.sql" />
   </ItemGroup>
 
 </Project>

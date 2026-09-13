@@ -42,4 +42,25 @@
     <ProjectReference Include="..\Common\UsageReporting\UsageReporting.csproj" />
   </ItemGroup>
 
+  <!-- SDK-style projects only glob .resx as EmbeddedResource. These were explicit <EmbeddedResource>
+       items in the legacy project and are loaded by manifest name at runtime, so they are listed
+       explicitly rather than globbed: a glob also picks up .sql files that are deliberately NOT
+       embedded (copilot_merge_step_timings.sql is a manual opt-in script). EmbeddedResourceNameTests
+       pins the resulting set. -->
+  <ItemGroup>
+    <EmbeddedResource Include="ActivityAPI\Copilot\SQL\insert_sp_copilot_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\Copilot\SQL\insert_teams_copilot_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\Copilot\SQL\common_upsert_copilot_agents.sql" />
+    <EmbeddedResource Include="ActivityAPI\Copilot\SQL\repair_denormalised_copilot_columns.sql" />
+    <EmbeddedResource Include="ActivityAPI\Copilot\SQL\insert_activity_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_app_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_app_share_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_automate_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_automate_share_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_power_bi_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\Dlp\SQL\insert_copilot_dlp_events_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\Dlp\SQL\insert_dlp_rule_matches_from_staging_table.sql" />
+    <EmbeddedResource Include="ActivityAPI\PowerPlatform\SQL\insert_copilot_studio_events_from_staging_table.sql" />
+    <EmbeddedResource Include="Resources\Product_names_and_service_plan_identifiers_for_licensing.csv" />
+  </ItemGroup>
 </Project>

@@ -1,4 +1,4 @@
-extern alias AnalyticsWeb;
+﻿extern alias AnalyticsWeb;
 
 using App.ControlPanel.Engine;
 using App.ControlPanel.Engine.Models;
@@ -172,8 +172,8 @@ namespace Tests.UnitTests
                 });
             });
 
-            var first = await provider.GetCorsPolicyAsync(new HttpRequestMessage(), CancellationToken.None);
-            var second = await provider.GetCorsPolicyAsync(new HttpRequestMessage(), CancellationToken.None);
+            var first = await provider.GetPolicyAsync(null, "AllowOrgUrls");
+            var second = await provider.GetPolicyAsync(null, "AllowOrgUrls");
 
             CollectionAssert.AreEquivalent(
                 new[] { "https://contoso.sharepoint.com" },
