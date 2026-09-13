@@ -1,7 +1,7 @@
 ﻿using Common.Entities.Config;
 using System;
 using System.Text;
-using System.Web.Http;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -9,7 +9,7 @@ namespace Web.AnalyticsWeb.Controllers
     /// Get the import config for the client-side AITracker.
     /// Protected by CORs and a GUID in the AppInsights connection string.
     /// </summary>
-    public class ImportConfigController : ApiController
+    public class ImportConfigController  : ControllerBase
     {
         // Get App Insights import config
         // POST: api/ImportConfig?appInsightsStringEncoded=base64encodedstring

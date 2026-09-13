@@ -1,14 +1,20 @@
 ﻿using System.Collections.Generic;
 using System.Net;
 using System.Runtime.Caching;
-using System.Web;
-using System.Web.Mvc;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Web.AnalyticsWeb.Controllers
 {
     [Authorize]
     public class HomeController : Controller
     {
+        private readonly Microsoft.AspNetCore.Hosting.IWebHostEnvironment _env;
+
+        public HomeController(Microsoft.AspNetCore.Hosting.IWebHostEnvironment env)
+        {
+            _env = env;
+        }
         // Read and written through this single constant: the two used to differ, so the cached copy
         // was stored under a key nothing ever read and index.html was re-read from disk every request.
         private const string PortalIndexCacheKey = "portalIndexHtml";
@@ -50,12 +56,11 @@ namespace Web.AnalyticsWeb.Controllers
 
             if (fileContents == null)
             {
-                string indexFile = Server.MapPath("~/Scripts/portal/build/index.html");
+                string indexFile = System.IO.Path.Combine(_env.WebRootPath ?? _env.ContentRootPath, "index.html");
 
                 if (!System.IO.File.Exists(indexFile))
                 {
-                    return new HttpStatusCodeResult(HttpStatusCode.NotFound,
-                        "The portal SPA has not been built. Run 'npm run build' in Scripts/portal (or build the Web project).");
+                    return StatusCode((int)HttpStatusCode.NotFound, "The portal SPA has not been built. Run 'npm run build' in Scripts/portal (or build the Web project).");
                 }
 
                 // Fetch the file contents.
@@ -71,8 +76,7 @@ namespace Web.AnalyticsWeb.Controllers
             // index.html names content-hashed chunks, so a browser holding a cached copy after a
             // redeploy asks for chunks that no longer exist ("Failed to fetch dynamically imported
             // module"). It must always be revalidated; the hashed assets it points at stay cacheable.
-            Response.Cache.SetCacheability(HttpCacheability.NoCache);
-            Response.Cache.SetNoStore();
+            Response.Headers.CacheControl = "no-cache, no-store";
 
             return Content(fileContents, "text/html");
         }

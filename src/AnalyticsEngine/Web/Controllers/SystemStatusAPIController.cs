@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Redis;
 using System;
@@ -7,7 +7,8 @@ using System.Data.Entity;
 using System.Linq;
 using System.Runtime.Caching;
 using System.Threading.Tasks;
-using System.Web.Http;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models;
 
 namespace Web.AnalyticsWeb.Controllers
@@ -17,13 +18,13 @@ namespace Web.AnalyticsWeb.Controllers
     /// by the SPA's Home page.
     /// </summary>
     [Authorize]
-    [RoutePrefix("api/SystemStatus")]
-    public class SystemStatusAPIController : ApiController
+    [Route("api/SystemStatus")]
+    public class SystemStatusAPIController  : ControllerBase
     {
         // GET: api/SystemStatus
         [HttpGet]
         [Route("")]
-        public async Task<IHttpActionResult> Get()
+        public async Task<IActionResult> Get()
         {
             using (var db = new AnalyticsEntitiesContext())
             {

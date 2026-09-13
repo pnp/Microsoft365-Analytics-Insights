@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.AgentCosts;
 using Common.Entities.Config;
 using System;
@@ -6,7 +6,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
-using System.Web.Http;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -26,8 +27,8 @@ namespace Web.AnalyticsWeb.Controllers
     /// export, carries a user identity.</para>
     /// </summary>
     [Authorize]
-    [RoutePrefix("api/AgentCosts")]
-    public class AgentCostsAPIController : ApiController
+    [Route("api/AgentCosts")]
+    public class AgentCostsAPIController  : ControllerBase
     {
         /// <summary>Default window. A month is the unit Microsoft bills in, so it is the natural default.</summary>
         private const int DefaultDays = 30;
@@ -57,7 +58,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// The page calls this first so it can explain an empty report instead of just showing zeroes.
         /// </summary>
         [HttpGet, Route("availability")]
-        public async Task<IHttpActionResult> Availability()
+        public async Task<IActionResult> Availability()
         {
             var settings = _importSettings();
             var result = await _store.GetAvailabilityAsync(settings.CopilotStudioCredits, settings.AzureCostManagement);
@@ -65,7 +66,7 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         [HttpGet, Route("summary")]
-        public Task<IHttpActionResult> Summary(string from = null, string to = null, string agentId = null,
+        public Task<IActionResult> Summary(string from = null, string to = null, string agentId = null,
             string environmentId = null, string harness = null, string feature = null, string model = null,
             string search = null, string tool = null, string knowledge = null, string channel = null)
             => Execute(async () =>
@@ -75,7 +76,7 @@ namespace Web.AnalyticsWeb.Controllers
             });
 
         [HttpGet, Route("trend")]
-        public Task<IHttpActionResult> Trend(string from = null, string to = null, string agentId = null,
+        public Task<IActionResult> Trend(string from = null, string to = null, string agentId = null,
             string environmentId = null, string harness = null, string feature = null, string model = null,
             string search = null, string tool = null, string knowledge = null, string channel = null)
             => Execute(async () =>
@@ -89,14 +90,14 @@ namespace Web.AnalyticsWeb.Controllers
         /// than passed through, because it selects a grouping expression.
         /// </summary>
         [HttpGet, Route("breakdown")]
-        public Task<IHttpActionResult> Breakdown(string dimension, string from = null, string to = null,
+        public Task<IActionResult> Breakdown(string dimension, string from = null, string to = null,
             string agentId = null, string environmentId = null, string harness = null, string feature = null,
             string model = null, string search = null, string tool = null, string knowledge = null, string channel = null, int top = 20)
             => Execute(async () =>
             {
                 if (!AgentCostDimensions.IsValid(dimension))
                 {
-                    return Content(HttpStatusCode.BadRequest, new
+                    return StatusCode((int)HttpStatusCode.BadRequest, new
                     {
                         message = $"'{dimension}' is not something these figures can be broken down by.",
                         supported = AgentCostDimensions.All,
@@ -109,7 +110,7 @@ namespace Web.AnalyticsWeb.Controllers
 
         /// <summary>The full billing tuple, paged. The deepest view the source data supports.</summary>
         [HttpGet, Route("detail")]
-        public Task<IHttpActionResult> Detail(string from = null, string to = null, string agentId = null,
+        public Task<IActionResult> Detail(string from = null, string to = null, string agentId = null,
             string environmentId = null, string harness = null, string feature = null, string model = null,
             string search = null, string tool = null, string knowledge = null, string channel = null,
             int page = 1, int pageSize = 50, string sort = "credits", string direction = "desc")
@@ -124,13 +125,13 @@ namespace Web.AnalyticsWeb.Controllers
             });
 
         [HttpGet, Route("azure")]
-        public Task<IHttpActionResult> Azure(string dimension = AzureCostDimensions.Meter, string from = null,
+        public Task<IActionResult> Azure(string dimension = AzureCostDimensions.Meter, string from = null,
             string to = null, int top = 20)
             => Execute(async () =>
             {
                 if (!AzureCostDimensions.IsValid(dimension))
                 {
-                    return Content(HttpStatusCode.BadRequest, new
+                    return StatusCode((int)HttpStatusCode.BadRequest, new
                     {
                         message = $"'{dimension}' is not something Azure costs can be broken down by.",
                         supported = AzureCostDimensions.All,
@@ -143,7 +144,7 @@ namespace Web.AnalyticsWeb.Controllers
 
         /// <summary>Filter values that actually occur in the window, so a picker never offers a dead end.</summary>
         [HttpGet, Route("filters")]
-        public Task<IHttpActionResult> Filters(string from = null, string to = null)
+        public Task<IActionResult> Filters(string from = null, string to = null)
             => Execute(async () =>
             {
                 var query = BuildQuery(from, to, null, null, null, null, null, null, null, null, null);
@@ -158,7 +159,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// Cost Management surface, so there is no equivalent endpoint for it and there cannot be one.
         /// </remarks>
         [HttpGet, Route("users")]
-        public Task<IHttpActionResult> Users(string from = null, string to = null, string environmentId = null, int top = 20)
+        public Task<IActionResult> Users(string from = null, string to = null, string environmentId = null, int top = 20)
             => Execute(async () =>
             {
                 var query = BuildQuery(from, to, null, environmentId, null, null, null, null, null, null, null);
@@ -243,7 +244,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// Runs a handler, turning an unexpected failure into a message an admin can act on rather than a
         /// blank 500. The report is read-only, so there is nothing to roll back.
         /// </summary>
-        private async Task<IHttpActionResult> Execute(Func<Task<IHttpActionResult>> handler)
+        private async Task<IActionResult> Execute(Func<Task<IActionResult>> handler)
         {
             try
             {
@@ -251,11 +252,11 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch (ArgumentException ex)
             {
-                return Content(HttpStatusCode.BadRequest, new { message = ex.Message });
+                return StatusCode((int)HttpStatusCode.BadRequest, new { message = ex.Message });
             }
             catch (Exception ex)
             {
-                return Content(HttpStatusCode.InternalServerError, new
+                return StatusCode((int)HttpStatusCode.InternalServerError, new
                 {
                     message = "The agent cost figures could not be loaded. If this keeps happening, check the "
                         + "database is reachable and that the agent cost imports have run at least once.",

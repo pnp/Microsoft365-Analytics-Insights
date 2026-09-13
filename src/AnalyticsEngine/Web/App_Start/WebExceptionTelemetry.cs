@@ -3,7 +3,9 @@ using DataUtils;
 using System;
 using System.Runtime.CompilerServices;
 using System.Threading;
-using System.Web.Http.ExceptionHandling;
+using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Http;
+using System.Threading.Tasks;
 using Web.AnalyticsWeb.Models.CopilotAdoption;
 
 namespace Web.AnalyticsWeb
@@ -165,20 +167,30 @@ namespace Web.AnalyticsWeb
     /// cannot alter what any existing caller sees.
     /// </para>
     /// </summary>
-    public class AnalyticsWebApiExceptionLogger : ExceptionLogger
+    /// <summary>
+    /// ASP.NET Core's hook for exceptions that escape a controller, registered in <c>Program.cs</c>.
+    /// <para>
+    /// Returning <c>false</c> means "observed, not handled" - the request continues to the normal error
+    /// response - so adding this cannot alter what any existing caller sees. That matches the
+    /// observe-only <c>IExceptionLogger</c> it replaces.
+    /// </para>
+    /// </summary>
+    public class AnalyticsWebExceptionHandler : IExceptionHandler
     {
-        public override void Log(ExceptionLoggerContext context)
+        public ValueTask<bool> TryHandleAsync(HttpContext httpContext, Exception exception, System.Threading.CancellationToken cancellationToken)
         {
-            if (context?.Exception == null) return;
+            if (exception == null) return ValueTask.FromResult(false);
 
             // A client that navigates away mid-request cancels it. That is normal browser behaviour, not
             // a fault, and reporting it would bury the real errors this exists to surface.
-            if (context.Exception is OperationCanceledException) return;
+            if (exception is OperationCanceledException) return ValueTask.FromResult(false);
 
-            var route = context.Request?.RequestUri?.AbsolutePath;
-            var where = string.IsNullOrEmpty(route) ? "WebApi" : $"WebApi {route}";
+            var route = httpContext?.Request?.Path.Value;
+            var where = string.IsNullOrEmpty(route) ? "Web" : $"Web {route}";
 
-            WebExceptionTelemetry.Report(context.Exception, where);
+            WebExceptionTelemetry.Report(exception, where);
+
+            return ValueTask.FromResult(false);
         }
     }
 }

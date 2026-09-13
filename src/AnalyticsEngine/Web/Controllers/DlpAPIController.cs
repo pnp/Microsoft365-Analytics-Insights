@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Config;
 using System;
 using System.Collections.Generic;
@@ -7,7 +7,8 @@ using System.Data.Entity.SqlServer;
 using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
-using System.Web.Http;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models.Dlp;
 
 namespace Web.AnalyticsWeb.Controllers
@@ -38,8 +39,8 @@ namespace Web.AnalyticsWeb.Controllers
     /// </para>
     /// </remarks>
     [Authorize]
-    [RoutePrefix("api/Dlp")]
-    public class DlpAPIController : ApiController
+    [Route("api/Dlp")]
+    public class DlpAPIController  : ControllerBase
     {
         /// <summary>Windows the UI offers. Anything else snaps to the nearest, so a hand-edited URL cannot force a huge scan.</summary>
         private static readonly int[] AllowedWindowDays = { 7, 28, 90, 180 };
@@ -67,7 +68,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/Dlp/availability
         [HttpGet]
         [Route("availability")]
-        public IHttpActionResult Availability()
+        public IActionResult Availability()
         {
             return Ok(BuildAvailability());
         }
@@ -108,7 +109,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/Dlp/summary?days=28
         [HttpGet]
         [Route("summary")]
-        public async Task<IHttpActionResult> Summary(int days = 28)
+        public async Task<IActionResult> Summary(int days = 28)
         {
             return Ok(await BuildSummaryAsync(days));
         }

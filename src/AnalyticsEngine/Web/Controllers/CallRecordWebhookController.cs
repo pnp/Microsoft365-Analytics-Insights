@@ -1,4 +1,4 @@
-using Azure.Messaging.ServiceBus;
+﻿using Azure.Messaging.ServiceBus;
 using Common.Entities.Config;
 using Common.Entities.Models;
 using DataUtils;
@@ -7,12 +7,12 @@ using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
-using System.Web.Http;
+using Microsoft.AspNetCore.Mvc;
 using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
 
 namespace Web.AnalyticsWeb.Controllers
 {
-    public class CallRecordWebhookController : ApiController
+    public class CallRecordWebhookController  : ControllerBase
     {
         // Webhook called by Graph for new calls
         // POST: api/CallRecordWebhook

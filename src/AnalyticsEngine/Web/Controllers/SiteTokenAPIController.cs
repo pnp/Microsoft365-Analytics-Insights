@@ -1,7 +1,8 @@
-using Common.Entities.Config;
+﻿using Common.Entities.Config;
 using Common.Entities.Models;
 using System.Threading.Tasks;
-using System.Web.Http;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -10,13 +11,13 @@ namespace Web.AnalyticsWeb.Controllers
     {
         // POST: api/SiteTokenAPI
         // Returns a fresh Microsoft Graph access token for the signed-in admin to the SPA.
-        public async Task<JSonToken> Post()
+        public async Task<IActionResult> Post()
         {
             var auth = await base.GetCachedUserAccessTokenAsync();
             if (auth == null || string.IsNullOrEmpty(auth.RefreshToken))
             {
                 // No usable token (e.g. signed in before token capture, or no Redis fallback).
-                throw new HttpResponseException(System.Net.HttpStatusCode.Unauthorized);
+                return Unauthorized();
             }
 
             // The cookie only stores the (long-lived) refresh token, so mint a fresh access token
@@ -33,17 +34,17 @@ namespace Web.AnalyticsWeb.Controllers
                 // signal the SPA to re-authenticate.
                 if (!string.IsNullOrEmpty(auth.AccessToken))
                 {
-                    return new JSonToken(auth);
+                    return Ok(new JSonToken(auth));
                 }
-                throw new HttpResponseException(System.Net.HttpStatusCode.Unauthorized);
+                return Unauthorized();
             }
 
             if (refreshed == null || string.IsNullOrEmpty(refreshed.AccessToken))
             {
-                throw new HttpResponseException(System.Net.HttpStatusCode.Unauthorized);
+                return Unauthorized();
             }
 
-            return new JSonToken(refreshed);
+            return Ok(new JSonToken(refreshed));
         }
     }
 }

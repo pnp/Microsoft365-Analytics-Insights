@@ -4,7 +4,8 @@ using Common.Entities.Redis.Teams;
 using System.Collections.Generic;
 using System.Net;
 using System.Threading.Tasks;
-using System.Web.Http;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models;
 
 namespace Web.AnalyticsWeb.Controllers
@@ -40,7 +41,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// Upload refresh token for a Team ID
         /// </summary>
         // PUT: api/TeamsAuthAPI
-        public async Task<IHttpActionResult> Put([FromBody] AuthTeamRequest authTeamData)
+        public async Task<IActionResult> Put([FromBody] AuthTeamRequest authTeamData)
         {
             if (authTeamData == null)
             {
@@ -53,7 +54,7 @@ namespace Web.AnalyticsWeb.Controllers
             var cache = GetConnectionManager();
             if (cache == null)
             {
-                return Content(HttpStatusCode.ServiceUnavailable, new ApiErrorModel(
+                return StatusCode((int)HttpStatusCode.ServiceUnavailable, new ApiErrorModel(
                     "Teams deep analytics can't be enabled because Redis is not configured for this deployment. " +
                     "Add a Redis connection string so Teams authorisation tokens can be stored."));
             }

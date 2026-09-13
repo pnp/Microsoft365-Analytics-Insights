@@ -1,8 +1,9 @@
-using Common.Entities.Config;
+﻿using Common.Entities.Config;
 using System;
 using System.Net;
 using System.Threading.Tasks;
-using System.Web.Http;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models;
 using Web.AnalyticsWeb.Models.UserDataLookup;
 
@@ -18,8 +19,8 @@ namespace Web.AnalyticsWeb.Controllers
     /// so both are testable without a database or an ASP.NET pipeline (issue #379).
     /// </remarks>
     [Authorize]
-    [RoutePrefix("api/UserDataLookup")]
-    public class UserDataLookupAPIController : ApiController
+    [Route("api/UserDataLookup")]
+    public class UserDataLookupAPIController  : ControllerBase
     {
         private readonly IUserDataLookupService _service;
 
@@ -38,7 +39,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// </summary>
         [HttpGet]
         [Route("summary")]
-        public async Task<IHttpActionResult> Summary(string upn = "")
+        public async Task<IActionResult> Summary(string upn = "")
         {
             // AppConfig is read lazily so a bad request costs nothing, exactly as before the extraction.
             return ToActionResult(await _service.GetSummaryAsync(upn, () => new AppConfig().ImportJobSettings));
@@ -50,19 +51,19 @@ namespace Web.AnalyticsWeb.Controllers
         /// </summary>
         [HttpGet]
         [Route("detail")]
-        public async Task<IHttpActionResult> Detail(string upn = "", string category = "", int take = UserDataLookupRules.DefaultTake)
+        public async Task<IActionResult> Detail(string upn = "", string category = "", int take = UserDataLookupRules.DefaultTake)
         {
             return ToActionResult(await _service.GetDetailAsync(upn, category, take));
         }
 
-        private IHttpActionResult ToActionResult<T>(UserDataLookupResult<T> result) where T : class
+        private IActionResult ToActionResult<T>(UserDataLookupResult<T> result) where T : class
         {
             switch (result.Status)
             {
                 case UserDataLookupStatus.BadRequest:
-                    return Content(HttpStatusCode.BadRequest, new ApiErrorModel(result.ErrorMessage));
+                    return StatusCode((int)HttpStatusCode.BadRequest, new ApiErrorModel(result.ErrorMessage));
                 case UserDataLookupStatus.UserNotFound:
-                    return Content(HttpStatusCode.NotFound, new ApiErrorModel(result.ErrorMessage));
+                    return StatusCode((int)HttpStatusCode.NotFound, new ApiErrorModel(result.ErrorMessage));
                 default:
                     return Ok(result.Value);
             }

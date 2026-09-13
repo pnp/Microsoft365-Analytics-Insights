@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.CopilotAdoption;
 using DataUtils;
@@ -11,7 +11,8 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web.Http;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models.CopilotAdoption;
 
 namespace Web.AnalyticsWeb.Controllers
@@ -43,8 +44,8 @@ namespace Web.AnalyticsWeb.Controllers
     /// </list>
     /// </summary>
     [Authorize]
-    [RoutePrefix("api/CopilotAdoption")]
-    public class CopilotAdoptionAPIController : ApiController
+    [Route("api/CopilotAdoption")]
+    public class CopilotAdoptionAPIController  : ControllerBase
     {
         /// <summary>Windows the UI offers. Anything else is snapped to the nearest, so a hand-edited URL cannot force a year-long scan.</summary>
         private static readonly int[] AllowedWindowDays = { 7, 28, 90, 180 };
@@ -80,7 +81,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/availability
         [HttpGet]
         [Route("availability")]
-        public IHttpActionResult Availability()
+        public IActionResult Availability()
         {
             var settings = new AppConfig().ImportJobSettings ?? new ImportTaskSettings();
 
@@ -200,19 +201,17 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>
         /// The 202 body. Deliberately the same shape for every endpoint so the SPA has one thing to detect.
         /// </summary>
-        private IHttpActionResult StillBuilding()
-        {
-            return ResponseMessage(StillBuildingResponse());
-        }
+        private IActionResult StillBuilding() => StillBuildingResponse();
 
         /// <summary>
         /// The same 202, for the export endpoints - they return <see cref="HttpResponseMessage"/> directly
         /// because they stream a file rather than a model.
         /// </summary>
-        private HttpResponseMessage StillBuildingResponse()
+        private IActionResult StillBuildingResponse()
         {
-            var response = Request.CreateResponse(
-                HttpStatusCode.Accepted,
+            Response.Headers.RetryAfter = RetryAfterSeconds.ToString();
+
+            return StatusCode((int)HttpStatusCode.Accepted,
                 new
                 {
                     status = "building",
@@ -220,9 +219,6 @@ namespace Web.AnalyticsWeb.Controllers
                     message = "The Copilot adoption analysis is still running. This can take a few minutes the "
                               + "first time on a large tenant; the page will refresh automatically.",
                 });
-
-            response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(RetryAfterSeconds));
-            return response;
         }
 
         /// <summary>
@@ -233,21 +229,21 @@ namespace Web.AnalyticsWeb.Controllers
         /// the person who clicked has to be able to read it. 503 + <c>Retry-After</c> is the honest
         /// status - the report is temporarily unavailable and retrying later will work.
         /// </remarks>
-        private HttpResponseMessage ExportNotReadyResponse()
+        private IActionResult ExportNotReadyResponse()
         {
-            var response = Request.CreateResponse(HttpStatusCode.ServiceUnavailable);
+            Response.Headers.RetryAfter = RetryAfterSeconds.ToString();
 
-            response.Content = new StringContent(
-                "The Copilot adoption analysis is still being prepared, so this export is not ready yet.\r\n\r\n"
-                + "This happens when the export is opened directly, or more than a few minutes after the "
-                + "page was last loaded. The analysis is still running in the background.\r\n\r\n"
-                + "Open the Copilot Adoption page, wait for it to finish loading, then use the export "
-                + "button there.",
-                Encoding.UTF8,
-                "text/plain");
-
-            response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(RetryAfterSeconds));
-            return response;
+            return new ContentResult
+            {
+                StatusCode = (int)HttpStatusCode.ServiceUnavailable,
+                ContentType = "text/plain; charset=utf-8",
+                Content =
+                    "The Copilot adoption analysis is still being prepared, so this export is not ready yet.\r\n\r\n"
+                    + "This happens when the export is opened directly, or more than a few minutes after the "
+                    + "page was last loaded. The analysis is still running in the background.\r\n\r\n"
+                    + "Open the Copilot Adoption page, wait for it to finish loading, then use the export "
+                    + "button there.",
+            };
         }
 
         #endregion
@@ -258,7 +254,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/summary?windowDays=28
         [HttpGet]
         [Route("summary")]
-        public async Task<IHttpActionResult> Summary(
+        public async Task<IActionResult> Summary(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
@@ -278,7 +274,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/licence-types
         [HttpGet]
         [Route("licence-types")]
-        public async Task<IHttpActionResult> LicenceTypes(
+        public async Task<IActionResult> LicenceTypes(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
@@ -292,7 +288,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/sql
         [HttpGet]
         [Route("sql")]
-        public async Task<IHttpActionResult> Sql(
+        public async Task<IActionResult> Sql(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
@@ -309,7 +305,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/filters
         [HttpGet]
         [Route("filters")]
-        public async Task<IHttpActionResult> Filters(
+        public async Task<IActionResult> Filters(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
@@ -342,7 +338,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/licensed-users?windowDays=28&skip=0&take=50
         [HttpGet]
         [Route("licensed-users")]
-        public async Task<IHttpActionResult> LicensedUsers(
+        public async Task<IActionResult> LicensedUsers(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
             string search = null,
@@ -385,7 +381,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/licensed-users/export
         [HttpGet]
         [Route("licensed-users/export")]
-        public async Task<HttpResponseMessage> ExportLicensedUsers(
+        public async Task<IActionResult> ExportLicensedUsers(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
             string search = null,
@@ -429,7 +425,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/opportunities?windowDays=28&skip=0&take=50
         [HttpGet]
         [Route("opportunities")]
-        public async Task<IHttpActionResult> Opportunities(
+        public async Task<IActionResult> Opportunities(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
             string search = null,
@@ -465,7 +461,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/opportunities/export
         [HttpGet]
         [Route("opportunities/export")]
-        public async Task<HttpResponseMessage> ExportOpportunities(
+        public async Task<IActionResult> ExportOpportunities(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
             string search = null,
@@ -514,7 +510,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/CopilotAdoption/export/workbook?windowDays=28
         [HttpGet]
         [Route("export/workbook")]
-        public async Task<HttpResponseMessage> ExportWorkbook(
+        public async Task<IActionResult> ExportWorkbook(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
@@ -554,27 +550,21 @@ namespace Web.AnalyticsWeb.Controllers
                     // top of it would replace a useful message with a confusing one.
                 }
 
-                return new HttpResponseMessage(HttpStatusCode.InternalServerError)
+                return new ContentResult
                 {
-                    Content = new StringContent(
+                    StatusCode = (int)HttpStatusCode.InternalServerError,
+                    ContentType = "text/plain; charset=utf-8",
+                    Content =
                         "The Copilot adoption workbook could not be generated. The failure has been logged; "
-                        + "the CSV exports on the Licensed users and Licence opportunities tabs are unaffected."),
+                        + "the CSV exports on the Licensed users and Licence opportunities tabs are unaffected.",
                 };
             }
 
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            return new FileContentResult(bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             {
-                Content = new ByteArrayContent(bytes),
+                FileDownloadName = CopilotAdoptionWorkbook.FileName(analysis.Summary),
             };
-
-            response.Content.Headers.ContentType =
-                new MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-            response.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment")
-            {
-                FileName = CopilotAdoptionWorkbook.FileName(analysis.Summary),
-            };
-
-            return response;
         }
 
         #endregion
@@ -734,20 +724,10 @@ namespace Web.AnalyticsWeb.Controllers
         /// so Excel renders non-ASCII names correctly, and the charset is declared explicitly for
         /// everything that is not Excel.
         /// </summary>
-        private static HttpResponseMessage CsvResponse(byte[] csv, string fileName)
+        private static IActionResult CsvResponse(byte[] csv, string fileName)
         {
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new ByteArrayContent(csv),
-            };
-
-            response.Content.Headers.ContentType = new MediaTypeHeaderValue("text/csv") { CharSet = "utf-8" };
-            response.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment")
-            {
-                FileName = fileName,
-            };
-
-            return response;
+            // File() sets Content-Type and an attachment Content-Disposition with the given name.
+            return new FileContentResult(csv, "text/csv; charset=utf-8") { FileDownloadName = fileName };
         }
 
         #endregion
