@@ -1,7 +1,7 @@
 using Common.Entities;
 using System;
 using System.Data;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Linq;
 
 namespace App.ControlPanel.Engine.Models
