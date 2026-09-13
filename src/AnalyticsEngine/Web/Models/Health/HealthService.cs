@@ -298,7 +298,7 @@ namespace Web.AnalyticsWeb.Models.Health
         {
             try
             {
-                return new System.Data.SqlClient.SqlConnectionStringBuilder(config.ConnectionStrings.DatabaseConnectionString).DataSource;
+                return new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(config.ConnectionStrings.DatabaseConnectionString).DataSource;
             }
             catch
             {
