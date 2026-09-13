@@ -1,4 +1,4 @@
-﻿################################################################################
+################################################################################
 # This .gitignore file was automatically created by Microsoft(R) Visual Studio.
 ################################################################################
 
@@ -49,3 +49,7 @@ src/TelemetryService/web.client/.vscode/*
 /infra/TelemetryService/*.parameters.json
 /infra/TelemetryService/.deploy/
 /artifacts/TelemetryService/
+
+# The portal SPA bundle is copied into wwwroot at build time by IncludeSpaBuildOutput.
+# It is build output, not source - the source lives in Web/Scripts/portal.
+src/AnalyticsEngine/Web/wwwroot/
