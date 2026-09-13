@@ -1,0 +1,45 @@
+<Project>
+
+  <!--
+    .NET Framework compared strings with Windows NLS. .NET 5 and later use ICU instead, and the two
+    disagree about characters that "expand": under NLS the German sharp s compares equal to "ss",
+    under ICU it does not.
+
+    That is not a cosmetic difference here. ObjectByIdCache deliberately builds its dictionary
+    comparer from LCID 1033 with IgnoreCase/IgnoreKanaType/IgnoreWidth in order to mimic the
+    database's Latin1_General_CI_AS collation, so that an in-memory cache hit and a SQL unique index
+    agree about what is the same name. SQL Server treats the sharp s as "ss"; ICU does not; so on
+    ICU the cache misses, the importer inserts a second row, and SQL rejects it with a duplicate-key
+    violation (2601). These caches carry every job title, department, office location, company and
+    country in the tenant, and the working assumption for this product is a ~200,000-user tenant.
+
+    How bad that is depends on the caller. DBLookupCache.GetOrCreateNewResource catches 2601/2627 and
+    reloads - but only around its own SaveChangesAsync, which it performs solely when called with
+    commitChangeOnSaveNew: true. The default overload passes false, and the high-volume path
+    (UserBatchProcessor's pre-warm) uses that default and saves later, outside the handler. There the
+    collision is not a recoverable round-trip: it fails the whole batch save.
+
+    So this branch, whose purpose is to behave exactly like the .NET Framework build it mirrors, asks
+    the runtime for the old behaviour. ObjectByIdCacheCollationTests is the focused proof and
+    DataUtilsTests.CacheEncodingTest is the end-to-end one; both fail if this is removed.
+
+    Caveat worth knowing before anyone moves a workload to Linux: this switch is Windows-only. On
+    Linux the runtime always uses ICU and silently ignores it, so the caches would revert to the
+    stricter comparison. Both web jobs - the cache-consuming workloads - target plain net10.0 and so
+    would run there happily; what keeps this safe today is that the installer deploys them to a
+    WINDOWS App Service plan (AppServicePlanTask uses Kind = "app"), not the target framework. The
+    test project targets net10.0-windows, so the guard tests would not travel with such a move
+    either. Treat Linux as an open decision, not a supported configuration.
+  -->
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.Globalization.UseNls" Value="true" />
+  </ItemGroup>
+
+  <!--
+    Developer-local overrides. This file used to be gitignored so that a developer could drop their
+    own settings in; now that the repository ships one, that hook moves here and the ignore rule
+    follows it. Optional, and absent from a clean checkout.
+  -->
+  <Import Project="Directory.Build.local.props" Condition="Exists('Directory.Build.local.props')" />
+
+</Project>
