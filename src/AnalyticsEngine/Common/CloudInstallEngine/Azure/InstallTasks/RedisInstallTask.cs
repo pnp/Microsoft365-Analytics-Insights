@@ -79,7 +79,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
         private Task<RedisResource> TryGetLegacyClassicCacheAsync(string name)
         {
             var allLegacy = base.Container.GetAllRedis();
-            return Task.FromResult(allLegacy.Where(c => c.Data.Name == name).SingleOrDefault());
+            return Task.FromResult(allLegacy.AsEnumerable().Where(c => c.Data.Name == name).SingleOrDefault());
         }
 
         private async Task<RedisInstallResult> ReuseLegacyClassicCacheAsync(RedisResource legacy)
@@ -148,7 +148,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var skuLabel = _requireStandardSku ? "Balanced B1" : "Balanced B0";
 
             var allClusters = base.Container.GetRedisEnterpriseClusters();
-            var cluster = allClusters.Where(c => c.Data.Name == name).SingleOrDefault();
+            var cluster = allClusters.AsEnumerable().Where(c => c.Data.Name == name).SingleOrDefault();
 
             if (cluster == null)
             {

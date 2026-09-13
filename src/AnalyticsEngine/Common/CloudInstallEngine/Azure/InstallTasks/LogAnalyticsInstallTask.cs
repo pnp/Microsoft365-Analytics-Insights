@@ -25,7 +25,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
         public async override Task<LogWorkspaceInfo> ExecuteTaskReturnResult(object contextArg)
         {
             var name = base._config.GetNameConfigValue();
-            var insightsLogs = Container.GetOperationalInsightsWorkspaces()
+            var insightsLogs = Container.GetOperationalInsightsWorkspaces().AsEnumerable()
                             .Where(r => r.Data.Name == name).SingleOrDefault();
 
             if (insightsLogs == null)
