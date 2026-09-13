@@ -1,4 +1,4 @@
-using Common.Entities.Config;
+﻿using Common.Entities.Config;
 using Common.Entities.LicenceActivity;
 using System;
 using System.Linq;
@@ -9,14 +9,15 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web.Http;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models.LicenceActivity;
 
 namespace Web.AnalyticsWeb.Controllers
 {
     [Authorize]
-    [RoutePrefix("api/LicenceActivity")]
-    public sealed class LicenceActivityAPIController : ApiController
+    [Route("api/LicenceActivity")]
+    public sealed class LicenceActivityAPIController  : ControllerBase
     {
         private static readonly LicenceActivitySnapshotCache<LicenceActivityOverview> OverviewCache =
             new LicenceActivitySnapshotCache<LicenceActivityOverview>(16, TimeSpan.FromMinutes(5));
@@ -41,7 +42,7 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         [HttpGet, Route("availability")]
-        public IHttpActionResult Availability()
+        public IActionResult Availability()
         {
             var sources = _context().Sources;
             var result = new LicenceActivityAvailability { Available = sources.UserMetadata };
@@ -52,7 +53,7 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         [HttpGet, Route("overview")]
-        public Task<IHttpActionResult> Overview(
+        public Task<IActionResult> Overview(
             string from = null, string to = null, int? departmentId = null, int? countryId = null,
             CancellationToken cancellationToken = default(CancellationToken)) =>
             ExecuteAsync(async () =>
@@ -75,7 +76,7 @@ namespace Web.AnalyticsWeb.Controllers
             });
 
         [HttpGet, Route("users")]
-        public Task<IHttpActionResult> Users(
+        public Task<IActionResult> Users(
             string overviewId, int licenceTypeId, string workload = "teams", int top = 10, string search = null,
             string sort = "upn", string direction = "asc", int page = 1, int pageSize = 50,
             CancellationToken cancellationToken = default(CancellationToken)) =>
@@ -99,7 +100,7 @@ namespace Web.AnalyticsWeb.Controllers
             });
 
         [HttpGet, Route("export")]
-        public Task<IHttpActionResult> Export(string overviewId, string usersId = null) =>
+        public Task<IActionResult> Export(string overviewId, string usersId = null) =>
             ExecuteAsync(() =>
             {
                 var context = _context();
@@ -108,18 +109,17 @@ namespace Web.AnalyticsWeb.Controllers
                 var users = usersId == null ? null : _users.Find(context.Scope, usersId);
                 if (users != null && users.OverviewId != overviewId)
                     return Task.FromResult(Reply(HttpStatusCode.Conflict, new { message = "The summary and the user list are no longer from the same set of figures. Refresh the report before exporting." }));
-                var response = Request.CreateResponse(HttpStatusCode.OK);
-                response.Content = new ByteArrayContent(LicenceActivityWorkbook.Build(overview, users));
-                response.Content.Headers.ContentType = new MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-                response.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment")
+                Response.Headers.CacheControl = "no-store, private";
+
+                return Task.FromResult<IActionResult>(new FileContentResult(
+                    LicenceActivityWorkbook.Build(overview, users),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 {
-                    FileName = "licence-activity-" + overview.GeneratedUtc.ToString("yyyy-MM-dd") + ".xlsx"
-                };
-                response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true, Private = true };
-                return Task.FromResult<IHttpActionResult>(ResponseMessage(response));
+                    FileDownloadName = "licence-activity-" + overview.GeneratedUtc.ToString("yyyy-MM-dd") + ".xlsx",
+                });
             });
 
-        private async Task<IHttpActionResult> ExecuteAsync(Func<Task<IHttpActionResult>> action)
+        private async Task<IActionResult> ExecuteAsync(Func<Task<IActionResult>> action)
         {
             if (!ModelState.IsValid) return Reply(HttpStatusCode.BadRequest, new { message = "That request wasn't valid. Check the selected dates and filters." });
             try { return await action(); }
@@ -146,15 +146,14 @@ namespace Web.AnalyticsWeb.Controllers
             }
         }
 
-        private IHttpActionResult MissingMetadata() =>
+        private IActionResult MissingMetadata() =>
             Reply(HttpStatusCode.PreconditionFailed, new { message = "This report needs the user details import turned on, so that licences can be matched to the people who hold them." });
 
-        private IHttpActionResult Reply(HttpStatusCode status, object body, bool retry = false)
+        private IActionResult Reply(HttpStatusCode status, object body, bool retry = false)
         {
-            var response = Request.CreateResponse(status, body);
-            response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true, Private = true };
-            if (retry) response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(5));
-            return ResponseMessage(response);
+            Response.Headers.CacheControl = "no-store, private";
+            if (retry) Response.Headers.RetryAfter = "5";
+            return StatusCode((int)status, body);
         }
 
         private static LicenceActivityRequestContext CreateContext()

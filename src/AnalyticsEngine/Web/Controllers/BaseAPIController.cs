@@ -4,11 +4,11 @@ using Common.Entities.Redis;
 using Common.Entities.Redis.Auth;
 using System.Security.Claims;
 using System.Threading.Tasks;
-using System.Web.Http;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Web.AnalyticsWeb.Controllers
 {
-    public class BaseAPIController : ApiController
+    public class BaseAPIController  : ControllerBase
     {
         /// <summary>
         /// Gets the signed-in admin's Graph token. Primary source is the encrypted auth cookie
@@ -35,7 +35,7 @@ namespace Web.AnalyticsWeb.Controllers
                 return null;
             }
 
-            var authToken = await redisConManager.GetToken(ClaimsPrincipal.Current);
+            var authToken = await redisConManager.GetToken(User);
 
             return authToken;
         }
@@ -44,9 +44,9 @@ namespace Web.AnalyticsWeb.Controllers
         /// Reads the Graph refresh token from the current user's auth-cookie claims, or returns
         /// <c>null</c> when it isn't present.
         /// </summary>
-        protected static RefreshOAuthToken GetUserTokenFromClaims()
+        protected RefreshOAuthToken GetUserTokenFromClaims()
         {
-            var identity = ClaimsPrincipal.Current?.Identity as ClaimsIdentity;
+            var identity = User?.Identity as ClaimsIdentity;
             var refreshToken = identity?.FindFirst(GraphTokenClaims.RefreshToken)?.Value;
             if (string.IsNullOrEmpty(refreshToken))
             {

@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -6,7 +6,8 @@ using Microsoft.Data.SqlClient;
 using System.Linq;
 using System.Runtime.Caching;
 using System.Threading.Tasks;
-using System.Web.Http;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models;
 
 namespace Web.AnalyticsWeb.Controllers
@@ -22,8 +23,8 @@ namespace Web.AnalyticsWeb.Controllers
     /// request: that "table doesn't exist" state IS the diagnostic an admin is looking for.
     /// </summary>
     [Authorize]
-    [RoutePrefix("api/ProfilingStatus")]
-    public class ProfilingStatusAPIController : ApiController
+    [Route("api/ProfilingStatus")]
+    public class ProfilingStatusAPIController  : ControllerBase
     {
         private const int DefaultPageSize = 50;
         private const int MaxPageSize = 200;
@@ -58,7 +59,7 @@ namespace Web.AnalyticsWeb.Controllers
         // tenants and the freshness only needs to be roughly current.
         [HttpGet]
         [Route("")]
-        public async Task<IHttpActionResult> Get()
+        public async Task<IActionResult> Get()
         {
             if (MemoryCache.Default.Get(FreshnessCacheKey) is ProfilingStatusModel cached)
             {
@@ -113,7 +114,7 @@ namespace Web.AnalyticsWeb.Controllers
         // A page of profiling.TraceLogs (the runbooks' own trace output), newest first.
         [HttpGet]
         [Route("tracelogs")]
-        public async Task<IHttpActionResult> TraceLogs(int page = 0, int pageSize = DefaultPageSize)
+        public async Task<IActionResult> TraceLogs(int page = 0, int pageSize = DefaultPageSize)
         {
             if (page < 0) page = 0;
             if (pageSize < 1) pageSize = DefaultPageSize;

@@ -1,42 +1,51 @@
-﻿using Microsoft.Owin.Security;
-using Microsoft.Owin.Security.Cookies;
-using Microsoft.Owin.Security.OpenIdConnect;
-using System.Web;
-using System.Web.Mvc;
+﻿using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.Mvc;
+using System.Threading.Tasks;
 
 namespace Web.AnalyticsWeb.Controllers
 {
     public class AccountController : Controller
     {
-
         [HttpGet]
-        public ActionResult CredentialsInvalid()
+        public IActionResult CredentialsInvalid()
         {
             return View();
         }
 
-        public void SignIn()
+        /// <summary>
+        /// Sends an OpenID Connect sign-in request.
+        /// </summary>
+        public IActionResult SignIn()
         {
-            // Send an OpenID Connect sign-in request.
-            if (!Request.IsAuthenticated)
+            if (User?.Identity?.IsAuthenticated == true)
             {
-                HttpContext.GetOwinContext().Authentication.Challenge(new AuthenticationProperties { RedirectUri = "/" },
-                    OpenIdConnectAuthenticationDefaults.AuthenticationType);
+                return RedirectToAction("Index", "Home");
             }
+
+            return Challenge(
+                new AuthenticationProperties { RedirectUri = "/" },
+                OpenIdConnectDefaults.AuthenticationScheme);
         }
 
-        public void SignOut()
+        /// <summary>
+        /// Signs out of both the local cookie and the identity provider, then returns to
+        /// <see cref="SignOutCallback"/>.
+        /// </summary>
+        public IActionResult SignOut()
         {
-            string callbackUrl = Url.Action("SignOutCallback", "Account", routeValues: null, protocol: Request.Url.Scheme);
+            var callbackUrl = Url.Action(nameof(SignOutCallback), "Account", values: null, protocol: Request.Scheme);
 
-            HttpContext.GetOwinContext().Authentication.SignOut(
+            return SignOut(
                 new AuthenticationProperties { RedirectUri = callbackUrl },
-                OpenIdConnectAuthenticationDefaults.AuthenticationType, CookieAuthenticationDefaults.AuthenticationType);
+                CookieAuthenticationDefaults.AuthenticationScheme,
+                OpenIdConnectDefaults.AuthenticationScheme);
         }
 
-        public ActionResult SignOutCallback()
+        public IActionResult SignOutCallback()
         {
-            if (Request.IsAuthenticated)
+            if (User?.Identity?.IsAuthenticated == true)
             {
                 // Redirect to home page if the user is authenticated.
                 return RedirectToAction("Index", "Home");

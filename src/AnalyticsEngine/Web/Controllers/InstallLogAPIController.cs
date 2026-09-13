@@ -1,9 +1,10 @@
-using Common.Entities;
+﻿using Common.Entities;
 using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
-using System.Web.Http;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models;
 
 namespace Web.AnalyticsWeb.Controllers
@@ -13,8 +14,8 @@ namespace Web.AnalyticsWeb.Controllers
     /// <c>sys_configs</c> table). The most recent entry is the current configuration.
     /// </summary>
     [Authorize]
-    [RoutePrefix("api/InstallLog")]
-    public class InstallLogAPIController : ApiController
+    [Route("api/InstallLog")]
+    public class InstallLogAPIController  : ControllerBase
     {
         // Cap how many history rows we return; the table grows by one per install/upgrade.
         private const int MaxEntries = 200;
@@ -22,7 +23,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/InstallLog
         [HttpGet]
         [Route("")]
-        public async Task<IHttpActionResult> Get()
+        public async Task<IActionResult> Get()
         {
             using (var db = new AnalyticsEntitiesContext())
             {

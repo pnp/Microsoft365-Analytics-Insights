@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Config;
 using System;
 using System.Collections.Generic;
@@ -7,7 +7,8 @@ using Microsoft.Data.SqlClient;
 using System.Linq;
 using System.Runtime.Caching;
 using System.Threading.Tasks;
-using System.Web.Http;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models;
 
 namespace Web.AnalyticsWeb.Controllers
@@ -32,8 +33,8 @@ namespace Web.AnalyticsWeb.Controllers
     ///   Sunday's rows into the next week's bucket, so we avoid it.)
     /// </summary>
     [Authorize]
-    [RoutePrefix("api/Reports")]
-    public class ReportsAPIController : ApiController
+    [Route("api/Reports")]
+    public class ReportsAPIController  : ControllerBase
     {
         // A single slow weekly scan would otherwise run until Azure App Service kills the HTTP
         // request (~230s) -> 500. Cap each query so it degrades to a per-chart error instead.
@@ -84,7 +85,7 @@ namespace Web.AnalyticsWeb.Controllers
         // Which report areas are available, based on the enabled imports.
         [HttpGet]
         [Route("areas")]
-        public IHttpActionResult Areas()
+        public IActionResult Areas()
         {
             var s = new AppConfig().ImportJobSettings ?? new ImportTaskSettings();
 
@@ -102,12 +103,12 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/Reports/copilot?months=3
         [HttpGet]
         [Route("copilot")]
-        public Task<IHttpActionResult> Copilot(int months = DefaultMonths) => AreaAsync("copilot", months);
+        public Task<IActionResult> Copilot(int months = DefaultMonths) => AreaAsync("copilot", months);
 
         // GET: api/Reports/copilot-agents?months=3
         [HttpGet]
         [Route("copilot-agents")]
-        public Task<IHttpActionResult> CopilotAgents(
+        public Task<IActionResult> CopilotAgents(
             int months = DefaultMonths,
             int top = 8,
             string agentName = null) => AreaAsync("copilot-agents", months, top, agentName);
@@ -115,32 +116,32 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/Reports/usage?months=3
         [HttpGet]
         [Route("usage")]
-        public Task<IHttpActionResult> Usage(int months = DefaultMonths) => AreaAsync("usage", months);
+        public Task<IActionResult> Usage(int months = DefaultMonths) => AreaAsync("usage", months);
 
         // GET: api/Reports/spo-audit?months=3
         [HttpGet]
         [Route("spo-audit")]
-        public Task<IHttpActionResult> SpoAudit(int months = DefaultMonths) => AreaAsync("spo-audit", months);
+        public Task<IActionResult> SpoAudit(int months = DefaultMonths) => AreaAsync("spo-audit", months);
 
         // GET: api/Reports/web-traffic?months=3
         [HttpGet]
         [Route("web-traffic")]
-        public Task<IHttpActionResult> WebTraffic(int months = DefaultMonths) => AreaAsync("web-traffic", months);
+        public Task<IActionResult> WebTraffic(int months = DefaultMonths) => AreaAsync("web-traffic", months);
 
         // GET: api/Reports/calls?months=3
         [HttpGet]
         [Route("calls")]
-        public Task<IHttpActionResult> Calls(int months = DefaultMonths) => AreaAsync("calls", months);
+        public Task<IActionResult> Calls(int months = DefaultMonths) => AreaAsync("calls", months);
 
         // GET: api/Reports/emails?months=3
         [HttpGet]
         [Route("emails")]
-        public Task<IHttpActionResult> Emails(int months = DefaultMonths) => AreaAsync("emails", months);
+        public Task<IActionResult> Emails(int months = DefaultMonths) => AreaAsync("emails", months);
 
         /// <summary>
         /// Builds (or serves from cache) the charts for one area over the requested window.
         /// </summary>
-        private async Task<IHttpActionResult> AreaAsync(
+        private async Task<IActionResult> AreaAsync(
             string area,
             int months,
             int topAgents = 8,

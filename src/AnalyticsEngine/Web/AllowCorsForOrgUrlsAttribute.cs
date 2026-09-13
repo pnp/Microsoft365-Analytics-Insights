@@ -5,11 +5,10 @@ using System;
 using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
-using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web.Cors;
-using System.Web.Http.Cors;
+using Microsoft.AspNetCore.Cors.Infrastructure;
+using Microsoft.AspNetCore.Http;
 
 namespace Web.AnalyticsWeb
 {
@@ -31,7 +30,7 @@ namespace Web.AnalyticsWeb
             _loadUrlBases = loadUrlBases ?? throw new ArgumentNullException(nameof(loadUrlBases));
         }
 
-        public async Task<CorsPolicy> GetCorsPolicyAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        public async Task<CorsPolicy> GetPolicyAsync(HttpContext context, string policyName)
         {
             if (_allowedCors == null)
             {
@@ -39,15 +38,14 @@ namespace Web.AnalyticsWeb
             }
 
             var retval = new CorsPolicy();
-            retval.AllowAnyHeader = true;
-            retval.AllowAnyMethod = true;
-            retval.AllowAnyOrigin = false;
+                        retval.Headers.Add("*");
+            retval.Methods.Add("*");
 
             foreach (var url in _allowedCors)
             {
                 if (url == "*" || url == "https://")
                 {
-                    retval.AllowAnyOrigin = true;
+                    retval.Origins.Add("*");
                     break;
                 }
                 retval.Origins.Add(url);
@@ -145,18 +143,5 @@ namespace Web.AnalyticsWeb
             return true;
         }
 
-    }
-
-    public class AllowCorsForOrgUrlsFactory : ICorsPolicyProviderFactory
-    {
-        ICorsPolicyProvider _provider;
-        public AllowCorsForOrgUrlsFactory()
-        {
-            _provider = new AllowCorsForOrgUrlsAttribute();
-        }
-        public ICorsPolicyProvider GetCorsPolicyProvider(HttpRequestMessage request)
-        {
-            return _provider;
-        }
     }
 }

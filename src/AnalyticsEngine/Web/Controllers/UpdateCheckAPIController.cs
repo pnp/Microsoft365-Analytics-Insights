@@ -1,5 +1,6 @@
-using System.Threading.Tasks;
-using System.Web.Http;
+﻿using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models.UpdateCheck;
 
 namespace Web.AnalyticsWeb.Controllers
@@ -13,13 +14,13 @@ namespace Web.AnalyticsWeb.Controllers
     /// GitHub's anonymous rate limit, which the installer also depends on.
     /// </remarks>
     [Authorize]
-    [RoutePrefix("api/UpdateCheck")]
-    public class UpdateCheckAPIController : ApiController
+    [Route("api/UpdateCheck")]
+    public class UpdateCheckAPIController  : ControllerBase
     {
         // GET: api/UpdateCheck
         [HttpGet]
         [Route("")]
-        public async Task<IHttpActionResult> Get()
+        public async Task<IActionResult> Get()
         {
             // Failures are reported inside the model (CheckError) rather than as an HTTP error, so the
             // page can always show which build is running even when GitHub is unreachable.
