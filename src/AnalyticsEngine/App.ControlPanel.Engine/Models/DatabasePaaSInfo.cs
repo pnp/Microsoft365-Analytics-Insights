@@ -80,7 +80,7 @@ namespace App.ControlPanel.Engine.Entities
         /// <c>DataUtils.Sql.AzureSqlTokenAuth</c>, which attaches an access token at connection-open time,
         /// and to anything reading the App Service configuration. Deliberately NOT
         /// <c>Authentication=Active Directory Managed Identity</c>: that keyword makes SqlClient acquire
-        /// the token itself, which the in-box .NET Framework System.Data.SqlClient provider EF6 requires
+        /// the token itself, which the in-box .NET Framework Microsoft.Data.SqlClient provider EF6 requires
         /// does not support for managed identity.
         /// </remarks>
         public static string GetEntraIdConnectionString(string server, string db)

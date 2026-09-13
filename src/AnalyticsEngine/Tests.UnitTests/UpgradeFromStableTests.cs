@@ -1,7 +1,7 @@
 using System;
 using System.Data.Entity.Infrastructure;
 using System.Data.Entity.Migrations;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Linq;
 using Common.Entities.Migrations;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -154,7 +154,7 @@ namespace Tests.UnitTests
         {
             var config = new Configuration
             {
-                TargetDatabase = new DbConnectionInfo(connectionString, "System.Data.SqlClient")
+                TargetDatabase = new DbConnectionInfo(connectionString, "Microsoft.Data.SqlClient")
             };
             return new DbMigrator(config);
         }
