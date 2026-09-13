@@ -22,7 +22,7 @@
   <UsingTask TaskName="ApplyXdtTransform"
              TaskFactory="RoslynCodeTaskFactory"
              AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll"
-             Condition="'$(GenerateAppConfigFromTemplate)' == 'true'">
+             Condition="'$(GenerateAppConfigFromTemplate)' == 'true' AND Exists('App.$(Configuration).config')">
     <ParameterGroup>
       <Source ParameterType="System.String" Required="true" />
       <Transform ParameterType="System.String" Required="true" />
@@ -59,9 +59,9 @@
     </Task>
   </UsingTask>
 
-  <Target Name="GenerateAppConfig"
+  <!-- Skips when the per-configuration transform is absent. App.Debug.config is developer-local and       gitignored, so a clean clone or CI agent legitimately has no Debug transform to apply. -->  <Target Name="GenerateAppConfig"
           BeforeTargets="PrepareForBuild;BeforeBuild"
-          Condition="'$(GenerateAppConfigFromTemplate)' == 'true'"
+          Condition="'$(GenerateAppConfigFromTemplate)' == 'true' AND Exists('App.$(Configuration).config')"
           Inputs="App.Template.config;App.$(Configuration).config"
           Outputs="App.config">
 
