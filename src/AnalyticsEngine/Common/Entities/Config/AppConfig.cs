@@ -14,25 +14,25 @@ namespace Common.Entities.Config
         {
             this.ConnectionStrings = new AppConnectionStrings();
 
-            this.AppInsightsConnectionString = ConfigurationManager.AppSettings.Get(nameof(AppInsightsConnectionString));
+            this.AppInsightsConnectionString = AnalyticsConfig.AppSettings.Get(nameof(AppInsightsConnectionString));
 
-            this.AppInsightsContainerName = ConfigurationManager.AppSettings["AppInsightsContainerName"];
+            this.AppInsightsContainerName = AnalyticsConfig.AppSettings["AppInsightsContainerName"];
 
             this.BuildLabel = BuildConstants.BuildLabel;
 
-            this.ClientID = ConfigurationManager.AppSettings.Get("ClientID");
-            this.ClientSecret = ConfigurationManager.AppSettings.Get("ClientSecret");
-            this.TenantDomain = ConfigurationManager.AppSettings.Get("TenantDomain");
-            this.TenantGUID = Guid.Parse(ConfigurationManager.AppSettings.Get("TenantGUID"));
-            this.AADInstance = ConfigurationManager.AppSettings.Get("AADInstance");
-            this.KeyVaultUrl = ConfigurationManager.AppSettings.Get("KeyVaultUrl");
+            this.ClientID = AnalyticsConfig.AppSettings.Get("ClientID");
+            this.ClientSecret = AnalyticsConfig.AppSettings.Get("ClientSecret");
+            this.TenantDomain = AnalyticsConfig.AppSettings.Get("TenantDomain");
+            this.TenantGUID = Guid.Parse(AnalyticsConfig.AppSettings.Get("TenantGUID"));
+            this.AADInstance = AnalyticsConfig.AppSettings.Get("AADInstance");
+            this.KeyVaultUrl = AnalyticsConfig.AppSettings.Get("KeyVaultUrl");
 
             RegisterAzureSqlFallbackCredential();
 
             // New: UserGroupsFilter (optional)
-            this.UserGroupsFilter = ConfigurationManager.AppSettings.Get("UserGroupsFilter");
+            this.UserGroupsFilter = AnalyticsConfig.AppSettings.Get("UserGroupsFilter");
 
-            var useClientCertificate = ConfigurationManager.AppSettings.Get("UseClientCertificate");
+            var useClientCertificate = AnalyticsConfig.AppSettings.Get("UseClientCertificate");
             if (!string.IsNullOrEmpty(useClientCertificate))
             {
                 bool.TryParse(useClientCertificate, out var useClientCertificateBool);
@@ -42,28 +42,28 @@ namespace Common.Entities.Config
             {
                 this.AADInstance = "https://login.microsoftonline.com/";
             }
-            this.WebAppURL = ConfigurationManager.AppSettings.Get("WebAppURL");
+            this.WebAppURL = AnalyticsConfig.AppSettings.Get("WebAppURL");
 
             // Preserve default if the config value is missing or invalid (TryParse would otherwise overwrite with TimeSpan.Zero)
-            this.ChunkSize = TimeSpan.TryParse(ConfigurationManager.AppSettings.Get("ChunkSize"), out var ts)
+            this.ChunkSize = TimeSpan.TryParse(AnalyticsConfig.AppSettings.Get("ChunkSize"), out var ts)
                 ? ts
                 : TimeSpan.FromDays(1);
-            this.ContentTypesString = ConfigurationManager.AppSettings.Get("ContentTypesListAsString") ?? "Audit.SharePoint";
+            this.ContentTypesString = AnalyticsConfig.AppSettings.Get("ContentTypesListAsString") ?? "Audit.SharePoint";
 
             // Preserve default of 6 if config value is missing or invalid
-            this.DaysBeforeNowToDownload = int.TryParse(ConfigurationManager.AppSettings.Get("DaysBeforeNowToDownload"), out var daysBeforeNowToDownload)
+            this.DaysBeforeNowToDownload = int.TryParse(AnalyticsConfig.AppSettings.Get("DaysBeforeNowToDownload"), out var daysBeforeNowToDownload)
                 ? daysBeforeNowToDownload
                 : 6;
 
             // Resolve Copilot file/meeting metadata from Graph. Default true so behaviour is unchanged unless
             // a tenant opts out. (The Power Platform workload is toggled separately on ImportJobSettings.)
-            this.ResolveCopilotResourceMetadata = bool.TryParse(ConfigurationManager.AppSettings.Get("ResolveCopilotResourceMetadata"), out var resolveCopilotResourceMetadata)
+            this.ResolveCopilotResourceMetadata = bool.TryParse(AnalyticsConfig.AppSettings.Get("ResolveCopilotResourceMetadata"), out var resolveCopilotResourceMetadata)
                 ? resolveCopilotResourceMetadata
                 : true;
 
             // Optional: how many days before today to start reading hits from App Insights.
             // Can be overridden via the -readHitsDaysBeforeToday command line argument.
-            var readHitsDaysBeforeTodayString = ConfigurationManager.AppSettings.Get("ReadHitsDaysBeforeToday");
+            var readHitsDaysBeforeTodayString = AnalyticsConfig.AppSettings.Get("ReadHitsDaysBeforeToday");
             if (!string.IsNullOrEmpty(readHitsDaysBeforeTodayString))
             {
                 int readHitsDaysBeforeTodayInt;
@@ -75,22 +75,22 @@ namespace Common.Entities.Config
 
             // Time chunk overlap in minutes to prevent missing events at boundaries.
             // Preserve default of 5 if config value is missing or invalid.
-            this.TimeChunkOverlapMinutes = int.TryParse(ConfigurationManager.AppSettings.Get("TimeChunkOverlapMinutes"), out var timeChunkOverlapMinutes)
+            this.TimeChunkOverlapMinutes = int.TryParse(AnalyticsConfig.AppSettings.Get("TimeChunkOverlapMinutes"), out var timeChunkOverlapMinutes)
                 ? timeChunkOverlapMinutes
                 : 5;
 
 
-            this.CognitiveEndpoint = ConfigurationManager.AppSettings.Get("CognitiveEndpoint");
-            this.CognitiveKey = ConfigurationManager.AppSettings.Get("CognitiveKey");
+            this.CognitiveEndpoint = AnalyticsConfig.AppSettings.Get("CognitiveEndpoint");
+            this.CognitiveKey = AnalyticsConfig.AppSettings.Get("CognitiveKey");
 
 
-            var importJobSettingsString = ConfigurationManager.AppSettings.Get("ImportJobSettings");
+            var importJobSettingsString = AnalyticsConfig.AppSettings.Get("ImportJobSettings");
             this.ImportJobSettings = new ImportTaskSettings(importJobSettingsString);
 
-            this.StatsApiSecret = ConfigurationManager.AppSettings.Get("StatsApiSecret");
-            this.StatsApiUrl = ConfigurationManager.AppSettings.Get("StatsApiUrl");
+            this.StatsApiSecret = AnalyticsConfig.AppSettings.Get("StatsApiSecret");
+            this.StatsApiUrl = AnalyticsConfig.AppSettings.Get("StatsApiUrl");
 
-            var metadataRefreshMinutes = ConfigurationManager.AppSettings.Get("MetadataRefreshMinutes");
+            var metadataRefreshMinutes = AnalyticsConfig.AppSettings.Get("MetadataRefreshMinutes");
             if (!string.IsNullOrEmpty(metadataRefreshMinutes)
                 && int.TryParse(metadataRefreshMinutes, out var metadataRefreshMinutesInt)
                 && metadataRefreshMinutesInt >= 0)
@@ -100,7 +100,7 @@ namespace Common.Entities.Config
 
             // Optional flag to bypass the "recently imported" gate for usage reports (default false).
             // Replaces a #if DEBUG override so it can be toggled in any build.
-            var forceUsageReportsImport = ConfigurationManager.AppSettings.Get("ForceUsageReportsImport");
+            var forceUsageReportsImport = AnalyticsConfig.AppSettings.Get("ForceUsageReportsImport");
             if (!string.IsNullOrEmpty(forceUsageReportsImport)
                 && bool.TryParse(forceUsageReportsImport, out var forceUsageReportsImportBool))
             {
@@ -109,7 +109,7 @@ namespace Common.Entities.Config
 
             // Optional cap on simultaneous Activity API summary fetches (default 8).
             // Prevents burst throttling when (contentTypes × timeChunks) is large.
-            this.MaxSummaryFetchConcurrency = int.TryParse(ConfigurationManager.AppSettings.Get("MaxSummaryFetchConcurrency"), out var maxSummaryFetchConcurrency)
+            this.MaxSummaryFetchConcurrency = int.TryParse(AnalyticsConfig.AppSettings.Get("MaxSummaryFetchConcurrency"), out var maxSummaryFetchConcurrency)
                 && maxSummaryFetchConcurrency > 0
                 ? maxSummaryFetchConcurrency
                 : 8;
@@ -117,13 +117,13 @@ namespace Common.Entities.Config
             // Import "aggressiveness" preset (High | Balanced | Gentle, default High). It provides
             // the default values for the burst/cadence knobs below so an admin can ease up CPU usage
             // with a single setting. Any explicit per-knob AppSetting still overrides the preset.
-            this.ImportAggressiveness = ParseAggressiveness(ConfigurationManager.AppSettings.Get("ImportAggressiveness"));
+            this.ImportAggressiveness = ParseAggressiveness(AnalyticsConfig.AppSettings.Get("ImportAggressiveness"));
             var preset = GetPreset(this.ImportAggressiveness);
 
             // Max simultaneous threads used to full-load audit reports (Office 365 Management Activity
             // API). Was a hardcoded 20; lower values reduce peak CPU on the (often 1-vCPU) App Service
             // plan. Preset-derived unless explicitly set & > 0.
-            this.MaxAuditReportLoadConcurrency = int.TryParse(ConfigurationManager.AppSettings.Get("MaxAuditReportLoadConcurrency"), out var maxAuditReportLoadConcurrency)
+            this.MaxAuditReportLoadConcurrency = int.TryParse(AnalyticsConfig.AppSettings.Get("MaxAuditReportLoadConcurrency"), out var maxAuditReportLoadConcurrency)
                 && maxAuditReportLoadConcurrency > 0
                 ? maxAuditReportLoadConcurrency
                 : preset.MaxAuditReportLoadConcurrency;
@@ -133,14 +133,14 @@ namespace Common.Entities.Config
             // Power Platform and App Insights hits - funnels its SQL commit through this one choke point,
             // so it is the lever for the SQL Server CPU/DTU burst on commit. Lower values reduce the SQL
             // peak (and, for insert-bound commits, total SQL CPU). Preset-derived unless explicitly set & > 0.
-            this.MaxSqlCommitConcurrency = int.TryParse(ConfigurationManager.AppSettings.Get("MaxSqlCommitConcurrency"), out var maxSqlCommitConcurrency)
+            this.MaxSqlCommitConcurrency = int.TryParse(AnalyticsConfig.AppSettings.Get("MaxSqlCommitConcurrency"), out var maxSqlCommitConcurrency)
                 && maxSqlCommitConcurrency > 0
                 ? maxSqlCommitConcurrency
                 : preset.MaxSqlCommitConcurrency;
 
             // Minutes the WebJob waits between import cycles (was a hardcoded 10). Preset-derived unless
             // explicitly set & > 0.
-            this.ImportCyclePauseMinutes = int.TryParse(ConfigurationManager.AppSettings.Get("ImportCyclePauseMinutes"), out var importCyclePauseMinutes)
+            this.ImportCyclePauseMinutes = int.TryParse(AnalyticsConfig.AppSettings.Get("ImportCyclePauseMinutes"), out var importCyclePauseMinutes)
                 && importCyclePauseMinutes > 0
                 ? importCyclePauseMinutes
                 : preset.ImportCyclePauseMinutes;
@@ -149,7 +149,7 @@ namespace Common.Entities.Config
             // apps). These barely change intraday, so by default they run once a day instead of every
             // cycle. 0 disables the gate (runs every cycle). Preset-derived (High=0 i.e. legacy
             // every-cycle, Balanced/Gentle=24) unless explicitly set >= 0.
-            this.GraphMetadataImportIntervalHours = int.TryParse(ConfigurationManager.AppSettings.Get("GraphMetadataImportIntervalHours"), out var graphMetadataImportIntervalHours)
+            this.GraphMetadataImportIntervalHours = int.TryParse(AnalyticsConfig.AppSettings.Get("GraphMetadataImportIntervalHours"), out var graphMetadataImportIntervalHours)
                 && graphMetadataImportIntervalHours >= 0
                 ? graphMetadataImportIntervalHours
                 : preset.NonFreshGraphIntervalHours;
@@ -157,7 +157,7 @@ namespace Common.Entities.Config
             // Minimum hours between Teams crawls. Teams analytics (channel messages/reactions) is fresher
             // than user metadata and crawls incrementally via delta tokens, so it has its own knob and
             // can be made more frequent without un-gating the static imports. Same preset defaults.
-            this.GraphTeamsImportIntervalHours = int.TryParse(ConfigurationManager.AppSettings.Get("GraphTeamsImportIntervalHours"), out var graphTeamsImportIntervalHours)
+            this.GraphTeamsImportIntervalHours = int.TryParse(AnalyticsConfig.AppSettings.Get("GraphTeamsImportIntervalHours"), out var graphTeamsImportIntervalHours)
                 && graphTeamsImportIntervalHours >= 0
                 ? graphTeamsImportIntervalHours
                 : preset.NonFreshGraphIntervalHours;
@@ -167,7 +167,7 @@ namespace Common.Entities.Config
             // from Graph on every sent-email call, forever, so re-checking them each 10-minute cycle is
             // pure waste and noise. The whole directory is re-swept on this interval so newly-licensed
             // users get picked up. 0 disables the skip list (re-checks everyone every cycle).
-            this.SentEmailNoMailboxRetryHours = int.TryParse(ConfigurationManager.AppSettings.Get("SentEmailNoMailboxRetryHours"), out var sentEmailNoMailboxRetryHours)
+            this.SentEmailNoMailboxRetryHours = int.TryParse(AnalyticsConfig.AppSettings.Get("SentEmailNoMailboxRetryHours"), out var sentEmailNoMailboxRetryHours)
                 && sentEmailNoMailboxRetryHours >= 0
                 ? sentEmailNoMailboxRetryHours
                 : 24;
@@ -177,14 +177,14 @@ namespace Common.Entities.Config
             // every licensed user's Copilot row against a source that only refreshes about every 48 hours.
             // This feature is new, so it has no legacy cadence to preserve and defaults to daily on every
             // preset. 0 disables the gate; the ForceGraphMetadataImport flag still overrides it for one run.
-            this.GraphCopilotUsageReportsIntervalHours = int.TryParse(ConfigurationManager.AppSettings.Get("GraphCopilotUsageReportsIntervalHours"), out var graphCopilotUsageReportsIntervalHours)
+            this.GraphCopilotUsageReportsIntervalHours = int.TryParse(AnalyticsConfig.AppSettings.Get("GraphCopilotUsageReportsIntervalHours"), out var graphCopilotUsageReportsIntervalHours)
                 && graphCopilotUsageReportsIntervalHours >= 0
                 ? graphCopilotUsageReportsIntervalHours
                 : DefaultCopilotUsageReportsIntervalHours;
 
             // One-off force flag: bypass the cadence gate for the non-fresh Graph imports (user metadata,
             // user apps, Teams) for this run. Mirrors ForceUsageReportsImport. Default false.
-            var forceGraphMetadataImport = ConfigurationManager.AppSettings.Get("ForceGraphMetadataImport");
+            var forceGraphMetadataImport = AnalyticsConfig.AppSettings.Get("ForceGraphMetadataImport");
             if (!string.IsNullOrEmpty(forceGraphMetadataImport)
                 && bool.TryParse(forceGraphMetadataImport, out var forceGraphMetadataImportBool))
             {
@@ -195,7 +195,7 @@ namespace Common.Entities.Config
             // two WebJobs so they don't peak on the shared App Service plan at the same time. 0 disables,
             // which is the default so an upgrade doesn't silently delay the first cycle. Opt in by setting
             // ImportStartStaggerMinutes (a good starting point is half the cycle pause).
-            this.ImportStartStaggerMinutes = int.TryParse(ConfigurationManager.AppSettings.Get("ImportStartStaggerMinutes"), out var importStartStaggerMinutes)
+            this.ImportStartStaggerMinutes = int.TryParse(AnalyticsConfig.AppSettings.Get("ImportStartStaggerMinutes"), out var importStartStaggerMinutes)
                 && importStartStaggerMinutes >= 0
                 ? importStartStaggerMinutes
                 : 0;
@@ -203,53 +203,53 @@ namespace Common.Entities.Config
             // ---- Copilot AI interaction history (optional, one Graph call per user) -------------------
             // This import is uniquely expensive, so every knob below exists to bound how much of a cycle
             // it can consume. See CopilotInteractionHistoryImporter for how they combine.
-            this.CopilotInteractionHistoryIntervalHours = int.TryParse(ConfigurationManager.AppSettings.Get("CopilotInteractionHistoryIntervalHours"), out var interactionIntervalHours)
+            this.CopilotInteractionHistoryIntervalHours = int.TryParse(AnalyticsConfig.AppSettings.Get("CopilotInteractionHistoryIntervalHours"), out var interactionIntervalHours)
                 && interactionIntervalHours >= 0
                 ? interactionIntervalHours
                 : DefaultCopilotInteractionHistoryIntervalHours;
 
-            this.CopilotInteractionHistoryMaxUsersPerCycle = int.TryParse(ConfigurationManager.AppSettings.Get("CopilotInteractionHistoryMaxUsersPerCycle"), out var interactionMaxUsers)
+            this.CopilotInteractionHistoryMaxUsersPerCycle = int.TryParse(AnalyticsConfig.AppSettings.Get("CopilotInteractionHistoryMaxUsersPerCycle"), out var interactionMaxUsers)
                 && interactionMaxUsers > 0
                 ? interactionMaxUsers
                 : DefaultCopilotInteractionHistoryMaxUsersPerCycle;
 
-            this.CopilotInteractionHistoryMaxDaysBackOnFirstRun = int.TryParse(ConfigurationManager.AppSettings.Get("CopilotInteractionHistoryMaxDaysBackOnFirstRun"), out var interactionMaxDaysBack)
+            this.CopilotInteractionHistoryMaxDaysBackOnFirstRun = int.TryParse(AnalyticsConfig.AppSettings.Get("CopilotInteractionHistoryMaxDaysBackOnFirstRun"), out var interactionMaxDaysBack)
                 && interactionMaxDaysBack > 0
                 ? interactionMaxDaysBack
                 : DefaultCopilotInteractionHistoryMaxDaysBackOnFirstRun;
 
-            this.CopilotInteractionHistoryEmptyUserBackOffHours = int.TryParse(ConfigurationManager.AppSettings.Get("CopilotInteractionHistoryEmptyUserBackOffHours"), out var interactionBackOffHours)
+            this.CopilotInteractionHistoryEmptyUserBackOffHours = int.TryParse(AnalyticsConfig.AppSettings.Get("CopilotInteractionHistoryEmptyUserBackOffHours"), out var interactionBackOffHours)
                 && interactionBackOffHours >= 0
                 ? interactionBackOffHours
                 : DefaultCopilotInteractionHistoryEmptyUserBackOffHours;
 
             // ---- Agent cost imports (optional) --------------------------------------------------------
-            this.CopilotStudioCreditsIntervalHours = int.TryParse(ConfigurationManager.AppSettings.Get("CopilotStudioCreditsIntervalHours"), out var creditsIntervalHours)
+            this.CopilotStudioCreditsIntervalHours = int.TryParse(AnalyticsConfig.AppSettings.Get("CopilotStudioCreditsIntervalHours"), out var creditsIntervalHours)
                 && creditsIntervalHours >= 0
                 ? creditsIntervalHours
                 : DefaultCopilotStudioCreditsIntervalHours;
 
-            this.CopilotStudioCreditsTrailingWindowDays = int.TryParse(ConfigurationManager.AppSettings.Get("CopilotStudioCreditsTrailingWindowDays"), out var creditsWindowDays)
+            this.CopilotStudioCreditsTrailingWindowDays = int.TryParse(AnalyticsConfig.AppSettings.Get("CopilotStudioCreditsTrailingWindowDays"), out var creditsWindowDays)
                 && creditsWindowDays > 0
                 ? creditsWindowDays
                 : DefaultCopilotStudioCreditsTrailingWindowDays;
 
             this.AzureCostImport = new AzureCostImportSettings
             {
-                Scopes = AzureCostImportSettings.ParseList(ConfigurationManager.AppSettings.Get("AzureCostScopes")),
-                MeterFilterValues = AzureCostImportSettings.ParseList(ConfigurationManager.AppSettings.Get("AzureCostMeterFilterValues")),
-                MeterFilterDimension = !string.IsNullOrWhiteSpace(ConfigurationManager.AppSettings.Get("AzureCostMeterFilterDimension"))
-                    ? ConfigurationManager.AppSettings.Get("AzureCostMeterFilterDimension").Trim()
+                Scopes = AzureCostImportSettings.ParseList(AnalyticsConfig.AppSettings.Get("AzureCostScopes")),
+                MeterFilterValues = AzureCostImportSettings.ParseList(AnalyticsConfig.AppSettings.Get("AzureCostMeterFilterValues")),
+                MeterFilterDimension = !string.IsNullOrWhiteSpace(AnalyticsConfig.AppSettings.Get("AzureCostMeterFilterDimension"))
+                    ? AnalyticsConfig.AppSettings.Get("AzureCostMeterFilterDimension").Trim()
                     : AzureCostImportSettings.DefaultMeterFilterDimension,
-                TrailingWindowDays = int.TryParse(ConfigurationManager.AppSettings.Get("AzureCostTrailingWindowDays"), out var azureCostWindowDays)
+                TrailingWindowDays = int.TryParse(AnalyticsConfig.AppSettings.Get("AzureCostTrailingWindowDays"), out var azureCostWindowDays)
                     && azureCostWindowDays > 0
                     ? azureCostWindowDays
                     : AzureCostImportSettings.DefaultTrailingWindowDays,
-                IntervalHours = int.TryParse(ConfigurationManager.AppSettings.Get("AzureCostIntervalHours"), out var azureCostIntervalHours)
+                IntervalHours = int.TryParse(AnalyticsConfig.AppSettings.Get("AzureCostIntervalHours"), out var azureCostIntervalHours)
                     && azureCostIntervalHours >= 0
                     ? azureCostIntervalHours
                     : AzureCostImportSettings.DefaultIntervalHours,
-                GroupBy = AzureCostImportSettings.ParseList(ConfigurationManager.AppSettings.Get("AzureCostGroupBy")),
+                GroupBy = AzureCostImportSettings.ParseList(AnalyticsConfig.AppSettings.Get("AzureCostGroupBy")),
             };
         }
 

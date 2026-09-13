@@ -881,10 +881,10 @@ namespace Tests.UnitTests
     {
         public AzureTestsConfigReader() : base()
         {
-            this.ClientID = ConfigurationManager.AppSettings.Get("AzureSubClientID");
-            this.ClientSecret = ConfigurationManager.AppSettings.Get("AzureSubClientSecret");
-            this.TenantGUID = ConfigurationManager.AppSettings.Get("AzureSubTenantGUID");
-            this.SubId = ConfigurationManager.AppSettings.Get("AzureSubId");
+            this.ClientID = AnalyticsConfig.AppSettings.Get("AzureSubClientID");
+            this.ClientSecret = AnalyticsConfig.AppSettings.Get("AzureSubClientSecret");
+            this.TenantGUID = AnalyticsConfig.AppSettings.Get("AzureSubTenantGUID");
+            this.SubId = AnalyticsConfig.AppSettings.Get("AzureSubId");
         }
 
 

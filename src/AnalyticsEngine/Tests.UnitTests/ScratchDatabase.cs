@@ -1,3 +1,4 @@
+using Common.Entities.Config;
 using System;
 using System.Collections.Generic;
 using System.Configuration;
@@ -38,7 +39,7 @@ namespace Tests.UnitTests
             // AnalyticsEntitiesContext: in a DEBUG build that context's initializer migrates the
             // shared unit-test database to the latest schema as a side effect, and these tests only
             // need the server details.
-            var configured = ConfigurationManager.ConnectionStrings["SPOInsightsEntities"];
+            var configured = AnalyticsConfig.ConnectionStrings["SPOInsightsEntities"];
             if (configured == null)
             {
                 throw new InvalidOperationException(

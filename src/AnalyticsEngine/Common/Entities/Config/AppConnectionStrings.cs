@@ -47,22 +47,22 @@ namespace Common.Entities.Config
 
         public AppConnectionStrings()
         {
-            var dbConnectionString = ConfigurationManager.ConnectionStrings["SPOInsightsEntities"];
+            var dbConnectionString = AnalyticsConfig.ConnectionStrings["SPOInsightsEntities"];
             if (dbConnectionString == null)
             {
                 throw new ConfigurationErrorsException("Missing SPOInsightsEntities connection string");
             }
             this.DatabaseConnectionString = dbConnectionString.ConnectionString;
 
-            var redisConnectionString = ConfigurationManager.ConnectionStrings["Redis"];
+            var redisConnectionString = AnalyticsConfig.ConnectionStrings["Redis"];
             // Redis can now be null
             this.RedisConnectionString = redisConnectionString?.ConnectionString;
 
-            var sb = ConfigurationManager.ConnectionStrings["ServiceBus"];
+            var sb = AnalyticsConfig.ConnectionStrings["ServiceBus"];
             // Service Bus is optional: only the Teams calls import needs it.
             this.ServiceBusConnectionString = sb?.ConnectionString;
 
-            var storageConfig = ConfigurationManager.ConnectionStrings["Storage"];
+            var storageConfig = AnalyticsConfig.ConnectionStrings["Storage"];
             if (storageConfig == null)
             {
                 throw new ConfigurationErrorsException("Missing storage connection string");

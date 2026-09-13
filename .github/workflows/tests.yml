@@ -14,6 +14,11 @@ on:
       - reports/**
       - .github/workflows/tests.yml
   pull_request:
+    # The net10 branch has no XML configuration and builds on the .NET 10 SDK; its own
+    # workflow (net10.yml) covers it. Running this .NET Framework pipeline against it would fail
+    # on the App.config/Web.config transforms this file still performs.
+    branches-ignore:
+      - net10
     # `ready_for_review` alone is NOT enough. A pull request opened directly as non-draft emits
     # `opened`, never `ready_for_review`, so this workflow never started and the required checks
     # were never reported - leaving the PR permanently at mergeStateStatus BLOCKED and mergeable

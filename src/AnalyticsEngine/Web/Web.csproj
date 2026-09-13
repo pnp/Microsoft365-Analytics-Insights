@@ -94,4 +94,7 @@
           SkipUnchangedFiles="true" />
   </Target>
 
+  <!-- Configuration is appsettings.json plus environment variables (and user secrets in
+       Development); see AnalyticsConfig. The Sdk.Web default already copies appsettings*.json. -->
+
 </Project>

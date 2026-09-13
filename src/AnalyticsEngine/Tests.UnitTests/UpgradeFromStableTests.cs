@@ -187,7 +187,7 @@ namespace Tests.UnitTests
 
         private static string ScratchConnectionString(string dbName)
         {
-            var configured = System.Configuration.ConfigurationManager
+            var configured = Common.Entities.Config.AnalyticsConfig
                 .ConnectionStrings["SPOInsightsEntities"].ConnectionString;
             return new SqlConnectionStringBuilder(configured) { InitialCatalog = dbName }.ConnectionString;
         }

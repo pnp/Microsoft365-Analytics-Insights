@@ -101,7 +101,7 @@
     <Compile Include="StressTests\LoadTest\LoadTestSuite.cs" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="App.config" />
+
     <None Include="Copilot\SQL\ShapeCopilotAdoptionDemo.sql" />
     <None Include="README.md" />
     <None Include="Verify-DemoCommand.ps1" />

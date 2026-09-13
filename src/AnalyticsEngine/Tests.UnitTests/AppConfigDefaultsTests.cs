@@ -61,7 +61,7 @@ namespace Tests.UnitTests
             _originalAppSettings = new Dictionary<string, string>();
             foreach (var key in _trackedKeys)
             {
-                _originalAppSettings[key] = ConfigurationManager.AppSettings[key];
+                _originalAppSettings[key] = AnalyticsConfig.AppSettings[key];
             }
         }
 
@@ -79,14 +79,14 @@ namespace Tests.UnitTests
                 // We cannot Remove a key when the section is read-only, so a
                 // previously-missing key is restored as empty; AppConfig treats
                 // both empty and missing as "no value" via its TryParse path.
-                ConfigurationManager.AppSettings.Set(kvp.Key, kvp.Value ?? string.Empty);
+                AnalyticsConfig.AppSettings.Set(kvp.Key, kvp.Value ?? string.Empty);
             }
         }
 
         [TestMethod]
         public void ChunkSize_InvalidAppSetting_KeepsOneDayDefault()
         {
-            ConfigurationManager.AppSettings.Set(ChunkSize, "not-a-timespan");
+            AnalyticsConfig.AppSettings.Set(ChunkSize, "not-a-timespan");
             var cfg = new AppConfig();
             Assert.AreEqual(TimeSpan.FromDays(1), cfg.ChunkSize,
                 "ChunkSize must fall back to 1 day when the AppSetting is invalid, not TimeSpan.Zero.");
@@ -95,7 +95,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void ChunkSize_EmptyAppSetting_KeepsOneDayDefault()
         {
-            ConfigurationManager.AppSettings.Set(ChunkSize, string.Empty);
+            AnalyticsConfig.AppSettings.Set(ChunkSize, string.Empty);
             var cfg = new AppConfig();
             Assert.AreEqual(TimeSpan.FromDays(1), cfg.ChunkSize,
                 "An empty ChunkSize setting must not silently parse to TimeSpan.Zero.");
@@ -104,7 +104,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void ChunkSize_ValidAppSetting_IsParsed()
         {
-            ConfigurationManager.AppSettings.Set(ChunkSize, "0.02:00:00");
+            AnalyticsConfig.AppSettings.Set(ChunkSize, "0.02:00:00");
             var cfg = new AppConfig();
             Assert.AreEqual(TimeSpan.FromHours(2), cfg.ChunkSize);
         }
@@ -112,7 +112,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void DaysBeforeNowToDownload_InvalidAppSetting_KeepsSixDefault()
         {
-            ConfigurationManager.AppSettings.Set(DaysBeforeNowToDownload, "not-an-int");
+            AnalyticsConfig.AppSettings.Set(DaysBeforeNowToDownload, "not-an-int");
             var cfg = new AppConfig();
             Assert.AreEqual(6, cfg.DaysBeforeNowToDownload,
                 "DaysBeforeNowToDownload must fall back to 6 when the AppSetting is invalid, not 0.");
@@ -121,7 +121,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void DaysBeforeNowToDownload_EmptyAppSetting_KeepsSixDefault()
         {
-            ConfigurationManager.AppSettings.Set(DaysBeforeNowToDownload, string.Empty);
+            AnalyticsConfig.AppSettings.Set(DaysBeforeNowToDownload, string.Empty);
             var cfg = new AppConfig();
             Assert.AreEqual(6, cfg.DaysBeforeNowToDownload);
         }
@@ -129,7 +129,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void TimeChunkOverlapMinutes_InvalidAppSetting_KeepsFiveDefault()
         {
-            ConfigurationManager.AppSettings.Set(TimeChunkOverlapMinutes, "abc");
+            AnalyticsConfig.AppSettings.Set(TimeChunkOverlapMinutes, "abc");
             var cfg = new AppConfig();
             Assert.AreEqual(5, cfg.TimeChunkOverlapMinutes,
                 "TimeChunkOverlapMinutes must fall back to 5 when the AppSetting is invalid, not 0.");
@@ -138,7 +138,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void TimeChunkOverlapMinutes_EmptyAppSetting_KeepsFiveDefault()
         {
-            ConfigurationManager.AppSettings.Set(TimeChunkOverlapMinutes, string.Empty);
+            AnalyticsConfig.AppSettings.Set(TimeChunkOverlapMinutes, string.Empty);
             var cfg = new AppConfig();
             Assert.AreEqual(5, cfg.TimeChunkOverlapMinutes);
         }
@@ -146,7 +146,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void MetadataRefreshMinutes_InvalidAppSetting_KeepsTwentyFourHourDefault()
         {
-            ConfigurationManager.AppSettings.Set(MetadataRefreshMinutes, "nope");
+            AnalyticsConfig.AppSettings.Set(MetadataRefreshMinutes, "nope");
             var cfg = new AppConfig();
             Assert.AreEqual(24 * 60, cfg.MetadataRefreshMinutes,
                 "MetadataRefreshMinutes must keep its 24-hour property default when the AppSetting is invalid.");
@@ -155,7 +155,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void MetadataRefreshMinutes_NegativeAppSetting_KeepsTwentyFourHourDefault()
         {
-            ConfigurationManager.AppSettings.Set(MetadataRefreshMinutes, "-1");
+            AnalyticsConfig.AppSettings.Set(MetadataRefreshMinutes, "-1");
             var cfg = new AppConfig();
             Assert.AreEqual(24 * 60, cfg.MetadataRefreshMinutes,
                 "Negative refresh intervals are rejected; default must be preserved.");
@@ -164,7 +164,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void MaxSummaryFetchConcurrency_InvalidAppSetting_DefaultsToEight()
         {
-            ConfigurationManager.AppSettings.Set(MaxSummaryFetchConcurrency, "abc");
+            AnalyticsConfig.AppSettings.Set(MaxSummaryFetchConcurrency, "abc");
             var cfg = new AppConfig();
             Assert.AreEqual(8, cfg.MaxSummaryFetchConcurrency);
         }
@@ -172,7 +172,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void MaxSummaryFetchConcurrency_EmptyAppSetting_DefaultsToEight()
         {
-            ConfigurationManager.AppSettings.Set(MaxSummaryFetchConcurrency, string.Empty);
+            AnalyticsConfig.AppSettings.Set(MaxSummaryFetchConcurrency, string.Empty);
             var cfg = new AppConfig();
             Assert.AreEqual(8, cfg.MaxSummaryFetchConcurrency);
         }
@@ -180,11 +180,11 @@ namespace Tests.UnitTests
         [TestMethod]
         public void MaxSummaryFetchConcurrency_ZeroOrNegative_DefaultsToEight()
         {
-            ConfigurationManager.AppSettings.Set(MaxSummaryFetchConcurrency, "0");
+            AnalyticsConfig.AppSettings.Set(MaxSummaryFetchConcurrency, "0");
             Assert.AreEqual(8, new AppConfig().MaxSummaryFetchConcurrency,
                 "0 disables concurrency entirely; default of 8 must be preserved.");
 
-            ConfigurationManager.AppSettings.Set(MaxSummaryFetchConcurrency, "-3");
+            AnalyticsConfig.AppSettings.Set(MaxSummaryFetchConcurrency, "-3");
             Assert.AreEqual(8, new AppConfig().MaxSummaryFetchConcurrency,
                 "Negative concurrency is invalid; default of 8 must be preserved.");
         }
@@ -192,7 +192,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void MaxSummaryFetchConcurrency_PositiveAppSetting_IsParsed()
         {
-            ConfigurationManager.AppSettings.Set(MaxSummaryFetchConcurrency, "16");
+            AnalyticsConfig.AppSettings.Set(MaxSummaryFetchConcurrency, "16");
             var cfg = new AppConfig();
             Assert.AreEqual(16, cfg.MaxSummaryFetchConcurrency);
         }
@@ -200,7 +200,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void ForceUsageReportsImport_EmptyAppSetting_DefaultsToFalse()
         {
-            ConfigurationManager.AppSettings.Set(ForceUsageReportsImport, string.Empty);
+            AnalyticsConfig.AppSettings.Set(ForceUsageReportsImport, string.Empty);
             var cfg = new AppConfig();
             Assert.IsFalse(cfg.ForceUsageReportsImport,
                 "ForceUsageReportsImport must default to false when the AppSetting is empty.");
@@ -209,7 +209,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void ForceUsageReportsImport_TrueAppSetting_IsParsed()
         {
-            ConfigurationManager.AppSettings.Set(ForceUsageReportsImport, "true");
+            AnalyticsConfig.AppSettings.Set(ForceUsageReportsImport, "true");
             var cfg = new AppConfig();
             Assert.IsTrue(cfg.ForceUsageReportsImport);
         }
@@ -217,7 +217,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void ForceUsageReportsImport_InvalidAppSetting_DefaultsToFalse()
         {
-            ConfigurationManager.AppSettings.Set(ForceUsageReportsImport, "garbage");
+            AnalyticsConfig.AppSettings.Set(ForceUsageReportsImport, "garbage");
             var cfg = new AppConfig();
             Assert.IsFalse(cfg.ForceUsageReportsImport,
                 "Unparseable values must not flip ForceUsageReportsImport to true.");
@@ -228,7 +228,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void ImportAggressiveness_EmptyAppSetting_DefaultsToHigh()
         {
-            ConfigurationManager.AppSettings.Set(ImportAggressiveness, string.Empty);
+            AnalyticsConfig.AppSettings.Set(ImportAggressiveness, string.Empty);
             Assert.AreEqual(ImportAggressivenessLevel.High, new AppConfig().ImportAggressiveness,
                 "Default must be High so upgrading never silently slows an existing deployment down.");
         }
@@ -236,23 +236,23 @@ namespace Tests.UnitTests
         [TestMethod]
         public void ImportAggressiveness_InvalidAppSetting_DefaultsToHigh()
         {
-            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "turbo");
+            AnalyticsConfig.AppSettings.Set(ImportAggressiveness, "turbo");
             Assert.AreEqual(ImportAggressivenessLevel.High, new AppConfig().ImportAggressiveness);
         }
 
         [TestMethod]
         public void ImportAggressiveness_IsCaseInsensitive()
         {
-            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "gEnTlE");
+            AnalyticsConfig.AppSettings.Set(ImportAggressiveness, "gEnTlE");
             Assert.AreEqual(ImportAggressivenessLevel.Gentle, new AppConfig().ImportAggressiveness);
         }
 
         [TestMethod]
         public void BalancedPreset_SetsModeratedDefaults()
         {
-            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Balanced");
-            ConfigurationManager.AppSettings.Set(MaxAuditReportLoadConcurrency, string.Empty);
-            ConfigurationManager.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
+            AnalyticsConfig.AppSettings.Set(ImportAggressiveness, "Balanced");
+            AnalyticsConfig.AppSettings.Set(MaxAuditReportLoadConcurrency, string.Empty);
+            AnalyticsConfig.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
             var cfg = new AppConfig();
             Assert.AreEqual(8, cfg.MaxAuditReportLoadConcurrency, "Balanced audit-load concurrency should be 8.");
             Assert.AreEqual(8, cfg.MaxSqlCommitConcurrency, "Balanced SQL-commit concurrency should be 8.");
@@ -262,9 +262,9 @@ namespace Tests.UnitTests
         [TestMethod]
         public void HighPreset_SetsLegacyDefaults()
         {
-            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "High");
-            ConfigurationManager.AppSettings.Set(MaxAuditReportLoadConcurrency, string.Empty);
-            ConfigurationManager.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
+            AnalyticsConfig.AppSettings.Set(ImportAggressiveness, "High");
+            AnalyticsConfig.AppSettings.Set(MaxAuditReportLoadConcurrency, string.Empty);
+            AnalyticsConfig.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
             var cfg = new AppConfig();
             Assert.AreEqual(20, cfg.MaxAuditReportLoadConcurrency, "High audit-load concurrency should be 20 (legacy).");
             Assert.AreEqual(20, cfg.MaxSqlCommitConcurrency, "High SQL-commit concurrency should be 20 (legacy).");
@@ -274,9 +274,9 @@ namespace Tests.UnitTests
         [TestMethod]
         public void GentlePreset_SetsLowCpuDefaults()
         {
-            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Gentle");
-            ConfigurationManager.AppSettings.Set(MaxAuditReportLoadConcurrency, string.Empty);
-            ConfigurationManager.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
+            AnalyticsConfig.AppSettings.Set(ImportAggressiveness, "Gentle");
+            AnalyticsConfig.AppSettings.Set(MaxAuditReportLoadConcurrency, string.Empty);
+            AnalyticsConfig.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
             var cfg = new AppConfig();
             Assert.AreEqual(3, cfg.MaxAuditReportLoadConcurrency, "Gentle audit-load concurrency should be 3.");
             Assert.AreEqual(3, cfg.MaxSqlCommitConcurrency, "Gentle SQL-commit concurrency should be 3.");
@@ -286,8 +286,8 @@ namespace Tests.UnitTests
         [TestMethod]
         public void ExplicitMaxAuditReportLoadConcurrency_OverridesPreset()
         {
-            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Gentle");
-            ConfigurationManager.AppSettings.Set(MaxAuditReportLoadConcurrency, "12");
+            AnalyticsConfig.AppSettings.Set(ImportAggressiveness, "Gentle");
+            AnalyticsConfig.AppSettings.Set(MaxAuditReportLoadConcurrency, "12");
             Assert.AreEqual(12, new AppConfig().MaxAuditReportLoadConcurrency,
                 "An explicit MaxAuditReportLoadConcurrency must override the preset.");
         }
@@ -295,19 +295,19 @@ namespace Tests.UnitTests
         [TestMethod]
         public void MaxAuditReportLoadConcurrency_ZeroOrInvalid_FallsBackToPreset()
         {
-            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Balanced");
-            ConfigurationManager.AppSettings.Set(MaxAuditReportLoadConcurrency, "0");
+            AnalyticsConfig.AppSettings.Set(ImportAggressiveness, "Balanced");
+            AnalyticsConfig.AppSettings.Set(MaxAuditReportLoadConcurrency, "0");
             Assert.AreEqual(8, new AppConfig().MaxAuditReportLoadConcurrency, "0 is invalid; preset (8) preserved.");
 
-            ConfigurationManager.AppSettings.Set(MaxAuditReportLoadConcurrency, "abc");
+            AnalyticsConfig.AppSettings.Set(MaxAuditReportLoadConcurrency, "abc");
             Assert.AreEqual(8, new AppConfig().MaxAuditReportLoadConcurrency, "Unparseable; preset (8) preserved.");
         }
 
         [TestMethod]
         public void ExplicitMaxSqlCommitConcurrency_OverridesPreset()
         {
-            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Gentle");
-            ConfigurationManager.AppSettings.Set(MaxSqlCommitConcurrency, "12");
+            AnalyticsConfig.AppSettings.Set(ImportAggressiveness, "Gentle");
+            AnalyticsConfig.AppSettings.Set(MaxSqlCommitConcurrency, "12");
             Assert.AreEqual(12, new AppConfig().MaxSqlCommitConcurrency,
                 "An explicit MaxSqlCommitConcurrency must override the preset.");
         }
@@ -315,11 +315,11 @@ namespace Tests.UnitTests
         [TestMethod]
         public void MaxSqlCommitConcurrency_ZeroOrInvalid_FallsBackToPreset()
         {
-            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Balanced");
-            ConfigurationManager.AppSettings.Set(MaxSqlCommitConcurrency, "0");
+            AnalyticsConfig.AppSettings.Set(ImportAggressiveness, "Balanced");
+            AnalyticsConfig.AppSettings.Set(MaxSqlCommitConcurrency, "0");
             Assert.AreEqual(8, new AppConfig().MaxSqlCommitConcurrency, "0 is invalid; preset (8) preserved.");
 
-            ConfigurationManager.AppSettings.Set(MaxSqlCommitConcurrency, "abc");
+            AnalyticsConfig.AppSettings.Set(MaxSqlCommitConcurrency, "abc");
             Assert.AreEqual(8, new AppConfig().MaxSqlCommitConcurrency, "Unparseable; preset (8) preserved.");
         }
 
@@ -332,7 +332,7 @@ namespace Tests.UnitTests
             // throttling work must NOT do by default.
             foreach (var key in _trackedKeys)
             {
-                ConfigurationManager.AppSettings.Set(key, string.Empty);
+                AnalyticsConfig.AppSettings.Set(key, string.Empty);
             }
 
             var cfg = new AppConfig();
@@ -349,8 +349,8 @@ namespace Tests.UnitTests
         [TestMethod]
         public void ExplicitImportCyclePauseMinutes_OverridesPreset()
         {
-            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "High");
-            ConfigurationManager.AppSettings.Set(ImportCyclePauseMinutes, "30");
+            AnalyticsConfig.AppSettings.Set(ImportAggressiveness, "High");
+            AnalyticsConfig.AppSettings.Set(ImportCyclePauseMinutes, "30");
             Assert.AreEqual(30, new AppConfig().ImportCyclePauseMinutes);
         }
 
@@ -358,19 +358,19 @@ namespace Tests.UnitTests
         public void GraphMetadataImportIntervalHours_EmptyOrInvalid_DefaultsToZero()
         {
             // Default preset is High, whose non-fresh Graph interval is 0 (every cycle = legacy behaviour).
-            ConfigurationManager.AppSettings.Set(ImportAggressiveness, string.Empty);
-            ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, string.Empty);
+            AnalyticsConfig.AppSettings.Set(ImportAggressiveness, string.Empty);
+            AnalyticsConfig.AppSettings.Set(GraphMetadataImportIntervalHours, string.Empty);
             Assert.AreEqual(0, new AppConfig().GraphMetadataImportIntervalHours,
                 "With the default High preset the gate is off, matching pre-throttling behaviour.");
 
-            ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, "nope");
+            AnalyticsConfig.AppSettings.Set(GraphMetadataImportIntervalHours, "nope");
             Assert.AreEqual(0, new AppConfig().GraphMetadataImportIntervalHours);
         }
 
         [TestMethod]
         public void GraphMetadataImportIntervalHours_ZeroIsAllowed()
         {
-            ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, "0");
+            AnalyticsConfig.AppSettings.Set(GraphMetadataImportIntervalHours, "0");
             Assert.AreEqual(0, new AppConfig().GraphMetadataImportIntervalHours,
                 "0 explicitly disables the gate and must be honoured.");
         }
@@ -378,7 +378,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void GraphMetadataImportIntervalHours_PositiveIsParsed()
         {
-            ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, "6");
+            AnalyticsConfig.AppSettings.Set(GraphMetadataImportIntervalHours, "6");
             Assert.AreEqual(6, new AppConfig().GraphMetadataImportIntervalHours);
         }
 
@@ -386,9 +386,9 @@ namespace Tests.UnitTests
         public void ImportStartStaggerMinutes_EmptyOrInvalid_DefaultsToZero()
         {
             // Staggering delays the first cycle, so it is opt-in: an upgrade must not silently add a delay.
-            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Gentle");
-            ConfigurationManager.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
-            ConfigurationManager.AppSettings.Set(ImportStartStaggerMinutes, string.Empty);
+            AnalyticsConfig.AppSettings.Set(ImportAggressiveness, "Gentle");
+            AnalyticsConfig.AppSettings.Set(ImportCyclePauseMinutes, string.Empty);
+            AnalyticsConfig.AppSettings.Set(ImportStartStaggerMinutes, string.Empty);
             Assert.AreEqual(0, new AppConfig().ImportStartStaggerMinutes,
                 "Default stagger must be 0 (no added start delay) regardless of preset.");
         }
@@ -396,19 +396,19 @@ namespace Tests.UnitTests
         [TestMethod]
         public void ImportStartStaggerMinutes_ExplicitAndZeroHonoured()
         {
-            ConfigurationManager.AppSettings.Set(ImportStartStaggerMinutes, "7");
+            AnalyticsConfig.AppSettings.Set(ImportStartStaggerMinutes, "7");
             Assert.AreEqual(7, new AppConfig().ImportStartStaggerMinutes);
 
-            ConfigurationManager.AppSettings.Set(ImportStartStaggerMinutes, "0");
+            AnalyticsConfig.AppSettings.Set(ImportStartStaggerMinutes, "0");
             Assert.AreEqual(0, new AppConfig().ImportStartStaggerMinutes, "0 disables stagger and must be honoured.");
         }
 
         [TestMethod]
         public void HighPreset_DisablesNonFreshGraphGate()
         {
-            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "High");
-            ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, string.Empty);
-            ConfigurationManager.AppSettings.Set(GraphTeamsImportIntervalHours, string.Empty);
+            AnalyticsConfig.AppSettings.Set(ImportAggressiveness, "High");
+            AnalyticsConfig.AppSettings.Set(GraphMetadataImportIntervalHours, string.Empty);
+            AnalyticsConfig.AppSettings.Set(GraphTeamsImportIntervalHours, string.Empty);
             var cfg = new AppConfig();
             Assert.AreEqual(0, cfg.GraphMetadataImportIntervalHours, "High must run metadata/apps every cycle (legacy).");
             Assert.AreEqual(0, cfg.GraphTeamsImportIntervalHours, "High must run Teams every cycle (legacy).");
@@ -417,9 +417,9 @@ namespace Tests.UnitTests
         [TestMethod]
         public void BalancedPreset_DailyGatesNonFreshGraph()
         {
-            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Balanced");
-            ConfigurationManager.AppSettings.Set(GraphMetadataImportIntervalHours, string.Empty);
-            ConfigurationManager.AppSettings.Set(GraphTeamsImportIntervalHours, string.Empty);
+            AnalyticsConfig.AppSettings.Set(ImportAggressiveness, "Balanced");
+            AnalyticsConfig.AppSettings.Set(GraphMetadataImportIntervalHours, string.Empty);
+            AnalyticsConfig.AppSettings.Set(GraphTeamsImportIntervalHours, string.Empty);
             var cfg = new AppConfig();
             Assert.AreEqual(24, cfg.GraphMetadataImportIntervalHours);
             Assert.AreEqual(24, cfg.GraphTeamsImportIntervalHours);
@@ -428,24 +428,24 @@ namespace Tests.UnitTests
         [TestMethod]
         public void GraphTeamsImportIntervalHours_ZeroAndExplicitHonoured()
         {
-            ConfigurationManager.AppSettings.Set(ImportAggressiveness, "Balanced");
-            ConfigurationManager.AppSettings.Set(GraphTeamsImportIntervalHours, "0");
+            AnalyticsConfig.AppSettings.Set(ImportAggressiveness, "Balanced");
+            AnalyticsConfig.AppSettings.Set(GraphTeamsImportIntervalHours, "0");
             Assert.AreEqual(0, new AppConfig().GraphTeamsImportIntervalHours, "0 disables the Teams gate.");
 
-            ConfigurationManager.AppSettings.Set(GraphTeamsImportIntervalHours, "6");
+            AnalyticsConfig.AppSettings.Set(GraphTeamsImportIntervalHours, "6");
             Assert.AreEqual(6, new AppConfig().GraphTeamsImportIntervalHours);
         }
 
         [TestMethod]
         public void ForceGraphMetadataImport_DefaultsFalse_ParsesTrue_IgnoresGarbage()
         {
-            ConfigurationManager.AppSettings.Set(ForceGraphMetadataImport, string.Empty);
+            AnalyticsConfig.AppSettings.Set(ForceGraphMetadataImport, string.Empty);
             Assert.IsFalse(new AppConfig().ForceGraphMetadataImport);
 
-            ConfigurationManager.AppSettings.Set(ForceGraphMetadataImport, "true");
+            AnalyticsConfig.AppSettings.Set(ForceGraphMetadataImport, "true");
             Assert.IsTrue(new AppConfig().ForceGraphMetadataImport);
 
-            ConfigurationManager.AppSettings.Set(ForceGraphMetadataImport, "garbage");
+            AnalyticsConfig.AppSettings.Set(ForceGraphMetadataImport, "garbage");
             Assert.IsFalse(new AppConfig().ForceGraphMetadataImport, "Unparseable must not flip to true.");
         }
     }

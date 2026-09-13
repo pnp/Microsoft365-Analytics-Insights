@@ -8,17 +8,17 @@ namespace Tests.UnitTests
     {
         public TestsAppConfig()
         {
-            this.TestCopilotDocContextIdSpSite = ConfigurationManager.AppSettings.Get("TestCopilotDocContextIdSpSite");
-            this.TestCopilotDocContextIdMySites = ConfigurationManager.AppSettings.Get("TestCopilotDocContextIdMySites");
-            this.TestCopilotDocContextIdMySites = ConfigurationManager.AppSettings.Get("TestCopilotDocContextIdMySites");
-            this.TestCopilotEventUPN = ConfigurationManager.AppSettings.Get("TestCopilotEventUPN");
-            this.TestCallThreadId = ConfigurationManager.AppSettings.Get("TestCallThreadId");
-            this.TeamSiteFileExtension = ConfigurationManager.AppSettings.Get("TeamSiteFileExtension");
-            this.TeamSitesFileName = ConfigurationManager.AppSettings.Get("TeamSitesFileName");
-            this.MySitesFileExtension = ConfigurationManager.AppSettings.Get("MySitesFileExtension");
-            this.MySitesFileName = ConfigurationManager.AppSettings.Get("MySitesFileName");
-            this.MySitesFileUrl = ConfigurationManager.AppSettings.Get("MySitesFileUrl");
-            this.TeamSiteFileUrl = ConfigurationManager.AppSettings.Get("TeamSiteFileUrl");
+            this.TestCopilotDocContextIdSpSite = AnalyticsConfig.AppSettings.Get("TestCopilotDocContextIdSpSite");
+            this.TestCopilotDocContextIdMySites = AnalyticsConfig.AppSettings.Get("TestCopilotDocContextIdMySites");
+            this.TestCopilotDocContextIdMySites = AnalyticsConfig.AppSettings.Get("TestCopilotDocContextIdMySites");
+            this.TestCopilotEventUPN = AnalyticsConfig.AppSettings.Get("TestCopilotEventUPN");
+            this.TestCallThreadId = AnalyticsConfig.AppSettings.Get("TestCallThreadId");
+            this.TeamSiteFileExtension = AnalyticsConfig.AppSettings.Get("TeamSiteFileExtension");
+            this.TeamSitesFileName = AnalyticsConfig.AppSettings.Get("TeamSitesFileName");
+            this.MySitesFileExtension = AnalyticsConfig.AppSettings.Get("MySitesFileExtension");
+            this.MySitesFileName = AnalyticsConfig.AppSettings.Get("MySitesFileName");
+            this.MySitesFileUrl = AnalyticsConfig.AppSettings.Get("MySitesFileUrl");
+            this.TeamSiteFileUrl = AnalyticsConfig.AppSettings.Get("TeamSiteFileUrl");
 
             if (!string.IsNullOrEmpty(this.TestCopilotDocContextIdMySites))
             {

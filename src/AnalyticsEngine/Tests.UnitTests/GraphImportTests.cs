@@ -418,7 +418,7 @@ namespace Tests.UnitTests
 
             // Use a filter for tests?
             const string SEP = ";";
-            var selectedTeamsAll = System.Configuration.ConfigurationManager.AppSettings.Get("UnitTestsTeamsWhiteList");
+            var selectedTeamsAll = AnalyticsConfig.AppSettings.Get("UnitTestsTeamsWhiteList");
             var filter = TeamsCrawlConfig.AllGroupsConfig;
             if (!string.IsNullOrEmpty(selectedTeamsAll))
             {

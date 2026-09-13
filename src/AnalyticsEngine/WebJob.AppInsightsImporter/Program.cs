@@ -55,7 +55,7 @@ namespace WebJob.AppInsightsImporter
             // Check configuration
             bool runAgain = true;
 
-            var importJobSettingsString = ConfigurationManager.AppSettings.Get("ImportJobSettings");
+            var importJobSettingsString = AnalyticsConfig.AppSettings.Get("ImportJobSettings");
             var importJobSettings = new ImportTaskSettings(importJobSettingsString);
 
 
