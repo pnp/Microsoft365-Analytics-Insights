@@ -149,6 +149,7 @@
     <Compile Include="AgentCostSqlIntegrationTests.cs" />
     <Compile Include="AzureSqlEntraAuthTests.cs" />
     <Compile Include="EmbeddedResourceNameTests.cs" />
+    <Compile Include="StringCipherCompatibilityTests.cs" />
     <Compile Include="InstallTests\SqlAuthenticationDetectionTests.cs" />
     <Compile Include="ActivityReportLoaderTimeoutTests.cs" />
     <Compile Include="ActivityReportSetMinMaxTests.cs" />
@@ -323,6 +324,8 @@
     <Compile Include="UpgradeFromStableTests.cs" />
     <Compile Include="UpdateCheckBuildVersionTests.cs" />
     <Compile Include="ScratchDatabase.cs" />
+    <Compile Include="SchemaSnapshot.cs" />
+    <Compile Include="SchemaSnapshotTests.cs" />
     <Compile Include="StressHarness\ActivityApiDbStressRunner.cs" />
     <Compile Include="StressHarness\ActivityApiDbStressTests.cs" />
     <Compile Include="StressHarness\CountingActivityReportPersistenceManager.cs" />
