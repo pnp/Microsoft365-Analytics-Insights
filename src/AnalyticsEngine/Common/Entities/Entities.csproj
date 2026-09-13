@@ -469,6 +469,7 @@
     <Compile Include="Redis\TeamsRedisManager.cs" />
     <Compile Include="AnalyticsEntitiesContext.cs" />
     <Compile Include="Sql\AzureSqlAccessTokenInterceptor.cs" />
+    <Compile Include="Sql\LegacyProviderNameAliasResolver.cs" />
     <Compile Include="IAnalyticsDbContextFactory.cs" />
     <Compile Include="Entities\Url.cs" />
     <Compile Include="Entities\User.cs" />
@@ -717,6 +718,12 @@
       <Version>4.0.3</Version>
     </PackageReference>
     <PackageReference Include="EntityFramework">
+      <Version>6.5.2</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Data.SqlClient">
+      <Version>6.1.4</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFramework.SqlServer">
       <Version>6.5.2</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions">

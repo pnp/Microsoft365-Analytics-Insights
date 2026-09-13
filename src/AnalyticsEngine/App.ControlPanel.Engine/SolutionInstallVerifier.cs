@@ -145,7 +145,7 @@ namespace App.ControlPanel.Engine
             if (testRg != null)
             {
                 SqlDetails sqlInfo = null;
-                var sqlServer = testRg.GetSqlServers().Where(s => s.Data.Name == Config.SQLServerName).SingleOrDefault();
+                var sqlServer = testRg.GetSqlServers().AsEnumerable().Where(s => s.Data.Name == Config.SQLServerName).SingleOrDefault();
                 if (sqlServer == null)
                 {
                     _logger.LogError($"Can't find SQL Server with name '{Config.SQLServerName}' in resource-group '{testRg.Data.Name}'");
@@ -273,7 +273,7 @@ namespace App.ControlPanel.Engine
 
             try
             {
-                var plan = testRg.GetAppServicePlans().Where(p => p.Data.Name == planName).SingleOrDefault();
+                var plan = testRg.GetAppServicePlans().AsEnumerable().Where(p => p.Data.Name == planName).SingleOrDefault();
                 if (plan == null)
                 {
                     _logger.LogInformation($"App Service plan '{planName}' not found yet; skipping capability check (it will be created during install).");
@@ -354,7 +354,7 @@ namespace App.ControlPanel.Engine
             KeyVaultResource vault;
             try
             {
-                vault = testRg.GetKeyVaults().Where(v => v.Data.Name == Config.KeyVaultName).SingleOrDefault();
+                vault = testRg.GetKeyVaults().AsEnumerable().Where(v => v.Data.Name == Config.KeyVaultName).SingleOrDefault();
             }
             catch (Exception ex)
             {
@@ -706,7 +706,7 @@ namespace App.ControlPanel.Engine
 
             try
             {
-                var classic = testRg.GetAllRedis().Where(c => c.Data.Name == redisName).SingleOrDefault();
+                var classic = testRg.GetAllRedis().AsEnumerable().Where(c => c.Data.Name == redisName).SingleOrDefault();
                 if (!string.IsNullOrWhiteSpace(classic?.Data?.HostName))
                 {
                     return classic.Data.HostName;
@@ -719,7 +719,7 @@ namespace App.ControlPanel.Engine
 
             try
             {
-                var managed = testRg.GetRedisEnterpriseClusters().Where(c => c.Data.Name == redisName).SingleOrDefault();
+                var managed = testRg.GetRedisEnterpriseClusters().AsEnumerable().Where(c => c.Data.Name == redisName).SingleOrDefault();
                 if (!string.IsNullOrWhiteSpace(managed?.Data?.HostName))
                 {
                     return managed.Data.HostName;

@@ -80,7 +80,7 @@ namespace App.ControlPanel.Frames
 
         SPOInsightsEntitiesContext GetDB()
         {
-            var sqlConnFact = new SqlConnectionFactory(txtConnectionString.Text);
+            var sqlConnFact = new MicrosoftSqlConnectionFactory(txtConnectionString.Text);
             DbConnection con = sqlConnFact.CreateConnection(txtConnectionString.Text);
             return new SPOInsightsEntitiesContext(con);
         }
@@ -102,7 +102,7 @@ namespace App.ControlPanel.Frames
                 {
                     errs.Add(ex.Message);
                 }
-                catch (System.Data.SqlClient.SqlException ex)
+                catch (Microsoft.Data.SqlClient.SqlException ex)
                 {
                     errs.Add(ex.Message);
                 }

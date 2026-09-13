@@ -3,7 +3,7 @@ using App.ControlPanel.Engine.Models;
 using Common.Entities;
 using System;
 using System.Collections.Generic;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Linq;
 using Tests.FakeDataGen.Copilot;
 using Tests.FakeDataGen.Demo;
