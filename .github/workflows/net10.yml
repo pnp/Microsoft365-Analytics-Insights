@@ -194,6 +194,18 @@ jobs:
           Start-Sleep -Seconds 3
           & "$env:RUNNER_TEMP\redis\redis-cli.exe" ping
 
+      # Hard gate, unlike the full suite below. These two classes assert invariants that no service
+      # or credential is needed to check, so a failure here is always a real regression and must fail
+      # the job. Without this they would be swallowed by the warning-only step that follows - and the
+      # NLS setting they guard lives in a file that was, briefly, gitignored, which is exactly the
+      # kind of "green CI, missing fix" combination this exists to prevent.
+      - name: Check configuration and collation invariants
+        shell: pwsh
+        run: |
+          dotnet test src\AnalyticsEngine\Tests.UnitTests\Tests.UnitTests.csproj `
+            -c Release --no-build --nologo `
+            --filter "FullyQualifiedName~ConfigurationSourceTests|FullyQualifiedName~ObjectByIdCacheCollationTests"
+
       - name: Run the unit tests
         shell: pwsh
         env:

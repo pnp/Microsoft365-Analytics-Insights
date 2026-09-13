@@ -39,7 +39,7 @@ src/TelemetryService/web.client/.vscode/*
 /src/SPO/AITracker/TypeScript/node_modules
 /src/SPO/AITracker/DevConfig.json
 /src/SPO/AITracker/aitracker.js
-/src/AnalyticsEngine/Directory.Build.props
+/src/AnalyticsEngine/Directory.Build.local.props
 
 # VSTest output (vstest.console.exe writes TRX logs + per-run subfolders here)
 **/TestResults/
