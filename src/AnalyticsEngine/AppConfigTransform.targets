@@ -8,9 +8,16 @@
     That task ships with Visual Studio's web tooling and is not available to `dotnet build`, so an
     SDK-style project cannot use it without tying the build to a VS install.
 
-    This replaces it with the same underlying engine - Microsoft.Web.Xdt, which is exactly what
-    TransformXml wraps - invoked from an inline task. Same transform semantics, no VS dependency,
-    and it works on a plain `dotnet build`.
+    Two attempts at a task-based replacement both failed on task RESOLUTION rather than on the
+    transform itself: a RoslynCodeTaskFactory inline task compiled locally on SDK 10.0.400 but not on
+    a CI runner with 10.0.401, and SlowCheetah's TransformXml did not resolve either. Both are the
+    same class of problem - a custom task has to be found and loaded before it can run, and that is
+    the fragile part.
+
+    So this drives the transform through Exec instead. Exec is a built-in MSBuild task, so there is
+    nothing to resolve; the XDT engine itself comes from the restored Microsoft.Web.Xdt package,
+    which is the same library TransformXml wraps. The branch is Windows-only (net10.0-windows), so
+    Windows PowerShell is a safe host.
 
     Projects opt in by setting <GenerateAppConfigFromTemplate>true</GenerateAppConfigFromTemplate>.
   -->
@@ -19,64 +26,40 @@
     <PackageReference Include="Microsoft.Web.Xdt" Version="3.1.0" PrivateAssets="all" />
   </ItemGroup>
 
-  <UsingTask TaskName="ApplyXdtTransform"
-             TaskFactory="RoslynCodeTaskFactory"
-             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll"
-             Condition="'$(GenerateAppConfigFromTemplate)' == 'true' AND Exists('App.$(Configuration).config')">
-    <ParameterGroup>
-      <Source ParameterType="System.String" Required="true" />
-      <Transform ParameterType="System.String" Required="true" />
-      <Destination ParameterType="System.String" Required="true" />
-      <XdtAssembly ParameterType="System.String" Required="true" />
-    </ParameterGroup>
-    <Task>
-      <Code Type="Fragment" Language="cs"><![CDATA[
-        var asm = System.Reflection.Assembly.LoadFrom(XdtAssembly);
-        var docType = asm.GetType("Microsoft.Web.XmlTransform.XmlTransformableDocument");
-        var xfmType = asm.GetType("Microsoft.Web.XmlTransform.XmlTransformation");
-
-        // Plain reflection rather than dynamic: the inline-task compiler has no reference to
-        // Microsoft.CSharp, so dynamic dispatch fails with CS0656 at task-compile time.
-        var doc = System.Activator.CreateInstance(docType);
-        docType.GetProperty("PreserveWhitespace").SetValue(doc, true, null);
-        docType.GetMethod("Load", new System.Type[] { typeof(string) }).Invoke(doc, new object[] { Source });
-
-        var xfm = System.Activator.CreateInstance(xfmType, new object[] { Transform });
-
-        var applied = (bool)xfmType.GetMethod("Apply").Invoke(xfm, new object[] { doc });
-
-        if (!applied)
-        {
-            Log.LogError("XDT transform of '" + Source + "' with '" + Transform + "' failed.");
-        }
-        else
-        {
-            docType.GetMethod("Save", new System.Type[] { typeof(string) }).Invoke(doc, new object[] { Destination });
-            Log.LogMessage(Microsoft.Build.Framework.MessageImportance.Normal,
-                "Generated " + Destination + " from " + Source + " + " + Transform);
-        }
-      ]]></Code>
-    </Task>
-  </UsingTask>
-
-  <!-- Skips when the per-configuration transform is absent. App.Debug.config is developer-local and       gitignored, so a clean clone or CI agent legitimately has no Debug transform to apply. -->  <Target Name="GenerateAppConfig"
+  <!--
+    Skips when the per-configuration transform is absent: App.Debug.config is developer-local and
+    gitignored, so a clean clone or a CI agent legitimately has no Debug transform to apply. Without
+    this guard the build fails on a machine that simply has not been set up for local debugging.
+  -->
+  <Target Name="GenerateAppConfig"
           BeforeTargets="PrepareForBuild;BeforeBuild"
           Condition="'$(GenerateAppConfigFromTemplate)' == 'true' AND Exists('App.$(Configuration).config')"
           Inputs="App.Template.config;App.$(Configuration).config"
           Outputs="App.config">
 
-    <!-- Resolve the XDT assembly from the restored package rather than hardcoding a path. -->
-    <ItemGroup>
-      <_XdtCandidate Include="$(NuGetPackageRoot)microsoft.web.xdt\3.1.0\lib\netstandard2.0\Microsoft.Web.XmlTransform.dll" />
-    </ItemGroup>
+    <PropertyGroup>
+      <_XdtAssembly>$(NuGetPackageRoot)microsoft.web.xdt\3.1.0\lib\netstandard2.0\Microsoft.Web.XmlTransform.dll</_XdtAssembly>
+      <!-- Single-quoted inside the PowerShell command so MSBuild's own $ escaping stays readable. -->
+      <_XdtScript>
+        Add-Type -Path '$(_XdtAssembly)';
+        $doc = New-Object Microsoft.Web.XmlTransform.XmlTransformableDocument;
+        $doc.PreserveWhitespace = $true;
+        $doc.Load('App.Template.config');
+        $xfm = New-Object Microsoft.Web.XmlTransform.XmlTransformation('App.$(Configuration).config');
+        if (-not $xfm.Apply($doc)) { Write-Error 'XDT transform failed.'; exit 1 };
+        $doc.Save('App.config');
+      </_XdtScript>
+    </PropertyGroup>
 
-    <Error Condition="!Exists('%(_XdtCandidate.FullPath)')"
+    <Error Condition="!Exists('$(_XdtAssembly)')"
            Text="Microsoft.Web.Xdt was not restored, so App.config cannot be generated from App.Template.config. Run a restore first." />
 
-    <ApplyXdtTransform Source="App.Template.config"
-                       Transform="App.$(Configuration).config"
-                       Destination="App.config"
-                       XdtAssembly="%(_XdtCandidate.FullPath)" />
+    <Exec Command="powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;$(_XdtScript.Replace('%0A',' ').Replace('%0D',' '))&quot;"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          StandardOutputImportance="low" />
+
+    <Message Importance="normal"
+             Text="Generated App.config from App.Template.config + App.$(Configuration).config" />
   </Target>
 
 </Project>
