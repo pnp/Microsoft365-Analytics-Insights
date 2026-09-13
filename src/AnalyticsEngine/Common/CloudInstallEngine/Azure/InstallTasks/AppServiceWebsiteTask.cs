@@ -37,7 +37,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var supportsAlwaysOn = AppServicePlanCapabilities.SupportsAlwaysOn(appServicePlanSku);
 
             // Get/create app-service with plan
-            var webApp = Container.GetWebSites().Where(s => s.Data.Name == _config.ResourceName).SingleOrDefault();
+            var webApp = Container.GetWebSites().AsEnumerable().Where(s => s.Data.Name == _config.ResourceName).SingleOrDefault();
             if (webApp == null)
             {
                 var newWebAppInfo = BuildNewWebSiteData(base.AzureLocation, appServicePlan.Id, appServicePlanSku, _allowPublicAccess);
