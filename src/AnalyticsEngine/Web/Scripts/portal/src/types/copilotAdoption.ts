@@ -14,7 +14,6 @@ export interface CopilotAdoptionAvailability {
   userMetadataImportEnabled: boolean;
   m365UsageReportImportEnabled: boolean;
   canViewIndividualData: boolean;
-  individualDataRoleConfigured: boolean;
   individualDataDisabled: boolean;
   individualDataPseudonymised: boolean;
   messages: string[];

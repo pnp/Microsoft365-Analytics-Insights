@@ -649,14 +649,12 @@ namespace Common.Entities.CopilotAdoption
         public bool M365UsageReportImportEnabled { get; set; }
 
         /// <summary>
-        /// True when the signed-in user has the deployment-configured role/group required to open
-        /// per-user rows and exports. False is fail-closed: the overview remains available.
+        /// True when per-user rows and exports are available on this deployment. It is NOT a function of
+        /// who is asking: Copilot Adoption does not do per-user access separation, so this is false only
+        /// when an administrator has turned the individual layer off outright.
         /// </summary>
         [JsonProperty("canViewIndividualData")]
         public bool CanViewIndividualData { get; set; }
-
-        [JsonProperty("individualDataRoleConfigured")]
-        public bool IndividualDataRoleConfigured { get; set; }
 
         [JsonProperty("individualDataDisabled")]
         public bool IndividualDataDisabled { get; set; }

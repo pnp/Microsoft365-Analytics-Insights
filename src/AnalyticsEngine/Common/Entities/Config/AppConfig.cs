@@ -255,16 +255,18 @@ namespace Common.Entities.Config
 
             this.CopilotAdoptionGovernance = new CopilotAdoptionGovernanceSettings
             {
-                IndividualDataRole = ConfigurationManager.AppSettings.Get(
-                    CopilotAdoptionGovernanceSettings.IndividualDataRoleSettingName),
+                // Both default OFF, so a deployment shows everything to everyone who can reach the page
+                // unless an administrator deliberately turns something down. There is no role setting:
+                // Copilot Adoption does not do per-user access separation - see
+                // CopilotAdoptionGovernanceSettings and issue #538.
                 DisableIndividualData = bool.TryParse(
                     ConfigurationManager.AppSettings.Get(CopilotAdoptionGovernanceSettings.DisableIndividualDataSettingName),
                     out var disableCopilotAdoptionIndividualData)
                     && disableCopilotAdoptionIndividualData,
-                PseudonymiseIndividualData = !bool.TryParse(
+                PseudonymiseIndividualData = bool.TryParse(
                     ConfigurationManager.AppSettings.Get(CopilotAdoptionGovernanceSettings.PseudonymiseIndividualDataSettingName),
                     out var pseudonymiseCopilotAdoptionIndividualData)
-                    || pseudonymiseCopilotAdoptionIndividualData,
+                    && pseudonymiseCopilotAdoptionIndividualData,
                 TenantId = this.TenantGUID,
             };
         }
@@ -656,9 +658,8 @@ namespace Common.Entities.Config
 
         /// <summary>
         /// Access-control and redaction settings for Copilot Adoption per-user lists and exports.
-        /// Defaults are deliberately fail-closed: no configured role means aggregate-only, and a
-        /// configured role sees pseudonymised rows unless an administrator explicitly opts into named
-        /// data.
+        /// Both switches default off: everyone who can reach the page sees the same data, including
+        /// names. There is deliberately no role separation yet - see #538.
         /// </summary>
         public CopilotAdoptionGovernanceSettings CopilotAdoptionGovernance { get; set; }
 

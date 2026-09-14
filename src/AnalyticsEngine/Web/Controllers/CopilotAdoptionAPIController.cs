@@ -106,7 +106,7 @@ namespace Web.AnalyticsWeb.Controllers
             // Read through the same factory every other endpoint uses. AppConfig always constructs a
             // governance object, so a null-coalescing fallback here would never fire and this endpoint
             // would be the one place the policy could not be substituted - including in the tests that
-            // prove the fail-closed default.
+            // prove the off-switch.
             var governance = GetGovernanceSettings();
 
             var model = new CopilotAdoptionAvailability
@@ -116,7 +116,6 @@ namespace Web.AnalyticsWeb.Controllers
                 UserMetadataImportEnabled = settings.GraphUsersMetadata,
                 M365UsageReportImportEnabled = settings.GraphUsageReports,
                 CanViewIndividualData = governance.HasIndividualDataAccess(UserPrincipal),
-                IndividualDataRoleConfigured = governance.IndividualDataRoleConfigured,
                 IndividualDataDisabled = governance.DisableIndividualData,
                 IndividualDataPseudonymised = governance.PseudonymiseIndividualData,
             };
@@ -368,7 +367,8 @@ namespace Web.AnalyticsWeb.Controllers
             // are cohort columns the redaction carries through unchanged - so pseudonymising first
             // would clone the whole scored population and hash every row to produce a byte-identical
             // answer. At the 200,000-user design point that is a large per-request cost for nothing.
-            // The role check above is what protects this endpoint; the redaction has nothing to remove.
+            // The [Authorize] attribute on the controller is what protects this endpoint, the same as
+            // every other one; the redaction has nothing to remove here.
             return Ok(new
             {
                 departments = Distinct(
@@ -769,7 +769,7 @@ namespace Web.AnalyticsWeb.Controllers
 
         /// <summary>
         /// Reads the current per-user governance policy. Kept behind a factory so tests can prove the
-        /// fail-closed 403 path without touching application configuration or starting a SQL analysis.
+        /// off-switch's 403 path without touching application configuration or starting a SQL analysis.
         /// </summary>
         private CopilotAdoptionGovernanceSettings GetGovernanceSettings()
         {

@@ -385,10 +385,10 @@ export default function CopilotAdoptionPage() {
             <MessageBar intent="info" style={{ marginTop: '16px' }}>
               <MessageBarBody>
                 Names and sign-in addresses are replaced with stable surrogates in every per-user list and
-                export, because this deployment has not opted into named individual data. Departments, bands
-                and scores are unaffected, and the same person keeps the same surrogate between runs. To show
-                real names, set the <code>CopilotAdoptionPseudonymiseIndividualData</code> application setting
-                to <code>false</code> &mdash; and check first that you have a lawful basis for it.
+                export, because this deployment has turned pseudonymisation on. Departments, bands and scores
+                are unaffected, and the same person keeps the same surrogate between runs. To show real names,
+                set the <code>CopilotAdoptionPseudonymiseIndividualData</code> application setting to{' '}
+                <code>false</code>.
               </MessageBarBody>
             </MessageBar>
           )}

@@ -17,6 +17,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Http;
 using System.Web.Http.Controllers;
+using System.Web.Http.Routing;
 using CopilotAdoptionAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.CopilotAdoptionAPIController;
 
 namespace Tests.UnitTests
@@ -2855,14 +2856,40 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task IndividualEndpoints_FailClosedWithoutTheConfiguredRole()
+        public async Task IndividualEndpoints_AreOpenToEverySignedInUserByDefault()
         {
-            // Issue #538: the aggregate dashboard can remain [Authorize], but every route that exposes
-            // the per-user population or exports it must refuse a normal signed-in user. This must be in
-            // the controller rather than only in the SPA, because the CSV/XLSX downloads are plain
-            // <a href> navigations and can be opened directly.
+            // The product does not do per-user access separation on any controller, and Copilot Adoption
+            // deliberately does not become the one exception - see #538, which tracks that as its own
+            // piece of work. A default deployment must therefore show the per-user lists and exports to
+            // anybody who can reach the page, exactly like every other report.
+            //
+            // Asserted at the controller, not just in the SPA, because the CSV/XLSX downloads are plain
+            // <a href> navigations: if the refusal were only a hidden tab, the files would still be
+            // reachable and the behaviour would differ between the page and the URL.
             using (var controller = GovernanceController(
-                new CopilotAdoptionGovernanceSettings { IndividualDataRole = "CopilotAdoption.IndividualData" },
+                new CopilotAdoptionGovernanceSettings(),
+                SignedIn("reader@contoso.com")))
+            {
+                // 503 is "the analysis has not been built yet" from the stub coordinator - the point is
+                // that nothing returns 403.
+                Assert.AreNotEqual(HttpStatusCode.Forbidden, await Status(controller.Filters()));
+                Assert.AreNotEqual(HttpStatusCode.Forbidden, await Status(controller.LicensedUsers()));
+                Assert.AreNotEqual(HttpStatusCode.Forbidden, await Status(controller.Opportunities()));
+                Assert.AreNotEqual(HttpStatusCode.Forbidden, (await controller.ExportLicensedUsers()).StatusCode);
+                Assert.AreNotEqual(HttpStatusCode.Forbidden, (await controller.ExportOpportunities()).StatusCode);
+                Assert.AreNotEqual(HttpStatusCode.Forbidden, (await controller.ExportWorkbook()).StatusCode);
+            }
+        }
+
+        [TestMethod]
+        public async Task IndividualEndpoints_RefuseOnlyWhenAnAdminTurnsTheLayerOff()
+        {
+            // The one refusal that does exist is deployment-wide, not per user: a tenant whose legal
+            // position is "no individual analytics at all" can switch the whole layer off and keep the
+            // aggregate dashboard. Every per-user route must honour it, including the direct download
+            // URLs.
+            using (var controller = GovernanceController(
+                new CopilotAdoptionGovernanceSettings { DisableIndividualData = true },
                 SignedIn("reader@contoso.com")))
             {
                 Assert.AreEqual(HttpStatusCode.Forbidden, await Status(controller.Filters()));
@@ -2875,19 +2902,33 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void IndividualDataRole_MatchesAppRoleOrGroupClaimOnlyWhenConfigured()
+        public void IndividualDataAccess_DoesNotDependOnWhoIsAsking()
         {
-            var noRoleConfigured = new CopilotAdoptionGovernanceSettings();
-            Assert.IsFalse(noRoleConfigured.HasIndividualDataAccess(SignedIn("admin@contoso.com", "CopilotAdoption.IndividualData")),
-                "No setting means aggregate-only; an upgrade must not silently widen access.");
+            // Pins the decision rather than the absence of code: access is a property of the deployment,
+            // never of the caller. If per-user separation is added later (#538) this test is the place
+            // that should fail and force the change to be deliberate.
+            var open = new CopilotAdoptionGovernanceSettings();
+            Assert.IsTrue(open.HasIndividualDataAccess(SignedIn("reader@contoso.com")),
+                "A default deployment shows per-user data to every signed-in user.");
+            Assert.IsTrue(open.HasIndividualDataAccess(SignedIn("admin@contoso.com", "SomeAppRole")),
+                "Carrying a role must not change the answer either way - there is no role gate.");
+            Assert.IsTrue(open.HasIndividualDataAccess(null),
+                "Authentication is the controller's [Authorize] attribute, not this policy's job.");
 
-            var appRole = new CopilotAdoptionGovernanceSettings { IndividualDataRole = "CopilotAdoption.IndividualData" };
-            Assert.IsTrue(appRole.HasIndividualDataAccess(SignedIn("admin@contoso.com", "CopilotAdoption.IndividualData")));
-            Assert.IsFalse(appRole.HasIndividualDataAccess(SignedIn("admin@contoso.com")));
+            var off = new CopilotAdoptionGovernanceSettings { DisableIndividualData = true };
+            Assert.IsFalse(off.HasIndividualDataAccess(SignedIn("admin@contoso.com", "SomeAppRole")),
+                "The off-switch is deployment-wide and no role overrides it.");
+            StringAssert.Contains(off.IndividualDataDeniedMessage(SignedIn("admin@contoso.com")),
+                CopilotAdoptionGovernanceSettings.DisableIndividualDataSettingName,
+                "The refusal must name the setting that caused it, or an admin cannot undo it.");
+        }
 
-            var groupId = "00000000-0000-0000-0000-000000000000";
-            var group = new CopilotAdoptionGovernanceSettings { IndividualDataRole = groupId };
-            Assert.IsTrue(group.HasIndividualDataAccess(SignedInWithGroup("admin@contoso.com", groupId)));
+        [TestMethod]
+        public void Pseudonymisation_IsOffByDefault()
+        {
+            // Everyone who can reach the page sees the same thing, names included. Pseudonymisation is an
+            // opt-in for tenants that need it, not the default posture.
+            Assert.IsFalse(new CopilotAdoptionGovernanceSettings().PseudonymiseIndividualData);
         }
 
         [TestMethod]
@@ -2996,14 +3037,66 @@ namespace Tests.UnitTests
             CopilotAdoptionGovernanceSettings settings,
             IPrincipal principal)
         {
+            // A stub coordinator that hands back an empty analysis immediately. Before per-user access
+            // was opened up these tests only ever asserted a 403, which short-circuits before any
+            // analysis runs - so the real coordinator was harmless. Now that the endpoints actually
+            // return data, using it would drive a full SQL analysis per assertion and make a governance
+            // test depend on the state of a database.
+            var coordinator = new AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionAnalysisCoordinator(
+                new StubAnalysisRunner(),
+                new StubAnalysisCache(),
+                (windowDays, hasSeatOverride) => new AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.NullCopilotAdoptionAnalysisTelemetry(),
+                TimeSpan.Zero);
+
+            var config = new HttpConfiguration();
+            var request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/api/CopilotAdoption/test?windowDays=28");
+            var requestContext = new HttpRequestContext { Principal = principal, Configuration = config };
+
             var controller = new CopilotAdoptionAPIController(
-                AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionAnalysisCoordinator.Default,
+                coordinator,
                 () => settings,
                 new RecordingAuditSink());
-            controller.Request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/api/CopilotAdoption/test?windowDays=28");
-            controller.Configuration = new HttpConfiguration();
-            controller.RequestContext = new HttpRequestContext { Principal = principal };
+
+            // Needed for the 200 path: content negotiation resolves through ControllerContext, and
+            // ExecuteAsync throws "HttpControllerContext.Configuration must not be null" without it.
+            // Set the whole context first, then the convenience properties read back through it.
+            controller.ControllerContext = new HttpControllerContext(config, new HttpRouteData(new HttpRoute()), request)
+            {
+                RequestContext = requestContext,
+            };
+            controller.Request = request;
+            controller.RequestContext = requestContext;
             return controller;
+        }
+
+        private sealed class StubAnalysisRunner
+            : AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.ICopilotAdoptionAnalysisRunner
+        {
+            public Task<CopilotAdoptionAnalysis> RunAsync(
+                int windowDays,
+                List<int> seatLicenceTypeIds,
+            ICopilotAdoptionRunTelemetry telemetry)
+            {
+                var analysis = new CopilotAdoptionAnalysis();
+                analysis.Summary.WindowDays = windowDays;
+                analysis.Summary.GeneratedUtc = Now;
+                analysis.Summary.Options = CopilotAdoptionOptions.Default;
+                return Task.FromResult(analysis);
+            }
+        }
+
+        private sealed class StubAnalysisCache
+            : AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.ICopilotAdoptionAnalysisCache
+        {
+            public bool TryGet(string key, out CopilotAdoptionAnalysis analysis)
+            {
+                analysis = null;
+                return false;
+            }
+
+            public void Set(string key, CopilotAdoptionAnalysis analysis, TimeSpan ttl)
+            {
+            }
         }
 
         private static async Task<HttpStatusCode> Status(Task<IHttpActionResult> action)
@@ -3024,14 +3117,6 @@ namespace Tests.UnitTests
                 identity.AddClaim(new Claim("roles", role));
             }
 
-            return new ClaimsPrincipal(identity);
-        }
-
-        private static IPrincipal SignedInWithGroup(string upn, string groupId)
-        {
-            var identity = new ClaimsIdentity("test");
-            identity.AddClaim(new Claim(ClaimTypes.Name, upn));
-            identity.AddClaim(new Claim("groups", groupId));
             return new ClaimsPrincipal(identity);
         }
 

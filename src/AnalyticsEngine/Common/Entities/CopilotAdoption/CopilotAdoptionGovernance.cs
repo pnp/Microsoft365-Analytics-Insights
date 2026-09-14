@@ -1,9 +1,7 @@
-using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
-using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
@@ -14,94 +12,60 @@ namespace Common.Entities.CopilotAdoption
     /// Runtime governance controls for Copilot Adoption individual-level data.
     /// </summary>
     /// <remarks>
-    /// These are App Service settings rather than installer JSON properties so an existing deployment
-    /// fails closed on upgrade: with no role setting present the aggregate dashboard still loads, but
-    /// named/pseudonymised per-user lists and every export return 403 until an administrator makes a
-    /// deliberate access-control decision.
+    /// <para>
+    /// <b>There is deliberately no role separation here.</b> Every authenticated portal user who can
+    /// reach Copilot Adoption sees the same thing, including the per-user lists and every export. That
+    /// matches the rest of the product - no controller in the Web project carries
+    /// <c>[Authorize(Roles = ...)]</c> - and introducing a role gate for this one surface would have made
+    /// it behave unlike every other page while giving an incomplete impression of protection. Role
+    /// separation is tracked as its own piece of work (#538) rather than bolted onto this feature.
+    /// </para>
+    /// <para>
+    /// What is here instead are two deployment-wide switches and an audit trail, none of which treat one
+    /// user differently from another, and all of which are OFF by default so a deployment shows
+    /// everything to everyone unless an administrator decides otherwise:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><see cref="DisableIndividualData"/> - turn the individual layer off entirely, leaving the
+    /// aggregate dashboard. For tenants whose legal position is simply "no individual analytics".</item>
+    /// <item><see cref="PseudonymiseIndividualData"/> - replace direct identifiers with stable
+    /// surrogates while keeping the cohort columns.</item>
+    /// </list>
+    /// <para>
+    /// These are App Service settings rather than installer JSON properties, which is why
+    /// <c>CONFIG_VERSION</c> is untouched by them.
+    /// </para>
     /// </remarks>
     public sealed class CopilotAdoptionGovernanceSettings
     {
-        public const string IndividualDataRoleSettingName = "CopilotAdoptionIndividualDataRole";
         public const string DisableIndividualDataSettingName = "CopilotAdoptionDisableIndividualData";
         public const string PseudonymiseIndividualDataSettingName = "CopilotAdoptionPseudonymiseIndividualData";
 
-        public string IndividualDataRole { get; set; }
-
+        /// <summary>Off-switch for the whole individual layer. Deployment-wide, default off.</summary>
         public bool DisableIndividualData { get; set; }
 
-        public bool PseudonymiseIndividualData { get; set; } = true;
+        /// <summary>
+        /// Replace direct identifiers with stable surrogates. Deployment-wide, default OFF: everyone who
+        /// can reach the page sees the same named data, which is the product's current position.
+        /// </summary>
+        public bool PseudonymiseIndividualData { get; set; }
 
         public Guid TenantId { get; set; }
 
-        [JsonIgnore]
-        public bool IndividualDataRoleConfigured => !string.IsNullOrWhiteSpace(IndividualDataRole);
-
+        /// <summary>
+        /// Whether per-user lists and exports are available. Deliberately not a function of who is
+        /// asking - see the class remarks. The parameter is kept so the call sites do not have to change
+        /// if per-user access control is added later.
+        /// </summary>
         public bool HasIndividualDataAccess(IPrincipal principal)
         {
-            if (DisableIndividualData || !IndividualDataRoleConfigured) return false;
-            if (principal?.Identity?.IsAuthenticated != true) return false;
-
-            var required = SplitRoleList(IndividualDataRole);
-            if (required.Count == 0) return false;
-
-            foreach (var role in required)
-            {
-                if (principal.IsInRole(role)) return true;
-            }
-
-            var claimsPrincipal = principal as ClaimsPrincipal;
-            if (claimsPrincipal == null) return false;
-
-            var claimValues = claimsPrincipal.Claims
-                .Where(c => IsRoleOrGroupClaim(c.Type))
-                .Select(c => c.Value)
-                .Where(v => !string.IsNullOrWhiteSpace(v))
-                .ToList();
-
-            return required.Any(r => claimValues.Any(v => string.Equals(v, r, StringComparison.OrdinalIgnoreCase)));
+            return !DisableIndividualData;
         }
 
         public string IndividualDataDeniedMessage(IPrincipal principal)
         {
-            if (DisableIndividualData)
-            {
-                return "Copilot Adoption individual-user lists and exports are disabled for this deployment. "
-                       + "The aggregate dashboard remains available.";
-            }
-
-            if (!IndividualDataRoleConfigured)
-            {
-                return "Copilot Adoption individual-user lists and exports require an explicit Entra app role "
-                       + "or group claim. Set the " + IndividualDataRoleSettingName
-                       + " application setting to the app-role value or group object id that is allowed to see "
-                       + "individual data. Until then this deployment is aggregate-only.";
-            }
-
-            if (principal?.Identity?.IsAuthenticated != true)
-            {
-                return "Sign in before opening Copilot Adoption individual-user lists or exports.";
-            }
-
-            return "Your account is signed in, but it does not carry the Copilot Adoption individual-data role "
-                   + "or group claim required for per-user lists and exports.";
-        }
-
-        private static List<string> SplitRoleList(string raw)
-        {
-            return (raw ?? string.Empty)
-                .Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(r => r.Trim())
-                .Where(r => r.Length > 0)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
-
-        private static bool IsRoleOrGroupClaim(string type)
-        {
-            return string.Equals(type, ClaimTypes.Role, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(type, "roles", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(type, "groups", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(type, "http://schemas.microsoft.com/ws/2008/06/identity/claims/role", StringComparison.OrdinalIgnoreCase);
+            return "Copilot Adoption individual-user lists and exports are turned off for this deployment "
+                   + "(" + DisableIndividualDataSettingName + "). The aggregate dashboard remains available.";
         }
     }
 
