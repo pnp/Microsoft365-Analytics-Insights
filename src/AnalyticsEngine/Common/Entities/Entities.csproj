@@ -99,7 +99,6 @@
     <Compile Include="CopilotAdoption\CopilotAdoptionConcentrationModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionDiagnostics.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionExports.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionGovernance.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionOptions.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionScoring.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionService.cs" />
@@ -432,10 +431,6 @@
     <Compile Include="Migrations\202609101200001_RetireImportDbHacks.Designer.cs">
       <DependentUpon>202609101200001_RetireImportDbHacks.cs</DependentUpon>
     </Compile>
-    <Compile Include="Migrations\202609131930001_AddCopilotAdoptionExportAudit.cs" />
-    <Compile Include="Migrations\202609131930001_AddCopilotAdoptionExportAudit.Designer.cs">
-      <DependentUpon>202609131930001_AddCopilotAdoptionExportAudit.cs</DependentUpon>
-    </Compile>
     <Compile Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.cs" />
     <Compile Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.Designer.cs">
       <DependentUpon>202609101100001_UniqueUrlsFullUrlIndex.cs</DependentUpon>
@@ -661,9 +656,6 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609101200001_RetireImportDbHacks.resx">
       <DependentUpon>202609101200001_RetireImportDbHacks.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Migrations\202609131930001_AddCopilotAdoptionExportAudit.resx">
-      <DependentUpon>202609131930001_AddCopilotAdoptionExportAudit.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.resx">
       <DependentUpon>202609101100001_UniqueUrlsFullUrlIndex.cs</DependentUpon>

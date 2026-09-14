@@ -13,9 +13,6 @@ export interface CopilotAdoptionAvailability {
   copilotUsageReportImportEnabled: boolean;
   userMetadataImportEnabled: boolean;
   m365UsageReportImportEnabled: boolean;
-  canViewIndividualData: boolean;
-  individualDataDisabled: boolean;
-  individualDataPseudonymised: boolean;
   messages: string[];
 }
 

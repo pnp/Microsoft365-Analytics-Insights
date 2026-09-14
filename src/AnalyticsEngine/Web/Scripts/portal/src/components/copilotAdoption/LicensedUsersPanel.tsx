@@ -115,7 +115,6 @@ export default function LicensedUsersPanel({
   seatLicenceTypeIds,
   initialBands,
   initialAction,
-  onExportNotice,
 }: {
   windowDays: number;
   filterOptions: AdoptionFilterOptions | null;
@@ -131,7 +130,6 @@ export default function LicensedUsersPanel({
    * that plan counted - not a similar-looking one they then have to reconstruct by hand.
    */
   initialAction?: string;
-  onExportNotice?: () => void;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -304,7 +302,7 @@ export default function LicensedUsersPanel({
         >
           Refresh
         </Button>
-        <Button size="small" icon={<ArrowDownload16Regular />} as="a" href={exportUrl} onClick={onExportNotice}>
+        <Button size="small" icon={<ArrowDownload16Regular />} as="a" href={exportUrl}>
           Export CSV
         </Button>
       </div>

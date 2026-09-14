@@ -129,14 +129,12 @@ export default function OpportunitiesPanel({
   filterOptions,
   options,
   seatLicenceTypeIds,
-  onExportNotice,
 }: {
   windowDays: number;
   filterOptions: AdoptionFilterOptions | null;
   /** The weights and targets actually used, so the score explanation quotes them rather than guessing. */
   options: CopilotAdoptionOptions;
   seatLicenceTypeIds?: number[];
-  onExportNotice?: () => void;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -276,7 +274,7 @@ export default function OpportunitiesPanel({
         >
           Refresh
         </Button>
-        <Button size="small" icon={<ArrowDownload16Regular />} as="a" href={exportUrl} onClick={onExportNotice}>
+        <Button size="small" icon={<ArrowDownload16Regular />} as="a" href={exportUrl}>
           Export CSV
         </Button>
       </div>

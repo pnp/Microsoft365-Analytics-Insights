@@ -272,16 +272,6 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Short display label for <see cref="RecommendedActionCode"/>, e.g. "Re-engage".</summary>
         [JsonProperty("recommendedActionLabel")]
         public string RecommendedActionLabel { get; set; }
-
-        /// <summary>
-        /// A field-for-field copy. Used by the pseudonymiser so redaction is "copy everything, then
-        /// blank the identifiers" rather than "rebuild from a list of properties somebody remembered" -
-        /// the latter silently drops any column added later, and pseudonymisation is the default.
-        /// </summary>
-        public LicensedUserAdoptionRow ShallowCopy()
-        {
-            return (LicensedUserAdoptionRow)MemberwiseClone();
-        }
     }
 
     /// <summary>
@@ -427,14 +417,5 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Plain-English justification, safe to paste into a licence request.</summary>
         [JsonProperty("rationale")]
         public string Rationale { get; set; }
-
-        /// <summary>
-        /// A field-for-field copy. See <see cref="LicensedUserAdoptionRow.ShallowCopy"/> for why the
-        /// pseudonymiser copies and redacts rather than rebuilding from an allow-list.
-        /// </summary>
-        public LicenceOpportunityRow ShallowCopy()
-        {
-            return (LicenceOpportunityRow)MemberwiseClone();
-        }
     }
 }

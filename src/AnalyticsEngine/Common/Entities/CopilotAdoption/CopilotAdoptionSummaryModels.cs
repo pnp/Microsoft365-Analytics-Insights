@@ -648,20 +648,6 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("m365UsageReportImportEnabled")]
         public bool M365UsageReportImportEnabled { get; set; }
 
-        /// <summary>
-        /// True when per-user rows and exports are available on this deployment. It is NOT a function of
-        /// who is asking: Copilot Adoption does not do per-user access separation, so this is false only
-        /// when an administrator has turned the individual layer off outright.
-        /// </summary>
-        [JsonProperty("canViewIndividualData")]
-        public bool CanViewIndividualData { get; set; }
-
-        [JsonProperty("individualDataDisabled")]
-        public bool IndividualDataDisabled { get; set; }
-
-        [JsonProperty("individualDataPseudonymised")]
-        public bool IndividualDataPseudonymised { get; set; }
-
         /// <summary>Explains, in plain English, anything that is switched off and what it costs the report.</summary>
         [JsonProperty("messages")]
         public List<string> Messages { get; set; } = new List<string>();

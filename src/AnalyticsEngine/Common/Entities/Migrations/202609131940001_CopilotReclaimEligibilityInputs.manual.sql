@@ -6,8 +6,8 @@
    page treat it as applied.
 
    PREREQUISITE
-     202609131930001_AddCopilotAdoptionExportAudit must already be stamped - it is the migration
-     immediately before this one. Run the release's manual scripts in migration-id order.
+     202609101200001_RetireImportDbHacks must already be stamped. This is the only manual script in
+     this release.
 
    WHAT IT DOES
      Adds dbo.users.created_utc as the Graph user.createdDateTime account-age proxy for reclaim grace
@@ -29,10 +29,10 @@ BEGIN
     SET NOEXEC ON;
 END
 
-IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609131930001_AddCopilotAdoptionExportAudit')
+IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609101200001_RetireImportDbHacks')
    AND NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609131940001_CopilotReclaimEligibilityInputs')
 BEGIN
-    RAISERROR('CopilotReclaimEligibilityInputs: prerequisite migration 202609131930001_AddCopilotAdoptionExportAudit is not stamped in __MigrationHistory. Run the manual scripts in migration-id order - this one is LAST. Nothing has been changed.', 16, 1) WITH NOWAIT;
+    RAISERROR('CopilotReclaimEligibilityInputs: prerequisite migration 202609101200001_RetireImportDbHacks is not stamped in __MigrationHistory. Nothing has been changed.', 16, 1) WITH NOWAIT;
     SET NOEXEC ON;
 END
 
@@ -130,7 +130,7 @@ BEGIN
         INSERT INTO dbo.__MigrationHistory (MigrationId, ContextKey, Model, ProductVersion)
         SELECT N'202609131940001_CopilotReclaimEligibilityInputs', ContextKey, Model, ProductVersion
         FROM dbo.__MigrationHistory
-        WHERE MigrationId = N'202609131930001_AddCopilotAdoptionExportAudit';
+        WHERE MigrationId = N'202609101200001_RetireImportDbHacks';
         RAISERROR('CopilotReclaimEligibilityInputs: stamped __MigrationHistory.', 0, 1) WITH NOWAIT;
     END
     ELSE
