@@ -28,7 +28,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         protected GraphHttpException(string message, HttpStatusCode statusCode, string url, string responseBody, Exception innerException)
-            : base(message, innerException)
+            : base(message, innerException, statusCode)
         {
             StatusCode = statusCode;
             Url = url;
@@ -37,7 +37,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         /// <summary>The HTTP status Graph returned.</summary>
-        public HttpStatusCode StatusCode { get; }
+        /// <remarks>
+        /// <para>
+        /// <c>new</c> is deliberate. <see cref="HttpRequestException"/> gained its own nullable
+        /// <c>StatusCode</c> in .NET 5, and this one deliberately shadows it with a non-nullable value,
+        /// because a <see cref="GraphHttpException"/> is never constructed without a status.
+        /// </para>
+        /// <para>
+        /// The base value is now passed to the base constructor as well, which it previously was not.
+        /// That mattered: this type exists so that pre-existing <c>catch (HttpRequestException)</c>
+        /// handlers keep working, and such a handler reading <c>StatusCode</c> got the base property -
+        /// which was left <c>null</c>. The status was present on the object and invisible to exactly the
+        /// callers the class was designed to keep working.
+        /// </para>
+        /// </remarks>
+        public new HttpStatusCode StatusCode { get; }
 
         /// <summary>The URL that failed.</summary>
         public string Url { get; }

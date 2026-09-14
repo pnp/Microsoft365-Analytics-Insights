@@ -32,7 +32,10 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.4" />
     <PackageReference Include="Microsoft.EntityFramework.SqlServer" Version="6.5.2" />
-    <PackageReference Include="Microsoft.Identity.Web" Version="3.16.0" />
+    <!-- 4.0.0, not 3.16.0: that version was never published, so NuGet silently resolved up to 4.0.0
+         and warned (NU1603). Pinning what is actually used makes the build reproducible - a floating
+         resolution is one package publish away from changing the auth stack underneath us. -->
+    <PackageReference Include="Microsoft.Identity.Web" Version="4.0.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.11" />
     <PackageReference Include="System.ClientModel" Version="1.15.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.11" />

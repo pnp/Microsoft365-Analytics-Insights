@@ -359,5 +359,41 @@ namespace Tests.UnitTests
         }
 
         #endregion
+
+        #region The base HttpRequestException contract
+
+        /// <summary>
+        /// A caller that catches the BASE type must be able to read the status.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="GraphHttpException"/> exists so that pre-existing <c>catch (HttpRequestException)</c>
+        /// handlers keep working, and .NET 5 gave that base type its own nullable <c>StatusCode</c>. The
+        /// derived class shadows it with a non-nullable one, so for a while the status was set on the
+        /// derived property and left <c>null</c> on the base - present on the object but invisible to
+        /// exactly the handlers the class was designed to keep working, with no error to show for it.
+        /// </remarks>
+        [TestMethod]
+        public void StatusCode_IsReadableThroughTheBaseHttpRequestException()
+        {
+            var ex = new GraphHttpException(HttpStatusCode.Forbidden, "https://graph.microsoft.com/x", Forbidden, null);
+
+            HttpRequestException asBase = ex;
+            Assert.AreEqual(HttpStatusCode.Forbidden, asBase.StatusCode,
+                "A handler catching HttpRequestException reads the base StatusCode; it must carry the status.");
+
+            Assert.AreEqual(HttpStatusCode.Forbidden, ex.StatusCode, "...and the derived property must agree.");
+        }
+
+        /// <summary>The 404 subclass must satisfy the same contract.</summary>
+        [TestMethod]
+        public void NotFoundSubclass_AlsoCarriesTheStatusOnTheBase()
+        {
+            HttpRequestException ex = new GraphResourceNotFoundException(
+                "https://graph.microsoft.com/v1.0/users/someone@contoso.com/drive", ServerError, null);
+
+            Assert.AreEqual(HttpStatusCode.NotFound, ex.StatusCode);
+        }
+
+        #endregion
     }
 }

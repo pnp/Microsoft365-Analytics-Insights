@@ -118,7 +118,7 @@ namespace CloudInstallEngine
                 return instanceInfo.Properties;
             }
 
-            logger.LogInformation("Couldn't get AppInsights application info", true);
+            logger.LogInformation("Couldn't get AppInsights application info");
             instanceResponse.EnsureSuccessStatusCode();
             return null;        // Won't get here if HTTP error
         }

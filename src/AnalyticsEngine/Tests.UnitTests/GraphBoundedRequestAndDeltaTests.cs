@@ -196,7 +196,7 @@ namespace Tests.UnitTests
 
         private static AppConfig BuildConfig(int tenantSeed)
         {
-            var config = (AppConfig)FormatterServices.GetUninitializedObject(typeof(AppConfig));
+            var config = (AppConfig)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(AppConfig));
             config.TenantGUID = Guid.Parse($"00000000-0000-0000-0000-00000000000{tenantSeed}");
             config.ConnectionStrings = new AppConnectionStrings();
             return config;

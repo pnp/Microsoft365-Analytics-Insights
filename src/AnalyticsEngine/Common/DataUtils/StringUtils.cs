@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using Microsoft.Data.SqlClient;
 using System.IO;
 using System.Linq;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -446,6 +447,14 @@ namespace DataUtils
         /// <summary>
         /// Return encrypted string of another string.
         /// </summary>
+        /// <remarks>
+        /// Windows-only, and declared as such rather than suppressed. This is DPAPI: the key is derived
+        /// from the current Windows user profile, so there is no cross-platform equivalent and nothing
+        /// to fall back to. The attribute pushes that fact up to callers, which is what we want - the
+        /// only consumer is the installer's local preferences file, and the installer is
+        /// net10.0-windows anyway.
+        /// </remarks>
+        [SupportedOSPlatform("windows")]
         public static byte[] ProtectString(string s)
         {
             return ProtectedData.Protect(Encoding.UTF8.GetBytes(s), protectedDataAdditionalEntropy, DataProtectionScope.CurrentUser);
@@ -454,6 +463,8 @@ namespace DataUtils
         /// <summary>
         /// Return string of an encrypted string made from this same machine
         /// </summary>
+        /// <remarks>Windows-only - see <see cref="ProtectString"/>.</remarks>
+        [SupportedOSPlatform("windows")]
         public static string UnprotectString(byte[] encryptedPayload)
         {
             return Encoding.UTF8.GetString(ProtectedData.Unprotect(encryptedPayload, protectedDataAdditionalEntropy, DataProtectionScope.CurrentUser));
