@@ -69,6 +69,7 @@
   <ItemGroup>
     <SpaSourceFile Include="$(SpaRoot)src\**\*" />
     <SpaSourceFile Include="$(SpaRoot)public\**\*" />
+    <Content Include="Scripts\portal\src\test\tsconfig.json" />
     <SpaSourceFile Include="$(SpaRoot)index.html" />
     <SpaSourceFile Include="$(SpaRoot)vite.config.ts" />
     <SpaSourceFile Include="$(SpaRoot)tsconfig.json" />

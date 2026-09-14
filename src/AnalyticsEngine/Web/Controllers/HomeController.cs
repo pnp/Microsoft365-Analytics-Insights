@@ -47,7 +47,7 @@ namespace Web.AnalyticsWeb.Controllers
 
         /// <summary>
         /// Serves the built portal SPA's index.html. The SPA's hashed JS/CSS assets referenced by
-        /// it are then loaded as ordinary static files under /Scripts/portal/build/.
+        /// it are then loaded from wwwroot/assets as ordinary static files under /assets/.
         /// </summary>
         private ActionResult ServePortalApp()
         {

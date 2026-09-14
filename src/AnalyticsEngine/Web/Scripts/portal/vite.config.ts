@@ -1,13 +1,11 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-// The built app is served by the ASP.NET site from /Scripts/portal/build/, so every
-// emitted asset URL must resolve under that path (mirrors the old CRA "homepage" setting).
-// We also keep the output directory named "build" so the existing MSBuild / HomeController
-// wiring (which reads build/index.html) does not need to change.
+// MSBuild copies the build output to wwwroot, served by ASP.NET Core at the site root.
+// Keep the output directory named "build" to match the existing MSBuild copy target.
 export default defineConfig({
   plugins: [react()],
-  base: '/Scripts/portal/build/',
+  base: '/',
   build: {
     outDir: 'build',
     emptyOutDir: true,

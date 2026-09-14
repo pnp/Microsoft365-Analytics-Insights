@@ -44,14 +44,17 @@ namespace Common.Entities.Models
         [JsonProperty("refresh_token")]
         public string RefreshToken { get; set; }
 
-        public static async Task<RefreshOAuthToken> GetAccessToken(string code, string scopes, AppConfig azureADConfig)
+        [JsonProperty("id_token")]
+        public string IdToken { get; set; }
+
+        public static async Task<RefreshOAuthToken> GetAccessToken(string code, string scopes, string redirectUri, AppConfig azureADConfig)
         {
 
             // https://docs.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-auth-code-flow#request-an-access-token
             HttpClient httpClient = new HttpClient();
             var loginData = new List<KeyValuePair<string, string>>
             {
-                new KeyValuePair<string, string>("redirect_uri", azureADConfig.WebAppURL),
+                new KeyValuePair<string, string>("redirect_uri", redirectUri),
                 new KeyValuePair<string, string>("client_id", azureADConfig.ClientID),
                 new KeyValuePair<string, string>("client_secret", azureADConfig.ClientSecret),
                 new KeyValuePair<string, string>("code", code),

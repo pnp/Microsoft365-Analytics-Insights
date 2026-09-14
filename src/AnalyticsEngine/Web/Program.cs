@@ -40,7 +40,8 @@ builder.Services.AddAuthentication(options =>
 {
     options.ClientId = appConfig.ClientID;
     options.ClientSecret = appConfig.ClientSecret;
-    options.Authority = appConfig.Authority;
+    // Match the v2 token endpoint used by RefreshOAuthToken with v2 discovery and issuer metadata.
+    options.Authority = $"{appConfig.Authority}/v2.0";
     options.SignedOutRedirectUri = appConfig.WebAppURL;
     options.ResponseType = OpenIdConnectResponseType.CodeIdToken;
     options.TokenValidationParameters.ValidateIssuer = true;
@@ -93,7 +94,8 @@ builder.Services.AddAuthentication(options =>
             var signedInUser = new ClaimsPrincipal(identity);
 
             var authToken = await RefreshOAuthToken.GetAccessToken(
-                context.ProtocolMessage.Code, $"openid email profile offline_access {GraphScopes}", appConfig);
+                context.ProtocolMessage.Code, $"openid email profile offline_access {GraphScopes}",
+                context.TokenEndpointRequest.RedirectUri, appConfig);
 
             // Persist the refresh token in the auth cookie (claim). SiteTokenAPI uses it to mint
             // fresh access tokens for the SPA. The access token itself isn't stored (it's short-lived
@@ -110,8 +112,8 @@ builder.Services.AddAuthentication(options =>
                 await redisConManager.SaveToken(signedInUser, authToken);
             }
 
-            // The handler would otherwise redeem the code a second time.
-            context.HandleCodeRedemption();
+            // Supply the redeemed tokens for validation without redeeming the code a second time.
+            context.HandleCodeRedemption(authToken.AccessToken, authToken.IdToken);
         }
     };
 });
