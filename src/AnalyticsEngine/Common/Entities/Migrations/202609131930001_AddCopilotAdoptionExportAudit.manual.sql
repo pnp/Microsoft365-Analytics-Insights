@@ -3,7 +3,17 @@
    Migration: 202609131930001_AddCopilotAdoptionExportAudit
 
    Applies the migration's Up SQL verbatim, then stamps dbo.__MigrationHistory by copying the previous
-   migration's model snapshot. Run manual scripts in migration-id order.
+   migration's model snapshot.
+
+   RUN ORDER
+     This is the FIRST of the two manual scripts in this release. Run it before
+     202609131940001_CopilotReclaimEligibilityInputs.manual.sql, which hard-fails if this one has not
+     been stamped.
+
+   PREREQUISITE
+     202609101200001_RetireImportDbHacks must already be stamped.
+
+   SAFE TO RE-RUN: every schema step is guarded and idempotent. The stamp guard checks schema only.
    ===================================================================================================== */
 
 SET NOCOUNT ON;
@@ -48,14 +58,22 @@ BEGIN
         [individual_data_disabled] bit NOT NULL CONSTRAINT [DF_copilot_adoption_export_audit_individual_data_disabled] DEFAULT (0),
         CONSTRAINT [PK_copilot_adoption_export_audit] PRIMARY KEY CLUSTERED ([id] ASC)
     );
-
-    CREATE NONCLUSTERED INDEX [IX_copilot_adoption_export_audit_occurred_utc]
-        ON [dbo].[copilot_adoption_export_audit] ([occurred_utc] ASC)
-        INCLUDE ([endpoint], [actor], [succeeded], [status_code]);
 END
 ELSE
 BEGIN
-    RAISERROR('AddCopilotAdoptionExportAudit: dbo.copilot_adoption_export_audit already exists; nothing to do.', 0, 1) WITH NOWAIT;
+    RAISERROR('AddCopilotAdoptionExportAudit: dbo.copilot_adoption_export_audit already exists.', 0, 1) WITH NOWAIT;
+END
+
+-- Guarded separately from the table. SQL Server autocommits each statement, so a failure between the
+-- two would leave the table present and the index missing - and a re-run that keyed only off the
+-- table would then skip the index and stamp the migration as complete anyway.
+IF OBJECT_ID(N'dbo.copilot_adoption_export_audit', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_adoption_export_audit') AND name = N'IX_copilot_adoption_export_audit_occurred_utc')
+BEGIN
+    CREATE NONCLUSTERED INDEX [IX_copilot_adoption_export_audit_occurred_utc]
+        ON [dbo].[copilot_adoption_export_audit] ([occurred_utc] ASC)
+        INCLUDE ([endpoint], [actor], [succeeded], [status_code]);
+    RAISERROR('AddCopilotAdoptionExportAudit: created IX_copilot_adoption_export_audit_occurred_utc.', 0, 1) WITH NOWAIT;
 END
 GO
 
@@ -71,6 +89,19 @@ IF OBJECT_ID(N'dbo.copilot_adoption_export_audit', N'U') IS NOT NULL
    AND NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.copilot_adoption_export_audit') AND name = N'actor' AND system_type_id = TYPE_ID(N'nvarchar'))
 BEGIN
     RAISERROR('AddCopilotAdoptionExportAudit: schema verification failed; actor is not nvarchar, so the migration will not be stamped.', 16, 1) WITH NOWAIT;
+    SET NOEXEC ON;
+END
+IF OBJECT_ID(N'dbo.copilot_adoption_export_audit', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_adoption_export_audit') AND name = N'IX_copilot_adoption_export_audit_occurred_utc')
+BEGIN
+    RAISERROR('AddCopilotAdoptionExportAudit: schema verification failed; IX_copilot_adoption_export_audit_occurred_utc is missing, so the migration will not be stamped.', 16, 1) WITH NOWAIT;
+    SET NOEXEC ON;
+END
+
+IF OBJECT_ID(N'dbo.copilot_adoption_export_audit', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.key_constraints WHERE parent_object_id = OBJECT_ID(N'dbo.copilot_adoption_export_audit') AND name = N'PK_copilot_adoption_export_audit')
+BEGIN
+    RAISERROR('AddCopilotAdoptionExportAudit: schema verification failed; PK_copilot_adoption_export_audit is missing, so the migration will not be stamped.', 16, 1) WITH NOWAIT;
     SET NOEXEC ON;
 END
 GO

@@ -95,6 +95,7 @@ export interface CopilotAdoptionOptions {
   workingDaysPerWeek: number;
   frequencyTargetRatio: number;
   depthTargetInteractionsPerActiveDay: number;
+  depthMinActiveDays: number;
   breadthTargetApps: number;
   frequencyWeight: number;
   depthWeight: number;
@@ -120,10 +121,12 @@ export interface CopilotAdoptionOptions {
   opportunityEmailWeight: number;
   opportunityDocumentWeight: number;
   opportunityCopilotTarget: number;
+  opportunityCopilotTargetBasisDays: number;
   opportunityCollaborationTarget: number;
   opportunityEmailTarget: number;
   opportunityDocumentTarget: number;
   opportunityRecommendScore: number;
+  opportunityProvenDemandMinActiveDays: number;
 
   usageReportLagDays: number;
   topSegments: number;

@@ -773,7 +773,7 @@ function OverviewTab({
               <InfoTip
                 title="Where the unmet demand is"
                 content={{
-                  what: `How many unlicensed users in each department scored ${o.opportunityRecommendScore} or above on the business-case score - i.e. how many people there have a strong case for a licence they do not have.`,
+                  what: `How many unlicensed users in each department are recommended for a licence - either from proven demand (${o.opportunityProvenDemandMinActiveDays} or more distinct days of unlicensed Copilot use) or from a business-case score of ${o.opportunityRecommendScore} or above. In other words, how many people there have a strong case for a licence they do not have.`,
                   how: 'Only recommended candidates are counted, not every unlicensed user. Disabled accounts are excluded. The full ranked list with each person\u2019s justification is on the "Licence opportunities" tab.',
                   source:
                     'Read against the department adoption table: a department that appears in both has licences going unused and people who would use them, which is a reassignment rather than a purchase.',
@@ -1175,6 +1175,18 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
   const weights = [o.frequencyWeight, o.depthWeight, o.breadthWeight];
   const weightSum = weights.reduce((total, w) => total + w, 0);
   const frequencyTargetDays = Math.round(o.windowDays * (o.workingDaysPerWeek / 7) * o.frequencyTargetRatio);
+  // Mirrors CopilotAdoptionScoring.OpportunityCopilotTargetForWindow. The Copilot opportunity target is
+  // the only one of the four that is a raw total rather than a per-active-day average, so it is scaled
+  // from its basis period to the selected window. Quoting the unscaled number here would document a
+  // formula that cannot reproduce the scores shown on the Licence opportunities tab.
+  const opportunityCopilotTargetForWindow =
+    Math.round(
+      Math.max(
+        1,
+        (o.opportunityCopilotTarget * Math.max(1, o.windowDays)) /
+          Math.max(1, o.opportunityCopilotTargetBasisDays),
+      ) * 10,
+    ) / 10;
 
   return (
     <Card>
@@ -1205,6 +1217,13 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 twice for the same low frequency.
               </Text>
               <Text>
+                Because depth divides by a number the user controls, it is scaled down below{' '}
+                {o.depthMinActiveDays} active days. Without that, a handful of prompts crammed into a single
+                afternoon scored full marks for depth and banded somebody who tried Copilot once and never came
+                back as though a habit were forming - and being active on <em>fewer</em> days could outscore
+                being active on more. At or above {o.depthMinActiveDays} active days nothing changes.
+              </Text>
+              <Text>
                 <strong>Breadth ({formatPct(weightSharePct(o.breadthWeight, weights))}).</strong> How many
                 distinct Copilot surfaces (Teams, Word, Outlook, Copilot Chat and so on) they use, against a
                 target of {o.breadthTargetApps}. Users who only ever use one surface are the cheapest group to
@@ -1217,9 +1236,10 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 result on a 0-100 scale whatever the weights are set to:
               </Text>
               <div className={styles.formula}>
-                {`frequency = min(1, activeDays / expectedActiveDays)\n` +
-                  `depth     = min(1, (interactions / activeDays) / ${o.depthTargetInteractionsPerActiveDay})\n` +
-                  `breadth   = min(1, appsUsed / ${o.breadthTargetApps})\n\n` +
+                {`frequency  = min(1, activeDays / expectedActiveDays)\n` +
+                  `confidence = min(1, activeDays / ${o.depthMinActiveDays})\n` +
+                  `depth      = min(1, (interactions / activeDays) / ${o.depthTargetInteractionsPerActiveDay}) x confidence\n` +
+                  `breadth    = min(1, appsUsed / ${o.breadthTargetApps})\n\n` +
                   `score = (frequency x ${o.frequencyWeight} + depth x ${o.depthWeight} + breadth x ${o.breadthWeight})\n` +
                   `        / ${weightSum} x 100`}
               </div>
@@ -1234,7 +1254,9 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                     100,
                 )}{' '}
                 - deep but narrow and intermittent, which is why the recommended action for that profile is to
-                broaden rather than to train.
+                broaden rather than to train. (Half of {frequencyTargetDays} days is at or above{' '}
+                {o.depthMinActiveDays}, so the depth confidence factor is 1 here and does not change the
+                number.)
               </Text>
             </div>
           </AccordionPanel>
@@ -1314,8 +1336,19 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
             <div className={styles.method}>
               <Text>
                 Unlicensed users are scored out of 100 on four weighted signals, with the weighting set so that
-                evidence beats inference. Anyone reaching {o.opportunityRecommendScore} is counted as a
-                recommended candidate.
+                evidence beats inference. There are two routes to being recommended, and each row says which
+                one it took. <strong>Proven demand</strong> is {o.opportunityProvenDemandMinActiveDays} or more
+                distinct days of unlicensed Copilot use, and qualifies on its own whatever the score.{' '}
+                <strong>Workload inferred</strong> is a score of {o.opportunityRecommendScore} or above.
+              </Text>
+              <Text>
+                Proven demand has to qualify on its own, because the Copilot signal is worth{' '}
+                {o.opportunityUnlicensedCopilotWeight} and the score bar is {o.opportunityRecommendScore}: the
+                one signal that actually <em>proves</em> demand for Copilot could never clear the bar unaided,
+                while general Microsoft 365 busyness (
+                {o.opportunityCollaborationWeight + o.opportunityEmailWeight + o.opportunityDocumentWeight})
+                could. Proven-demand candidates are also ranked first, so they cannot be pushed out of the list
+                by people who have never opened Copilot.
               </Text>
               <Text>
                 <strong>
@@ -1332,13 +1365,24 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 heavy knowledge workers who would benefit but have never had the chance to try it.
               </Text>
               <div className={styles.formula}>
-                {`copilot   = min(1, unlicensedCopilotInteractions / ${o.opportunityCopilotTarget})\n` +
+                {`copilot   = min(1, unlicensedCopilotInteractions / ${opportunityCopilotTargetForWindow})\n` +
                   `collab    = min(1, (teamsMessages + teamsMeetings) / ${o.opportunityCollaborationTarget})\n` +
                   `email     = min(1, (emailsSent + emailsRead) / ${o.opportunityEmailTarget})\n` +
                   `documents = min(1, filesViewedOrEdited / ${o.opportunityDocumentTarget})\n\n` +
                   `score = copilot x ${o.opportunityUnlicensedCopilotWeight} + collab x ${o.opportunityCollaborationWeight}` +
-                  ` + email x ${o.opportunityEmailWeight} + documents x ${o.opportunityDocumentWeight}`}
+                  ` + email x ${o.opportunityEmailWeight} + documents x ${o.opportunityDocumentWeight}\n\n` +
+                  `recommended when unlicensedCopilotActiveDays >= ${o.opportunityProvenDemandMinActiveDays}` +
+                  ` (proven demand)\n` +
+                  `               or score >= ${o.opportunityRecommendScore} (workload inferred)`}
               </div>
+              <Text>
+                The Copilot target is {o.opportunityCopilotTarget} interactions per{' '}
+                {o.opportunityCopilotTargetBasisDays} days, scaled to the {o.windowDays}-day period selected
+                above - {opportunityCopilotTargetForWindow} here. It is the only one of the four that is a raw
+                total rather than a per-active-day average, so without that scaling the same person would be
+                recommended over a long period and not over a short one, purely because the reader changed the
+                drop-down.
+              </Text>
               <Text>
                 Each signal is capped at its target before weighting, which matters: without the cap a single
                 extremely noisy mailbox would clear the threshold on email alone. As the weights stand, a user
@@ -1347,8 +1391,7 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 o.opportunityRecommendScore
                   ? 'more than one'
                   : 'every'}{' '}
-                Microsoft 365 workload to be recommended, whereas proven Copilot use plus one heavy workload
-                gets there on its own.
+                Microsoft 365 workload to be recommended.
               </Text>
               <Text>
                 Disabled accounts are excluded from the candidate list. They are, however, kept in the licensed
@@ -1568,11 +1611,15 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
           summary.neverUsedUsers,
         )} never used + ${formatCount(summary.dormantUsers)} dormant + ${formatCount(
           summary.reclaimSeatsFromActiveBands,
-        )} disabled-but-active = ${formatCount(summary.reclaimableSeats)} reclaimable + ${formatCount(
-          summary.reclaimSeatsHeldBackForWindowMismatch,
-        )} held back for window mismatch + ${formatCount(
+        )} disabled-but-active = ${formatCount(summary.reclaimableSeats)} reclaimable${
+          summary.reclaimSeatsHeldBackForWindowMismatch > 0
+            ? ` + ${formatCount(
+                summary.reclaimSeatsHeldBackForWindowMismatch,
+              )} held back for window mismatch`
+            : ''
+        } + ${formatCount(
           summary.reclaimSeatsHeldBackForReview,
-        )} held back for review.`,
+        )} held back for review or exclusion.`,
         source:
           'Drill through on the Licensed users tab with the Reclaim tier filter; each tier uses the same reclaimEligibility key counted here. Expired exclusions are shown for re-review rather than silently honoured forever.',
       },
@@ -1584,9 +1631,11 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
       hint: 'Disabled accounts still holding a Copilot licence',
       tone: summary.disabledLicensedUsers > 0 ? 'critical' : 'good',
       info: {
-        what: 'Copilot seats assigned to disabled Entra accounts. This is the zero-risk reclaim population.',
-        how: 'Counted from licensed-user rows where accountEnabled is false. Admin exclusions remain visible separately and do not remove the user from the licensed denominator.',
-        formula: `${formatCount(summary.disabledLicensedUsers)} disabled licensed account(s)`,
+        what: 'Copilot seats assigned to disabled Entra accounts. This is the raw inventory, not the actionable total: any of these that an administrator has excluded from reclaim are still counted here but are not in Reclaimable licences.',
+        how: 'Counted from licensed-user rows where accountEnabled is false, including admin-excluded ones. Admin exclusions remain visible separately and do not remove the user from the licensed denominator.',
+        formula: `${formatCount(summary.disabledLicensedUsers)} disabled licensed account(s), of which ${formatCount(
+          summary.reclaimCertainSeats,
+        )} are certain reclaims; the difference is admin-excluded.`,
         source: 'Requires the Graph user metadata import to have populated accountEnabled.',
       },
     },
@@ -1654,9 +1703,9 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
     hint: 'Heavy Microsoft 365 users with a strong business case',
     tone: 'opportunity',
     info: {
-      what: `Unlicensed users whose business-case score reached ${o.opportunityRecommendScore} out of 100.`,
-      how: `Four weighted signals: already using Copilot Chat without a licence (${o.opportunityUnlicensedCopilotWeight} points, the heaviest because it is evidence rather than inference), Teams collaboration (${o.opportunityCollaborationWeight}), email volume (${o.opportunityEmailWeight}) and document work (${o.opportunityDocumentWeight}). Each is a capped ratio against its own target, so no single workload can carry someone over the threshold alone.`,
-      formula: `recommended when score >= ${o.opportunityRecommendScore}`,
+      what: `Unlicensed users recommended for a licence - either because they already use Copilot on at least ${o.opportunityProvenDemandMinActiveDays} distinct days without one (proven demand), or because their business-case score reached ${o.opportunityRecommendScore} out of 100 (workload inferred).`,
+      how: `Four weighted signals: already using Copilot Chat without a licence (${o.opportunityUnlicensedCopilotWeight} points, the heaviest because it is evidence rather than inference), Teams collaboration (${o.opportunityCollaborationWeight}), email volume (${o.opportunityEmailWeight}) and document work (${o.opportunityDocumentWeight}). Each is a capped ratio against its own target, so no single workload can carry someone over the threshold alone. Proven demand qualifies on its own because the Copilot weight sits below the score bar, so recurrent unlicensed use could otherwise never clear it while general Microsoft 365 busyness could.`,
+      formula: `recommended when unlicensedCopilotActiveDays >= ${o.opportunityProvenDemandMinActiveDays} or score >= ${o.opportunityRecommendScore}`,
       source:
         'Disabled accounts, and users with no recorded activity at all, are excluded. The Microsoft 365 activity signals are a per-active-day average across the period selected above, taken from Microsoft\u2019s daily usage reports - see the "Licence opportunities" tab for each candidate\u2019s justification.',
     },

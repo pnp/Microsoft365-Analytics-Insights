@@ -12,6 +12,51 @@ using System.Threading.Tasks;
 namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
     /// <summary>
+    /// The <c>/users/delta</c> query this product tracks users with, and the version stamp that pins it.
+    /// </summary>
+    /// <remarks>
+    /// Microsoft Graph fixes the <c>$select</c> when a delta token is first minted: a stored token
+    /// continues the cycle it was created for, so widening the selection later does NOT start returning
+    /// the new property to a tenant that already has one. That makes every <c>$select</c> change a
+    /// breaking change for existing deployments unless the stored token is invalidated with it.
+    ///
+    /// <para>
+    /// <see cref="SelectVersion"/> is part of the delta-token cache key, so bumping it discards the
+    /// stored token and the next import performs one full enumeration under the new selection. That is
+    /// the only thing that makes a newly selected property arrive for users who have not otherwise
+    /// changed - and those are the overwhelming majority on an established tenant.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Bump <see cref="SelectVersion"/> in the same change that edits <see cref="Select"/>.</b>
+    /// Forgetting it does not fail anywhere: the import keeps running, the new column simply stays
+    /// empty forever on every upgraded tenant while looking correct on a fresh install. v2 added
+    /// <c>createdDateTime</c> for the Copilot Adoption seat-tenure proxy.
+    /// </para>
+    /// </remarks>
+    public static class GraphUserDeltaQuery
+    {
+        /// <summary>Bump whenever <see cref="Select"/> changes. Part of the delta-token cache key.</summary>
+        public const string SelectVersion = "v2";
+
+        /// <summary>
+        /// Properties tracked for user changes.
+        /// </summary>
+        /// <remarks>
+        /// assignedLicenses / assignedPlans are here as defence-in-depth so that a user whose ONLY
+        /// change is a licence assignment is still surfaced by /users/delta on subsequent runs. The
+        /// primary correctness guarantee for licence counts comes from UserMetadataUpdater /
+        /// UserLicenseProcessor processing the full DB user population each run, not just delta users.
+        ///
+        /// createdDateTime is Entra's immutable account-creation timestamp, used by Copilot Adoption as
+        /// the seat-tenure proxy until real licence-assignment history exists.
+        /// </remarks>
+        public const string Select =
+            "id,accountEnabled,createdDateTime,officeLocation,usageLocation,jobTitle,department,mail,"
+            + "userPrincipalName,manager,companyName,postalCode,country,state,assignedLicenses,assignedPlans";
+    }
+
+    /// <summary>
     /// Graph API implementation of user metadata loader
     /// </summary>
     public class GraphUserLoader : IUserMetadataLoader
@@ -45,17 +90,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             // Cache delta using tenant ID
             var usersQueryDelta = await _deltaValueProvider.GetDeltaToken();
-            // assignedLicenses / assignedPlans are added to $select as defence-in-depth
-            // so that a user whose ONLY change is a licence assignment will still be
-            // surfaced by /users/delta on subsequent runs. The primary correctness
-            // guarantee for licence counts now comes from UserMetadataUpdater /
-            // UserLicenseProcessor processing the full DB user population each run
-            // (not just delta users) - selecting these fields here is a belt-and-
-            // braces measure: without them, Graph would not flag a user as changed
-            // when only their licence assignments were updated, even though those
-            // are tracked properties on the underlying user object.
             var initialDeltaUrl = $"https://graph.microsoft.com:443/v1.0/users/delta" +
-                "?$select=id,accountEnabled,createdDateTime,officeLocation,usageLocation,jobTitle,department,mail,userPrincipalName,manager,companyName,postalCode,country,state,assignedLicenses,assignedPlans" +
+                $"?$select={GraphUserDeltaQuery.Select}" +
                 "&$expand=manager";
             if (!string.IsNullOrEmpty(usersQueryDelta))
             {

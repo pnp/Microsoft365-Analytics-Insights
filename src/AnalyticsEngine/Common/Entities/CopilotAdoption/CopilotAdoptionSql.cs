@@ -364,7 +364,11 @@ namespace Common.Entities.CopilotAdoption
                 "       manager.user_name AS ManagerUserPrincipalName,\r\n" +
                 "       u.account_enabled AS AccountEnabled,\r\n" +
                 "       u.created_utc AS AccountCreatedUtc,\r\n" +
-                "       exclusion.reason AS ReclaimExclusionReason,\r\n" +
+                // A blank reason must still count as an exclusion. The tier is decided by whether this
+                // column has text, so an exclusion row saved with an empty reason would otherwise be
+                // silently ignored and the seat would be offered for reclaim - the exact opposite of
+                // what the administrator recorded.
+                "       ISNULL(NULLIF(LTRIM(RTRIM(exclusion.reason)), N''), CASE WHEN exclusion.excluded_utc IS NULL THEN NULL ELSE N'(no reason recorded)' END) AS ReclaimExclusionReason,\r\n" +
                 "       exclusion.note AS ReclaimExclusionNote,\r\n" +
                 "       exclusion.excluded_by AS ReclaimExcludedBy,\r\n" +
                 "       exclusion.excluded_utc AS ReclaimExcludedUtc,\r\n" +
@@ -373,7 +377,9 @@ namespace Common.Entities.CopilotAdoption
                 // whose review date has passed, so a user who was excluded, allowed to lapse, and then
                 // excluded again would otherwise be reported as both currently excluded and expired -
                 // inflating the "needs re-review" count with cases an admin has already dealt with.
-                "       CAST(CASE WHEN expired.user_id IS NOT NULL AND exclusion.reason IS NULL THEN 1 ELSE 0 END AS bit) AS ReclaimExclusionExpired,\r\n" +
+                // Keyed on excluded_utc (NOT NULL in the table) rather than reason, so presence is
+                // tested rather than content.
+                "       CAST(CASE WHEN expired.user_id IS NOT NULL AND exclusion.excluded_utc IS NULL THEN 1 ELSE 0 END AS bit) AS ReclaimExclusionExpired,\r\n" +
                 "       CAST(ISNULL(chats.Interactions, 0) AS bigint) AS Interactions,\r\n" +
                 "       CAST(ISNULL(chats.PriorInteractions, 0) AS bigint) AS PriorInteractions,\r\n" +
                 "       ISNULL(chats.ActiveDays, 0) AS ActiveDays,\r\n" +

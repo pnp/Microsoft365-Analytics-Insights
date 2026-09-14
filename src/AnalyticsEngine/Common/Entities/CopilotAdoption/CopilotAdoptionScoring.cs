@@ -93,15 +93,30 @@ namespace Common.Entities.CopilotAdoption
         /// early-tenure case is prorated; established users still use the full-window target so the
         /// metric remains comparable across the population.
         /// </summary>
+        /// <remarks>
+        /// Prorated against the REPORTING WINDOW, not against <see cref="CopilotAdoptionOptions.ReclaimGraceDays"/>.
+        /// Those are different questions: the grace period decides whether an idle seat is too new to
+        /// reclaim, while this decides how many active days it was even possible for the person to have.
+        /// Tying the proration to the grace period put a cliff at exactly the grace boundary on any
+        /// window longer than it - on a 180-day report a 29-day-old account was measured against about
+        /// 13 active days and a 30-day-old one against 77, so somebody who had used Copilot every
+        /// working day since joining was scored as a light user for having existed one day longer. At
+        /// the default 28-day window the two rules coincide exactly, so nothing changes there.
+        /// </remarks>
         public static double TargetActiveDaysForTenure(LicensedUserUsageRow row, DateTime nowUtc, CopilotAdoptionOptions options)
         {
             var o = options ?? CopilotAdoptionOptions.Default;
             var target = TargetActiveDays(o);
             var days = DaysSinceTenureStart(row?.AccountCreatedUtc, nowUtc);
-            if (!days.HasValue || days.Value >= Math.Max(1, o.ReclaimGraceDays)) return target;
+            if (!days.HasValue) return target;
 
-            var observedDays = Math.Max(1, Math.Min(Math.Max(1, o.WindowDays), days.Value + 1));
-            return Math.Max(1d, target * observedDays / Math.Max(1, o.WindowDays));
+            var windowDays = Math.Max(1, o.WindowDays);
+            // "days since creation" counts whole days, so an account created today has been available
+            // for one day of the window, not zero.
+            var observedDays = Math.Max(1, Math.Min(windowDays, days.Value + 1));
+            if (observedDays >= windowDays) return target;
+
+            return Math.Max(1d, target * observedDays / windowDays);
         }
 
         /// <summary>Whole days since the tenure proxy started, clamped to zero for clock skew.</summary>
@@ -521,8 +536,14 @@ namespace Common.Entities.CopilotAdoption
                     var since = row.DaysSinceLastUse.HasValue
                         ? $"last used it {row.DaysSinceLastUse.Value} days ago"
                         : "has used it in the past";
+                    // The action is enablement ("win back"), but the seat decision for a dormant row is
+                    // review-only - there is still somebody to talk to. Saying "or reassign the licence"
+                    // without that caveat reads as permission to reclaim, which contradicts the tier the
+                    // same row carries.
                     return $"Win back - {since} but not once in this period. "
-                         + "Ask what stopped and offer a refresher, or reassign the licence.";
+                         + "Ask what stopped and offer a refresher. This seat is review-only for reclaim: "
+                         + "check with the user or their manager before reassigning it, because leave, "
+                         + "part-time patterns and role changes are not visible in usage data.";
 
                 case AdoptionBand.Trialling:
                     return "Build a first habit - occasional use only. Target one repeatable Copilot habit in "

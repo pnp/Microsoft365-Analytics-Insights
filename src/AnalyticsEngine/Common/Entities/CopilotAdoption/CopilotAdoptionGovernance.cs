@@ -114,21 +114,40 @@ namespace Common.Entities.CopilotAdoption
         public static List<LicensedUserAdoptionRow> Pseudonymise(
             IEnumerable<LicensedUserAdoptionRow> rows, CopilotAdoptionGovernanceSettings settings)
         {
-            return (rows ?? Enumerable.Empty<LicensedUserAdoptionRow>())
-                .Select(r => Pseudonymise(r, settings))
-                .ToList();
+            // One hash instance for the whole batch. A new SHA256 per row is a disposable object and a
+            // native handle each time, and this runs over the entire scored population on every request
+            // that is not served from the result cache - up to MaxLicensedUsersScored rows, before any
+            // filtering or paging.
+            using (var sha = SHA256.Create())
+            {
+                return (rows ?? Enumerable.Empty<LicensedUserAdoptionRow>())
+                    .Select(r => Pseudonymise(r, settings, sha))
+                    .ToList();
+            }
         }
 
         public static List<LicenceOpportunityRow> Pseudonymise(
             IEnumerable<LicenceOpportunityRow> rows, CopilotAdoptionGovernanceSettings settings)
         {
-            return (rows ?? Enumerable.Empty<LicenceOpportunityRow>())
-                .Select(r => Pseudonymise(r, settings))
-                .ToList();
+            using (var sha = SHA256.Create())
+            {
+                return (rows ?? Enumerable.Empty<LicenceOpportunityRow>())
+                    .Select(r => Pseudonymise(r, settings, sha))
+                    .ToList();
+            }
         }
 
         public static LicensedUserAdoptionRow Pseudonymise(
             LicensedUserAdoptionRow r, CopilotAdoptionGovernanceSettings settings)
+        {
+            using (var sha = SHA256.Create())
+            {
+                return Pseudonymise(r, settings, sha);
+            }
+        }
+
+        private static LicensedUserAdoptionRow Pseudonymise(
+            LicensedUserAdoptionRow r, CopilotAdoptionGovernanceSettings settings, SHA256 sha)
         {
             if (r == null) return null;
 
@@ -147,7 +166,7 @@ namespace Common.Entities.CopilotAdoption
             // decision cannot be skipped by accident.
             var copy = r.ShallowCopy();
 
-            copy.UserPrincipalName = Surrogate(r.UserId, r.UserPrincipalName, settings);
+            copy.UserPrincipalName = Surrogate(r.UserId, r.UserPrincipalName, settings, sha);
             copy.Mail = null;
             copy.JobTitle = null;
             copy.OfficeLocation = null;
@@ -170,12 +189,21 @@ namespace Common.Entities.CopilotAdoption
         public static LicenceOpportunityRow Pseudonymise(
             LicenceOpportunityRow r, CopilotAdoptionGovernanceSettings settings)
         {
+            using (var sha = SHA256.Create())
+            {
+                return Pseudonymise(r, settings, sha);
+            }
+        }
+
+        private static LicenceOpportunityRow Pseudonymise(
+            LicenceOpportunityRow r, CopilotAdoptionGovernanceSettings settings, SHA256 sha)
+        {
             if (r == null) return null;
 
             // Clone then redact - see the note on the licensed-user overload above.
             var copy = r.ShallowCopy();
 
-            copy.UserPrincipalName = Surrogate(r.UserId, r.UserPrincipalName, settings);
+            copy.UserPrincipalName = Surrogate(r.UserId, r.UserPrincipalName, settings, sha);
             copy.Mail = null;
             copy.JobTitle = null;
             copy.OfficeLocation = null;
@@ -202,7 +230,7 @@ namespace Common.Entities.CopilotAdoption
         };
 
         private static string Surrogate(
-            int userId, string userPrincipalName, CopilotAdoptionGovernanceSettings settings)
+            int userId, string userPrincipalName, CopilotAdoptionGovernanceSettings settings, SHA256 sha)
         {
             var input = string.Format(
                 "{0}|{1}|{2}",
@@ -210,17 +238,14 @@ namespace Common.Entities.CopilotAdoption
                 userId,
                 userPrincipalName ?? string.Empty);
 
-            using (var sha = SHA256.Create())
+            var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(input));
+            var sb = new StringBuilder(12);
+            for (var i = 0; i < 6; i++)
             {
-                var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(input));
-                var sb = new StringBuilder(12);
-                for (var i = 0; i < 6; i++)
-                {
-                    sb.Append(bytes[i].ToString("x2"));
-                }
-
-                return "User " + sb;
+                sb.Append(bytes[i].ToString("x2"));
             }
+
+            return "User " + sb;
         }
     }
 

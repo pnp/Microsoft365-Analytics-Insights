@@ -2010,6 +2010,54 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void TenureProration_HasNoCliffAtTheGracePeriodOnALongWindow()
+        {
+            // Proration answers "how many active days could this person even have had?", which depends
+            // on the reporting window - not on the reclaim grace period, which answers the different
+            // question "is this seat too new to take away?".
+            //
+            // Tying the two together put a cliff at the grace boundary on every window longer than it:
+            // on a 180-day report a 29-day-old account was measured against about 13 active days and a
+            // 30-day-old one against 77, so somebody using Copilot every working day since joining was
+            // scored as a light user for having existed one day longer.
+            foreach (var windowDays in new[] { 7, 28, 90, 180 })
+            {
+                var options = new CopilotAdoptionOptions { WindowDays = windowDays };
+                var fullTarget = CopilotAdoptionScoring.TargetActiveDays(options);
+                // Seeded from age 0, not from zero: the target has a deliberate floor of 1 active day,
+                // so the very first value is a floor rather than a step.
+                var previous = CopilotAdoptionScoring.TargetActiveDaysForTenure(
+                    new LicensedUserUsageRow { AccountCreatedUtc = Now }, Now, options);
+
+                for (var age = 1; age <= windowDays + 5; age++)
+                {
+                    var row = new LicensedUserUsageRow { AccountCreatedUtc = Now.AddDays(-age) };
+                    var target = CopilotAdoptionScoring.TargetActiveDaysForTenure(row, Now, options);
+
+                    Assert.IsTrue(target >= previous,
+                        $"D{windowDays}: the expected-active-days target must never fall as an account gets older (age {age}).");
+
+                    Assert.IsTrue(target <= fullTarget + 0.001,
+                        $"D{windowDays}: proration must never exceed the full-window target (age {age}).");
+
+                    // No step bigger than one window-day's worth of target. A cliff shows up here.
+                    var maxStep = (fullTarget / windowDays) + 0.001;
+                    Assert.IsTrue(target - previous <= maxStep,
+                        $"D{windowDays}: target jumped from {previous} to {target} at age {age} - that is a cliff, not proration.");
+
+                    previous = target;
+                }
+
+                var established = new LicensedUserUsageRow { AccountCreatedUtc = Now.AddDays(-(windowDays + 1)) };
+                Assert.AreEqual(
+                    CopilotAdoptionScoring.TargetActiveDays(options),
+                    CopilotAdoptionScoring.TargetActiveDaysForTenure(established, Now, options),
+                    0.001,
+                    $"D{windowDays}: an account older than the window must use the full target, so the metric stays comparable.");
+            }
+        }
+
+        [TestMethod]
         public void Opportunities_RankProvenDemandAboveAHigherScoringInferredCandidate()
         {
             // The SQL sorts proven-demand candidates into the row cap first; sorting on score alone in
@@ -2057,8 +2105,13 @@ namespace Tests.UnitTests
 
             StringAssert.Contains(
                 sql,
-                "CASE WHEN expired.user_id IS NOT NULL AND exclusion.reason IS NULL THEN 1 ELSE 0 END",
+                "CASE WHEN expired.user_id IS NOT NULL AND exclusion.excluded_utc IS NULL THEN 1 ELSE 0 END",
                 "ReclaimExclusionExpired must be false while an active exclusion exists for the same user.");
+
+            StringAssert.Contains(
+                sql,
+                "NULLIF(LTRIM(RTRIM(exclusion.reason)), N'')",
+                "A blank reason must still count as an exclusion, or the seat is offered for reclaim anyway.");
         }
 
         [TestMethod]

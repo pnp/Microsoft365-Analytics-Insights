@@ -127,6 +127,7 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Breadth weight", o.BreadthWeight, "Share from number of Copilot surfaces used.");
             AddMeta(sheet, "Frequency target", o.FrequencyTargetRatio, "Share of working days needed for full marks.");
             AddMeta(sheet, "Depth target", o.DepthTargetInteractionsPerActiveDay, "Interactions per active day for full marks.");
+            AddMeta(sheet, "Depth minimum active days", o.DepthMinActiveDays, "Below this many active days the depth component is scaled down in proportion, so one busy afternoon cannot read as a habit.");
             AddMeta(sheet, "Breadth target", o.BreadthTargetApps, "Copilot surfaces for full marks.");
             AddMeta(sheet, "Champion at", o.ChampionScore, "Engagement score for the Champion band.");
             AddMeta(sheet, "Established at", o.EstablishedScore, "The 'habit formed' line - what 'habitual users' counts.");
@@ -205,7 +206,7 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Never used", summary.NeverUsedUsers,
                 $"No Copilot activity anywhere in the last {summary.Options.HistoryDays} days. Needs onboarding, or the licence back.");
             AddMeta(sheet, "Disabled accounts with licences", summary.DisabledLicensedUsers,
-                "Zero-risk reclaim: the account is disabled but still holds a Copilot seat.");
+                "The raw inventory of disabled accounts still holding a Copilot seat, including any an admin has excluded from reclaim. The actionable subset is the certain tier below.");
             AddMeta(sheet, "Reclaimable licences", summary.ReclaimableSeats,
                 summary.UsageReportWindowMismatch
                     ? "Certain plus probable reclaim, minus rows scored from Microsoft's usage report because its pinned period does not match this analysis window. Excludes admin exclusions and review-only cases; leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from usage data."
@@ -222,8 +223,8 @@ namespace Common.Entities.CopilotAdoption
                 "Previously excluded seats whose review-after date has passed and should be looked at again.");
             // The two hold-backs and the disabled-but-active term, so the reader can add the reclaim
             // figures up against the band breakdown and land exactly on it.
-            AddMeta(sheet, "Held back - review or excluded", summary.ReclaimSeatsHeldBackForReview,
-                "Never-used or dormant seats kept out of the reclaimable total because a human has to look at them first.");
+            AddMeta(sheet, "Held back - review or exclusion", summary.ReclaimSeatsHeldBackForReview,
+                "Never-used or dormant seats kept out of the reclaimable total because a human has to look at them first, or because an admin has already excluded them.");
             AddMeta(sheet, "Held back - report window mismatch", summary.ReclaimSeatsHeldBackForWindowMismatch,
                 "Seats kept out of the reclaimable total because they were scored from Microsoft's usage report over a period that is not this analysis window.");
             AddMeta(sheet, "Reclaimable but still active", summary.ReclaimSeatsFromActiveBands,
@@ -1031,10 +1032,14 @@ namespace Common.Entities.CopilotAdoption
                 "Each licensed user scores 0-100 from three capped components, because 'did they use Copilot?' is "
                 + "almost never a yes/no question - someone who opened it twice and someone who lives in it produce "
                 + "the same 'active user' count and need opposite responses.\n"
-                + $"frequency = min(1, activeDays / {targetDays})\n"
-                + $"depth = min(1, (interactions / activeDays) / {o.DepthTargetInteractionsPerActiveDay})\n"
-                + $"breadth = min(1, appsUsed / {o.BreadthTargetApps})\n"
-                + $"score = (frequency x {o.FrequencyWeight} + depth x {o.DepthWeight} + breadth x {o.BreadthWeight}) / {weightSum} x 100");
+                + $"frequency  = min(1, activeDays / {targetDays})\n"
+                + $"confidence = min(1, activeDays / {o.DepthMinActiveDays})\n"
+                + $"depth      = min(1, (interactions / activeDays) / {o.DepthTargetInteractionsPerActiveDay}) x confidence\n"
+                + $"breadth    = min(1, appsUsed / {o.BreadthTargetApps})\n"
+                + $"score = (frequency x {o.FrequencyWeight} + depth x {o.DepthWeight} + breadth x {o.BreadthWeight}) / {weightSum} x 100\n"
+                + $"Depth is scaled down below {o.DepthMinActiveDays} active days, because it divides by a number "
+                + "the user controls: a handful of prompts in one afternoon would otherwise score full marks for "
+                + "depth and read as a habit forming. At or above that many active days nothing changes.");
 
             AddMethod(sheet, "Why working days",
                 $"The frequency target is {o.FrequencyTargetRatio:P0} of the working days in the period, assuming "
@@ -1075,7 +1080,7 @@ namespace Common.Entities.CopilotAdoption
                 // per-active-day averages. It is scaled from its basis period to the window actually
                 // analysed, so the method sheet has to quote the scaled figure or it cannot reproduce
                 // the scores on the opportunities sheet at any window other than the default.
-                + $"copilot = min(1, unlicensedCopilotInteractions / {CopilotAdoptionScoring.OpportunityCopilotTargetForWindow(o)}) x {o.OpportunityUnlicensedCopilotWeight}\n"
+                + $"copilot = min(1, unlicensedCopilotInteractions / {Math.Round(CopilotAdoptionScoring.OpportunityCopilotTargetForWindow(o), 1)}) x {o.OpportunityUnlicensedCopilotWeight}\n"
                 + $"collaboration = min(1, (teamsMessages + teamsMeetings) / {o.OpportunityCollaborationTarget}) x {o.OpportunityCollaborationWeight}\n"
                 + $"email = min(1, (emailsSent + emailsRead) / {o.OpportunityEmailTarget}) x {o.OpportunityEmailWeight}\n"
                 + $"documents = min(1, filesViewedOrEdited / {o.OpportunityDocumentTarget}) x {o.OpportunityDocumentWeight}\n"

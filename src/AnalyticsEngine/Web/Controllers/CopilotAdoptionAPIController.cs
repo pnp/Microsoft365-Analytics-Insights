@@ -364,17 +364,19 @@ namespace Web.AnalyticsWeb.Controllers
             var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
             if (analysis == null) return StillBuilding();
 
-            var licensedUsers = GovernedRows(analysis.LicensedUsers, governance);
-            var opportunities = GovernedRows(analysis.Opportunities, governance);
-
+            // Deliberately NOT pseudonymised. This endpoint returns only department and country, which
+            // are cohort columns the redaction carries through unchanged - so pseudonymising first
+            // would clone the whole scored population and hash every row to produce a byte-identical
+            // answer. At the 200,000-user design point that is a large per-request cost for nothing.
+            // The role check above is what protects this endpoint; the redaction has nothing to remove.
             return Ok(new
             {
                 departments = Distinct(
-                    licensedUsers.Select(u => u.Department)
-                        .Concat(opportunities.Select(o => o.Department))),
+                    analysis.LicensedUsers.Select(u => u.Department)
+                        .Concat(analysis.Opportunities.Select(o => o.Department))),
                 countries = Distinct(
-                    licensedUsers.Select(u => u.Country)
-                        .Concat(opportunities.Select(o => o.Country))),
+                    analysis.LicensedUsers.Select(u => u.Country)
+                        .Concat(analysis.Opportunities.Select(o => o.Country))),
                 bands = CopilotAdoptionScoring.AllBands
                     .Select(b => new { value = (int)b, name = CopilotAdoptionScoring.BandDisplayName(b) })
                     .ToList(),
