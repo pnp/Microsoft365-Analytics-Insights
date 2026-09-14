@@ -36,8 +36,8 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />
     <PackageReference Include="Microsoft.Graph" Version="6.5.0" />
-    <PackageReference Include="MSTest.TestAdapter" Version="3.8.3" />
-    <PackageReference Include="MSTest.TestFramework" Version="3.8.3" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.11" />
+    <PackageReference Include="MSTest.TestAdapter" Version="3.8.3" />    <PackageReference Include="MSTest.TestFramework" Version="3.8.3" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.22.0" />
     <PackageReference Include="System.IO.Packaging" Version="10.0.11" />
@@ -89,19 +89,6 @@
     <Compile Include="..\Tests.FakeDataGen\Demo\SqlExistingDemoDatabase.cs" />
     <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotAdoptionPersonas.cs" />
     <Compile Include="..\Tests.FakeDataGen\Seeding\SeedDataCatalogue.cs" />
-  </ItemGroup>
-
-  <!-- These two host the licence-activity API in memory using Web API 2's HttpServer, which has no
-       .NET 10 equivalent. Porting them means rebuilding the harness on
-       Microsoft.AspNetCore.Mvc.Testing / WebApplicationFactory - worth doing, but it is a rewrite of
-       the harness rather than part of the framework move, so it is tracked separately (#516).
-       Everything else in the suite runs on .NET 10. -->
-  <ItemGroup>
-    <Compile Remove="LicenceActivityHttpHost.cs" />
-    <Compile Remove="LicenceActivityApiTests.cs" />
-    <Compile Remove="LicenceActivityLoadTests.cs" />
-    <Compile Remove="LicenceActivityPerformanceTests.cs" />
-    <Compile Remove="LicenceActivityReadModelCacheTests.cs" />
   </ItemGroup>
 
   <!-- Configuration comes from appsettings.json plus environment variables (and user secrets

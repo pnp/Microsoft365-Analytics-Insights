@@ -349,7 +349,7 @@ SELECT CASE WHEN EXISTS (
                 {
                     if (existingWebUrls.Add(definition.Url))
                     {
-                        db.webs.Add(new Web
+                        db.webs.Add(new Common.Entities.Web
                         {
                             url_base = definition.Url,
                             title = definition.Title,
@@ -715,7 +715,9 @@ SELECT CASE WHEN EXISTS (
             public Dictionary<string, SPEventFileExtension> FileExtensions { get; set; }
             public Dictionary<string, SPEventFileName> FileNames { get; set; }
             public Dictionary<string, Url> Urls { get; set; }
-            public Dictionary<string, Web> Webs { get; set; }
+            // Fully qualified: the portal assembly's `Web` NAMESPACE arrives here transitively via
+            // Tests.UnitTests (extern aliases are not transitive), so the bare type name is ambiguous.
+            public Dictionary<string, Common.Entities.Web> Webs { get; set; }
             public Dictionary<string, SPEventType> EventTypes { get; set; }
         }
 

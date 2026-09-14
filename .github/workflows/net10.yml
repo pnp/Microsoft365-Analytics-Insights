@@ -169,6 +169,10 @@ jobs:
             'App.ControlPanel\App.ControlPanel.WinForms.csproj'
             'Web\Web.csproj'
             'Tests.UnitTests\Tests.UnitTests.csproj'
+            # Builds only because every project it references is now .NET 10. It was left on net48
+            # during the port and so could not restore at all (NU1201) - a breakage nothing caught,
+            # because it is the one project no other project references.
+            'Tests.FakeDataGen\Tests.FakeDataGen.csproj'
           )
 
           $failed = @()
@@ -194,17 +198,33 @@ jobs:
           Start-Sleep -Seconds 3
           & "$env:RUNNER_TEMP\redis\redis-cli.exe" ping
 
-      # Hard gate, unlike the full suite below. These two classes assert invariants that no service
-      # or credential is needed to check, so a failure here is always a real regression and must fail
-      # the job. Without this they would be swallowed by the warning-only step that follows - and the
-      # NLS setting they guard lives in a file that was, briefly, gitignored, which is exactly the
-      # kind of "green CI, missing fix" combination this exists to prevent.
-      - name: Check configuration and collation invariants
+      # Hard gate, unlike the full suite below. These classes assert invariants that need no service
+      # or credential, so a failure is always a real regression and must fail the job. Without this
+      # they would be swallowed by the warning-only step that follows - and two of the things they
+      # guard (the NLS setting, and 22 tests that spent the port excluded from the build) are exactly
+      # the kind of thing that goes missing without anything turning red. Runs in about a second.
+      - name: Check configuration, collation and API invariants
         shell: pwsh
         run: |
           dotnet test src\AnalyticsEngine\Tests.UnitTests\Tests.UnitTests.csproj `
             -c Release --no-build --nologo `
-            --filter "FullyQualifiedName~ConfigurationSourceTests|FullyQualifiedName~ObjectByIdCacheCollationTests"
+            --filter "FullyQualifiedName~ConfigurationSourceTests|FullyQualifiedName~ObjectByIdCacheCollationTests|FullyQualifiedName~AuthRequestRulesTests|FullyQualifiedName~LicenceActivityApiTests|FullyQualifiedName~LicenceActivityLoadHarnessTests|FullyQualifiedName~LicenceActivityReadModelCacheTests"
+
+      # Guards the demo generator's entry point. Building it proves nothing about whether it RUNS:
+      # the project's move to an SDK-style csproj added a target-framework folder to the output path
+      # and silently invalidated the literal path Verify-DemoCommand.ps1 used to locate the exe.
+      # Deliberately only `demo --help` rather than the full Verify-DemoCommand.ps1, which provisions
+      # real LocalDB databases - too slow and too failure-prone for every push, while this catches the
+      # class of breakage that actually occurred.
+      - name: Smoke-test the demo data generator
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path "src\AnalyticsEngine\Tests.FakeDataGen\bin\Release" -Filter 'Tests.FakeDataGen.exe' -Recurse |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $exe) { throw "Tests.FakeDataGen.exe was not produced by the build." }
+          Write-Host "Found $exe"
+          & $exe demo --help 2>&1 | Out-String | Write-Host
+          if ($LASTEXITCODE -ne 0) { throw "demo --help exited $LASTEXITCODE" }
 
       - name: Run the unit tests
         shell: pwsh

@@ -324,7 +324,7 @@ namespace Tests.UnitTests
             public int Users { get; set; } = 300000;
             public int LicenceTypes { get; set; } = 50;
             public long Assignments { get; set; }
-            public string Scope { get; set; } = "In-process attributed HTTP API, real SQL adapter, production cache and Excel writer; synthetic database only. Client and server share the measured process. Cold means fresh application caches/HttpServer, not a fresh OS process or cold SQL. Preview source preparation has a separate 30-second budget (the existing response deadline); interactive response-cache misses retain the 15-second gate. This is not the former blanket 15-second cold-load acceptance, an IIS/network/Entra deployment test, or an Azure capacity guarantee.";
+            public string Scope { get; set; } = "In-process attributed HTTP API, real SQL adapter, production cache and Excel writer; synthetic database only. Client and server share the measured process. Cold means fresh application caches/TestServer, not a fresh OS process or cold SQL. Preview source preparation has a separate 30-second budget (the existing response deadline); interactive response-cache misses retain the 15-second gate. This is not the former blanket 15-second cold-load acceptance, an IIS/network/Entra deployment test, or an Azure capacity guarantee.";
             public int SourcePreparationBudgetMs { get; set; } = PreparationBudgetMs;
             public int InteractiveColdBudgetMs { get; set; } = ColdBudgetMs;
             public int InteractiveWarmBudgetMs { get; set; } = WarmBudgetMs;
