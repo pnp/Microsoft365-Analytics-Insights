@@ -2885,7 +2885,7 @@ namespace Tests.UnitTests
             Assert.IsTrue(appRole.HasIndividualDataAccess(SignedIn("admin@contoso.com", "CopilotAdoption.IndividualData")));
             Assert.IsFalse(appRole.HasIndividualDataAccess(SignedIn("admin@contoso.com")));
 
-            var groupId = "00000000-0000-0000-0000-000000000538";
+            var groupId = "00000000-0000-0000-0000-000000000000";
             var group = new CopilotAdoptionGovernanceSettings { IndividualDataRole = groupId };
             Assert.IsTrue(group.HasIndividualDataAccess(SignedInWithGroup("admin@contoso.com", groupId)));
         }

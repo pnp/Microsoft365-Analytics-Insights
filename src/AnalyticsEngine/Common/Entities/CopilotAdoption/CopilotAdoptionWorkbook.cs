@@ -360,7 +360,7 @@ namespace Common.Entities.CopilotAdoption
                     + "restates active days per "
                     + summary.Options.HabitBucketNormalisationDays
                     + "-day month so they mean the same thing whichever period was selected. A licence that was never "
-                    + "used is not 'infrequent' - it is in the reclaimable-licence figure."));
+                    + "used is not 'infrequent' - it is an idle seat, assessed by the reclaim confidence tiers."));
                 sheet.AddHeaderRow("Usage frequency", "Users", "% of active", "Range");
 
                 var habitFirst = sheet.CurrentRow + 1;
@@ -967,8 +967,10 @@ namespace Common.Entities.CopilotAdoption
             {
                 sheet.AddTitle("Licence opportunities - TRUNCATED");
                 sheet.AddRow(XlsxCell.Wrapped(
-                    $"This sheet lists the {MaxUserRows:N0} strongest of {candidates.Count:N0} candidates. "
-                    + "The headline 'recommended for a licence' figure covers all of them."));
+                    $"This sheet lists the {MaxUserRows:N0} strongest of {candidates.Count:N0} candidates, "
+                    + "proven-demand candidates first so recurrent unlicensed Copilot users cannot be truncated "
+                    + "away by people who have never used it. The headline 'recommended for a licence' figure "
+                    + "covers all of them."));
                 sheet.AddBlankRow();
             }
             else if (analysis.Summary.FiguresIncomplete)
@@ -985,7 +987,16 @@ namespace Common.Entities.CopilotAdoption
 
             var headerRow = sheet.CurrentRow;
 
-            foreach (var candidate in candidates.OrderByDescending(c => c.OpportunityScore).Take(MaxUserRows))
+            // Proven demand first, then score - the same order the service and the CSV use. Re-sorting on
+            // score alone here would undo it precisely where it matters most: this sheet TRUNCATES, and a
+            // proven-demand candidate can score below the recommendation bar by construction (the Copilot
+            // weight sits under it), so a large tenant's workbook would drop people who already use
+            // Copilot in favour of people who never have.
+            foreach (var candidate in candidates
+                .OrderBy(c => c.QualificationTier == CopilotAdoptionScoring.OpportunityTiers.ProvenDemand ? 0 : 1)
+                .ThenByDescending(c => c.OpportunityScore)
+                .ThenBy(c => c.UserPrincipalName, StringComparer.OrdinalIgnoreCase)
+                .Take(MaxUserRows))
             {
                 sheet.AddRow(
                     candidate.UserPrincipalName,
@@ -1021,7 +1032,11 @@ namespace Common.Entities.CopilotAdoption
             sheet.SetColumnWidths(30, 96);
 
             var o = summary.Options;
-            var targetDays = Math.Round(o.WindowDays * (o.WorkingDaysPerWeek / 7d) * o.FrequencyTargetRatio, 0);
+            // The EXACT value the scorer divides by, not a rounded display figure: a rounded denominator
+            // in a published formula puts the arithmetic on the wrong side of a band boundary for a user
+            // sitting exactly on it, in the one sheet whose purpose is to reproduce the score.
+            var targetDays = CopilotAdoptionScoring.TargetActiveDays(o);
+            var targetDaysLabel = Math.Round(targetDays, 1);
             var weightSum = o.FrequencyWeight + o.DepthWeight + o.BreadthWeight;
 
             sheet.AddTitle("How this is calculated");
@@ -1040,13 +1055,13 @@ namespace Common.Entities.CopilotAdoption
                 + $"Depth is scaled down below {o.DepthMinActiveDays} active days, because it divides by a number "
                 + "the user controls: a handful of prompts in one afternoon would otherwise score full marks for "
                 + "depth and read as a habit forming. At or above that many active days nothing changes.\n"
-                + $"The {targetDays}-day frequency target above is the full-window one. An account younger than the "
+                + $"The {targetDaysLabel}-day frequency target above is the full-window one. An account younger than the "
                 + "reporting period has its target prorated to the days it has actually existed, so each row's own "
                 + "'Expected active days' column is the number that row was scored against.");
 
             AddMethod(sheet, "Why working days",
                 $"The frequency target is {o.FrequencyTargetRatio:P0} of the working days in the period, assuming "
-                + $"{o.WorkingDaysPerWeek} working days a week - {targetDays} days over {o.WindowDays}. Measured "
+                + $"{o.WorkingDaysPerWeek} working days a week - {targetDaysLabel} days over {o.WindowDays}. Measured "
                 + "against calendar days, someone who used Copilot every single working day would cap out at about "
                 + "71% and look like a partial adopter.");
 
@@ -1069,8 +1084,8 @@ namespace Common.Entities.CopilotAdoption
                 + "This is UNWEIGHTED frequency and is deliberately NOT the same measure as 'habitual users' above, "
                 + "which is the weighted engagement score. The two are meant to be compared: a large Daily figure "
                 + "with a low habit rate means people open Copilot constantly and do very little with it.\n"
-                + "Percentages are of ACTIVE users. A licence that was never used is not 'infrequent' - it is a "
-                + "reclaimable licence, and merging the two hides the more expensive problem.");
+                + "Percentages are of ACTIVE users. A licence that was never used is not 'infrequent' - it is "
+                + "an idle seat, assessed by the reclaim confidence tiers, and merging the two hides the more expensive problem.");
 
             AddMethod(sheet, "Usage concentration",
                 "Active licensed users ranked by interaction count and cut into percentile cohorts. Only active "
@@ -1079,16 +1094,19 @@ namespace Common.Entities.CopilotAdoption
 
             AddMethod(sheet, "Business case score",
                 "Unlicensed users score 0-100 on four weighted signals, weighted so evidence beats inference:\n"
-                // The Copilot component is the only raw total among four targets; the other three are
-                // per-active-day averages. It is scaled from its basis period to the window actually
-                // analysed, so the method sheet has to quote the scaled figure or it cannot reproduce
-                // the scores on the opportunities sheet at any window other than the default.
-                + $"copilot = min(1, unlicensedCopilotInteractions / {Math.Round(CopilotAdoptionScoring.OpportunityCopilotTargetForWindow(o), 1)}) x {o.OpportunityUnlicensedCopilotWeight}\n"
+                // Written as the computation, not as a rounded product. Printing "64.3" at D90 would make
+                // the published formula disagree with the scorer at the recommendation boundary - a
+                // candidate the scorer puts at exactly 50.0 reads as 49.9 here. This form is exactly
+                // reproducible at every window and says where the number comes from.
+                + $"copilot = min(1, unlicensedCopilotInteractions / ({o.OpportunityCopilotTarget} x {o.WindowDays} / {o.OpportunityCopilotTargetBasisDays})) x {o.OpportunityUnlicensedCopilotWeight}\n"
                 + $"collaboration = min(1, (teamsMessages + teamsMeetings) / {o.OpportunityCollaborationTarget}) x {o.OpportunityCollaborationWeight}\n"
                 + $"email = min(1, (emailsSent + emailsRead) / {o.OpportunityEmailTarget}) x {o.OpportunityEmailWeight}\n"
                 + $"documents = min(1, filesViewedOrEdited / {o.OpportunityDocumentTarget}) x {o.OpportunityDocumentWeight}\n"
                 + $"The Copilot target is {o.OpportunityCopilotTarget} interactions per {o.OpportunityCopilotTargetBasisDays} days, "
-                + $"scaled to the {o.WindowDays}-day window shown above. Without that scaling the same person "
+                + $"scaled to the {o.WindowDays}-day window shown above - about {Math.Round(CopilotAdoptionScoring.OpportunityCopilotTargetForWindow(o), 1)}. "
+                + "The formula keeps the exact division rather than that rounded figure, because rounding it "
+                + "would put the published arithmetic on the wrong side of the recommendation bar for a "
+                + "candidate sitting exactly on it. Without the scaling the same person "
                 + "would be recommended over a long window and not over a short one.\n"
                 + $"Recommended when unlicensedCopilotActiveDays is at least {o.OpportunityProvenDemandMinActiveDays} "
                 + $"(proven demand), or when the score reaches {o.OpportunityRecommendScore} (workload inferred). "

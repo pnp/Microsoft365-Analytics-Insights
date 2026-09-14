@@ -839,8 +839,9 @@ function OverviewTab({
               </Text>
               <Text size={200} block className={styles.muted}>
                 Every licensed user in exactly one band. "Never used" and "Dormant" together are the idle
-                seats - the reclaimable-licences figure is the certain and probable tiers drawn from
-                them, not the whole total.
+                seats. The reclaimable-licences figure is the certain and probable tiers, which is not the
+                same set: dormant seats are review-only, admin exclusions are held back, and a disabled
+                account that was still active is a certain reclaim without being idle at all.
               </Text>
             </div>
             <InfoTip
@@ -1180,7 +1181,11 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
   // the only one of the four that is a raw total rather than a per-active-day average, so it is scaled
   // from its basis period to the selected window. Quoting the unscaled number here would document a
   // formula that cannot reproduce the scores shown on the Licence opportunities tab.
-  const opportunityCopilotTargetForWindow =
+  // Shown as the computation rather than a rounded product: printing "64.3" at a 90-day period would put
+  // the published formula on the wrong side of the recommendation bar for a candidate sitting exactly on
+  // it. `approx` is for prose only, never for the formula.
+  const opportunityCopilotTargetExpression = `${o.opportunityCopilotTarget} x ${o.windowDays} / ${o.opportunityCopilotTargetBasisDays}`;
+  const opportunityCopilotTargetApprox =
     Math.round(
       Math.max(
         1,
@@ -1190,11 +1195,13 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
     ) / 10;
   // The worked example below has to be computed, not asserted: at a 7-day period half the frequency
   // target is fewer than depthMinActiveDays, so hard-coding full depth would print a score the scorer
-  // would never produce - in a panel whose entire purpose is to reproduce the scorer.
-  const exampleActiveDays = frequencyTargetDays / 2;
+  // would never produce - in a panel whose entire purpose is to reproduce the scorer. Active days are a
+  // count of distinct calendar dates, so the example uses a whole number.
+  const exampleActiveDays = Math.max(1, Math.round(frequencyTargetDays / 2));
+  const exampleFrequency = Math.min(1, exampleActiveDays / Math.max(1, frequencyTargetDays));
   const exampleDepthConfidence = Math.min(1, exampleActiveDays / Math.max(1, o.depthMinActiveDays));
   const exampleScore = Math.round(
-    ((0.5 * o.frequencyWeight +
+    ((exampleFrequency * o.frequencyWeight +
       1 * exampleDepthConfidence * o.depthWeight +
       (1 / o.breadthTargetApps) * o.breadthWeight) /
       (weightSum || 1)) *
@@ -1258,7 +1265,7 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
               </div>
               <Text>
                 <strong>Worked example.</strong> Over a {o.windowDays}-day period the frequency target is{' '}
-                {frequencyTargetDays} active days. A user active on half of those ({exampleActiveDays}),
+                {frequencyTargetDays} active days. A user active on {exampleActiveDays} of those,
                 averaging {o.depthTargetInteractionsPerActiveDay} interactions on each of those days, in a
                 single app, scores {exampleScore} - deep but narrow and intermittent, which is why the
                 recommended action for that profile is to broaden rather than to train.
@@ -1326,8 +1333,9 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
               </div>
               <Text>
                 The habit percentages are a share of <em>active</em> users, not of all licences. Someone who never
-                opened Copilot is not an infrequent user - they are a reclaimable licence, and merging the two would
-                hide the more expensive of the two problems.
+                opened Copilot is not an infrequent user - they are an idle seat, assessed by the reclaim
+                confidence tiers rather than counted here, and merging the two would hide the more expensive
+                of the two problems.
               </Text>
             </div>
           </AccordionPanel>
@@ -1388,7 +1396,7 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 heavy knowledge workers who would benefit but have never had the chance to try it.
               </Text>
               <div className={styles.formula}>
-                {`copilot   = min(1, unlicensedCopilotInteractions / ${opportunityCopilotTargetForWindow})\n` +
+                {`copilot   = min(1, unlicensedCopilotInteractions / (${opportunityCopilotTargetExpression}))\n` +
                   `collab    = min(1, (teamsMessages + teamsMeetings) / ${o.opportunityCollaborationTarget})\n` +
                   `email     = min(1, (emailsSent + emailsRead) / ${o.opportunityEmailTarget})\n` +
                   `documents = min(1, filesViewedOrEdited / ${o.opportunityDocumentTarget})\n\n` +
@@ -1401,7 +1409,9 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
               <Text>
                 The Copilot target is {o.opportunityCopilotTarget} interactions per{' '}
                 {o.opportunityCopilotTargetBasisDays} days, scaled to the {o.windowDays}-day period selected
-                above - {opportunityCopilotTargetForWindow} here. It is the only one of the four that is a raw
+                above - about {opportunityCopilotTargetApprox} here, though the formula keeps the exact
+                division so a candidate sitting exactly on the recommendation bar is not rounded across it.
+                It is the only one of the four that is a raw
                 total rather than a per-active-day average, so without that scaling the same person would be
                 recommended over a long period and not over a short one, purely because the reader changed the
                 drop-down.

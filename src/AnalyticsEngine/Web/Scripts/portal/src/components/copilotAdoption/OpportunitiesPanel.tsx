@@ -146,9 +146,11 @@ export default function OpportunitiesPanel({
 
   // Mirrors CopilotAdoptionScoring.OpportunityCopilotTargetForWindow. The Copilot component is the only
   // one of the four that is a raw total rather than a per-active-day average, so it is scaled from its
-  // basis period to the selected window. Quoting the unscaled number in the tooltip would describe a
-  // formula that cannot reproduce the score on the row beside it.
-  const opportunityCopilotTargetForWindow =
+  // basis period to the selected window. Shown as the computation rather than a rounded product: a
+  // rounded denominator puts the published arithmetic on the wrong side of the recommendation bar for a
+  // candidate sitting exactly on it. `approx` is for prose only, never for the formula.
+  const opportunityCopilotTargetExpression = `${options.opportunityCopilotTarget} x ${windowDays} / ${options.opportunityCopilotTargetBasisDays}`;
+  const opportunityCopilotTargetApprox =
     Math.round(
       Math.max(
         1,
@@ -377,10 +379,10 @@ export default function OpportunitiesPanel({
                     <InfoTip
                       title="Business case score"
                       content={{
-                        what: `How strong the case for giving this person a Copilot licence is, from 0 to 100. Someone is counted in the "recommended for a licence" headline if they already use Copilot on at least ${options.opportunityProvenDemandMinActiveDays} distinct days without a licence (proven demand), or if this score reaches ${options.opportunityRecommendScore} (workload inferred). The "Qualified by" column says which.`,
+                        what: `How strong the case for giving this person a Copilot licence is, from 0 to 100. Someone is counted in the "recommended for a licence" headline if they already use Copilot on at least ${options.opportunityProvenDemandMinActiveDays} distinct days without a licence (proven demand), or if this score reaches ${options.opportunityRecommendScore} (workload inferred). The Justification column on each row says which route applied, and the CSV export carries it as a "Qualified by" column.`,
                         how: `Four weighted signals, weighted so evidence beats inference. Already using Copilot Chat without a licence is worth ${options.opportunityUnlicensedCopilotWeight} points because it proves demand for Copilot itself; Teams collaboration is worth ${options.opportunityCollaborationWeight}, email ${options.opportunityEmailWeight} and document work ${options.opportunityDocumentWeight}, and those three only infer it from general Microsoft 365 activity. Each signal is a ratio against its own target and is capped at 1, so no single very heavy workload can carry someone over the line on its own. Proven demand has to qualify independently because the Copilot weight sits below the score bar, so recurrent unlicensed use could otherwise never clear it while general busyness could.`,
                         formula:
-                          `copilot     = min(1, unlicensedCopilotInteractions / ${opportunityCopilotTargetForWindow})\n` +
+                          `copilot     = min(1, unlicensedCopilotInteractions / (${opportunityCopilotTargetExpression}))\n` +
                           `collab      = min(1, (teamsMessages + teamsMeetings) / ${options.opportunityCollaborationTarget})\n` +
                           `email       = min(1, (emailsSent + emailsRead) / ${options.opportunityEmailTarget})\n` +
                           `documents   = min(1, filesViewedOrEdited / ${options.opportunityDocumentTarget})\n` +
@@ -388,7 +390,7 @@ export default function OpportunitiesPanel({
                           `recommended when unlicensedCopilotActiveDays >= ${options.opportunityProvenDemandMinActiveDays}\n` +
                           `               or score >= ${options.opportunityRecommendScore}`,
                         source:
-                          `Copilot use comes from the Copilot audit import and covers this period exactly. Its target of ${options.opportunityCopilotTarget} per ${options.opportunityCopilotTargetBasisDays} days is scaled to the selected period (${opportunityCopilotTargetForWindow} here) because it is a raw total, not a per-active-day average. The Teams, email and document figures are a per-active-day average across this same period, taken from Microsoft\u2019s daily usage reports - a day the user did not appear in the report at all does not drag the average down. Hover any row for its four component scores.`,
+                          `Copilot use comes from the Copilot audit import and covers this period exactly. Its target of ${options.opportunityCopilotTarget} per ${options.opportunityCopilotTargetBasisDays} days is scaled to the selected period (about ${opportunityCopilotTargetApprox} here; the formula keeps the exact division so a candidate on the bar is not rounded across it) because it is a raw total, not a per-active-day average. The Teams, email and document figures are a per-active-day average across this same period, taken from Microsoft\u2019s daily usage reports - a day the user did not appear in the report at all does not drag the average down. Hover any row for its four component scores.`,
                       }}
                     />
                   </span>
