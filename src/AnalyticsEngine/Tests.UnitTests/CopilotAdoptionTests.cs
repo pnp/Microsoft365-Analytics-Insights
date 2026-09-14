@@ -245,8 +245,14 @@ namespace Tests.UnitTests
             Assert.AreEqual(CopilotAdoptionScoring.SignalSourceAudit, scored.SignalSource);
             Assert.AreEqual(2, scored.ActiveDays, "The audit figures, not Microsoft's.");
             Assert.AreEqual(4, scored.Interactions);
-            Assert.AreEqual(AdoptionBand.Developing, scored.Band,
-                "Scored on the audit figures this is a light user; Microsoft's much larger numbers must not leak in.");
+            Assert.AreNotEqual(AdoptionBand.Champion, scored.Band,
+                "Microsoft's 500 prompts across 20 days and 6 apps would band this user Champion. That is "
+                + "the leak this test exists to catch.");
+            Assert.AreEqual(AdoptionBand.Trialling, scored.Band,
+                "Four interactions across two days of a 28-day window is occasional use. (This read "
+                + "Developing until the depth component was made confidence-weighted: two active days "
+                + "used to earn 40% of the depth marks outright, which flattered a two-day user into a "
+                + "band whose advice is 'a habit is forming'.)");
         }
 
         [TestMethod]
@@ -479,7 +485,9 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(100, heavy.OpportunityScore);
             Assert.IsTrue(heavy.Recommended);
-            StringAssert.StartsWith(heavy.Rationale, "Recommended:");
+            Assert.AreEqual(CopilotAdoptionScoring.OpportunityTiers.ProvenDemand, heavy.QualificationTier,
+                "Ten days of unlicensed Copilot use is evidence, not inference.");
+            StringAssert.StartsWith(heavy.Rationale, "Recommended");
         }
 
         [TestMethod]
@@ -490,6 +498,238 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, idle.OpportunityScore);
             Assert.IsFalse(idle.Recommended);
             StringAssert.Contains(idle.Rationale, "No qualifying");
+        }
+
+        [TestMethod]
+        public void OneDayTrialist_IsNotReportedAsFormingAHabit()
+        {
+            // The defect this guards: depth is interactions per *active* day, so a single active day
+            // made full depth marks trivial to reach. Five prompts crammed into one afternoon scored
+            // 40.8 and banded Developing - whose advice is "Deepen to daily use - a habit is forming" -
+            // for somebody who tried Copilot once and never came back. Worse, being active on FEWER
+            // days could outscore being active on more: this user beat the two-day user below.
+            var triedOnce = CopilotAdoptionScoring.Score(
+                UsageRow(interactions: 5, activeDays: 1, appsUsed: 1, lastUse: Now.AddDays(-20)),
+                WindowStart, Now, auditAvailable: true);
+
+            var twoDays = CopilotAdoptionScoring.Score(
+                UsageRow(interactions: 3, activeDays: 2, appsUsed: 1, lastUse: Now.AddDays(-2)),
+                WindowStart, Now, auditAvailable: true);
+
+            Assert.AreEqual(AdoptionBand.Trialling, triedOnce.Band,
+                "One active day in a 28-day window is a trial, not a forming habit.");
+            Assert.IsTrue(triedOnce.AdoptionScore < twoDays.AdoptionScore,
+                $"More active days must never score worse: one day scored {triedOnce.AdoptionScore}, "
+                + $"two days scored {twoDays.AdoptionScore}.");
+            Assert.IsFalse(CopilotAdoptionScoring.IsHabitual(triedOnce.Band));
+        }
+
+        [TestMethod]
+        public void SingleDayOfUse_CannotReachFullDepthMarks()
+        {
+            // The mechanism, pinned separately from the banding so a threshold change cannot quietly
+            // reintroduce the defect: depth is scaled by how much of the minimum sample was observed.
+            var options = CopilotAdoptionOptions.Default;
+
+            var oneDay = CopilotAdoptionScoring.Score(
+                UsageRow(interactions: 50, activeDays: 1, appsUsed: 1, lastUse: Now),
+                WindowStart, Now, auditAvailable: true, options: options);
+
+            Assert.IsTrue(oneDay.DepthScore < 100,
+                "A one-day sample must not earn full depth marks however many interactions it contains.");
+            Assert.AreEqual(
+                Math.Round(100d / options.DepthMinActiveDays, 1), oneDay.DepthScore, 0.05,
+                "One of the three minimum days observed should earn a third of the depth marks.");
+        }
+
+        [TestMethod]
+        public void DepthConfidence_DoesNotPenaliseAGenuinelyDeepUser()
+        {
+            // The other side of the fix: at or above the minimum sample nothing changes at all. If this
+            // fails, the confidence factor is taxing the users it was never meant to touch.
+            var deep = CopilotAdoptionScoring.Score(
+                UsageRow(interactions: 100, activeDays: 20, appsUsed: 1, lastUse: Now),
+                WindowStart, Now, auditAvailable: true);
+
+            Assert.AreEqual(100, deep.FrequencyScore);
+            Assert.AreEqual(100, deep.DepthScore,
+                "Twenty active days is far above the minimum sample, so depth is untouched.");
+        }
+
+        [TestMethod]
+        public void DisabledAccountHoldingASeat_IsAlwaysAReclaim()
+        {
+            // A disabled account cannot be won back or coached - the person has gone. Branching on the
+            // band alone told a previously-active disabled account to "Win back" (write to someone who
+            // has left) and a recently-active one that no action was needed, while the page itself
+            // calls this "the clearest reclaim there is".
+            var wasActive = UsageRow(interactions: 80, activeDays: 18, appsUsed: 3, lastUse: Now.AddDays(-1));
+            wasActive.AccountEnabled = false;
+
+            var scored = CopilotAdoptionScoring.Score(wasActive, WindowStart, Now, auditAvailable: true);
+
+            Assert.AreEqual(CopilotAdoptionScoring.AdoptionActionCodes.Reclaim, scored.RecommendedActionCode,
+                "A disabled account is a reclaim whatever its usage looked like beforehand.");
+            StringAssert.Contains(scored.RecommendedAction, "disabled");
+            Assert.AreNotEqual(CopilotAdoptionScoring.AdoptionActionCodes.Sustain, scored.RecommendedActionCode);
+            Assert.AreNotEqual(CopilotAdoptionScoring.AdoptionActionCodes.Reengage, scored.RecommendedActionCode);
+        }
+
+        [TestMethod]
+        public void ProvenCopilotDemand_QualifiesOnItsOwn()
+        {
+            // The defect this guards: the Copilot-demand weight (35) sits below the recommendation bar
+            // (50), so the one signal that PROVES demand for Copilot could never clear it alone - while
+            // general Microsoft 365 busyness (25 + 20 + 20 = 65) could. Somebody using Copilot Chat
+            // every day without a licence was not recommended for one; somebody who had never opened
+            // Copilot was. Microsoft's own readiness guidance ranks these the other way round.
+            var provenDemand = CopilotAdoptionScoring.ScoreOpportunity(new UnlicensedUserSignalRow
+            {
+                UserPrincipalName = "daily@contoso.com",
+                UnlicensedCopilotInteractions = 1000,
+                UnlicensedCopilotActiveDays = 20,
+            });
+
+            var busyButNeverTriedCopilot = CopilotAdoptionScoring.ScoreOpportunity(new UnlicensedUserSignalRow
+            {
+                UserPrincipalName = "busy@contoso.com",
+                TeamsMessages = 60,
+                TeamsMeetings = 10,
+                EmailsSent = 40,
+                EmailsRead = 40,
+                FilesViewedOrEdited = 40,
+            });
+
+            Assert.IsTrue(provenDemand.Recommended,
+                $"A thousand unlicensed Copilot interactions scored {provenDemand.OpportunityScore} and "
+                + "must be recommended regardless - the composite score cannot express proven demand.");
+            Assert.AreEqual(CopilotAdoptionScoring.OpportunityTiers.ProvenDemand, provenDemand.QualificationTier);
+            StringAssert.Contains(provenDemand.Rationale, "proven demand");
+
+            Assert.AreEqual(
+                CopilotAdoptionScoring.OpportunityTiers.WorkloadInferred,
+                busyButNeverTriedCopilot.QualificationTier,
+                "Busyness is inference, not evidence, and must be labelled as such even when it clears the bar.");
+            StringAssert.StartsWith(busyButNeverTriedCopilot.Rationale, "Candidate for assessment");
+        }
+
+        [TestMethod]
+        public void TryingCopilotOnce_IsNotProvenDemand()
+        {
+            // "Recurrent" is the point. A single day of unlicensed use is curiosity, not demand, and
+            // must not short-circuit the score - otherwise the tier would recommend a seat for anyone
+            // who ever opened Copilot once.
+            var curious = CopilotAdoptionScoring.ScoreOpportunity(new UnlicensedUserSignalRow
+            {
+                UserPrincipalName = "curious@contoso.com",
+                UnlicensedCopilotInteractions = 2,
+                UnlicensedCopilotActiveDays = 1,
+            });
+
+            Assert.AreNotEqual(CopilotAdoptionScoring.OpportunityTiers.ProvenDemand, curious.QualificationTier);
+            Assert.IsFalse(curious.Recommended);
+            Assert.AreEqual(CopilotAdoptionScoring.OpportunityTiers.None, curious.QualificationTier);
+        }
+
+        [TestMethod]
+        public void ProvenDemandCandidates_SurviveTheRowCap()
+        {
+            // The C# tier is not enough on its own. The candidate list is TOP (@maxRows) ORDER BY the
+            // composite score, and that score cannot express proven demand - so on a large tenant a
+            // daily unlicensed Copilot user could be ranked below thousands of merely busy users and
+            // truncated away before the C# scorer ever saw them, silently reinstating the defect.
+            var sql = CopilotAdoptionSql.LicenceOpportunitiesSql(
+                new[] { 1 }, CopilotAdoptionOptions.Default, includeCopilotAudit: true, includeM365Usage: true);
+
+            var orderByIndex = sql.IndexOf("ORDER BY", StringComparison.Ordinal);
+            Assert.IsTrue(orderByIndex >= 0, "The candidate query must be ordered.");
+
+            var orderBy = sql.Substring(orderByIndex);
+            StringAssert.Contains(orderBy, "copilot.ActiveDays",
+                "Proven demand must be part of the ranking, or the row cap can discard it.");
+            Assert.IsTrue(
+                orderBy.IndexOf("copilot.ActiveDays", StringComparison.Ordinal)
+                    < orderBy.IndexOf("RankScore", StringComparison.Ordinal),
+                "Proven demand must sort ahead of the composite score, not after it.");
+        }
+
+        [TestMethod]
+        public void WithoutTheAuditImport_TheCandidateQueryStillOrdersValidly()
+        {
+            // Proven demand is unobservable without the audit import, and a bare constant in an ORDER BY
+            // is a SQL Server error ("a constant expression was encountered in the ORDER BY list"), so
+            // the clause has to be omitted rather than collapsed to a literal.
+            var sql = CopilotAdoptionSql.LicenceOpportunitiesSql(
+                new[] { 1 }, CopilotAdoptionOptions.Default, includeCopilotAudit: false, includeM365Usage: true);
+
+            StringAssert.Contains(sql, "ORDER BY RankScore DESC");
+            Assert.IsFalse(sql.Contains("copilot.ActiveDays"),
+                "Without the audit CTE its columns must not be referenced anywhere, including the ORDER BY.");
+        }
+
+        [TestMethod]
+        public void CopilotDemandTarget_ScalesWithTheReportingWindow()
+        {
+            // The other three opportunity components are per-active-day averages, so they mean the same
+            // thing at any window length. The Copilot component is a raw total, so without scaling the
+            // same person clears the bar over 180 days and misses it over 7 - their recommendation
+            // flipping because the reader changed the period drop-down, in a list used to decide who
+            // gets a paid seat.
+            var week = new CopilotAdoptionOptions { WindowDays = 7 };
+            var month = new CopilotAdoptionOptions { WindowDays = 28 };
+            var halfYear = new CopilotAdoptionOptions { WindowDays = 180 };
+
+            Assert.AreEqual(5, CopilotAdoptionScoring.OpportunityCopilotTargetForWindow(week), 0.01,
+                "A quarter of the 28-day basis is a quarter of the target.");
+            Assert.AreEqual(20, CopilotAdoptionScoring.OpportunityCopilotTargetForWindow(month), 0.01,
+                "The default window must leave the shipped target exactly as documented.");
+            Assert.IsTrue(
+                CopilotAdoptionScoring.OpportunityCopilotTargetForWindow(halfYear) > 100,
+                "Six months of use has to clear a proportionally higher bar.");
+
+            // The behaviour that matters: identical raw usage, scored under two windows.
+            var signals = new Func<UnlicensedUserSignalRow>(() => new UnlicensedUserSignalRow
+            {
+                UserPrincipalName = "same@contoso.com",
+                UnlicensedCopilotInteractions = 20,
+                UnlicensedCopilotActiveDays = 1,
+            });
+
+            var overAWeek = CopilotAdoptionScoring.ScoreOpportunity(signals(), week);
+            var overHalfAYear = CopilotAdoptionScoring.ScoreOpportunity(signals(), halfYear);
+
+            Assert.AreEqual(100, overAWeek.CopilotDemandScore,
+                "Twenty interactions in a week is heavy unlicensed use.");
+            Assert.IsTrue(overHalfAYear.CopilotDemandScore < 20,
+                $"The same twenty interactions spread over six months is not, but scored "
+                + $"{overHalfAYear.CopilotDemandScore}.");
+        }
+
+        [TestMethod]
+        public void CopilotDemandTarget_IsNeverFreeOnAShortWindow()
+        {
+            // A pathologically short window must not scale the target to zero and hand every user who
+            // has ever touched Copilot a full-marks demand score.
+            var tiny = new CopilotAdoptionOptions { WindowDays = 1, OpportunityCopilotTarget = 2 };
+
+            Assert.IsTrue(CopilotAdoptionScoring.OpportunityCopilotTargetForWindow(tiny) >= 1,
+                "The scaled target is floored at one interaction.");
+        }
+
+        [TestMethod]
+        public void OpportunitySqlExpression_UsesTheWindowScaledCopilotTarget()
+        {
+            // The database ranks candidates, so if the SQL used the unscaled target while C# used the
+            // scaled one, the query would return a different set of people from the one the displayed
+            // scores describe - and the drill-through would disagree with its own headline.
+            var halfYear = new CopilotAdoptionOptions { WindowDays = 180 };
+            var expected = CopilotAdoptionScoring.OpportunityCopilotTargetForWindow(halfYear);
+
+            var sql = CopilotAdoptionScoring.BuildOpportunityScoreSql(
+                halfYear, "cop", "teams", "meetings", "sent", "read", "files");
+
+            StringAssert.Contains(sql, expected.ToString(CultureInfo.InvariantCulture),
+                "The ranking expression must use the same window-scaled target as the C# scorer.");
         }
 
         [TestMethod]

@@ -341,6 +341,21 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("recommended")]
         public bool Recommended { get; set; }
 
+        /// <summary>
+        /// Why this user qualifies (or does not): <c>provenDemand</c>, <c>workloadInferred</c> or
+        /// <c>none</c>. See <see cref="CopilotAdoptionScoring.OpportunityTiers"/>.
+        ///
+        /// Exported because "recommended" alone does not say whether the evidence was the person
+        /// actually using Copilot or an inference from how busy they are, and those two justify a seat
+        /// very differently in a purchase conversation.
+        /// </summary>
+        [JsonProperty("qualificationTier")]
+        public string QualificationTier { get; set; }
+
+        /// <summary>Short display label for <see cref="QualificationTier"/>.</summary>
+        [JsonProperty("qualificationTierLabel")]
+        public string QualificationTierLabel { get; set; }
+
         /// <summary>Plain-English justification, safe to paste into a licence request.</summary>
         [JsonProperty("rationale")]
         public string Rationale { get; set; }

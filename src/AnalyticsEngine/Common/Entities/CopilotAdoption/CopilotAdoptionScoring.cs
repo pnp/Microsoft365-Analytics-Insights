@@ -116,8 +116,13 @@ namespace Common.Entities.CopilotAdoption
 
             var targetActiveDays = TargetActiveDays(o);
             var frequency = Ratio(activeDays, targetActiveDays);
+            // Depth divides by a number the user controls, so one active day would otherwise make full
+            // marks trivial to reach - see CopilotAdoptionOptions.DepthMinActiveDays. Scaling by the
+            // size of the sample stops a single afternoon's experiment reading as a forming habit,
+            // and leaves anyone at or above the minimum completely unaffected.
+            var depthConfidence = Ratio(activeDays, o.DepthMinActiveDays);
             var depth = activeDays > 0
-                ? Ratio((double)interactions / activeDays, o.DepthTargetInteractionsPerActiveDay)
+                ? Ratio((double)interactions / activeDays, o.DepthTargetInteractionsPerActiveDay) * depthConfidence
                 : 0d;
             var breadth = Ratio(appsUsed, o.BreadthTargetApps);
 
@@ -361,6 +366,14 @@ namespace Common.Entities.CopilotAdoption
             if (row == null) throw new ArgumentNullException(nameof(row));
             var o = options ?? CopilotAdoptionOptions.Default;
 
+            // Kept in step with RecommendedActionCode: a disabled account still holding a seat is a
+            // reclaim regardless of how it was used before it was disabled.
+            if (row.AccountEnabled == false)
+            {
+                return "Reclaim - the account is disabled but still holds a Copilot licence. "
+                     + "This is the clearest reclaim there is; no enablement effort is worthwhile.";
+            }
+
             switch (row.Band)
             {
                 case AdoptionBand.NeverUsed:
@@ -444,6 +457,12 @@ namespace Common.Entities.CopilotAdoption
         public static string RecommendedActionCode(LicensedUserAdoptionRow row)
         {
             if (row == null) throw new ArgumentNullException(nameof(row));
+
+            // A disabled account holding a Copilot seat is the clearest reclaim there is, whatever its
+            // usage looked like while it was still in use. Branching on the band alone told a disabled
+            // account that had been active to "win back" - i.e. write to someone who has left - and a
+            // recently active one that no action was needed.
+            if (row.AccountEnabled == false) return AdoptionActionCodes.Reclaim;
 
             switch (row.Band)
             {
@@ -769,7 +788,7 @@ namespace Common.Entities.CopilotAdoption
             if (row == null) throw new ArgumentNullException(nameof(row));
             var o = options ?? CopilotAdoptionOptions.Default;
 
-            var copilot = Ratio(row.UnlicensedCopilotInteractions, o.OpportunityCopilotTarget);
+            var copilot = Ratio(row.UnlicensedCopilotInteractions, OpportunityCopilotTargetForWindow(o));
             var collaboration = Ratio(row.TeamsMessages + row.TeamsMeetings, o.OpportunityCollaborationTarget);
             var email = Ratio(row.EmailsSent + row.EmailsRead, o.OpportunityEmailTarget);
             var documents = Ratio(row.FilesViewedOrEdited, o.OpportunityDocumentTarget);
@@ -808,9 +827,65 @@ namespace Common.Entities.CopilotAdoption
                 OpportunityScore = Round(score, 1),
             };
 
-            scored.Recommended = scored.OpportunityScore >= o.OpportunityRecommendScore;
+            // Proven demand qualifies on its own. The composite score cannot express this: the Copilot
+            // weight (35) sits below the recommendation bar (50), so recurrent unlicensed use could
+            // never clear it unaided while general busyness (65) could. See
+            // CopilotAdoptionOptions.OpportunityProvenDemandMinActiveDays.
+            var provenDemand = row.UnlicensedCopilotActiveDays >= Math.Max(1, o.OpportunityProvenDemandMinActiveDays);
+
+            scored.Recommended = provenDemand || scored.OpportunityScore >= o.OpportunityRecommendScore;
+            scored.QualificationTier = provenDemand
+                ? OpportunityTiers.ProvenDemand
+                : scored.Recommended ? OpportunityTiers.WorkloadInferred : OpportunityTiers.None;
+            scored.QualificationTierLabel = OpportunityTierLabel(scored.QualificationTier);
             scored.Rationale = OpportunityRationale(scored);
             return scored;
+        }
+
+        /// <summary>
+        /// <see cref="CopilotAdoptionOptions.OpportunityCopilotTarget"/> scaled from its basis period to
+        /// the reporting window actually being analysed.
+        ///
+        /// The other three opportunity components are per-active-day averages, so they already mean the
+        /// same thing at any window length. This one is a raw total, and without scaling it silently
+        /// changes meaning with the period drop-down: 20 interactions is heavy use over a week and
+        /// almost nothing over six months, so the same person would be recommended for a licence at one
+        /// setting and not at another. Never below 1, so a short window cannot make the target free.
+        /// </summary>
+        public static double OpportunityCopilotTargetForWindow(CopilotAdoptionOptions options)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var basisDays = Math.Max(1, o.OpportunityCopilotTargetBasisDays);
+            var windowDays = Math.Max(1, o.WindowDays);
+            return Math.Max(1d, o.OpportunityCopilotTarget * windowDays / basisDays);
+        }
+
+        /// <summary>
+        /// Why an unlicensed user qualifies for a seat. Split from the score because the two routes
+        /// justify a purchase very differently: one is evidence, the other is inference.
+        /// </summary>
+        public static class OpportunityTiers
+        {
+            /// <summary>Recurrent unlicensed Copilot use - the person is already doing it.</summary>
+            public const string ProvenDemand = "provenDemand";
+
+            /// <summary>No Copilot use, but a workload pattern that suggests they would benefit.</summary>
+            public const string WorkloadInferred = "workloadInferred";
+
+            /// <summary>Below the bar on both routes.</summary>
+            public const string None = "none";
+        }
+
+        /// <summary>Short display label for an opportunity tier.</summary>
+        public static string OpportunityTierLabel(string tier)
+        {
+            switch (tier)
+            {
+                case OpportunityTiers.ProvenDemand: return "Proven demand";
+                case OpportunityTiers.WorkloadInferred: return "Candidate for assessment";
+                case OpportunityTiers.None: return "Not recommended";
+                default: return string.Empty;
+            }
         }
 
         /// <summary>
@@ -851,7 +926,23 @@ namespace Common.Entities.CopilotAdoption
                 return "No qualifying Microsoft 365 activity recorded in this period.";
             }
 
-            return (row.Recommended ? "Recommended: " : "Candidate: ") + string.Join("; ", reasons) + ".";
+            // Name the route as well as the evidence. "Recommended" on its own does not say whether the
+            // person is already using Copilot or merely looks like someone who would.
+            string prefix;
+            switch (row.QualificationTier)
+            {
+                case OpportunityTiers.ProvenDemand:
+                    prefix = "Recommended - proven demand: ";
+                    break;
+                case OpportunityTiers.WorkloadInferred:
+                    prefix = "Candidate for assessment: ";
+                    break;
+                default:
+                    prefix = "Not recommended: ";
+                    break;
+            }
+
+            return prefix + string.Join("; ", reasons) + ".";
         }
 
         /// <summary>
@@ -884,7 +975,7 @@ namespace Common.Entities.CopilotAdoption
             // All column arguments are compile-time constants supplied by CopilotAdoptionSql, never
             // user input, so there is no injection surface here.
             return
-                Component(copilotColumn, o.OpportunityCopilotTarget, o.OpportunityUnlicensedCopilotWeight)
+                Component(copilotColumn, OpportunityCopilotTargetForWindow(o), o.OpportunityUnlicensedCopilotWeight)
                 + " + " + Component($"({teamsColumn} + {meetingsColumn})", o.OpportunityCollaborationTarget, o.OpportunityCollaborationWeight)
                 + " + " + Component($"({emailSentColumn} + {emailReadColumn})", o.OpportunityEmailTarget, o.OpportunityEmailWeight)
                 + " + " + Component(filesColumn, o.OpportunityDocumentTarget, o.OpportunityDocumentWeight);
