@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.Http;
 using System.Threading;
@@ -96,9 +97,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
             }
 
-            foreach (var property in request.Properties)
+            // Options rather than the obsolete Properties. Same underlying dictionary - Properties is a
+            // shim over Options on modern .NET - so a request cloned here keeps whatever Kiota, the
+            // Graph SDK or our own handlers stashed on it.
+            foreach (var option in (IDictionary<string, object>)request.Options)
             {
-                clone.Properties[property.Key] = property.Value;
+                ((IDictionary<string, object>)clone.Options)[option.Key] = option.Value;
             }
 
             if (request.Content != null)

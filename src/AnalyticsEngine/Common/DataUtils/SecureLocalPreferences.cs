@@ -1,12 +1,19 @@
 ﻿using Newtonsoft.Json;
 using System;
 using System.IO;
+using System.Runtime.Versioning;
 
 namespace DataUtils
 {
     /// <summary>
     /// A class to load/save preferences securely on the local machine
     /// </summary>
+    /// <remarks>
+    /// Windows-only, because "securely" here means DPAPI (<see cref="StringUtils.ProtectString"/>),
+    /// whose key comes from the current Windows user profile. Declared rather than suppressed so the
+    /// constraint is visible to callers; the only consumer is the installer, which is net10.0-windows.
+    /// </remarks>
+    [SupportedOSPlatform("windows")]
     public abstract class SecureLocalPreferences
     {
         protected abstract string FileTitle { get; }

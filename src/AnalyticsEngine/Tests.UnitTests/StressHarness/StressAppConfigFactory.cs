@@ -6,7 +6,7 @@ namespace Tests.UnitTests.StressHarness
 {
     /// <summary>
     /// Builds an <see cref="AppConfig"/> for the DB-backed stress harness without touching real
-    /// configuration. Uses <c>FormatterServices.GetUninitializedObject</c> to bypass base-constructor
+    /// configuration. Uses <c>RuntimeHelpers.GetUninitializedObject</c> to bypass base-constructor
     /// validation (mirrors the FakeDataGen factory), then sets only the fields the audit-import path
     /// reads: the activity-window settings and (via <see cref="AppConnectionStrings"/>) the DB connection.
     /// Graph credentials are placeholders - they never authenticate for SharePoint-only events.
@@ -15,7 +15,7 @@ namespace Tests.UnitTests.StressHarness
     {
         public static AppConfig Create(string databaseConnectionString, int windowDays = 6)
         {
-            var config = (AppConfig)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(AppConfig));
+            var config = (AppConfig)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(AppConfig));
             config.TenantGUID = Guid.Parse("00000000-0000-0000-0000-000000000001");
             config.ClientID = "fake-client-id-for-stress-testing";
             config.ClientSecret = "fake-client-secret";
@@ -36,7 +36,7 @@ namespace Tests.UnitTests.StressHarness
             config.BuildLabel = "stress-test";
             config.MetadataRefreshMinutes = 24 * 60;
 
-            var connStrings = (AppConnectionStrings)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(AppConnectionStrings));
+            var connStrings = (AppConnectionStrings)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(AppConnectionStrings));
             connStrings.DatabaseConnectionString = databaseConnectionString;
             connStrings.RedisConnectionString = "fake:6380,******";
             connStrings.ServiceBusConnectionString = "Endpoint=sb://fake.servicebus.windows.net/;SharedAccessKeyName=fake;SharedAccessKey=fake";

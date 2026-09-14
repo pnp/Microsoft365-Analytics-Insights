@@ -213,7 +213,7 @@ namespace Tests.UnitTests
 
         private static AppConfig NewConfig()
         {
-            var config = (AppConfig)FormatterServices.GetUninitializedObject(typeof(AppConfig));
+            var config = (AppConfig)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(AppConfig));
             config.TenantGUID = Guid.Empty;
             return config;
         }

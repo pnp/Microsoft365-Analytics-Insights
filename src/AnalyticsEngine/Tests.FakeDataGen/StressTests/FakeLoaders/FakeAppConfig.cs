@@ -12,7 +12,7 @@ namespace Tests.FakeDataGen.StressTests.FakeLoaders
         public static AppConfig Create()
         {
             // Create an uninitialized instance without calling constructor
-            var config = (AppConfig)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(AppConfig));
+            var config = (AppConfig)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(AppConfig));
 
             // Now set all properties manually
             config.TenantGUID = Guid.Parse("00000000-0000-0000-0000-000000000001");
@@ -35,7 +35,7 @@ namespace Tests.FakeDataGen.StressTests.FakeLoaders
             config.MetadataRefreshMinutes = 24 * 60; // 24 hours
 
             // Create minimal connection strings using same technique
-            var connStrings = (AppConnectionStrings)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(AppConnectionStrings));
+            var connStrings = (AppConnectionStrings)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(AppConnectionStrings));
             connStrings.DatabaseConnectionString = "Server=fake;Database=fake;User Id=fake;Password=fake;";
             connStrings.RedisConnectionString = "fake:6380,password=fake,ssl=True,abortConnect=False";
             connStrings.ServiceBusConnectionString = "Endpoint=sb://fake.servicebus.windows.net/;SharedAccessKeyName=fake;SharedAccessKey=fake";

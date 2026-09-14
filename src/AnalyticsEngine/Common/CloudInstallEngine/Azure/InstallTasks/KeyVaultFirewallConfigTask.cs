@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
@@ -120,11 +121,16 @@ namespace CloudInstallEngine.Azure.InstallTasks
             return ParseOutboundIPv4Addresses(site.Data.PossibleOutboundIPAddresses);
         }
 
+        // One shared client for the public-IP lookup. A new HttpClient per call would leak sockets the
+        // way WebClient (obsolete since .NET 6) effectively did; the timeout keeps a hung endpoint from
+        // stalling the install, which is why the old code's implicit 100s default is made explicit.
+        static readonly HttpClient _ipLookupClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+
         string TryGetInstallerPublicIp()
         {
             try
             {
-                var ip = new WebClient().DownloadString(IP_CHECK_URL)?.Trim();
+                var ip = _ipLookupClient.GetStringAsync(IP_CHECK_URL).GetAwaiter().GetResult()?.Trim();
                 if (!string.IsNullOrEmpty(ip) && IPv4Regex.IsMatch(ip))
                 {
                     return ip;
