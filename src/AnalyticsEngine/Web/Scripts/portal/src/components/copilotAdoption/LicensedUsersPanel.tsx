@@ -123,6 +123,7 @@ export default function LicensedUsersPanel({
   seatLicenceTypeIds,
   initialBands,
   initialAction,
+  onExportNotice,
 }: {
   windowDays: number;
   filterOptions: AdoptionFilterOptions | null;
@@ -138,6 +139,7 @@ export default function LicensedUsersPanel({
    * that plan counted - not a similar-looking one they then have to reconstruct by hand.
    */
   initialAction?: string;
+  onExportNotice?: () => void;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -306,7 +308,7 @@ export default function LicensedUsersPanel({
         >
           Refresh
         </Button>
-        <Button size="small" icon={<ArrowDownload16Regular />} as="a" href={exportUrl}>
+        <Button size="small" icon={<ArrowDownload16Regular />} as="a" href={exportUrl} onClick={onExportNotice}>
           Export CSV
         </Button>
       </div>
@@ -387,6 +389,7 @@ export default function LicensedUsersPanel({
                     />
                   </span>
                 </th>
+                <th className={table.th}>Signal source</th>
                 <th className={`${table.th} ${table.thNumeric}`}>Interactions</th>
                 <th className={`${table.th} ${table.thNumeric}`}>
                   <span className={styles.thWithInfo}>
@@ -451,6 +454,7 @@ export default function LicensedUsersPanel({
                   <td className={table.td}>
                     <BandBadge band={row.band} name={row.bandName} />
                   </td>
+                  <td className={table.td}>{row.signalSource}</td>
                   <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.interactions)}</td>
                   <td className={`${table.td} ${table.tdNumeric}`}>
                     {row.activeDays} <span className={styles.muted}>/ {Math.round(row.expectedActiveDays)}</span>

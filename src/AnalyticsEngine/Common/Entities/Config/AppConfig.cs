@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Configuration;
 using System.Linq;
+using Common.Entities.CopilotAdoption;
 
 namespace Common.Entities.Config
 {
@@ -250,6 +251,21 @@ namespace Common.Entities.Config
                     ? azureCostIntervalHours
                     : AzureCostImportSettings.DefaultIntervalHours,
                 GroupBy = AzureCostImportSettings.ParseList(ConfigurationManager.AppSettings.Get("AzureCostGroupBy")),
+            };
+
+            this.CopilotAdoptionGovernance = new CopilotAdoptionGovernanceSettings
+            {
+                IndividualDataRole = ConfigurationManager.AppSettings.Get(
+                    CopilotAdoptionGovernanceSettings.IndividualDataRoleSettingName),
+                DisableIndividualData = bool.TryParse(
+                    ConfigurationManager.AppSettings.Get(CopilotAdoptionGovernanceSettings.DisableIndividualDataSettingName),
+                    out var disableCopilotAdoptionIndividualData)
+                    && disableCopilotAdoptionIndividualData,
+                PseudonymiseIndividualData = !bool.TryParse(
+                    ConfigurationManager.AppSettings.Get(CopilotAdoptionGovernanceSettings.PseudonymiseIndividualDataSettingName),
+                    out var pseudonymiseCopilotAdoptionIndividualData)
+                    || pseudonymiseCopilotAdoptionIndividualData,
+                TenantId = this.TenantGUID,
             };
         }
 
@@ -637,6 +653,14 @@ namespace Common.Entities.Config
         /// <see cref="AzureCostImportSettings.IsConfigured"/> false, and the import declines to run.
         /// </summary>
         public AzureCostImportSettings AzureCostImport { get; set; } = new AzureCostImportSettings();
+
+        /// <summary>
+        /// Access-control and redaction settings for Copilot Adoption per-user lists and exports.
+        /// Defaults are deliberately fail-closed: no configured role means aggregate-only, and a
+        /// configured role sees pseudonymised rows unless an administrator explicitly opts into named
+        /// data.
+        /// </summary>
+        public CopilotAdoptionGovernanceSettings CopilotAdoptionGovernance { get; set; }
 
         #endregion
     }

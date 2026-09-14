@@ -8,9 +8,15 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Security.Claims;
+using System.Security.Principal;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Web.Http;
+using System.Web.Http.Controllers;
 using CopilotAdoptionAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.CopilotAdoptionAPIController;
 
 namespace Tests.UnitTests
@@ -2061,6 +2067,66 @@ namespace Tests.UnitTests
                 }).Count);
         }
 
+        [TestMethod]
+        public async Task IndividualEndpoints_FailClosedWithoutTheConfiguredRole()
+        {
+            // Issue #538: the aggregate dashboard can remain [Authorize], but every route that exposes
+            // the per-user population or exports it must refuse a normal signed-in user. This must be in
+            // the controller rather than only in the SPA, because the CSV/XLSX downloads are plain
+            // <a href> navigations and can be opened directly.
+            using (var controller = GovernanceController(
+                new CopilotAdoptionGovernanceSettings { IndividualDataRole = "CopilotAdoption.IndividualData" },
+                SignedIn("reader@contoso.com")))
+            {
+                Assert.AreEqual(HttpStatusCode.Forbidden, await Status(controller.Filters()));
+                Assert.AreEqual(HttpStatusCode.Forbidden, await Status(controller.LicensedUsers()));
+                Assert.AreEqual(HttpStatusCode.Forbidden, await Status(controller.Opportunities()));
+                Assert.AreEqual(HttpStatusCode.Forbidden, (await controller.ExportLicensedUsers()).StatusCode);
+                Assert.AreEqual(HttpStatusCode.Forbidden, (await controller.ExportOpportunities()).StatusCode);
+                Assert.AreEqual(HttpStatusCode.Forbidden, (await controller.ExportWorkbook()).StatusCode);
+            }
+        }
+
+        [TestMethod]
+        public void IndividualDataRole_MatchesAppRoleOrGroupClaimOnlyWhenConfigured()
+        {
+            var noRoleConfigured = new CopilotAdoptionGovernanceSettings();
+            Assert.IsFalse(noRoleConfigured.HasIndividualDataAccess(SignedIn("admin@contoso.com", "CopilotAdoption.IndividualData")),
+                "No setting means aggregate-only; an upgrade must not silently widen access.");
+
+            var appRole = new CopilotAdoptionGovernanceSettings { IndividualDataRole = "CopilotAdoption.IndividualData" };
+            Assert.IsTrue(appRole.HasIndividualDataAccess(SignedIn("admin@contoso.com", "CopilotAdoption.IndividualData")));
+            Assert.IsFalse(appRole.HasIndividualDataAccess(SignedIn("admin@contoso.com")));
+
+            var groupId = "00000000-0000-0000-0000-000000000538";
+            var group = new CopilotAdoptionGovernanceSettings { IndividualDataRole = groupId };
+            Assert.IsTrue(group.HasIndividualDataAccess(SignedInWithGroup("admin@contoso.com", groupId)));
+        }
+
+        [TestMethod]
+        public void Pseudonymisation_RemovesDirectIdentifiersButKeepsCohortAndProvenance()
+        {
+            var row = ScoredUser("Καλημέρα.user@contoso.com", 20, AdoptionBand.Developing);
+            row.Mail = "person@contoso.com";
+            row.Department = "Finance";
+            row.JobTitle = "Director";
+            row.ManagerUserPrincipalName = "manager@contoso.com";
+            row.SignalSource = CopilotAdoptionScoring.SignalSourceUsageReport;
+
+            var redacted = CopilotAdoptionPseudonymiser.Pseudonymise(
+                row,
+                new CopilotAdoptionGovernanceSettings { TenantId = Guid.Parse("00000000-0000-0000-0000-000000000000") });
+
+            StringAssert.StartsWith(redacted.UserPrincipalName, "User ");
+            Assert.IsNull(redacted.Mail);
+            Assert.IsNull(redacted.JobTitle);
+            Assert.IsNull(redacted.ManagerUserPrincipalName);
+            Assert.AreEqual("Finance", redacted.Department);
+            Assert.AreEqual(AdoptionBand.Developing, redacted.Band);
+            Assert.AreEqual(CopilotAdoptionScoring.SignalSourceUsageReport, redacted.SignalSource,
+                "Redaction must not strip the provenance that tells a forwarded export how the row was scored.");
+        }
+
         private static LicensedUserAdoptionRow ActionRow(string upn, string actionCode)
         {
             return new LicensedUserAdoptionRow
@@ -2069,6 +2135,57 @@ namespace Tests.UnitTests
                 RecommendedActionCode = actionCode,
                 RecommendedActionLabel = CopilotAdoptionScoring.ActionLabel(actionCode),
             };
+        }
+
+        private static CopilotAdoptionAPIController GovernanceController(
+            CopilotAdoptionGovernanceSettings settings,
+            IPrincipal principal)
+        {
+            var controller = new CopilotAdoptionAPIController(
+                AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionAnalysisCoordinator.Default,
+                () => settings,
+                new RecordingAuditSink());
+            controller.Request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/api/CopilotAdoption/test?windowDays=28");
+            controller.Configuration = new HttpConfiguration();
+            controller.RequestContext = new HttpRequestContext { Principal = principal };
+            return controller;
+        }
+
+        private static async Task<HttpStatusCode> Status(Task<IHttpActionResult> action)
+        {
+            var result = await action;
+            var response = await result.ExecuteAsync(CancellationToken.None);
+            return response.StatusCode;
+        }
+
+        private static IPrincipal SignedIn(string upn, params string[] roles)
+        {
+            var identity = new ClaimsIdentity("test");
+            identity.AddClaim(new Claim(ClaimTypes.Name, upn));
+            identity.AddClaim(new Claim(ClaimTypes.Upn, upn));
+            foreach (var role in roles)
+            {
+                identity.AddClaim(new Claim(ClaimTypes.Role, role));
+                identity.AddClaim(new Claim("roles", role));
+            }
+
+            return new ClaimsPrincipal(identity);
+        }
+
+        private static IPrincipal SignedInWithGroup(string upn, string groupId)
+        {
+            var identity = new ClaimsIdentity("test");
+            identity.AddClaim(new Claim(ClaimTypes.Name, upn));
+            identity.AddClaim(new Claim("groups", groupId));
+            return new ClaimsPrincipal(identity);
+        }
+
+        private sealed class RecordingAuditSink : ICopilotAdoptionExportAuditSink
+        {
+            public bool Write(CopilotAdoptionExportAuditRecord record)
+            {
+                return true;
+            }
         }
 
         #endregion

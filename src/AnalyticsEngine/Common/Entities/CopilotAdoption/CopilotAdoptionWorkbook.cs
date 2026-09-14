@@ -94,6 +94,12 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "To (UTC)", summary.ToUtc, string.Empty);
             AddMeta(sheet, "History window", $"{summary.Options.HistoryDays} days",
                 "How far back 'ever used Copilot' looks, which is what separates Dormant from Never used.");
+            AddMeta(sheet, "Figures incomplete", YesNo(summary.FiguresIncomplete),
+                summary.FiguresIncomplete
+                    ? "A source query failed or timed out. Treat every individual row and aggregate in this workbook as incomplete."
+                    : "No headline-source query reported an incomplete result.");
+            AddMeta(sheet, "Individual rows", summary.Options == null ? string.Empty : "See per-user sheets",
+                "The Licensed users and Licence opportunities sheets contain individual-level governance data. Do not share externally without a legal basis.");
 
             sheet.AddBlankRow();
             sheet.AddHeaderRow("Data source", "Available", "Notes");
@@ -152,6 +158,20 @@ namespace Common.Entities.CopilotAdoption
         private static string YesNo(bool value)
         {
             return value ? "Yes" : "No";
+        }
+
+        private static string WarningSummary(CopilotAdoptionSummary summary)
+        {
+            if (summary == null) return string.Empty;
+
+            var warnings = new List<string>();
+            if (summary.FiguresIncomplete)
+            {
+                warnings.Add("Figures incomplete: " + string.Join(", ", summary.IncompleteReasons));
+            }
+
+            warnings.AddRange(summary.Warnings ?? new List<string>());
+            return string.Join(" | ", warnings);
         }
 
         #endregion
@@ -852,7 +872,7 @@ namespace Common.Entities.CopilotAdoption
             if (users.Count == 0) return;
 
             var sheet = workbook.AddSheet("Licensed users");
-            sheet.SetColumnWidths(34, 26, 22, 22, 12, 10, 14, 12, 10, 10, 14, 14, 22, 60);
+            sheet.SetColumnWidths(34, 26, 22, 22, 12, 10, 16, 18, 42, 14, 12, 10, 10, 14, 14, 22, 60);
 
             // A workbook that quietly stops at a row limit is worse than one that refuses to export:
             // the reader has no way of knowing the list is short. Say so on the sheet itself, where it
@@ -868,9 +888,17 @@ namespace Common.Entities.CopilotAdoption
                     + "on the Licensed users tab if you need all of them."));
                 sheet.AddBlankRow();
             }
+            else if (analysis.Summary.FiguresIncomplete)
+            {
+                sheet.AddTitle("Licensed users - FIGURES INCOMPLETE");
+                sheet.AddRow(XlsxCell.Wrapped(
+                    "A source query failed or timed out. This sheet is incomplete and must not be used as a complete employee list."));
+                sheet.AddBlankRow();
+            }
 
             sheet.AddHeaderRow(
-                "User", "Department", "Job title", "Manager", "Engagement", "Band", "Interactions",
+                "User", "Department", "Job title", "Manager", "Engagement", "Band", "Signal source",
+                "Figures incomplete", "Figure warnings", "Interactions",
                 "Active days", "Expected", "Apps", "Used Cowork", "Days since last use", "Recommended action",
                 "Action detail");
 
@@ -885,6 +913,9 @@ namespace Common.Entities.CopilotAdoption
                     user.ManagerUserPrincipalName ?? string.Empty,
                     user.AdoptionScore,
                     user.BandName,
+                    user.SignalSource,
+                    analysis.Summary.FiguresIncomplete ? "Yes" : "No",
+                    XlsxCell.Wrapped(WarningSummary(analysis.Summary)),
                     user.Interactions,
                     user.ActiveDays,
                     user.ExpectedActiveDays,
@@ -896,7 +927,7 @@ namespace Common.Entities.CopilotAdoption
             }
 
             sheet.FreezeTopRows(headerRow);
-            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 14);
+            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 17);
         }
 
         private static void WriteOpportunitiesSheet(XlsxWriter workbook, CopilotAdoptionAnalysis analysis)
@@ -905,7 +936,7 @@ namespace Common.Entities.CopilotAdoption
             if (candidates.Count == 0) return;
 
             var sheet = workbook.AddSheet("Licence opportunities");
-            sheet.SetColumnWidths(34, 26, 22, 14, 14, 22, 14, 14, 14, 60);
+            sheet.SetColumnWidths(34, 26, 22, 14, 14, 18, 42, 22, 14, 14, 14, 60);
 
             if (candidates.Count > MaxUserRows)
             {
@@ -915,10 +946,17 @@ namespace Common.Entities.CopilotAdoption
                     + "The headline 'recommended for a licence' figure covers all of them."));
                 sheet.AddBlankRow();
             }
+            else if (analysis.Summary.FiguresIncomplete)
+            {
+                sheet.AddTitle("Licence opportunities - FIGURES INCOMPLETE");
+                sheet.AddRow(XlsxCell.Wrapped(
+                    "A source query failed or timed out. This sheet is incomplete and must not be used as a complete employee list."));
+                sheet.AddBlankRow();
+            }
 
             sheet.AddHeaderRow(
                 "User", "Department", "Job title", "Business case", "Recommended",
-                "Unlicensed Copilot interactions", "Teams", "Email", "Files", "Justification");
+                "Figures incomplete", "Figure warnings", "Unlicensed Copilot interactions", "Teams", "Email", "Files", "Justification");
 
             var headerRow = sheet.CurrentRow;
 
@@ -930,6 +968,8 @@ namespace Common.Entities.CopilotAdoption
                     candidate.JobTitle ?? string.Empty,
                     candidate.OpportunityScore,
                     candidate.Recommended ? "Yes" : "No",
+                    analysis.Summary.FiguresIncomplete ? "Yes" : "No",
+                    XlsxCell.Wrapped(WarningSummary(analysis.Summary)),
                     candidate.UnlicensedCopilotInteractions,
                     candidate.TeamsMessages + candidate.TeamsMeetings,
                     candidate.EmailsSent + candidate.EmailsRead,
@@ -938,7 +978,7 @@ namespace Common.Entities.CopilotAdoption
             }
 
             sheet.FreezeTopRows(headerRow);
-            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 10);
+            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 12);
         }
 
         #endregion

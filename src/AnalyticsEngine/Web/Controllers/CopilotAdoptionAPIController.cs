@@ -8,10 +8,13 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Security.Claims;
+using System.Security.Principal;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Http;
+using Newtonsoft.Json;
 using Web.AnalyticsWeb.Models.CopilotAdoption;
 
 namespace Web.AnalyticsWeb.Controllers
@@ -64,11 +67,27 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         internal CopilotAdoptionAPIController(CopilotAdoptionAnalysisCoordinator coordinator)
+            : this(
+                coordinator,
+                () => new AppConfig().CopilotAdoptionGovernance,
+                new SqlCopilotAdoptionExportAuditSink())
+        {
+        }
+
+        internal CopilotAdoptionAPIController(
+            CopilotAdoptionAnalysisCoordinator coordinator,
+            Func<CopilotAdoptionGovernanceSettings> governanceSettingsFactory,
+            ICopilotAdoptionExportAuditSink exportAuditSink)
         {
             Coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
+            _governanceSettingsFactory = governanceSettingsFactory ?? (() => new CopilotAdoptionGovernanceSettings());
+            _exportAuditSink = exportAuditSink ?? new SqlCopilotAdoptionExportAuditSink();
         }
 
         internal CopilotAdoptionAnalysisCoordinator Coordinator { get; }
+
+        private readonly Func<CopilotAdoptionGovernanceSettings> _governanceSettingsFactory;
+        private readonly ICopilotAdoptionExportAuditSink _exportAuditSink;
 
         #region Availability
 
@@ -82,7 +101,9 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("availability")]
         public IHttpActionResult Availability()
         {
-            var settings = new AppConfig().ImportJobSettings ?? new ImportTaskSettings();
+            var config = new AppConfig();
+            var settings = config.ImportJobSettings ?? new ImportTaskSettings();
+            var governance = config.CopilotAdoptionGovernance ?? GetGovernanceSettings();
 
             var model = new CopilotAdoptionAvailability
             {
@@ -90,6 +111,10 @@ namespace Web.AnalyticsWeb.Controllers
                 CopilotUsageReportImportEnabled = settings.GraphCopilotUsageReports,
                 UserMetadataImportEnabled = settings.GraphUsersMetadata,
                 M365UsageReportImportEnabled = settings.GraphUsageReports,
+                CanViewIndividualData = governance.HasIndividualDataAccess(UserPrincipal),
+                IndividualDataRoleConfigured = governance.IndividualDataRoleConfigured,
+                IndividualDataDisabled = governance.DisableIndividualData,
+                IndividualDataPseudonymised = governance.PseudonymiseIndividualData,
             };
 
             // Licence data is what makes this a *licence* adoption tool - without the user metadata
@@ -125,6 +150,18 @@ namespace Web.AnalyticsWeb.Controllers
                     "The Microsoft 365 usage-report import is disabled, so licence candidates can only be ranked "
                     + "on existing unlicensed Copilot use. Enable it to also find heavy Microsoft 365 users who "
                     + "have never tried Copilot.");
+            }
+
+            if (!model.CanViewIndividualData)
+            {
+                model.Messages.Add(governance.IndividualDataDeniedMessage(UserPrincipal));
+            }
+            else if (model.IndividualDataPseudonymised)
+            {
+                model.Messages.Add(
+                    "Per-user Copilot Adoption rows are pseudonymised on this deployment. Department, country, "
+                    + "band and activity measures remain visible, but direct identifiers are replaced by stable "
+                    + "surrogates in the page and in every export.");
             }
 
             return Ok(model);
@@ -314,17 +351,26 @@ namespace Web.AnalyticsWeb.Controllers
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
+            var governance = GetGovernanceSettings();
+            if (!governance.HasIndividualDataAccess(UserPrincipal))
+            {
+                return IndividualDataForbidden(governance);
+            }
+
             var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
             if (analysis == null) return StillBuilding();
+
+            var licensedUsers = GovernedRows(analysis.LicensedUsers, governance);
+            var opportunities = GovernedRows(analysis.Opportunities, governance);
 
             return Ok(new
             {
                 departments = Distinct(
-                    analysis.LicensedUsers.Select(u => u.Department)
-                        .Concat(analysis.Opportunities.Select(o => o.Department))),
+                    licensedUsers.Select(u => u.Department)
+                        .Concat(opportunities.Select(o => o.Department))),
                 countries = Distinct(
-                    analysis.LicensedUsers.Select(u => u.Country)
-                        .Concat(analysis.Opportunities.Select(o => o.Country))),
+                    licensedUsers.Select(u => u.Country)
+                        .Concat(opportunities.Select(o => o.Country))),
                 bands = CopilotAdoptionScoring.AllBands
                     .Select(b => new { value = (int)b, name = CopilotAdoptionScoring.BandDisplayName(b) })
                     .ToList(),
@@ -360,13 +406,19 @@ namespace Web.AnalyticsWeb.Controllers
             int take = DefaultTake,
             CancellationToken cancellationToken = default(CancellationToken))
         {
+            var governance = GetGovernanceSettings();
+            if (!governance.HasIndividualDataAccess(UserPrincipal))
+            {
+                return IndividualDataForbidden(governance);
+            }
+
             var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
             if (analysis == null) return StillBuilding();
 
             var query = BuildLicensedUserQuery(
                 search, bands, department, country, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
 
-            var matched = CopilotAdoptionExports.Apply(analysis.LicensedUsers, query);
+            var matched = CopilotAdoptionExports.Apply(GovernedRows(analysis.LicensedUsers, governance), query);
 
             return Ok(new LicensedUserPage
             {
@@ -401,22 +453,64 @@ namespace Web.AnalyticsWeb.Controllers
             bool sortDesc = false,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
-            // would just render the JSON body as the "file". So an export WAITS - but only up to
-            // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
-            // download instead of an answer.
-            var analysis = await TryGetAnalysisAsync(
-                windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
-            if (analysis == null) return ExportNotReadyResponse();
+            var governance = GetGovernanceSettings();
+            var audit = NewExportAudit("licensed-users/export", windowDays, governance);
+            HttpResponseMessage response;
 
-            var query = BuildLicensedUserQuery(
-                search, bands, department, country, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
+            try
+            {
+                if (!governance.HasIndividualDataAccess(UserPrincipal))
+                {
+                    audit.StatusCode = (int)HttpStatusCode.Forbidden;
+                    audit.FailureReason = governance.IndividualDataDeniedMessage(UserPrincipal);
+                    response = IndividualDataForbiddenResponse(governance);
+                }
+                else
+                {
+                    // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
+                    // would just render the JSON body as the "file". So an export WAITS - but only up to
+                    // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
+                    // download instead of an answer.
+                    var analysis = await TryGetAnalysisAsync(
+                        windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+                    if (analysis == null)
+                    {
+                        audit.StatusCode = (int)HttpStatusCode.ServiceUnavailable;
+                        audit.FailureReason = "analysis-not-ready";
+                        response = ExportNotReadyResponse();
+                    }
+                    else
+                    {
+                        var query = BuildLicensedUserQuery(
+                            search, bands, department, country, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
 
-            var rows = CopilotAdoptionExports.Apply(analysis.LicensedUsers, query).Take(MaxCsvRows).ToList();
+                        var matched = CopilotAdoptionExports.Apply(GovernedRows(analysis.LicensedUsers, governance), query);
+                        var rows = matched.Take(MaxCsvRows).ToList();
+                        audit.OptionsJson = JsonConvert.SerializeObject(analysis.Summary.Options);
+                        audit.RowCount = rows.Count;
+                        audit.Truncated = matched.Count > rows.Count;
+                        audit.Succeeded = true;
+                        audit.StatusCode = (int)HttpStatusCode.OK;
 
-            return CsvResponse(
-                CsvSerialiser.ToBytes(rows, CopilotAdoptionExports.LicensedUserColumns()),
-                CsvSerialiser.FileName("copilot-licensed-users", analysis.Summary.GeneratedUtc));
+                        response = CsvResponse(
+                            CsvSerialiser.ToBytes(
+                                rows,
+                                CopilotAdoptionExports.LicensedUserColumns(
+                                    analysis.Summary.FiguresIncomplete,
+                                    WarningSummary(analysis.Summary))),
+                            CsvSerialiser.FileName("copilot-licensed-users", analysis.Summary.GeneratedUtc));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                audit.StatusCode = (int)HttpStatusCode.InternalServerError;
+                audit.FailureReason = ex.GetType().Name;
+                response = Request.CreateResponse(HttpStatusCode.InternalServerError,
+                    "The Copilot Adoption licensed-user export failed. The failure has been recorded.");
+            }
+
+            return AuditAndMaybeBlockExport(audit, response);
         }
 
         #endregion
@@ -444,13 +538,19 @@ namespace Web.AnalyticsWeb.Controllers
             int take = DefaultTake,
             CancellationToken cancellationToken = default(CancellationToken))
         {
+            var governance = GetGovernanceSettings();
+            if (!governance.HasIndividualDataAccess(UserPrincipal))
+            {
+                return IndividualDataForbidden(governance);
+            }
+
             var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
             if (analysis == null) return StillBuilding();
 
             var query = BuildOpportunityQuery(
                 search, department, country, recommendedOnly, existingCopilotUsersOnly, minScore, sortBy, sortDesc);
 
-            var matched = CopilotAdoptionExports.Apply(analysis.Opportunities, query);
+            var matched = CopilotAdoptionExports.Apply(GovernedRows(analysis.Opportunities, governance), query);
 
             return Ok(new LicenceOpportunityPage
             {
@@ -478,22 +578,60 @@ namespace Web.AnalyticsWeb.Controllers
             bool sortDesc = true,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
-            // would just render the JSON body as the "file". So an export WAITS - but only up to
-            // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
-            // download instead of an answer.
-            var analysis = await TryGetAnalysisAsync(
-                windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
-            if (analysis == null) return ExportNotReadyResponse();
+            var governance = GetGovernanceSettings();
+            var audit = NewExportAudit("opportunities/export", windowDays, governance);
+            HttpResponseMessage response;
 
-            var query = BuildOpportunityQuery(
-                search, department, country, recommendedOnly, existingCopilotUsersOnly, minScore, sortBy, sortDesc);
+            try
+            {
+                if (!governance.HasIndividualDataAccess(UserPrincipal))
+                {
+                    audit.StatusCode = (int)HttpStatusCode.Forbidden;
+                    audit.FailureReason = governance.IndividualDataDeniedMessage(UserPrincipal);
+                    response = IndividualDataForbiddenResponse(governance);
+                }
+                else
+                {
+                    var analysis = await TryGetAnalysisAsync(
+                        windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+                    if (analysis == null)
+                    {
+                        audit.StatusCode = (int)HttpStatusCode.ServiceUnavailable;
+                        audit.FailureReason = "analysis-not-ready";
+                        response = ExportNotReadyResponse();
+                    }
+                    else
+                    {
+                        var query = BuildOpportunityQuery(
+                            search, department, country, recommendedOnly, existingCopilotUsersOnly, minScore, sortBy, sortDesc);
 
-            var rows = CopilotAdoptionExports.Apply(analysis.Opportunities, query).Take(MaxCsvRows).ToList();
+                        var matched = CopilotAdoptionExports.Apply(GovernedRows(analysis.Opportunities, governance), query);
+                        var rows = matched.Take(MaxCsvRows).ToList();
+                        audit.OptionsJson = JsonConvert.SerializeObject(analysis.Summary.Options);
+                        audit.RowCount = rows.Count;
+                        audit.Truncated = matched.Count > rows.Count;
+                        audit.Succeeded = true;
+                        audit.StatusCode = (int)HttpStatusCode.OK;
 
-            return CsvResponse(
-                CsvSerialiser.ToBytes(rows, CopilotAdoptionExports.LicenceOpportunityColumns()),
-                CsvSerialiser.FileName("copilot-licence-opportunities", analysis.Summary.GeneratedUtc));
+                        response = CsvResponse(
+                            CsvSerialiser.ToBytes(
+                                rows,
+                                CopilotAdoptionExports.LicenceOpportunityColumns(
+                                    analysis.Summary.FiguresIncomplete,
+                                    WarningSummary(analysis.Summary))),
+                            CsvSerialiser.FileName("copilot-licence-opportunities", analysis.Summary.GeneratedUtc));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                audit.StatusCode = (int)HttpStatusCode.InternalServerError;
+                audit.FailureReason = ex.GetType().Name;
+                response = Request.CreateResponse(HttpStatusCode.InternalServerError,
+                    "The Copilot Adoption licence-opportunity export failed. The failure has been recorded.");
+            }
+
+            return AuditAndMaybeBlockExport(audit, response);
         }
 
         #endregion
@@ -519,62 +657,234 @@ namespace Web.AnalyticsWeb.Controllers
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
-            // would just render the JSON body as the "file". So an export WAITS - but only up to
-            // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
-            // download instead of an answer.
-            var analysis = await TryGetAnalysisAsync(
-                windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
-            if (analysis == null) return ExportNotReadyResponse();
+            var governance = GetGovernanceSettings();
+            var audit = NewExportAudit("export/workbook", windowDays, governance);
+            HttpResponseMessage response;
 
-            byte[] bytes;
             try
             {
-                bytes = CopilotAdoptionWorkbook.Build(analysis);
+                if (!governance.HasIndividualDataAccess(UserPrincipal))
+                {
+                    audit.StatusCode = (int)HttpStatusCode.Forbidden;
+                    audit.FailureReason = governance.IndividualDataDeniedMessage(UserPrincipal);
+                    response = IndividualDataForbiddenResponse(governance);
+                }
+                else
+                {
+                    // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
+                    // would just render the JSON body as the "file". So an export WAITS - but only up to
+                    // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
+                    // download instead of an answer.
+                    var analysis = await TryGetAnalysisAsync(
+                        windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+                    if (analysis == null)
+                    {
+                        audit.StatusCode = (int)HttpStatusCode.ServiceUnavailable;
+                        audit.FailureReason = "analysis-not-ready";
+                        response = ExportNotReadyResponse();
+                    }
+                    else
+                    {
+                        byte[] bytes;
+                        try
+                        {
+                            bytes = CopilotAdoptionWorkbook.Build(GovernedAnalysis(analysis, governance));
+                        }
+                        catch (Exception ex)
+                        {
+                            // The workbook is assembled as OpenXML by hand, so a failure here is a defect in this
+                            // application rather than anything the caller did. Log it with detail and return a
+                            // deliberately plain message: the default Web API behaviour would put the exception
+                            // and its stack trace in the response body, and this endpoint is reachable by every
+                            // admin user.
+                            try
+                            {
+                                var config = new AppConfig();
+                                var logger = new AnalyticsLogger(
+                                    config.AppInsightsConnectionString, nameof(CopilotAdoptionAPIController));
+                                logger.TrackException(ex);
+                                logger.LogError($"Failed to build the Copilot adoption workbook: {ex.Message}");
+                            }
+                            catch (Exception)
+                            {
+                                // Telemetry must never be the reason a request fails differently. Swallowing here
+                                // is deliberate - the caller is already getting an error, and a logging failure on
+                                // top of it would replace a useful message with a confusing one.
+                            }
+
+                            audit.StatusCode = (int)HttpStatusCode.InternalServerError;
+                            audit.FailureReason = "workbook-build-failed";
+                            response = new HttpResponseMessage(HttpStatusCode.InternalServerError)
+                            {
+                                Content = new StringContent(
+                                    "The Copilot adoption workbook could not be generated. The failure has been logged; "
+                                    + "the CSV exports on the Licensed users and Licence opportunities tabs are unaffected."),
+                            };
+                            return AuditAndMaybeBlockExport(audit, response);
+                        }
+
+                        audit.OptionsJson = JsonConvert.SerializeObject(analysis.Summary.Options);
+                        audit.RowCount = (analysis.LicensedUsers?.Count ?? 0) + (analysis.Opportunities?.Count ?? 0);
+                        audit.Truncated = (analysis.LicensedUsers?.Count ?? 0) > CopilotAdoptionWorkbook.MaxUserRows
+                            || (analysis.Opportunities?.Count ?? 0) > CopilotAdoptionWorkbook.MaxUserRows;
+                        audit.Succeeded = true;
+                        audit.StatusCode = (int)HttpStatusCode.OK;
+
+                        response = new HttpResponseMessage(HttpStatusCode.OK)
+                        {
+                            Content = new ByteArrayContent(bytes),
+                        };
+
+                        response.Content.Headers.ContentType =
+                            new MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+                        response.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment")
+                        {
+                            FileName = CopilotAdoptionWorkbook.FileName(analysis.Summary),
+                        };
+                    }
+                }
             }
             catch (Exception ex)
             {
-                // The workbook is assembled as OpenXML by hand, so a failure here is a defect in this
-                // application rather than anything the caller did. Log it with detail and return a
-                // deliberately plain message: the default Web API behaviour would put the exception
-                // and its stack trace in the response body, and this endpoint is reachable by every
-                // admin user.
-                try
-                {
-                    var config = new AppConfig();
-                    var logger = new AnalyticsLogger(
-                        config.AppInsightsConnectionString, nameof(CopilotAdoptionAPIController));
-                    logger.TrackException(ex);
-                    logger.LogError($"Failed to build the Copilot adoption workbook: {ex.Message}");
-                }
-                catch (Exception)
-                {
-                    // Telemetry must never be the reason a request fails differently. Swallowing here
-                    // is deliberate - the caller is already getting an error, and a logging failure on
-                    // top of it would replace a useful message with a confusing one.
-                }
-
-                return new HttpResponseMessage(HttpStatusCode.InternalServerError)
-                {
-                    Content = new StringContent(
-                        "The Copilot adoption workbook could not be generated. The failure has been logged; "
-                        + "the CSV exports on the Licensed users and Licence opportunities tabs are unaffected."),
-                };
+                audit.StatusCode = (int)HttpStatusCode.InternalServerError;
+                audit.FailureReason = ex.GetType().Name;
+                response = Request.CreateResponse(HttpStatusCode.InternalServerError,
+                    "The Copilot Adoption workbook export failed. The failure has been recorded.");
             }
 
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new ByteArrayContent(bytes),
-            };
+            return AuditAndMaybeBlockExport(audit, response);
+        }
 
-            response.Content.Headers.ContentType =
-                new MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-            response.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment")
+        #endregion
+
+        #region Individual data governance
+
+        /// <summary>
+        /// Reads the current per-user governance policy. Kept behind a factory so tests can prove the
+        /// fail-closed 403 path without touching application configuration or starting a SQL analysis.
+        /// </summary>
+        private CopilotAdoptionGovernanceSettings GetGovernanceSettings()
+        {
+            return _governanceSettingsFactory() ?? new CopilotAdoptionGovernanceSettings();
+        }
+
+        private IPrincipal UserPrincipal => User ?? RequestContext?.Principal;
+
+        private IHttpActionResult IndividualDataForbidden(CopilotAdoptionGovernanceSettings governance)
+        {
+            return ResponseMessage(IndividualDataForbiddenResponse(governance));
+        }
+
+        private HttpResponseMessage IndividualDataForbiddenResponse(CopilotAdoptionGovernanceSettings governance)
+        {
+            var response = Request.CreateResponse(HttpStatusCode.Forbidden);
+            response.Content = new StringContent(
+                governance.IndividualDataDeniedMessage(UserPrincipal),
+                Encoding.UTF8,
+                "text/plain");
+            return response;
+        }
+
+        private List<LicensedUserAdoptionRow> GovernedRows(
+            IEnumerable<LicensedUserAdoptionRow> rows,
+            CopilotAdoptionGovernanceSettings governance)
+        {
+            return governance.PseudonymiseIndividualData
+                ? CopilotAdoptionPseudonymiser.Pseudonymise(rows, governance)
+                : (rows ?? Enumerable.Empty<LicensedUserAdoptionRow>()).ToList();
+        }
+
+        private List<LicenceOpportunityRow> GovernedRows(
+            IEnumerable<LicenceOpportunityRow> rows,
+            CopilotAdoptionGovernanceSettings governance)
+        {
+            return governance.PseudonymiseIndividualData
+                ? CopilotAdoptionPseudonymiser.Pseudonymise(rows, governance)
+                : (rows ?? Enumerable.Empty<LicenceOpportunityRow>()).ToList();
+        }
+
+        private CopilotAdoptionAnalysis GovernedAnalysis(
+            CopilotAdoptionAnalysis analysis,
+            CopilotAdoptionGovernanceSettings governance)
+        {
+            if (!governance.PseudonymiseIndividualData) return analysis;
+
+            return new CopilotAdoptionAnalysis
             {
-                FileName = CopilotAdoptionWorkbook.FileName(analysis.Summary),
+                Summary = analysis.Summary,
+                Sql = analysis.Sql,
+                LicensedUsers = GovernedRows(analysis.LicensedUsers, governance),
+                Opportunities = GovernedRows(analysis.Opportunities, governance),
+                UnlicensedUsers = analysis.UnlicensedUsers,
+                Agents = analysis.Agents,
             };
+        }
+
+        private CopilotAdoptionExportAuditRecord NewExportAudit(
+            string endpoint,
+            int windowDays,
+            CopilotAdoptionGovernanceSettings governance)
+        {
+            return new CopilotAdoptionExportAuditRecord
+            {
+                Actor = ActorName(UserPrincipal),
+                Endpoint = endpoint,
+                Parameters = Request?.RequestUri?.Query,
+                WindowDays = NormaliseWindowDays(windowDays),
+                Pseudonymised = governance.PseudonymiseIndividualData,
+                IndividualDataDisabled = governance.DisableIndividualData,
+            };
+        }
+
+        private HttpResponseMessage AuditAndMaybeBlockExport(
+            CopilotAdoptionExportAuditRecord audit,
+            HttpResponseMessage response)
+        {
+            bool written;
+            try
+            {
+                written = _exportAuditSink.Write(audit);
+            }
+            catch
+            {
+                written = false;
+            }
+
+            if (!written && response != null && response.IsSuccessStatusCode)
+            {
+                return Request.CreateResponse(
+                    HttpStatusCode.InternalServerError,
+                    "The Copilot Adoption export was blocked because the export audit row could not be written.");
+            }
 
             return response;
+        }
+
+        private static string WarningSummary(CopilotAdoptionSummary summary)
+        {
+            if (summary == null) return null;
+
+            var warnings = new List<string>();
+            if (summary.FiguresIncomplete)
+            {
+                warnings.Add("Figures incomplete: " + string.Join(", ", summary.IncompleteReasons));
+            }
+
+            warnings.AddRange(summary.Warnings ?? new List<string>());
+            return warnings.Count == 0 ? null : string.Join(" | ", warnings);
+        }
+
+        private static string ActorName(IPrincipal principal)
+        {
+            var claims = principal as ClaimsPrincipal;
+            var claim = claims?.Claims.FirstOrDefault(c =>
+                c.Type == ClaimTypes.Upn
+                || c.Type == ClaimTypes.Email
+                || c.Type == ClaimTypes.Name
+                || c.Type == "preferred_username");
+
+            if (!string.IsNullOrWhiteSpace(claim?.Value)) return claim.Value;
+            return principal?.Identity?.Name;
         }
 
         #endregion

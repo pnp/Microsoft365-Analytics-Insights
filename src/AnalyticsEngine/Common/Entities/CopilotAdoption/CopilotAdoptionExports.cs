@@ -183,7 +183,9 @@ namespace Common.Entities.CopilotAdoption
         /// The licensed-user CSV. Column order tells the story the export exists to tell: who they are,
         /// how much they are using Copilot, how that scores, and what to do about it.
         /// </summary>
-        public static IReadOnlyList<CsvColumn<LicensedUserAdoptionRow>> LicensedUserColumns()
+        public static IReadOnlyList<CsvColumn<LicensedUserAdoptionRow>> LicensedUserColumns(
+            bool figuresIncomplete = false,
+            string warningSummary = null)
         {
             return new List<CsvColumn<LicensedUserAdoptionRow>>
             {
@@ -200,6 +202,9 @@ namespace Common.Entities.CopilotAdoption
 
                 new CsvColumn<LicensedUserAdoptionRow>("Adoption score (0-100)", r => r.AdoptionScore),
                 new CsvColumn<LicensedUserAdoptionRow>("Engagement band", r => r.BandName),
+                new CsvColumn<LicensedUserAdoptionRow>("Signal source", r => r.SignalSource),
+                new CsvColumn<LicensedUserAdoptionRow>("Figures incomplete", r => figuresIncomplete),
+                new CsvColumn<LicensedUserAdoptionRow>("Figure warnings", r => warningSummary),
                 new CsvColumn<LicensedUserAdoptionRow>("Frequency score", r => r.FrequencyScore),
                 new CsvColumn<LicensedUserAdoptionRow>("Depth score", r => r.DepthScore),
                 new CsvColumn<LicensedUserAdoptionRow>("Breadth score", r => r.BreadthScore),
@@ -219,7 +224,6 @@ namespace Common.Entities.CopilotAdoption
                 new CsvColumn<LicensedUserAdoptionRow>("Microsoft report prompts", r => r.ReportPrompts),
                 new CsvColumn<LicensedUserAdoptionRow>("Microsoft report active days", r => r.ReportActiveDays),
                 new CsvColumn<LicensedUserAdoptionRow>("Microsoft report last activity", r => r.ReportLastActivityUtc),
-                new CsvColumn<LicensedUserAdoptionRow>("Signal source", r => r.SignalSource),
 
                 new CsvColumn<LicensedUserAdoptionRow>("Recommended action", r => r.RecommendedActionLabel),
                 new CsvColumn<LicensedUserAdoptionRow>("Recommended action detail", r => r.RecommendedAction),
@@ -283,7 +287,9 @@ namespace Common.Entities.CopilotAdoption
         /// ends with a ready-written justification, so the file can go straight to whoever signs off
         /// the spend.
         /// </summary>
-        public static IReadOnlyList<CsvColumn<LicenceOpportunityRow>> LicenceOpportunityColumns()
+        public static IReadOnlyList<CsvColumn<LicenceOpportunityRow>> LicenceOpportunityColumns(
+            bool figuresIncomplete = false,
+            string warningSummary = null)
         {
             return new List<CsvColumn<LicenceOpportunityRow>>
             {
@@ -298,6 +304,8 @@ namespace Common.Entities.CopilotAdoption
 
                 new CsvColumn<LicenceOpportunityRow>("Opportunity score (0-100)", r => r.OpportunityScore),
                 new CsvColumn<LicenceOpportunityRow>("Recommended for a licence", r => r.Recommended),
+                new CsvColumn<LicenceOpportunityRow>("Figures incomplete", r => figuresIncomplete),
+                new CsvColumn<LicenceOpportunityRow>("Figure warnings", r => warningSummary),
 
                 new CsvColumn<LicenceOpportunityRow>("Unlicensed Copilot interactions", r => r.UnlicensedCopilotInteractions),
                 new CsvColumn<LicenceOpportunityRow>("Unlicensed Copilot active days", r => r.UnlicensedCopilotActiveDays),

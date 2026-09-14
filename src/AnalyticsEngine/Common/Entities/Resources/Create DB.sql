@@ -215,6 +215,25 @@ CREATE TABLE [dbo].[users] (
 );
 
 
+-- Creating table 'copilot_adoption_export_audit'
+CREATE TABLE [dbo].[copilot_adoption_export_audit] (
+    [id] bigint IDENTITY(1,1) NOT NULL,
+    [occurred_utc] datetime2(3) NOT NULL CONSTRAINT [DF_copilot_adoption_export_audit_occurred_utc] DEFAULT SYSUTCDATETIME(),
+    [actor] nvarchar(512) NULL,
+    [endpoint] nvarchar(200) NOT NULL,
+    [parameters] nvarchar(max) NULL,
+    [window_days] int NULL,
+    [options_json] nvarchar(max) NULL,
+    [row_count] int NULL,
+    [truncated] bit NOT NULL CONSTRAINT [DF_copilot_adoption_export_audit_truncated] DEFAULT (0),
+    [succeeded] bit NOT NULL CONSTRAINT [DF_copilot_adoption_export_audit_succeeded] DEFAULT (0),
+    [status_code] int NOT NULL,
+    [failure_reason] nvarchar(1000) NULL,
+    [pseudonymised] bit NOT NULL CONSTRAINT [DF_copilot_adoption_export_audit_pseudonymised] DEFAULT (1),
+    [individual_data_disabled] bit NOT NULL CONSTRAINT [DF_copilot_adoption_export_audit_individual_data_disabled] DEFAULT (0)
+);
+
+
 -- --------------------------------------------------
 -- Creating all PRIMARY KEY constraints
 -- --------------------------------------------------
@@ -354,6 +373,12 @@ ADD CONSTRAINT [PK_urls]
 -- Creating primary key on [id] in table 'users'
 ALTER TABLE [dbo].[users]
 ADD CONSTRAINT [PK_users]
+    PRIMARY KEY CLUSTERED ([id] ASC);
+
+
+-- Creating primary key on [id] in table 'copilot_adoption_export_audit'
+ALTER TABLE [dbo].[copilot_adoption_export_audit]
+ADD CONSTRAINT [PK_copilot_adoption_export_audit]
     PRIMARY KEY CLUSTERED ([id] ASC);
 
 
@@ -674,6 +699,11 @@ ON [dbo].[sessions]
 
 
 -- Lookups
+CREATE NONCLUSTERED INDEX [IX_copilot_adoption_export_audit_occurred_utc]
+    ON [dbo].[copilot_adoption_export_audit] ([occurred_utc] ASC)
+    INCLUDE ([endpoint], [actor], [succeeded], [status_code]);
+
+
 CREATE UNIQUE NONCLUSTERED INDEX IX_search ON dbo.search_terms
 	(
 	[search_term]
@@ -920,4 +950,3 @@ CREATE VIEW url_stats AS
 	from urls
 
 GO
-

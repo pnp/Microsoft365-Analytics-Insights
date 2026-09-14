@@ -65,6 +65,8 @@ const WINDOW_OPTIONS = [
 
 type AdoptionTab = 'overview' | 'licensed' | 'unlicensed' | 'agents' | 'opportunities' | 'method';
 
+const EXPORT_NOTICE_SESSION_KEY = 'copilot-adoption-export-notice-seen';
+
 const useStyles = makeStyles({
   header: {
     display: 'flex',
@@ -195,6 +197,9 @@ export default function CopilotAdoptionPage() {
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [filterOptions, setFilterOptions] = useState<AdoptionFilterOptions | null>(null);
   const [sql, setSql] = useState<Record<string, string> | null>(null);
+  const [showExportNotice, setShowExportNotice] = useState(
+    () => window.sessionStorage.getItem(EXPORT_NOTICE_SESSION_KEY) !== 'true',
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -239,13 +244,18 @@ export default function CopilotAdoptionPage() {
         if (!cancelled) setSummaryLoading(false);
       });
 
-    // The filter lists and the SQL come from the same cached analysis, so these are cheap follow-ups
-    // rather than extra work. Their failure is not worth surfacing - the page works without them.
-    fetchAdoptionFilters(windowDays, undefined, controller.signal)
-      .then((f) => {
-        if (!cancelled) setFilterOptions(f);
-      })
-      .catch(() => undefined);
+    // The filter lists contain values from the individual-user populations, so the server refuses
+    // them unless the signed-in user has the individual-data role. Do not even ask for them in the
+    // aggregate-only state; the per-user tabs are absent and no control needs those lists.
+    if (availability.canViewIndividualData) {
+      fetchAdoptionFilters(windowDays, undefined, controller.signal)
+        .then((f) => {
+          if (!cancelled) setFilterOptions(f);
+        })
+        .catch(() => undefined);
+    } else {
+      setFilterOptions(null);
+    }
 
     fetchAdoptionSql(windowDays, undefined, controller.signal)
       .then((s) => {
@@ -262,14 +272,27 @@ export default function CopilotAdoptionPage() {
     };
   }, [availability, windowDays]);
 
+  useEffect(() => {
+    if (availability?.available && !availability.canViewIndividualData && (tab === 'licensed' || tab === 'opportunities')) {
+      setTab('overview');
+      setDrillAction(undefined);
+    }
+  }, [availability, tab]);
+
   const onTabSelect: SelectTabEventHandler = (_e, data) => {
     setDrillAction(undefined);
     setTab(data.value as AdoptionTab);
   };
 
   const drillToAction = (code: string) => {
+    if (!availability?.canViewIndividualData) return;
     setDrillAction(code);
     setTab('licensed');
+  };
+
+  const acknowledgeExportNotice = () => {
+    window.sessionStorage.setItem(EXPORT_NOTICE_SESSION_KEY, 'true');
+    setShowExportNotice(false);
   };
 
   return (
@@ -279,8 +302,8 @@ export default function CopilotAdoptionPage() {
           <Title3>Copilot Adoption</Title3>
           <Body1 block className={styles.intro}>
             Who is paying for a Microsoft 365 Copilot licence they are not using, and who would benefit from one
-            they do not have. Both lists export to CSV with full user metadata, so they can be handed to a
-            department lead or attached to a licence request.
+            they do not have. The overview is aggregate; individual-user lists and exports require the dedicated
+            Copilot Adoption individual-data role and may be pseudonymised by deployment policy.
           </Body1>
         </div>
         <div className={styles.controls}>
@@ -298,7 +321,7 @@ export default function CopilotAdoptionPage() {
               </option>
             ))}
           </Select>
-          {availability?.available && (
+          {availability?.available && availability.canViewIndividualData && (
             <Tooltip
               relationship="description"
               content={
@@ -316,6 +339,7 @@ export default function CopilotAdoptionPage() {
                 as="a"
                 href={summary ? workbookExportUrl(windowDays) : undefined}
                 disabled={!summary}
+                onClick={acknowledgeExportNotice}
               >
                 Excel report
               </Button>
@@ -357,13 +381,37 @@ export default function CopilotAdoptionPage() {
             </MessageBar>
           )}
 
+          {availability.canViewIndividualData && availability.individualDataPseudonymised && (
+            <MessageBar intent="info" style={{ marginTop: '16px' }}>
+              <MessageBarBody>
+                Names and sign-in addresses are replaced with stable surrogates in every per-user list and
+                export, because this deployment has not opted into named individual data. Departments, bands
+                and scores are unaffected, and the same person keeps the same surrogate between runs. To show
+                real names, set the <code>CopilotAdoptionPseudonymiseIndividualData</code> application setting
+                to <code>false</code> &mdash; and check first that you have a lawful basis for it.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+
+          {availability.canViewIndividualData && showExportNotice && (
+            <MessageBar intent="warning" style={{ marginTop: '16px' }}>
+              <MessageBarBody>
+                Exports contain individual-level Copilot adoption data about employees. Do not share files outside
+                the customer organisation unless there is a clear legal basis.
+                <Button size="small" appearance="subtle" onClick={acknowledgeExportNotice} style={{ marginLeft: '8px' }}>
+                  OK
+                </Button>
+              </MessageBarBody>
+            </MessageBar>
+          )}
+
           <div className={styles.subTabs}>
             <TabList selectedValue={tab} onTabSelect={onTabSelect}>
               <Tab value="overview">Overview</Tab>
-              <Tab value="licensed">Licensed users</Tab>
+              {availability.canViewIndividualData && <Tab value="licensed">Licensed users</Tab>}
               <Tab value="unlicensed">Unlicensed usage</Tab>
               <Tab value="agents">Agents</Tab>
-              <Tab value="opportunities">Licence opportunities</Tab>
+              {availability.canViewIndividualData && <Tab value="opportunities">Licence opportunities</Tab>}
               <Tab value="method">How this is calculated</Tab>
             </TabList>
           </div>
@@ -417,10 +465,14 @@ export default function CopilotAdoptionPage() {
                   // thousands of seats that it has none at all.
                   <FirstRunState summary={summary} />
                 ) : (
-                  <OverviewTab summary={summary} sql={sql} onDrillToAction={drillToAction} />
+                  <OverviewTab
+                    summary={summary}
+                    sql={sql}
+                    onDrillToAction={availability.canViewIndividualData ? drillToAction : undefined}
+                  />
                 ))}
 
-              {tab === 'licensed' && (
+              {availability.canViewIndividualData && tab === 'licensed' && (
                 <LicensedUsersPanel
                   key={drillAction ?? 'all'}
                   windowDays={windowDays}
@@ -428,6 +480,7 @@ export default function CopilotAdoptionPage() {
                   actionPlan={summary.actionPlan}
                   options={summary.options}
                   initialAction={drillAction}
+                  onExportNotice={acknowledgeExportNotice}
                 />
               )}
 
@@ -450,11 +503,12 @@ export default function CopilotAdoptionPage() {
                 />
               )}
 
-              {tab === 'opportunities' && (
+              {availability.canViewIndividualData && tab === 'opportunities' && (
                 <OpportunitiesPanel
                   windowDays={windowDays}
                   filterOptions={filterOptions}
                   options={summary.options}
+                  onExportNotice={acknowledgeExportNotice}
                 />
               )}
 
