@@ -1,4 +1,4 @@
-using Newtonsoft.Json;
+﻿using Newtonsoft.Json;
 using System;
 
 namespace Common.Entities.CopilotAdoption
@@ -29,6 +29,25 @@ namespace Common.Entities.CopilotAdoption
         public string ManagerUserPrincipalName { get; set; }
 
         public bool? AccountEnabled { get; set; }
+
+        /// <summary>
+        /// Entra user.createdDateTime persisted by the user import. Used as the current account-age proxy
+        /// for Copilot seat tenure until real assignment history exists.
+        /// </summary>
+        public DateTime? AccountCreatedUtc { get; set; }
+
+        /// <summary>Reason on the current reclaim exclusion, if this user has one.</summary>
+        public string ReclaimExclusionReason { get; set; }
+
+        public string ReclaimExclusionNote { get; set; }
+
+        public string ReclaimExcludedBy { get; set; }
+
+        public DateTime? ReclaimExcludedUtc { get; set; }
+
+        public DateTime? ReclaimExclusionReviewAfterUtc { get; set; }
+
+        public bool ReclaimExclusionExpired { get; set; }
 
         /// <summary>Copilot seat SKUs held, comma separated (a user can hold more than one).</summary>
         public string SeatLicences { get; set; }
@@ -117,6 +136,45 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("accountEnabled")]
         public bool? AccountEnabled { get; set; }
+
+        [JsonProperty("accountCreatedUtc")]
+        public DateTime? AccountCreatedUtc { get; set; }
+
+        [JsonProperty("tenureStartUtc")]
+        public DateTime? TenureStartUtc { get; set; }
+
+        [JsonProperty("tenureBasis")]
+        public string TenureBasis { get; set; }
+
+        [JsonProperty("daysSinceTenureStart")]
+        public int? DaysSinceTenureStart { get; set; }
+
+        [JsonProperty("tooNewToJudge")]
+        public bool TooNewToJudge { get; set; }
+
+        [JsonProperty("reclaimEligibility")]
+        public string ReclaimEligibility { get; set; }
+
+        [JsonProperty("reclaimEligibilityReason")]
+        public string ReclaimEligibilityReason { get; set; }
+
+        [JsonProperty("reclaimExclusionReason")]
+        public string ReclaimExclusionReason { get; set; }
+
+        [JsonProperty("reclaimExclusionNote")]
+        public string ReclaimExclusionNote { get; set; }
+
+        [JsonProperty("reclaimExcludedBy")]
+        public string ReclaimExcludedBy { get; set; }
+
+        [JsonProperty("reclaimExcludedUtc")]
+        public DateTime? ReclaimExcludedUtc { get; set; }
+
+        [JsonProperty("reclaimExclusionReviewAfterUtc")]
+        public DateTime? ReclaimExclusionReviewAfterUtc { get; set; }
+
+        [JsonProperty("reclaimExclusionExpired")]
+        public bool ReclaimExclusionExpired { get; set; }
 
         [JsonProperty("seatLicences")]
         public string SeatLicences { get; set; }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -363,6 +363,13 @@ namespace Common.Entities.CopilotAdoption
                 "       company.name AS CompanyName,\r\n" +
                 "       manager.user_name AS ManagerUserPrincipalName,\r\n" +
                 "       u.account_enabled AS AccountEnabled,\r\n" +
+                "       u.created_utc AS AccountCreatedUtc,\r\n" +
+                "       exclusion.reason AS ReclaimExclusionReason,\r\n" +
+                "       exclusion.note AS ReclaimExclusionNote,\r\n" +
+                "       exclusion.excluded_by AS ReclaimExcludedBy,\r\n" +
+                "       exclusion.excluded_utc AS ReclaimExcludedUtc,\r\n" +
+                "       exclusion.review_after_utc AS ReclaimExclusionReviewAfterUtc,\r\n" +
+                "       CAST(CASE WHEN expired.user_id IS NULL THEN 0 ELSE 1 END AS bit) AS ReclaimExclusionExpired,\r\n" +
                 "       CAST(ISNULL(chats.Interactions, 0) AS bigint) AS Interactions,\r\n" +
                 "       CAST(ISNULL(chats.PriorInteractions, 0) AS bigint) AS PriorInteractions,\r\n" +
                 "       ISNULL(chats.ActiveDays, 0) AS ActiveDays,\r\n" +
@@ -392,6 +399,20 @@ namespace Common.Entities.CopilotAdoption
                 "LEFT JOIN dbo.users AS manager ON manager.id = u.manager_id\r\n" +
                 "LEFT JOIN CopilotUsage AS chats ON chats.user_id = u.id\r\n" +
                 (includeCopilotReport ? "LEFT JOIN ReportSnapshot AS report ON report.user_id = u.id\r\n" : string.Empty) +
+                "OUTER APPLY (\r\n" +
+                "    SELECT TOP (1) e.reason, e.note, e.excluded_by, e.excluded_utc, e.review_after_utc\r\n" +
+                "    FROM dbo.copilot_adoption_reclaim_exclusions AS e\r\n" +
+                "    WHERE e.user_id = u.id\r\n" +
+                "      AND (e.review_after_utc IS NULL OR e.review_after_utc > SYSUTCDATETIME())\r\n" +
+                "    ORDER BY e.excluded_utc DESC, e.id DESC\r\n" +
+                ") AS exclusion\r\n" +
+                "OUTER APPLY (\r\n" +
+                "    SELECT TOP (1) e.user_id\r\n" +
+                "    FROM dbo.copilot_adoption_reclaim_exclusions AS e\r\n" +
+                "    WHERE e.user_id = u.id\r\n" +
+                "      AND e.review_after_utc <= SYSUTCDATETIME()\r\n" +
+                "    ORDER BY e.review_after_utc DESC, e.excluded_utc DESC, e.id DESC\r\n" +
+                ") AS expired\r\n" +
                 // Ordered by id so the cap truncates deterministically: the same users are dropped on
                 // every run, which makes a capped report reproducible instead of randomly different.
                 "ORDER BY u.id\r\n" +

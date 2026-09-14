@@ -102,6 +102,7 @@ const DEFAULT_FILTERS: LicensedUserFilters = {
   actions: [],
   department: '',
   country: '',
+  reclaimEligibility: '',
   coworkOnly: false,
   disabledOnly: false,
   sortBy: 'score',
@@ -250,6 +251,18 @@ export default function LicensedUsersPanel({
               {a.label} ({a.users.toLocaleString()})
             </option>
           ))}
+        </Select>
+
+        <Select
+          value={filters.reclaimEligibility}
+          aria-label="Filter by reclaim eligibility"
+          onChange={(_e, d) => setFilters((f) => ({ ...f, reclaimEligibility: d.value }))}
+        >
+          <option value="">All reclaim tiers</option>
+          <option value="certain">Certain reclaim</option>
+          <option value="probable">Probable reclaim</option>
+          <option value="review">Review before reclaim</option>
+          <option value="excluded">Excluded from reclaim</option>
         </Select>
 
         <Select
@@ -406,6 +419,19 @@ export default function LicensedUsersPanel({
                 <th className={table.th}>Last used</th>
                 <th className={table.th}>
                   <span className={styles.thWithInfo}>
+                    Reclaim tier
+                    <InfoTip
+                      title="Reclaim eligibility"
+                      content={{
+                        what: 'Whether this seat is safe to put in the reclaim total. Certain means a disabled account still holds a seat; probable means no observed use beyond the grace period; review means a human must check first; excluded means an admin already reviewed it.',
+                        how: `Uses the same row-level key as the headline reclaim counts. A new user inside the ${options.reclaimGraceDays}-day grace period is review-only, and active new users have their expected active days prorated.`,
+                        source: 'Leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from Microsoft 365 usage data, so they must be handled through review or an exclusion.',
+                      }}
+                    />
+                  </span>
+                </th>
+                <th className={table.th}>
+                  <span className={styles.thWithInfo}>
                     Action
                     <InfoTip
                       title="Recommended action"
@@ -464,6 +490,16 @@ export default function LicensedUsersPanel({
                     {row.daysSinceLastUse !== null && row.daysSinceLastUse > 0 && (
                       <Text size={100} block className={table.tdSub}>
                         {row.daysSinceLastUse} days ago
+                      </Text>
+                    )}
+                  </td>
+                  <td className={table.td}>
+                    <Tooltip relationship="description" content={row.reclaimEligibilityReason || 'This active seat is not in a reclaim tier.'}>
+                      <Text size={200}>{row.reclaimEligibility || '—'}</Text>
+                    </Tooltip>
+                    {row.reclaimExclusionExpired && (
+                      <Text size={100} block className={table.tdSub}>
+                        exclusion expired
                       </Text>
                     )}
                   </td>

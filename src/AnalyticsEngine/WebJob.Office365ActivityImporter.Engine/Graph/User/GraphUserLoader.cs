@@ -1,4 +1,4 @@
-using DataUtils;
+﻿using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
@@ -55,7 +55,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // when only their licence assignments were updated, even though those
             // are tracked properties on the underlying user object.
             var initialDeltaUrl = $"https://graph.microsoft.com:443/v1.0/users/delta" +
-                "?$select=id,accountEnabled,officeLocation,usageLocation,jobTitle,department,mail,userPrincipalName,manager,companyName,postalCode,country,state,assignedLicenses,assignedPlans" +
+                "?$select=id,accountEnabled,createdDateTime,officeLocation,usageLocation,jobTitle,department,mail,userPrincipalName,manager,companyName,postalCode,country,state,assignedLicenses,assignedPlans" +
                 "&$expand=manager";
             if (!string.IsNullOrEmpty(usersQueryDelta))
             {

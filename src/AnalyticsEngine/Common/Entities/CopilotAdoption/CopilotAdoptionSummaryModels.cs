@@ -1,4 +1,4 @@
-using Common.Entities.Copilot;
+﻿using Common.Entities.Copilot;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -337,6 +337,31 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         [JsonProperty("reclaimableSeats")]
         public int ReclaimableSeats { get; set; }
+
+        /// <summary>Disabled accounts that still hold a Copilot seat. This is the zero-risk reclaim KPI.</summary>
+        [JsonProperty("disabledLicensedUsers")]
+        public int DisabledLicensedUsers { get; set; }
+
+        [JsonProperty("reclaimCertainSeats")]
+        public int ReclaimCertainSeats { get; set; }
+
+        [JsonProperty("reclaimProbableSeats")]
+        public int ReclaimProbableSeats { get; set; }
+
+        [JsonProperty("reclaimReviewSeats")]
+        public int ReclaimReviewSeats { get; set; }
+
+        [JsonProperty("reclaimExcludedUsers")]
+        public int ReclaimExcludedUsers { get; set; }
+
+        [JsonProperty("expiredReclaimExclusions")]
+        public int ExpiredReclaimExclusions { get; set; }
+
+        [JsonProperty("tooNewToJudgeUsers")]
+        public int TooNewToJudgeUsers { get; set; }
+
+        [JsonProperty("reclaimCaveat")]
+        public string ReclaimCaveat { get; set; }
 
         /// <summary>Mean engagement score across all licensed users, including the ones scoring zero.</summary>
         [JsonProperty("averageAdoptionScore")]

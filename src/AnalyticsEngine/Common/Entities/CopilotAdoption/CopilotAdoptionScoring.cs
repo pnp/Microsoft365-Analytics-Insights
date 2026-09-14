@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -28,6 +28,20 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>Score built from Microsoft's per-user Copilot usage report.</summary>
         public const string SignalSourceUsageReport = "usageReport";
+
+        /// <summary>The current tenure signal is Entra account age, not true Copilot seat tenure.</summary>
+        public const string TenureBasisAccountAge = "accountAge";
+
+        /// <summary>No tenure signal was available, so reclaim confidence is deliberately lowered.</summary>
+        public const string TenureBasisUnknown = "unknown";
+
+        public static class ReclaimEligibilityTiers
+        {
+            public const string Certain = "certain";
+            public const string Probable = "probable";
+            public const string Review = "review";
+            public const string Excluded = "excluded";
+        }
 
         #region Licensed-user engagement
 
@@ -74,6 +88,38 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
+        /// Frequency target adjusted for a new user's actual observation window. Until issue #277 adds
+        /// real seat-tenure history, <c>users.created_utc</c> is the best cheap proxy we have. Only the
+        /// early-tenure case is prorated; established users still use the full-window target so the
+        /// metric remains comparable across the population.
+        /// </summary>
+        public static double TargetActiveDaysForTenure(LicensedUserUsageRow row, DateTime nowUtc, CopilotAdoptionOptions options)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var target = TargetActiveDays(o);
+            var days = DaysSinceTenureStart(row?.AccountCreatedUtc, nowUtc);
+            if (!days.HasValue || days.Value >= Math.Max(1, o.ReclaimGraceDays)) return target;
+
+            var observedDays = Math.Max(1, Math.Min(Math.Max(1, o.WindowDays), days.Value + 1));
+            return Math.Max(1d, target * observedDays / Math.Max(1, o.WindowDays));
+        }
+
+        /// <summary>Whole days since the tenure proxy started, clamped to zero for clock skew.</summary>
+        public static int? DaysSinceTenureStart(DateTime? tenureStartUtc, DateTime nowUtc)
+        {
+            if (!tenureStartUtc.HasValue) return null;
+            return Math.Max(0, (int)(nowUtc.Date - tenureStartUtc.Value.Date).TotalDays);
+        }
+
+        /// <summary>Whether the only tenure signal says the user is still inside the grace period.</summary>
+        public static bool IsTooNewToJudge(LicensedUserUsageRow row, DateTime nowUtc, CopilotAdoptionOptions options)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var days = DaysSinceTenureStart(row?.AccountCreatedUtc, nowUtc);
+            return days.HasValue && days.Value < Math.Max(1, o.ReclaimGraceDays);
+        }
+
+        /// <summary>
         /// Turns one licensed user's raw signals into a scored, banded, actionable row.
         /// </summary>
         /// <param name="row">The user's raw counters, straight from the database.</param>
@@ -114,7 +160,7 @@ namespace Common.Entities.CopilotAdoption
                 ? row.ReportLastActivityUtc
                 : (row.LastInteractionUtc ?? row.ReportLastActivityUtc);
 
-            var targetActiveDays = TargetActiveDays(o);
+            var targetActiveDays = TargetActiveDaysForTenure(row, nowUtc, o);
             var frequency = Ratio(activeDays, targetActiveDays);
             var depth = activeDays > 0
                 ? Ratio((double)interactions / activeDays, o.DepthTargetInteractionsPerActiveDay)
@@ -149,6 +195,17 @@ namespace Common.Entities.CopilotAdoption
                 CompanyName = row.CompanyName,
                 ManagerUserPrincipalName = row.ManagerUserPrincipalName,
                 AccountEnabled = row.AccountEnabled,
+                AccountCreatedUtc = row.AccountCreatedUtc,
+                TenureStartUtc = row.AccountCreatedUtc,
+                TenureBasis = row.AccountCreatedUtc.HasValue ? TenureBasisAccountAge : TenureBasisUnknown,
+                DaysSinceTenureStart = DaysSinceTenureStart(row.AccountCreatedUtc, nowUtc),
+                TooNewToJudge = IsTooNewToJudge(row, nowUtc, o),
+                ReclaimExclusionReason = row.ReclaimExclusionReason,
+                ReclaimExclusionNote = row.ReclaimExclusionNote,
+                ReclaimExcludedBy = row.ReclaimExcludedBy,
+                ReclaimExcludedUtc = row.ReclaimExcludedUtc,
+                ReclaimExclusionReviewAfterUtc = row.ReclaimExclusionReviewAfterUtc,
+                ReclaimExclusionExpired = row.ReclaimExclusionExpired,
                 SeatLicences = row.SeatLicences,
 
                 Interactions = interactions,
@@ -177,10 +234,68 @@ namespace Common.Entities.CopilotAdoption
                 SignalSource = useReport ? SignalSourceUsageReport : SignalSourceAudit,
             };
 
+            ApplyReclaimEligibility(scored, o);
             scored.RecommendedActionCode = RecommendedActionCode(scored);
             scored.RecommendedActionLabel = ActionLabel(scored.RecommendedActionCode);
             scored.RecommendedAction = RecommendedAction(scored, o);
             return scored;
+        }
+
+        /// <summary>
+        /// Assigns the reclaim confidence tier from the same row fields the drill-through list exposes.
+        /// Disabled seats are certain. Never-used enabled accounts with enough tenure are probable.
+        /// Dormant, too-new and unknown-tenure users are review-only because leave, part-time work and
+        /// service/shared accounts are not observable from Microsoft 365 activity data.
+        /// </summary>
+        public static void ApplyReclaimEligibility(LicensedUserAdoptionRow row, CopilotAdoptionOptions options = null)
+        {
+            if (row == null) throw new ArgumentNullException(nameof(row));
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            if (!string.IsNullOrEmpty(row.ReclaimExclusionReason))
+            {
+                row.ReclaimEligibility = ReclaimEligibilityTiers.Excluded;
+                row.ReclaimEligibilityReason = $"Excluded by admin: {row.ReclaimExclusionReason}.";
+                return;
+            }
+
+            if (row.AccountEnabled == false)
+            {
+                row.ReclaimEligibility = ReclaimEligibilityTiers.Certain;
+                row.ReclaimEligibilityReason = "Disabled account still holds a Copilot seat. Reclaim immediately.";
+                return;
+            }
+
+            if (row.Band == AdoptionBand.NeverUsed)
+            {
+                if (row.TooNewToJudge)
+                {
+                    row.ReclaimEligibility = ReclaimEligibilityTiers.Review;
+                    row.ReclaimEligibilityReason = $"Too new to judge: {row.TenureBasis} is below the {o.ReclaimGraceDays}-day grace period.";
+                }
+                else if (row.AccountEnabled == true && row.DaysSinceTenureStart.HasValue)
+                {
+                    row.ReclaimEligibility = ReclaimEligibilityTiers.Probable;
+                    row.ReclaimEligibilityReason = $"No observed Copilot use and {row.TenureBasis} is beyond the {o.ReclaimGraceDays}-day grace period.";
+                }
+                else
+                {
+                    row.ReclaimEligibility = ReclaimEligibilityTiers.Review;
+                    row.ReclaimEligibilityReason = "No observed Copilot use, but account state or tenure is unknown.";
+                }
+                return;
+            }
+
+            if (row.Band == AdoptionBand.Dormant)
+            {
+                row.ReclaimEligibility = ReclaimEligibilityTiers.Review;
+                row.ReclaimEligibilityReason = "Dormant seat: review with the user's manager before reclaiming.";
+            }
+            else
+            {
+                row.ReclaimEligibility = string.Empty;
+                row.ReclaimEligibilityReason = string.Empty;
+            }
         }
 
         /// <summary>
@@ -361,6 +476,24 @@ namespace Common.Entities.CopilotAdoption
             if (row == null) throw new ArgumentNullException(nameof(row));
             var o = options ?? CopilotAdoptionOptions.Default;
 
+            if (row.ReclaimEligibility == ReclaimEligibilityTiers.Excluded)
+            {
+                var review = row.ReclaimExclusionReviewAfterUtc.HasValue
+                    ? $" Review after {row.ReclaimExclusionReviewAfterUtc.Value:yyyy-MM-dd}."
+                    : " Permanent until an admin changes it.";
+                return $"Excluded from reclaim - {row.ReclaimExclusionReason}.{review}";
+            }
+
+            if (row.TooNewToJudge && row.Band == AdoptionBand.NeverUsed)
+            {
+                return $"Review before reclaim - Too new to judge: {row.TenureBasis} is below the {o.ReclaimGraceDays}-day grace period. Do not reclaim yet; check again after onboarding has had time to work.";
+            }
+
+            if (row.ReclaimEligibility == ReclaimEligibilityTiers.Review && row.Band == AdoptionBand.NeverUsed)
+            {
+                return "Review before reclaim - no observed Copilot use, but the account state or tenure signal is incomplete. Confirm this is not leave, part-time work, a service account or a shared mailbox before reassigning the licence.";
+            }
+
             switch (row.Band)
             {
                 case AdoptionBand.NeverUsed:
@@ -422,6 +555,8 @@ namespace Common.Entities.CopilotAdoption
             public const string Grow = "grow";
             public const string Sustain = "sustain";
             public const string Advocate = "advocate";
+            public const string Review = "review";
+            public const string Excluded = "excluded";
         }
 
         /// <summary>All action codes in the order they should be worked through - cheapest saving first.</summary>
@@ -434,6 +569,8 @@ namespace Common.Entities.CopilotAdoption
             AdoptionActionCodes.Grow,
             AdoptionActionCodes.Sustain,
             AdoptionActionCodes.Advocate,
+            AdoptionActionCodes.Review,
+            AdoptionActionCodes.Excluded,
         };
 
         /// <summary>
@@ -444,6 +581,9 @@ namespace Common.Entities.CopilotAdoption
         public static string RecommendedActionCode(LicensedUserAdoptionRow row)
         {
             if (row == null) throw new ArgumentNullException(nameof(row));
+
+            if (row.ReclaimEligibility == ReclaimEligibilityTiers.Excluded) return AdoptionActionCodes.Excluded;
+            if (row.ReclaimEligibility == ReclaimEligibilityTiers.Review && row.Band == AdoptionBand.NeverUsed) return AdoptionActionCodes.Review;
 
             switch (row.Band)
             {
@@ -479,6 +619,8 @@ namespace Common.Entities.CopilotAdoption
                 case AdoptionActionCodes.Grow: return "Deepen to daily use";
                 case AdoptionActionCodes.Sustain: return "No action needed";
                 case AdoptionActionCodes.Advocate: return "Recruit as advocate";
+                case AdoptionActionCodes.Review: return "Review before reclaim";
+                case AdoptionActionCodes.Excluded: return "Excluded from reclaim";
                 default: return string.Empty;
             }
         }
@@ -529,6 +671,15 @@ namespace Common.Entities.CopilotAdoption
                          + "run a peer session for their own department, which converts better than centrally "
                          + "run training. If their breadth score is low they are still worth showing one more "
                          + "surface.";
+
+                case AdoptionActionCodes.Review:
+                    return "Potential reclaim cases that are too new, dormant, or missing enough tenure/account "
+                         + "context to act on automatically. Leave, part-time patterns, service accounts and "
+                         + "shared mailboxes are not detectable from usage data, so a human review is required.";
+
+                case AdoptionActionCodes.Excluded:
+                    return "Reviewed cases an admin deliberately excluded from reclaim. They still hold a seat "
+                         + "and remain in the licence denominator, but do not inflate the actionable reclaim KPI.";
 
                 default: return string.Empty;
             }

@@ -1,4 +1,4 @@
-extern alias AnalyticsWeb;
+﻿extern alias AnalyticsWeb;
 
 using Common.Entities.CopilotAdoption;
 using UnitTests.FakeLoaderClasses;
@@ -278,6 +278,65 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(20d, CopilotAdoptionScoring.AvailableWorkingDays(options), 0.001);
             Assert.AreEqual(12d, CopilotAdoptionScoring.TargetActiveDays(options), 0.001);
+        }
+
+        [TestMethod]
+        public void BrandNewInactiveUser_IsTooNewToJudgeNotReclaimable()
+        {
+            // New starters are the highest-risk false positive: without a tenure grace period a person
+            // licensed five days ago is scored against a full month and lands in the reclaim list before
+            // onboarding has had a fair chance to work.
+            var row = UsageRow(interactions: 0, activeDays: 0, appsUsed: 0, lastUse: null);
+            row.AccountEnabled = true;
+            row.AccountCreatedUtc = Now.AddDays(-5);
+
+            var scored = CopilotAdoptionScoring.Score(row, WindowStart, Now, auditAvailable: true);
+
+            Assert.AreEqual(AdoptionBand.NeverUsed, scored.Band, "The raw usage state is still true.");
+            Assert.IsTrue(scored.TooNewToJudge);
+            Assert.AreEqual(CopilotAdoptionScoring.ReclaimEligibilityTiers.Review, scored.ReclaimEligibility,
+                "Too-new users need a later review, not an automatic reclaim recommendation.");
+            Assert.AreEqual(CopilotAdoptionScoring.AdoptionActionCodes.Review, scored.RecommendedActionCode);
+            StringAssert.Contains(scored.RecommendedAction, "Too new to judge");
+            Assert.AreEqual(CopilotAdoptionScoring.TenureBasisAccountAge, scored.TenureBasis,
+                "Until seat-tenure history exists, the row must say it used account age.");
+        }
+
+        [TestMethod]
+        public void BrandNewHighlyActiveUser_GetsProratedFrequencyTarget()
+        {
+            // The grace period protects in both directions. A daily user who joined last week is a
+            // champion-in-progress, not a Trialling user, because they could not possibly have been
+            // active on the full-window target days.
+            var row = UsageRow(interactions: 30, activeDays: 5, appsUsed: 3, lastUse: Now.AddDays(-1));
+            row.AccountEnabled = true;
+            row.AccountCreatedUtc = Now.AddDays(-5);
+
+            var scored = CopilotAdoptionScoring.Score(row, WindowStart, Now, auditAvailable: true);
+
+            Assert.IsTrue(scored.ExpectedActiveDays < CopilotAdoptionScoring.TargetActiveDays(CopilotAdoptionOptions.Default),
+                "Frequency must be prorated while the account-age tenure proxy is inside the grace period.");
+            Assert.AreEqual(100, scored.FrequencyScore);
+            Assert.AreEqual(AdoptionBand.Champion, scored.Band);
+            Assert.IsFalse(scored.TooNewToJudge && scored.ReclaimEligibility == CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable,
+                "Active new users must never leak into reclaim tiers.");
+        }
+
+        [TestMethod]
+        public void LongTenuredInactiveUser_IsProbableReclaim()
+        {
+            // This is the low-risk reclaim case: no observed use, account enabled, and the available
+            // tenure signal is comfortably beyond the grace period.
+            var row = UsageRow(interactions: 0, activeDays: 0, appsUsed: 0, lastUse: null);
+            row.AccountEnabled = true;
+            row.AccountCreatedUtc = Now.AddDays(-120);
+
+            var scored = CopilotAdoptionScoring.Score(row, WindowStart, Now, auditAvailable: true);
+
+            Assert.AreEqual(AdoptionBand.NeverUsed, scored.Band);
+            Assert.AreEqual(CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable, scored.ReclaimEligibility);
+            Assert.AreEqual(CopilotAdoptionScoring.AdoptionActionCodes.Reclaim, scored.RecommendedActionCode);
+            StringAssert.Contains(scored.ReclaimEligibilityReason, "beyond the 30-day grace period");
         }
 
         [TestMethod]
@@ -619,6 +678,10 @@ namespace Tests.UnitTests
             // Deterministic truncation, so a capped report is reproducible rather than randomly
             // different between runs.
             StringAssert.Contains(sql, "TOP (@maxRows)");
+            StringAssert.Contains(sql, "u.created_utc AS AccountCreatedUtc",
+                "The user detail rows must carry the account-age tenure proxy used by the grace-period rule.");
+            StringAssert.Contains(sql, "dbo.copilot_adoption_reclaim_exclusions",
+                "Reclaim exclusions must be read with the same user-id key the detail list drills through on.");
             StringAssert.Contains(sql, "ORDER BY u.id");
             StringAssert.Contains(sql, "OPTION (RECOMPILE)");
         }
@@ -1228,13 +1291,47 @@ namespace Tests.UnitTests
             Assert.AreEqual(3, summary.ActiveUsers, "Trialling, Established and Champion are active.");
             Assert.AreEqual(2, summary.NeverUsedUsers);
             Assert.AreEqual(1, summary.DormantUsers);
-            Assert.AreEqual(3, summary.ReclaimableSeats, "Never-used plus dormant seats are the reclaim candidates.");
+            Assert.AreEqual(2, summary.ReclaimableSeats, "Only certain/probable seats are reclaimable; dormant seats are review-only.");
+            Assert.AreEqual(0, summary.ReclaimCertainSeats);
+            Assert.AreEqual(2, summary.ReclaimProbableSeats);
+            Assert.AreEqual(1, summary.ReclaimReviewSeats, "Dormant users need a human review, not automatic reclaim.");
             Assert.AreEqual(2, summary.HabitualUsers, "Established and Champion only.");
             Assert.AreEqual(50, summary.AdoptionRatePct);
             Assert.AreEqual(
                 summary.LicensedUsers,
                 summary.ActiveUsers + summary.NeverUsedUsers + summary.DormantUsers,
                 "Every licensed user must land in exactly one of active / dormant / never used.");
+        }
+
+        [TestMethod]
+        public void Summary_SplitsReclaimByConfidenceAndShowsExclusions()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(new[]
+            {
+                ScoredUser("disabled@contoso.com", 0, AdoptionBand.NeverUsed),
+                ScoredUser("probable@contoso.com", 0, AdoptionBand.NeverUsed),
+                ScoredUser("dormant@contoso.com", 0, AdoptionBand.Dormant),
+                ScoredUser("excluded@contoso.com", 0, AdoptionBand.NeverUsed),
+            });
+            analysis.LicensedUsers[0].AccountEnabled = false;
+            analysis.LicensedUsers[3].ReclaimExclusionReason = "service account";
+            analysis.LicensedUsers[3].ReclaimExcludedBy = "admin@contoso.com";
+            foreach (var user in analysis.LicensedUsers)
+            {
+                CopilotAdoptionScoring.ApplyReclaimEligibility(user);
+                user.RecommendedActionCode = CopilotAdoptionScoring.RecommendedActionCode(user);
+            }
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(1, analysis.Summary.DisabledLicensedUsers);
+            Assert.AreEqual(1, analysis.Summary.ReclaimCertainSeats);
+            Assert.AreEqual(1, analysis.Summary.ReclaimProbableSeats);
+            Assert.AreEqual(1, analysis.Summary.ReclaimReviewSeats);
+            Assert.AreEqual(1, analysis.Summary.ReclaimExcludedUsers);
+            Assert.AreEqual(2, analysis.Summary.ReclaimableSeats,
+                "Excluded and review-only rows remain licensed seats but must not inflate the actionable reclaim KPI.");
         }
 
         [TestMethod]
@@ -2081,6 +2178,8 @@ namespace Tests.UnitTests
             {
                 UserId = 1,
                 UserPrincipalName = "user@contoso.com",
+                AccountEnabled = true,
+                AccountCreatedUtc = Now.AddDays(-120),
                 Interactions = interactions,
                 ActiveDays = activeDays,
                 AppsUsed = appsUsed,
@@ -2091,14 +2190,23 @@ namespace Tests.UnitTests
 
         private static LicensedUserAdoptionRow ScoredUser(string upn, double score, AdoptionBand band)
         {
-            return new LicensedUserAdoptionRow
+            var row = new LicensedUserAdoptionRow
             {
                 UserId = upn.GetHashCode(),
                 UserPrincipalName = upn,
+                AccountEnabled = true,
+                AccountCreatedUtc = Now.AddDays(-120),
+                TenureStartUtc = Now.AddDays(-120),
+                TenureBasis = CopilotAdoptionScoring.TenureBasisAccountAge,
+                DaysSinceTenureStart = 120,
                 AdoptionScore = score,
                 Band = band,
                 BandName = CopilotAdoptionScoring.BandDisplayName(band),
             };
+            CopilotAdoptionScoring.ApplyReclaimEligibility(row);
+            row.RecommendedActionCode = CopilotAdoptionScoring.RecommendedActionCode(row);
+            row.RecommendedActionLabel = CopilotAdoptionScoring.ActionLabel(row.RecommendedActionCode);
+            return row;
         }
 
         private static LicensedUserAdoptionRow Departmental(string upn, string department, double score)

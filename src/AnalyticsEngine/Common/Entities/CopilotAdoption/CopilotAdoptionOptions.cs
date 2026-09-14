@@ -1,4 +1,4 @@
-using Newtonsoft.Json;
+﻿using Newtonsoft.Json;
 
 namespace Common.Entities.CopilotAdoption
 {
@@ -121,6 +121,15 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         [JsonProperty("agentNewDays")]
         public int AgentNewDays { get; set; } = 30;
+
+        /// <summary>
+        /// How long a newly-created Entra user is protected from reclaim recommendations. This is an
+        /// account-age proxy for the future seat-tenure history (#277): a new starter with five days of
+        /// Copilot ownership must not be judged against a full-window target, and a new starter with no
+        /// prompts yet belongs in "too new to judge", not in a list of seats to take away.
+        /// </summary>
+        [JsonProperty("reclaimGraceDays")]
+        public int ReclaimGraceDays { get; set; } = 30;
 
         /// <summary>
         /// Distinct users an agent needs before its usage is treated as adoption rather than as its

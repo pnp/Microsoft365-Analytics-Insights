@@ -1,4 +1,4 @@
-using Common.Entities.Copilot;
+﻿using Common.Entities.Copilot;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -1093,7 +1093,15 @@ namespace Common.Entities.CopilotAdoption
             summary.NeverUsedUsers = users.Count(u => u.Band == AdoptionBand.NeverUsed);
             summary.DormantUsers = users.Count(u => u.Band == AdoptionBand.Dormant);
             summary.HabitualUsers = users.Count(u => CopilotAdoptionScoring.IsHabitual(u.Band));
-            summary.ReclaimableSeats = summary.NeverUsedUsers + summary.DormantUsers;
+            summary.DisabledLicensedUsers = users.Count(u => u.AccountEnabled == false);
+            summary.ReclaimCertainSeats = users.Count(u => string.Equals(u.ReclaimEligibility, CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain, StringComparison.OrdinalIgnoreCase));
+            summary.ReclaimProbableSeats = users.Count(u => string.Equals(u.ReclaimEligibility, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable, StringComparison.OrdinalIgnoreCase));
+            summary.ReclaimReviewSeats = users.Count(u => string.Equals(u.ReclaimEligibility, CopilotAdoptionScoring.ReclaimEligibilityTiers.Review, StringComparison.OrdinalIgnoreCase));
+            summary.ReclaimExcludedUsers = users.Count(u => string.Equals(u.ReclaimEligibility, CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded, StringComparison.OrdinalIgnoreCase));
+            summary.ExpiredReclaimExclusions = users.Count(u => u.ReclaimExclusionExpired);
+            summary.TooNewToJudgeUsers = users.Count(u => u.TooNewToJudge);
+            summary.ReclaimableSeats = summary.ReclaimCertainSeats + summary.ReclaimProbableSeats;
+            summary.ReclaimCaveat = "Reclaim excludes admin exclusions and separates review-only cases. Leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from Microsoft 365 usage data.";
             summary.TotalInteractions = users.Sum(u => u.Interactions);
 
             summary.AdoptionRatePct = CopilotAdoptionScoring.Percentage(summary.ActiveUsers, denominator);
