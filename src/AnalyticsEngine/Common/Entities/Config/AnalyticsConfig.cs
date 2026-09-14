@@ -1,7 +1,9 @@
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration.UserSecrets;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 
 namespace Common.Entities.Config
 {
@@ -66,23 +68,54 @@ namespace Common.Entities.Config
 
             if (string.Equals(environment, "Development", StringComparison.OrdinalIgnoreCase))
             {
-                // The solution-wide developer secrets store, read from THIS assembly rather than the
-                // entry assembly. Two reasons. First, the entry assembly is the wrong thing to ask:
-                // under `dotnet test` it is testhost, which carries no UserSecretsId, so an
-                // entry-assembly lookup silently finds nothing for the whole suite. Second, one store
-                // shared by every executable is what a developer actually wants - the web app, both web
-                // jobs, the installer and the tests all authenticate against the same tenant with the
-                // same app registration.
-                //
-                // Called directly rather than reflectively. An earlier version looked the method up via
-                // Type.GetType and swallowed failures, which meant a typo or a missing assembly left the
-                // whole feature silently dead - and it was: it resolved nothing at run time and the
-                // empty tenant only showed up when the importer was actually started.
-                builder.AddUserSecrets(typeof(AnalyticsConfig).Assembly, optional: true);
+                AddDeveloperSecrets(builder);
             }
 
             return builder.AddEnvironmentVariables().Build();
         }
+
+        /// <summary>
+        /// Adds the developer's user-secrets store(s).
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The solution keeps ONE shared store, declared as <c>pnp-m365-analytics-insights</c> on
+        /// <c>Common.Entities</c> and repeated as the <c>UserSecretsId</c> of every executable and test
+        /// project. One store is what a developer wants: the web app, both web jobs, the installer and
+        /// the tests all authenticate against the same tenant with the same app registration.
+        /// </para>
+        /// <para>
+        /// It is read from <b>this</b> assembly rather than the entry assembly, because the entry
+        /// assembly is the wrong thing to ask - under <c>dotnet test</c> it is <c>testhost</c>, which
+        /// carries no id at all, so an entry-assembly lookup silently finds nothing for the whole suite.
+        /// </para>
+        /// <para>
+        /// The entry assembly's own store is then added as well, when it declares a DIFFERENT id. That
+        /// is a deliberate safety net for the sharpest edge here: Visual Studio's "Manage User Secrets"
+        /// generates a fresh random id into whichever project it is invoked on, and a developer who does
+        /// that on the web app gets a store nothing reads. Worse, it looks like it works -
+        /// <c>WebApplication.CreateBuilder</c> loads that store into <c>builder.Configuration</c> in
+        /// Development, but nothing in this solution reads configuration from the host builder; every
+        /// read goes through this class. So the secrets are loaded, ignored, and give no error. Reading
+        /// the entry assembly's store too means such a store still works, and it takes precedence
+        /// because it is the more specific of the two.
+        /// </para>
+        /// </remarks>
+        private static void AddDeveloperSecrets(IConfigurationBuilder builder)
+        {
+            var shared = typeof(AnalyticsConfig).Assembly;
+            builder.AddUserSecrets(shared, optional: true);
+
+            var entry = System.Reflection.Assembly.GetEntryAssembly();
+            if (entry != null && entry != shared && SecretsIdOf(entry) is string entryId
+                && !string.Equals(entryId, SecretsIdOf(shared), StringComparison.Ordinal))
+            {
+                builder.AddUserSecrets(entry, optional: true);
+            }
+        }
+
+        private static string SecretsIdOf(System.Reflection.Assembly assembly) =>
+            assembly.GetCustomAttribute<UserSecretsIdAttribute>()?.UserSecretsId;
 
 
         /// <summary>Replaces the configuration. Test seam only.</summary>

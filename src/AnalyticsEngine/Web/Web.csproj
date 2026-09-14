@@ -7,6 +7,10 @@
     <LangVersion>latest</LangVersion>
     <!-- Properties\AssemblyInfo.cs is checked in and carries the product version attributes. -->
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!-- The SHARED solution-wide secrets store, deliberately the same id as Common.Entities. Without
+         it, Visual Studio's `Manage User Secrets` mints a fresh random id into this project and opens a
+         store that AnalyticsConfig never reads - secrets that appear saved but are silently ignored. -->
+    <UserSecretsId>pnp-m365-analytics-insights</UserSecretsId>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <NoWarn>$(NoWarn);SYSLIB0011;SYSLIB0021;SYSLIB0022;SYSLIB0023;SYSLIB0060;CA1416;NU1510</NoWarn>
@@ -14,7 +18,6 @@
     <SpaRoot>Scripts\portal\</SpaRoot>
     <NpmInstallStampFile>Scripts/portal/node_modules/.install-stamp</NpmInstallStampFile>
     <SpaBuildOutputFile>$(SpaRoot)build\index.html</SpaBuildOutputFile>
-    <UserSecretsId>caa00516-6812-4ef4-8453-06ca62348754</UserSecretsId>
   </PropertyGroup>
 
   <!-- The SPA sources are not compiled by MSBuild; excluding them keeps the default globs off
