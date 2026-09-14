@@ -13,7 +13,6 @@ using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
-using System.Web.Http;
 using Tests.UnitTests.FakeControllers;
 using Tests.UnitTests.FakeEntities;
 using WebJob.Office365ActivityImporter.Engine;
@@ -179,9 +178,8 @@ namespace Tests.UnitTests
             const int CALLS_TO_ADD = 10;
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
 
-            var httpConfig = new HttpConfiguration();
-            httpConfig.MapHttpAttributeRoutes();
-            var server = new HttpServer(httpConfig);        // Will use fake controllers in test project
+            using var fakeApi = new FakeApiHost();       // Will use fake controllers in test project
+            var server = fakeApi.Handler;
 
             // Create new SB client (updated to RBAC credential auth)
             var config = new AppConfig();
@@ -268,9 +266,8 @@ namespace Tests.UnitTests
         {
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
 
-            var config = new HttpConfiguration();
-            config.MapHttpAttributeRoutes();
-            var server = new HttpServer(config);
+            using var fakeApi = new FakeApiHost();
+            var server = fakeApi.Handler;
 
             using (var client = new ManualGraphCallClient(server, logger))
             {

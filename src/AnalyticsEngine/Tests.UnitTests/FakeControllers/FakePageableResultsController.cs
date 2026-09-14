@@ -1,11 +1,9 @@
-﻿using System.Net;
-using System.Net.Http;
-using System.Web.Http;
+using Microsoft.AspNetCore.Mvc;
 using Tests.UnitTests.FakeEntities;
 
 namespace Tests.UnitTests.FakeControllers
 {
-    public class FakePageableResultsController : ApiController
+    public class FakePageableResultsController : ControllerBase
     {
         public FakePageableResultsController()
         {
@@ -13,7 +11,7 @@ namespace Tests.UnitTests.FakeControllers
 
         [HttpGet]
         [Route("fakepagedresults")]
-        public HttpResponseMessage PageTest(int skip, int maxCount, int pageSize)
+        public IActionResult PageTest(int skip, int maxCount, int pageSize)
         {
             var data = new FakePagedResult();
             var to = skip + pageSize;
@@ -31,10 +29,7 @@ namespace Tests.UnitTests.FakeControllers
                 data.OdataNextLink = GetUrl(skip + pageSize, maxCount, pageSize);
             }
 
-            var r = Request.CreateResponse(HttpStatusCode.OK, data);
-
-
-            return r;
+            return Ok(data);
         }
 
 
