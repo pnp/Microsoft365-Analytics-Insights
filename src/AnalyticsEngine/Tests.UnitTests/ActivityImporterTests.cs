@@ -12,7 +12,6 @@ using System.Data.Entity;
 using System.Data.SqlTypes;
 using System.Linq;
 using System.Threading.Tasks;
-using System.Web.Http;
 using Tests.UnitTests.FakeEntities;
 using Tests.UnitTests.FakeLoaderClasses;
 using Tests.UnitTests.Properties;
@@ -674,9 +673,8 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
             var auth = new ActivityAPIAppIndentityOAuthContext(logger, s.ClientID, s.TenantGUID.ToString(), s.ClientSecret, s.KeyVaultUrl, s.UseClientCertificate);
 
 
-            var config = new HttpConfiguration();
-            config.MapHttpAttributeRoutes();
-            var server = new HttpServer(config);
+            using var fakeApi = new FakeApiHost();
+            var server = fakeApi.Handler;
 
             // Clear down DB
             using (var db = new FakeOfficeServicesDB())
@@ -710,9 +708,8 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
             // Get settings
             var s = GetSettings();
 
-            HttpConfiguration config = new HttpConfiguration();
-            config.MapHttpAttributeRoutes();
-            HttpServer server = new HttpServer(config);
+            using var fakeApi = new FakeApiHost();
+            var server = fakeApi.Handler;
 
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
 

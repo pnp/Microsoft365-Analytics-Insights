@@ -1,22 +1,20 @@
-﻿using Common.Entities.Config;
+using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Graph;
 using System;
 using System.Collections.Generic;
-using System.Net;
-using System.Net.Http;
 using System.Threading.Tasks;
-using System.Web.Http;
+using Microsoft.AspNetCore.Mvc;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace Tests.UnitTests.FakeControllers
 {
-    public class FakeCallsController : ApiController
+    public class FakeCallsController : ControllerBase
     {
         [HttpGet]
         [Route("v1.0/communications/callRecords/{id}")]
-        public async Task<HttpResponseMessage> Call(string id)
+        public async Task<IActionResult> Call(string id)
         {
             var authConfig = new AppConfig();
             var _auth = new GraphAppIndentityOAuthContext(AnalyticsLogger.ConsoleOnlyTracer(), authConfig.ClientID, authConfig.TenantGUID.ToString(), authConfig.ClientSecret, authConfig.KeyVaultUrl, authConfig.UseClientCertificate);
@@ -48,9 +46,7 @@ namespace Tests.UnitTests.FakeControllers
                 Modalities = new string[] { "this", "that" }
             });
 
-            var r = Request.CreateResponse(HttpStatusCode.OK, call);
-
-            return r;
+            return Ok(call);
         }
 
 

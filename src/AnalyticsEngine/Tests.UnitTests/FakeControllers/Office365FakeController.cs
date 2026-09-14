@@ -1,13 +1,11 @@
-﻿using Newtonsoft.Json;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
-using System.Net;
-using System.Net.Http;
-using System.Web.Http;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Tests.UnitTests.FakeControllers
 {
-    public class Office365FakeController : ApiController
+    public class Office365FakeController : ControllerBase
     {
         // Process-wide counter so every fake content-summary gets a unique contentId across all pages /
         // time-chunk requests (mirrors real, globally-unique Activity API content blob ids).
@@ -19,19 +17,19 @@ namespace Tests.UnitTests.FakeControllers
 
         [HttpPost]
         [Route("{tenantDomain}/oauth2/token")]
-        public HttpResponseMessage GetFakeAuthToken(string tenantDomain)
+        public IActionResult GetFakeAuthToken(string tenantDomain)
         {
             // Taken from a real request 30-5-2018.
             string fakeKey = "{\"token_type\":\"Bearer\",\"expires_in\":\"3599\",\"ext_expires_in\":\"0\",\"expires_on\":\"1527703450\",\"not_before\":\"1527699550\",\"resource\":\"https://manage.office.com\",\"access_token\":\"eyFAKETOKEN\"}";
             Console.WriteLine($"--Office365FakeController.GetFakeAuthToken called. Returning '{fakeKey}'");
-            return Request.CreateResponse(HttpStatusCode.OK, JObject.Parse(fakeKey));
+            return Ok(JObject.Parse(fakeKey));
         }
 
         #region Subscriptions
 
         [HttpGet]
         [Route("api/v1.0/{tenantDomain}/activity/feed/subscriptions/list")]
-        public HttpResponseMessage ListSubs(Guid tenantDomain)
+        public IActionResult ListSubs(Guid tenantDomain)
         {
             // Fake Json data
             string subString = string.Empty;
@@ -49,16 +47,16 @@ namespace Tests.UnitTests.FakeControllers
 
             var allSubs = JsonConvert.DeserializeObject(allSubsString);
 
-            return Request.CreateResponse(HttpStatusCode.OK, allSubs);
+            return Ok(allSubs);
         }
 
         [Route("api/v1.0/{tenantDomain}/activity/feed/subscriptions/start")]
         [HttpPost]
-        public HttpResponseMessage StartSubscription(Guid tenantDomain, [FromUri] string contentType)
+        public IActionResult StartSubscription(Guid tenantDomain, [FromQuery] string contentType)
         {
             if (string.IsNullOrWhiteSpace(contentType))
             {
-                return Request.CreateErrorResponse(HttpStatusCode.BadRequest, "No contentType");
+                return BadRequest("No contentType");
             }
 
             using (FakeOfficeServicesDB db = new FakeOfficeServicesDB())
@@ -69,14 +67,14 @@ namespace Tests.UnitTests.FakeControllers
 
             Console.WriteLine($"--Office365FakeController.StartSubscription called. Returning 'HTTP 200'.");
 
-            return Request.CreateResponse(HttpStatusCode.Created);
+            return StatusCode(201);
         }
 
         #endregion
 
         [HttpGet]
         [Route("api/v1.0/{tenantDomain}/activity/feed/subscriptions/content")]
-        public HttpResponseMessage GetFakeActivitySummary(Guid tenantDomain)
+        public IActionResult GetFakeActivitySummary(Guid tenantDomain)
         {
             string fakeActivity = string.Empty;
             Guid fakeDomain = default(Guid);
@@ -97,26 +95,24 @@ namespace Tests.UnitTests.FakeControllers
 
             var allActivity = JsonConvert.DeserializeObject(fakeActivity);
 
-            HttpResponseMessage r = Request.CreateResponse(HttpStatusCode.OK, allActivity);
-
-            // Add a fake "next page" to not-next-page requests
+            // Add a fake "next page" to not-next-page requests.
+            //
+            // fakeDomain is default(Guid), so this is really "unless the caller's tenant is the zero
+            // GUID". That is load-bearing and easy to break from a long way away: a zeroed TenantGUID in
+            // configuration makes this withhold the header, and every paging test then imports exactly
+            // half of what it expects while still passing its other assertions.
             if (!fakeDomain.Equals(tenantDomain))
             {
-                //Console.WriteLine($"--Office365FakeController.GetFakeActivities called. Returning {Constants.ACTIVITIES_PER_TIME_CHUNK} activities, with next-page results.");
-                r.Headers.Add("NextPageUri", $"https://manage.office.com/api/v1.0/{fakeDomain}/activity/feed/subscriptions/content?isNextPage=true");
-            }
-            else
-            {
-                // Don't add "next page"
-                //Console.WriteLine($"--Office365FakeController.GetFakeActivities called. Returning {Constants.ACTIVITIES_PER_TIME_CHUNK} activities.");
+                Response.Headers["NextPageUri"] =
+                    $"https://manage.office.com/api/v1.0/{fakeDomain}/activity/feed/subscriptions/content?isNextPage=true";
             }
 
-            return r;
+            return Ok(allActivity);
         }
 
         [HttpGet]
         [Route("api/v1.0/{tenantDomain}/activity/feed/audit/{contentId}")]
-        public HttpResponseMessage GetFakeReportDetails(Guid tenantDomain, string contentId, [FromUri] Guid publisherIdentifier)
+        public IActionResult GetFakeReportDetails(Guid tenantDomain, string contentId, [FromQuery] Guid publisherIdentifier)
         {
             // Taken from a real request 30-5-2018.
             string fakeAuditLogs = "[";
@@ -131,7 +127,7 @@ namespace Tests.UnitTests.FakeControllers
             Console.WriteLine($"--Office365FakeController.GetFakeAuditLogs called. Returning {Constants.REPORTS_PER_ACTIVITY} reports.");
 
             var allActivity = JsonConvert.DeserializeObject(fakeAuditLogs);
-            return Request.CreateResponse(HttpStatusCode.OK, allActivity);
+            return Ok(allActivity);
         }
     }
 }
