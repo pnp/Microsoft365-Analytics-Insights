@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHistory;
 
 namespace Tests.UnitTests.InstallTests
@@ -105,6 +106,31 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [TestMethod]
+        public void TheIssue563PermissionTogglesAreDeclaredAsVerified()
+        {
+            var expectedPermissionsByToggle = new Dictionary<string, string[]>
+            {
+                [nameof(ImportTaskSettings.GraphUsersMetadata)] = new[] { "User.Read.All", "Directory.Read.All" },
+                [nameof(ImportTaskSettings.SentEmails)] = new[] { "Mail.Read" },
+                [nameof(ImportTaskSettings.Calls)] = new[] { "CallRecords.Read.All" },
+                [nameof(ImportTaskSettings.ImportDlp)] = new[] { "ActivityFeed.ReadDlp" },
+            };
+
+            foreach (var pair in expectedPermissionsByToggle)
+            {
+                var coverage = SolutionInstallVerifier.ImportToggleCoverages
+                    .Single(c => c.PropertyName == pair.Key);
+
+                Assert.IsTrue(coverage.IsVerified, $"'{pair.Key}' must now be covered by Test Configuration.");
+                Assert.IsTrue(string.IsNullOrEmpty(coverage.NotVerifiedReason));
+                foreach (var permission in pair.Value)
+                {
+                    StringAssert.Contains(coverage.VerifiedBy, permission);
+                }
+            }
+        }
+
+        [TestMethod]
         public void TheAuditFeedTogglesAreDeclaredAsVerifiedByTheActivityApiCheck()
         {
             // The installer's Activity API check runs whenever ImportTaskSettings.UsesActivityApi is true
@@ -164,7 +190,7 @@ namespace Tests.UnitTests.InstallTests
 
         #endregion
 
-        #region AiEnterpriseInteraction.Read.All tri-state (Gap A)
+        #region Token permission tri-state checks
 
         /// <summary>
         /// An app identity that returns a canned JWT (or throws), so the permission check can be exercised
@@ -250,7 +276,7 @@ namespace Tests.UnitTests.InstallTests
             // A token that decodes cleanly and carries no roles is a DEFINITE absence of consent - the most
             // likely real-world shape of "nobody consented to anything yet" - so it must produce the
             // actionable error, not the indeterminate warning. Distinguishing this from an unreadable token is
-            // exactly why GraphTokenPermissions.TryExtract reports parse success separately.
+            // exactly why AccessTokenPermissions.TryExtract reports parse success separately.
             var loader = NewLoader(new FakeAppIdentity(JwtWithRoles()));
 
             Assert.AreEqual(InteractionReadAccess.NotGranted, await loader.GetInteractionReadAccessAsync());
@@ -260,21 +286,69 @@ namespace Tests.UnitTests.InstallTests
         [TestMethod]
         public void TryExtractSeparatesAnUnreadableTokenFromOneWithNoPermissions()
         {
-            Assert.IsTrue(GraphTokenPermissions.TryExtract(JwtWithRoles(), out var none));
+            Assert.IsTrue(AccessTokenPermissions.TryExtract(JwtWithRoles(), out var none));
             Assert.AreEqual(0, none.Count, "A valid payload with an empty roles array parses to no permissions.");
 
-            Assert.IsTrue(GraphTokenPermissions.TryExtract(JwtWithRoles("Reports.Read.All"), out var some));
+            Assert.IsTrue(AccessTokenPermissions.TryExtract(JwtWithRoles("Reports.Read.All"), out var some));
             CollectionAssert.AreEquivalent(new[] { "Reports.Read.All" }, some.ToArray());
 
             foreach (var unreadable in new[] { null, string.Empty, "not-a-jwt", "header..signature" })
             {
-                Assert.IsFalse(GraphTokenPermissions.TryExtract(unreadable, out var parsed),
+                Assert.IsFalse(AccessTokenPermissions.TryExtract(unreadable, out var parsed),
                     $"'{unreadable ?? "<null>"}' should be reported as unparseable.");
                 Assert.AreEqual(0, parsed.Count);
             }
 
             // Extract() keeps its old collapse-to-empty behaviour for callers that only want "does it have X?".
-            Assert.AreEqual(0, GraphTokenPermissions.Extract("not-a-jwt").Count);
+            Assert.AreEqual(0, AccessTokenPermissions.Extract("not-a-jwt").Count);
+        }
+
+        [TestMethod]
+        public async Task AppTokenPermissionAccessIsGrantedWhenAnyAcceptedRoleIsPresent()
+        {
+            var access = await AppTokenPermissionVerifier.GetAccessAsync(
+                new FakeAppIdentity(JwtWithRoles("mail.read")),
+                new[] { "Mail.Read" },
+                NullLogger.Instance,
+                "Mail.Read");
+
+            Assert.AreEqual(AppTokenPermissionAccess.Granted, access);
+        }
+
+        [TestMethod]
+        public async Task AppTokenPermissionAccessIsNotGrantedWhenTheTokenParsesButLacksTheRole()
+        {
+            var access = await AppTokenPermissionVerifier.GetAccessAsync(
+                new FakeAppIdentity(JwtWithRoles("Reports.Read.All")),
+                new[] { "Mail.Read" },
+                NullLogger.Instance,
+                "Mail.Read");
+
+            Assert.AreEqual(AppTokenPermissionAccess.NotGranted, access);
+        }
+
+        [TestMethod]
+        public async Task AppTokenPermissionAccessIsUnknownWhenTheTokenCannotBeRead()
+        {
+            var access = await AppTokenPermissionVerifier.GetAccessAsync(
+                new FakeAppIdentity("not-a-jwt"),
+                new[] { "Mail.Read" },
+                NullLogger.Instance,
+                "Mail.Read");
+
+            Assert.AreEqual(AppTokenPermissionAccess.Unknown, access);
+        }
+
+        [TestMethod]
+        public async Task AppTokenPermissionAccessReportsNoIdentityDistinctly()
+        {
+            var access = await AppTokenPermissionVerifier.GetAccessAsync(
+                null,
+                new[] { "Mail.Read" },
+                NullLogger.Instance,
+                "Mail.Read");
+
+            Assert.AreEqual(AppTokenPermissionAccess.NoIdentityToInspect, access);
         }
 
         [TestMethod]
@@ -347,6 +421,41 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [TestMethod]
+        public void OnlyAProvenAbsenceOfGenericTokenPermissionIsReportedAsAnError()
+        {
+            var granted = SolutionInstallVerifier.DescribeRequiredTokenPermissionAccess(
+                AppTokenPermissionAccess.Granted,
+                "Mail.Read",
+                "sent emails import",
+                "Microsoft Graph",
+                "the mailbox delta calls will fail.");
+            Assert.AreEqual(LogLevel.Information, granted.level);
+            StringAssert.Contains(granted.message, "Successfully verified");
+
+            var notGranted = SolutionInstallVerifier.DescribeRequiredTokenPermissionAccess(
+                AppTokenPermissionAccess.NotGranted,
+                "Mail.Read",
+                "sent emails import",
+                "Microsoft Graph",
+                "the mailbox delta calls will fail.");
+            Assert.AreEqual(LogLevel.Error, notGranted.level);
+            StringAssert.Contains(notGranted.message, "Mail.Read");
+            StringAssert.Contains(notGranted.message, "APPLICATION permission");
+
+            foreach (var indeterminate in new[] { AppTokenPermissionAccess.Unknown, AppTokenPermissionAccess.NoIdentityToInspect })
+            {
+                var result = SolutionInstallVerifier.DescribeRequiredTokenPermissionAccess(
+                    indeterminate,
+                    "Mail.Read",
+                    "sent emails import",
+                    "Microsoft Graph",
+                    "the mailbox delta calls will fail.");
+                Assert.AreEqual(LogLevel.Warning, result.level, $"{indeterminate} must be a warning, not an error or a pass.");
+                StringAssert.Contains(result.message, "NOT a failure of the grant itself");
+            }
+        }
+
+        [TestMethod]
         public void EveryInteractionReadAccessStateHasAReport()
         {
             // A new enum member falling into the default branch would silently be reported as "could not
@@ -364,16 +473,36 @@ namespace Tests.UnitTests.InstallTests
             // Nothing enabled -> nothing to say.
             Assert.AreEqual(0, SolutionInstallVerifier.GetUnverifiedEnabledImports(new ImportTaskSettings()).Count);
 
-            // An enabled toggle that IS verified is not reported - the per-check output already covers it.
+            // Enabled toggles that ARE verified are not reported - the per-check output already covers them.
             Assert.AreEqual(0,
-                SolutionInstallVerifier.GetUnverifiedEnabledImports(new ImportTaskSettings { GraphTeams = true }).Count);
+                SolutionInstallVerifier.GetUnverifiedEnabledImports(new ImportTaskSettings
+                {
+                    GraphTeams = true,
+                    GraphUsersMetadata = true,
+                    SentEmails = true,
+                    Calls = true,
+                    ImportDlp = true,
+                }).Count);
 
             // An enabled toggle with no possible check must be called out.
             var reported = SolutionInstallVerifier.GetUnverifiedEnabledImports(
-                new ImportTaskSettings { Calls = true, SentEmails = true, GraphTeams = true });
+                new ImportTaskSettings
+                {
+                    Calls = true,
+                    SentEmails = true,
+                    GraphTeams = true,
+                    WebTraffic = true,
+                    AzureCostManagement = true,
+                    CopilotStudioCredits = true,
+                });
 
             CollectionAssert.AreEquivalent(
-                new[] { nameof(ImportTaskSettings.Calls), nameof(ImportTaskSettings.SentEmails) },
+                new[]
+                {
+                    nameof(ImportTaskSettings.WebTraffic),
+                    nameof(ImportTaskSettings.AzureCostManagement),
+                    nameof(ImportTaskSettings.CopilotStudioCredits),
+                },
                 reported.Select(c => c.PropertyName).ToArray());
 
             Assert.IsTrue(reported.All(c => !string.IsNullOrWhiteSpace(c.NotVerifiedReason)));

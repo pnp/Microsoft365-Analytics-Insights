@@ -830,6 +830,13 @@ namespace App.ControlPanel.Engine
             else
                 _logger.LogInformation("Skipping Activity API checks as audit-data not being targeted");
 
+            if (Config.SolutionConfig.ImportTaskSettings.ImportDlp)
+            {
+                await VerifyDlpActivityApiPermission(Config.RuntimeAccountOffice365.ClientId, Config.RuntimeAccountOffice365.DirectoryId, Config.RuntimeAccountOffice365.Secret);
+            }
+            else
+                _logger.LogInformation("Skipping verifying Office 365 Management APIs for DLP import as not being targeted");
+
             // Teams & Groups enumeration (All Graph tests). Individual tests skipped below
             await VerifyTeamsAndUserActivityImport(Config.RuntimeAccountOffice365.ClientId, Config.RuntimeAccountOffice365.DirectoryId, Config.RuntimeAccountOffice365.Secret);
 
@@ -863,12 +870,8 @@ namespace App.ControlPanel.Engine
             new ImportToggleCoverage(nameof(ImportTaskSettings.ImportPowerPlatform),
                 "Office 365 Management Activity API subscription read (Power Platform arrives on the Audit.General feed)"),
 
-            new ImportToggleCoverage(nameof(ImportTaskSettings.ImportDlp), null,
-                "the Activity API check reads the subscription list, which needs only ActivityFeed.Read - it "
-                + "cannot prove the SEPARATE ActivityFeed.ReadDlp grant that the DLP.All feed requires. A "
-                + "missing DLP consent first appears as a warning on the importer's next cycle, which "
-                + "deliberately does not fail the other workloads. Note this toggle is not needed for "
-                + "Microsoft 365 Copilot DLP reporting, which rides on the Copilot interaction records."),
+            new ImportToggleCoverage(nameof(ImportTaskSettings.ImportDlp),
+                "Office 365 Management API token roles include ActivityFeed.ReadDlp"),
 
             new ImportToggleCoverage(nameof(ImportTaskSettings.GraphUsageReports),
                 "Microsoft 365 usage reports via Reports.Read.All"),
@@ -887,17 +890,14 @@ namespace App.ControlPanel.Engine
                 + "in-page AI Tracker script, so correctness depends on the SharePoint deployment rather than "
                 + "on a Graph or Management API grant."),
 
-            new ImportToggleCoverage(nameof(ImportTaskSettings.GraphUsersMetadata), null,
-                "no check exercises the Graph user-metadata read (User.Read.All); a missing grant would first "
-                + "appear at runtime."),
+            new ImportToggleCoverage(nameof(ImportTaskSettings.GraphUsersMetadata),
+                "Graph token roles include User.Read.All and Directory.Read.All"),
 
-            new ImportToggleCoverage(nameof(ImportTaskSettings.Calls), null,
-                "the Teams call-records import needs a Graph change-notification subscription pointed at the "
-                + "web app plus a Service Bus queue, neither of which exists until the install has finished."),
+            new ImportToggleCoverage(nameof(ImportTaskSettings.Calls),
+                "Graph token roles include CallRecords.Read.All (permission only; subscription and queue are post-install resources)"),
 
-            new ImportToggleCoverage(nameof(ImportTaskSettings.SentEmails), null,
-                "no check exercises the Graph mailbox read (Mail.Read); a missing grant would first appear at "
-                + "runtime."),
+            new ImportToggleCoverage(nameof(ImportTaskSettings.SentEmails),
+                "Graph token roles include Mail.Read"),
 
             new ImportToggleCoverage(nameof(ImportTaskSettings.CopilotStudioCredits), null,
                 "no check exercises the Power Platform licensing API. It needs a token for a different audience "
@@ -963,6 +963,19 @@ namespace App.ControlPanel.Engine
             _logger.LogInformation("Successfully verified runtime account permissions to Office 365 Management APIs for activity data.");
         }
 
+        async Task VerifyDlpActivityApiPermission(string clientId, string tenantId, string clientSecret)
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var auth = new ActivityAPIAppIndentityOAuthContext(logger, clientId, tenantId, clientSecret, null, false);
+            await VerifyRequiredTokenPermission(
+                auth,
+                new[] { "ActivityFeed.ReadDlp" },
+                "ActivityFeed.ReadDlp",
+                "DLP activity feed import",
+                "Office 365 Management APIs",
+                "the DLP.All feed subscription is optional at runtime and will be skipped until the grant is consented.");
+        }
+
         async Task VerifyTeamsAndUserActivityImport(string clientId, string tenantId, string clientSecret)
         {
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
@@ -1000,6 +1013,107 @@ namespace App.ControlPanel.Engine
                 await VerifyCopilotInteractionHistoryImport(auth, manualGraphClient);
             }
             else _logger.LogInformation("Skipping verifying Copilot AI interaction history import as not being targeted");
+
+            // Graph user metadata. The user delta call needs User.Read.All; group membership reads also need
+            // Directory.Read.All in real tenants, so verify both roles while we have the Graph token.
+            if (Config.SolutionConfig.ImportTaskSettings.GraphUsersMetadata)
+            {
+                await VerifyRequiredTokenPermission(
+                    auth,
+                    new[] { "User.Read.All" },
+                    "User.Read.All",
+                    "Graph user metadata import",
+                    "Microsoft Graph",
+                    "the user delta and per-user metadata calls will fail at runtime.");
+
+                await VerifyRequiredTokenPermission(
+                    auth,
+                    new[] { "Directory.Read.All" },
+                    "Directory.Read.All",
+                    "Graph user group membership import",
+                    "Microsoft Graph",
+                    "the per-user memberOf calls used for group filters will fail at runtime.");
+            }
+            else _logger.LogInformation("Skipping verifying Graph API for user metadata import as not being targeted");
+
+            // Sent email import
+            if (Config.SolutionConfig.ImportTaskSettings.SentEmails)
+            {
+                await VerifyRequiredTokenPermission(
+                    auth,
+                    new[] { "Mail.Read" },
+                    "Mail.Read",
+                    "sent emails import",
+                    "Microsoft Graph",
+                    "the /mailFolders/sentitems/messages/delta calls will fail at runtime.");
+            }
+            else _logger.LogInformation("Skipping verifying Graph API for sent emails import as not being targeted");
+
+            // Teams call records. This verifies only the app role; the change-notification subscription and
+            // Service Bus queue are created by the install and therefore cannot be proven before it runs.
+            if (Config.SolutionConfig.ImportTaskSettings.Calls)
+            {
+                await VerifyRequiredTokenPermission(
+                    auth,
+                    new[] { "CallRecords.Read.All" },
+                    "CallRecords.Read.All",
+                    "Teams call-records import",
+                    "Microsoft Graph",
+                    "the call-records subscription and reads will fail at runtime.");
+            }
+            else _logger.LogInformation("Skipping verifying Graph API for call records import as not being targeted");
+        }
+
+        async Task VerifyRequiredTokenPermission(
+            ImportAppIndentityOAuthContext auth,
+            IReadOnlyCollection<string> acceptablePermissions,
+            string permissionName,
+            string importName,
+            string tokenAudience,
+            string notGrantedImpact)
+        {
+            _logger.LogInformation($"Verifying {importName} permission '{permissionName}' on the {tokenAudience} token...");
+
+            var access = await AppTokenPermissionVerifier.GetAccessAsync(
+                auth,
+                acceptablePermissions,
+                _logger,
+                permissionName);
+
+            var (level, message) = DescribeRequiredTokenPermissionAccess(
+                access,
+                permissionName,
+                importName,
+                tokenAudience,
+                notGrantedImpact);
+            _logger.Log(level, message);
+        }
+
+        internal static (LogLevel level, string message) DescribeRequiredTokenPermissionAccess(
+            AppTokenPermissionAccess access,
+            string permissionName,
+            string importName,
+            string tokenAudience,
+            string notGrantedImpact)
+        {
+            switch (access)
+            {
+                case AppTokenPermissionAccess.Granted:
+                    return (LogLevel.Information,
+                        $"Successfully verified '{permissionName}' for the {importName} on the {tokenAudience} token.");
+
+                case AppTokenPermissionAccess.NotGranted:
+                    return (LogLevel.Error,
+                        $"ERROR: the runtime account does not hold the '{permissionName}' application permission on the {tokenAudience} token, " +
+                        $"so the {importName} is not ready: {notGrantedImpact} Grant '{permissionName}' as an APPLICATION permission, " +
+                        "grant admin consent, then re-run these tests.");
+
+                default:
+                    return (LogLevel.Warning,
+                        $"Could not confirm whether the runtime account holds '{permissionName}' on the {tokenAudience} token. " +
+                        "This is NOT a failure of the grant itself; verify it by hand on the app registration before relying on " +
+                        $"the {importName}.");
+            }
         }
 
         /// <summary>
