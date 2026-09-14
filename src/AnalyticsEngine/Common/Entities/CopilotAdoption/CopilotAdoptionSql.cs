@@ -392,8 +392,10 @@ namespace Common.Entities.CopilotAdoption
                 "LEFT JOIN dbo.users AS manager ON manager.id = u.manager_id\r\n" +
                 "LEFT JOIN CopilotUsage AS chats ON chats.user_id = u.id\r\n" +
                 (includeCopilotReport ? "LEFT JOIN ReportSnapshot AS report ON report.user_id = u.id\r\n" : string.Empty) +
-                // Ordered by id so the cap truncates deterministically: the same users are dropped on
-                // every run, which makes a capped report reproducible instead of randomly different.
+                // Ordered by id so the drill-down cap truncates deterministically: the same users are
+                // dropped on every run, which makes a capped report reproducible instead of randomly
+                // different. That is still a biased sample - oldest user records are over-represented -
+                // so the service warns explicitly if the cap ever bites.
                 "ORDER BY u.id\r\n" +
                 "OPTION (RECOMPILE);";
 
