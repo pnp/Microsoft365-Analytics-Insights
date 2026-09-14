@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -29,6 +29,12 @@ namespace Common.Entities.CopilotAdoption
         public string Department { get; set; }
 
         public string Country { get; set; }
+
+        /// <summary>
+        /// Restrict to one reclaim confidence tier. This is the drill-through key for the headline
+        /// reclaim aggregates, so the list population is exactly the one the KPI counted.
+        /// </summary>
+        public string ReclaimEligibility { get; set; }
 
         /// <summary>Only users who have used Microsoft 365 Copilot Cowork.</summary>
         public bool CoworkOnly { get; set; }
@@ -137,6 +143,12 @@ namespace Common.Entities.CopilotAdoption
 
             if (q.CoworkOnly && !row.UsedCowork) return false;
 
+            if (!string.IsNullOrWhiteSpace(q.ReclaimEligibility) &&
+                !string.Equals(row.ReclaimEligibility ?? string.Empty, q.ReclaimEligibility.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
             // AccountEnabled is nullable: null means "we have not imported that flag", which is not the
             // same as "disabled", so it must not be swept into a reclaim list.
             if (q.DisabledAccountsOnly && row.AccountEnabled != false) return false;
@@ -196,6 +208,18 @@ namespace Common.Entities.CopilotAdoption
                 new CsvColumn<LicensedUserAdoptionRow>("Country", r => r.Country),
                 new CsvColumn<LicensedUserAdoptionRow>("Company", r => r.CompanyName),
                 new CsvColumn<LicensedUserAdoptionRow>("Account enabled", r => r.AccountEnabled),
+                new CsvColumn<LicensedUserAdoptionRow>("Account created (UTC)", r => r.AccountCreatedUtc),
+                new CsvColumn<LicensedUserAdoptionRow>("Tenure basis", r => r.TenureBasis),
+                new CsvColumn<LicensedUserAdoptionRow>("Days since tenure start", r => r.DaysSinceTenureStart),
+                new CsvColumn<LicensedUserAdoptionRow>("Too new to judge", r => r.TooNewToJudge),
+                new CsvColumn<LicensedUserAdoptionRow>("Reclaim eligibility", r => r.ReclaimEligibility),
+                new CsvColumn<LicensedUserAdoptionRow>("Reclaim eligibility reason", r => r.ReclaimEligibilityReason),
+                new CsvColumn<LicensedUserAdoptionRow>("Reclaim exclusion reason", r => r.ReclaimExclusionReason),
+                new CsvColumn<LicensedUserAdoptionRow>("Reclaim exclusion note", r => r.ReclaimExclusionNote),
+                new CsvColumn<LicensedUserAdoptionRow>("Reclaim excluded by", r => r.ReclaimExcludedBy),
+                new CsvColumn<LicensedUserAdoptionRow>("Reclaim excluded (UTC)", r => r.ReclaimExcludedUtc),
+                new CsvColumn<LicensedUserAdoptionRow>("Reclaim exclusion review after (UTC)", r => r.ReclaimExclusionReviewAfterUtc),
+                new CsvColumn<LicensedUserAdoptionRow>("Expired reclaim exclusion", r => r.ReclaimExclusionExpired),
                 new CsvColumn<LicensedUserAdoptionRow>("Copilot licences", r => r.SeatLicences),
 
                 new CsvColumn<LicensedUserAdoptionRow>("Adoption score (0-100)", r => r.AdoptionScore),

@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.CopilotAdoption;
 using DataUtils;
@@ -350,6 +350,7 @@ namespace Web.AnalyticsWeb.Controllers
             string actions = null,
             string department = null,
             string country = null,
+            string reclaimEligibility = null,
             bool coworkOnly = false,
             bool disabledOnly = false,
             double? minScore = null,
@@ -364,7 +365,7 @@ namespace Web.AnalyticsWeb.Controllers
             if (analysis == null) return StillBuilding();
 
             var query = BuildLicensedUserQuery(
-                search, bands, department, country, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
+                search, bands, department, country, reclaimEligibility, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
 
             var matched = CopilotAdoptionExports.Apply(analysis.LicensedUsers, query);
 
@@ -393,6 +394,7 @@ namespace Web.AnalyticsWeb.Controllers
             string actions = null,
             string department = null,
             string country = null,
+            string reclaimEligibility = null,
             bool coworkOnly = false,
             bool disabledOnly = false,
             double? minScore = null,
@@ -410,7 +412,7 @@ namespace Web.AnalyticsWeb.Controllers
             if (analysis == null) return ExportNotReadyResponse();
 
             var query = BuildLicensedUserQuery(
-                search, bands, department, country, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
+                search, bands, department, country, reclaimEligibility, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
 
             var rows = CopilotAdoptionExports.Apply(analysis.LicensedUsers, query).Take(MaxCsvRows).ToList();
 
@@ -681,7 +683,7 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         private static LicensedUserQuery BuildLicensedUserQuery(
-            string search, string bands, string department, string country,
+            string search, string bands, string department, string country, string reclaimEligibility,
             bool coworkOnly, bool disabledOnly, double? minScore, double? maxScore,
             string sortBy, bool sortDesc, string actions = null)
         {
@@ -692,6 +694,7 @@ namespace Web.AnalyticsWeb.Controllers
                 Actions = ParseActions(actions),
                 Department = department,
                 Country = country,
+                ReclaimEligibility = reclaimEligibility,
                 CoworkOnly = coworkOnly,
                 DisabledAccountsOnly = disabledOnly,
                 MinScore = minScore,

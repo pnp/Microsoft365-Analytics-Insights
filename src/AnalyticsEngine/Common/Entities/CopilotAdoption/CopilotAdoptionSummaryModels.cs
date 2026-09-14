@@ -1,4 +1,4 @@
-using Common.Entities.Copilot;
+﻿using Common.Entities.Copilot;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -338,6 +338,31 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("reclaimableSeats")]
         public int ReclaimableSeats { get; set; }
 
+        /// <summary>Disabled accounts that still hold a Copilot seat. This is the zero-risk reclaim KPI.</summary>
+        [JsonProperty("disabledLicensedUsers")]
+        public int DisabledLicensedUsers { get; set; }
+
+        [JsonProperty("reclaimCertainSeats")]
+        public int ReclaimCertainSeats { get; set; }
+
+        [JsonProperty("reclaimProbableSeats")]
+        public int ReclaimProbableSeats { get; set; }
+
+        [JsonProperty("reclaimReviewSeats")]
+        public int ReclaimReviewSeats { get; set; }
+
+        [JsonProperty("reclaimExcludedUsers")]
+        public int ReclaimExcludedUsers { get; set; }
+
+        [JsonProperty("expiredReclaimExclusions")]
+        public int ExpiredReclaimExclusions { get; set; }
+
+        [JsonProperty("tooNewToJudgeUsers")]
+        public int TooNewToJudgeUsers { get; set; }
+
+        [JsonProperty("reclaimCaveat")]
+        public string ReclaimCaveat { get; set; }
+
         /// <summary>Mean engagement score across all licensed users, including the ones scoring zero.</summary>
         [JsonProperty("averageAdoptionScore")]
         public double AverageAdoptionScore { get; set; }
@@ -387,6 +412,33 @@ namespace Common.Entities.CopilotAdoption
         /// </remarks>
         [JsonProperty("reclaimSeatsHeldBackForWindowMismatch")]
         public int ReclaimSeatsHeldBackForWindowMismatch { get; set; }
+
+        /// <summary>
+        /// Idle seats (never used or dormant) that the confidence tiers deliberately keep out of
+        /// <see cref="ReclaimableSeats"/> because a human has to look at them first - dormant users,
+        /// users still inside the grace period, users with no tenure or account-state evidence, and
+        /// users an administrator has explicitly excluded.
+        /// </summary>
+        /// <remarks>
+        /// Published alongside <see cref="ReclaimSeatsHeldBackForWindowMismatch"/> so the whole
+        /// arithmetic ties out on screen:
+        /// <c>NeverUsedUsers + DormantUsers + ReclaimSeatsFromActiveBands ==
+        /// ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview</c>.
+        /// </remarks>
+        [JsonProperty("reclaimSeatsHeldBackForReview")]
+        public int ReclaimSeatsHeldBackForReview { get; set; }
+
+        /// <summary>
+        /// Reclaimable seats whose engagement band is better than dormant - in practice, disabled
+        /// accounts that were still active right up to the day they were disabled.
+        /// </summary>
+        /// <remarks>
+        /// They are the most certain reclaims there are, and they are <i>not</i> part of
+        /// <c>NeverUsedUsers + DormantUsers</c>. Published so a reader adding up the band breakdown can
+        /// account for the difference rather than finding an unexplained gap.
+        /// </remarks>
+        [JsonProperty("reclaimSeatsFromActiveBands")]
+        public int ReclaimSeatsFromActiveBands { get; set; }
 
         #endregion
 

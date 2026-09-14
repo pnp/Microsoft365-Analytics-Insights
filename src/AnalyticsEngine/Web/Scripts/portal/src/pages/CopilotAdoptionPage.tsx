@@ -1488,16 +1488,33 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
       key: 'reclaim',
       label: 'Reclaimable licences',
       value: formatCount(summary.reclaimableSeats),
-      hint: `${formatCount(summary.neverUsedUsers)} never used, ${formatCount(summary.dormantUsers)} dormant`,
+      hint: `${formatCount(summary.reclaimCertainSeats)} certain, ${formatCount(
+        summary.reclaimProbableSeats,
+      )} probable, ${formatCount(summary.reclaimReviewSeats)} review, ${formatCount(summary.reclaimExcludedUsers)} excluded`,
       tone: summary.reclaimableSeats > 0 ? 'critical' : 'good',
       info: {
-        what: 'Licences held by someone who did nothing with Copilot in the entire period. The directly actionable cost figure on this page.',
-        how: `Split in two because they need opposite responses. "Never used" means no Copilot activity anywhere in the last ${o.historyDays} days - that licence has produced nothing and needs onboarding or reassignment. "Dormant" means they used it before the period but not inside it - that is someone who tried it and stopped, and needs a conversation before the licence is taken away.`,
-        formula: `${formatCount(summary.neverUsedUsers)} never used + ${formatCount(
-          summary.dormantUsers,
-        )} dormant = ${formatCount(summary.reclaimableSeats)}`,
+        what: 'Licences safe enough to include in the actionable reclaim total. Disabled accounts are certain. Enabled, long-tenured never-used accounts are probable. Dormant, too-new and unknown-tenure accounts are review-only.',
+        how: `A new user is protected for ${o.reclaimGraceDays} days using Graph user.createdDateTime as the account-age proxy until true seat-tenure history exists. Active new users have their expected active days prorated; inactive new users are "too new to judge". ${summary.reclaimCaveat ?? ''}`,
+        formula: `${formatCount(summary.reclaimCertainSeats)} certain + ${formatCount(
+          summary.reclaimProbableSeats,
+        )} probable = ${formatCount(summary.reclaimableSeats)} reclaimable. ${formatCount(
+          summary.reclaimReviewSeats,
+        )} review-only and ${formatCount(summary.reclaimExcludedUsers)} excluded users still remain in the licensed denominator.`,
         source:
-          'Disabled accounts still holding a licence are included and are the clearest reclaim of all - filter for them on the "Licensed users" tab.',
+          'Drill through on the Licensed users tab with the Reclaim tier filter; each tier uses the same reclaimEligibility key counted here. Expired exclusions are shown for re-review rather than silently honoured forever.',
+      },
+    },
+    {
+      key: 'disabled-reclaim',
+      label: 'Disabled seats',
+      value: formatCount(summary.disabledLicensedUsers),
+      hint: 'Disabled accounts still holding a Copilot licence',
+      tone: summary.disabledLicensedUsers > 0 ? 'critical' : 'good',
+      info: {
+        what: 'Copilot seats assigned to disabled Entra accounts. This is the zero-risk reclaim population.',
+        how: 'Counted from licensed-user rows where accountEnabled is false. Admin exclusions remain visible separately and do not remove the user from the licensed denominator.',
+        formula: `${formatCount(summary.disabledLicensedUsers)} disabled licensed account(s)`,
+        source: 'Requires the Graph user metadata import to have populated accountEnabled.',
       },
     },
     {

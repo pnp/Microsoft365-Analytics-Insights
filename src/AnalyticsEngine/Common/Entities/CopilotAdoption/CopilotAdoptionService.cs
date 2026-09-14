@@ -1,4 +1,4 @@
-using Common.Entities.Copilot;
+﻿using Common.Entities.Copilot;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -1128,16 +1128,51 @@ namespace Common.Entities.CopilotAdoption
             summary.NeverUsedUsers = users.Count(u => u.Band == AdoptionBand.NeverUsed);
             summary.DormantUsers = users.Count(u => u.Band == AdoptionBand.Dormant);
             summary.HabitualUsers = users.Count(u => CopilotAdoptionScoring.IsHabitual(u.Band));
-            var reclaimablePopulation = summary.UsageReportWindowMismatch
-                ? auditInteractionUsers
-                : users;
-            summary.ReclaimableSeats = reclaimablePopulation.Count(
-                u => u.Band == AdoptionBand.NeverUsed || u.Band == AdoptionBand.Dormant);
-            // Publish what was held back, so NeverUsed + Dormant - heldBack == ReclaimableSeats stays
-            // visibly true. Otherwise the band breakdown and the reclaim headline silently disagree and
-            // the reader has no way to account for the difference.
-            summary.ReclaimSeatsHeldBackForWindowMismatch =
-                (summary.NeverUsedUsers + summary.DormantUsers) - summary.ReclaimableSeats;
+            // ----- Reclaim: tiers first, then the two things held back from the headline -----
+            //
+            // Written for the combination, not taken from either side. Two independent mechanisms now
+            // keep a seat out of "Reclaimable licences", and they compose:
+            //
+            //   * confidence tiering  - certain + probable only; review and excluded are parked
+            //   * window mismatch     - a row scored from Microsoft's report over a period that is not
+            //                           the selected window cannot justify taking a licence away
+            //
+            // Both hold-backs are published, because a headline that quietly disagrees with the band
+            // breakdown loses a licence argument however good the reason behind it. The identity that
+            // must hold on screen - asserted by CopilotAdoptionTests - is:
+            //
+            //   NeverUsed + Dormant + ReclaimSeatsFromActiveBands
+            //     == ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview
+            //
+            // The left-hand extra term is there because "certain" is not a subset of the idle bands: a
+            // disabled account that was active right up to the day it was disabled is the clearest
+            // reclaim there is, and it is not in NeverUsed + Dormant.
+            summary.DisabledLicensedUsers = users.Count(u => u.AccountEnabled == false);
+            summary.ReclaimCertainSeats = users.Count(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain));
+            summary.ReclaimProbableSeats = users.Count(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable));
+            summary.ReclaimReviewSeats = users.Count(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Review));
+            summary.ReclaimExcludedUsers = users.Count(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded));
+            summary.ExpiredReclaimExclusions = users.Count(u => u.ReclaimExclusionExpired);
+            summary.TooNewToJudgeUsers = users.Count(u => u.TooNewToJudge);
+
+            var reclaimCandidates = users
+                .Where(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain)
+                         || IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable))
+                .ToList();
+
+            var heldBackForWindowMismatch = summary.UsageReportWindowMismatch
+                ? reclaimCandidates.Count(IsUsageReportSourced)
+                : 0;
+
+            summary.ReclaimSeatsHeldBackForWindowMismatch = heldBackForWindowMismatch;
+            summary.ReclaimableSeats = reclaimCandidates.Count - heldBackForWindowMismatch;
+            summary.ReclaimSeatsFromActiveBands = reclaimCandidates.Count(u => !IsIdleBand(u.Band));
+            summary.ReclaimSeatsHeldBackForReview = users.Count(u =>
+                IsIdleBand(u.Band)
+                && (IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Review)
+                    || IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded)));
+
+            summary.ReclaimCaveat = "Reclaim excludes admin exclusions and separates review-only cases. Leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from Microsoft 365 usage data.";
             // Report-sourced rows carry Microsoft's prompt count in Interactions. Do not publish a total
             // that adds prompts to audit-log interactions; they are different units over potentially
             // different windows.
@@ -1187,6 +1222,21 @@ namespace Common.Entities.CopilotAdoption
         {
             return row != null
                 && string.Equals(row.SignalSource, CopilotAdoptionScoring.SignalSourceUsageReport, StringComparison.Ordinal);
+        }
+
+        /// <summary>Whether a row carries the given reclaim confidence tier.</summary>
+        private static bool IsReclaimTier(LicensedUserAdoptionRow row, string tier)
+        {
+            return row != null && string.Equals(row.ReclaimEligibility, tier, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// The two bands that make up the idle-seat population the reclaim arithmetic reconciles
+        /// against. Kept as one definition so the hold-back counts and the headline cannot drift apart.
+        /// </summary>
+        private static bool IsIdleBand(AdoptionBand band)
+        {
+            return band == AdoptionBand.NeverUsed || band == AdoptionBand.Dormant;
         }
 
         /// <summary>

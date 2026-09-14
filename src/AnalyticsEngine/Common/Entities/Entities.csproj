@@ -423,6 +423,10 @@
     <Compile Include="Migrations\202608310800001_ColumnstoreUsageReportMetrics.Designer.cs">
       <DependentUpon>202608310800001_ColumnstoreUsageReportMetrics.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202609131940001_CopilotReclaimEligibilityInputs.cs" />
+    <Compile Include="Migrations\202609131940001_CopilotReclaimEligibilityInputs.Designer.cs">
+      <DependentUpon>202609131940001_CopilotReclaimEligibilityInputs.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609101200001_RetireImportDbHacks.cs" />
     <Compile Include="Migrations\202609101200001_RetireImportDbHacks.Designer.cs">
       <DependentUpon>202609101200001_RetireImportDbHacks.cs</DependentUpon>
@@ -646,6 +650,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609101000001_RetireUnusedAuditYammerStreamTables.resx">
       <DependentUpon>202609101000001_RetireUnusedAuditYammerStreamTables.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609131940001_CopilotReclaimEligibilityInputs.resx">
+      <DependentUpon>202609131940001_CopilotReclaimEligibilityInputs.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609101200001_RetireImportDbHacks.resx">
       <DependentUpon>202609101200001_RetireImportDbHacks.cs</DependentUpon>

@@ -1,4 +1,4 @@
-using Common.Entities.Copilot;
+﻿using Common.Entities.Copilot;
 using Common.Entities.Xlsx;
 using System;
 using System.Collections.Generic;
@@ -184,10 +184,30 @@ namespace Common.Entities.CopilotAdoption
                 "Used Copilot before this period but not inside it. Needs a conversation about what stopped.");
             AddMeta(sheet, "Never used", summary.NeverUsedUsers,
                 $"No Copilot activity anywhere in the last {summary.Options.HistoryDays} days. Needs onboarding, or the licence back.");
+            AddMeta(sheet, "Disabled accounts with licences", summary.DisabledLicensedUsers,
+                "Zero-risk reclaim: the account is disabled but still holds a Copilot seat.");
             AddMeta(sheet, "Reclaimable licences", summary.ReclaimableSeats,
                 summary.UsageReportWindowMismatch
-                    ? "Dormant plus never used from audit-sourced rows only; Microsoft report-sourced rows are excluded because its period does not match this analysis window."
-                    : "Dormant plus never used - licences that produced nothing this period.");
+                    ? "Certain plus probable reclaim, minus rows scored from Microsoft's usage report because its pinned period does not match this analysis window. Excludes admin exclusions and review-only cases; leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from usage data."
+                    : "Certain plus probable reclaim only. Excludes admin exclusions and review-only cases; leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from usage data.");
+            AddMeta(sheet, "Reclaim - certain", summary.ReclaimCertainSeats,
+                "Disabled accounts still holding seats. Act immediately unless there is a known exception.");
+            AddMeta(sheet, "Reclaim - probable", summary.ReclaimProbableSeats,
+                $"No observed use, account enabled, and the account-age tenure proxy is beyond the {summary.Options.ReclaimGraceDays}-day grace period.");
+            AddMeta(sheet, "Reclaim - review", summary.ReclaimReviewSeats,
+                "Dormant, too new, or missing enough account state/tenure context to judge automatically.");
+            AddMeta(sheet, "Reclaim exclusions", summary.ReclaimExcludedUsers,
+                "Reviewed false positives removed from reclaim counts but still included in the licensed denominator.");
+            AddMeta(sheet, "Expired exclusions", summary.ExpiredReclaimExclusions,
+                "Previously excluded seats whose review-after date has passed and should be looked at again.");
+            // The two hold-backs and the disabled-but-active term, so the reader can add the reclaim
+            // figures up against the band breakdown and land exactly on it.
+            AddMeta(sheet, "Held back - review or excluded", summary.ReclaimSeatsHeldBackForReview,
+                "Never-used or dormant seats kept out of the reclaimable total because a human has to look at them first.");
+            AddMeta(sheet, "Held back - report window mismatch", summary.ReclaimSeatsHeldBackForWindowMismatch,
+                "Seats kept out of the reclaimable total because they were scored from Microsoft's usage report over a period that is not this analysis window.");
+            AddMeta(sheet, "Reclaimable but still active", summary.ReclaimSeatsFromActiveBands,
+                "Reclaimable seats that are not never-used or dormant - disabled accounts that were still active when they were disabled. Never used + Dormant + this = Reclaimable + both held-back figures.");
 
             var last = sheet.CurrentRow;
 

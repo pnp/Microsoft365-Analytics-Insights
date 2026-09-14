@@ -107,6 +107,7 @@ export interface CopilotAdoptionOptions {
   agentReviewInactiveDays: number;
   agentRetireInactiveDays: number;
   agentNewDays: number;
+  reclaimGraceDays: number;
   agentMinUsers: number;
   agentHistoryDays: number;
 
@@ -262,6 +263,14 @@ export interface CopilotAdoptionSummary {
   habitualUsers: number;
   habitRatePct: number;
   reclaimableSeats: number;
+  disabledLicensedUsers: number;
+  reclaimCertainSeats: number;
+  reclaimProbableSeats: number;
+  reclaimReviewSeats: number;
+  reclaimExcludedUsers: number;
+  expiredReclaimExclusions: number;
+  tooNewToJudgeUsers: number;
+  reclaimCaveat: string | null;
   averageAdoptionScore: number;
   medianAdoptionScore: number;
   totalInteractions: number;
@@ -319,6 +328,19 @@ export interface LicensedUserAdoptionRow {
   companyName: string | null;
   manager: string | null;
   accountEnabled: boolean | null;
+  accountCreatedUtc: string | null;
+  tenureStartUtc: string | null;
+  tenureBasis: string | null;
+  daysSinceTenureStart: number | null;
+  tooNewToJudge: boolean;
+  reclaimEligibility: string | null;
+  reclaimEligibilityReason: string | null;
+  reclaimExclusionReason: string | null;
+  reclaimExclusionNote: string | null;
+  reclaimExcludedBy: string | null;
+  reclaimExcludedUtc: string | null;
+  reclaimExclusionReviewAfterUtc: string | null;
+  reclaimExclusionExpired: boolean;
   seatLicences: string | null;
 
   interactions: number;
@@ -412,6 +434,7 @@ export interface LicensedUserFilters {
   actions: string[];
   department: string;
   country: string;
+  reclaimEligibility: string;
   coworkOnly: boolean;
   disabledOnly: boolean;
   sortBy: string;

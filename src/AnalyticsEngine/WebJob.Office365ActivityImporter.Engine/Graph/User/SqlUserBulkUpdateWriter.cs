@@ -80,6 +80,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 id              INT          NOT NULL,
                 azure_ad_id     NVARCHAR(450) NULL,
                 account_enabled BIT           NULL,
+                created_utc    DATETIME2(7)  NULL,
                 mail            NVARCHAR(450) NULL,
                 postalcode      NVARCHAR(50)  NULL,
                 department_id   INT           NULL,
@@ -97,6 +98,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             UPDATE u
             SET u.azure_ad_id            = t.azure_ad_id,
                 u.account_enabled        = t.account_enabled,
+                u.created_utc           = t.created_utc,
                 u.mail                   = t.mail,
                 u.postalcode             = t.postalcode,
                 u.department_id          = t.department_id,
