@@ -275,6 +275,12 @@ export interface CopilotAdoptionSummary {
   expiredReclaimExclusions: number;
   tooNewToJudgeUsers: number;
   reclaimCaveat: string | null;
+  reclaimSeatsHeldBackForWindowMismatch: number;
+  reclaimSeatsHeldBackForReview: number;
+  reclaimSeatsFromActiveBands: number;
+  usageReportSourcedUsers: number;
+  usageReportSourcedUserPct: number;
+  usageReportWindowMismatch: boolean;
   averageAdoptionScore: number;
   medianAdoptionScore: number;
   totalInteractions: number;

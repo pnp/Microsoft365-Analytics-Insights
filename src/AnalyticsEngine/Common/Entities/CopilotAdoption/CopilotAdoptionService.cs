@@ -1049,7 +1049,12 @@ namespace Common.Entities.CopilotAdoption
 
             analysis.Opportunities = rows
                 .Select(r => CopilotAdoptionScoring.ScoreOpportunity(r, _options))
-                .OrderByDescending(r => r.OpportunityScore)
+                // Proven demand first. The SQL deliberately sorts proven-demand candidates into the
+                // TOP (@maxRows) window ahead of merely busy users so the cap cannot truncate them;
+                // ordering on score alone here would quietly undo that in the list the reader sees,
+                // ranking somebody who has never opened Copilot above somebody already using it.
+                .OrderBy(r => r.QualificationTier == CopilotAdoptionScoring.OpportunityTiers.ProvenDemand ? 0 : 1)
+                .ThenByDescending(r => r.OpportunityScore)
                 .ThenBy(r => r.UserPrincipalName, StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
@@ -1160,8 +1165,16 @@ namespace Common.Entities.CopilotAdoption
                          || IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable))
                 .ToList();
 
+            // The window-mismatch hold-back only applies to PROBABLE seats. Probable is an inference
+            // from an absence of recorded use, and an absence measured over Microsoft's period rather
+            // than the selected one is not evidence about the selected one. Certain is not an
+            // inference at all - the account is disabled - so a report-period technicality must never
+            // remove a disabled seat from the reclaim total. Before this was restricted, the mismatch
+            // held back exactly the wrong rows: see the note on IsUsageReportSourced.
             var heldBackForWindowMismatch = summary.UsageReportWindowMismatch
-                ? reclaimCandidates.Count(IsUsageReportSourced)
+                ? reclaimCandidates.Count(u =>
+                    IsUsageReportSourced(u)
+                    && IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable))
                 : 0;
 
             summary.ReclaimSeatsHeldBackForWindowMismatch = heldBackForWindowMismatch;
@@ -1218,6 +1231,22 @@ namespace Common.Entities.CopilotAdoption
                 .ToList();
         }
 
+        /// <summary>
+        /// Whether this row's engagement was scored from Microsoft's usage report rather than from the
+        /// Copilot audit import.
+        /// </summary>
+        /// <remarks>
+        /// Worth knowing when reading the reclaim arithmetic: <c>CopilotAdoptionScoring.Score</c> only
+        /// selects the report when the report has a non-zero signal, and a non-zero signal makes the
+        /// user active in the window. A report-sourced row therefore can never be banded never-used or
+        /// dormant, which means it can never be <c>probable</c> either. The window-mismatch hold-back is
+        /// consequently defence-in-depth rather than a live filter today. It is kept because the
+        /// alternative - deleting it - would silently remove the guard if the source-selection rule ever
+        /// changes, and because a hold-back that is wired up and provably zero is easier to reason about
+        /// than one that has to be remembered. See the deferred item in the pull request: the residual
+        /// exposure is a user with NO audit signal at all while Microsoft's period is shorter than the
+        /// selected window, who is currently banded never-used from audit data that does not cover them.
+        /// </remarks>
         private static bool IsUsageReportSourced(LicensedUserAdoptionRow row)
         {
             return row != null

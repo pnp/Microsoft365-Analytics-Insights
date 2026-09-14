@@ -1071,13 +1071,23 @@ namespace Common.Entities.CopilotAdoption
 
             AddMethod(sheet, "Business case score",
                 "Unlicensed users score 0-100 on four weighted signals, weighted so evidence beats inference:\n"
-                + $"copilot = min(1, unlicensedCopilotInteractions / {o.OpportunityCopilotTarget}) x {o.OpportunityUnlicensedCopilotWeight}\n"
+                // The Copilot component is the only raw total among four targets; the other three are
+                // per-active-day averages. It is scaled from its basis period to the window actually
+                // analysed, so the method sheet has to quote the scaled figure or it cannot reproduce
+                // the scores on the opportunities sheet at any window other than the default.
+                + $"copilot = min(1, unlicensedCopilotInteractions / {CopilotAdoptionScoring.OpportunityCopilotTargetForWindow(o)}) x {o.OpportunityUnlicensedCopilotWeight}\n"
                 + $"collaboration = min(1, (teamsMessages + teamsMeetings) / {o.OpportunityCollaborationTarget}) x {o.OpportunityCollaborationWeight}\n"
                 + $"email = min(1, (emailsSent + emailsRead) / {o.OpportunityEmailTarget}) x {o.OpportunityEmailWeight}\n"
                 + $"documents = min(1, filesViewedOrEdited / {o.OpportunityDocumentTarget}) x {o.OpportunityDocumentWeight}\n"
-                + $"Recommended at {o.OpportunityRecommendScore} or above. Already using Copilot Chat without a licence "
-                + "carries the most weight because it is the only signal that proves demand for Copilot itself "
-                + "rather than inferring it from general activity.");
+                + $"The Copilot target is {o.OpportunityCopilotTarget} interactions per {o.OpportunityCopilotTargetBasisDays} days, "
+                + $"scaled to the {o.WindowDays}-day window shown above. Without that scaling the same person "
+                + "would be recommended over a long window and not over a short one.\n"
+                + $"Recommended when unlicensedCopilotActiveDays is at least {o.OpportunityProvenDemandMinActiveDays} "
+                + $"(proven demand), or when the score reaches {o.OpportunityRecommendScore} (workload inferred). "
+                + "Proven demand qualifies on its own because the Copilot weight "
+                + $"({o.OpportunityUnlicensedCopilotWeight}) sits below the score bar, so the one signal that "
+                + "actually proves demand for Copilot could otherwise never clear it while general Microsoft 365 "
+                + "busyness could. Each row states which route qualified it.");
 
             AddMethod(sheet, "Agent verdicts",
                 $"Retire after {o.AgentRetireInactiveDays} days without use; Review between {o.AgentReviewInactiveDays} "

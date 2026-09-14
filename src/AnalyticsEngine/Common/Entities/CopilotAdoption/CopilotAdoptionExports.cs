@@ -302,7 +302,46 @@ namespace Common.Entities.CopilotAdoption
                 case LicenceOpportunitySortFields.Department:
                     return Order(rows, r => r.Department ?? string.Empty, q.SortDescending);
                 default:
-                    return OrderThenUpn(rows, r => r.OpportunityScore, q.SortDescending);
+                    // Proven demand first, then the composite score. The database already sorts
+                    // proven-demand candidates into the TOP (@maxRows) window ahead of merely busy
+                    // users; re-sorting on score alone in memory would undo that and put a person who
+                    // demonstrably uses Copilot below one who never has. The Copilot component (35) is
+                    // worth less than the recommendation bar (50), so that inversion is the normal
+                    // case, not an edge case.
+                    //
+                    // Applied as the primary key of one composite sort, not as a separate pass: a
+                    // later OrderBy would discard it except within exact score ties.
+                    return ProvenDemandFirst(rows)
+                        .ThenBy(r => r.OpportunityScore, Direction(q.SortDescending))
+                        .ThenBy(r => r.UserPrincipalName ?? string.Empty, StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        /// <summary>
+        /// Orders proven-demand candidates ahead of workload-inferred ones, whichever direction the
+        /// score is then sorted in. Evidence outranks inference in this list at all times - that is the
+        /// whole reason the tier exists.
+        /// </summary>
+        private static IOrderedEnumerable<LicenceOpportunityRow> ProvenDemandFirst(
+            IEnumerable<LicenceOpportunityRow> rows)
+        {
+            return rows.OrderBy(r =>
+                r.QualificationTier == CopilotAdoptionScoring.OpportunityTiers.ProvenDemand ? 0 : 1);
+        }
+
+        /// <summary>Ascending or descending as a comparer, so it can be used inside a ThenBy.</summary>
+        private static IComparer<double> Direction(bool descending)
+        {
+            return descending ? DescendingDouble.Instance : (IComparer<double>)Comparer<double>.Default;
+        }
+
+        private sealed class DescendingDouble : IComparer<double>
+        {
+            public static readonly DescendingDouble Instance = new DescendingDouble();
+
+            public int Compare(double x, double y)
+            {
+                return y.CompareTo(x);
             }
         }
 

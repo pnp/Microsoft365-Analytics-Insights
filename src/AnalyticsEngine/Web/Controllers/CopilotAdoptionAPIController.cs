@@ -103,7 +103,11 @@ namespace Web.AnalyticsWeb.Controllers
         {
             var config = new AppConfig();
             var settings = config.ImportJobSettings ?? new ImportTaskSettings();
-            var governance = config.CopilotAdoptionGovernance ?? GetGovernanceSettings();
+            // Read through the same factory every other endpoint uses. AppConfig always constructs a
+            // governance object, so a null-coalescing fallback here would never fire and this endpoint
+            // would be the one place the policy could not be substituted - including in the tests that
+            // prove the fail-closed default.
+            var governance = GetGovernanceSettings();
 
             var model = new CopilotAdoptionAvailability
             {

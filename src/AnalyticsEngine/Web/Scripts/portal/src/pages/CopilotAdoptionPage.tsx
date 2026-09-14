@@ -1549,11 +1549,30 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
       info: {
         what: 'Licences safe enough to include in the actionable reclaim total. Disabled accounts are certain. Enabled, long-tenured never-used accounts are probable. Dormant, too-new and unknown-tenure accounts are review-only.',
         how: `A new user is protected for ${o.reclaimGraceDays} days using Graph user.createdDateTime as the account-age proxy until true seat-tenure history exists. Active new users have their expected active days prorated; inactive new users are "too new to judge". ${summary.reclaimCaveat ?? ''}`,
+        // Two independent mechanisms hold seats back - confidence tiering and a Microsoft
+        // report-period mismatch - so the formula has to state both, or a reader adding up the band
+        // breakdown finds a gap nothing on the page accounts for.
         formula: `${formatCount(summary.reclaimCertainSeats)} certain + ${formatCount(
           summary.reclaimProbableSeats,
-        )} probable = ${formatCount(summary.reclaimableSeats)} reclaimable. ${formatCount(
+        )} probable${
+          summary.reclaimSeatsHeldBackForWindowMismatch > 0
+            ? ` - ${formatCount(
+                summary.reclaimSeatsHeldBackForWindowMismatch,
+              )} held back because Microsoft's usage-report period does not match this window`
+            : ''
+        } = ${formatCount(summary.reclaimableSeats)} reclaimable. ${formatCount(
           summary.reclaimReviewSeats,
-        )} review-only and ${formatCount(summary.reclaimExcludedUsers)} excluded users still remain in the licensed denominator.`,
+        )} review-only and ${formatCount(
+          summary.reclaimExcludedUsers,
+        )} excluded users still remain in the licensed denominator. Reconciles against the band breakdown as ${formatCount(
+          summary.neverUsedUsers,
+        )} never used + ${formatCount(summary.dormantUsers)} dormant + ${formatCount(
+          summary.reclaimSeatsFromActiveBands,
+        )} disabled-but-active = ${formatCount(summary.reclaimableSeats)} reclaimable + ${formatCount(
+          summary.reclaimSeatsHeldBackForWindowMismatch,
+        )} held back for window mismatch + ${formatCount(
+          summary.reclaimSeatsHeldBackForReview,
+        )} held back for review.`,
         source:
           'Drill through on the Licensed users tab with the Reclaim tier filter; each tier uses the same reclaimEligibility key counted here. Expired exclusions are shown for re-review rather than silently honoured forever.',
       },

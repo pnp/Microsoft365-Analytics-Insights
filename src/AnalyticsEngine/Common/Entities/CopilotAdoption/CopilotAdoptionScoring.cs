@@ -699,9 +699,12 @@ namespace Common.Entities.CopilotAdoption
                          + "surface.";
 
                 case AdoptionActionCodes.Review:
-                    return "Potential reclaim cases that are too new, dormant, or missing enough tenure/account "
-                         + "context to act on automatically. Leave, part-time patterns, service accounts and "
-                         + "shared mailboxes are not detectable from usage data, so a human review is required.";
+                    return "Potential reclaim cases that are too new to judge, or missing enough tenure or "
+                         + "account-state context to act on automatically. Leave, part-time patterns, service "
+                         + "accounts and shared mailboxes are not detectable from usage data, so a human review "
+                         + "is required. Dormant seats are deliberately NOT here - they get the Win back action, "
+                         + "because there is still somebody to talk to - but they are counted as review-only in "
+                         + "the reclaim tiers, which is a seat decision rather than an enablement one.";
 
                 case AdoptionActionCodes.Excluded:
                     return "Reviewed cases an admin deliberately excluded from reclaim. They still hold a seat "

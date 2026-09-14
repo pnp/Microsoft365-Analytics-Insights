@@ -1918,6 +1918,13 @@ namespace Tests.UnitTests
 
             // Probable on the tier, but scored from Microsoft's report over a period that is not the
             // selected window - held back by the second mechanism.
+            //
+            // NOTE: Score() cannot currently produce this combination. It only prefers the report when
+            // the report has a non-zero signal, and a non-zero signal makes the user active in the
+            // window, so a report-sourced row is never idle and therefore never "probable". The row is
+            // constructed directly here because the hold-back is defence-in-depth against exactly that
+            // rule changing - see ReportSourcedRows_AreNeverIdle_SoTheMismatchHoldBackIsDefenceInDepth,
+            // which pins the reachability fact itself.
             var reportProbable = ScoredUser("report-probable@contoso.com", 0, AdoptionBand.NeverUsed);
             reportProbable.SignalSource = CopilotAdoptionScoring.SignalSourceUsageReport;
 
@@ -2000,6 +2007,153 @@ namespace Tests.UnitTests
                     + summary.ReclaimSeatsHeldBackForReview,
                 "NeverUsed + Dormant + ReclaimSeatsFromActiveBands must equal "
                 + "ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview.");
+        }
+
+        [TestMethod]
+        public void Opportunities_RankProvenDemandAboveAHigherScoringInferredCandidate()
+        {
+            // The SQL sorts proven-demand candidates into the row cap first; sorting on score alone in
+            // memory would undo that in the list the reader actually sees. It is not an edge case: the
+            // Copilot component is worth 35 and the recommendation bar is 50, so a proven-demand user
+            // with no other Microsoft 365 activity scores BELOW a merely busy one by construction.
+            var proven = CopilotAdoptionScoring.ScoreOpportunity(new UnlicensedUserSignalRow
+            {
+                UserId = 1,
+                UserPrincipalName = "proven@contoso.com",
+                UnlicensedCopilotInteractions = 9,
+                UnlicensedCopilotActiveDays = 6,
+            });
+
+            var busy = CopilotAdoptionScoring.ScoreOpportunity(new UnlicensedUserSignalRow
+            {
+                UserId = 2,
+                UserPrincipalName = "busy@contoso.com",
+                TeamsMessages = 60,
+                TeamsMeetings = 30,
+                EmailsSent = 90,
+                EmailsRead = 90,
+            });
+
+            Assert.AreEqual(CopilotAdoptionScoring.OpportunityTiers.ProvenDemand, proven.QualificationTier);
+            Assert.IsTrue(busy.OpportunityScore > proven.OpportunityScore,
+                "The premise of this test is that the inferred candidate scores higher.");
+
+            var sorted = CopilotAdoptionExports.Apply(
+                new[] { busy, proven },
+                new LicenceOpportunityQuery { SortBy = LicenceOpportunitySortFields.Score, SortDescending = true });
+
+            Assert.AreEqual("proven@contoso.com", sorted[0].UserPrincipalName,
+                "Evidence must outrank inference in the default ordering, not just in the SQL row cap.");
+        }
+
+        [TestMethod]
+        public void AnExclusionThatWasRenewed_IsNotReportedAsExpired()
+        {
+            // The expired lookup matches any exclusion whose review date has passed. A user who was
+            // excluded, allowed to lapse and then excluded again is currently excluded - reporting them
+            // as expired as well sends an admin back to a decision somebody already re-made.
+            var sql = CopilotAdoptionSql.LicensedUsersSql(
+                new[] { 1 }, new[] { 2 }, includeCopilotReport: true);
+
+            StringAssert.Contains(
+                sql,
+                "CASE WHEN expired.user_id IS NOT NULL AND exclusion.reason IS NULL THEN 1 ELSE 0 END",
+                "ReclaimExclusionExpired must be false while an active exclusion exists for the same user.");
+        }
+
+        [TestMethod]
+        public void AWindowMismatch_NeverHoldsBackADisabledAccount()
+        {
+            // A disabled account holding a seat is a CERTAIN reclaim - it is not an inference from an
+            // absence of recorded use, so a Microsoft report-period technicality has no bearing on it.
+            //
+            // This is the case the mismatch hold-back actually reaches, and before it was restricted to
+            // probable seats it held back exactly the wrong rows: a leaver's seat vanished from the
+            // reclaim headline because Microsoft's report period was D90 and the reader had picked D28,
+            // while the row itself still said "Reclaim - the account is disabled".
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.LicensedUsers = 2;
+            analysis.Summary.DataSources.CopilotUsageReportPeriodDays = 90;
+
+            var disabledReportSourced = ScoredUser("disabled-report@contoso.com", 60, AdoptionBand.Established);
+            disabledReportSourced.AccountEnabled = false;
+            disabledReportSourced.SignalSource = CopilotAdoptionScoring.SignalSourceUsageReport;
+
+            var idleAudit = ScoredUser("idle-audit@contoso.com", 0, AdoptionBand.NeverUsed);
+            idleAudit.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+
+            analysis.LicensedUsers.AddRange(new[] { disabledReportSourced, idleAudit });
+            foreach (var user in analysis.LicensedUsers)
+            {
+                CopilotAdoptionScoring.ApplyReclaimEligibility(user);
+                user.RecommendedActionCode = CopilotAdoptionScoring.RecommendedActionCode(user);
+            }
+
+            new CopilotAdoptionService(new CopilotAdoptionOptions { WindowDays = 28 }).FinaliseSummary(analysis);
+
+            var summary = analysis.Summary;
+            Assert.IsTrue(summary.UsageReportWindowMismatch);
+            Assert.AreEqual(1, summary.ReclaimCertainSeats);
+            Assert.AreEqual(0, summary.ReclaimSeatsHeldBackForWindowMismatch,
+                "A disabled seat is certain, not inferred, so a report-period mismatch must not hold it back.");
+            Assert.AreEqual(2, summary.ReclaimableSeats,
+                "Both the disabled seat and the audit-sourced never-used seat remain reclaimable.");
+            Assert.AreEqual(CopilotAdoptionScoring.AdoptionActionCodes.Reclaim, disabledReportSourced.RecommendedActionCode,
+                "The row-level advice and the headline must agree about a disabled seat.");
+            AssertReclaimArithmeticTiesOut(summary);
+        }
+
+        [TestMethod]
+        public void ReportSourcedRows_AreNeverIdle_SoTheMismatchHoldBackIsDefenceInDepth()
+        {
+            // Pins the reachability fact the hold-back's scope depends on. Score() only prefers
+            // Microsoft's report when the report carries a non-zero signal, and a non-zero signal makes
+            // the user active in the window - so a report-sourced row can never band never-used or
+            // dormant, and therefore can never be "probable".
+            //
+            // If the source-selection rule is ever relaxed (for example to mark a user report-sourced
+            // when the audit import is unavailable even though the report is empty), this test fails and
+            // whoever changed it has to decide deliberately what the reclaim hold-back should then do -
+            // rather than discovering that a dormant guard has quietly come alive.
+            var nowUtc = Now;
+
+            var reportOnly = CopilotAdoptionScoring.Score(
+                new LicensedUserUsageRow
+                {
+                    UserId = 1,
+                    UserPrincipalName = "report-only@contoso.com",
+                    AccountEnabled = true,
+                    AccountCreatedUtc = nowUtc.AddDays(-400),
+                    ReportPrompts = 12,
+                    ReportActiveDays = 4,
+                    ReportLastActivityUtc = nowUtc.AddDays(-2),
+                },
+                WindowStart,
+                nowUtc,
+                auditAvailable: false);
+
+            Assert.AreEqual(CopilotAdoptionScoring.SignalSourceUsageReport, reportOnly.SignalSource);
+            Assert.IsTrue(reportOnly.Band > AdoptionBand.Dormant,
+                "A report-sourced row is only ever produced when the report shows activity, so it cannot be idle.");
+
+            var noSignalAnywhere = CopilotAdoptionScoring.Score(
+                new LicensedUserUsageRow
+                {
+                    UserId = 2,
+                    UserPrincipalName = "no-signal@contoso.com",
+                    AccountEnabled = true,
+                    AccountCreatedUtc = nowUtc.AddDays(-400),
+                    ReportPrompts = 0,
+                    ReportActiveDays = 0,
+                },
+                WindowStart,
+                nowUtc,
+                auditAvailable: false);
+
+            Assert.AreEqual(CopilotAdoptionScoring.SignalSourceAudit, noSignalAnywhere.SignalSource,
+                "With nothing from either source the row stays audit-sourced, which is why the window-mismatch "
+                + "hold-back cannot reach it. See the deferred item in the pull request.");
+            Assert.AreEqual(AdoptionBand.NeverUsed, noSignalAnywhere.Band);
         }
 
         [TestMethod]

@@ -369,7 +369,11 @@ namespace Common.Entities.CopilotAdoption
                 "       exclusion.excluded_by AS ReclaimExcludedBy,\r\n" +
                 "       exclusion.excluded_utc AS ReclaimExcludedUtc,\r\n" +
                 "       exclusion.review_after_utc AS ReclaimExclusionReviewAfterUtc,\r\n" +
-                "       CAST(CASE WHEN expired.user_id IS NULL THEN 0 ELSE 1 END AS bit) AS ReclaimExclusionExpired,\r\n" +
+                // Expired only when there is no ACTIVE exclusion. The expired lookup matches any row
+                // whose review date has passed, so a user who was excluded, allowed to lapse, and then
+                // excluded again would otherwise be reported as both currently excluded and expired -
+                // inflating the "needs re-review" count with cases an admin has already dealt with.
+                "       CAST(CASE WHEN expired.user_id IS NOT NULL AND exclusion.reason IS NULL THEN 1 ELSE 0 END AS bit) AS ReclaimExclusionExpired,\r\n" +
                 "       CAST(ISNULL(chats.Interactions, 0) AS bigint) AS Interactions,\r\n" +
                 "       CAST(ISNULL(chats.PriorInteractions, 0) AS bigint) AS PriorInteractions,\r\n" +
                 "       ISNULL(chats.ActiveDays, 0) AS ActiveDays,\r\n" +

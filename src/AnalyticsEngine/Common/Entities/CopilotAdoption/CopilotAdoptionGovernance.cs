@@ -153,9 +153,20 @@ namespace Common.Entities.CopilotAdoption
             copy.OfficeLocation = null;
             copy.CompanyName = null;
             copy.ManagerUserPrincipalName = null;
+            // The administrator who recorded a reclaim exclusion is a named person too, and the note is
+            // free text a reviewer wrote about why - "on parental leave until March", "shared mailbox
+            // for the Contoso helpdesk" - which is exactly the kind of detail that re-identifies the
+            // subject and often says something about their circumstances. The reason code, the dates
+            // and the tier are what an operator needs on a pseudonymised page; these two are not, and
+            // an export that still carries them is not pseudonymised.
+            copy.ReclaimExcludedBy = null;
+            copy.ReclaimExclusionNote = null;
             return copy;
         }
 
+        /// <summary>
+        /// Clone then redact - see the note on the licensed-user overload above.
+        /// </summary>
         public static LicenceOpportunityRow Pseudonymise(
             LicenceOpportunityRow r, CopilotAdoptionGovernanceSettings settings)
         {
@@ -186,6 +197,8 @@ namespace Common.Entities.CopilotAdoption
             nameof(LicensedUserAdoptionRow.OfficeLocation),
             nameof(LicensedUserAdoptionRow.CompanyName),
             nameof(LicensedUserAdoptionRow.ManagerUserPrincipalName),
+            nameof(LicensedUserAdoptionRow.ReclaimExcludedBy),
+            nameof(LicensedUserAdoptionRow.ReclaimExclusionNote),
         };
 
         private static string Surrogate(
