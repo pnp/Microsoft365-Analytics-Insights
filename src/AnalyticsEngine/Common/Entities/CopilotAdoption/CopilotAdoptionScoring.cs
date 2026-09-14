@@ -689,8 +689,10 @@ namespace Common.Entities.CopilotAdoption
 
                 case AdoptionActionCodes.Reengage:
                     return "Used Copilot before this period but not once inside it. Someone who tried it and "
-                         + "stopped is a different problem from someone who never started - ask what stopped, "
-                         + "offer a refresher, or reassign the licence.";
+                         + "stopped is a different problem from someone who never started - ask what stopped "
+                         + "and offer a refresher. These seats carry the review-only reclaim tier, so confirm "
+                         + "with the user or their manager before reassigning one: leave, part-time patterns "
+                         + "and role changes are not visible in usage data.";
 
                 case AdoptionActionCodes.Coach:
                     return $"Occasional use only (engagement below {o.DevelopingScore}). The cheapest move is "

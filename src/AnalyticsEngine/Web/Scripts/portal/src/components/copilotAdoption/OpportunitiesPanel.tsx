@@ -144,6 +144,19 @@ export default function OpportunitiesPanel({
   const styles = useStyles();
   const table = useAdoptionTableStyles();
 
+  // Mirrors CopilotAdoptionScoring.OpportunityCopilotTargetForWindow. The Copilot component is the only
+  // one of the four that is a raw total rather than a per-active-day average, so it is scaled from its
+  // basis period to the selected window. Quoting the unscaled number in the tooltip would describe a
+  // formula that cannot reproduce the score on the row beside it.
+  const opportunityCopilotTargetForWindow =
+    Math.round(
+      Math.max(
+        1,
+        (options.opportunityCopilotTarget * Math.max(1, windowDays)) /
+          Math.max(1, options.opportunityCopilotTargetBasisDays),
+      ) * 10,
+    ) / 10;
+
   const [filters, setFilters] = useState<OpportunityFilters>(DEFAULT_FILTERS);
   const [searchDraft, setSearchDraft] = useState('');
   const [page, setPage] = useState(0);
@@ -364,16 +377,18 @@ export default function OpportunitiesPanel({
                     <InfoTip
                       title="Business case score"
                       content={{
-                        what: `How strong the case for giving this person a Copilot licence is, from 0 to 100. Anyone at ${options.opportunityRecommendScore} or above is counted in the "recommended for a licence" headline.`,
-                        how: `Four weighted signals, weighted so evidence beats inference. Already using Copilot Chat without a licence is worth ${options.opportunityUnlicensedCopilotWeight} points because it proves demand for Copilot itself; Teams collaboration is worth ${options.opportunityCollaborationWeight}, email ${options.opportunityEmailWeight} and document work ${options.opportunityDocumentWeight}, and those three only infer it from general Microsoft 365 activity. Each signal is a ratio against its own target and is capped at 1, so no single very heavy workload can carry someone over the line on its own.`,
+                        what: `How strong the case for giving this person a Copilot licence is, from 0 to 100. Someone is counted in the "recommended for a licence" headline if they already use Copilot on at least ${options.opportunityProvenDemandMinActiveDays} distinct days without a licence (proven demand), or if this score reaches ${options.opportunityRecommendScore} (workload inferred). The "Qualified by" column says which.`,
+                        how: `Four weighted signals, weighted so evidence beats inference. Already using Copilot Chat without a licence is worth ${options.opportunityUnlicensedCopilotWeight} points because it proves demand for Copilot itself; Teams collaboration is worth ${options.opportunityCollaborationWeight}, email ${options.opportunityEmailWeight} and document work ${options.opportunityDocumentWeight}, and those three only infer it from general Microsoft 365 activity. Each signal is a ratio against its own target and is capped at 1, so no single very heavy workload can carry someone over the line on its own. Proven demand has to qualify independently because the Copilot weight sits below the score bar, so recurrent unlicensed use could otherwise never clear it while general busyness could.`,
                         formula:
-                          `copilot     = min(1, unlicensedCopilotInteractions / ${options.opportunityCopilotTarget})\n` +
+                          `copilot     = min(1, unlicensedCopilotInteractions / ${opportunityCopilotTargetForWindow})\n` +
                           `collab      = min(1, (teamsMessages + teamsMeetings) / ${options.opportunityCollaborationTarget})\n` +
                           `email       = min(1, (emailsSent + emailsRead) / ${options.opportunityEmailTarget})\n` +
                           `documents   = min(1, filesViewedOrEdited / ${options.opportunityDocumentTarget})\n` +
-                          `score = copilot*${options.opportunityUnlicensedCopilotWeight} + collab*${options.opportunityCollaborationWeight} + email*${options.opportunityEmailWeight} + documents*${options.opportunityDocumentWeight}`,
+                          `score = copilot*${options.opportunityUnlicensedCopilotWeight} + collab*${options.opportunityCollaborationWeight} + email*${options.opportunityEmailWeight} + documents*${options.opportunityDocumentWeight}\n\n` +
+                          `recommended when unlicensedCopilotActiveDays >= ${options.opportunityProvenDemandMinActiveDays}\n` +
+                          `               or score >= ${options.opportunityRecommendScore}`,
                         source:
-                          'Copilot use comes from the Copilot audit import and covers this period exactly. The Teams, email and document figures are a per-active-day average across this same period, taken from Microsoft\u2019s daily usage reports - a day the user did not appear in the report at all does not drag the average down. Hover any row for its four component scores.',
+                          `Copilot use comes from the Copilot audit import and covers this period exactly. Its target of ${options.opportunityCopilotTarget} per ${options.opportunityCopilotTargetBasisDays} days is scaled to the selected period (${opportunityCopilotTargetForWindow} here) because it is a raw total, not a per-active-day average. The Teams, email and document figures are a per-active-day average across this same period, taken from Microsoft\u2019s daily usage reports - a day the user did not appear in the report at all does not drag the average down. Hover any row for its four component scores.`,
                       }}
                     />
                   </span>

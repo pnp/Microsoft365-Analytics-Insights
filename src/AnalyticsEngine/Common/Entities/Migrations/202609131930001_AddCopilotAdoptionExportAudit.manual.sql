@@ -33,7 +33,6 @@ END
 
 RAISERROR('AddCopilotAdoptionExportAudit: pre-flight checks passed.', 0, 1) WITH NOWAIT;
 GO
-
 SET NOCOUNT ON;
 
 IF OBJECT_ID(N'dbo.copilot_adoption_export_audit', N'U') IS NULL
@@ -64,9 +63,10 @@ BEGIN
     RAISERROR('AddCopilotAdoptionExportAudit: dbo.copilot_adoption_export_audit already exists.', 0, 1) WITH NOWAIT;
 END
 
--- Guarded separately from the table. SQL Server autocommits each statement, so a failure between the
--- two would leave the table present and the index missing - and a re-run that keyed only off the
--- table would then skip the index and stamp the migration as complete anyway.
+-- Guarded separately from the table, not nested inside its "table does not exist" branch. This runs
+-- with suppressTransaction, so SQL Server commits each statement independently: a failure between the
+-- two would leave the table present and the index missing, and a re-run keyed only off the table would
+-- then skip the index and stamp the migration as complete.
 IF OBJECT_ID(N'dbo.copilot_adoption_export_audit', N'U') IS NOT NULL
    AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_adoption_export_audit') AND name = N'IX_copilot_adoption_export_audit_occurred_utc')
 BEGIN
@@ -91,6 +91,7 @@ BEGIN
     RAISERROR('AddCopilotAdoptionExportAudit: schema verification failed; actor is not nvarchar, so the migration will not be stamped.', 16, 1) WITH NOWAIT;
     SET NOEXEC ON;
 END
+
 IF OBJECT_ID(N'dbo.copilot_adoption_export_audit', N'U') IS NOT NULL
    AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_adoption_export_audit') AND name = N'IX_copilot_adoption_export_audit_occurred_utc')
 BEGIN

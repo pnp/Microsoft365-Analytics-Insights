@@ -48,14 +48,23 @@ BEGIN
         [individual_data_disabled] bit NOT NULL CONSTRAINT [DF_copilot_adoption_export_audit_individual_data_disabled] DEFAULT (0),
         CONSTRAINT [PK_copilot_adoption_export_audit] PRIMARY KEY CLUSTERED ([id] ASC)
     );
-
-    CREATE NONCLUSTERED INDEX [IX_copilot_adoption_export_audit_occurred_utc]
-        ON [dbo].[copilot_adoption_export_audit] ([occurred_utc] ASC)
-        INCLUDE ([endpoint], [actor], [succeeded], [status_code]);
 END
 ELSE
 BEGIN
-    RAISERROR('AddCopilotAdoptionExportAudit: dbo.copilot_adoption_export_audit already exists; nothing to do.', 0, 1) WITH NOWAIT;
+    RAISERROR('AddCopilotAdoptionExportAudit: dbo.copilot_adoption_export_audit already exists.', 0, 1) WITH NOWAIT;
+END
+
+-- Guarded separately from the table, not nested inside its ""table does not exist"" branch. This runs
+-- with suppressTransaction, so SQL Server commits each statement independently: a failure between the
+-- two would leave the table present and the index missing, and a re-run keyed only off the table would
+-- then skip the index and stamp the migration as complete.
+IF OBJECT_ID(N'dbo.copilot_adoption_export_audit', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.copilot_adoption_export_audit') AND name = N'IX_copilot_adoption_export_audit_occurred_utc')
+BEGIN
+    CREATE NONCLUSTERED INDEX [IX_copilot_adoption_export_audit_occurred_utc]
+        ON [dbo].[copilot_adoption_export_audit] ([occurred_utc] ASC)
+        INCLUDE ([endpoint], [actor], [succeeded], [status_code]);
+    RAISERROR('AddCopilotAdoptionExportAudit: created IX_copilot_adoption_export_audit_occurred_utc.', 0, 1) WITH NOWAIT;
 END";
 
         public override void Up()

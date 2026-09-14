@@ -838,8 +838,9 @@ function OverviewTab({
                 Engagement mix
               </Text>
               <Text size={200} block className={styles.muted}>
-                Every licensed user in exactly one band. "Never used" and "Dormant" together are the
-                reclaimable licences.
+                Every licensed user in exactly one band. "Never used" and "Dormant" together are the idle
+                seats - the reclaimable-licences figure is the certain and probable tiers drawn from
+                them, not the whole total.
               </Text>
             </div>
             <InfoTip
@@ -1187,6 +1188,18 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
           Math.max(1, o.opportunityCopilotTargetBasisDays),
       ) * 10,
     ) / 10;
+  // The worked example below has to be computed, not asserted: at a 7-day period half the frequency
+  // target is fewer than depthMinActiveDays, so hard-coding full depth would print a score the scorer
+  // would never produce - in a panel whose entire purpose is to reproduce the scorer.
+  const exampleActiveDays = frequencyTargetDays / 2;
+  const exampleDepthConfidence = Math.min(1, exampleActiveDays / Math.max(1, o.depthMinActiveDays));
+  const exampleScore = Math.round(
+    ((0.5 * o.frequencyWeight +
+      1 * exampleDepthConfidence * o.depthWeight +
+      (1 / o.breadthTargetApps) * o.breadthWeight) /
+      (weightSum || 1)) *
+      100,
+  );
 
   return (
     <Card>
@@ -1245,18 +1258,24 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
               </div>
               <Text>
                 <strong>Worked example.</strong> Over a {o.windowDays}-day period the frequency target is{' '}
-                {frequencyTargetDays} active days. A user active on half of those, averaging{' '}
-                {o.depthTargetInteractionsPerActiveDay} interactions on each of those days, in a single app,
-                scores{' '}
-                {Math.round(
-                  ((0.5 * o.frequencyWeight + 1 * o.depthWeight + (1 / o.breadthTargetApps) * o.breadthWeight) /
-                    (weightSum || 1)) *
-                    100,
-                )}{' '}
-                - deep but narrow and intermittent, which is why the recommended action for that profile is to
-                broaden rather than to train. (Half of {frequencyTargetDays} days is at or above{' '}
-                {o.depthMinActiveDays}, so the depth confidence factor is 1 here and does not change the
-                number.)
+                {frequencyTargetDays} active days. A user active on half of those ({exampleActiveDays}),
+                averaging {o.depthTargetInteractionsPerActiveDay} interactions on each of those days, in a
+                single app, scores {exampleScore} - deep but narrow and intermittent, which is why the
+                recommended action for that profile is to broaden rather than to train.
+                {exampleDepthConfidence < 1 ? (
+                  <>
+                    {' '}
+                    Over this short a period, {exampleActiveDays} active days is below the{' '}
+                    {o.depthMinActiveDays} needed for full confidence in the depth measure, so depth is scaled
+                    to {formatPct(exampleDepthConfidence * 100)} of its face value.
+                  </>
+                ) : (
+                  <>
+                    {' '}
+                    {exampleActiveDays} active days is at or above {o.depthMinActiveDays}, so the depth
+                    confidence factor is 1 here and does not change the number.
+                  </>
+                )}
               </Text>
             </div>
           </AccordionPanel>
@@ -1280,7 +1299,11 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 distinction decides the action: a dormant user tried Copilot and stopped, and needs a
                 conversation about what went wrong before the licence is taken away; a never-used licence has produced
                 nothing at all and needs either onboarding or reassignment. Together they are the{' '}
-                <strong>reclaimable licences</strong> figure.
+                <strong>idle seats</strong> - the population the reclaim tiers are drawn from. They are{' '}
+                <em>not</em> the <strong>reclaimable licences</strong> figure, which counts only the{' '}
+                <em>certain</em> and <em>probable</em> tiers: dormant seats are review-only, admin exclusions
+                are held back, and disabled accounts that were still active are reclaimable without being idle
+                at all.
               </Text>
               <Text>
                 <strong>"How often people open Copilot"</strong> answers a narrower question with no weighting

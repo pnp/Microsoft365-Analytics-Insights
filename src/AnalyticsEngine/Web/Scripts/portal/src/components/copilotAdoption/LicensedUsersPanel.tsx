@@ -376,11 +376,12 @@ export default function LicensedUsersPanel({
                           weightSharePct(options.depthWeight, scoreWeights),
                         )}) against ${options.depthTargetInteractionsPerActiveDay} interactions per active day, and breadth (${formatPct(
                           weightSharePct(options.breadthWeight, scoreWeights),
-                        )}) against ${options.breadthTargetApps} Copilot surfaces. Each component is capped at 100% before weighting, so nothing above target buys extra credit.`,
+                        )}) against ${options.breadthTargetApps} Copilot surfaces. Each component is capped at 100% before weighting, so nothing above target buys extra credit. Depth is additionally scaled down below ${options.depthMinActiveDays} active days, because it divides by a number the user controls - a few prompts in one afternoon would otherwise score full marks. Expected active days is prorated for accounts younger than the reporting period.`,
                         formula:
-                          'freq = min(1, activeDays / expectedActiveDays)\n' +
-                          'depth = min(1, interactions / activeDays / depthTarget)\n' +
-                          'breadth = min(1, appsUsed / breadthTarget)\n' +
+                          'freq       = min(1, activeDays / expectedActiveDays)\n' +
+                          `confidence = min(1, activeDays / ${options.depthMinActiveDays})\n` +
+                          'depth      = min(1, interactions / activeDays / depthTarget) x confidence\n' +
+                          'breadth    = min(1, appsUsed / breadthTarget)\n' +
                           `score = (freq*${options.frequencyWeight} + depth*${options.depthWeight} + breadth*${options.breadthWeight})\n` +
                           `        / ${weightSum} x 100`,
                         source: 'Hover the bar on any row for that user\u2019s three component scores.',
@@ -397,7 +398,7 @@ export default function LicensedUsersPanel({
                         what: 'The engagement score turned into a label, so a list of numbers becomes a list of decisions.',
                         how: `Champion at ${options.championScore}+, Established at ${options.establishedScore}+, Developing at ${options.developingScore}+, Trialling below that. Users with no activity in this period are not scored at all: they are split into Dormant (used Copilot at some point in the last ${options.historyDays} days) and Never used.`,
                         source:
-                          'Established and above is what the "habitual users" headline counts. Dormant plus Never used is what "reclaimable licences" counts.',
+                          'Established and above is what the "habitual users" headline counts. Dormant plus Never used is the idle-seat population, which is NOT the same as "reclaimable licences" - that figure is the certain and probable reclaim tiers only, after review, exclusion and window-mismatch hold-backs.',
                       }}
                     />
                   </span>

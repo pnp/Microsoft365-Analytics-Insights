@@ -246,7 +246,7 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Using Copilot unlicensed", summary.UnlicensedActiveUsers,
                 "People with no licence who used Copilot anyway - proven, unmet demand, and invisible in Microsoft's own reports.");
             AddMeta(sheet, "Recommended for a licence", summary.RecommendedForLicence,
-                $"Unlicensed users whose business-case score reached {summary.Options.OpportunityRecommendScore}.");
+                $"Unlicensed users recommended for a licence: either {summary.Options.OpportunityProvenDemandMinActiveDays} or more distinct days of unlicensed Copilot use (proven demand), or a business-case score of {summary.Options.OpportunityRecommendScore} or above (workload inferred).");
 
             if (summary.CoworkDetected)
             {
@@ -1039,7 +1039,10 @@ namespace Common.Entities.CopilotAdoption
                 + $"score = (frequency x {o.FrequencyWeight} + depth x {o.DepthWeight} + breadth x {o.BreadthWeight}) / {weightSum} x 100\n"
                 + $"Depth is scaled down below {o.DepthMinActiveDays} active days, because it divides by a number "
                 + "the user controls: a handful of prompts in one afternoon would otherwise score full marks for "
-                + "depth and read as a habit forming. At or above that many active days nothing changes.");
+                + "depth and read as a habit forming. At or above that many active days nothing changes.\n"
+                + $"The {targetDays}-day frequency target above is the full-window one. An account younger than the "
+                + "reporting period has its target prorated to the days it has actually existed, so each row's own "
+                + "'Expected active days' column is the number that row was scored against.");
 
             AddMethod(sheet, "Why working days",
                 $"The frequency target is {o.FrequencyTargetRatio:P0} of the working days in the period, assuming "
