@@ -645,6 +645,22 @@ namespace Common.Entities.CopilotAdoption
                   "       CAST(0 AS bigint) AS FilesViewedOrEdited,\r\n" +
                   "       CAST(NULL AS datetime) AS LastM365ActivityUtc,\r\n";
 
+            // Proven demand must survive the row cap. The list is TOP (@maxRows) ORDER BY the composite
+            // score, and that score cannot express proven demand: the Copilot weight sits below the
+            // recommendation bar while general Microsoft 365 volume sits above it. So on a large tenant
+            // a person already using Copilot Chat daily could be ranked below thousands of merely busy
+            // users and truncated away before the C# scorer ever sees them - which would silently
+            // reinstate the very defect the tier was added to fix.
+            //
+            // Sorting them into the first block costs nothing when the cap is not reached, and
+            // guarantees they are present when it is. Omitted entirely without the audit import: proven
+            // demand is unobservable without it, and a constant in ORDER BY is a SQL Server error.
+            var provenDemandOrder = includeCopilotAudit
+                ? "ORDER BY CASE WHEN ISNULL(copilot.ActiveDays, 0) >= "
+                  + $"{Math.Max(1, o.OpportunityProvenDemandMinActiveDays)} THEN 0 ELSE 1 END,\r\n"
+                  + "         RankScore DESC, u.id\r\n"
+                : "ORDER BY RankScore DESC, u.id\r\n";
+
             return
                 "WITH " + string.Join(",\r\n", ctes) + "\r\n" +
                 "SELECT TOP (@maxRows)\r\n" +
@@ -681,7 +697,7 @@ namespace Common.Entities.CopilotAdoption
                 // directory, every one of them ranked as a licence candidate it is impossible to act on.
                 // See issue #360.
                 ExcludeGuests("u") +
-                $"ORDER BY RankScore DESC, u.id\r\n" +
+                provenDemandOrder +
                 "OPTION (RECOMPILE);";
         }
 

@@ -298,6 +298,10 @@ namespace Common.Entities.CopilotAdoption
 
                 new CsvColumn<LicenceOpportunityRow>("Opportunity score (0-100)", r => r.OpportunityScore),
                 new CsvColumn<LicenceOpportunityRow>("Recommended for a licence", r => r.Recommended),
+                // Whether the recommendation rests on evidence (the person already uses Copilot) or on
+                // inference (they look like someone who would). Those justify a purchase very
+                // differently, and "recommended" alone does not say which.
+                new CsvColumn<LicenceOpportunityRow>("Qualified by", r => r.QualificationTierLabel),
 
                 new CsvColumn<LicenceOpportunityRow>("Unlicensed Copilot interactions", r => r.UnlicensedCopilotInteractions),
                 new CsvColumn<LicenceOpportunityRow>("Unlicensed Copilot active days", r => r.UnlicensedCopilotActiveDays),
