@@ -169,6 +169,81 @@ namespace Common.Entities.CopilotAdoption
             "      AND EXISTS (SELECT 1 FROM dbo.audit_events AS ae WHERE ae.id = c.event_id)\r\n" +
             ") THEN 1 ELSE 0 END AS Value;";
 
+        #region Copilot app host
+
+        /// <summary>
+        /// The width <c>app_host</c> is bounded to whenever it is used as a GROUPING or DISTINCT key.
+        /// Generous: a real tenant's longest value is well under half this, and the point is only to
+        /// give SQL Server a fixed-width key, not to shorten the label.
+        /// </summary>
+        private const int AppHostKeyWidth = 100;
+
+        /// <summary>
+        /// <c>app_host</c> as a fixed-width grouping key.
+        ///
+        /// <para>
+        /// <b>Why this cast exists.</b> <c>dbo.copilot_chats.app_host</c> is <c>nvarchar(max)</c> - the EF
+        /// property carries no <c>MaxLength</c>, so the column is a LOB (see the <c>CopilotEvents</c>
+        /// migration). Every value it actually holds is a short product-surface name, but SQL Server does
+        /// not know that: it sizes hash tables, sort buffers and - above all - the query's MEMORY GRANT
+        /// from the column's DECLARED width, not its contents. Using the raw column as one of the
+        /// grouping keys of a multi-million-row aggregate therefore asks for an enormous workspace grant
+        /// and burns CPU hashing a LOB per row, which is what pushed the 90- and 180-day windows of the
+        /// Copilot Adoption page past the command timeout on a large tenant.
+        /// </para>
+        /// <para>
+        /// Measured on a synthetic 200k-user tenant (26M <c>copilot_chats</c>, 100k unlicensed active
+        /// users, 20k Copilot seats, the (user, day, app, agent) grain compressing 2.4x), running the
+        /// SQL this class actually emits, medians of three after a discarded cold run:
+        /// <list type="table">
+        /// <item><description><b>UnlicensedUsageRows</b> 28d: 3,259ms -&gt; 1,903ms, CPU 13.5s -&gt; 8.3s</description></item>
+        /// <item><description><b>UnlicensedUsageRows</b> 90d: 8,018ms -&gt; 5,122ms, CPU 42.9s -&gt; 23.7s (1.8x)</description></item>
+        /// <item><description><b>UnlicensedUsageRows</b> 180d: 14,890ms -&gt; 9,559ms, CPU 83.7s -&gt; 46.3s (1.8x)</description></item>
+        /// <item><description><b>AgentUsage</b> 90d: 2,482ms -&gt; 1,751ms, CPU 13.8s -&gt; 8.1s (1.7x)</description></item>
+        /// <item><description><b>AgentUsage</b> 180d: 3,425ms -&gt; 2,152ms, CPU 21.2s -&gt; 10.3s (2.1x)</description></item>
+        /// <item><description><b>LicensedUsers</b>: NEUTRAL (0.93x - 1.02x, i.e. noise) at every window</description></item>
+        /// </list>
+        /// Logical reads are unchanged (within 0.2%) - the same index pages are read either way, so the
+        /// saving is aggregation CPU and workspace memory, which is the resource that actually runs out
+        /// on a tier-capped database shared with the importer. The win lands where the GROUPING OUTPUT
+        /// is large (the two grain tables, millions of rows); <c>LicensedUsers</c> only ever distincts
+        /// down to users x surfaces, so its hash table is small whatever the key width - the cast is
+        /// applied there for consistency, not because it was shown to help.
+        /// </para>
+        /// <para>
+        /// The memory grant is the part that turns this from "slower" into "fails". On a grain with
+        /// higher cardinality the optimiser was observed asking for 65GB (90-day) and 130GB (180-day)
+        /// of workspace for the LOB shape against 3.3GB and 6.6GB for this one - a ~20x request that no
+        /// database can grant, so it is capped and the query spills, and under concurrent load it
+        /// queues on <c>RESOURCE_SEMAPHORE</c> behind everything else. That is the reported symptom:
+        /// the 28-day window completes while 90- and 180-day windows hit the command timeout and the
+        /// unlicensed section silently degrades to a warning.
+        /// </para>
+        /// <para>
+        /// Verified row-for-row identical (same rows, same order, same values) against the previous SQL
+        /// at 28, 90 and 180 days for all three queries. Giving the grain temp table a clustered index
+        /// on <c>user_id</c> was also measured and REJECTED: neutral at 90 days and 17% WORSE at 180.
+        /// </para>
+        /// <para>
+        /// The cast truncates, so it must never be applied where the FULL value is needed - only where
+        /// <c>app_host</c> is a grouping or DISTINCT key, or the label of a small categorical roll-up.
+        /// It is deliberately NOT applied to <see cref="CoworkPredicate"/>, which compares the base
+        /// column and would otherwise stop being a plain equality against the stored value.
+        /// </para>
+        /// </summary>
+        /// <param name="column">The <c>app_host</c> column reference, e.g. <c>c.app_host</c>.</param>
+        /// <param name="nullLabel">
+        /// When supplied, NULL is bucketed to this label first, matching the existing
+        /// <c>ISNULL(app_host, '(unknown)')</c> behaviour. When null, NULL stays NULL.
+        /// </param>
+        private static string AppHostKey(string column, string nullLabel = null)
+        {
+            var value = nullLabel == null ? column : $"ISNULL({column}, '{nullLabel}')";
+            return $"CAST({value} AS nvarchar({AppHostKeyWidth}))";
+        }
+
+        #endregion
+
         #region Guest (external) accounts
 
         /// <summary>
@@ -267,7 +342,8 @@ namespace Common.Entities.CopilotAdoption
                 "CopilotWindow AS (\r\n" +
                 "    SELECT c.user_id AS user_id,\r\n" +
                 "           c.time_stamp AS time_stamp,\r\n" +
-                "           c.app_host AS app_host,\r\n" +
+                // Bounded, because CopilotApps below uses this as a DISTINCT key - see AppHostKey.
+                $"           {AppHostKey("c.app_host")} AS app_host,\r\n" +
                 "           c.agent_id AS agent_id\r\n" +
                 "    FROM dbo.copilot_chats AS c\r\n" +
                 "    JOIN SeatUsers AS seats ON seats.user_id = c.user_id\r\n" +
@@ -775,7 +851,7 @@ namespace Common.Entities.CopilotAdoption
                 "SELECT c.agent_id AS agent_id,\r\n" +
                 "       c.user_id AS user_id,\r\n" +
                 "       CAST(c.time_stamp AS date) AS active_date,\r\n" +
-                "       ISNULL(c.app_host, '(unknown)') AS app_host,\r\n" +
+                $"       {AppHostKey("c.app_host", "(unknown)")} AS app_host,\r\n" +
                 // Licensing is a property of the user, so it is constant within the group.
                 "       MAX(CASE WHEN seats.user_id IS NOT NULL THEN 1 ELSE 0 END) AS IsLicensed,\r\n" +
                 "       COUNT_BIG(*) AS Interactions,\r\n" +
@@ -794,7 +870,7 @@ namespace Common.Entities.CopilotAdoption
                 // eliminate the (usually large) majority of Copilot interactions that carry no agent
                 // before it does any joining, rather than discovering it during the join.
                 "  AND c.agent_id IS NOT NULL\r\n" +
-                "GROUP BY c.agent_id, c.user_id, CAST(c.time_stamp AS date), ISNULL(c.app_host, '(unknown)')\r\n" +
+                $"GROUP BY c.agent_id, c.user_id, CAST(c.time_stamp AS date), {AppHostKey("c.app_host", "(unknown)")}\r\n" +
                 "OPTION (RECOMPILE);\r\n" +
                 "\r\n" +
                 // Every aggregate below now reads the small grain table instead of copilot_chats.
@@ -881,7 +957,7 @@ namespace Common.Entities.CopilotAdoption
                 "WITH Unlicensed AS (\r\n" +
                 "    SELECT c.user_id AS user_id,\r\n" +
                 "           c.time_stamp AS time_stamp,\r\n" +
-                "           ISNULL(c.app_host, '(unknown)') AS app_host,\r\n" +
+                $"           {AppHostKey("c.app_host", "(unknown)")} AS app_host,\r\n" +
                 "           c.agent_id AS agent_id\r\n" +
                 "    FROM dbo.copilot_chats AS c\r\n" +
                 "    WHERE c.time_stamp >= @from\r\n" +
@@ -988,12 +1064,12 @@ namespace Common.Entities.CopilotAdoption
                 "    FROM dbo.user_license_type_lookups AS ul\r\n" +
                 $"    WHERE ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
                 ")\r\n" +
-                "SELECT TOP (@top) ISNULL(c.app_host, '(unknown)') AS Label,\r\n" +
+                $"SELECT TOP (@top) {AppHostKey("c.app_host", "(unknown)")} AS Label,\r\n" +
                 "       CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
                 "FROM dbo.copilot_chats AS c\r\n" +
                 "JOIN SeatUsers AS seats ON seats.user_id = c.user_id\r\n" +
                 "WHERE c.time_stamp >= @from\r\n" +
-                "GROUP BY ISNULL(c.app_host, '(unknown)')\r\n" +
+                $"GROUP BY {AppHostKey("c.app_host", "(unknown)")}\r\n" +
                 "ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
         }
@@ -1007,7 +1083,7 @@ namespace Common.Entities.CopilotAdoption
         public static string UnlicensedUsageByAppSql(IEnumerable<int> seatLicenceTypeIds)
         {
             return
-                "SELECT TOP (@top) ISNULL(c.app_host, '(unknown)') AS Label,\r\n" +
+                $"SELECT TOP (@top) {AppHostKey("c.app_host", "(unknown)")} AS Label,\r\n" +
                 "       CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
                 "FROM dbo.copilot_chats AS c\r\n" +
                 "WHERE c.time_stamp >= @from\r\n" +
@@ -1019,7 +1095,7 @@ namespace Common.Entities.CopilotAdoption
                 "  )\r\n" +
                 // Kept in step with UnlicensedActiveUsersSql - this breaks that same population down by app.
                 ExcludeGuestsByUserId("c.user_id", "  ") +
-                "GROUP BY ISNULL(c.app_host, '(unknown)')\r\n" +
+                $"GROUP BY {AppHostKey("c.app_host", "(unknown)")}\r\n" +
                 "ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
         }
