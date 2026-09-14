@@ -845,7 +845,9 @@ namespace Common.Entities.CopilotAdoption
             {
                 output.Warnings.Add(
                     $"Only the first {_options.MaxLicensedUsersScored:N0} licensed users were analysed. "
-                    + "The figures below therefore describe that subset, not the whole tenant.");
+                    + "The figures below therefore describe that subset, not the whole tenant. The subset is "
+                    + "ordered by internal user id for reproducibility, so the oldest user records are "
+                    + "over-represented and the newest user records are excluded first.");
             }
 
             foreach (var row in rows)
@@ -1079,6 +1081,17 @@ namespace Common.Entities.CopilotAdoption
             // really was, and the funnel would open with a 75% drop that is pure measurement artefact.
             summary.ScoredUsers = users.Count;
             var denominator = summary.ScoredUsers;
+            var reportSourcedUsers = users
+                .Where(IsUsageReportSourced)
+                .ToList();
+            var auditInteractionUsers = users
+                .Where(u => !IsUsageReportSourced(u))
+                .ToList();
+            summary.UsageReportSourcedUsers = reportSourcedUsers.Count;
+            summary.UsageReportSourcedUserPct = CopilotAdoptionScoring.Percentage(reportSourcedUsers.Count, denominator);
+            summary.UsageReportWindowMismatch = reportSourcedUsers.Count > 0
+                && summary.DataSources.CopilotUsageReportPeriodDays > 0
+                && summary.DataSources.CopilotUsageReportPeriodDays != _options.WindowDays;
 
             if (summary.ScoredUsers > 0 && summary.ScoredUsers < summary.LicensedUsers)
             {
@@ -1086,15 +1099,49 @@ namespace Common.Entities.CopilotAdoption
                     $"This tenant holds {summary.LicensedUsers:N0} Copilot licences, but only {summary.ScoredUsers:N0} "
                     + "users could be analysed in one pass. Every rate and breakdown below describes those "
                     + $"{summary.ScoredUsers:N0} users, not the whole tenant - they are not tenant-wide figures "
-                    + "and must not be quoted as such.");
+                    + "and must not be quoted as such. Because the drill-down query is ordered by internal user id, "
+                    + "the oldest user records are over-represented and the newest joiners or newly onboarded "
+                    + "subsidiaries are excluded first; the subset is reproducible, but not representative.");
+            }
+
+            if (summary.UsageReportSourcedUsers > 0)
+            {
+                summary.Warnings.Add(
+                    $"{summary.UsageReportSourcedUsers:N0} licensed user{(summary.UsageReportSourcedUsers == 1 ? string.Empty : "s")} "
+                    + $"({summary.UsageReportSourcedUserPct:N1}%) were scored from Microsoft's Copilot usage report because "
+                    + "the audit import had no per-user signal for them. Their Microsoft prompt counts are not added to "
+                    + "audit interaction totals, concentration, intensity or licensed/unlicensed interaction comparisons.");
+            }
+
+            if (summary.UsageReportWindowMismatch)
+            {
+                summary.Warnings.Add(
+                    $"Microsoft's pinned Copilot usage-report period is D{summary.DataSources.CopilotUsageReportPeriodDays}, "
+                    + $"but this analysis window is D{_options.WindowDays}. Report-sourced rows are kept in the adoption "
+                    + "population so active people are not marked as never used, but they are excluded from reclaimable-seat "
+                    + "totals rather than normalising prompt counts across unlike windows. The band breakdown therefore "
+                    + "counts more idle seats than the reclaim figure does; the difference is reported as "
+                    + "\"held back for window mismatch\".");
             }
 
             summary.ActiveUsers = users.Count(u => u.Band > AdoptionBand.Dormant);
             summary.NeverUsedUsers = users.Count(u => u.Band == AdoptionBand.NeverUsed);
             summary.DormantUsers = users.Count(u => u.Band == AdoptionBand.Dormant);
             summary.HabitualUsers = users.Count(u => CopilotAdoptionScoring.IsHabitual(u.Band));
-            summary.ReclaimableSeats = summary.NeverUsedUsers + summary.DormantUsers;
-            summary.TotalInteractions = users.Sum(u => u.Interactions);
+            var reclaimablePopulation = summary.UsageReportWindowMismatch
+                ? auditInteractionUsers
+                : users;
+            summary.ReclaimableSeats = reclaimablePopulation.Count(
+                u => u.Band == AdoptionBand.NeverUsed || u.Band == AdoptionBand.Dormant);
+            // Publish what was held back, so NeverUsed + Dormant - heldBack == ReclaimableSeats stays
+            // visibly true. Otherwise the band breakdown and the reclaim headline silently disagree and
+            // the reader has no way to account for the difference.
+            summary.ReclaimSeatsHeldBackForWindowMismatch =
+                (summary.NeverUsedUsers + summary.DormantUsers) - summary.ReclaimableSeats;
+            // Report-sourced rows carry Microsoft's prompt count in Interactions. Do not publish a total
+            // that adds prompts to audit-log interactions; they are different units over potentially
+            // different windows.
+            summary.TotalInteractions = auditInteractionUsers.Sum(u => u.Interactions);
 
             summary.AdoptionRatePct = CopilotAdoptionScoring.Percentage(summary.ActiveUsers, denominator);
             summary.HabitRatePct = CopilotAdoptionScoring.Percentage(summary.HabitualUsers, denominator);
@@ -1115,11 +1162,11 @@ namespace Common.Entities.CopilotAdoption
             summary.HabitBuckets = BuildHabitBuckets(users.Select(u => (double)u.ActiveDays));
             summary.ActionPlan = BuildActionPlan(users);
             summary.Concentration = CopilotAdoptionScoring.Concentration(
-                users.Where(CopilotAdoptionScoring.IsActive).Select(u => u.Interactions));
-            summary.ScoreProfiles = BuildScoreProfiles(users);
+                auditInteractionUsers.Where(CopilotAdoptionScoring.IsActive).Select(u => u.Interactions));
+            summary.ScoreProfiles = BuildScoreProfiles(auditInteractionUsers);
             summary.AdoptionByDepartment = BuildSegments(users, u => u.Department, "(no department)");
             summary.AdoptionByCountry = BuildSegments(users, u => u.Country, "(no country)");
-            summary.IntensityByDepartment = BuildIntensity(users, u => u.Department, "(no department)");
+            summary.IntensityByDepartment = BuildIntensity(auditInteractionUsers, u => u.Department, "(no department)");
 
             FinaliseAgents(analysis);
             FinaliseUnlicensed(analysis);
@@ -1134,6 +1181,12 @@ namespace Common.Entities.CopilotAdoption
                 .OrderByDescending(c => c.Value)
                 .Take(_options.TopSegments)
                 .ToList();
+        }
+
+        private static bool IsUsageReportSourced(LicensedUserAdoptionRow row)
+        {
+            return row != null
+                && string.Equals(row.SignalSource, CopilotAdoptionScoring.SignalSourceUsageReport, StringComparison.Ordinal);
         }
 
         /// <summary>
@@ -1374,7 +1427,12 @@ namespace Common.Entities.CopilotAdoption
                     LicensedActiveUsers = seats.Count(CopilotAdoptionScoring.IsActive),
                     // Per seat held, not per active seat: this column exists to be compared with the
                     // unlicensed one, and an idle seat is the whole point of the comparison.
-                    InteractionsPerLicensedUser = PerUserPerMonth(seats.Sum(u => (double)u.Interactions), seats.Count),
+                    // Report-sourced licensed rows hold Microsoft prompt counts in Interactions, not
+                    // audit interaction counts, so they stay in the seat denominator but never in this
+                    // numerator. Otherwise this row adds two different units and labels them as one.
+                    InteractionsPerLicensedUser = PerUserPerMonth(
+                        seats.Where(u => !IsUsageReportSourced(u)).Sum(u => (double)u.Interactions),
+                        seats.Count),
                     LicensedAgentUserPct = CopilotAdoptionScoring.Percentage(
                         seats.Count(u => u.AgentsUsed > 0), seats.Count),
                     UnlicensedActiveUsers = chat.Count,

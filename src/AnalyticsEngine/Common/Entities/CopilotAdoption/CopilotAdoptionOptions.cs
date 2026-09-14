@@ -289,6 +289,19 @@ namespace Common.Entities.CopilotAdoption
         /// <see cref="CopilotAdoptionScoring"/>. Copilot seats are purchased individually, so even a
         /// very large customer is far below this; if it is ever hit the result carries an explicit
         /// warning rather than silently truncating a licence-spend report.
+        ///
+        /// <para>
+        /// <b>Deliberately not raised to the 200,000-user design point.</b> Raising it was considered as
+        /// a way to make the oldest-record bias below less likely to bite, and rejected: the scored set
+        /// is materialised in memory and held in a ten-minute result cache, and every row carries
+        /// several strings including a full prose recommendation, so a four-fold raise is a four-fold
+        /// increase in retained memory per cached analysis. This page already has a history of timing
+        /// out and of losing its AppDomain mid-run, which is why the lifecycle telemetry exists. Raising
+        /// the cap would also not fix the bias - a tenant past the new cap is truncated exactly as
+        /// unfairly - so it would trade a real memory risk for no correctness gain. If the cap is ever
+        /// genuinely binding for a customer, the fix is exact SQL aggregates for the headline figures,
+        /// measured per the repository's benchmarking rule, not a bigger number here.
+        /// </para>
         /// </summary>
         [JsonProperty("maxLicensedUsersScored")]
         public int MaxLicensedUsersScored { get; set; } = 50000;

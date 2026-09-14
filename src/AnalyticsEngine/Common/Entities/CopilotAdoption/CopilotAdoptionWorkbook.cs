@@ -185,7 +185,9 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Never used", summary.NeverUsedUsers,
                 $"No Copilot activity anywhere in the last {summary.Options.HistoryDays} days. Needs onboarding, or the licence back.");
             AddMeta(sheet, "Reclaimable licences", summary.ReclaimableSeats,
-                "Dormant plus never used - licences that produced nothing this period.");
+                summary.UsageReportWindowMismatch
+                    ? "Dormant plus never used from audit-sourced rows only; Microsoft report-sourced rows are excluded because its period does not match this analysis window."
+                    : "Dormant plus never used - licences that produced nothing this period.");
 
             var last = sheet.CurrentRow;
 
@@ -195,7 +197,9 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Average engagement", summary.AverageAdoptionScore, "Mean score out of 100, including licences scoring zero.");
             AddMeta(sheet, "Median engagement", summary.MedianAdoptionScore,
                 "Reported next to the mean because a few Champions pull the mean up; a large gap means a long tail of light users.");
-            AddMeta(sheet, "Total interactions", summary.TotalInteractions, "All Copilot interactions by licensed users in the period.");
+            AddMeta(sheet, "Total interactions", summary.TotalInteractions, "Audit-log Copilot interactions by licensed users in the period; Microsoft usage-report prompt counts are not mixed into this total.");
+            AddMeta(sheet, "Users scored from Microsoft report", summary.UsageReportSourcedUsers,
+                "Licensed users whose score used Microsoft's per-user report because the audit import had no per-user signal for them.");
 
             sheet.AddBlankRow();
             AddMeta(sheet, "Using Copilot unlicensed", summary.UnlicensedActiveUsers,

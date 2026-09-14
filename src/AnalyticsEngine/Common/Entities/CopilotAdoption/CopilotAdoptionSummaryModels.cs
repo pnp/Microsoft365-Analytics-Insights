@@ -349,6 +349,45 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("totalInteractions")]
         public long TotalInteractions { get; set; }
 
+        /// <summary>
+        /// Licensed users whose engagement row was scored from Microsoft's per-user usage report rather
+        /// than from this product's Copilot audit import.
+        /// </summary>
+        /// <remarks>
+        /// The fallback is deliberately preserved because it stops a partial or lagging audit import from
+        /// putting active people on a reclaim list. It is nevertheless a different measurement source:
+        /// Microsoft's report supplies prompt counts over its own D7/D28/D90/D180 window, so any
+        /// interaction-volume aggregate must say how much of the scored population was not eligible for
+        /// the audit-interaction totals.
+        /// </remarks>
+        [JsonProperty("usageReportSourcedUsers")]
+        public int UsageReportSourcedUsers { get; set; }
+
+        /// <summary>Share of scored licensed users whose engagement came from Microsoft's usage report.</summary>
+        [JsonProperty("usageReportSourcedUserPct")]
+        public double UsageReportSourcedUserPct { get; set; }
+
+        /// <summary>
+        /// True when report-sourced rows used a Microsoft report period that does not match the selected
+        /// analysis window, so those rows are deliberately excluded from reclaimable-seat totals.
+        /// </summary>
+        [JsonProperty("usageReportWindowMismatch")]
+        public bool UsageReportWindowMismatch { get; set; }
+
+        /// <summary>
+        /// Seats held back from <see cref="ReclaimableSeats"/> because they were scored from Microsoft's
+        /// report over a window that does not match the one selected.
+        /// </summary>
+        /// <remarks>
+        /// Published so the arithmetic still reconciles on screen. Without it
+        /// <c>ReclaimableSeats != NeverUsedUsers + DormantUsers</c> whenever the windows disagree, and a
+        /// reader who adds up the band breakdown finds a gap that nothing on the page accounts for.
+        /// A figure that does not tie out is exactly the kind of thing that loses an argument in a
+        /// licence negotiation, however defensible the reason behind it.
+        /// </remarks>
+        [JsonProperty("reclaimSeatsHeldBackForWindowMismatch")]
+        public int ReclaimSeatsHeldBackForWindowMismatch { get; set; }
+
         #endregion
 
         #region Cowork

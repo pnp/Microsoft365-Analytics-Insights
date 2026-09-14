@@ -1613,6 +1613,25 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void CappedAnalysisWarning_NamesTheOldestRecordBias()
+        {
+            // The denominator warning was true but incomplete: ORDER BY u.id makes the capped set
+            // reproducible, not representative. New joiners and recently-onboarded subsidiaries are the
+            // first people excluded, and they are exactly the population most likely to be never-used.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(
+                Enumerable.Range(0, 10).Select(i => ScoredUser($"u{i}@contoso.com", 80, AdoptionBand.Champion)));
+            analysis.Summary.LicensedUsers = 40;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.IsTrue(
+                analysis.Summary.Warnings.Any(w =>
+                    w.Contains("oldest user records") && w.Contains("newest joiners")),
+                "A capped analysis must say the subset is biased towards older directory records, not merely smaller.");
+        }
+
+        [TestMethod]
         public void WhenEveryLicensedUserIsAnalysed_TheDenominatorsAreIdentical()
         {
             // The normal case must be untouched by the fix above.
@@ -1678,6 +1697,132 @@ namespace Tests.UnitTests
             var finance = analysis.Summary.IntensityByDepartment.Single();
             Assert.AreEqual(6, finance.ActiveUsers,
                 "The intensity view must count the same active population as the headline figures.");
+        }
+
+        [TestMethod]
+        public void MixedSignalSources_DoNotAddMicrosoftPromptsToAuditInteractionTotals()
+        {
+            // A report-sourced row stores Microsoft's prompt count in Interactions because that is what
+            // the per-user score used. Adding it to audit interaction counts publishes one number with
+            // two units, and the same unit mix used to leak into concentration, intensity, score profiles
+            // and the licensed/unlicensed segment comparison.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.LicensedUsers = 12;
+
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 6)
+                .Select(i =>
+                {
+                    var row = Departmentalise(ActiveUser($"audit{i}@contoso.com", activeDays: 5, interactions: 10), "Finance");
+                    row.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+                    return row;
+                }));
+
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 6)
+                .Select(i =>
+                {
+                    var row = Departmentalise(ActiveUser($"report{i}@contoso.com", activeDays: 18, interactions: 1000), "Finance");
+                    row.SignalSource = CopilotAdoptionScoring.SignalSourceUsageReport;
+                    row.ReportPrompts = 1000;
+                    row.ReportActiveDays = 18;
+                    return row;
+                }));
+
+            analysis.UnlicensedUsers.AddRange(Enumerable.Range(0, 6)
+                .Select(i => Unlicensed($"chat{i}@contoso.com", "Finance", activeDays: 10, interactions: 100)));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(6, analysis.Summary.UsageReportSourcedUsers);
+            Assert.AreEqual(50, analysis.Summary.UsageReportSourcedUserPct);
+            Assert.AreEqual(60, analysis.Summary.TotalInteractions,
+                "Only audit interactions may appear in the licensed interaction total.");
+            Assert.AreEqual(6, analysis.Summary.Concentration.Sum(b => b.Users),
+                "Usage concentration is an audit-interaction distribution, not a prompt distribution.");
+            Assert.AreEqual(6, analysis.Summary.ScoreProfiles.Single(p => p.Label == "Typical active user").Users,
+                "The depth profile is interaction-derived, so report-prompt rows must not dilute it.");
+
+            var financeIntensity = analysis.Summary.IntensityByDepartment.Single(r => r.Segment == "Finance");
+            Assert.AreEqual(6, financeIntensity.ActiveUsers,
+                "The intensity plot is interactions per audit active day; report-prompt rows must be disclosed, not mixed.");
+            Assert.AreEqual(2, financeIntensity.ActionsPerActiveDay);
+
+            var financeCombined = analysis.Summary.CombinedByDepartment.Single(r => r.Segment == "Finance");
+            Assert.AreEqual(12, financeCombined.LicensedUsers);
+            Assert.AreEqual(5, financeCombined.InteractionsPerLicensedUser,
+                "The comparison keeps all seats in the denominator but counts only audit interactions in the numerator.");
+
+            Assert.IsTrue(
+                analysis.Summary.Warnings.Any(w => w.Contains("Microsoft prompt counts are not added")),
+                "The summary must disclose that a visible share of rows came from a different source.");
+        }
+
+        [TestMethod]
+        public void ReportPeriodMismatch_ExcludesReportSourcedRowsFromReclaimableSeats()
+        {
+            // We choose exclusion rather than linear normalisation for reclaim decisions. Normalising a
+            // D7/D90/D180 Microsoft prompt window into the selected window would still be inferring an
+            // absence of use for the exact users whose audit signal is already suspect; excluding them
+            // is conservative and avoids taking a licence from someone the fallback says may be active.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.LicensedUsers = 2;
+            analysis.Summary.DataSources.CopilotUsageReportPeriodDays = 90;
+
+            var auditNever = ScoredUser("audit-never@contoso.com", 0, AdoptionBand.NeverUsed);
+            auditNever.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+
+            var reportNever = ScoredUser("report-never@contoso.com", 0, AdoptionBand.NeverUsed);
+            reportNever.SignalSource = CopilotAdoptionScoring.SignalSourceUsageReport;
+
+            analysis.LicensedUsers.Add(auditNever);
+            analysis.LicensedUsers.Add(reportNever);
+
+            new CopilotAdoptionService(new CopilotAdoptionOptions { WindowDays = 28 }).FinaliseSummary(analysis);
+
+            Assert.IsTrue(analysis.Summary.UsageReportWindowMismatch);
+            Assert.AreEqual(2, analysis.Summary.NeverUsedUsers,
+                "The band breakdown still describes the scored rows and carries the source warning.");
+            Assert.AreEqual(1, analysis.Summary.ReclaimableSeats,
+                "A report-sourced row from a mismatched Microsoft period must not be counted as a licence to reclaim.");
+            Assert.IsTrue(
+                analysis.Summary.Warnings.Any(w => w.Contains("pinned Copilot usage-report period is D90")),
+                "The conservative exclusion must be visible in the summary warnings.");
+
+            // The figures must still tie out. Excluding rows from the reclaim headline while the band
+            // breakdown keeps counting them leaves a gap the reader cannot account for, and a number
+            // that does not reconcile loses the argument however defensible the reason behind it.
+            Assert.AreEqual(1, analysis.Summary.ReclaimSeatsHeldBackForWindowMismatch,
+                "The held-back seats must be published, not silently dropped.");
+            Assert.AreEqual(
+                analysis.Summary.NeverUsedUsers + analysis.Summary.DormantUsers,
+                analysis.Summary.ReclaimableSeats + analysis.Summary.ReclaimSeatsHeldBackForWindowMismatch,
+                "NeverUsed + Dormant must always equal Reclaimable + HeldBack.");
+            Assert.IsTrue(
+                analysis.Summary.Warnings.Any(w => w.Contains("held back for window mismatch")),
+                "The warning must name the reconciling figure so the gap is explainable on screen.");
+        }
+
+        [TestMethod]
+        public void WithoutAWindowMismatch_NoSeatsAreHeldBack()
+        {
+            // The reconciling figure must be zero in the normal case, not merely ignored - otherwise a
+            // non-zero value would be indistinguishable from an unset one.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.LicensedUsers = 2;
+            analysis.Summary.DataSources.CopilotUsageReportPeriodDays = 28;
+
+            var auditNever = ScoredUser("audit-never@contoso.com", 0, AdoptionBand.NeverUsed);
+            auditNever.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+            var reportNever = ScoredUser("report-never@contoso.com", 0, AdoptionBand.NeverUsed);
+            reportNever.SignalSource = CopilotAdoptionScoring.SignalSourceUsageReport;
+            analysis.LicensedUsers.Add(auditNever);
+            analysis.LicensedUsers.Add(reportNever);
+
+            new CopilotAdoptionService(new CopilotAdoptionOptions { WindowDays = 28 }).FinaliseSummary(analysis);
+
+            Assert.IsFalse(analysis.Summary.UsageReportWindowMismatch);
+            Assert.AreEqual(2, analysis.Summary.ReclaimableSeats,
+                "With matching windows a report-sourced idle seat is still an idle seat.");
+            Assert.AreEqual(0, analysis.Summary.ReclaimSeatsHeldBackForWindowMismatch);
         }
 
         #endregion
