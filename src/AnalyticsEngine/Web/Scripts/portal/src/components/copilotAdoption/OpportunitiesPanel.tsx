@@ -22,21 +22,18 @@ import type {
   OpportunityFilters,
 } from '../../types/copilotAdoption';
 import Spinner from '../Spinner';
-import { ScoreBar, useAdoptionTableStyles } from './adoptionShared';
+import { ScoreBar, SortableTh, useAdoptionTableStyles } from './adoptionShared';
 import { formatCount, formatDate } from './KpiGrid';
 import InfoTip from './InfoTip';
 
 const PAGE_SIZE = 50;
 
-const SORT_OPTIONS = [
-  { value: 'score:desc', label: 'Strongest case first' },
-  { value: 'copilot:desc', label: 'Most unlicensed Copilot use' },
-  { value: 'collaboration:desc', label: 'Most Teams activity' },
-  { value: 'email:desc', label: 'Most email activity' },
-  { value: 'documents:desc', label: 'Most document activity' },
-  { value: 'department:asc', label: 'Department (A-Z)' },
-  { value: 'upn:asc', label: 'User name (A-Z)' },
-];
+/**
+ * The default sort. Strongest case first, with proven-demand candidates ahead of merely busy ones.
+ * Every column is sortable from its own header, so the old sort drop-down was a second way to do the
+ * same thing.
+ */
+const DEFAULT_SORT_BY = 'score';
 
 const useStyles = makeStyles({
   filters: {
@@ -115,7 +112,7 @@ const DEFAULT_FILTERS: OpportunityFilters = {
   country: '',
   recommendedOnly: false,
   existingCopilotUsersOnly: false,
-  sortBy: 'score',
+  sortBy: DEFAULT_SORT_BY,
   sortDesc: true,
 };
 
@@ -195,7 +192,14 @@ export default function OpportunitiesPanel({
     };
   }, [windowDays, filters, page, seatLicenceTypeIds, reloadKey]);
 
-  const sortValue = `${filters.sortBy}:${filters.sortDesc ? 'desc' : 'asc'}`;
+  /**
+   * Applies a column-header sort. The effect above already resets the page whenever `filters`
+   * changes, so there is nothing else to do here.
+   */
+  const applySort = (sortBy: string, sortDesc: boolean) => {
+    setFilters((f) => ({ ...f, sortBy, sortDesc }));
+  };
+
   const exportUrl = useMemo(
     () => opportunitiesExportUrl(windowDays, filters, seatLicenceTypeIds),
     [windowDays, filters, seatLicenceTypeIds],
@@ -242,21 +246,6 @@ export default function OpportunitiesPanel({
           {(filterOptions?.departments ?? []).map((dept) => (
             <option key={dept} value={dept}>
               {dept}
-            </option>
-          ))}
-        </Select>
-
-        <Select
-          value={sortValue}
-          aria-label="Sort licence candidates"
-          onChange={(_e, d) => {
-            const [sortBy, direction] = d.value.split(':');
-            setFilters((f) => ({ ...f, sortBy, sortDesc: direction === 'desc' }));
-          }}
-        >
-          {SORT_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
             </option>
           ))}
         </Select>
@@ -371,9 +360,20 @@ export default function OpportunitiesPanel({
           <table className={table.table}>
             <thead>
               <tr>
-                <th className={table.th}>User</th>
-                <th className={table.th}>Department</th>
-                <th className={table.th}>
+                <SortableTh label="user" sortKey="upn" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
+                  User
+                </SortableTh>
+                <SortableTh label="department" sortKey="department" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
+                  Department
+                </SortableTh>
+                <SortableTh
+                  label="business case score"
+                  sortKey="score"
+                  activeKey={filters.sortBy}
+                  descending={filters.sortDesc}
+                  onSort={applySort}
+                  defaultDescending
+                >
                   <span className={styles.thWithInfo}>
                     Business case
                     <InfoTip
@@ -394,8 +394,15 @@ export default function OpportunitiesPanel({
                       }}
                     />
                   </span>
-                </th>
-                <th className={table.th}>
+                </SortableTh>
+                <SortableTh
+                  label="unlicensed Copilot use"
+                  sortKey="copilot"
+                  activeKey={filters.sortBy}
+                  descending={filters.sortDesc}
+                  onSort={applySort}
+                  defaultDescending
+                >
                   <span className={styles.thWithInfo}>
                     Already using Copilot
                     <InfoTip
@@ -408,11 +415,19 @@ export default function OpportunitiesPanel({
                       }}
                     />
                   </span>
-                </th>
-                <th className={`${table.th} ${table.thNumeric}`}>Teams (per day)</th>
-                <th className={`${table.th} ${table.thNumeric}`}>Email (per day)</th>
-                <th className={`${table.th} ${table.thNumeric}`}>Files (per day)</th>
-                <th className={table.th}>Last M365 activity</th>
+                </SortableTh>
+                <SortableTh label="Teams activity" sortKey="collaboration" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} numeric defaultDescending>
+                  Teams (per day)
+                </SortableTh>
+                <SortableTh label="email activity" sortKey="email" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} numeric defaultDescending>
+                  Email (per day)
+                </SortableTh>
+                <SortableTh label="document activity" sortKey="documents" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} numeric defaultDescending>
+                  Files (per day)
+                </SortableTh>
+                <SortableTh label="last Microsoft 365 activity" sortKey="lastM365" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
+                  Last M365 activity
+                </SortableTh>
                 <th className={table.th}>
                   <span className={styles.thWithInfo}>
                     Justification

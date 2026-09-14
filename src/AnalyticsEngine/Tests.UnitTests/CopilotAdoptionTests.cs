@@ -2856,6 +2856,132 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void EveryLicensedUserColumn_CanBeSortedFromItsHeader()
+        {
+            // The table shows twelve columns and every one of them is now a clickable header, so every
+            // sort key the UI can send has to be handled. An unrecognised key silently falls through to
+            // the score sort, which looks like the click did nothing - the worst kind of failure here,
+            // because the reader concludes the data is wrong rather than the control.
+            var rows = new[]
+            {
+                SortableUser("b@contoso.com", "Sales", 10, AdoptionBand.Trialling, 5, 2, 1, "audit", CopilotAdoptionScoring.ReclaimEligibilityTiers.Review),
+                SortableUser("a@contoso.com", "Ops", 90, AdoptionBand.Champion, 50, 20, 4, "usageReport", null),
+                SortableUser("c@contoso.com", "Eng", 0, AdoptionBand.NeverUsed, 0, 0, 0, "audit", CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain),
+            };
+
+            // Ascending by each key, then the first row's expected UPN.
+            var expectations = new (string SortBy, string FirstUpn, string Because)[]
+            {
+                (LicensedUserSortFields.UserPrincipalName, "a@contoso.com", "alphabetical by sign-in address"),
+                (LicensedUserSortFields.Department, "c@contoso.com", "alphabetical by department"),
+                (LicensedUserSortFields.Score, "c@contoso.com", "lowest engagement first"),
+                (LicensedUserSortFields.Band, "c@contoso.com", "the adoption ladder, not the alphabet"),
+                (LicensedUserSortFields.Interactions, "c@contoso.com", "fewest interactions first"),
+                (LicensedUserSortFields.ActiveDays, "c@contoso.com", "fewest active days first"),
+                (LicensedUserSortFields.Apps, "c@contoso.com", "fewest Copilot surfaces first"),
+                (LicensedUserSortFields.SignalSource, "b@contoso.com", "audit before usageReport"),
+                (LicensedUserSortFields.ReclaimEligibility, "c@contoso.com", "certain before review before none"),
+            };
+
+            foreach (var e in expectations)
+            {
+                var sorted = CopilotAdoptionExports.Apply(rows, new LicensedUserQuery { SortBy = e.SortBy, SortDescending = false });
+                Assert.AreEqual(e.FirstUpn, sorted[0].UserPrincipalName,
+                    $"Ascending by '{e.SortBy}' should lead with {e.FirstUpn} - {e.Because}.");
+
+                // Not asserted as an exact reversal: the stable UPN tie-break stays ascending within
+                // equal keys, so a column with ties (signal source here) is legitimately not the mirror
+                // image. What must hold is that the direction actually changes which row leads.
+                var reversed = CopilotAdoptionExports.Apply(rows, new LicensedUserQuery { SortBy = e.SortBy, SortDescending = true });
+                Assert.AreEqual(rows.Length, reversed.Count, $"Sorting by '{e.SortBy}' must not drop rows.");
+                Assert.AreNotEqual(sorted[0].UserPrincipalName, reversed[0].UserPrincipalName,
+                    $"Descending by '{e.SortBy}' must change the leading row - a header click that does nothing reads as broken.");
+            }
+        }
+
+        [TestMethod]
+        public void ReclaimTierSort_RunsMostActionableFirstNotAlphabetically()
+        {
+            // "certain, excluded, probable, review" is the alphabet. The order an admin works through is
+            // certain, probable, review, excluded - most actionable first - and that is what the column
+            // has to do, or the sort actively misleads.
+            var tiers = new[]
+            {
+                CopilotAdoptionScoring.ReclaimEligibilityTiers.Review,
+                CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded,
+                CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain,
+                CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable,
+            };
+
+            var rows = tiers.Select((t, i) => SortableUser($"u{i}@contoso.com", "Ops", 0, AdoptionBand.NeverUsed, 0, 0, 0, "audit", t)).ToArray();
+
+            var sorted = CopilotAdoptionExports.Apply(
+                rows, new LicensedUserQuery { SortBy = LicensedUserSortFields.ReclaimEligibility, SortDescending = false });
+
+            CollectionAssert.AreEqual(
+                new[]
+                {
+                    CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain,
+                    CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable,
+                    CopilotAdoptionScoring.ReclaimEligibilityTiers.Review,
+                    CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded,
+                },
+                sorted.Select(r => r.ReclaimEligibility).ToArray());
+        }
+
+        [TestMethod]
+        public void OpportunityLastActivityColumn_CanBeSorted()
+        {
+            // Never-seen must sort as the beginning of time rather than being scattered by a null, so an
+            // ascending sort leads with the people there is no recent evidence for.
+            var rows = new[]
+            {
+                OpportunityRow(1, "recent@contoso.com", Now.AddDays(-1)),
+                OpportunityRow(2, "never@contoso.com", null),
+                OpportunityRow(3, "old@contoso.com", Now.AddDays(-100)),
+            };
+
+            var sorted = CopilotAdoptionExports.Apply(
+                rows, new LicenceOpportunityQuery { SortBy = LicenceOpportunitySortFields.LastM365Activity, SortDescending = false });
+
+            CollectionAssert.AreEqual(
+                new[] { "never@contoso.com", "old@contoso.com", "recent@contoso.com" },
+                sorted.Select(r => r.UserPrincipalName).ToArray());
+        }
+
+        private static LicensedUserAdoptionRow SortableUser(
+            string upn, string department, double score, AdoptionBand band,
+            long interactions, int activeDays, int appsUsed, string signalSource, string reclaimTier)
+        {
+            return new LicensedUserAdoptionRow
+            {
+                UserId = upn.GetHashCode(),
+                UserPrincipalName = upn,
+                Department = department,
+                AdoptionScore = score,
+                Band = band,
+                BandName = CopilotAdoptionScoring.BandDisplayName(band),
+                Interactions = interactions,
+                ActiveDays = activeDays,
+                AppsUsed = appsUsed,
+                SignalSource = signalSource,
+                ReclaimEligibility = reclaimTier,
+                RecommendedActionCode = CopilotAdoptionScoring.AdoptionActionCodes.Reclaim,
+                RecommendedActionLabel = CopilotAdoptionScoring.ActionLabel(CopilotAdoptionScoring.AdoptionActionCodes.Reclaim),
+            };
+        }
+
+        private static LicenceOpportunityRow OpportunityRow(int id, string upn, DateTime? lastM365)
+        {
+            return new LicenceOpportunityRow
+            {
+                UserId = id,
+                UserPrincipalName = upn,
+                LastM365ActivityUtc = lastM365,
+            };
+        }
+
+        [TestMethod]
         public async Task IndividualEndpoints_AreOpenToEverySignedInUserByDefault()
         {
             // The product does not do per-user access separation on any controller, and Copilot Adoption

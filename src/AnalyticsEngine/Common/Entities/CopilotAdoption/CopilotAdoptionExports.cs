@@ -66,6 +66,15 @@ namespace Common.Entities.CopilotAdoption
         public const string LastUse = "lastUse";
         public const string Department = "department";
         public const string Cowork = "cowork";
+
+        // Added so every column in the on-screen table can be sorted by clicking its header. A column
+        // the user can see but not sort reads as a bug, and the list is long enough that "find the
+        // people in one band" or "group the report-sourced rows together" are real questions.
+        public const string Band = "band";
+        public const string Apps = "apps";
+        public const string SignalSource = "signalSource";
+        public const string ReclaimEligibility = "reclaimEligibility";
+        public const string Action = "action";
     }
 
     /// <summary>How the licence-opportunity list is filtered and ordered.</summary>
@@ -102,6 +111,9 @@ namespace Common.Entities.CopilotAdoption
         public const string Email = "email";
         public const string Documents = "documents";
         public const string Department = "department";
+
+        /// <summary>Last recorded Microsoft 365 activity. Added so the column can be sorted from its header.</summary>
+        public const string LastM365Activity = "lastM365";
     }
 
     /// <summary>
@@ -186,9 +198,37 @@ namespace Common.Entities.CopilotAdoption
                     return Order(rows, r => r.Department ?? string.Empty, q.SortDescending);
                 case LicensedUserSortFields.Cowork:
                     return OrderThenUpn(rows, r => (double)r.CoworkInteractions, q.SortDescending);
+                case LicensedUserSortFields.Band:
+                    // By the underlying band value, not its display name, so the order is the adoption
+                    // ladder (Never used -> Champion) rather than the alphabet.
+                    return OrderThenUpn(rows, r => (int)r.Band, q.SortDescending);
+                case LicensedUserSortFields.Apps:
+                    return OrderThenUpn(rows, r => (double)r.AppsUsed, q.SortDescending);
+                case LicensedUserSortFields.SignalSource:
+                    return Order(rows, r => r.SignalSource ?? string.Empty, q.SortDescending);
+                case LicensedUserSortFields.ReclaimEligibility:
+                    // Grouped by how confident the reclaim is, most actionable first ascending, rather
+                    // than alphabetically - "certain" before "probable" before "review" is the order an
+                    // admin works through, and it is not the order the words happen to sort in.
+                    return OrderThenUpn(rows, r => ReclaimTierRank(r.ReclaimEligibility), q.SortDescending);
+                case LicensedUserSortFields.Action:
+                    return Order(rows, r => r.RecommendedActionLabel ?? string.Empty, q.SortDescending);
                 default:
                     return OrderThenUpn(rows, r => r.AdoptionScore, q.SortDescending);
             }
+        }
+
+        /// <summary>
+        /// Orders the reclaim tiers by how safe they are to act on rather than alphabetically. Rows with
+        /// no tier (the actively engaged) sort last, because they are not a reclaim decision at all.
+        /// </summary>
+        private static int ReclaimTierRank(string tier)
+        {
+            if (string.Equals(tier, CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain, StringComparison.OrdinalIgnoreCase)) return 0;
+            if (string.Equals(tier, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable, StringComparison.OrdinalIgnoreCase)) return 1;
+            if (string.Equals(tier, CopilotAdoptionScoring.ReclaimEligibilityTiers.Review, StringComparison.OrdinalIgnoreCase)) return 2;
+            if (string.Equals(tier, CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded, StringComparison.OrdinalIgnoreCase)) return 3;
+            return 4;
         }
 
         /// <summary>
@@ -301,6 +341,9 @@ namespace Common.Entities.CopilotAdoption
                     return OrderThenUpn(rows, r => (double)r.FilesViewedOrEdited, q.SortDescending);
                 case LicenceOpportunitySortFields.Department:
                     return Order(rows, r => r.Department ?? string.Empty, q.SortDescending);
+                case LicenceOpportunitySortFields.LastM365Activity:
+                    // Never-seen sorts as the beginning of time rather than being scattered by a null.
+                    return OrderThenUpn(rows, r => (r.LastM365ActivityUtc ?? DateTime.MinValue).Ticks, q.SortDescending);
                 default:
                     // Proven demand first, then the composite score. The database already sorts
                     // proven-demand candidates into the TOP (@maxRows) window ahead of merely busy
