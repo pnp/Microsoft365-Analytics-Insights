@@ -5,7 +5,19 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
-$exe = Join-Path $PSScriptRoot "bin\$Configuration\Tests.FakeDataGen.exe"
+
+# Discovered rather than hard-coded. This project moved from a legacy csproj (which emitted straight
+# into bin\<Configuration>\) to an SDK-style one, which adds a target-framework folder - so the old
+# literal path silently stopped resolving. Globbing keeps this working across that move and any
+# future retarget, and fails loudly if the project has not been built.
+$exe = Get-ChildItem -Path (Join-Path $PSScriptRoot "bin\$Configuration") -Filter 'Tests.FakeDataGen.exe' -Recurse -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1 -ExpandProperty FullName
+
+if (-not $exe) {
+    throw "Tests.FakeDataGen.exe was not found under bin\$Configuration. Build it first: dotnet build Tests.FakeDataGen\Tests.FakeDataGen.csproj -c $Configuration"
+}
+
 $run = [Guid]::NewGuid().ToString('N')
 $database = "ContosoDemo_CI_$run"
 $artifacts = ".artifacts-demo-ci-$run"
