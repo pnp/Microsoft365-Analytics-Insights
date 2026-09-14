@@ -14,6 +14,7 @@
     <SpaRoot>Scripts\portal\</SpaRoot>
     <NpmInstallStampFile>Scripts/portal/node_modules/.install-stamp</NpmInstallStampFile>
     <SpaBuildOutputFile>$(SpaRoot)build\index.html</SpaBuildOutputFile>
+    <UserSecretsId>caa00516-6812-4ef4-8453-06ca62348754</UserSecretsId>
   </PropertyGroup>
 
   <!-- The SPA sources are not compiled by MSBuild; excluding them keeps the default globs off
@@ -89,9 +90,7 @@
     <ItemGroup>
       <SpaBuiltFile Include="$(SpaRoot)build\**\*" />
     </ItemGroup>
-    <Copy SourceFiles="@(SpaBuiltFile)"
-          DestinationFiles="@(SpaBuiltFile->'wwwroot\%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(SpaBuiltFile)" DestinationFiles="@(SpaBuiltFile->'wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
 
   <!-- Configuration is appsettings.json plus environment variables (and user secrets in
