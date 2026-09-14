@@ -363,6 +363,7 @@
     <Compile Include="InstallTests\InstallFailureDiagnosisTests.cs" />
     <Compile Include="InstallTests\InstallerAuthAndEndpointTests.cs" />
     <Compile Include="InstallTests\KeyVaultFirewallConfigTaskTests.cs" />
+    <Compile Include="InstallTests\PrivateDnsZoneInstallTaskTests.cs" />
     <Compile Include="InstallTests\ServiceBusNamespaceInstallTaskTests.cs" />
     <Compile Include="InstallTests\RbacPermissionProbeTests.cs" />
     <Compile Include="InstallTests\TeamsUserActivityReportUrlTests.cs" />
