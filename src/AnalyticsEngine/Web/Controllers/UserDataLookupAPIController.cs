@@ -28,7 +28,7 @@ namespace Web.AnalyticsWeb.Controllers
         {
         }
 
-        public UserDataLookupAPIController(IUserDataLookupService service)
+        internal UserDataLookupAPIController(IUserDataLookupService service)
         {
             _service = service ?? throw new ArgumentNullException(nameof(service));
         }

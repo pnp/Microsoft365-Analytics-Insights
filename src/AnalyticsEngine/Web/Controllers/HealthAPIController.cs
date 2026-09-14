@@ -29,7 +29,7 @@ namespace Web.AnalyticsWeb.Controllers
         {
         }
 
-        public HealthAPIController(HealthService health)
+        internal HealthAPIController(HealthService health)
         {
             _health = health ?? throw new ArgumentNullException(nameof(health));
         }
