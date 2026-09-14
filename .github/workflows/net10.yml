@@ -208,7 +208,7 @@ jobs:
         run: |
           dotnet test src\AnalyticsEngine\Tests.UnitTests\Tests.UnitTests.csproj `
             -c Release --no-build --nologo `
-            --filter "FullyQualifiedName~ConfigurationSourceTests|FullyQualifiedName~ObjectByIdCacheCollationTests|FullyQualifiedName~AuthRequestRulesTests|FullyQualifiedName~LicenceActivityApiTests|FullyQualifiedName~LicenceActivityLoadHarnessTests|FullyQualifiedName~LicenceActivityReadModelCacheTests"
+            --filter "FullyQualifiedName~ConfigurationSourceTests|FullyQualifiedName~UserSecretsConsistencyTests|FullyQualifiedName~ObjectByIdCacheCollationTests|FullyQualifiedName~AuthRequestRulesTests|FullyQualifiedName~LicenceActivityApiTests|FullyQualifiedName~LicenceActivityLoadHarnessTests|FullyQualifiedName~LicenceActivityReadModelCacheTests"
 
       # Guards the demo generator's entry point. Building it proves nothing about whether it RUNS:
       # the project's move to an SDK-style csproj added a target-framework folder to the output path

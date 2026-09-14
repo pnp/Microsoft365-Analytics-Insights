@@ -9,6 +9,10 @@
     <LangVersion>latest</LangVersion>
     <!-- Properties\AssemblyInfo.cs is checked in and carries the product version attributes. -->
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!-- The SHARED solution-wide secrets store, deliberately the same id as Common.Entities. Without
+         it, Visual Studio's `Manage User Secrets` mints a fresh random id into this project and opens a
+         store that AnalyticsConfig never reads - secrets that appear saved but are silently ignored. -->
+    <UserSecretsId>pnp-m365-analytics-insights</UserSecretsId>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <!-- Obsolete-crypto and Windows-only warnings are tracked separately; silencing them here
