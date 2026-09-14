@@ -100,40 +100,76 @@ namespace Tests.UnitTests
             var tableGuard = up.IndexOf("IF OBJECT_ID(N'dbo.copilot_adoption_export_audit', N'U') IS NULL", StringComparison.Ordinal);
             var indexCreate = up.IndexOf("CREATE NONCLUSTERED INDEX", StringComparison.Ordinal);
             var indexGuard = up.IndexOf("AND name = N'IX_copilot_adoption_export_audit_occurred_utc')", StringComparison.Ordinal);
+            var tableBranchElse = up.IndexOf("END ELSE BEGIN", StringComparison.Ordinal);
 
-            Assert.IsTrue(tableGuard >= 0 && indexCreate >= 0 && indexGuard >= 0, "Expected guards not found in Up_Sql.");
+            Assert.IsTrue(tableGuard >= 0 && indexCreate >= 0 && indexGuard >= 0 && tableBranchElse >= 0,
+                "Expected guards not found in Up_Sql.");
             Assert.IsTrue(indexGuard < indexCreate,
-                "The index guard must precede the CREATE INDEX, not sit inside the table's branch.");
+                "The index guard must precede the CREATE INDEX.");
+            Assert.IsTrue(indexGuard > tableBranchElse,
+                "The index guard must sit AFTER the table's IF/ELSE has closed, not nested inside its "
+                + "'table does not exist' branch - otherwise a re-run after a partial apply skips the index.");
         }
 
         [TestMethod]
         public void BothManualScripts_VerifyTheSchemaTheyCreatedBeforeStamping()
         {
             // A stamp reached without verification lets a partial apply be recorded as complete, and the
-            // migration is then never retried. These are the objects each migration is responsible for.
-            var exportAudit = Normalise(ReadManualScript(ExportAuditId));
-            foreach (var required in new[]
+            // migration is then never retried.
+            //
+            // Asserted over the PRE-STAMP SEGMENT only - the text between the end of the schema work and
+            // the __MigrationHistory insert. Every object name below also appears in the CREATE statements
+            // further up, so searching the whole file would stay green after the entire verification block
+            // was deleted.
+            AssertVerifiesBeforeStamping(ExportAuditId, new[]
             {
                 "N'IX_copilot_adoption_export_audit_occurred_utc'",
                 "N'PK_copilot_adoption_export_audit'",
                 "name = N'actor'",
-            })
-            {
-                StringAssert.Contains(exportAudit, required,
-                    $"The export-audit script must verify {required} before stamping.");
-            }
+            });
 
-            var reclaim = Normalise(ReadManualScript(ReclaimInputsId));
-            foreach (var required in new[]
+            AssertVerifiesBeforeStamping(ReclaimInputsId, new[]
             {
                 "name = N'created_utc'",
                 "N'IX_copilot_adoption_reclaim_exclusions_user_review'",
                 "N'FK_copilot_adoption_reclaim_exclusions_users'",
-            })
+            });
+        }
+
+        private static void AssertVerifiesBeforeStamping(string migrationId, string[] requiredChecks)
+        {
+            var manual = ReadManualScript(migrationId);
+
+            var stampAt = manual.IndexOf("INSERT INTO dbo.__MigrationHistory", StringComparison.Ordinal);
+            Assert.IsTrue(stampAt > 0, $"{migrationId}: no __MigrationHistory stamp found.");
+
+            // The verification section is whatever guards the stamp: everything after the last CREATE
+            // statement and before the insert. Anything found only above that is creation SQL, not a
+            // check.
+            var lastCreate = manual.Substring(0, stampAt).LastIndexOf("CREATE ", StringComparison.Ordinal);
+            Assert.IsTrue(lastCreate > 0, $"{migrationId}: no CREATE statement found before the stamp.");
+
+            var preStamp = Normalise(manual.Substring(lastCreate, stampAt - lastCreate));
+
+            foreach (var required in requiredChecks)
             {
-                StringAssert.Contains(reclaim, required,
-                    $"The reclaim script must verify {required} before stamping.");
+                StringAssert.Contains(preStamp, required,
+                    $"{migrationId}: the section guarding the stamp must verify {required}. Found only in the "
+                    + "creation SQL, which proves nothing about whether the creation succeeded.");
             }
+
+            // Both gating shapes are acceptable - SET NOEXEC ON before the stamp, or wrapping the stamp
+            // in the verifying IF - so assert the property they share: a failed verification says so
+            // loudly and does not stamp.
+            var normalisedWhole = Normalise(manual);
+            Assert.IsTrue(
+                normalisedWhole.IndexOf("not be stamped", StringComparison.OrdinalIgnoreCase) >= 0
+                || normalisedWhole.IndexOf("NOT stamped", StringComparison.OrdinalIgnoreCase) >= 0,
+                $"{migrationId}: a failed schema verification must fail loudly and must not stamp "
+                + "__MigrationHistory, or a partial apply is recorded as complete and never retried.");
+
+            StringAssert.Contains(normalisedWhole, ", 16, 1) WITH NOWAIT",
+                $"{migrationId}: the verification failure must be raised at severity 16 so an operator sees it.");
         }
 
         [TestMethod]

@@ -1177,6 +1177,10 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
   const weights = [o.frequencyWeight, o.depthWeight, o.breadthWeight];
   const weightSum = weights.reduce((total, w) => total + w, 0);
   const frequencyTargetDays = Math.round(o.windowDays * (o.workingDaysPerWeek / 7) * o.frequencyTargetRatio);
+  // The EXACT target the scorer divides by (CopilotAdoptionScoring.TargetActiveDays). frequencyTargetDays
+  // above is a display label; using it in the arithmetic would print a score the scorer never produces -
+  // at a 90-day period the exact target is 38.57 and the label is 39.
+  const frequencyTargetExact = Math.max(1, o.windowDays * (o.workingDaysPerWeek / 7) * o.frequencyTargetRatio);
   // Mirrors CopilotAdoptionScoring.OpportunityCopilotTargetForWindow. The Copilot opportunity target is
   // the only one of the four that is a raw total rather than a per-active-day average, so it is scaled
   // from its basis period to the selected window. Quoting the unscaled number here would document a
@@ -1197,8 +1201,8 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
   // target is fewer than depthMinActiveDays, so hard-coding full depth would print a score the scorer
   // would never produce - in a panel whose entire purpose is to reproduce the scorer. Active days are a
   // count of distinct calendar dates, so the example uses a whole number.
-  const exampleActiveDays = Math.max(1, Math.round(frequencyTargetDays / 2));
-  const exampleFrequency = Math.min(1, exampleActiveDays / Math.max(1, frequencyTargetDays));
+  const exampleActiveDays = Math.max(1, Math.round(frequencyTargetExact / 2));
+  const exampleFrequency = Math.min(1, exampleActiveDays / frequencyTargetExact);
   const exampleDepthConfidence = Math.min(1, exampleActiveDays / Math.max(1, o.depthMinActiveDays));
   const exampleScore = Math.round(
     ((exampleFrequency * o.frequencyWeight +
@@ -1634,7 +1638,7 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
           summary.reclaimSeatsHeldBackForWindowMismatch > 0
             ? ` - ${formatCount(
                 summary.reclaimSeatsHeldBackForWindowMismatch,
-              )} held back because Microsoft's usage-report period does not match this window`
+              )} probable seats held back because Microsoft's usage-report period does not match this window`
             : ''
         } = ${formatCount(summary.reclaimableSeats)} reclaimable. ${formatCount(
           summary.reclaimReviewSeats,

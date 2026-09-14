@@ -209,7 +209,7 @@ namespace Common.Entities.CopilotAdoption
                 "The raw inventory of disabled accounts still holding a Copilot seat, including any an admin has excluded from reclaim. The actionable subset is the certain tier below.");
             AddMeta(sheet, "Reclaimable licences", summary.ReclaimableSeats,
                 summary.UsageReportWindowMismatch
-                    ? "Certain plus probable reclaim, minus rows scored from Microsoft's usage report because its pinned period does not match this analysis window. Excludes admin exclusions and review-only cases; leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from usage data."
+                    ? "Certain plus probable reclaim, minus PROBABLE rows scored from Microsoft's usage report because its pinned period does not match this analysis window. Certain (disabled) seats are never held back that way - a disabled account is not an inference from an absence of use. Excludes admin exclusions and review-only cases; leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from usage data."
                     : "Certain plus probable reclaim only. Excludes admin exclusions and review-only cases; leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from usage data.");
             AddMeta(sheet, "Reclaim - certain", summary.ReclaimCertainSeats,
                 "Disabled accounts still holding seats. Act immediately unless there is a known exception.");

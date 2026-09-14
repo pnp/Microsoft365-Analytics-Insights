@@ -1123,9 +1123,11 @@ namespace Common.Entities.CopilotAdoption
                 summary.Warnings.Add(
                     $"Microsoft's pinned Copilot usage-report period is D{summary.DataSources.CopilotUsageReportPeriodDays}, "
                     + $"but this analysis window is D{_options.WindowDays}. Report-sourced rows are kept in the adoption "
-                    + "population so active people are not marked as never used, but they are excluded from reclaimable-seat "
-                    + "totals rather than normalising prompt counts across unlike windows. The band breakdown therefore "
-                    + "counts more idle seats than the reclaim figure does; the difference is reported as "
+                    + "population so active people are not marked as never used, but a report-sourced row that would "
+                    + "otherwise be a PROBABLE reclaim is excluded from reclaimable-seat totals rather than normalising "
+                    + "prompt counts across unlike windows. Certain (disabled-account) seats are never held back this "
+                    + "way, because a disabled account is not an inference from an absence of use. The band breakdown "
+                    + "therefore counts more idle seats than the reclaim figure does; the difference is reported as "
                     + "\"held back for window mismatch\".");
             }
 

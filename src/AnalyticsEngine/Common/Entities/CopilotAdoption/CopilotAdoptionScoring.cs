@@ -686,11 +686,10 @@ namespace Common.Entities.CopilotAdoption
                     return "Two routes reach this group, and both are safe to act on. A disabled account "
                          + "still holding a seat is the clearest reclaim there is whatever its usage looked "
                          + "like before it was disabled - no enablement effort is worthwhile on an account "
-                         + $"nobody can sign into. The rest had no Copilot activity at all in the last {o.HistoryDays} "
-                         + "days and have enough account tenure to judge: confirm the licence is still needed "
-                         + "before renewal, and if it is, this person has never been onboarded and the licence "
-                         + "has produced nothing so far. New starters inside the grace period and users with no "
-                         + "tenure evidence are NOT here - they are under 'Review before reclaim'.";
+                         + $"nobody can sign into. The rest had no Copilot activity anywhere in the last {o.HistoryDays} "
+                         + "days - the whole history this analysis reads - and have enough account tenure to judge: "
+                         + "confirm the licence is still needed before renewal. New starters inside the grace period "
+                         + "and users with no tenure evidence are NOT here; they are under 'Review before reclaim'.";
 
                 case AdoptionActionCodes.Reengage:
                     return "Used Copilot before this period but not once inside it. Someone who tried it and "
