@@ -648,6 +648,22 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("m365UsageReportImportEnabled")]
         public bool M365UsageReportImportEnabled { get; set; }
 
+        /// <summary>
+        /// True when the signed-in user has the deployment-configured role/group required to open
+        /// per-user rows and exports. False is fail-closed: the overview remains available.
+        /// </summary>
+        [JsonProperty("canViewIndividualData")]
+        public bool CanViewIndividualData { get; set; }
+
+        [JsonProperty("individualDataRoleConfigured")]
+        public bool IndividualDataRoleConfigured { get; set; }
+
+        [JsonProperty("individualDataDisabled")]
+        public bool IndividualDataDisabled { get; set; }
+
+        [JsonProperty("individualDataPseudonymised")]
+        public bool IndividualDataPseudonymised { get; set; }
+
         /// <summary>Explains, in plain English, anything that is switched off and what it costs the report.</summary>
         [JsonProperty("messages")]
         public List<string> Messages { get; set; } = new List<string>();

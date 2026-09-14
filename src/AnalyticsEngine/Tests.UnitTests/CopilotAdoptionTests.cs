@@ -8,9 +8,15 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Security.Claims;
+using System.Security.Principal;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Web.Http;
+using System.Web.Http.Controllers;
 using CopilotAdoptionAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.CopilotAdoptionAPIController;
 
 namespace Tests.UnitTests
@@ -1889,13 +1895,111 @@ namespace Tests.UnitTests
             // that does not reconcile loses the argument however defensible the reason behind it.
             Assert.AreEqual(1, analysis.Summary.ReclaimSeatsHeldBackForWindowMismatch,
                 "The held-back seats must be published, not silently dropped.");
-            Assert.AreEqual(
-                analysis.Summary.NeverUsedUsers + analysis.Summary.DormantUsers,
-                analysis.Summary.ReclaimableSeats + analysis.Summary.ReclaimSeatsHeldBackForWindowMismatch,
-                "NeverUsed + Dormant must always equal Reclaimable + HeldBack.");
+            AssertReclaimArithmeticTiesOut(analysis.Summary);
             Assert.IsTrue(
                 analysis.Summary.Warnings.Any(w => w.Contains("held back for window mismatch")),
                 "The warning must name the reconciling figure so the gap is explainable on screen.");
+        }
+
+        [TestMethod]
+        public void ReclaimArithmeticTiesOut_WithConfidenceTiersAndAWindowMismatchAtTheSameTime()
+        {
+            // The two hold-back mechanisms were built on separate branches and had never met: confidence
+            // tiering parks review/excluded seats, and a Microsoft report-period mismatch parks
+            // report-sourced seats. They compose, and the composition is what a reader actually sees, so
+            // this asserts the published figures still reconcile with BOTH active at once.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.LicensedUsers = 7;
+            analysis.Summary.DataSources.CopilotUsageReportPeriodDays = 90;
+
+            // Probable, audit-sourced: the only unambiguously reclaimable idle seat here.
+            var auditProbable = ScoredUser("audit-probable@contoso.com", 0, AdoptionBand.NeverUsed);
+            auditProbable.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+
+            // Probable on the tier, but scored from Microsoft's report over a period that is not the
+            // selected window - held back by the second mechanism.
+            var reportProbable = ScoredUser("report-probable@contoso.com", 0, AdoptionBand.NeverUsed);
+            reportProbable.SignalSource = CopilotAdoptionScoring.SignalSourceUsageReport;
+
+            // Dormant: review-only, held back by the first mechanism.
+            var dormant = ScoredUser("dormant@contoso.com", 0, AdoptionBand.Dormant);
+            dormant.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+
+            // Inside the grace period: review-only, held back by the first mechanism.
+            var tooNew = ScoredUser("too-new@contoso.com", 0, AdoptionBand.NeverUsed);
+            tooNew.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+            tooNew.AccountCreatedUtc = Now.AddDays(-5);
+            tooNew.TenureStartUtc = tooNew.AccountCreatedUtc;
+            tooNew.DaysSinceTenureStart = 5;
+            tooNew.TooNewToJudge = true;
+
+            // Admin exclusion: held back by the first mechanism, still a licensed seat.
+            var excluded = ScoredUser("excluded@contoso.com", 0, AdoptionBand.NeverUsed);
+            excluded.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+            excluded.ReclaimExclusionReason = "shared mailbox";
+            excluded.ReclaimExcludedBy = "admin@contoso.com";
+
+            // Disabled but was active right up to the day it was disabled. Certain reclaim, and the
+            // reason the identity needs a term for reclaimable seats that are NOT idle.
+            var disabledButActive = ScoredUser("disabled-active@contoso.com", 82, AdoptionBand.Champion);
+            disabledButActive.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+            disabledButActive.AccountEnabled = false;
+
+            // A healthy user, to prove nothing here depends on the population being all-idle.
+            var healthy = ScoredUser("healthy@contoso.com", 70, AdoptionBand.Established);
+            healthy.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+
+            analysis.LicensedUsers.AddRange(new[]
+            {
+                auditProbable, reportProbable, dormant, tooNew, excluded, disabledButActive, healthy,
+            });
+
+            foreach (var user in analysis.LicensedUsers)
+            {
+                CopilotAdoptionScoring.ApplyReclaimEligibility(user);
+                user.RecommendedActionCode = CopilotAdoptionScoring.RecommendedActionCode(user);
+            }
+
+            new CopilotAdoptionService(new CopilotAdoptionOptions { WindowDays = 28 }).FinaliseSummary(analysis);
+
+            var summary = analysis.Summary;
+
+            Assert.IsTrue(summary.UsageReportWindowMismatch, "Both mechanisms must be live for this test to mean anything.");
+            Assert.AreEqual(4, summary.NeverUsedUsers);
+            Assert.AreEqual(1, summary.DormantUsers);
+
+            Assert.AreEqual(1, summary.ReclaimCertainSeats, "The disabled account, even though it was active.");
+            Assert.AreEqual(2, summary.ReclaimProbableSeats, "The two established-tenure never-used accounts.");
+            Assert.AreEqual(2, summary.ReclaimReviewSeats, "Dormant and too-new.");
+            Assert.AreEqual(1, summary.ReclaimExcludedUsers);
+
+            Assert.AreEqual(1, summary.ReclaimSeatsHeldBackForWindowMismatch,
+                "Only the report-sourced probable seat is held back for the window mismatch.");
+            Assert.AreEqual(3, summary.ReclaimSeatsHeldBackForReview,
+                "Dormant, too-new and admin-excluded idle seats are held back by the tiering.");
+            Assert.AreEqual(1, summary.ReclaimSeatsFromActiveBands,
+                "The disabled-but-active seat is reclaimable without being never-used or dormant.");
+
+            Assert.AreEqual(2, summary.ReclaimableSeats,
+                "Certain + probable, minus the report-sourced row on a mismatched window.");
+
+            AssertReclaimArithmeticTiesOut(summary);
+        }
+
+        /// <summary>
+        /// The one identity the Copilot Adoption reclaim figures must always satisfy, whichever hold-back
+        /// mechanisms happen to be active. A reclaim headline that cannot be reconciled against the band
+        /// breakdown on screen loses a licence argument however defensible the reason behind it.
+        /// </summary>
+        private static void AssertReclaimArithmeticTiesOut(CopilotAdoptionSummary summary)
+        {
+            Assert.AreEqual(
+                summary.NeverUsedUsers + summary.DormantUsers + summary.ReclaimSeatsFromActiveBands,
+                summary.ReclaimableSeats
+                    + summary.ReclaimSeatsHeldBackForWindowMismatch
+                    + summary.ReclaimSeatsHeldBackForReview,
+                "NeverUsed + Dormant + ReclaimSeatsFromActiveBands must equal "
+                + "ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview.");
         }
 
         [TestMethod]
@@ -2543,6 +2647,134 @@ namespace Tests.UnitTests
                 }).Count);
         }
 
+        [TestMethod]
+        public async Task IndividualEndpoints_FailClosedWithoutTheConfiguredRole()
+        {
+            // Issue #538: the aggregate dashboard can remain [Authorize], but every route that exposes
+            // the per-user population or exports it must refuse a normal signed-in user. This must be in
+            // the controller rather than only in the SPA, because the CSV/XLSX downloads are plain
+            // <a href> navigations and can be opened directly.
+            using (var controller = GovernanceController(
+                new CopilotAdoptionGovernanceSettings { IndividualDataRole = "CopilotAdoption.IndividualData" },
+                SignedIn("reader@contoso.com")))
+            {
+                Assert.AreEqual(HttpStatusCode.Forbidden, await Status(controller.Filters()));
+                Assert.AreEqual(HttpStatusCode.Forbidden, await Status(controller.LicensedUsers()));
+                Assert.AreEqual(HttpStatusCode.Forbidden, await Status(controller.Opportunities()));
+                Assert.AreEqual(HttpStatusCode.Forbidden, (await controller.ExportLicensedUsers()).StatusCode);
+                Assert.AreEqual(HttpStatusCode.Forbidden, (await controller.ExportOpportunities()).StatusCode);
+                Assert.AreEqual(HttpStatusCode.Forbidden, (await controller.ExportWorkbook()).StatusCode);
+            }
+        }
+
+        [TestMethod]
+        public void IndividualDataRole_MatchesAppRoleOrGroupClaimOnlyWhenConfigured()
+        {
+            var noRoleConfigured = new CopilotAdoptionGovernanceSettings();
+            Assert.IsFalse(noRoleConfigured.HasIndividualDataAccess(SignedIn("admin@contoso.com", "CopilotAdoption.IndividualData")),
+                "No setting means aggregate-only; an upgrade must not silently widen access.");
+
+            var appRole = new CopilotAdoptionGovernanceSettings { IndividualDataRole = "CopilotAdoption.IndividualData" };
+            Assert.IsTrue(appRole.HasIndividualDataAccess(SignedIn("admin@contoso.com", "CopilotAdoption.IndividualData")));
+            Assert.IsFalse(appRole.HasIndividualDataAccess(SignedIn("admin@contoso.com")));
+
+            var groupId = "00000000-0000-0000-0000-000000000538";
+            var group = new CopilotAdoptionGovernanceSettings { IndividualDataRole = groupId };
+            Assert.IsTrue(group.HasIndividualDataAccess(SignedInWithGroup("admin@contoso.com", groupId)));
+        }
+
+        [TestMethod]
+        public void Pseudonymisation_RemovesDirectIdentifiersButKeepsCohortAndProvenance()
+        {
+            var row = ScoredUser("Καλημέρα.user@contoso.com", 20, AdoptionBand.Developing);
+            row.Mail = "person@contoso.com";
+            row.Department = "Finance";
+            row.JobTitle = "Director";
+            row.ManagerUserPrincipalName = "manager@contoso.com";
+            row.SignalSource = CopilotAdoptionScoring.SignalSourceUsageReport;
+
+            var redacted = CopilotAdoptionPseudonymiser.Pseudonymise(
+                row,
+                new CopilotAdoptionGovernanceSettings { TenantId = Guid.Parse("00000000-0000-0000-0000-000000000000") });
+
+            StringAssert.StartsWith(redacted.UserPrincipalName, "User ");
+            Assert.IsNull(redacted.Mail);
+            Assert.IsNull(redacted.JobTitle);
+            Assert.IsNull(redacted.ManagerUserPrincipalName);
+            Assert.AreEqual("Finance", redacted.Department);
+            Assert.AreEqual(AdoptionBand.Developing, redacted.Band);
+            Assert.AreEqual(CopilotAdoptionScoring.SignalSourceUsageReport, redacted.SignalSource,
+                "Redaction must not strip the provenance that tells a forwarded export how the row was scored.");
+        }
+
+        [TestMethod]
+        public void Pseudonymisation_CarriesEveryNonIdentifyingColumnThrough()
+        {
+            // Pseudonymisation is ON by default, so a column it silently drops is blank for almost every
+            // deployment with nothing failing to say so. The redaction used to rebuild the row from a
+            // hand-written list of properties, which made that the DEFAULT outcome for any column added
+            // afterwards - and merging the reclaim-eligibility and licence-qualification work into this
+            // branch added fifteen of them at once.
+            //
+            // This walks every property on both row types, gives it a distinctive non-default value, and
+            // asserts it either survives or is one of the identifiers redaction is meant to remove. A new
+            // column therefore forces a deliberate decision instead of disappearing.
+            AssertPseudonymisationIsExhaustive<LicensedUserAdoptionRow>(
+                r => CopilotAdoptionPseudonymiser.Pseudonymise(r, new CopilotAdoptionGovernanceSettings()));
+            AssertPseudonymisationIsExhaustive<LicenceOpportunityRow>(
+                r => CopilotAdoptionPseudonymiser.Pseudonymise(r, new CopilotAdoptionGovernanceSettings()));
+        }
+
+        private static void AssertPseudonymisationIsExhaustive<T>(Func<T, T> pseudonymise) where T : new()
+        {
+            var source = new T();
+            var properties = typeof(T)
+                .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+                .Where(p => p.CanRead && p.CanWrite)
+                .ToList();
+
+            foreach (var property in properties)
+            {
+                property.SetValue(source, DistinctiveValue(property.PropertyType));
+            }
+
+            var redacted = pseudonymise(source);
+
+            foreach (var property in properties)
+            {
+                var expected = property.GetValue(source);
+                var actual = property.GetValue(redacted);
+
+                if (CopilotAdoptionPseudonymiser.RedactedPropertyNames.Contains(property.Name))
+                {
+                    Assert.AreNotEqual(expected, actual,
+                        $"{typeof(T).Name}.{property.Name} is listed as a direct identifier but survived redaction.");
+                    continue;
+                }
+
+                Assert.AreEqual(expected, actual,
+                    $"{typeof(T).Name}.{property.Name} was dropped by pseudonymisation. Either carry it through, "
+                    + "or add it to CopilotAdoptionPseudonymiser.RedactedPropertyNames if it identifies someone.");
+            }
+        }
+
+        /// <summary>A non-default value for any property type the adoption rows use.</summary>
+        private static object DistinctiveValue(Type type)
+        {
+            var underlying = Nullable.GetUnderlyingType(type) ?? type;
+
+            if (underlying == typeof(string)) return "Καλημέρα κόσμε";
+            if (underlying == typeof(bool)) return true;
+            if (underlying == typeof(int)) return 7;
+            if (underlying == typeof(long)) return 7L;
+            if (underlying == typeof(double)) return 7.5d;
+            if (underlying == typeof(DateTime)) return new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+            if (underlying.IsEnum) return Enum.GetValues(underlying).Cast<object>().Last();
+
+            Assert.Fail($"DistinctiveValue does not know how to populate a {underlying.Name}; extend it.");
+            return null;
+        }
+
         private static LicensedUserAdoptionRow ActionRow(string upn, string actionCode)
         {
             return new LicensedUserAdoptionRow
@@ -2551,6 +2783,57 @@ namespace Tests.UnitTests
                 RecommendedActionCode = actionCode,
                 RecommendedActionLabel = CopilotAdoptionScoring.ActionLabel(actionCode),
             };
+        }
+
+        private static CopilotAdoptionAPIController GovernanceController(
+            CopilotAdoptionGovernanceSettings settings,
+            IPrincipal principal)
+        {
+            var controller = new CopilotAdoptionAPIController(
+                AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionAnalysisCoordinator.Default,
+                () => settings,
+                new RecordingAuditSink());
+            controller.Request = new HttpRequestMessage(HttpMethod.Get, "http://localhost/api/CopilotAdoption/test?windowDays=28");
+            controller.Configuration = new HttpConfiguration();
+            controller.RequestContext = new HttpRequestContext { Principal = principal };
+            return controller;
+        }
+
+        private static async Task<HttpStatusCode> Status(Task<IHttpActionResult> action)
+        {
+            var result = await action;
+            var response = await result.ExecuteAsync(CancellationToken.None);
+            return response.StatusCode;
+        }
+
+        private static IPrincipal SignedIn(string upn, params string[] roles)
+        {
+            var identity = new ClaimsIdentity("test");
+            identity.AddClaim(new Claim(ClaimTypes.Name, upn));
+            identity.AddClaim(new Claim(ClaimTypes.Upn, upn));
+            foreach (var role in roles)
+            {
+                identity.AddClaim(new Claim(ClaimTypes.Role, role));
+                identity.AddClaim(new Claim("roles", role));
+            }
+
+            return new ClaimsPrincipal(identity);
+        }
+
+        private static IPrincipal SignedInWithGroup(string upn, string groupId)
+        {
+            var identity = new ClaimsIdentity("test");
+            identity.AddClaim(new Claim(ClaimTypes.Name, upn));
+            identity.AddClaim(new Claim("groups", groupId));
+            return new ClaimsPrincipal(identity);
+        }
+
+        private sealed class RecordingAuditSink : ICopilotAdoptionExportAuditSink
+        {
+            public bool Write(CopilotAdoptionExportAuditRecord record)
+            {
+                return true;
+            }
         }
 
         #endregion

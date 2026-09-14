@@ -56,6 +56,10 @@ namespace Tests.UnitTests
         // drops the unused audit extended-property, Yammer and Stream tables,
         // UniqueUrlsFullUrlIndex de-duplicates dbo.urls and makes IX_urls_full_url UNIQUE, and
         // RetireImportDbHacks brings IX_PageRequestID and IX_ai_session_id under the migration chain.
+        // AddCopilotAdoptionExportAudit adds the Copilot Adoption export audit table, and
+        // CopilotReclaimEligibilityInputs adds users.created_utc and the reclaim-exclusion table.
+        // Both are raw-SQL, additive and reuse the RetireImportDbHacks model snapshot; the later id
+        // wins here.
         private const string LatestId = "202609131940001_CopilotReclaimEligibilityInputs";
         private const string IndexName = "IX_urls_full_url";
 
