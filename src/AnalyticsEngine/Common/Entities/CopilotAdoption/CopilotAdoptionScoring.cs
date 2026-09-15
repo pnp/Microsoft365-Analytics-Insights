@@ -15,11 +15,12 @@ namespace Common.Entities.CopilotAdoption
     /// C# also means it can be unit-tested against hand-written inputs, and reused verbatim by a
     /// scheduled e-mail report later without lifting any of it out of a controller.
     ///
-    /// The one exception is <see cref="BuildOpportunityScoreSql"/>, which emits a SQL expression for
-    /// the same formula so the database can rank hundreds of thousands of unlicensed users and return
-    /// only the top candidates. It is generated from the same <see cref="CopilotAdoptionOptions"/>
-    /// instance, and the returned rows are always re-scored here before display, so the SQL is a
-    /// ranking aid rather than a second source of truth.
+    /// The exceptions are <see cref="BuildOpportunityScoreSql"/> and
+    /// <see cref="BuildCoworkLoadScoreSql"/>, which emit SQL expressions for the same formulae so the
+    /// database can rank hundreds of thousands of users and return only the rows worth scoring. Both are
+    /// generated from the same <see cref="CopilotAdoptionOptions"/> instance, and the returned rows are
+    /// always re-scored here before display, so the SQL is a ranking aid rather than a second source of
+    /// truth.
     /// </summary>
     public static class CopilotAdoptionScoring
     {
@@ -1176,6 +1177,451 @@ namespace Common.Entities.CopilotAdoption
             // CAST to float first so integer division never silently floors the ratio to 0 or 1.
             return $"(CASE WHEN CAST({valueSql} AS float) / {Num(safeTarget)} > 1 THEN 1.0 "
                  + $"ELSE CAST({valueSql} AS float) / {Num(safeTarget)} END) * {Num(weight)}";
+        }
+
+        #endregion
+
+        #region Cowork readiness
+
+        /// <summary>
+        /// Scores a Copilot seat holder for Microsoft 365 Copilot Cowork readiness.
+        ///
+        /// <para>Cowork is an agentic delegation layer: you describe an outcome and it plans and runs
+        /// multi-step work across Outlook, Teams, the Office apps and SharePoint/OneDrive. That shapes the
+        /// whole model. Two things have to be true before enabling it for someone is a good idea:</para>
+        ///
+        /// <list type="number">
+        /// <item><b>They have delegable work</b> - a real coordination load of meetings, mail and document
+        /// churn. Without it Cowork has nothing to absorb and simply burns credits.</item>
+        /// <item><b>They can delegate it</b> - enough existing Copilot fluency to trust an agent with a
+        /// multi-step task. Cowork is a step up from Copilot, not an entry point.</item>
+        /// </list>
+        ///
+        /// <para>Neither signal is sufficient alone, which is why this produces two independent axes rather
+        /// than one blended number. A blend would average a heavy-workload novice and a fluent user with no
+        /// coordination work into the same middling score, and those two need opposite interventions -
+        /// exactly the failure <see cref="AdoptionScoreProfile"/> exists to avoid on the main report.</para>
+        /// </summary>
+        public static CoworkReadinessRow ScoreCoworkReadiness(
+            CoworkReadinessSignalRow row,
+            CopilotAdoptionOptions options = null)
+        {
+            if (row == null) throw new ArgumentNullException(nameof(row));
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            var collaboration = Ratio(row.TeamsMessages, o.CoworkCollaborationTarget);
+            var meetings = Ratio(row.TeamsMeetings, o.CoworkMeetingTarget);
+            var email = Ratio(row.EmailsSent + row.EmailsRead, o.CoworkEmailTarget);
+            var documents = Ratio(row.FilesViewedOrEdited, o.CoworkDocumentTarget);
+
+            var load = collaboration * o.CoworkCollaborationWeight
+                     + meetings * o.CoworkMeetingWeight
+                     + email * o.CoworkEmailWeight
+                     + documents * o.CoworkDocumentWeight;
+
+            // Agent familiarity is evidence of the delegation habit itself, which the engagement score does
+            // not capture - but it is an uplift, not a substitute. Clamped to 100 so it can promote a
+            // borderline user without ever carrying an inactive one over the fluency bar.
+            var uplift = row.AgentsUsed > 0 ? Math.Max(0d, o.CoworkAgentFamiliarityUplift) : 0d;
+            var fluency = Math.Min(100d, Math.Max(0d, row.AdoptionScore) + uplift);
+
+            var scored = new CoworkReadinessRow
+            {
+                UserId = row.UserId,
+                UserPrincipalName = row.UserPrincipalName,
+                Mail = row.Mail,
+                Department = row.Department,
+                JobTitle = row.JobTitle,
+                Country = row.Country,
+                OfficeLocation = row.OfficeLocation,
+                CompanyName = row.CompanyName,
+                ManagerUserPrincipalName = row.ManagerUserPrincipalName,
+                AccountEnabled = row.AccountEnabled,
+
+                CoworkInteractions = row.CoworkInteractions,
+                CoworkActiveDays = row.CoworkActiveDays,
+                LastCoworkInteractionUtc = row.LastCoworkInteractionUtc,
+                UsedCowork = row.CoworkInteractions > 0,
+
+                TeamsMessages = row.TeamsMessages,
+                TeamsMeetings = row.TeamsMeetings,
+                EmailsSent = row.EmailsSent,
+                EmailsRead = row.EmailsRead,
+                FilesViewedOrEdited = row.FilesViewedOrEdited,
+                LastM365ActivityUtc = row.LastM365ActivityUtc,
+
+                CollaborationScore = Round(collaboration * 100d, 1),
+                MeetingScore = Round(meetings * 100d, 1),
+                EmailScore = Round(email * 100d, 1),
+                DocumentScore = Round(documents * 100d, 1),
+
+                CoordinationLoadScore = Round(load, 1),
+                FluencyScore = Round(fluency, 1),
+                AdoptionScore = Round(Math.Max(0d, row.AdoptionScore), 1),
+                AgentsUsed = row.AgentsUsed,
+
+                TotalCopilotCredits = row.TotalCopilotCredits,
+            };
+
+            scored.RegularCoworkUser =
+                row.CoworkActiveDays >= Math.Max(1, o.CoworkRegularMinActiveDays);
+
+            scored.Tier = CoworkTierFor(scored, o);
+            scored.TierLabel = CoworkTierLabel(scored.Tier);
+            scored.Basis = CoworkTierBasis(scored.Tier);
+
+            // Current users are in scope as well as prime candidates. Scoping a policy from candidates
+            // alone would silently REMOVE access from the people already using Cowork - turning a rollout
+            // list into an outage for exactly the users who proved the capability works.
+            scored.RecommendForPolicy =
+                scored.Tier == CoworkTiers.Established
+                || scored.Tier == CoworkTiers.Trialling
+                || scored.Tier == CoworkTiers.PrimeCandidate;
+
+            scored.Rationale = CoworkRationale(scored, o);
+            return scored;
+        }
+
+        /// <summary>
+        /// The Cowork populations. Ordered from strongest evidence to weakest, and evaluated in that
+        /// order so every user lands in exactly one.
+        /// </summary>
+        public static class CoworkTiers
+        {
+            /// <summary>Regular, habitual Cowork use. Evidence.</summary>
+            public const string Established = "established";
+
+            /// <summary>Has used Cowork, but not yet regularly. Evidence.</summary>
+            public const string Trialling = "trialling";
+
+            /// <summary>Fluent with Copilot and carrying a real coordination load. The rollout target.</summary>
+            public const string PrimeCandidate = "primeCandidate";
+
+            /// <summary>Has the workload for Cowork but not yet the Copilot habit to delegate it.</summary>
+            public const string BuildFluencyFirst = "buildFluencyFirst";
+
+            /// <summary>Fluent with Copilot, but little delegable coordination work.</summary>
+            public const string LowCoordinationLoad = "lowCoordinationLoad";
+
+            /// <summary>Below the bar on both axes.</summary>
+            public const string NotIndicated = "notIndicated";
+        }
+
+        /// <summary>Whether a tier rests on observed Cowork use or on inference.</summary>
+        public static class CoworkBasis
+        {
+            /// <summary>The user has actually used Cowork - this is observed, not inferred.</summary>
+            public const string Evidence = "evidence";
+
+            /// <summary>Derived from workload and Copilot fluency. A prediction, and must read as one.</summary>
+            public const string Inference = "inference";
+        }
+
+        /// <summary>Every Cowork tier, in report order. Used to build the tier breakdown and filters.</summary>
+        public static IReadOnlyList<string> AllCoworkTiers { get; } = new[]
+        {
+            CoworkTiers.Established,
+            CoworkTiers.Trialling,
+            CoworkTiers.PrimeCandidate,
+            CoworkTiers.BuildFluencyFirst,
+            CoworkTiers.LowCoordinationLoad,
+            CoworkTiers.NotIndicated,
+        };
+
+        /// <summary>
+        /// Places a scored user in exactly one Cowork tier.
+        ///
+        /// Observed Cowork use is tested first and wins outright: someone already using it is not a
+        /// "candidate" whatever their scores say, and demoting a real user to a predicted one because
+        /// their measured workload looks light would be the report contradicting its own evidence.
+        /// </summary>
+        public static string CoworkTierFor(CoworkReadinessRow row, CopilotAdoptionOptions options = null)
+        {
+            if (row == null) throw new ArgumentNullException(nameof(row));
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            if (row.CoworkActiveDays >= Math.Max(1, o.CoworkRegularMinActiveDays))
+            {
+                return CoworkTiers.Established;
+            }
+
+            if (row.CoworkInteractions > 0)
+            {
+                return CoworkTiers.Trialling;
+            }
+
+            var fluent = row.FluencyScore >= o.CoworkFluencyMinScore;
+            var loaded = row.CoordinationLoadScore >= o.CoworkLoadMinScore;
+
+            if (fluent && loaded) return CoworkTiers.PrimeCandidate;
+            if (loaded) return CoworkTiers.BuildFluencyFirst;
+            if (fluent) return CoworkTiers.LowCoordinationLoad;
+            return CoworkTiers.NotIndicated;
+        }
+
+        /// <summary>Short display label for a Cowork tier.</summary>
+        public static string CoworkTierLabel(string tier)
+        {
+            switch (tier)
+            {
+                case CoworkTiers.Established: return "Established";
+                case CoworkTiers.Trialling: return "Trialling";
+                case CoworkTiers.PrimeCandidate: return "Prime candidate";
+                case CoworkTiers.BuildFluencyFirst: return "Build fluency first";
+                case CoworkTiers.LowCoordinationLoad: return "Low coordination load";
+                case CoworkTiers.NotIndicated: return "Not indicated";
+                default: return string.Empty;
+            }
+        }
+
+        /// <summary>Whether a tier is founded on observed Cowork use or on inference.</summary>
+        public static string CoworkTierBasis(string tier)
+        {
+            switch (tier)
+            {
+                case CoworkTiers.Established:
+                case CoworkTiers.Trialling:
+                    return CoworkBasis.Evidence;
+                default:
+                    return CoworkBasis.Inference;
+            }
+        }
+
+        /// <summary>What a Cowork tier means and what to do about it. Stated once per group.</summary>
+        public static string CoworkTierDescription(string tier, CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var days = Math.Max(1, o.CoworkRegularMinActiveDays);
+
+            switch (tier)
+            {
+                case CoworkTiers.Established:
+                    return $"Using Cowork on at least {days} separate days in this period. These people have "
+                         + "already made it part of how they work - keep them in scope, and use them as the "
+                         + "reference for what good looks like.";
+
+                case CoworkTiers.Trialling:
+                    return "Has used Cowork, but not yet regularly enough to call it a habit. Usually a "
+                         + "prompt problem rather than a fit problem: they need a worked example on a task "
+                         + "they actually own. Keep them in scope.";
+
+                case CoworkTiers.PrimeCandidate:
+                    return "Not yet using Cowork, but fluent with Copilot and carrying a heavy coordination "
+                         + "load - the combination Cowork is built for. This is the rollout target: enable "
+                         + "these people first.";
+
+                case CoworkTiers.BuildFluencyFirst:
+                    return "Has the workload Cowork would help with, but has not yet formed a Copilot habit. "
+                         + "Enabling Cowork now would spend credits on someone unlikely to delegate to it. "
+                         + "Bring them up on everyday Copilot first, then revisit.";
+
+                case CoworkTiers.LowCoordinationLoad:
+                    return "Comfortable with Copilot, but little of the multi-step coordination work Cowork "
+                         + "takes on. Not a bad user - just not where this capability pays back. Revisit if "
+                         + "their role changes.";
+
+                case CoworkTiers.NotIndicated:
+                    return "Neither a Copilot habit nor a heavy coordination load in this period. No case "
+                         + "for Cowork on current evidence.";
+
+                default:
+                    return string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// A one-line, quotable justification for this user's tier, written to be pasted into a rollout
+        /// request or a spending-policy change.
+        ///
+        /// Leads with observed Cowork use where it exists, and otherwise states plainly that the verdict is
+        /// a prediction. The phrasing matters: this text ends up in a CSV that someone forwards to a
+        /// budget holder, and "predicted" must not quietly become "measured" on the way.
+        /// </summary>
+        public static string CoworkRationale(CoworkReadinessRow row, CopilotAdoptionOptions options = null)
+        {
+            if (row == null) throw new ArgumentNullException(nameof(row));
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            var workload = new List<string>();
+
+            if (row.TeamsMeetings > 0)
+            {
+                workload.Add($"{row.TeamsMeetings:N0} meeting{Plural(row.TeamsMeetings)} a day");
+            }
+
+            if (row.TeamsMessages > 0)
+            {
+                workload.Add($"{row.TeamsMessages:N0} Teams message{Plural(row.TeamsMessages)} a day");
+            }
+
+            var mail = row.EmailsSent + row.EmailsRead;
+            if (mail > 0)
+            {
+                workload.Add($"{mail:N0} email{Plural(mail)} a day");
+            }
+
+            if (row.FilesViewedOrEdited > 0)
+            {
+                workload.Add($"{row.FilesViewedOrEdited:N0} file{Plural(row.FilesViewedOrEdited)} a day");
+            }
+
+            var workloadPhrase = workload.Count > 0
+                ? string.Join(", ", workload)
+                : "no recorded Microsoft 365 activity in this period";
+
+            switch (row.Tier)
+            {
+                case CoworkTiers.Established:
+                    return $"Already established: {row.CoworkInteractions:N0} Cowork interaction"
+                         + $"{Plural(row.CoworkInteractions)} across {row.CoworkActiveDays:N0} day"
+                         + $"{Plural(row.CoworkActiveDays)}. Keep in scope.";
+
+                case CoworkTiers.Trialling:
+                    return $"Trialling: {row.CoworkInteractions:N0} Cowork interaction"
+                         + $"{Plural(row.CoworkInteractions)} on {row.CoworkActiveDays:N0} day"
+                         + $"{Plural(row.CoworkActiveDays)}, short of the {Math.Max(1, o.CoworkRegularMinActiveDays)} "
+                         + "needed to count as regular use. Keep in scope and follow up.";
+
+                case CoworkTiers.PrimeCandidate:
+                    return $"Predicted fit - not yet measured: Copilot fluency {Num(row.FluencyScore)}/100 "
+                         + $"and a coordination load of {Num(row.CoordinationLoadScore)}/100 ({workloadPhrase}). "
+                         + "Recommended for the Cowork spending policy.";
+
+                case CoworkTiers.BuildFluencyFirst:
+                    return $"Predicted fit for the work ({workloadPhrase}), but Copilot fluency is only "
+                         + $"{Num(row.FluencyScore)}/100 against a bar of {Num(o.CoworkFluencyMinScore)}. "
+                         + "Build everyday Copilot use first.";
+
+                case CoworkTiers.LowCoordinationLoad:
+                    return $"Fluent with Copilot ({Num(row.FluencyScore)}/100) but a coordination load of "
+                         + $"only {Num(row.CoordinationLoadScore)}/100 ({workloadPhrase}). Little for Cowork "
+                         + "to take on.";
+
+                default:
+                    return $"No case on current evidence: Copilot fluency {Num(row.FluencyScore)}/100, "
+                         + $"coordination load {Num(row.CoordinationLoadScore)}/100 ({workloadPhrase}).";
+            }
+        }
+
+        /// <summary>
+        /// The coordination-load formula as a SQL expression, so the database can rank a 200,000-user
+        /// tenant and return only the rows worth scoring.
+        ///
+        /// Generated from the same options instance the C# scorer is given, on the same contract as
+        /// <see cref="BuildOpportunityScoreSql"/>: this decides <i>which</i> rows come back, never what
+        /// their published score is. Every returned row is re-scored in C# before it is displayed.
+        /// </summary>
+        public static string BuildCoworkLoadScoreSql(
+            CopilotAdoptionOptions options,
+            string teamsColumn,
+            string meetingsColumn,
+            string emailSentColumn,
+            string emailReadColumn,
+            string filesColumn)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            // All column arguments are compile-time constants supplied by CopilotAdoptionSql, never user
+            // input, so there is no injection surface here.
+            return
+                Component(teamsColumn, o.CoworkCollaborationTarget, o.CoworkCollaborationWeight)
+                + " + " + Component(meetingsColumn, o.CoworkMeetingTarget, o.CoworkMeetingWeight)
+                + " + " + Component($"({emailSentColumn} + {emailReadColumn})", o.CoworkEmailTarget, o.CoworkEmailWeight)
+                + " + " + Component(filesColumn, o.CoworkDocumentTarget, o.CoworkDocumentWeight);
+        }
+
+        /// <summary>
+        /// Builds the modelled hours/cost estimate for a cohort.
+        ///
+        /// <b>Every output is an assumption applied to observed volume.</b> The volumes are real - they
+        /// come from Microsoft's usage reports - but the conversion to time saved is a model, and this
+        /// method returns the assumptions that produced it so no caller can render a number without them.
+        /// A currency figure is produced only when a loaded hourly cost has been explicitly configured;
+        /// there is no defensible default and the tool must not invent one.
+        /// </summary>
+        /// <param name="cohort">The users the estimate covers - normally the recommended rollout cohort.</param>
+        /// <param name="options">Tuning, including the assumptions and the optional loaded cost.</param>
+        public static CoworkValueEstimate EstimateCoworkValue(
+            IReadOnlyCollection<CoworkReadinessRow> cohort,
+            CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var estimate = new CoworkValueEstimate();
+
+            if (cohort == null || cohort.Count == 0)
+            {
+                return estimate;
+            }
+
+            estimate.CohortUsers = cohort.Count;
+
+            // The per-active-day averages are restated per month on the habit-bucket basis, so the estimate
+            // is quoted in the same "a month" units as the rest of the report rather than in whichever
+            // window the reader happened to select.
+            var workingDaysPerMonth = Math.Max(1d,
+                o.HabitBucketNormalisationDays * (o.WorkingDaysPerWeek / 7d));
+
+            double meetings = 0, mail = 0, documents = 0;
+            foreach (var row in cohort)
+            {
+                meetings += row.TeamsMeetings * workingDaysPerMonth;
+                mail += (row.EmailsSent + row.EmailsRead) * workingDaysPerMonth;
+                documents += row.FilesViewedOrEdited * workingDaysPerMonth;
+            }
+
+            estimate.AddressableMeetings = Round(meetings, 0);
+            estimate.AddressableMailThreads = Round(mail, 0);
+            estimate.AddressableDocuments = Round(documents, 0);
+
+            var minutesHigh = meetings * Math.Max(0d, o.CoworkMinutesSavedPerMeeting)
+                            + mail * Math.Max(0d, o.CoworkMinutesSavedPerMailThread)
+                            + documents * Math.Max(0d, o.CoworkMinutesSavedPerDocument);
+
+            // Clamped to 0..1: a ratio above 1 would make the "low" end exceed the "high" end and render a
+            // backwards range, and a negative one would invent a saving out of thin air.
+            var lowerRatio = Math.Min(1d, Math.Max(0d, o.CoworkEstimateLowerBoundRatio));
+
+            estimate.HoursPerMonthHigh = Round(minutesHigh / 60d, 0);
+            estimate.HoursPerMonthLow = Round(minutesHigh * lowerRatio / 60d, 0);
+
+            if (o.CoworkLoadedCostPerHour.HasValue && o.CoworkLoadedCostPerHour.Value > 0)
+            {
+                var rate = o.CoworkLoadedCostPerHour.Value;
+                estimate.CurrencyPerMonthLow = Round(estimate.HoursPerMonthLow * rate, 0);
+                estimate.CurrencyPerMonthHigh = Round(estimate.HoursPerMonthHigh * rate, 0);
+                estimate.CurrencyCode = o.CoworkCurrencyCode;
+            }
+
+            estimate.Assumptions.Add(
+                $"Assumes Cowork saves {Num(o.CoworkMinutesSavedPerMeeting)} minutes per meeting, "
+                + $"{Num(o.CoworkMinutesSavedPerMailThread)} per email and "
+                + $"{Num(o.CoworkMinutesSavedPerDocument)} per document.");
+
+            estimate.Assumptions.Add(
+                $"The lower bound applies {Num(lowerRatio * 100d)}% of those assumptions; the upper bound "
+                + "applies them in full.");
+
+            estimate.Assumptions.Add(
+                $"Volumes are observed from Microsoft's usage reports for {cohort.Count:N0} user"
+                + $"{(cohort.Count == 1 ? string.Empty : "s")}, restated over "
+                + $"{Num(workingDaysPerMonth)} working days a month.");
+
+            estimate.Assumptions.Add(
+                "Time saved is NOT measured by this product and cannot be. These figures are a model for "
+                + "sizing a rollout, not a result.");
+
+            if (!estimate.CurrencyPerMonthHigh.HasValue)
+            {
+                estimate.Assumptions.Add(
+                    "No monetary value is shown because no fully-loaded hourly cost has been configured.");
+            }
+
+            return estimate;
+        }
+
+        private static string Plural(long count)
+        {
+            return count == 1 ? string.Empty : "s";
         }
 
         #endregion

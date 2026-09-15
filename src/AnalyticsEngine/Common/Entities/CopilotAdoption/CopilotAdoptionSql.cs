@@ -575,6 +575,335 @@ namespace Common.Entities.CopilotAdoption
 
         #endregion
 
+        #region Cowork readiness
+
+        /// <summary>
+        /// Every Copilot seat holder with the two signals Cowork readiness is judged on: how much Cowork
+        /// they already use, and how much delegable coordination work they carry.
+        ///
+        /// <para>Run as its own step rather than by extending <see cref="LicensedUsersSql"/>. That query is
+        /// the hottest path in the whole report, and bolting four more workload CTEs onto it would make
+        /// every existing figure pay for a feature on a different tab. Here the two run concurrently, so the
+        /// page costs the slower of them rather than the sum, and a failure degrades this tab alone.</para>
+        ///
+        /// <para>The Copilot engagement score is deliberately <b>not</b> computed here. It is carried across
+        /// in memory from the already-scored licensed-user set, because a second implementation of the
+        /// engagement formula would eventually disagree with the first - and a user shown as Established on
+        /// one tab and "not fluent enough" on another is exactly the contradiction
+        /// <see cref="CopilotAdoptionScoring"/> exists to prevent.</para>
+        ///
+        /// <para>The Microsoft 365 workload figures are read across the whole window and reduced to a
+        /// per-active-day average by <see cref="PerActiveDay"/>, for the same correctness reason as
+        /// <see cref="LicenceOpportunitiesSql"/>: these are Graph's <i>daily</i> user-detail reports, so
+        /// seeking a single date would make the answer "whoever happened to be working last Tuesday".</para>
+        ///
+        /// <para><b>No new index is required, and that was measured rather than assumed.</b> At synthetic
+        /// scale (6,000,000 interactions, 200,000 users, 180 days of history, 15,000 seats, Cowork ~9% of
+        /// rows; medians with the buffer pool and plan cache cleared between runs) the Cowork aggregate
+        /// rides the existing <c>IX_copilot_chats_time_stamp_user_id</c> - key <c>(time_stamp, user_id)</c>
+        /// with <c>app_host</c> and <c>agent_id</c> INCLUDEd - from
+        /// <c>DenormaliseCopilotChatUserAndTime</c>:</para>
+        ///
+        /// <list type="table">
+        ///   <listheader><term>Shape</term><description>28-day window / 180-day window</description></listheader>
+        ///   <item>
+        ///     <term>No supporting index</term>
+        ///     <description>43,811 reads, 1,789 ms / 43,811 reads, 3,488 ms (clustered scan)</description>
+        ///   </item>
+        ///   <item>
+        ///     <term>Existing production index</term>
+        ///     <description><b>6,466 reads, 502 ms</b> / 41,525 reads, 3,305 ms (index seek)</description>
+        ///   </item>
+        ///   <item>
+        ///     <term>Added filtered <c>WHERE app_host = 'cowork'</c> index</term>
+        ///     <description>6,466 reads, 590 ms - <b>identical reads, slightly slower</b></description>
+        ///   </item>
+        /// </list>
+        ///
+        /// <para>So the existing index gives a 6.8x reads and 3.6x elapsed improvement on the default
+        /// 28-day window, and <b>the Cowork-specific index was measured and rejected</b>: it produced
+        /// exactly the same logical reads because the optimiser keeps choosing the index that is already
+        /// there, while costing another ~320 MB on the largest table in the schema and an offline build on
+        /// every customer's upgrade. A negative result is still a result - shipping it would have been an
+        /// "optimisation" that made nothing faster.</para>
+        ///
+        /// <para>The 180-day column is close to the no-index numbers on purpose, and is not a regression:
+        /// at that width the window covers essentially the whole table, so a scan is the correct plan. It
+        /// is reported here because the repo requires more than one selectivity - a shape that only ever
+        /// gets tested at its best window is not proven.</para>
+        /// </summary>
+        /// <param name="seatLicenceTypeIds">Licence-type ids classified as Copilot seats.</param>
+        /// <param name="coworkAgentIds">Agent ids identified as Cowork; may be empty.</param>
+        /// <param name="options">Tuning, used to build the ranking expression.</param>
+        /// <param name="includeCopilotAudit">
+        /// False when the Copilot audit import has nothing for this window, in which case Cowork usage is
+        /// unobservable and its columns collapse to zero rather than joining an absent CTE.
+        /// </param>
+        /// <param name="includeM365Usage">
+        /// False when the Microsoft 365 usage reports have no settled snapshot, in which case the
+        /// coordination-load signals are unobservable and their CTEs are omitted entirely.
+        /// </param>
+        public static string CoworkReadinessSql(
+            IEnumerable<int> seatLicenceTypeIds,
+            IEnumerable<int> coworkAgentIds,
+            CopilotAdoptionOptions options,
+            bool includeCopilotAudit,
+            bool includeM365Usage)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var cowork = CoworkPredicate(coworkAgentIds);
+
+            // The ranking expression may only reference CTEs that are actually present: when the usage
+            // reports are unavailable their CTEs are omitted, so each component has to collapse to a
+            // literal zero rather than to an unbound column reference.
+            var loadScore = CopilotAdoptionScoring.BuildCoworkLoadScoreSql(
+                o,
+                teamsColumn: includeM365Usage ? "ISNULL(teams.Messages, 0)" : "0",
+                meetingsColumn: includeM365Usage ? "ISNULL(teams.Meetings, 0)" : "0",
+                emailSentColumn: includeM365Usage ? "ISNULL(mail.EmailsSent, 0)" : "0",
+                emailReadColumn: includeM365Usage ? "ISNULL(mail.EmailsRead, 0)" : "0",
+                filesColumn: includeM365Usage ? "ISNULL(files.ViewedOrEdited, 0)" : "0");
+
+            var ctes = new List<string>
+            {
+                "SeatUsers AS (\r\n" +
+                "    SELECT DISTINCT ul.user_id AS user_id\r\n" +
+                "    FROM dbo.user_license_type_lookups AS ul\r\n" +
+                $"    WHERE ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
+                ")"
+            };
+
+            if (includeCopilotAudit)
+            {
+                ctes.Add(
+                    "-- Cowork use, per seat holder. Rides IX_copilot_chats_time_stamp_user_id, whose key is\r\n" +
+                    "-- (time_stamp, user_id) with app_host and agent_id INCLUDEd - so the window seek, the\r\n" +
+                    "-- grouping and the Cowork predicate are all served without touching the base table.\r\n" +
+                    "--\r\n" +
+                    "-- ActiveDays is the column the 'regular use' verdict rests on: an interaction count\r\n" +
+                    "-- cannot tell habitual use apart from one long afternoon of experimenting.\r\n" +
+                    "CoworkUsage AS (\r\n" +
+                    "    SELECT c.user_id AS user_id,\r\n" +
+                    "           COUNT_BIG(*) AS Interactions,\r\n" +
+                    "           COUNT(DISTINCT CAST(c.time_stamp AS date)) AS ActiveDays,\r\n" +
+                    "           MAX(c.time_stamp) AS LastInteractionUtc\r\n" +
+                    "    FROM dbo.copilot_chats AS c\r\n" +
+                    "    WHERE c.time_stamp >= @from\r\n" +
+                    "      AND c.user_id IS NOT NULL\r\n" +
+                    $"      AND ({cowork})\r\n" +
+                    "    GROUP BY c.user_id\r\n" +
+                    ")");
+            }
+
+            if (includeM365Usage)
+            {
+                // Each workload CTE is restricted to seat holders. Without the semi-join these would
+                // aggregate the entire directory's activity and then throw almost all of it away at the
+                // final join - on a 200,000-user tenant with a few thousand Copilot seats that is most of
+                // the query's cost spent on rows that cannot appear in the result.
+                ctes.Add(
+                    "TeamsUsage AS (\r\n" +
+                    "    SELECT t.user_id AS user_id,\r\n" +
+                    "           " + PerActiveDay("t.private_chat_count + t.team_chat_count + t.post_messages + t.reply_messages", "t.[date]") + " AS Messages,\r\n" +
+                    "           " + PerActiveDay("t.meetings_attended_count + t.meetings_organized_count", "t.[date]") + " AS Meetings,\r\n" +
+                    "           MAX(t.last_activity_date) AS LastActivity\r\n" +
+                    "    FROM dbo.teams_user_activity_log AS t\r\n" +
+                    "    WHERE t.[date] >= @m365From AND t.[date] <= @m365ReportDate\r\n" +
+                    "      AND EXISTS (SELECT 1 FROM SeatUsers AS s WHERE s.user_id = t.user_id)\r\n" +
+                    "    GROUP BY t.user_id\r\n" +
+                    ")");
+
+                ctes.Add(
+                    // Named EmailsSent/EmailsRead, not Sent/Read: READ is a reserved word in T-SQL and an
+                    // unbracketed alias produces a syntax error the moment it is referenced.
+                    "MailUsage AS (\r\n" +
+                    "    SELECT o.user_id AS user_id,\r\n" +
+                    "           " + PerActiveDay("o.email_send_count", "o.[date]") + " AS EmailsSent,\r\n" +
+                    "           " + PerActiveDay("o.email_read_count", "o.[date]") + " AS EmailsRead,\r\n" +
+                    "           MAX(o.last_activity_date) AS LastActivity\r\n" +
+                    "    FROM dbo.outlook_user_activity_log AS o\r\n" +
+                    "    WHERE o.[date] >= @m365From AND o.[date] <= @m365ReportDate\r\n" +
+                    "      AND EXISTS (SELECT 1 FROM SeatUsers AS s WHERE s.user_id = o.user_id)\r\n" +
+                    "    GROUP BY o.user_id\r\n" +
+                    ")");
+
+                ctes.Add(
+                    "-- SharePoint and OneDrive are one signal (\"works with documents\"), so they are summed\r\n" +
+                    "-- rather than shown as two weak ones. A day the user touched both counts once.\r\n" +
+                    "FileUsage AS (\r\n" +
+                    "    SELECT f.user_id AS user_id,\r\n" +
+                    "           " + PerActiveDay("f.viewed_or_edited", "f.[date]") + " AS ViewedOrEdited,\r\n" +
+                    "           MAX(f.last_activity_date) AS LastActivity\r\n" +
+                    "    FROM (\r\n" +
+                    "        SELECT sp.user_id, sp.[date], sp.viewed_or_edited, sp.last_activity_date\r\n" +
+                    "        FROM dbo.sharepoint_user_activity_log AS sp\r\n" +
+                    "        WHERE sp.[date] >= @m365From AND sp.[date] <= @m365ReportDate\r\n" +
+                    "          AND EXISTS (SELECT 1 FROM SeatUsers AS s WHERE s.user_id = sp.user_id)\r\n" +
+                    "        UNION ALL\r\n" +
+                    "        SELECT od.user_id, od.[date], od.viewed_or_edited, od.last_activity_date\r\n" +
+                    "        FROM dbo.onedrive_user_activity_log AS od\r\n" +
+                    "        WHERE od.[date] >= @m365From AND od.[date] <= @m365ReportDate\r\n" +
+                    "          AND EXISTS (SELECT 1 FROM SeatUsers AS s WHERE s.user_id = od.user_id)\r\n" +
+                    "    ) AS f\r\n" +
+                    "    GROUP BY f.user_id\r\n" +
+                    ")");
+            }
+
+            var coworkSelect = includeCopilotAudit
+                ? "       CAST(ISNULL(cw.Interactions, 0) AS bigint) AS CoworkInteractions,\r\n" +
+                  "       ISNULL(cw.ActiveDays, 0) AS CoworkActiveDays,\r\n" +
+                  "       cw.LastInteractionUtc AS LastCoworkInteractionUtc,\r\n"
+                : "       CAST(0 AS bigint) AS CoworkInteractions,\r\n" +
+                  "       0 AS CoworkActiveDays,\r\n" +
+                  "       CAST(NULL AS datetime) AS LastCoworkInteractionUtc,\r\n";
+
+            var m365Select = includeM365Usage
+                ? "       CAST(ISNULL(teams.Messages, 0) AS bigint) AS TeamsMessages,\r\n" +
+                  "       CAST(ISNULL(teams.Meetings, 0) AS bigint) AS TeamsMeetings,\r\n" +
+                  "       CAST(ISNULL(mail.EmailsSent, 0) AS bigint) AS EmailsSent,\r\n" +
+                  "       CAST(ISNULL(mail.EmailsRead, 0) AS bigint) AS EmailsRead,\r\n" +
+                  "       CAST(ISNULL(files.ViewedOrEdited, 0) AS bigint) AS FilesViewedOrEdited,\r\n" +
+                  "       (SELECT MAX(activity.dt) FROM (VALUES (teams.LastActivity), (mail.LastActivity), (files.LastActivity)) AS activity(dt)) AS LastM365ActivityUtc,\r\n"
+                : "       CAST(0 AS bigint) AS TeamsMessages,\r\n" +
+                  "       CAST(0 AS bigint) AS TeamsMeetings,\r\n" +
+                  "       CAST(0 AS bigint) AS EmailsSent,\r\n" +
+                  "       CAST(0 AS bigint) AS EmailsRead,\r\n" +
+                  "       CAST(0 AS bigint) AS FilesViewedOrEdited,\r\n" +
+                  "       CAST(NULL AS datetime) AS LastM365ActivityUtc,\r\n";
+
+            // Existing Cowork users must survive the row cap. The ranking expression is coordination load
+            // only, and load says nothing about whether someone already uses Cowork - so on a large tenant
+            // a current Cowork user with modest measured workload could be ranked below thousands of busier
+            // colleagues and truncated away. That would drop them from the spending-policy scoping list and
+            // silently REVOKE the access of the very people proving the capability works.
+            //
+            // Sorting them into the first block costs nothing when the cap is not reached and guarantees
+            // they are present when it is. Omitted without the audit import, where Cowork use is
+            // unobservable and a constant in ORDER BY is a SQL Server error.
+            var coworkFirstOrder = includeCopilotAudit
+                ? "ORDER BY CASE WHEN ISNULL(cw.Interactions, 0) > 0 THEN 0 ELSE 1 END,\r\n" +
+                  "         LoadScore DESC, u.id\r\n"
+                : "ORDER BY LoadScore DESC, u.id\r\n";
+
+            return
+                "WITH " + string.Join(",\r\n", ctes) + "\r\n" +
+                "SELECT TOP (@maxRows)\r\n" +
+                "       u.id AS UserId,\r\n" +
+                "       u.user_name AS UserPrincipalName,\r\n" +
+                "       u.mail AS Mail,\r\n" +
+                "       dept.name AS Department,\r\n" +
+                "       title.name AS JobTitle,\r\n" +
+                "       country.name AS Country,\r\n" +
+                "       office.name AS OfficeLocation,\r\n" +
+                "       company.name AS CompanyName,\r\n" +
+                "       manager.user_name AS ManagerUserPrincipalName,\r\n" +
+                "       u.account_enabled AS AccountEnabled,\r\n" +
+                coworkSelect +
+                m365Select +
+                $"       CAST({loadScore} AS float) AS LoadScore\r\n" +
+                "FROM SeatUsers AS seats\r\n" +
+                "JOIN dbo.users AS u ON u.id = seats.user_id\r\n" +
+                "LEFT JOIN dbo.user_departments AS dept ON dept.id = u.department_id\r\n" +
+                "LEFT JOIN dbo.user_job_titles AS title ON title.id = u.job_title_id\r\n" +
+                "LEFT JOIN dbo.user_country_or_region AS country ON country.id = u.country_or_region_id\r\n" +
+                "LEFT JOIN dbo.user_office_locations AS office ON office.id = u.office_location_id\r\n" +
+                "LEFT JOIN dbo.user_company_name AS company ON company.id = u.company_name_id\r\n" +
+                "LEFT JOIN dbo.users AS manager ON manager.id = u.manager_id\r\n" +
+                (includeCopilotAudit ? "LEFT JOIN CoworkUsage AS cw ON cw.user_id = u.id\r\n" : string.Empty) +
+                (includeM365Usage
+                    ? "LEFT JOIN TeamsUsage AS teams ON teams.user_id = u.id\r\n" +
+                      "LEFT JOIN MailUsage AS mail ON mail.user_id = u.id\r\n" +
+                      "LEFT JOIN FileUsage AS files ON files.user_id = u.id\r\n"
+                    : string.Empty) +
+                // Guests are excluded for the same reason as on the opportunity list: a guest cannot be
+                // put in a Cowork spending policy, so proposing one would discredit the list. Disabled
+                // accounts are deliberately KEPT - a disabled account still holding a Copilot seat is a
+                // finding the reclaim figures rely on, and hiding it here would contradict them.
+                "WHERE 1 = 1\r\n" +
+                ExcludeGuests("u") +
+                coworkFirstOrder +
+                "OPTION (RECOMPILE);";
+        }
+
+        /// <summary>
+        /// Total Copilot Credits billed per user inside the window, for the seat holders on the Cowork tab.
+        ///
+        /// <para><b>This is not a Cowork figure and must never be labelled as one.</b> Microsoft meters
+        /// Cowork against the shared Copilot Credits pool and publishes no per-row workload discriminator,
+        /// so this is the user's total consumption across every credit-billed Copilot workload. It is worth
+        /// showing anyway - a rollout conversation needs to know who is already consuming credits - but only
+        /// with that caveat attached.</para>
+        ///
+        /// <para>Users with no row are absent from the result rather than returned as zero, so the caller
+        /// can render "not attributable" instead of claiming the user costs nothing.</para>
+        ///
+        /// <para>A plain <c>SUM</c> is safe here: the per-user importer keys its rows on
+        /// (usage date, user, environment) with no agent grain - <c>CopilotStudioCreditImporter.MapUserRows</c>
+        /// never sets <c>agent_id</c> on this table - so there is no per-agent breakdown sitting alongside a
+        /// per-user total waiting to be double counted. Rows whose Entra object id could not be resolved to
+        /// a <c>dbo.users</c> row are excluded, because an unattributable credit cannot be shown against a
+        /// person; they remain visible on the Agent Costs page, which reports by object id.</para>
+        /// </summary>
+        public static string CoworkUserCreditsSql(IEnumerable<int> seatLicenceTypeIds)
+        {
+            return
+                "WITH SeatUsers AS (\r\n" +
+                "    SELECT DISTINCT ul.user_id AS user_id\r\n" +
+                "    FROM dbo.user_license_type_lookups AS ul\r\n" +
+                $"    WHERE ul.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
+                ")\r\n" +
+                "SELECT cu.user_id AS UserId,\r\n" +
+                "       CAST(SUM(cu.billed_credits) AS decimal(18,4)) AS BilledCredits\r\n" +
+                "FROM dbo.copilot_studio_credit_user_daily AS cu\r\n" +
+                "WHERE cu.usage_date >= @from\r\n" +
+                "  AND cu.user_id IS NOT NULL\r\n" +
+                "  AND EXISTS (SELECT 1 FROM SeatUsers AS s WHERE s.user_id = cu.user_id)\r\n" +
+                "GROUP BY cu.user_id\r\n" +
+                "HAVING SUM(cu.billed_credits) > 0\r\n" +
+                "OPTION (RECOMPILE);";
+        }
+
+        /// <summary>
+        /// The tenant's latest Copilot Credit capacity snapshot, used as rollout headroom on the Cowork tab.
+        ///
+        /// <para><b>This is the shared Copilot Credits pool, not Cowork-only spend.</b> Cowork genuinely
+        /// consumes from it, which is what makes it valid headroom for a rollout decision - but Copilot
+        /// Studio and other credit-billed workloads draw on the same pool and Microsoft publishes no way to
+        /// separate them, so every label built from this must say so.</para>
+        ///
+        /// <para>Latest snapshot regardless of the reporting window, matching the Agent Costs page: it is a
+        /// point-in-time tenant total, and an admin planning a rollout wants today's headroom rather than
+        /// headroom as at the end of an arbitrary report period.</para>
+        /// </summary>
+        public const string CoworkCreditCapacitySql =
+            "SELECT TOP 1\r\n" +
+            "       cap.snapshot_utc AS SnapshotUtc,\r\n" +
+            "       cap.entitled AS Entitled,\r\n" +
+            "       cap.consumed AS Consumed,\r\n" +
+            "       cap.available AS AvailableCredits,\r\n" +
+            "       cap.pay_as_you_go_consumed AS PayAsYouGoConsumed,\r\n" +
+            "       cap.status AS Status\r\n" +
+            "FROM dbo.copilot_studio_credit_capacity AS cap\r\n" +
+            "ORDER BY cap.snapshot_utc DESC;";
+
+        /// <summary>
+        /// Whether the Copilot Studio credit tables exist at all.
+        ///
+        /// <para>The credit figures on the Cowork tab are optional decoration from a <i>separate</i>
+        /// import, and a database that predates the agent-cost migration simply does not have these
+        /// tables. Probing for them is not defensive clutter: without it, every Cowork analysis on such
+        /// a database would surface "Could not load Copilot Credit capacity: Invalid object name..." as
+        /// a warning, which reads as a fault on a page whose credibility depends on its warnings meaning
+        /// something. A missing optional import is a legitimate state, and is reported by the absence of
+        /// the credit block rather than by an error.</para>
+        /// </summary>
+        public const string HasCreditTablesSql =
+            "SELECT CASE WHEN OBJECT_ID('dbo.copilot_studio_credit_user_daily') IS NOT NULL\r\n" +
+            "             AND OBJECT_ID('dbo.copilot_studio_credit_capacity') IS NOT NULL\r\n" +
+            "            THEN 1 ELSE 0 END AS Value;";
+
+        #endregion
+
         #region Licence opportunities (unlicensed users)
 
         /// <summary>
