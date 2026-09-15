@@ -1,4 +1,5 @@
 import { makeStyles, tokens, Text, Badge } from '@fluentui/react-components';
+import type { ReactNode } from 'react';
 import { AdoptionBand } from '../../types/copilotAdoption';
 import type { AdoptionSegmentRow } from '../../types/copilotAdoption';
 import { ADOPTION_BANDS } from '../charts/GaugeRing';
@@ -77,6 +78,74 @@ const useStyles = makeStyles({
   },
   thNumeric: {
     textAlign: 'right',
+  },
+  /**
+   * A clickable column header. Rendered as a button inside the th so it is keyboard reachable and
+   * announced as a control, while the th keeps the `aria-sort` state that screen readers read out.
+   */
+  sortButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    backgroundColor: 'transparent',
+    // Longhands throughout - Griffel rejects the shorthands it cannot split reliably.
+    borderTopStyle: 'none',
+    borderRightStyle: 'none',
+    borderBottomStyle: 'none',
+    borderLeftStyle: 'none',
+    padding: '0',
+    margin: '0',
+    fontFamily: 'inherit',
+    fontSize: 'inherit',
+    fontWeight: 'inherit',
+    lineHeight: 'inherit',
+    color: 'inherit',
+    cursor: 'pointer',
+    ':hover': {
+      color: tokens.colorNeutralForeground1,
+      textDecorationLine: 'underline',
+    },
+    ':focus-visible': {
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineColor: tokens.colorStrokeFocus2,
+      outlineOffset: '2px',
+      borderRadius: tokens.borderRadiusSmall,
+    },
+  },
+  /** The direction arrow. Reserved width so headers do not shift as the sort moves between columns. */
+  sortArrow: {
+    width: '10px',
+    fontSize: '9px',
+    lineHeight: '1',
+  },
+  sortArrowActive: {
+    color: tokens.colorBrandForeground1,
+  },
+  sortArrowIdle: {
+    // Faint rather than hidden: the arrow is the affordance that says the header is clickable, but
+    // eleven of them at full strength would compete with the data.
+    opacity: 0.3,
+  },
+  /**
+   * Pins a column to the right-hand edge of a horizontally scrolling table.
+   *
+   * The licensed-user table has twelve columns and overflows on a normal laptop, which put the
+   * recommended Action - the column the whole page exists to produce - off the right edge, reachable
+   * only by scrolling. It is worth more than the columns it now floats above.
+   *
+   * Needs an opaque background: the cells it overlaps scroll underneath it.
+   */
+  stickyRight: {
+    position: 'sticky',
+    right: '0',
+    zIndex: 1,
+    backgroundColor: tokens.colorNeutralBackground1,
+    // A hairline so the pinned column reads as pinned rather than as an overlap artefact once the
+    // table is actually scrolled.
+    borderLeftWidth: '1px',
+    borderLeftStyle: 'solid',
+    borderLeftColor: tokens.colorNeutralStroke2,
   },
   td: {
     padding: '6px 10px',
@@ -257,4 +326,69 @@ export function SegmentTable({
 /** Shared table styling for the two user lists, so they look and behave identically. */
 export function useAdoptionTableStyles() {
   return useStyles();
+}
+
+/**
+ * A sortable column header.
+ *
+ * Clicking selects the column; clicking the column that is already selected reverses it. The first
+ * click uses `defaultDescending`, because the useful first answer differs per column: "most
+ * interactions" but "A-Z" for a name, and starting a numeric column ascending shows the reader a
+ * screen of zeroes.
+ *
+ * `aria-sort` lives on the `th` (that is where assistive technology looks for it) while the control
+ * itself is a real `button`, so the header is reachable and operable from the keyboard.
+ */
+export function SortableTh({
+  label,
+  sortKey,
+  activeKey,
+  descending,
+  onSort,
+  numeric = false,
+  defaultDescending = false,
+  className,
+  children,
+}: {
+  /** Accessible name for the sort control. Use `children` to render something richer. */
+  label: string;
+  sortKey: string;
+  activeKey: string;
+  descending: boolean;
+  onSort: (key: string, descending: boolean) => void;
+  numeric?: boolean;
+  /** Direction applied when this column is selected from cold. */
+  defaultDescending?: boolean;
+  className?: string;
+  children?: ReactNode;
+}) {
+  const styles = useStyles();
+  const active = activeKey === sortKey;
+  const ariaSort: 'ascending' | 'descending' | 'none' = active
+    ? descending
+      ? 'descending'
+      : 'ascending'
+    : 'none';
+
+  return (
+    <th
+      className={`${styles.th}${numeric ? ` ${styles.thNumeric}` : ''}${className ? ` ${className}` : ''}`}
+      aria-sort={ariaSort}
+    >
+      <button
+        type="button"
+        className={styles.sortButton}
+        onClick={() => onSort(sortKey, active ? !descending : defaultDescending)}
+        title={`Sort by ${label}`}
+      >
+        {children ?? label}
+        <span
+          className={`${styles.sortArrow} ${active ? styles.sortArrowActive : styles.sortArrowIdle}`}
+          aria-hidden="true"
+        >
+          {active ? (descending ? '\u25BC' : '\u25B2') : '\u25B2'}
+        </span>
+      </button>
+    </th>
+  );
 }

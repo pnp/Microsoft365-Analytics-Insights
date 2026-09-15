@@ -300,9 +300,16 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot
             // - Generative Answer: 2 credits (always for AI-generated responses)
             // - Tenant Graph Grounding: +10 credits (if tenant resources accessed)
             // - Total per message: 2 or 12 credits
+            //
+            // "IsPrompt == false" rather than "!IsPrompt": IsPrompt is bool?, and a null means the
+            // payload omitted the flag so the message's direction is UNKNOWN. Billing an unknown as a
+            // response is what the old non-nullable bool did - it defaulted to false - and it silently
+            // over-stated credit consumption. An unknown-direction message is now left unbilled and
+            // uncounted, which is the conservative reading: a credit estimate that is slightly low is
+            // recoverable, one that is invisibly high is not.
             if (auditEvent.Messages != null)
             {
-                foreach (var message in auditEvent.Messages.Where(m => !m.IsPrompt))
+                foreach (var message in auditEvent.Messages.Where(m => m.IsPrompt == false))
                 {
                     // Every AI-generated response is a generative answer (2 credits)
                     report.GenerativeAnswers++;

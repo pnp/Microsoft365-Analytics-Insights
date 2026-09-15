@@ -385,7 +385,7 @@ export default function IntensityScatter({
         still reads in greyscale or to a colour-blind reader. The dashed lines are your own medians, not fixed
         targets - each quadrant is "compared with your other departments". Only users who were active at least
         once are averaged, so a department is not dragged towards the origin by licences that were never used;
-        those are counted in the reclaimable-licence figure.
+        those are idle seats, assessed by the reclaim confidence tiers.
       </Text>
     </div>
   );

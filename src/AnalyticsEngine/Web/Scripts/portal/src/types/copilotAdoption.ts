@@ -91,6 +91,7 @@ export interface CopilotAdoptionOptions {
   workingDaysPerWeek: number;
   frequencyTargetRatio: number;
   depthTargetInteractionsPerActiveDay: number;
+  depthMinActiveDays: number;
   breadthTargetApps: number;
   frequencyWeight: number;
   depthWeight: number;
@@ -107,6 +108,7 @@ export interface CopilotAdoptionOptions {
   agentReviewInactiveDays: number;
   agentRetireInactiveDays: number;
   agentNewDays: number;
+  reclaimGraceDays: number;
   agentMinUsers: number;
   agentHistoryDays: number;
 
@@ -115,10 +117,33 @@ export interface CopilotAdoptionOptions {
   opportunityEmailWeight: number;
   opportunityDocumentWeight: number;
   opportunityCopilotTarget: number;
+  opportunityCopilotTargetBasisDays: number;
   opportunityCollaborationTarget: number;
   opportunityEmailTarget: number;
   opportunityDocumentTarget: number;
   opportunityRecommendScore: number;
+  opportunityProvenDemandMinActiveDays: number;
+
+  coworkCollaborationWeight: number;
+  coworkMeetingWeight: number;
+  coworkEmailWeight: number;
+  coworkDocumentWeight: number;
+  coworkCollaborationTarget: number;
+  coworkMeetingTarget: number;
+  coworkEmailTarget: number;
+  coworkDocumentTarget: number;
+  coworkLoadMinScore: number;
+  coworkFluencyMinScore: number;
+  coworkRegularMinActiveDays: number;
+  coworkAgentFamiliarityUplift: number;
+
+  coworkMinutesSavedPerMeeting: number;
+  coworkMinutesSavedPerMailThread: number;
+  coworkMinutesSavedPerDocument: number;
+  coworkEstimateLowerBoundRatio: number;
+  /** Null means no monetary figure is produced at all - there is no defensible default. */
+  coworkLoadedCostPerHour: number | null;
+  coworkCurrencyCode: string | null;
 
   usageReportLagDays: number;
   topSegments: number;
@@ -127,6 +152,7 @@ export interface CopilotAdoptionOptions {
   maxOpportunityCandidates: number;
   maxAgents: number;
   maxUnlicensedUsersScored: number;
+  maxCoworkUsersScored: number;
 }
 
 /** One active-day habit bucket (Infrequent / Moderate / Frequent / Daily). */
@@ -262,6 +288,20 @@ export interface CopilotAdoptionSummary {
   habitualUsers: number;
   habitRatePct: number;
   reclaimableSeats: number;
+  disabledLicensedUsers: number;
+  reclaimCertainSeats: number;
+  reclaimProbableSeats: number;
+  reclaimReviewSeats: number;
+  reclaimExcludedUsers: number;
+  expiredReclaimExclusions: number;
+  tooNewToJudgeUsers: number;
+  reclaimCaveat: string | null;
+  reclaimSeatsHeldBackForWindowMismatch: number;
+  reclaimSeatsHeldBackForReview: number;
+  reclaimSeatsFromActiveBands: number;
+  usageReportSourcedUsers: number;
+  usageReportSourcedUserPct: number;
+  usageReportWindowMismatch: boolean;
   averageAdoptionScore: number;
   medianAdoptionScore: number;
   totalInteractions: number;
@@ -270,6 +310,25 @@ export interface CopilotAdoptionSummary {
   coworkAdoptionPct: number;
   coworkInteractions: number;
   coworkDetected: boolean;
+
+  /**
+   * False when the Cowork readiness step did not run or produced nothing. The tab must say so rather
+   * than render an empty quadrant, which reads as "nobody is a candidate" - a finding, not a fault.
+   */
+  coworkReadinessAvailable: boolean;
+  coworkScoredUsers: number;
+  coworkEstablishedUsers: number;
+  coworkTriallingUsers: number;
+  coworkPrimeCandidates: number;
+  coworkBuildFluencyFirst: number;
+  coworkRecommendedForPolicy: number;
+  coworkAverageCoordinationLoad: number;
+  coworkAverageFluency: number;
+  coworkTiers: CoworkTierSummary[];
+  coworkQuadrant: CoworkQuadrantPoint[];
+  coworkByDepartment: CoworkSegmentRow[];
+  coworkCreditPosition: CoworkCreditPosition;
+  coworkValueEstimate: CoworkValueEstimate;
 
   unlicensedActiveUsers: number;
   recommendedForLicence: number;
@@ -319,6 +378,19 @@ export interface LicensedUserAdoptionRow {
   companyName: string | null;
   manager: string | null;
   accountEnabled: boolean | null;
+  accountCreatedUtc: string | null;
+  tenureStartUtc: string | null;
+  tenureBasis: string | null;
+  daysSinceTenureStart: number | null;
+  tooNewToJudge: boolean;
+  reclaimEligibility: string | null;
+  reclaimEligibilityReason: string | null;
+  reclaimExclusionReason: string | null;
+  reclaimExclusionNote: string | null;
+  reclaimExcludedBy: string | null;
+  reclaimExcludedUtc: string | null;
+  reclaimExclusionReviewAfterUtc: string | null;
+  reclaimExclusionExpired: boolean;
   seatLicences: string | null;
 
   interactions: number;
@@ -402,6 +474,8 @@ export interface AdoptionFilterOptions {
   departments: string[];
   countries: string[];
   bands: { value: number; name: string }[];
+  /** Cowork tiers, each carrying whether it rests on observed usage or on inference. */
+  coworkTiers?: { value: string; name: string; basis: CoworkBasis }[];
 }
 
 /** Filter/sort state for the licensed-user list. */
@@ -412,6 +486,7 @@ export interface LicensedUserFilters {
   actions: string[];
   department: string;
   country: string;
+  reclaimEligibility: string;
   coworkOnly: boolean;
   disabledOnly: boolean;
   sortBy: string;
@@ -425,6 +500,162 @@ export interface OpportunityFilters {
   country: string;
   recommendedOnly: boolean;
   existingCopilotUsersOnly: boolean;
+  sortBy: string;
+  sortDesc: boolean;
+}
+
+/**
+ * Whether a Cowork verdict rests on observed usage or on a prediction.
+ *
+ * Carried as data rather than inferred from the tier name in the UI, so there is exactly one place
+ * that decides it. Presenting a prediction as an observation is the worst thing this tab could do.
+ */
+export type CoworkBasis = 'evidence' | 'inference';
+
+/** The Cowork populations, strongest evidence first. */
+export type CoworkTier =
+  | 'established'
+  | 'trialling'
+  | 'primeCandidate'
+  | 'buildFluencyFirst'
+  | 'lowCoordinationLoad'
+  | 'notIndicated';
+
+export interface CoworkTierSummary {
+  code: CoworkTier;
+  label: string;
+  basis: CoworkBasis;
+  description: string;
+  users: number;
+  sharePct: number;
+}
+
+/** A department placed on the readiness quadrant. */
+export interface CoworkQuadrantPoint {
+  segment: string;
+  licensedUsers: number;
+  coordinationLoadScore: number;
+  fluencyScore: number;
+  regularCoworkUsers: number;
+  primeCandidates: number;
+}
+
+/** One department's position in the rollout order. */
+export interface CoworkSegmentRow {
+  segment: string;
+  licensedUsers: number;
+  primeCandidates: number;
+  primeCandidateRatePct: number;
+  regularCoworkUsers: number;
+  coworkAdoptionPct: number;
+  averageCoordinationLoad: number;
+  averageFluency: number;
+}
+
+/**
+ * The tenant's Copilot Credit position.
+ *
+ * This is the SHARED pool, not Cowork-only spend: Cowork draws on it, which makes it valid rollout
+ * headroom, but Copilot Studio and other credit-billed workloads draw on the same pool and Microsoft
+ * publishes no way to separate them. Every label built from this must say so.
+ */
+export interface CoworkCreditPosition {
+  available: boolean;
+  snapshotUtc: string | null;
+  entitled: number | null;
+  consumed: number | null;
+  available_credits: number | null;
+  payAsYouGoConsumed: number | null;
+  status: string | null;
+  /** When false the per-user credit column is hidden entirely rather than filled with "not attributable". */
+  perUserCreditsAvailable: boolean;
+}
+
+/**
+ * The modelled time/cost estimate.
+ *
+ * The `addressable*` volumes are observed; the hours and money are those volumes multiplied by an
+ * assumption. `assumptions` travels with the numbers so no component can render a figure without it.
+ */
+export interface CoworkValueEstimate {
+  isModelled: boolean;
+  cohortUsers: number;
+  addressableMeetings: number;
+  addressableMailThreads: number;
+  addressableDocuments: number;
+  hoursPerMonthLow: number;
+  hoursPerMonthHigh: number;
+  /** Null when no fully-loaded hourly cost was configured. The tool does not invent money. */
+  currencyPerMonthLow: number | null;
+  currencyPerMonthHigh: number | null;
+  currencyCode: string | null;
+  assumptions: string[];
+}
+
+/** One Copilot seat holder assessed for Cowork readiness. */
+export interface CoworkReadinessRow {
+  userId: number;
+  userPrincipalName: string;
+  mail: string | null;
+  department: string | null;
+  jobTitle: string | null;
+  country: string | null;
+  officeLocation: string | null;
+  companyName: string | null;
+  manager: string | null;
+  accountEnabled: boolean | null;
+
+  coworkInteractions: number;
+  coworkActiveDays: number;
+  lastCoworkInteractionUtc: string | null;
+  usedCowork: boolean;
+  regularCoworkUser: boolean;
+
+  coordinationLoadScore: number;
+  fluencyScore: number;
+  adoptionScore: number;
+  agentsUsed: number;
+
+  collaborationScore: number;
+  meetingScore: number;
+  emailScore: number;
+  documentScore: number;
+  teamsMessages: number;
+  teamsMeetings: number;
+  emailsSent: number;
+  emailsRead: number;
+  filesViewedOrEdited: number;
+  lastM365ActivityUtc: string | null;
+
+  tier: CoworkTier;
+  tierLabel: string;
+  basis: CoworkBasis;
+  recommendForPolicy: boolean;
+  rationale: string;
+
+  /**
+   * ALL Copilot Credits for this user, not Cowork's share - Microsoft exposes no per-row workload
+   * discriminator. Null means not attributable, and must never be rendered as 0.
+   */
+  totalCopilotCredits: number | null;
+}
+
+export interface CoworkReadinessPage {
+  total: number;
+  skip: number;
+  take: number;
+  rows: CoworkReadinessRow[];
+  warnings: string[];
+}
+
+/** Filter/sort state for the Cowork readiness list. */
+export interface CoworkFilters {
+  search: string;
+  tiers: CoworkTier[];
+  department: string;
+  country: string;
+  recommendedOnly: boolean;
+  coworkUsersOnly: boolean;
   sortBy: string;
   sortDesc: boolean;
 }

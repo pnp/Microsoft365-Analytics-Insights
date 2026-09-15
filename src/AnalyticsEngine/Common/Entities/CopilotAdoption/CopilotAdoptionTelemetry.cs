@@ -111,6 +111,10 @@ namespace Common.Entities.CopilotAdoption
         public const string WeeklyTrend = "WeeklyTrend";
         public const string UnlicensedActiveUsers = "UnlicensedActiveUsers";
         public const string LicenceOpportunities = "LicenceOpportunities";
+        public const string CoworkReadiness = "CoworkReadiness";
+        public const string CoworkUserCredits = "CoworkUserCredits";
+        public const string CoworkCreditCapacity = "CoworkCreditCapacity";
+        public const string CoworkCreditProbe = "CoworkCreditProbe";
         public const string AgentUsage = "AgentUsage";
         public const string AgentUsageByDepartment = "AgentUsageByDepartment";
         public const string UnlicensedUsage = "UnlicensedUsage";

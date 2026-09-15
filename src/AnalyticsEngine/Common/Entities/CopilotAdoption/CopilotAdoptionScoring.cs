@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -15,11 +15,12 @@ namespace Common.Entities.CopilotAdoption
     /// C# also means it can be unit-tested against hand-written inputs, and reused verbatim by a
     /// scheduled e-mail report later without lifting any of it out of a controller.
     ///
-    /// The one exception is <see cref="BuildOpportunityScoreSql"/>, which emits a SQL expression for
-    /// the same formula so the database can rank hundreds of thousands of unlicensed users and return
-    /// only the top candidates. It is generated from the same <see cref="CopilotAdoptionOptions"/>
-    /// instance, and the returned rows are always re-scored here before display, so the SQL is a
-    /// ranking aid rather than a second source of truth.
+    /// The exceptions are <see cref="BuildOpportunityScoreSql"/> and
+    /// <see cref="BuildCoworkLoadScoreSql"/>, which emit SQL expressions for the same formulae so the
+    /// database can rank hundreds of thousands of users and return only the rows worth scoring. Both are
+    /// generated from the same <see cref="CopilotAdoptionOptions"/> instance, and the returned rows are
+    /// always re-scored here before display, so the SQL is a ranking aid rather than a second source of
+    /// truth.
     /// </summary>
     public static class CopilotAdoptionScoring
     {
@@ -28,6 +29,20 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>Score built from Microsoft's per-user Copilot usage report.</summary>
         public const string SignalSourceUsageReport = "usageReport";
+
+        /// <summary>The current tenure signal is Entra account age, not true Copilot seat tenure.</summary>
+        public const string TenureBasisAccountAge = "accountAge";
+
+        /// <summary>No tenure signal was available, so reclaim confidence is deliberately lowered.</summary>
+        public const string TenureBasisUnknown = "unknown";
+
+        public static class ReclaimEligibilityTiers
+        {
+            public const string Certain = "certain";
+            public const string Probable = "probable";
+            public const string Review = "review";
+            public const string Excluded = "excluded";
+        }
 
         #region Licensed-user engagement
 
@@ -74,6 +89,53 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
+        /// Frequency target adjusted for a new user's actual observation window. Until issue #277 adds
+        /// real seat-tenure history, <c>users.created_utc</c> is the best cheap proxy we have. Only the
+        /// early-tenure case is prorated; established users still use the full-window target so the
+        /// metric remains comparable across the population.
+        /// </summary>
+        /// <remarks>
+        /// Prorated against the REPORTING WINDOW, not against <see cref="CopilotAdoptionOptions.ReclaimGraceDays"/>.
+        /// Those are different questions: the grace period decides whether an idle seat is too new to
+        /// reclaim, while this decides how many active days it was even possible for the person to have.
+        /// Tying the proration to the grace period put a cliff at exactly the grace boundary on any
+        /// window longer than it - on a 180-day report a 29-day-old account was measured against about
+        /// 13 active days and a 30-day-old one against 77, so somebody who had used Copilot every
+        /// working day since joining was scored as a light user for having existed one day longer. At
+        /// the default 28-day window the two rules coincide exactly, so nothing changes there.
+        /// </remarks>
+        public static double TargetActiveDaysForTenure(LicensedUserUsageRow row, DateTime nowUtc, CopilotAdoptionOptions options)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var target = TargetActiveDays(o);
+            var days = DaysSinceTenureStart(row?.AccountCreatedUtc, nowUtc);
+            if (!days.HasValue) return target;
+
+            var windowDays = Math.Max(1, o.WindowDays);
+            // "days since creation" counts whole days, so an account created today has been available
+            // for one day of the window, not zero.
+            var observedDays = Math.Max(1, Math.Min(windowDays, days.Value + 1));
+            if (observedDays >= windowDays) return target;
+
+            return Math.Max(1d, target * observedDays / windowDays);
+        }
+
+        /// <summary>Whole days since the tenure proxy started, clamped to zero for clock skew.</summary>
+        public static int? DaysSinceTenureStart(DateTime? tenureStartUtc, DateTime nowUtc)
+        {
+            if (!tenureStartUtc.HasValue) return null;
+            return Math.Max(0, (int)(nowUtc.Date - tenureStartUtc.Value.Date).TotalDays);
+        }
+
+        /// <summary>Whether the only tenure signal says the user is still inside the grace period.</summary>
+        public static bool IsTooNewToJudge(LicensedUserUsageRow row, DateTime nowUtc, CopilotAdoptionOptions options)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var days = DaysSinceTenureStart(row?.AccountCreatedUtc, nowUtc);
+            return days.HasValue && days.Value < Math.Max(1, o.ReclaimGraceDays);
+        }
+
+        /// <summary>
         /// Turns one licensed user's raw signals into a scored, banded, actionable row.
         /// </summary>
         /// <param name="row">The user's raw counters, straight from the database.</param>
@@ -114,10 +176,15 @@ namespace Common.Entities.CopilotAdoption
                 ? row.ReportLastActivityUtc
                 : (row.LastInteractionUtc ?? row.ReportLastActivityUtc);
 
-            var targetActiveDays = TargetActiveDays(o);
+            var targetActiveDays = TargetActiveDaysForTenure(row, nowUtc, o);
             var frequency = Ratio(activeDays, targetActiveDays);
+            // Depth divides by a number the user controls, so one active day would otherwise make full
+            // marks trivial to reach - see CopilotAdoptionOptions.DepthMinActiveDays. Scaling by the
+            // size of the sample stops a single afternoon's experiment reading as a forming habit,
+            // and leaves anyone at or above the minimum completely unaffected.
+            var depthConfidence = Ratio(activeDays, o.DepthMinActiveDays);
             var depth = activeDays > 0
-                ? Ratio((double)interactions / activeDays, o.DepthTargetInteractionsPerActiveDay)
+                ? Ratio((double)interactions / activeDays, o.DepthTargetInteractionsPerActiveDay) * depthConfidence
                 : 0d;
             var breadth = Ratio(appsUsed, o.BreadthTargetApps);
 
@@ -149,6 +216,17 @@ namespace Common.Entities.CopilotAdoption
                 CompanyName = row.CompanyName,
                 ManagerUserPrincipalName = row.ManagerUserPrincipalName,
                 AccountEnabled = row.AccountEnabled,
+                AccountCreatedUtc = row.AccountCreatedUtc,
+                TenureStartUtc = row.AccountCreatedUtc,
+                TenureBasis = row.AccountCreatedUtc.HasValue ? TenureBasisAccountAge : TenureBasisUnknown,
+                DaysSinceTenureStart = DaysSinceTenureStart(row.AccountCreatedUtc, nowUtc),
+                TooNewToJudge = IsTooNewToJudge(row, nowUtc, o),
+                ReclaimExclusionReason = row.ReclaimExclusionReason,
+                ReclaimExclusionNote = row.ReclaimExclusionNote,
+                ReclaimExcludedBy = row.ReclaimExcludedBy,
+                ReclaimExcludedUtc = row.ReclaimExcludedUtc,
+                ReclaimExclusionReviewAfterUtc = row.ReclaimExclusionReviewAfterUtc,
+                ReclaimExclusionExpired = row.ReclaimExclusionExpired,
                 SeatLicences = row.SeatLicences,
 
                 Interactions = interactions,
@@ -177,10 +255,68 @@ namespace Common.Entities.CopilotAdoption
                 SignalSource = useReport ? SignalSourceUsageReport : SignalSourceAudit,
             };
 
+            ApplyReclaimEligibility(scored, o);
             scored.RecommendedActionCode = RecommendedActionCode(scored);
             scored.RecommendedActionLabel = ActionLabel(scored.RecommendedActionCode);
             scored.RecommendedAction = RecommendedAction(scored, o);
             return scored;
+        }
+
+        /// <summary>
+        /// Assigns the reclaim confidence tier from the same row fields the drill-through list exposes.
+        /// Disabled seats are certain. Never-used enabled accounts with enough tenure are probable.
+        /// Dormant, too-new and unknown-tenure users are review-only because leave, part-time work and
+        /// service/shared accounts are not observable from Microsoft 365 activity data.
+        /// </summary>
+        public static void ApplyReclaimEligibility(LicensedUserAdoptionRow row, CopilotAdoptionOptions options = null)
+        {
+            if (row == null) throw new ArgumentNullException(nameof(row));
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            if (!string.IsNullOrEmpty(row.ReclaimExclusionReason))
+            {
+                row.ReclaimEligibility = ReclaimEligibilityTiers.Excluded;
+                row.ReclaimEligibilityReason = $"Excluded by admin: {row.ReclaimExclusionReason}.";
+                return;
+            }
+
+            if (row.AccountEnabled == false)
+            {
+                row.ReclaimEligibility = ReclaimEligibilityTiers.Certain;
+                row.ReclaimEligibilityReason = "Disabled account still holds a Copilot seat. Reclaim immediately.";
+                return;
+            }
+
+            if (row.Band == AdoptionBand.NeverUsed)
+            {
+                if (row.TooNewToJudge)
+                {
+                    row.ReclaimEligibility = ReclaimEligibilityTiers.Review;
+                    row.ReclaimEligibilityReason = $"Too new to judge: {row.TenureBasis} is below the {o.ReclaimGraceDays}-day grace period.";
+                }
+                else if (row.AccountEnabled == true && row.DaysSinceTenureStart.HasValue)
+                {
+                    row.ReclaimEligibility = ReclaimEligibilityTiers.Probable;
+                    row.ReclaimEligibilityReason = $"No observed Copilot use and {row.TenureBasis} is beyond the {o.ReclaimGraceDays}-day grace period.";
+                }
+                else
+                {
+                    row.ReclaimEligibility = ReclaimEligibilityTiers.Review;
+                    row.ReclaimEligibilityReason = "No observed Copilot use, but account state or tenure is unknown.";
+                }
+                return;
+            }
+
+            if (row.Band == AdoptionBand.Dormant)
+            {
+                row.ReclaimEligibility = ReclaimEligibilityTiers.Review;
+                row.ReclaimEligibilityReason = "Dormant seat: review with the user's manager before reclaiming.";
+            }
+            else
+            {
+                row.ReclaimEligibility = string.Empty;
+                row.ReclaimEligibilityReason = string.Empty;
+            }
         }
 
         /// <summary>
@@ -361,6 +497,36 @@ namespace Common.Entities.CopilotAdoption
             if (row == null) throw new ArgumentNullException(nameof(row));
             var o = options ?? CopilotAdoptionOptions.Default;
 
+            // Precedence deliberately matches ApplyReclaimEligibility, so the tier, the action code and
+            // this sentence can never disagree: an admin exclusion outranks everything, then a disabled
+            // account, then the review cases.
+            if (row.ReclaimEligibility == ReclaimEligibilityTiers.Excluded)
+            {
+                var review = row.ReclaimExclusionReviewAfterUtc.HasValue
+                    ? $" Review after {row.ReclaimExclusionReviewAfterUtc.Value:yyyy-MM-dd}."
+                    : " Permanent until an admin changes it.";
+                return $"Excluded from reclaim - {row.ReclaimExclusionReason}.{review}";
+            }
+
+            // A disabled account still holding a seat is a reclaim regardless of how it was used before
+            // it was disabled - and regardless of how new it is. Checked ahead of the too-new branch
+            // below, which would otherwise tell an admin not to reclaim a seat the tier calls certain.
+            if (row.AccountEnabled == false)
+            {
+                return "Reclaim - the account is disabled but still holds a Copilot licence. "
+                     + "This is the clearest reclaim there is; no enablement effort is worthwhile.";
+            }
+
+            if (row.TooNewToJudge && row.Band == AdoptionBand.NeverUsed)
+            {
+                return $"Review before reclaim - Too new to judge: {row.TenureBasis} is below the {o.ReclaimGraceDays}-day grace period. Do not reclaim yet; check again after onboarding has had time to work.";
+            }
+
+            if (row.ReclaimEligibility == ReclaimEligibilityTiers.Review && row.Band == AdoptionBand.NeverUsed)
+            {
+                return "Review before reclaim - no observed Copilot use, but the account state or tenure signal is incomplete. Confirm this is not leave, part-time work, a service account or a shared mailbox before reassigning the licence.";
+            }
+
             switch (row.Band)
             {
                 case AdoptionBand.NeverUsed:
@@ -371,8 +537,14 @@ namespace Common.Entities.CopilotAdoption
                     var since = row.DaysSinceLastUse.HasValue
                         ? $"last used it {row.DaysSinceLastUse.Value} days ago"
                         : "has used it in the past";
+                    // The action is enablement ("win back"), but the seat decision for a dormant row is
+                    // review-only - there is still somebody to talk to. Saying "or reassign the licence"
+                    // without that caveat reads as permission to reclaim, which contradicts the tier the
+                    // same row carries.
                     return $"Win back - {since} but not once in this period. "
-                         + "Ask what stopped and offer a refresher, or reassign the licence.";
+                         + "Ask what stopped and offer a refresher. This seat is review-only for reclaim: "
+                         + "check with the user or their manager before reassigning it, because leave, "
+                         + "part-time patterns and role changes are not visible in usage data.";
 
                 case AdoptionBand.Trialling:
                     return "Build a first habit - occasional use only. Target one repeatable Copilot habit in "
@@ -422,6 +594,8 @@ namespace Common.Entities.CopilotAdoption
             public const string Grow = "grow";
             public const string Sustain = "sustain";
             public const string Advocate = "advocate";
+            public const string Review = "review";
+            public const string Excluded = "excluded";
         }
 
         /// <summary>All action codes in the order they should be worked through - cheapest saving first.</summary>
@@ -434,6 +608,8 @@ namespace Common.Entities.CopilotAdoption
             AdoptionActionCodes.Grow,
             AdoptionActionCodes.Sustain,
             AdoptionActionCodes.Advocate,
+            AdoptionActionCodes.Review,
+            AdoptionActionCodes.Excluded,
         };
 
         /// <summary>
@@ -444,6 +620,18 @@ namespace Common.Entities.CopilotAdoption
         public static string RecommendedActionCode(LicensedUserAdoptionRow row)
         {
             if (row == null) throw new ArgumentNullException(nameof(row));
+
+            // Same precedence as ApplyReclaimEligibility and RecommendedAction: an admin exclusion
+            // outranks everything, then a disabled account, then the review cases.
+            if (row.ReclaimEligibility == ReclaimEligibilityTiers.Excluded) return AdoptionActionCodes.Excluded;
+
+            // A disabled account holding a Copilot seat is the clearest reclaim there is, whatever its
+            // usage looked like while it was still in use. Branching on the band alone told a disabled
+            // account that had been active to "win back" - i.e. write to someone who has left - and a
+            // recently active one that no action was needed.
+            if (row.AccountEnabled == false) return AdoptionActionCodes.Reclaim;
+
+            if (row.ReclaimEligibility == ReclaimEligibilityTiers.Review && row.Band == AdoptionBand.NeverUsed) return AdoptionActionCodes.Review;
 
             switch (row.Band)
             {
@@ -479,6 +667,8 @@ namespace Common.Entities.CopilotAdoption
                 case AdoptionActionCodes.Grow: return "Deepen to daily use";
                 case AdoptionActionCodes.Sustain: return "No action needed";
                 case AdoptionActionCodes.Advocate: return "Recruit as advocate";
+                case AdoptionActionCodes.Review: return "Review before reclaim";
+                case AdoptionActionCodes.Excluded: return "Excluded from reclaim";
                 default: return string.Empty;
             }
         }
@@ -494,14 +684,20 @@ namespace Common.Entities.CopilotAdoption
             switch (code)
             {
                 case AdoptionActionCodes.Reclaim:
-                    return $"No Copilot activity at all in the last {o.HistoryDays} days. Confirm the licence is "
-                         + "still needed before renewal; if it is, this person has never been onboarded and "
-                         + "the licence has produced nothing so far.";
+                    return "Two routes reach this group, and both are safe to act on. A disabled account "
+                         + "still holding a seat is the clearest reclaim there is whatever its usage looked "
+                         + "like before it was disabled - no enablement effort is worthwhile on an account "
+                         + $"nobody can sign into. The rest had no Copilot activity anywhere in the last {o.HistoryDays} "
+                         + "days - the whole history this analysis reads - and have enough account tenure to judge: "
+                         + "confirm the licence is still needed before renewal. New starters inside the grace period "
+                         + "and users with no tenure evidence are NOT here; they are under 'Review before reclaim'.";
 
                 case AdoptionActionCodes.Reengage:
                     return "Used Copilot before this period but not once inside it. Someone who tried it and "
-                         + "stopped is a different problem from someone who never started - ask what stopped, "
-                         + "offer a refresher, or reassign the licence.";
+                         + "stopped is a different problem from someone who never started - ask what stopped "
+                         + "and offer a refresher. These seats carry the review-only reclaim tier, so confirm "
+                         + "with the user or their manager before reassigning one: leave, part-time patterns "
+                         + "and role changes are not visible in usage data.";
 
                 case AdoptionActionCodes.Coach:
                     return $"Occasional use only (engagement below {o.DevelopingScore}). The cheapest move is "
@@ -529,6 +725,18 @@ namespace Common.Entities.CopilotAdoption
                          + "run a peer session for their own department, which converts better than centrally "
                          + "run training. If their breadth score is low they are still worth showing one more "
                          + "surface.";
+
+                case AdoptionActionCodes.Review:
+                    return "Potential reclaim cases that are too new to judge, or missing enough tenure or "
+                         + "account-state context to act on automatically. Leave, part-time patterns, service "
+                         + "accounts and shared mailboxes are not detectable from usage data, so a human review "
+                         + "is required. Dormant seats are deliberately NOT here - they get the Win back action, "
+                         + "because there is still somebody to talk to - but they are counted as review-only in "
+                         + "the reclaim tiers, which is a seat decision rather than an enablement one.";
+
+                case AdoptionActionCodes.Excluded:
+                    return "Reviewed cases an admin deliberately excluded from reclaim. They still hold a seat "
+                         + "and remain in the licence denominator, but do not inflate the actionable reclaim KPI.";
 
                 default: return string.Empty;
             }
@@ -769,7 +977,7 @@ namespace Common.Entities.CopilotAdoption
             if (row == null) throw new ArgumentNullException(nameof(row));
             var o = options ?? CopilotAdoptionOptions.Default;
 
-            var copilot = Ratio(row.UnlicensedCopilotInteractions, o.OpportunityCopilotTarget);
+            var copilot = Ratio(row.UnlicensedCopilotInteractions, OpportunityCopilotTargetForWindow(o));
             var collaboration = Ratio(row.TeamsMessages + row.TeamsMeetings, o.OpportunityCollaborationTarget);
             var email = Ratio(row.EmailsSent + row.EmailsRead, o.OpportunityEmailTarget);
             var documents = Ratio(row.FilesViewedOrEdited, o.OpportunityDocumentTarget);
@@ -808,9 +1016,65 @@ namespace Common.Entities.CopilotAdoption
                 OpportunityScore = Round(score, 1),
             };
 
-            scored.Recommended = scored.OpportunityScore >= o.OpportunityRecommendScore;
+            // Proven demand qualifies on its own. The composite score cannot express this: the Copilot
+            // weight (35) sits below the recommendation bar (50), so recurrent unlicensed use could
+            // never clear it unaided while general busyness (65) could. See
+            // CopilotAdoptionOptions.OpportunityProvenDemandMinActiveDays.
+            var provenDemand = row.UnlicensedCopilotActiveDays >= Math.Max(1, o.OpportunityProvenDemandMinActiveDays);
+
+            scored.Recommended = provenDemand || scored.OpportunityScore >= o.OpportunityRecommendScore;
+            scored.QualificationTier = provenDemand
+                ? OpportunityTiers.ProvenDemand
+                : scored.Recommended ? OpportunityTiers.WorkloadInferred : OpportunityTiers.None;
+            scored.QualificationTierLabel = OpportunityTierLabel(scored.QualificationTier);
             scored.Rationale = OpportunityRationale(scored);
             return scored;
+        }
+
+        /// <summary>
+        /// <see cref="CopilotAdoptionOptions.OpportunityCopilotTarget"/> scaled from its basis period to
+        /// the reporting window actually being analysed.
+        ///
+        /// The other three opportunity components are per-active-day averages, so they already mean the
+        /// same thing at any window length. This one is a raw total, and without scaling it silently
+        /// changes meaning with the period drop-down: 20 interactions is heavy use over a week and
+        /// almost nothing over six months, so the same person would be recommended for a licence at one
+        /// setting and not at another. Never below 1, so a short window cannot make the target free.
+        /// </summary>
+        public static double OpportunityCopilotTargetForWindow(CopilotAdoptionOptions options)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var basisDays = Math.Max(1, o.OpportunityCopilotTargetBasisDays);
+            var windowDays = Math.Max(1, o.WindowDays);
+            return Math.Max(1d, o.OpportunityCopilotTarget * windowDays / basisDays);
+        }
+
+        /// <summary>
+        /// Why an unlicensed user qualifies for a seat. Split from the score because the two routes
+        /// justify a purchase very differently: one is evidence, the other is inference.
+        /// </summary>
+        public static class OpportunityTiers
+        {
+            /// <summary>Recurrent unlicensed Copilot use - the person is already doing it.</summary>
+            public const string ProvenDemand = "provenDemand";
+
+            /// <summary>No Copilot use, but a workload pattern that suggests they would benefit.</summary>
+            public const string WorkloadInferred = "workloadInferred";
+
+            /// <summary>Below the bar on both routes.</summary>
+            public const string None = "none";
+        }
+
+        /// <summary>Short display label for an opportunity tier.</summary>
+        public static string OpportunityTierLabel(string tier)
+        {
+            switch (tier)
+            {
+                case OpportunityTiers.ProvenDemand: return "Proven demand";
+                case OpportunityTiers.WorkloadInferred: return "Candidate for assessment";
+                case OpportunityTiers.None: return "Not recommended";
+                default: return string.Empty;
+            }
         }
 
         /// <summary>
@@ -851,7 +1115,23 @@ namespace Common.Entities.CopilotAdoption
                 return "No qualifying Microsoft 365 activity recorded in this period.";
             }
 
-            return (row.Recommended ? "Recommended: " : "Candidate: ") + string.Join("; ", reasons) + ".";
+            // Name the route as well as the evidence. "Recommended" on its own does not say whether the
+            // person is already using Copilot or merely looks like someone who would.
+            string prefix;
+            switch (row.QualificationTier)
+            {
+                case OpportunityTiers.ProvenDemand:
+                    prefix = "Recommended - proven demand: ";
+                    break;
+                case OpportunityTiers.WorkloadInferred:
+                    prefix = "Candidate for assessment: ";
+                    break;
+                default:
+                    prefix = "Not recommended: ";
+                    break;
+            }
+
+            return prefix + string.Join("; ", reasons) + ".";
         }
 
         /// <summary>
@@ -884,7 +1164,7 @@ namespace Common.Entities.CopilotAdoption
             // All column arguments are compile-time constants supplied by CopilotAdoptionSql, never
             // user input, so there is no injection surface here.
             return
-                Component(copilotColumn, o.OpportunityCopilotTarget, o.OpportunityUnlicensedCopilotWeight)
+                Component(copilotColumn, OpportunityCopilotTargetForWindow(o), o.OpportunityUnlicensedCopilotWeight)
                 + " + " + Component($"({teamsColumn} + {meetingsColumn})", o.OpportunityCollaborationTarget, o.OpportunityCollaborationWeight)
                 + " + " + Component($"({emailSentColumn} + {emailReadColumn})", o.OpportunityEmailTarget, o.OpportunityEmailWeight)
                 + " + " + Component(filesColumn, o.OpportunityDocumentTarget, o.OpportunityDocumentWeight);
@@ -897,6 +1177,451 @@ namespace Common.Entities.CopilotAdoption
             // CAST to float first so integer division never silently floors the ratio to 0 or 1.
             return $"(CASE WHEN CAST({valueSql} AS float) / {Num(safeTarget)} > 1 THEN 1.0 "
                  + $"ELSE CAST({valueSql} AS float) / {Num(safeTarget)} END) * {Num(weight)}";
+        }
+
+        #endregion
+
+        #region Cowork readiness
+
+        /// <summary>
+        /// Scores a Copilot seat holder for Microsoft 365 Copilot Cowork readiness.
+        ///
+        /// <para>Cowork is an agentic delegation layer: you describe an outcome and it plans and runs
+        /// multi-step work across Outlook, Teams, the Office apps and SharePoint/OneDrive. That shapes the
+        /// whole model. Two things have to be true before enabling it for someone is a good idea:</para>
+        ///
+        /// <list type="number">
+        /// <item><b>They have delegable work</b> - a real coordination load of meetings, mail and document
+        /// churn. Without it Cowork has nothing to absorb and simply burns credits.</item>
+        /// <item><b>They can delegate it</b> - enough existing Copilot fluency to trust an agent with a
+        /// multi-step task. Cowork is a step up from Copilot, not an entry point.</item>
+        /// </list>
+        ///
+        /// <para>Neither signal is sufficient alone, which is why this produces two independent axes rather
+        /// than one blended number. A blend would average a heavy-workload novice and a fluent user with no
+        /// coordination work into the same middling score, and those two need opposite interventions -
+        /// exactly the failure <see cref="AdoptionScoreProfile"/> exists to avoid on the main report.</para>
+        /// </summary>
+        public static CoworkReadinessRow ScoreCoworkReadiness(
+            CoworkReadinessSignalRow row,
+            CopilotAdoptionOptions options = null)
+        {
+            if (row == null) throw new ArgumentNullException(nameof(row));
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            var collaboration = Ratio(row.TeamsMessages, o.CoworkCollaborationTarget);
+            var meetings = Ratio(row.TeamsMeetings, o.CoworkMeetingTarget);
+            var email = Ratio(row.EmailsSent + row.EmailsRead, o.CoworkEmailTarget);
+            var documents = Ratio(row.FilesViewedOrEdited, o.CoworkDocumentTarget);
+
+            var load = collaboration * o.CoworkCollaborationWeight
+                     + meetings * o.CoworkMeetingWeight
+                     + email * o.CoworkEmailWeight
+                     + documents * o.CoworkDocumentWeight;
+
+            // Agent familiarity is evidence of the delegation habit itself, which the engagement score does
+            // not capture - but it is an uplift, not a substitute. Clamped to 100 so it can promote a
+            // borderline user without ever carrying an inactive one over the fluency bar.
+            var uplift = row.AgentsUsed > 0 ? Math.Max(0d, o.CoworkAgentFamiliarityUplift) : 0d;
+            var fluency = Math.Min(100d, Math.Max(0d, row.AdoptionScore) + uplift);
+
+            var scored = new CoworkReadinessRow
+            {
+                UserId = row.UserId,
+                UserPrincipalName = row.UserPrincipalName,
+                Mail = row.Mail,
+                Department = row.Department,
+                JobTitle = row.JobTitle,
+                Country = row.Country,
+                OfficeLocation = row.OfficeLocation,
+                CompanyName = row.CompanyName,
+                ManagerUserPrincipalName = row.ManagerUserPrincipalName,
+                AccountEnabled = row.AccountEnabled,
+
+                CoworkInteractions = row.CoworkInteractions,
+                CoworkActiveDays = row.CoworkActiveDays,
+                LastCoworkInteractionUtc = row.LastCoworkInteractionUtc,
+                UsedCowork = row.CoworkInteractions > 0,
+
+                TeamsMessages = row.TeamsMessages,
+                TeamsMeetings = row.TeamsMeetings,
+                EmailsSent = row.EmailsSent,
+                EmailsRead = row.EmailsRead,
+                FilesViewedOrEdited = row.FilesViewedOrEdited,
+                LastM365ActivityUtc = row.LastM365ActivityUtc,
+
+                CollaborationScore = Round(collaboration * 100d, 1),
+                MeetingScore = Round(meetings * 100d, 1),
+                EmailScore = Round(email * 100d, 1),
+                DocumentScore = Round(documents * 100d, 1),
+
+                CoordinationLoadScore = Round(load, 1),
+                FluencyScore = Round(fluency, 1),
+                AdoptionScore = Round(Math.Max(0d, row.AdoptionScore), 1),
+                AgentsUsed = row.AgentsUsed,
+
+                TotalCopilotCredits = row.TotalCopilotCredits,
+            };
+
+            scored.RegularCoworkUser =
+                row.CoworkActiveDays >= Math.Max(1, o.CoworkRegularMinActiveDays);
+
+            scored.Tier = CoworkTierFor(scored, o);
+            scored.TierLabel = CoworkTierLabel(scored.Tier);
+            scored.Basis = CoworkTierBasis(scored.Tier);
+
+            // Current users are in scope as well as prime candidates. Scoping a policy from candidates
+            // alone would silently REMOVE access from the people already using Cowork - turning a rollout
+            // list into an outage for exactly the users who proved the capability works.
+            scored.RecommendForPolicy =
+                scored.Tier == CoworkTiers.Established
+                || scored.Tier == CoworkTiers.Trialling
+                || scored.Tier == CoworkTiers.PrimeCandidate;
+
+            scored.Rationale = CoworkRationale(scored, o);
+            return scored;
+        }
+
+        /// <summary>
+        /// The Cowork populations. Ordered from strongest evidence to weakest, and evaluated in that
+        /// order so every user lands in exactly one.
+        /// </summary>
+        public static class CoworkTiers
+        {
+            /// <summary>Regular, habitual Cowork use. Evidence.</summary>
+            public const string Established = "established";
+
+            /// <summary>Has used Cowork, but not yet regularly. Evidence.</summary>
+            public const string Trialling = "trialling";
+
+            /// <summary>Fluent with Copilot and carrying a real coordination load. The rollout target.</summary>
+            public const string PrimeCandidate = "primeCandidate";
+
+            /// <summary>Has the workload for Cowork but not yet the Copilot habit to delegate it.</summary>
+            public const string BuildFluencyFirst = "buildFluencyFirst";
+
+            /// <summary>Fluent with Copilot, but little delegable coordination work.</summary>
+            public const string LowCoordinationLoad = "lowCoordinationLoad";
+
+            /// <summary>Below the bar on both axes.</summary>
+            public const string NotIndicated = "notIndicated";
+        }
+
+        /// <summary>Whether a tier rests on observed Cowork use or on inference.</summary>
+        public static class CoworkBasis
+        {
+            /// <summary>The user has actually used Cowork - this is observed, not inferred.</summary>
+            public const string Evidence = "evidence";
+
+            /// <summary>Derived from workload and Copilot fluency. A prediction, and must read as one.</summary>
+            public const string Inference = "inference";
+        }
+
+        /// <summary>Every Cowork tier, in report order. Used to build the tier breakdown and filters.</summary>
+        public static IReadOnlyList<string> AllCoworkTiers { get; } = new[]
+        {
+            CoworkTiers.Established,
+            CoworkTiers.Trialling,
+            CoworkTiers.PrimeCandidate,
+            CoworkTiers.BuildFluencyFirst,
+            CoworkTiers.LowCoordinationLoad,
+            CoworkTiers.NotIndicated,
+        };
+
+        /// <summary>
+        /// Places a scored user in exactly one Cowork tier.
+        ///
+        /// Observed Cowork use is tested first and wins outright: someone already using it is not a
+        /// "candidate" whatever their scores say, and demoting a real user to a predicted one because
+        /// their measured workload looks light would be the report contradicting its own evidence.
+        /// </summary>
+        public static string CoworkTierFor(CoworkReadinessRow row, CopilotAdoptionOptions options = null)
+        {
+            if (row == null) throw new ArgumentNullException(nameof(row));
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            if (row.CoworkActiveDays >= Math.Max(1, o.CoworkRegularMinActiveDays))
+            {
+                return CoworkTiers.Established;
+            }
+
+            if (row.CoworkInteractions > 0)
+            {
+                return CoworkTiers.Trialling;
+            }
+
+            var fluent = row.FluencyScore >= o.CoworkFluencyMinScore;
+            var loaded = row.CoordinationLoadScore >= o.CoworkLoadMinScore;
+
+            if (fluent && loaded) return CoworkTiers.PrimeCandidate;
+            if (loaded) return CoworkTiers.BuildFluencyFirst;
+            if (fluent) return CoworkTiers.LowCoordinationLoad;
+            return CoworkTiers.NotIndicated;
+        }
+
+        /// <summary>Short display label for a Cowork tier.</summary>
+        public static string CoworkTierLabel(string tier)
+        {
+            switch (tier)
+            {
+                case CoworkTiers.Established: return "Established";
+                case CoworkTiers.Trialling: return "Trialling";
+                case CoworkTiers.PrimeCandidate: return "Prime candidate";
+                case CoworkTiers.BuildFluencyFirst: return "Build fluency first";
+                case CoworkTiers.LowCoordinationLoad: return "Low coordination load";
+                case CoworkTiers.NotIndicated: return "Not indicated";
+                default: return string.Empty;
+            }
+        }
+
+        /// <summary>Whether a tier is founded on observed Cowork use or on inference.</summary>
+        public static string CoworkTierBasis(string tier)
+        {
+            switch (tier)
+            {
+                case CoworkTiers.Established:
+                case CoworkTiers.Trialling:
+                    return CoworkBasis.Evidence;
+                default:
+                    return CoworkBasis.Inference;
+            }
+        }
+
+        /// <summary>What a Cowork tier means and what to do about it. Stated once per group.</summary>
+        public static string CoworkTierDescription(string tier, CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var days = Math.Max(1, o.CoworkRegularMinActiveDays);
+
+            switch (tier)
+            {
+                case CoworkTiers.Established:
+                    return $"Using Cowork on at least {days} separate days in this period. These people have "
+                         + "already made it part of how they work - keep them in scope, and use them as the "
+                         + "reference for what good looks like.";
+
+                case CoworkTiers.Trialling:
+                    return "Has used Cowork, but not yet regularly enough to call it a habit. Usually a "
+                         + "prompt problem rather than a fit problem: they need a worked example on a task "
+                         + "they actually own. Keep them in scope.";
+
+                case CoworkTiers.PrimeCandidate:
+                    return "Not yet using Cowork, but fluent with Copilot and carrying a heavy coordination "
+                         + "load - the combination Cowork is built for. This is the rollout target: enable "
+                         + "these people first.";
+
+                case CoworkTiers.BuildFluencyFirst:
+                    return "Has the workload Cowork would help with, but has not yet formed a Copilot habit. "
+                         + "Enabling Cowork now would spend credits on someone unlikely to delegate to it. "
+                         + "Bring them up on everyday Copilot first, then revisit.";
+
+                case CoworkTiers.LowCoordinationLoad:
+                    return "Comfortable with Copilot, but little of the multi-step coordination work Cowork "
+                         + "takes on. Not a bad user - just not where this capability pays back. Revisit if "
+                         + "their role changes.";
+
+                case CoworkTiers.NotIndicated:
+                    return "Neither a Copilot habit nor a heavy coordination load in this period. No case "
+                         + "for Cowork on current evidence.";
+
+                default:
+                    return string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// A one-line, quotable justification for this user's tier, written to be pasted into a rollout
+        /// request or a spending-policy change.
+        ///
+        /// Leads with observed Cowork use where it exists, and otherwise states plainly that the verdict is
+        /// a prediction. The phrasing matters: this text ends up in a CSV that someone forwards to a
+        /// budget holder, and "predicted" must not quietly become "measured" on the way.
+        /// </summary>
+        public static string CoworkRationale(CoworkReadinessRow row, CopilotAdoptionOptions options = null)
+        {
+            if (row == null) throw new ArgumentNullException(nameof(row));
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            var workload = new List<string>();
+
+            if (row.TeamsMeetings > 0)
+            {
+                workload.Add($"{row.TeamsMeetings:N0} meeting{Plural(row.TeamsMeetings)} a day");
+            }
+
+            if (row.TeamsMessages > 0)
+            {
+                workload.Add($"{row.TeamsMessages:N0} Teams message{Plural(row.TeamsMessages)} a day");
+            }
+
+            var mail = row.EmailsSent + row.EmailsRead;
+            if (mail > 0)
+            {
+                workload.Add($"{mail:N0} email{Plural(mail)} a day");
+            }
+
+            if (row.FilesViewedOrEdited > 0)
+            {
+                workload.Add($"{row.FilesViewedOrEdited:N0} file{Plural(row.FilesViewedOrEdited)} a day");
+            }
+
+            var workloadPhrase = workload.Count > 0
+                ? string.Join(", ", workload)
+                : "no recorded Microsoft 365 activity in this period";
+
+            switch (row.Tier)
+            {
+                case CoworkTiers.Established:
+                    return $"Already established: {row.CoworkInteractions:N0} Cowork interaction"
+                         + $"{Plural(row.CoworkInteractions)} across {row.CoworkActiveDays:N0} day"
+                         + $"{Plural(row.CoworkActiveDays)}. Keep in scope.";
+
+                case CoworkTiers.Trialling:
+                    return $"Trialling: {row.CoworkInteractions:N0} Cowork interaction"
+                         + $"{Plural(row.CoworkInteractions)} on {row.CoworkActiveDays:N0} day"
+                         + $"{Plural(row.CoworkActiveDays)}, short of the {Math.Max(1, o.CoworkRegularMinActiveDays)} "
+                         + "needed to count as regular use. Keep in scope and follow up.";
+
+                case CoworkTiers.PrimeCandidate:
+                    return $"Predicted fit - not yet measured: Copilot fluency {Num(row.FluencyScore)}/100 "
+                         + $"and a coordination load of {Num(row.CoordinationLoadScore)}/100 ({workloadPhrase}). "
+                         + "Recommended for the Cowork spending policy.";
+
+                case CoworkTiers.BuildFluencyFirst:
+                    return $"Predicted fit for the work ({workloadPhrase}), but Copilot fluency is only "
+                         + $"{Num(row.FluencyScore)}/100 against a bar of {Num(o.CoworkFluencyMinScore)}. "
+                         + "Build everyday Copilot use first.";
+
+                case CoworkTiers.LowCoordinationLoad:
+                    return $"Fluent with Copilot ({Num(row.FluencyScore)}/100) but a coordination load of "
+                         + $"only {Num(row.CoordinationLoadScore)}/100 ({workloadPhrase}). Little for Cowork "
+                         + "to take on.";
+
+                default:
+                    return $"No case on current evidence: Copilot fluency {Num(row.FluencyScore)}/100, "
+                         + $"coordination load {Num(row.CoordinationLoadScore)}/100 ({workloadPhrase}).";
+            }
+        }
+
+        /// <summary>
+        /// The coordination-load formula as a SQL expression, so the database can rank a 200,000-user
+        /// tenant and return only the rows worth scoring.
+        ///
+        /// Generated from the same options instance the C# scorer is given, on the same contract as
+        /// <see cref="BuildOpportunityScoreSql"/>: this decides <i>which</i> rows come back, never what
+        /// their published score is. Every returned row is re-scored in C# before it is displayed.
+        /// </summary>
+        public static string BuildCoworkLoadScoreSql(
+            CopilotAdoptionOptions options,
+            string teamsColumn,
+            string meetingsColumn,
+            string emailSentColumn,
+            string emailReadColumn,
+            string filesColumn)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            // All column arguments are compile-time constants supplied by CopilotAdoptionSql, never user
+            // input, so there is no injection surface here.
+            return
+                Component(teamsColumn, o.CoworkCollaborationTarget, o.CoworkCollaborationWeight)
+                + " + " + Component(meetingsColumn, o.CoworkMeetingTarget, o.CoworkMeetingWeight)
+                + " + " + Component($"({emailSentColumn} + {emailReadColumn})", o.CoworkEmailTarget, o.CoworkEmailWeight)
+                + " + " + Component(filesColumn, o.CoworkDocumentTarget, o.CoworkDocumentWeight);
+        }
+
+        /// <summary>
+        /// Builds the modelled hours/cost estimate for a cohort.
+        ///
+        /// <b>Every output is an assumption applied to observed volume.</b> The volumes are real - they
+        /// come from Microsoft's usage reports - but the conversion to time saved is a model, and this
+        /// method returns the assumptions that produced it so no caller can render a number without them.
+        /// A currency figure is produced only when a loaded hourly cost has been explicitly configured;
+        /// there is no defensible default and the tool must not invent one.
+        /// </summary>
+        /// <param name="cohort">The users the estimate covers - normally the recommended rollout cohort.</param>
+        /// <param name="options">Tuning, including the assumptions and the optional loaded cost.</param>
+        public static CoworkValueEstimate EstimateCoworkValue(
+            IReadOnlyCollection<CoworkReadinessRow> cohort,
+            CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var estimate = new CoworkValueEstimate();
+
+            if (cohort == null || cohort.Count == 0)
+            {
+                return estimate;
+            }
+
+            estimate.CohortUsers = cohort.Count;
+
+            // The per-active-day averages are restated per month on the habit-bucket basis, so the estimate
+            // is quoted in the same "a month" units as the rest of the report rather than in whichever
+            // window the reader happened to select.
+            var workingDaysPerMonth = Math.Max(1d,
+                o.HabitBucketNormalisationDays * (o.WorkingDaysPerWeek / 7d));
+
+            double meetings = 0, mail = 0, documents = 0;
+            foreach (var row in cohort)
+            {
+                meetings += row.TeamsMeetings * workingDaysPerMonth;
+                mail += (row.EmailsSent + row.EmailsRead) * workingDaysPerMonth;
+                documents += row.FilesViewedOrEdited * workingDaysPerMonth;
+            }
+
+            estimate.AddressableMeetings = Round(meetings, 0);
+            estimate.AddressableMailThreads = Round(mail, 0);
+            estimate.AddressableDocuments = Round(documents, 0);
+
+            var minutesHigh = meetings * Math.Max(0d, o.CoworkMinutesSavedPerMeeting)
+                            + mail * Math.Max(0d, o.CoworkMinutesSavedPerMailThread)
+                            + documents * Math.Max(0d, o.CoworkMinutesSavedPerDocument);
+
+            // Clamped to 0..1: a ratio above 1 would make the "low" end exceed the "high" end and render a
+            // backwards range, and a negative one would invent a saving out of thin air.
+            var lowerRatio = Math.Min(1d, Math.Max(0d, o.CoworkEstimateLowerBoundRatio));
+
+            estimate.HoursPerMonthHigh = Round(minutesHigh / 60d, 0);
+            estimate.HoursPerMonthLow = Round(minutesHigh * lowerRatio / 60d, 0);
+
+            if (o.CoworkLoadedCostPerHour.HasValue && o.CoworkLoadedCostPerHour.Value > 0)
+            {
+                var rate = o.CoworkLoadedCostPerHour.Value;
+                estimate.CurrencyPerMonthLow = Round(estimate.HoursPerMonthLow * rate, 0);
+                estimate.CurrencyPerMonthHigh = Round(estimate.HoursPerMonthHigh * rate, 0);
+                estimate.CurrencyCode = o.CoworkCurrencyCode;
+            }
+
+            estimate.Assumptions.Add(
+                $"Assumes Cowork saves {Num(o.CoworkMinutesSavedPerMeeting)} minutes per meeting, "
+                + $"{Num(o.CoworkMinutesSavedPerMailThread)} per email and "
+                + $"{Num(o.CoworkMinutesSavedPerDocument)} per document.");
+
+            estimate.Assumptions.Add(
+                $"The lower bound applies {Num(lowerRatio * 100d)}% of those assumptions; the upper bound "
+                + "applies them in full.");
+
+            estimate.Assumptions.Add(
+                $"Volumes are observed from Microsoft's usage reports for {cohort.Count:N0} user"
+                + $"{(cohort.Count == 1 ? string.Empty : "s")}, restated over "
+                + $"{Num(workingDaysPerMonth)} working days a month.");
+
+            estimate.Assumptions.Add(
+                "Time saved is NOT measured by this product and cannot be. These figures are a model for "
+                + "sizing a rollout, not a result.");
+
+            if (!estimate.CurrencyPerMonthHigh.HasValue)
+            {
+                estimate.Assumptions.Add(
+                    "No monetary value is shown because no fully-loaded hourly cost has been configured.");
+            }
+
+            return estimate;
+        }
+
+        private static string Plural(long count)
+        {
+            return count == 1 ? string.Empty : "s";
         }
 
         #endregion

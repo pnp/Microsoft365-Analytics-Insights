@@ -211,8 +211,27 @@ CREATE TABLE [dbo].[urls] (
 CREATE TABLE [dbo].[users] (
     [id] int IDENTITY(1,1) NOT NULL,
     [user_name] varchar(250)  NOT NULL,
-	org_id int NULL
+	org_id int NULL,
+    [created_utc] datetime2(7) NULL
 );
+
+
+-- Creating table 'copilot_adoption_reclaim_exclusions'
+CREATE TABLE [dbo].[copilot_adoption_reclaim_exclusions] (
+    [id] int IDENTITY(1,1) NOT NULL,
+    [user_id] int NOT NULL,
+    [reason] nvarchar(100) NOT NULL,
+    [note] nvarchar(1000) NULL,
+    [excluded_by] nvarchar(256) NOT NULL,
+    [excluded_utc] datetime2(7) NOT NULL CONSTRAINT [DF_copilot_adoption_reclaim_exclusions_excluded_utc] DEFAULT SYSUTCDATETIME(),
+    [review_after_utc] datetime2(7) NULL,
+    CONSTRAINT [PK_copilot_adoption_reclaim_exclusions] PRIMARY KEY CLUSTERED ([id] ASC)
+);
+
+CREATE NONCLUSTERED INDEX [IX_copilot_adoption_reclaim_exclusions_user_review]
+    ON [dbo].[copilot_adoption_reclaim_exclusions] ([user_id] ASC, [review_after_utc] ASC, [excluded_utc] DESC)
+    INCLUDE ([reason], [excluded_by]);
+
 
 
 -- --------------------------------------------------
@@ -355,6 +374,12 @@ ADD CONSTRAINT [PK_urls]
 ALTER TABLE [dbo].[users]
 ADD CONSTRAINT [PK_users]
     PRIMARY KEY CLUSTERED ([id] ASC);
+
+
+-- Creating foreign key on [user_id] in table 'copilot_adoption_reclaim_exclusions'
+ALTER TABLE [dbo].[copilot_adoption_reclaim_exclusions]
+ADD CONSTRAINT [FK_copilot_adoption_reclaim_exclusions_users]
+    FOREIGN KEY ([user_id]) REFERENCES [dbo].[users] ([id]) ON DELETE CASCADE;
 
 
 -- --------------------------------------------------
@@ -674,6 +699,8 @@ ON [dbo].[sessions]
 
 
 -- Lookups
+
+
 CREATE UNIQUE NONCLUSTERED INDEX IX_search ON dbo.search_terms
 	(
 	[search_term]
@@ -920,4 +947,3 @@ CREATE VIEW url_stats AS
 	from urls
 
 GO
-

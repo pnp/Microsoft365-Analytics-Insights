@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
@@ -348,10 +348,16 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         ///
         /// BOTH prompts and responses are serialized. Previously only responses (IsPrompt = false)
         /// were kept, because the only field persisted was the message id and a prompt row carried
-        /// no extra information. Now that the schema's Size is persisted, the prompt row is the only
-        /// source of the interaction's input volume, and the persisted is_prompt flag would be a
-        /// constant if prompts were still dropped. Cost estimation is unaffected: it reads
-        /// ParsedAuditEvent directly and does its own IsPrompt filtering.
+        /// no extra information. They are kept now because the persisted is_prompt flag would be a
+        /// constant if prompts were dropped, and because JailbreakDetected is a property OF the prompt -
+        /// dropping prompt rows would discard the audit feed's only jailbreak signal outright.
+        ///
+        /// This used to be justified by the schema's Size instead. That was wrong: Microsoft documents
+        /// Size as "currently not used", so it is NULL in practice and carries no input volume. See the
+        /// remarks on CopilotMessage.Size.
+        ///
+        /// Cost estimation is unaffected: it reads ParsedAuditEvent directly and does its own IsPrompt
+        /// filtering.
         /// </summary>
         internal string SerializeMessages(CopilotAuditLogContent auditRecord)
         {
