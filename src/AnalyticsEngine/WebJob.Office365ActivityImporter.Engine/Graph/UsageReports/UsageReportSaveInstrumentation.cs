@@ -51,6 +51,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         public const string EnableEnvironmentVariable = "AI_USAGE_REPORT_SAVE_DIAGNOSTICS";
         private readonly AnalyticsLogger _logger;
         private readonly string _runId;
+        private long _sequence;
 
         private AnalyticsUsageReportSaveInstrumentation(AnalyticsLogger logger)
         {
@@ -92,6 +93,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 dimensions["ExceptionType"] = point.ExceptionType;
             }
 
+            point.Metrics["Sequence"] = Interlocked.Increment(ref _sequence);
             _logger.TrackEvent(AnalyticsLogger.AnalyticsEvent.UsageReportSaveStage, dimensions, point.Metrics);
         }
 
@@ -114,6 +116,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         {
             if (metrics == null) return;
 
+            metrics["ActiveLoaderCount"] = _activeDailyLoaders;
             metrics["ManagedHeapBytes"] = GC.GetTotalMemory(false);
             metrics["Gen0Collections"] = GC.CollectionCount(0);
             metrics["Gen1Collections"] = GC.CollectionCount(1);
@@ -125,5 +128,4 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         }
     }
 }
-
 
