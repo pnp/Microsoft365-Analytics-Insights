@@ -524,7 +524,7 @@ WHERE u.user_name = @upn;";
             {
                 foreach (var msg in parsed.Messages)
                 {
-                    if (!msg.IsPrompt) responses++;
+                    if (msg.IsPrompt == false) responses++;
                 }
             }
 

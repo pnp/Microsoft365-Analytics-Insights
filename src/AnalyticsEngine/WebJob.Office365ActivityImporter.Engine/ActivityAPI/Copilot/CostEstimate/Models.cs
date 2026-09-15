@@ -42,13 +42,48 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstima
         [JsonProperty("Id")]
         public string Id { get; set; }
 
+        /// <summary>
+        /// True for the user's prompt, false for Copilot's response (schema field <c>isPrompt</c>).
+        /// </summary>
+        /// <remarks>
+        /// NULLABLE ON PURPOSE. This used to be a non-nullable <c>bool</c>, which meant a payload that
+        /// omitted <c>isPrompt</c> deserialised to <c>false</c> - indistinguishable from an explicit
+        /// "this is a response". Since only responses are billable, an absent flag was silently charged
+        /// as a generative answer, over-stating estimated Copilot credit consumption. It also disagreed
+        /// with the persisted <see cref="Common.Entities.Entities.AuditLog.CopilotEventMessage.IsPrompt"/>,
+        /// which was already <c>bool?</c> and documented as null when the payload omits it.
+        ///
+        /// Consumers must therefore treat null as "direction unknown" and neither bill it nor count it as
+        /// a prompt. See <c>CopilotCreditEstimation</c>.
+        /// </remarks>
         [JsonProperty("isPrompt")]
-        public bool IsPrompt { get; set; }
+        public bool? IsPrompt { get; set; }
+
+        /// <summary>
+        /// Whether a jailbreak attempt was detected in this prompt message (schema field
+        /// <c>JailbreakDetected</c>). Null when the payload omits it.
+        /// </summary>
+        /// <remarks>
+        /// Documented on the Purview audit schema page but absent from the older OData Management API
+        /// schema, which is why it was missed until now: the model was written against the OData schema
+        /// and Newtonsoft silently discarded the field. One of only two prompt-safety signals the audit
+        /// feed carries (the other is <see cref="Entities.Serialisation.AccessedResource.XPIADetected"/>).
+        /// https://learn.microsoft.com/en-us/purview/audit-copilot
+        /// </remarks>
+        [JsonProperty("JailbreakDetected")]
+        public bool? JailbreakDetected { get; set; }
 
         /// <summary>
         /// Size of the message as reported by the audit schema (MessageData.Size, Edm.Int64).
-        /// Nullable because Microsoft does not populate it for every Copilot host.
         /// </summary>
+        /// <remarks>
+        /// EXPECT THIS TO BE NULL. The OData Management API schema declares <c>MessageData.Size</c> as
+        /// Edm.Int64, but Microsoft's Purview audit documentation states plainly that "Size is currently
+        /// not used", and its example payloads omit it. The two official sources disagree, so the field
+        /// is kept for forward compatibility - but nothing may assume a value is present, and no metric
+        /// may be built on it until a real payload is observed carrying one.
+        /// https://learn.microsoft.com/en-us/purview/audit-copilot
+        /// </remarks>
         [JsonProperty("Size")]
         public long? Size { get; set; }
 
