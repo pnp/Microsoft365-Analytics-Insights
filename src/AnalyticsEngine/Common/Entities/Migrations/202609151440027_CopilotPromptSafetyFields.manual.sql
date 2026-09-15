@@ -145,7 +145,7 @@ BEGIN
         RAISERROR('CopilotPromptSafetyFields: recorded in __MigrationHistory.', 0, 1) WITH NOWAIT;
     END
     ELSE
-        RAISERROR('CopilotPromptSafetyFields: the schema changes were applied, but prerequisite migration 202609131940001_CopilotReclaimEligibilityInputs is missing from __MigrationHistory, so it was NOT stamped. Upgrade to the previous release first, or run the installer to reconcile.', 16, 1);
+        RAISERROR('CopilotPromptSafetyFields: the schema changes were applied, but prerequisite migration 202609131940001_CopilotReclaimEligibilityInputs is missing from __MigrationHistory, so it was NOT stamped. Upgrade to the previous release first, or run the installer to reconcile.', 16, 1) WITH NOWAIT;
 END
 ELSE
     RAISERROR('CopilotPromptSafetyFields: already recorded in __MigrationHistory, nothing to do.', 0, 1) WITH NOWAIT;

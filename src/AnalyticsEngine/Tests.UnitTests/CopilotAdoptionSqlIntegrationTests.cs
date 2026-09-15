@@ -741,16 +741,21 @@ namespace Tests.UnitTests
                     @"INSERT INTO dbo.license_types (id, name, sku_id)
                           VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
                       INSERT INTO dbo.users (id, user_name, account_enabled)
-                          VALUES (1, N'spender@contoso.com', 1), (2, N'nospend@contoso.com', 1);
+                          VALUES (1, N'spender@contoso.com', 1), (2, N'nospend@contoso.com', 1),
+                                 (3, N'nettozero@contoso.com', 1);
                       INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id)
-                          VALUES (1, 1, 1), (2, 2, 1);
+                          VALUES (1, 1, 1), (2, 2, 1), (3, 3, 1);
 
                       INSERT INTO dbo.copilot_studio_credit_user_daily
                           (id, usage_date, entra_object_id, user_id, billed_credits, dimension_hash, imported_utc)
                       VALUES (1, DATEADD(day, -2, GETUTCDATE()), N'obj-1', 1, 12.5, N'h1', GETUTCDATE()),
                              (2, DATEADD(day, -3, GETUTCDATE()), N'obj-1', 1,  7.5, N'h2', GETUTCDATE()),
                              -- An unresolved row: real, but not attributable to a person.
-                             (3, DATEADD(day, -2, GETUTCDATE()), N'obj-9', NULL, 99.0, N'h3', GETUTCDATE());
+                             (3, DATEADD(day, -2, GETUTCDATE()), N'obj-9', NULL, 99.0, N'h3', GETUTCDATE()),
+                             -- Imported rows that net to exactly zero. This user IS attributable and their
+                             -- answer is 0, which is a different statement from having no data at all.
+                             (4, DATEADD(day, -2, GETUTCDATE()), N'obj-3', 3,  5.0, N'h4', GETUTCDATE()),
+                             (5, DATEADD(day, -3, GETUTCDATE()), N'obj-3', 3, -5.0, N'h5', GETUTCDATE());
 
                       INSERT INTO dbo.copilot_studio_credit_capacity
                           (id, snapshot_utc, entitled, consumed, available, status)
@@ -764,11 +769,25 @@ namespace Tests.UnitTests
                     db, CopilotAdoptionSql.CoworkUserCreditsSql(new[] { 1 }),
                     new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-28)));
 
-                Assert.AreEqual(1, credits.Count,
-                    "Only the resolved, seat-holding user has attributable credits. A user with no rows "
+                Assert.AreEqual(2, credits.Count,
+                    "The spender and the net-zero user are both attributable. The seat holder with NO rows "
                     + "must be ABSENT so the UI can render 'not attributable' rather than a zero.");
-                Assert.AreEqual(1, credits[0].UserId);
-                Assert.AreEqual(20m, credits[0].BilledCredits, "12.5 + 7.5 across the two days.");
+
+                var spender = credits.Single(c => c.UserId == 1);
+                Assert.AreEqual(20m, spender.BilledCredits, "12.5 + 7.5 across the two days.");
+
+                // Regression guard. An earlier revision ended this query with HAVING SUM(...) > 0, which
+                // dropped this user and made the UI say "not attributable" about someone the importer had
+                // measured and found to be zero. "We do not know" and "it is nothing" are different claims,
+                // and the whole credit section of this tab is built on keeping them apart.
+                var netZero = credits.SingleOrDefault(c => c.UserId == 3);
+                Assert.IsNotNull(netZero,
+                    "A seat holder whose imported rows total zero must be RETURNED as zero, not filtered "
+                    + "out into the same bucket as a user the importer never saw.");
+                Assert.AreEqual(0m, netZero.BilledCredits);
+
+                Assert.IsFalse(credits.Any(c => c.UserId == 2),
+                    "The seat holder with no imported rows at all stays absent.");
 
                 var capacity = Query<CopilotAdoptionService.CreditCapacityRow>(
                     db, CopilotAdoptionSql.CoworkCreditCapacitySql);
@@ -800,7 +819,11 @@ namespace Tests.UnitTests
                       INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1);
                       INSERT INTO dbo.copilot_agents (id, name, agent_id)
                           VALUES (1, N'Copilot Cowork', N'Copilot.M365Copilot.CoworkChat'),
-                                 (2, N'Sales helper', N'SPO_1234');");
+                                 (2, N'Sales helper', N'SPO_1234'),
+                                 -- A tenant's OWN agent that happens to have 'Cowork' in its name. Agent
+                                 -- display names are customer free text, so matching on them would let a
+                                 -- customer promote their own users into the observed-use evidence tiers.
+                                 (3, N'Contoso Cowork Helper', N'SPO_9999');");
 
                 SeedCopilotInteraction(db, userId: 1, daysAgo: 2, appHost: "Teams");
                 SeedCopilotInteraction(db, userId: 1, daysAgo: 2, appHost: "cowork", agentId: 1);
@@ -815,7 +838,10 @@ namespace Tests.UnitTests
 
                 var coworkAgents = Query<CopilotAdoptionService.IntValueRow>(db, CopilotAdoptionSql.CoworkAgentIdsSql);
                 CollectionAssert.AreEqual(new[] { 1 }, coworkAgents.Select(a => a.Value).ToArray(),
-                    "Only the Cowork agent should match - a SharePoint agent must not.");
+                    "Only the first-party Cowork agent id should match. A SharePoint agent must not - and "
+                    + "neither must a customer's own agent whose NAME contains 'Cowork', because observed "
+                    + "Cowork use outranks every inferred tier, so a name match would hand a tenant the "
+                    + "ability to fabricate evidence by typing it.");
 
                 var seats = Query<CopilotAdoptionService.SeatAssignmentRow>(db, CopilotAdoptionSql.SeatAssignmentsSql(new[] { 1 }));
                 Assert.AreEqual(1, seats.Count);

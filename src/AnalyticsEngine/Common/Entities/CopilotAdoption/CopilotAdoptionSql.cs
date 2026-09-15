@@ -57,12 +57,27 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         public const string CoworkAppHost = "cowork";
 
-        /// <summary>Finds the <c>copilot_agents</c> rows that represent Cowork.</summary>
+        /// <summary>
+        /// Finds the <c>copilot_agents</c> rows that represent Cowork.
+        ///
+        /// <para>Matched on the first-party agent id ONLY, never on the display name. The name is
+        /// customer-controlled free text, so <c>name LIKE '%Cowork%'</c> matches a tenant's own Copilot
+        /// Studio agent called anything like "Cowork Helper" or "Coworking bot". That is not a cosmetic
+        /// mismatch: a false agent match makes the user's interactions read as <i>observed</i> Cowork
+        /// use, and observed use is tested first in <see cref="CopilotAdoptionScoring.CoworkTierFor"/>
+        /// and wins outright over every inferred tier. A custom agent would therefore promote its users
+        /// into the evidence tiers and onto the recommended spending-policy list on the strength of a
+        /// substring of a name somebody typed.</para>
+        ///
+        /// <para>Nothing is lost by dropping the name match: <c>app_host = 'cowork'</c> is present on
+        /// <i>every</i> Cowork interaction (see <see cref="CoworkAppHost"/>), and
+        /// <see cref="CoworkPredicate"/> tests it with OR, so the agent id is a supplementary signal for
+        /// dimensioned agents rather than the only way a Cowork interaction is found.</para>
+        /// </summary>
         public const string CoworkAgentIdsSql =
             "SELECT ag.id AS Value\r\n" +
             "FROM dbo.copilot_agents AS ag\r\n" +
-            "WHERE ag.agent_id LIKE 'Copilot.M365Copilot.Cowork%'\r\n" +
-            "   OR ag.name LIKE '%Cowork%';";
+            "WHERE ag.agent_id LIKE 'Copilot.M365Copilot.Cowork%';";
 
         /// <summary>
         /// Every licence type with how many users hold it, so the tool can classify them and show the
@@ -835,7 +850,12 @@ namespace Common.Entities.CopilotAdoption
         /// with that caveat attached.</para>
         ///
         /// <para>Users with no row are absent from the result rather than returned as zero, so the caller
-        /// can render "not attributable" instead of claiming the user costs nothing.</para>
+        /// can render "not attributable" instead of claiming the user costs nothing. The converse matters
+        /// just as much and is why there is no <c>HAVING SUM(...) &gt; 0</c> here: a user whose imported
+        /// rows genuinely total zero is returned <i>as zero</i>. Filtering those out would have collapsed
+        /// them into the same "not attributable" bucket as a user the importer never saw, which is the
+        /// exact conflation of "we do not know" with "it is nothing" that the rest of this tab exists to
+        /// avoid.</para>
         ///
         /// <para>A plain <c>SUM</c> is safe here: the per-user importer keys its rows on
         /// (usage date, user, environment) with no agent grain - <c>CopilotStudioCreditImporter.MapUserRows</c>
@@ -859,7 +879,6 @@ namespace Common.Entities.CopilotAdoption
                 "  AND cu.user_id IS NOT NULL\r\n" +
                 "  AND EXISTS (SELECT 1 FROM SeatUsers AS s WHERE s.user_id = cu.user_id)\r\n" +
                 "GROUP BY cu.user_id\r\n" +
-                "HAVING SUM(cu.billed_credits) > 0\r\n" +
                 "OPTION (RECOMPILE);";
         }
 

@@ -71,13 +71,18 @@ namespace Common.Entities.Migrations
     /// __MigrationHistory with this new model blob rather than copying the previous row.
     ///
     /// Because this is now the HEAD of the migration chain, its snapshot is also the one EF compares the
-    /// live model against at runtime - so it necessarily carries every model change made by earlier
-    /// migrations too, including two from <see cref="CopilotReclaimEligibilityInputs"/>'s release that its
-    /// own (deliberately reused) snapshot predates: the <c>users.created_utc</c> property, and the switch
-    /// of the EF provider from <c>System.Data.SqlClient</c> to <c>Microsoft.Data.SqlClient</c> that came
-    /// with SPOInsightsDBConfiguration deriving from MicrosoftSqlDbConfiguration. That is correct and
-    /// intentional: a raw-SQL migration may reuse a stale snapshot, but the head of the chain may not,
-    /// or EF would see the live model as divergent and try to auto-migrate the difference.
+    /// live model against at runtime - so it necessarily carries every model change made since the
+    /// predecessor's own (deliberately reused) snapshot was taken. Concretely that is the switch of the EF
+    /// provider from <c>System.Data.SqlClient</c> to <c>Microsoft.Data.SqlClient</c>, which came with
+    /// SPOInsightsDBConfiguration deriving from MicrosoftSqlDbConfiguration and is baked into the SSDL.
+    /// That is correct and intentional: a raw-SQL migration may reuse a stale snapshot, but the head of
+    /// the chain may not, or EF would see the live model as divergent and try to auto-migrate the
+    /// difference.
+    ///
+    /// Note that <c>dbo.users.created_utc</c>, added by <see cref="CopilotReclaimEligibilityInputs"/>, is
+    /// deliberately NOT in this snapshot: it has no EF property at all and is written only by the bulk-SQL
+    /// user-update path. Having no property is what let that migration reuse its predecessor's snapshot,
+    /// and it is why the column does not appear here either.
     ///
     /// Left as a single atomic EF transaction - no Sql(..., suppressTransaction: true) - because both
     /// operations are instant metadata changes. There is nothing long-running to make resumable, so the

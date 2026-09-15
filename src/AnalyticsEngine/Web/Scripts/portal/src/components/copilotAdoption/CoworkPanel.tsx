@@ -347,8 +347,10 @@ export default function CoworkPanel({
           Cowork has <strong>no licence of its own</strong>. It requires a Microsoft 365 Copilot licence as
           a prerequisite, and is then billed by usage against Copilot Credits with access granted by a{' '}
           <strong>spending policy scoped to users or groups</strong>. So this is not a list of licences to
-          buy - it is a list of people to put in that policy, and the CSV below is written to be pasted
-          straight into it.
+          buy - it is a list of people to <strong>add to</strong> that policy. Merge the CSV into your
+          existing policy scope; never replace the scope with it. This product observes usage, not policy
+          assignments, so someone already scoped who simply had no Cowork activity in the selected period
+          will not appear here, and replacing the scope would revoke their access.
         </Text>
         <Text size={200} className={styles.sectionNote}>
           Two things have to be true before enabling someone is worthwhile: they must carry real{' '}
@@ -650,7 +652,7 @@ export default function CoworkPanel({
             Refresh
           </Button>
           <Tooltip
-            content="A spending-policy scoping list: UPN first, with each person's justification next to it."
+            content="A spending-policy scoping list: UPN first, with each person's justification next to it. It exports the rows matching the filters above, so tick 'Recommended only' first if you want just the rollout cohort - and merge the result into your existing policy scope rather than replacing it."
             relationship="description"
           >
             <Button size="small" icon={<ArrowDownload16Regular />} as="a" href={exportUrl}>
