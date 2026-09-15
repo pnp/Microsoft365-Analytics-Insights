@@ -45,6 +45,8 @@ namespace Common.Entities.CopilotAdoption
                 WriteUnlicensedSheet(workbook, summary);
                 WriteActionPlanSheet(workbook, summary);
                 WriteLicensedUsersSheet(workbook, analysis);
+                WriteCoworkSheet(workbook, analysis);
+                WriteCoworkEstimateSheet(workbook, summary);
                 WriteOpportunitiesSheet(workbook, analysis);
                 WriteMethodSheet(workbook, summary);
 
@@ -252,6 +254,18 @@ namespace Common.Entities.CopilotAdoption
             {
                 AddMeta(sheet, "Cowork users", summary.CoworkUsers, "Licensed users who used Microsoft 365 Copilot Cowork.");
                 AddMeta(sheet, "Cowork adoption %", summary.CoworkAdoptionPct, "Cowork users as a share of licensed users.");
+            }
+
+            if (summary.CoworkReadinessAvailable)
+            {
+                AddMeta(sheet, "Cowork established users", summary.CoworkEstablishedUsers,
+                    $"Using Cowork on at least {summary.Options.CoworkRegularMinActiveDays} separate days - a habit, not a trial.");
+                AddMeta(sheet, "Cowork prime candidates", summary.CoworkPrimeCandidates,
+                    "PREDICTED, not measured. Copilot-fluent seat holders with a heavy coordination load who are not "
+                    + "yet using Cowork. The population a rollout should target first.");
+                AddMeta(sheet, "To add to the Cowork policy", summary.CoworkRecommendedForPolicy,
+                    "Prime candidates plus everyone already using Cowork. Cowork access is granted by a spending "
+                    + "policy scoped to users, and existing users must stay in scope or they lose access.");
             }
 
             var chart = new XlsxChart
@@ -953,6 +967,223 @@ namespace Common.Entities.CopilotAdoption
 
             sheet.FreezeTopRows(headerRow);
             sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 17);
+        }
+
+        /// <summary>
+        /// The Cowork readiness view: who already uses Cowork, who should be enabled next, and the
+        /// department order to roll it out in.
+        /// </summary>
+        private static void WriteCoworkSheet(XlsxWriter workbook, CopilotAdoptionAnalysis analysis)
+        {
+            var summary = analysis.Summary;
+            if (!summary.CoworkReadinessAvailable) return;
+
+            var rows = analysis.CoworkReadiness ?? new List<CoworkReadinessRow>();
+            if (rows.Count == 0) return;
+
+            var sheet = workbook.AddSheet("Cowork readiness");
+            sheet.SetColumnWidths(34, 26, 22, 22, 16, 14, 14, 12, 12, 12, 60);
+
+            sheet.AddTitle("Microsoft 365 Copilot Cowork - readiness");
+            sheet.AddRow(XlsxCell.Wrapped(
+                "Cowork has no licence of its own. It requires a Microsoft 365 Copilot licence as a "
+                + "prerequisite and is then billed by usage against Copilot Credits, with access granted by a "
+                + "spending policy scoped to users or groups. So this is not a list of licences to buy - it is "
+                + "a list of people to put in that policy."));
+            sheet.AddBlankRow();
+
+            sheet.AddHeaderRow("Measure", "Value", "What it means");
+            var tierFirst = sheet.CurrentRow + 1;
+
+            foreach (var tier in summary.CoworkTiers)
+            {
+                AddMeta(sheet, tier.Label, tier.Users,
+                    (tier.Basis == CopilotAdoptionScoring.CoworkBasis.Evidence
+                        ? "OBSERVED. "
+                        : "PREDICTED, not observed. ")
+                    + tier.Description);
+            }
+
+            var tierLast = sheet.CurrentRow;
+
+            sheet.AddBlankRow();
+            AddMeta(sheet, "Average coordination load", summary.CoworkAverageCoordinationLoad,
+                "Mean of the 0-100 coordination-load score across scored seat holders - how much delegable, "
+                + "multi-step work the population carries.");
+            AddMeta(sheet, "Average Copilot fluency", summary.CoworkAverageFluency,
+                "Mean of the 0-100 fluency score - whether people are practised enough with Copilot to "
+                + "delegate a multi-step task to it.");
+
+            if (summary.CoworkCreditPosition != null && summary.CoworkCreditPosition.Available)
+            {
+                var credits = summary.CoworkCreditPosition;
+                sheet.AddBlankRow();
+                sheet.AddRow(XlsxCell.Wrapped(
+                    "Copilot Credit position - the SHARED pool, not Cowork-only spend. Cowork draws on it, "
+                    + "which is what makes it valid rollout headroom, but Copilot Studio and other "
+                    + "credit-billed workloads draw on the same pool and Microsoft publishes no way to "
+                    + "separate them."));
+
+                if (credits.Entitled.HasValue)
+                {
+                    AddMeta(sheet, "Credits entitled", credits.Entitled.Value, "Pre-purchased capacity.");
+                }
+                if (credits.Consumed.HasValue)
+                {
+                    AddMeta(sheet, "Credits consumed", credits.Consumed.Value, "Consumed so far, across all credit-billed workloads.");
+                }
+                if (credits.AvailableCredits.HasValue)
+                {
+                    AddMeta(sheet, "Credits available", credits.AvailableCredits.Value, "Remaining headroom for a Cowork rollout.");
+                }
+                if (credits.PayAsYouGoConsumed.HasValue)
+                {
+                    AddMeta(sheet, "Pay-as-you-go consumed", credits.PayAsYouGoConsumed.Value, "Billed beyond pre-purchased capacity.");
+                }
+                if (!string.IsNullOrWhiteSpace(credits.Status))
+                {
+                    AddMeta(sheet, "Capacity status", credits.Status, "As reported by Microsoft, e.g. WithinCapacity or Overage.");
+                }
+            }
+
+            var chart = new XlsxChart
+            {
+                Type = XlsxChartType.Bar,
+                Title = "Cowork readiness tiers",
+                CategoryRange = sheet.RangeReference(tierFirst, 1, tierLast, 1),
+                AnchorCell = "E5",
+                ShowDataLabels = true,
+                ShowLegend = false,
+            };
+            chart.AddSeries("Users", sheet.RangeReference(tierFirst, 2, tierLast, 2));
+            sheet.AddChart(chart);
+
+            // Rollout sequencing.
+            if (summary.CoworkByDepartment.Count > 0)
+            {
+                sheet.AddBlankRow();
+                sheet.AddBlankRow();
+                sheet.AddTitle("Rollout order by department");
+                sheet.AddRow(XlsxCell.Wrapped(
+                    "Ordered by the NUMBER of prime candidates, not the rate. A three-person team where "
+                    + "everyone qualifies is a 100% rate and not where a rollout should start."));
+                sheet.AddHeaderRow(
+                    "Department", "Copilot seats", "Prime candidates", "Prime candidate %",
+                    "Regular Cowork users", "Cowork adoption %", "Avg coordination load", "Avg fluency");
+
+                foreach (var segment in summary.CoworkByDepartment)
+                {
+                    sheet.AddRow(
+                        segment.Segment,
+                        segment.LicensedUsers,
+                        segment.PrimeCandidates,
+                        segment.PrimeCandidateRatePct,
+                        segment.RegularCoworkUsers,
+                        segment.CoworkAdoptionPct,
+                        segment.AverageCoordinationLoad,
+                        segment.AverageFluency);
+                }
+            }
+
+            // The people.
+            sheet.AddBlankRow();
+            sheet.AddBlankRow();
+
+            var truncated = rows.Count > MaxUserRows;
+            sheet.AddTitle(truncated ? "Cowork candidates - TRUNCATED" : "Cowork candidates");
+            if (truncated)
+            {
+                sheet.AddRow(XlsxCell.Wrapped(
+                    $"This list shows the {MaxUserRows:N0} strongest of {rows.Count:N0} scored seat holders. "
+                    + "The summary figures above cover the whole population - only this list is shortened. "
+                    + "Use the CSV export on the Cowork tab if you need all of them."));
+            }
+
+            sheet.AddHeaderRow(
+                "User", "Department", "Job title", "Manager", "Cowork tier", "Verdict based on",
+                "Coordination load", "Copilot fluency", "Cowork interactions", "Cowork active days",
+                "Justification");
+
+            var headerRow = sheet.CurrentRow;
+
+            foreach (var row in rows.Take(MaxUserRows))
+            {
+                sheet.AddRow(
+                    row.UserPrincipalName,
+                    row.Department ?? string.Empty,
+                    row.JobTitle ?? string.Empty,
+                    row.ManagerUserPrincipalName ?? string.Empty,
+                    row.TierLabel,
+                    row.Basis,
+                    row.CoordinationLoadScore,
+                    row.FluencyScore,
+                    row.CoworkInteractions,
+                    row.CoworkActiveDays,
+                    XlsxCell.Wrapped(row.Rationale));
+            }
+
+            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 11);
+        }
+
+        /// <summary>
+        /// The modelled value estimate, on its own sheet and nowhere else.
+        ///
+        /// <para>Deliberately separated from every measured figure in this workbook. The observed volumes
+        /// are real; the conversion to hours is an assumption, and a reader who finds an "hours saved"
+        /// column sitting beside interaction counts will reasonably assume both were counted. Keeping it
+        /// on a sheet that states its assumptions at the top is what makes the number usable without
+        /// making it misleading.</para>
+        /// </summary>
+        private static void WriteCoworkEstimateSheet(XlsxWriter workbook, CopilotAdoptionSummary summary)
+        {
+            var estimate = summary.CoworkValueEstimate;
+            if (!summary.CoworkReadinessAvailable || estimate == null || estimate.CohortUsers == 0) return;
+
+            var sheet = workbook.AddSheet("Cowork estimate (modelled)");
+            sheet.SetColumnWidths(38, 18, 62);
+
+            sheet.AddTitle("Cowork value estimate - MODELLED, NOT MEASURED");
+            sheet.AddRow(XlsxCell.Wrapped(
+                "This product does not and cannot measure time saved. The volumes below are observed from "
+                + "Microsoft's usage reports; the hours are those volumes multiplied by an editable "
+                + "assumption. Treat this as a way to size a rollout, not as a result. Do not quote the "
+                + "hours or the money without the assumptions listed underneath them."));
+            sheet.AddBlankRow();
+
+            sheet.AddHeaderRow("Measure", "Value", "What it means");
+
+            AddMeta(sheet, "Cohort size", estimate.CohortUsers,
+                "People recommended for the Cowork spending policy - prime candidates plus existing users.");
+
+            sheet.AddBlankRow();
+            AddMeta(sheet, "Meetings a month (observed)", estimate.AddressableMeetings,
+                "OBSERVED. Total meetings across the cohort, from Microsoft's Teams usage report.");
+            AddMeta(sheet, "Emails a month (observed)", estimate.AddressableMailThreads,
+                "OBSERVED. Total emails sent and read across the cohort.");
+            AddMeta(sheet, "Document touches a month (observed)", estimate.AddressableDocuments,
+                "OBSERVED. SharePoint and OneDrive files viewed or edited across the cohort.");
+
+            sheet.AddBlankRow();
+            AddMeta(sheet, "Modelled hours a month (low)", estimate.HoursPerMonthLow,
+                "MODELLED. The lower bound of the assumption range.");
+            AddMeta(sheet, "Modelled hours a month (high)", estimate.HoursPerMonthHigh,
+                "MODELLED. The upper bound. Quote the range, never a single figure.");
+
+            if (estimate.CurrencyPerMonthHigh.HasValue)
+            {
+                var code = string.IsNullOrWhiteSpace(estimate.CurrencyCode) ? string.Empty : $" ({estimate.CurrencyCode})";
+                AddMeta(sheet, "Modelled value a month, low" + code, estimate.CurrencyPerMonthLow.Value,
+                    "MODELLED. Hours multiplied by the fully-loaded hourly cost configured for this report.");
+                AddMeta(sheet, "Modelled value a month, high" + code, estimate.CurrencyPerMonthHigh.Value,
+                    "MODELLED. No currency conversion is performed - this is the rate as supplied.");
+            }
+
+            sheet.AddBlankRow();
+            sheet.AddTitle("Assumptions");
+            foreach (var assumption in estimate.Assumptions)
+            {
+                sheet.AddRow(XlsxCell.Wrapped(assumption));
+            }
         }
 
         private static void WriteOpportunitiesSheet(XlsxWriter workbook, CopilotAdoptionAnalysis analysis)

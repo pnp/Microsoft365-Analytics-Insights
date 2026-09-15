@@ -331,6 +331,12 @@ namespace Common.Entities.CopilotAdoption
                     output => BuildUsageByAppAsync(analysis, output, seatIds, windowStart, cancellationToken)));
                 steps.Add(new AnalysisStep(CopilotAdoptionSteps.WeeklyTrend,
                     output => BuildWeeklyTrendAsync(analysis, output, seatIds, trendStart, cancellationToken)));
+
+                // Cowork readiness only means something for people who hold a Copilot seat: Cowork requires
+                // a Copilot licence as a prerequisite, so assessing an unlicensed user for it would produce
+                // a recommendation that cannot be acted on. Gated with the other seat-dependent steps.
+                steps.Add(new AnalysisStep(CopilotAdoptionSteps.CoworkReadiness,
+                    output => BuildCoworkReadinessAsync(analysis, output, seatIds, windowStart, cancellationToken)));
             }
 
             // Deliberately not gated on seatIds.Count - see BuildOpportunitiesAsync.
@@ -1061,6 +1067,210 @@ namespace Common.Entities.CopilotAdoption
 
         #endregion
 
+        #region Cowork readiness
+
+        /// <summary>
+        /// Scores every Copilot seat holder for Cowork readiness.
+        ///
+        /// <para>Runs concurrently with the other heavy steps and writes only to its own part of the
+        /// result, so a failure here costs the Cowork tab and nothing else. That matters more than usual:
+        /// this step depends on the Microsoft 365 usage reports, which are a separate import from the
+        /// Copilot audit log and routinely absent on a new installation.</para>
+        ///
+        /// <para>The Copilot engagement score is joined in from the already-scored licensed users rather
+        /// than recomputed, so the two tabs can never disagree about whether someone is fluent. That does
+        /// make this step depend on <see cref="BuildLicensedUsersAsync"/> having populated
+        /// <see cref="CopilotAdoptionAnalysis.LicensedUsers"/> - which is why the join happens in
+        /// <see cref="FinaliseCowork"/> during scoring, after every step has completed, rather than here
+        /// while they are still running in parallel.</para>
+        /// </summary>
+        private async Task BuildCoworkReadinessAsync(
+            CopilotAdoptionAnalysis analysis,
+            StepOutput output,
+            List<int> seatIds,
+            DateTime windowStart,
+            CancellationToken cancellationToken)
+        {
+            var summary = analysis.Summary;
+            var includeAudit = summary.DataSources.AuditAvailable;
+            var includeM365 = summary.DataSources.M365UsageReportsAvailable;
+
+            if (!includeAudit && !includeM365)
+            {
+                output.Warnings.Add(
+                    "Cowork readiness needs either the Copilot audit import or the Microsoft 365 usage "
+                    + "reports. Neither has data for this period, so no readiness assessment is possible.");
+                return;
+            }
+
+            var coworkAgentIds = await SafeAsync(
+                () => QueryAsync<IntValueRow>(CopilotAdoptionSql.CoworkAgentIdsSql, cancellationToken),
+                CopilotAdoptionSteps.CoworkReadiness,
+                CopilotAdoptionQueries.CoworkAgentLookup,
+                output,
+                "Cowork agent lookup", cancellationToken);
+
+            // A failed lookup is NOT the same as a tenant with no Cowork agents. Falling through with an
+            // empty list would silently narrow the Cowork predicate to app_host alone, under-reporting
+            // exactly the usage this tab exists to find - so say so rather than quietly measuring less.
+            if (coworkAgentIds == null)
+            {
+                output.MarkIncomplete("Cowork agent lookup");
+                coworkAgentIds = new List<IntValueRow>();
+            }
+
+            var agentIds = coworkAgentIds.Select(r => r.Value).ToList();
+
+            var sql = CopilotAdoptionSql.CoworkReadinessSql(
+                seatIds, agentIds, _options, includeAudit, includeM365);
+
+            var parameters = new Dictionary<string, object>
+            {
+                { "@maxRows", _options.MaxCoworkUsersScored },
+            };
+            if (includeAudit) parameters["@from"] = windowStart;
+            if (includeM365)
+            {
+                // Date-only columns, so the lower bound is the window's first calendar day rather than the
+                // timestamp - otherwise the earliest day of the window is silently dropped.
+                parameters["@m365From"] = windowStart.Date;
+                parameters["@m365ReportDate"] = summary.DataSources.M365UsageReportDate.Value;
+            }
+
+            output.Sql["coworkReadiness"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
+
+            var rows = await SafeAsync(
+                () => QueryAsync<CoworkReadinessSignalRow>(sql, cancellationToken, ToSqlParameters(parameters)),
+                CopilotAdoptionSteps.CoworkReadiness,
+                CopilotAdoptionQueries.CoworkReadiness,
+                output,
+                "Cowork readiness", cancellationToken);
+
+            if (rows == null)
+            {
+                // The prime-candidate count is a headline KPI and this list drives a whole tab and its CSV
+                // export. An empty list here would read as "nobody is a candidate for Cowork", which is a
+                // finding rather than a fault.
+                output.MarkIncomplete("Cowork readiness");
+                return;
+            }
+
+            if (!includeM365)
+            {
+                output.Warnings.Add(
+                    "The Microsoft 365 usage reports are not available, so coordination load cannot be "
+                    + "measured. Everyone will score zero on that axis and no one will be identified as a "
+                    + "Cowork candidate. Enable the Microsoft 365 usage report import to use this tab.");
+            }
+
+            if (!includeAudit)
+            {
+                output.Warnings.Add(
+                    "The Copilot audit import has no data for this period, so existing Cowork use cannot be "
+                    + "seen. Everyone is assessed as a potential candidate, including people who may already "
+                    + "be using Cowork.");
+            }
+
+            // Credits are a decoration on this tab, not a load-bearing figure, and they come from a
+            // SEPARATE import whose tables a database predating the agent-cost migration does not have
+            // at all. Probe first: without this, every Cowork analysis on such a database would raise
+            // "Invalid object name" as a warning, which reads as a fault rather than as an import that
+            // was never enabled - and a page whose warnings cry wolf stops being read.
+            var hasCreditTables = await SafeScalarAsync(
+                CopilotAdoptionSql.HasCreditTablesSql,
+                CopilotAdoptionSteps.CoworkReadiness,
+                CopilotAdoptionQueries.CoworkCreditProbe,
+                output,
+                "Copilot Credit table probe",
+                // No MarkIncomplete: an absent optional import does not make the readiness figures wrong.
+                null,
+                cancellationToken) == 1;
+
+            if (hasCreditTables)
+            {
+                await AddCoworkCreditsAsync(analysis, output, rows, seatIds, windowStart, cancellationToken);
+            }
+
+            // Stored raw. Scoring happens in FinaliseCowork, once the licensed-user step has finished and
+            // the engagement scores are available to join against - the same raw-then-finalise shape the
+            // unlicensed population already uses.
+            analysis.CoworkSignals = rows;
+        }
+
+        /// <summary>
+        /// Attaches the optional Copilot Credit figures: the tenant's pool position, and each user's
+        /// total where the per-user import has rows for them.
+        ///
+        /// <para><b>Neither figure is Cowork-specific and neither is labelled as such.</b> Microsoft
+        /// meters Cowork against the shared Copilot Credits pool with no per-row workload discriminator,
+        /// so a Cowork-only figure cannot be produced - see
+        /// <see cref="Common.Entities.Entities.AgentCosts.CopilotStudioHarnessClassifier"/>.</para>
+        /// </summary>
+        private async Task AddCoworkCreditsAsync(
+            CopilotAdoptionAnalysis analysis,
+            StepOutput output,
+            List<CoworkReadinessSignalRow> rows,
+            List<int> seatIds,
+            DateTime windowStart,
+            CancellationToken cancellationToken)
+        {
+            var summary = analysis.Summary;
+
+            var creditsSql = CopilotAdoptionSql.CoworkUserCreditsSql(seatIds);
+            var creditRows = await SafeAsync(
+                () => QueryAsync<UserCreditRow>(
+                    creditsSql, cancellationToken, new SqlParameter("@from", windowStart)),
+                CopilotAdoptionSteps.CoworkReadiness,
+                CopilotAdoptionQueries.CoworkUserCredits,
+                output,
+                "Cowork per-user credits", cancellationToken);
+
+            if (creditRows != null && creditRows.Count > 0)
+            {
+                output.Sql["coworkUserCredits"] = CopilotAdoptionSql.ForDisplay(
+                    creditsSql, new Dictionary<string, object> { { "@from", windowStart } });
+
+                var creditsByUser = new Dictionary<int, decimal>();
+                foreach (var credit in creditRows)
+                {
+                    creditsByUser[credit.UserId] = credit.BilledCredits;
+                }
+
+                foreach (var row in rows)
+                {
+                    if (creditsByUser.TryGetValue(row.UserId, out var credits))
+                    {
+                        row.TotalCopilotCredits = credits;
+                    }
+                }
+
+                summary.CoworkCreditPosition.PerUserCreditsAvailable = true;
+            }
+
+            var capacity = await SafeAsync(
+                () => QueryAsync<CreditCapacityRow>(
+                    CopilotAdoptionSql.CoworkCreditCapacitySql, cancellationToken),
+                CopilotAdoptionSteps.CoworkReadiness,
+                CopilotAdoptionQueries.CoworkCreditCapacity,
+                output,
+                "Copilot Credit capacity", cancellationToken);
+
+            var snapshot = capacity?.FirstOrDefault();
+            if (snapshot != null)
+            {
+                var position = summary.CoworkCreditPosition;
+                position.Available = true;
+                position.SnapshotUtc = snapshot.SnapshotUtc;
+                position.Entitled = snapshot.Entitled;
+                position.Consumed = snapshot.Consumed;
+                position.AvailableCredits = snapshot.AvailableCredits;
+                position.PayAsYouGoConsumed = snapshot.PayAsYouGoConsumed;
+                position.Status = snapshot.Status;
+            }
+        }
+
+        #endregion
+
         #region Summary assembly
 
         /// <summary>
@@ -1220,6 +1430,7 @@ namespace Common.Entities.CopilotAdoption
 
             FinaliseAgents(analysis);
             FinaliseUnlicensed(analysis);
+            FinaliseCowork(analysis);
             summary.CombinedByDepartment = BuildCombinedSegments(analysis);
 
             var opportunities = analysis.Opportunities ?? new List<LicenceOpportunityRow>();
@@ -1419,6 +1630,169 @@ namespace Common.Entities.CopilotAdoption
                 .ToList();
 
             estate.Agents = agents;
+        }
+
+        /// <summary>
+        /// Scores the raw Cowork signals and rolls them up into the executive view.
+        ///
+        /// <para>This is where the two data sources are joined: the coordination load comes from this
+        /// feature's own query, while the Copilot engagement score is taken from the already-scored
+        /// licensed-user list. Joining here rather than in SQL is what guarantees the Cowork tab and the
+        /// Licensed users tab can never disagree about whether somebody is fluent - there is exactly one
+        /// engagement calculation and both tabs read its output.</para>
+        ///
+        /// <para>Pure - no database - so the whole tab can be unit-tested from hand-written rows.</para>
+        /// </summary>
+        private void FinaliseCowork(CopilotAdoptionAnalysis analysis)
+        {
+            var summary = analysis.Summary;
+            var signals = analysis.CoworkSignals ?? new List<CoworkReadinessSignalRow>();
+
+            if (signals.Count == 0)
+            {
+                // Left explicitly unavailable rather than published as a set of zeros. "0 prime candidates"
+                // is a finding; "this analysis did not run" is a fault, and the tab has to tell them apart.
+                summary.CoworkReadinessAvailable = false;
+                return;
+            }
+
+            // The engagement score and agent count are carried across from the licensed-user analysis.
+            // A seat holder missing from that list scores zero fluency, which is the correct answer: they
+            // had no Copilot activity to score.
+            var licensed = analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>();
+            var scoreByUser = new Dictionary<int, LicensedUserAdoptionRow>();
+            foreach (var user in licensed)
+            {
+                scoreByUser[user.UserId] = user;
+            }
+
+            var rows = new List<CoworkReadinessRow>(signals.Count);
+            foreach (var signal in signals)
+            {
+                if (scoreByUser.TryGetValue(signal.UserId, out var scored))
+                {
+                    signal.AdoptionScore = scored.AdoptionScore;
+                    signal.AgentsUsed = scored.AgentsUsed;
+                    signal.CopilotActive = CopilotAdoptionScoring.IsActive(scored);
+                }
+
+                rows.Add(CopilotAdoptionScoring.ScoreCoworkReadiness(signal, _options));
+            }
+
+            // Ordered so the people to act on are first: recommended before not, then by the strength of
+            // the case. The CSV export inherits this, so a truncated read of it is still the right people.
+            analysis.CoworkReadiness = rows
+                .OrderByDescending(r => r.RecommendForPolicy)
+                .ThenByDescending(r => r.CoordinationLoadScore)
+                .ThenByDescending(r => r.FluencyScore)
+                .ThenBy(r => r.UserPrincipalName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            summary.CoworkReadinessAvailable = true;
+            summary.CoworkScoredUsers = rows.Count;
+            summary.CoworkEstablishedUsers =
+                rows.Count(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.Established);
+            summary.CoworkTriallingUsers =
+                rows.Count(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.Trialling);
+            summary.CoworkPrimeCandidates =
+                rows.Count(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.PrimeCandidate);
+            summary.CoworkBuildFluencyFirst =
+                rows.Count(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.BuildFluencyFirst);
+            summary.CoworkRecommendedForPolicy = rows.Count(r => r.RecommendForPolicy);
+
+            summary.CoworkAverageCoordinationLoad = Math.Round(
+                rows.Average(r => r.CoordinationLoadScore), 1, MidpointRounding.AwayFromZero);
+            summary.CoworkAverageFluency = Math.Round(
+                rows.Average(r => r.FluencyScore), 1, MidpointRounding.AwayFromZero);
+
+            summary.CoworkTiers = BuildCoworkTiers(rows);
+            summary.CoworkByDepartment = BuildCoworkSegments(rows);
+            summary.CoworkQuadrant = BuildCoworkQuadrant(summary.CoworkByDepartment);
+
+            summary.CoworkValueEstimate = CopilotAdoptionScoring.EstimateCoworkValue(
+                rows.Where(r => r.RecommendForPolicy).ToList(), _options);
+        }
+
+        /// <summary>
+        /// Every tier with its population, stated once with a count rather than repeated per row - the
+        /// same reasoning as <see cref="BuildActionPlan"/>.
+        /// </summary>
+        private List<CoworkTierSummary> BuildCoworkTiers(IReadOnlyCollection<CoworkReadinessRow> rows)
+        {
+            return CopilotAdoptionScoring.AllCoworkTiers
+                .Select(tier =>
+                {
+                    var count = rows.Count(r => r.Tier == tier);
+                    return new CoworkTierSummary
+                    {
+                        Code = tier,
+                        Label = CopilotAdoptionScoring.CoworkTierLabel(tier),
+                        Basis = CopilotAdoptionScoring.CoworkTierBasis(tier),
+                        Description = CopilotAdoptionScoring.CoworkTierDescription(tier, _options),
+                        Users = count,
+                        SharePct = CopilotAdoptionScoring.Percentage(count, rows.Count),
+                    };
+                })
+                .ToList();
+        }
+
+        /// <summary>
+        /// Departments ranked for rollout sequencing: most prime candidates first, so the reader sees the
+        /// business unit with the largest concentration of ready users at the top.
+        ///
+        /// Sorted on the absolute count rather than the rate on purpose. A three-person department where
+        /// everyone qualifies is a 100% rate and not somewhere to start a rollout; a 200-person department
+        /// at 40% is. <see cref="CopilotAdoptionOptions.MinSeatsPerSegment"/> additionally removes the
+        /// segments too small to mean anything, matching the other department tables.
+        /// </summary>
+        private List<CoworkSegmentRow> BuildCoworkSegments(IReadOnlyCollection<CoworkReadinessRow> rows)
+        {
+            return rows
+                .GroupBy(r => string.IsNullOrWhiteSpace(r.Department) ? "(no department)" : r.Department)
+                .Where(g => g.Count() >= _options.MinSeatsPerSegment)
+                .Select(g =>
+                {
+                    var prime = g.Count(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.PrimeCandidate);
+                    var regular = g.Count(r => r.RegularCoworkUser);
+
+                    return new CoworkSegmentRow
+                    {
+                        Segment = g.Key,
+                        LicensedUsers = g.Count(),
+                        PrimeCandidates = prime,
+                        PrimeCandidateRatePct = CopilotAdoptionScoring.Percentage(prime, g.Count()),
+                        RegularCoworkUsers = regular,
+                        CoworkAdoptionPct = CopilotAdoptionScoring.Percentage(regular, g.Count()),
+                        AverageCoordinationLoad = Math.Round(
+                            g.Average(r => r.CoordinationLoadScore), 1, MidpointRounding.AwayFromZero),
+                        AverageFluency = Math.Round(
+                            g.Average(r => r.FluencyScore), 1, MidpointRounding.AwayFromZero),
+                    };
+                })
+                .OrderByDescending(s => s.PrimeCandidates)
+                .ThenByDescending(s => s.AverageCoordinationLoad)
+                .ThenBy(s => s.Segment, StringComparer.OrdinalIgnoreCase)
+                .Take(_options.TopSegments)
+                .ToList();
+        }
+
+        /// <summary>
+        /// The quadrant points, built from the same department rows the sequencing table shows so the
+        /// chart and the table below it cannot describe different populations.
+        /// </summary>
+        private List<CoworkQuadrantPoint> BuildCoworkQuadrant(IEnumerable<CoworkSegmentRow> segments)
+        {
+            return segments
+                .Select(s => new CoworkQuadrantPoint
+                {
+                    Segment = s.Segment,
+                    LicensedUsers = s.LicensedUsers,
+                    CoordinationLoadScore = s.AverageCoordinationLoad,
+                    FluencyScore = s.AverageFluency,
+                    RegularCoworkUsers = s.RegularCoworkUsers,
+                    PrimeCandidates = s.PrimeCandidates,
+                })
+                .ToList();
         }
 
         /// <summary>
@@ -1983,6 +2357,39 @@ namespace Common.Entities.CopilotAdoption
         public class IntValueRow
         {
             public int Value { get; set; }
+        }
+
+        /// <summary>
+        /// One user's total billed Copilot Credits in the window.
+        ///
+        /// Users with no credit rows are simply absent, which is what lets the Cowork tab render "not
+        /// attributable" rather than a zero that would read as "this person costs nothing".
+        /// </summary>
+        public class UserCreditRow
+        {
+            public int UserId { get; set; }
+
+            public decimal BilledCredits { get; set; }
+        }
+
+        /// <summary>
+        /// The tenant's Copilot Credit capacity snapshot. Every figure is nullable because the licensing
+        /// API legitimately omits some of them - notably pay-as-you-go consumption, which a tenant on
+        /// pre-purchased capacity simply does not have.
+        /// </summary>
+        public class CreditCapacityRow
+        {
+            public DateTime SnapshotUtc { get; set; }
+
+            public decimal? Entitled { get; set; }
+
+            public decimal? Consumed { get; set; }
+
+            public decimal? AvailableCredits { get; set; }
+
+            public decimal? PayAsYouGoConsumed { get; set; }
+
+            public string Status { get; set; }
         }
 
         /// <summary>A label/value pair for the categorical charts.</summary>
