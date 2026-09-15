@@ -1,9 +1,10 @@
 ﻿using Common.Entities;
 using Common.Entities.Migrations;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using System;
 using System.Collections.Generic;
 using System.Data.Entity;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -28,6 +29,7 @@ namespace Tests.UnitTests
     public class UniqueUrlsFullUrlIndexMigrationTests
     {
         private const string IndexName = "IX_urls_full_url";
+        private int _fieldDefinitionId;
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data). A varchar
         // column would corrupt this to '?', and the de-duplication must not mangle it either.
@@ -52,10 +54,52 @@ namespace Tests.UnitTests
         [TestCleanup]
         public void RestoreSharedSchema()
         {
+            Exception migrationFailure = null;
+
             using (var db = new AnalyticsEntitiesContext())
             {
-                RunMigrationAsync(db).GetAwaiter().GetResult();
+                try
+                {
+                    RunMigrationAsync(db).GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    migrationFailure = ex;
+                }
+                finally
+                {
+                    DeleteFixtureFieldDefinitionAsync(db).GetAwaiter().GetResult();
+                }
             }
+
+            if (migrationFailure != null)
+            {
+                throw migrationFailure;
+            }
+        }
+
+        [TestInitialize]
+        public void CreateFixtureFieldDefinition()
+        {
+            try
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    EnsureSchemaAsync(db).GetAwaiter().GetResult();
+                    _fieldDefinitionId = InsertFileFieldDefinitionAsync(db).GetAwaiter().GetResult();
+                }
+            }
+            catch (Exception ex)
+            {
+                Assert.Fail(
+                    "Pre-condition: the test fixture could not create a file metadata field definition "
+                    + "for dbo.file_metadata_property_values. " + ex.Message);
+            }
+
+            Assert.IsTrue(
+                _fieldDefinitionId > 0,
+                "Pre-condition: the test fixture must create a file metadata field definition before "
+                + "seeding dbo.file_metadata_property_values.");
         }
 
         private static Task<int> ExecAsync(AnalyticsEntitiesContext db, string sql)
@@ -125,6 +169,24 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
                 $"INSERT INTO dbo.urls (full_url) OUTPUT INSERTED.id VALUES (N'{url.Replace("'", "''")}')");
         }
 
+        private static Task<int> InsertFileFieldDefinitionAsync(AnalyticsEntitiesContext db)
+        {
+            return ScalarAsync<int>(db,
+                @"INSERT INTO dbo.file_field_definitions (name)
+                  OUTPUT INSERTED.id
+                  VALUES (N'UniqueUrlsFullUrlIndexMigrationTests-' + CONVERT(nvarchar(36), NEWID()))");
+        }
+
+        private Task DeleteFixtureFieldDefinitionAsync(AnalyticsEntitiesContext db)
+        {
+            if (_fieldDefinitionId <= 0)
+            {
+                return Task.CompletedTask;
+            }
+
+            return ExecAsync(db, $"DELETE FROM dbo.file_field_definitions WHERE id = {_fieldDefinitionId}");
+        }
+
         private static Task<bool> IndexIsUniqueAsync(AnalyticsEntitiesContext db)
         {
             return ScalarAsync<int>(db,
@@ -183,7 +245,7 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
 
                 // A reference pointing at the row that is about to be deleted.
                 await ExecAsync(db,
-                    $"INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) SELECT {dupId}, MIN(id), N'x', GETUTCDATE() FROM dbo.file_field_definitions");
+                    $"INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) VALUES ({dupId}, {_fieldDefinitionId}, N'x', GETUTCDATE())");
 
                 await RunMigrationAsync(db);
 
@@ -221,9 +283,8 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
                 // Same field_id under BOTH urls - these collide once dupId becomes keepId.
                 // The DUPLICATE carries the newer value, so "freshest wins" is actually exercised.
                 await ExecAsync(db,
-                    $@"DECLARE @f int = (SELECT MIN(id) FROM dbo.file_field_definitions);
-                       INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) VALUES ({keepId}, @f, N'stale', '2020-01-01T00:00:00');
-                       INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) VALUES ({dupId}, @f, N'freshest', '2026-01-01T00:00:00');");
+                    $@"INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) VALUES ({keepId}, {_fieldDefinitionId}, N'stale', '2020-01-01T00:00:00');
+                       INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) VALUES ({dupId}, {_fieldDefinitionId}, N'freshest', '2026-01-01T00:00:00');");
 
                 // Must not throw.
                 await RunMigrationAsync(db);
@@ -253,9 +314,8 @@ CREATE NONCLUSTERED INDEX [{IndexName}] ON [dbo].[urls] ([full_url]);");
                 var dupId = await InsertUrlAsync(db, PlainUrl);
 
                 await ExecAsync(db,
-                    $@"DECLARE @f int = (SELECT MIN(id) FROM dbo.file_field_definitions);
-                       INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) VALUES ({keepId}, @f, N'keep-me', '2026-01-01T00:00:00');
-                       INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) VALUES ({dupId}, @f, N'collides', '2026-01-01T00:00:00');");
+                    $@"INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) VALUES ({keepId}, {_fieldDefinitionId}, N'keep-me', '2026-01-01T00:00:00');
+                       INSERT INTO dbo.file_metadata_property_values (url_id, field_id, field_value, updated) VALUES ({dupId}, {_fieldDefinitionId}, N'collides', '2026-01-01T00:00:00');");
 
                 await RunMigrationAsync(db);
 

@@ -1,9 +1,9 @@
-using Common.Entities.CopilotAdoption;
+﻿using Common.Entities.CopilotAdoption;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Linq;
 
 namespace Tests.UnitTests
@@ -796,6 +796,7 @@ namespace Tests.UnitTests
                       user_name varchar(250) NOT NULL,
                       mail nvarchar(max) NULL,
                       account_enabled bit NULL,
+                      created_utc datetime2(7) NULL,
                       department_id int NULL,
                       job_title_id int NULL,
                       country_or_region_id int NULL,
@@ -814,7 +815,19 @@ namespace Tests.UnitTests
                       license_type_id int NOT NULL);
 
                   CREATE UNIQUE NONCLUSTERED INDEX IX_license_type_id_user_id
-                      ON dbo.user_license_type_lookups (license_type_id, user_id);");
+                      ON dbo.user_license_type_lookups (license_type_id, user_id);
+
+                  CREATE TABLE dbo.copilot_adoption_reclaim_exclusions (
+                      id int NOT NULL PRIMARY KEY,
+                      user_id int NOT NULL,
+                      reason nvarchar(100) NOT NULL,
+                      note nvarchar(1000) NULL,
+                      excluded_by nvarchar(256) NOT NULL,
+                      excluded_utc datetime2(7) NOT NULL,
+                      review_after_utc datetime2(7) NULL);
+
+                  CREATE NONCLUSTERED INDEX IX_copilot_adoption_reclaim_exclusions_user_review
+                      ON dbo.copilot_adoption_reclaim_exclusions (user_id, review_after_utc, excluded_utc DESC);");
         }
 
         private static void CreateCopilotTables(ScratchDatabase db)

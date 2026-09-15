@@ -1,7 +1,7 @@
 using Azure.Core;
 using Azure.Identity;
 using System;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Text.RegularExpressions;
 using System.Threading;
 

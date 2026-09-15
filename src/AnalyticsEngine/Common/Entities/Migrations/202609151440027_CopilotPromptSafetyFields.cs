@@ -70,6 +70,15 @@ namespace Common.Entities.Migrations
     /// not a copy of the predecessor's). The manual upgrade script therefore has to stamp
     /// __MigrationHistory with this new model blob rather than copying the previous row.
     ///
+    /// Because this is now the HEAD of the migration chain, its snapshot is also the one EF compares the
+    /// live model against at runtime - so it necessarily carries every model change made by earlier
+    /// migrations too, including two from <see cref="CopilotReclaimEligibilityInputs"/>'s release that its
+    /// own (deliberately reused) snapshot predates: the <c>users.created_utc</c> property, and the switch
+    /// of the EF provider from <c>System.Data.SqlClient</c> to <c>Microsoft.Data.SqlClient</c> that came
+    /// with SPOInsightsDBConfiguration deriving from MicrosoftSqlDbConfiguration. That is correct and
+    /// intentional: a raw-SQL migration may reuse a stale snapshot, but the head of the chain may not,
+    /// or EF would see the live model as divergent and try to auto-migrate the difference.
+    ///
     /// Left as a single atomic EF transaction - no Sql(..., suppressTransaction: true) - because both
     /// operations are instant metadata changes. There is nothing long-running to make resumable, so the
     /// migration either applies and stamps or rolls back entirely, and a retry starts clean either way.

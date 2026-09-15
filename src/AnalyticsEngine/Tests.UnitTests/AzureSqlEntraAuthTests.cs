@@ -6,7 +6,7 @@ using Common.Entities.Sql;
 using DataUtils.Sql;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Threading;
 
 namespace Tests.UnitTests

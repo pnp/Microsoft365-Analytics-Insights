@@ -4,7 +4,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Data;
 using System.Data.Entity.Migrations;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 // Aliased rather than imported: an unqualified `using System.Configuration` makes `Configuration`
 // ambiguous with the EF migrations Configuration this file already uses.
 using ConfigurationManager = System.Configuration.ConfigurationManager;
@@ -55,9 +55,12 @@ namespace Tests.UnitTests
         // tables, DlpCopilotImpact adds the DLP-impact tables, RetireUnusedAuditYammerStreamTables
         // drops the unused audit extended-property, Yammer and Stream tables,
         // UniqueUrlsFullUrlIndex de-duplicates dbo.urls and makes IX_urls_full_url UNIQUE, and
-        // RetireImportDbHacks brings IX_PageRequestID and IX_ai_session_id under the migration chain,
-        // and CopilotPromptSafetyFields adds the two Copilot prompt-safety flag columns
+        // RetireImportDbHacks brings IX_PageRequestID and IX_ai_session_id under the migration chain.
+        // CopilotReclaimEligibilityInputs adds users.created_utc and the reclaim-exclusion table. It is
+        // raw-SQL, additive, and reuses the RetireImportDbHacks model snapshot verbatim.
+        // CopilotPromptSafetyFields then adds the two Copilot prompt-safety flag columns
         // (copilot_event_messages.jailbreak_detected, copilot_event_accessed_resources.xpia_detected).
+        // It DOES change the entity model, so unlike its predecessor its snapshot is freshly scaffolded.
         private const string LatestId = "202609151440027_CopilotPromptSafetyFields";
         private const string IndexName = "IX_urls_full_url";
 

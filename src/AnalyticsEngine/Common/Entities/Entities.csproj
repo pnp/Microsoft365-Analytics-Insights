@@ -423,6 +423,10 @@
     <Compile Include="Migrations\202608310800001_ColumnstoreUsageReportMetrics.Designer.cs">
       <DependentUpon>202608310800001_ColumnstoreUsageReportMetrics.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202609131940001_CopilotReclaimEligibilityInputs.cs" />
+    <Compile Include="Migrations\202609131940001_CopilotReclaimEligibilityInputs.Designer.cs">
+      <DependentUpon>202609131940001_CopilotReclaimEligibilityInputs.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609101200001_RetireImportDbHacks.cs" />
     <Compile Include="Migrations\202609101200001_RetireImportDbHacks.Designer.cs">
       <DependentUpon>202609101200001_RetireImportDbHacks.cs</DependentUpon>
@@ -473,6 +477,7 @@
     <Compile Include="Redis\TeamsRedisManager.cs" />
     <Compile Include="AnalyticsEntitiesContext.cs" />
     <Compile Include="Sql\AzureSqlAccessTokenInterceptor.cs" />
+    <Compile Include="Sql\LegacyProviderNameAliasResolver.cs" />
     <Compile Include="IAnalyticsDbContextFactory.cs" />
     <Compile Include="Entities\Url.cs" />
     <Compile Include="Entities\User.cs" />
@@ -650,6 +655,9 @@
     <EmbeddedResource Include="Migrations\202609101000001_RetireUnusedAuditYammerStreamTables.resx">
       <DependentUpon>202609101000001_RetireUnusedAuditYammerStreamTables.cs</DependentUpon>
     </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609131940001_CopilotReclaimEligibilityInputs.resx">
+      <DependentUpon>202609131940001_CopilotReclaimEligibilityInputs.cs</DependentUpon>
+    </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609101200001_RetireImportDbHacks.resx">
       <DependentUpon>202609101200001_RetireImportDbHacks.cs</DependentUpon>
     </EmbeddedResource>
@@ -724,6 +732,12 @@
       <Version>4.0.3</Version>
     </PackageReference>
     <PackageReference Include="EntityFramework">
+      <Version>6.5.2</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Data.SqlClient">
+      <Version>6.1.4</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFramework.SqlServer">
       <Version>6.5.2</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions">

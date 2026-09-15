@@ -1,4 +1,4 @@
-using DataUtils;
+﻿using DataUtils;
 using System;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
@@ -16,6 +16,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     public sealed class UserMetadataChangePlan
     {
         public bool? AccountEnabled { get; set; }
+        public DateTime? AccountCreatedUtc { get; set; }
         public string PostalCode { get; set; }
         public string AzureAdId { get; set; }
         public string Mail { get; set; }
@@ -98,6 +99,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             return new UserMetadataChangePlan
             {
                 AccountEnabled = graphUser.AccountEnabled,
+                AccountCreatedUtc = graphUser.CreatedDateTime,
                 PostalCode = graphUser.PostalCode,
                 AzureAdId = graphUser.Id,
                 Mail = graphUser.Mail,

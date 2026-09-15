@@ -107,27 +107,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
                 return InteractionReadAccess.NoIdentityToInspect;
             }
 
-            try
-            {
-                var token = await _appIdentity.GetAccessToken();
+            var access = await AppTokenPermissionVerifier.GetAccessAsync(
+                _appIdentity,
+                InteractionReadPermissions,
+                _logger,
+                "AiEnterpriseInteraction.Read.All");
 
-                if (!GraphTokenPermissions.TryExtract(token.Token, out var permissions))
-                {
-                    // The token could not be decoded, which proves nothing either way. Distinct from a token
-                    // that parsed cleanly and simply carries no roles - that IS a definite absence of consent.
-                    _logger.LogWarning("Could not read the access token's permissions, so the "
-                        + "AiEnterpriseInteraction.Read.All grant could not be confirmed either way.");
+            switch (access)
+            {
+                case AppTokenPermissionAccess.Granted:
+                    return InteractionReadAccess.Granted;
+                case AppTokenPermissionAccess.NotGranted:
+                    return InteractionReadAccess.NotGranted;
+                case AppTokenPermissionAccess.NoIdentityToInspect:
+                    return InteractionReadAccess.NoIdentityToInspect;
+                default:
                     return InteractionReadAccess.Unknown;
-                }
-
-                return permissions.Any(p => InteractionReadPermissions.Contains(p))
-                    ? InteractionReadAccess.Granted
-                    : InteractionReadAccess.NotGranted;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning($"Could not verify AiEnterpriseInteraction.Read.All on the access token: {ex.Message}.");
-                return InteractionReadAccess.Unknown;
             }
         }
 
@@ -362,88 +357,4 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
         }
     }
 
-    /// <summary>
-    /// Reads the permissions an app-only access token actually carries.
-    /// </summary>
-    /// <remarks>
-    /// The signature is not validated - the token was just issued to us by Entra ID, and this is only used to
-    /// produce a clearer "you haven't consented to X yet" message than a wall of 403s would.
-    /// </remarks>
-    public static class GraphTokenPermissions
-    {
-        public static IReadOnlyCollection<string> Extract(string jwt)
-        {
-            TryExtract(jwt, out var permissions);
-            return permissions;
-        }
-
-        /// <summary>
-        /// Reads the permissions off an app-only token, reporting separately whether the token could be
-        /// parsed at all.
-        /// </summary>
-        /// <returns>
-        /// True when the payload was decoded (even if it carried no permissions), false when the token was
-        /// missing, malformed or not decodable.
-        /// </returns>
-        /// <remarks>
-        /// The distinction matters to callers that report on a permission: "the token parsed and carries no
-        /// roles" is a definite, actionable absence of consent, whereas "the token could not be read" proves
-        /// nothing. <see cref="Extract"/> collapses both to an empty set, which is fine for a caller that
-        /// only wants "does it have X?" but would make a diagnostic tell an admin to re-consent a permission
-        /// they may already hold. See issue #329.
-        /// </remarks>
-        public static bool TryExtract(string jwt, out IReadOnlyCollection<string> permissions)
-        {
-            permissions = Array.Empty<string>();
-
-            if (string.IsNullOrEmpty(jwt))
-                return false;
-
-            var parts = jwt.Split('.');
-            if (parts.Length < 2)
-                return false;
-
-            JObject payload;
-            try
-            {
-                payload = JObject.Parse(Encoding.UTF8.GetString(Base64UrlDecode(parts[1])));
-            }
-            catch (Exception)
-            {
-                return false;
-            }
-
-            var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            // Application permissions arrive as a "roles" array...
-            if (payload["roles"] is JArray roles)
-            {
-                foreach (var r in roles)
-                    found.Add(r.ToString());
-            }
-
-            // ...delegated ones as a space-separated "scp" string. This endpoint is app-only, but both are
-            // collected so the check behaves sensibly if it is ever reused.
-            var scp = payload["scp"]?.ToString();
-            if (!string.IsNullOrEmpty(scp))
-            {
-                foreach (var s in scp.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
-                    found.Add(s);
-            }
-
-            permissions = found;
-            return true;
-        }
-
-        private static byte[] Base64UrlDecode(string input)
-        {
-            var s = input.Replace('-', '+').Replace('_', '/');
-            switch (s.Length % 4)
-            {
-                case 2: s += "=="; break;
-                case 3: s += "="; break;
-            }
-            return Convert.FromBase64String(s);
-        }
-    }
 }

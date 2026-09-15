@@ -349,7 +349,7 @@ namespace Tests.UnitTests
             StringAssert.Contains(manual, "[jailbreak_detected] [bit] NULL",
                 "The script must add the message flag column.");
 
-            StringAssert.Contains(manual, "202609101200001_RetireImportDbHacks",
+            StringAssert.Contains(manual, "202609131940001_CopilotReclaimEligibilityInputs",
                 "The stamp must be conditional on the predecessor, so the scripts cannot be applied out of order.");
 
             StringAssert.Contains(manual, "INSERT INTO dbo.__MigrationHistory",

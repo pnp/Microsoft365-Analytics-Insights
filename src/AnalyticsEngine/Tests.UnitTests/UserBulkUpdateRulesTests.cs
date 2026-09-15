@@ -174,10 +174,40 @@ namespace Tests.UnitTests
             var fromStart = updateSql.IndexOf("FROM dbo.users", System.StringComparison.Ordinal);
             var setClause = updateSql.Substring(setStart, fromStart - setStart);
 
-            return Regex.Matches(setClause, @"u\.(?<target>[a-z_][a-z0-9_]*)\s*=\s*t\.(?<source>[a-z_][a-z0-9_]*)")
+            // Two accepted shapes: a straight "u.x = t.x", and the guarded
+            // "u.x = ISNULL(t.x, u.x)" used for columns that must never be blanked by a Graph
+            // response that simply did not carry them. Both count as writing the column.
+            return Regex.Matches(
+                    setClause,
+                    @"u\.(?<target>[a-z_][a-z0-9_]*)\s*=\s*(?:ISNULL\(\s*)?t\.(?<source>[a-z_][a-z0-9_]*)",
+                    RegexOptions.IgnoreCase)
                 .Cast<Match>()
                 .Select(m => (Target: m.Groups["target"].Value, Source: m.Groups["source"].Value))
                 .ToArray();
+        }
+
+        [TestMethod]
+        public void UserBulkUpdate_NeverBlanksTheImmutableCreationDate()
+        {
+            // users.created_utc carries Entra's user.createdDateTime and is Copilot Adoption's
+            // seat-tenure proxy. It is immutable in Entra, so a NULL in a Graph response only ever
+            // means "this response did not carry it" - never "this user has no creation date".
+            //
+            // That is not hypothetical: the /users/delta $select is fixed when the delta token is
+            // first minted, so a tenant that upgrades with a stored token can keep receiving
+            // responses without createdDateTime. Writing those NULLs straight through would blank
+            // the column for every user Graph reports as changed, silently demoting every never-used
+            // seat from "probable" to "review" and emptying the reclaim recommendation.
+            StringAssert.Contains(
+                Normalise(SqlUserBulkUpdateWriter.UPDATE_FROM_TEMP_SQL),
+                "u.created_utc = ISNULL(t.created_utc, u.created_utc)",
+                "created_utc must be written with a coalescing guard so an absent value cannot erase a known one.");
+        }
+
+        /// <summary>Collapses runs of whitespace so an assertion is not hostage to SQL indentation.</summary>
+        private static string Normalise(string sql)
+        {
+            return Regex.Replace(sql, @"\s+", " ");
         }
 
         #endregion
