@@ -768,6 +768,17 @@ namespace Tests.UnitTests
                 "An unavailable fluency input must leave the tab unavailable, not published as zeros.");
             Assert.AreEqual(0, analysis.CoworkReadiness.Count,
                 "Nothing may be published from an analysis that could not be scored.");
+
+            // The tab's unavailable card otherwise tells the admin this is a missing usage-report import,
+            // which is exactly wrong here: the Cowork signals imported fine and the fault is upstream. The
+            // panel filters warnings on the word "Cowork", so the warning has to name it to be surfaced.
+            var warning = analysis.Summary.Warnings.SingleOrDefault(
+                w => w.IndexOf("Cowork", StringComparison.OrdinalIgnoreCase) >= 0);
+
+            Assert.IsNotNull(warning,
+                "The unavailable path must raise a Cowork-named warning, or the tab silently blames a "
+                + "missing import for an upstream query failure.");
+            StringAssert.Contains(warning, "licensed-user analysis");
         }
 
         #endregion

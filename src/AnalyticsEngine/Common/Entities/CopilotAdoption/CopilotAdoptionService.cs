@@ -1669,7 +1669,15 @@ namespace Common.Entities.CopilotAdoption
                 // them "build fluency first": an unavailable input rendered as a measured verdict of "not
                 // fluent enough", on the tab used to decide who gets access. Unavailable is the honest
                 // answer, and it is the same call the empty-signals guard above makes.
+                //
+                // The warning names Cowork on purpose: the panel filters warnings on that word, so this is
+                // what tells the tab's own diagnostic channel that the fault was upstream rather than the
+                // missing usage-report import its unavailable card would otherwise blame.
                 summary.CoworkReadinessAvailable = false;
+                summary.Warnings.Add(
+                    "Cowork readiness was measured, but the licensed-user analysis it takes Copilot fluency "
+                    + "from did not complete, so the tab could not be scored. This is NOT a missing usage "
+                    + "report import - the Cowork signals imported fine. Check the Health page and re-run.");
                 return;
             }
 
