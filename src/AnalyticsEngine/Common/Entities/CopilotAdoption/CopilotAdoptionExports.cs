@@ -117,6 +117,54 @@ namespace Common.Entities.CopilotAdoption
     }
 
     /// <summary>
+    /// How the Cowork readiness list is filtered and ordered.
+    ///
+    /// Shaped around the action the tab exists to produce: deciding who goes into the Cowork spending
+    /// policy. Hence <see cref="RecommendedOnly"/> rather than a score threshold as the primary filter -
+    /// the reader is picking people, not tuning a model.
+    /// </summary>
+    public class CoworkReadinessQuery
+    {
+        public string Search { get; set; }
+
+        /// <summary>Restrict to these Cowork tiers; empty means all.</summary>
+        public List<string> Tiers { get; set; } = new List<string>();
+
+        public string Department { get; set; }
+
+        public string Country { get; set; }
+
+        /// <summary>Only the people who should be in the Cowork spending policy.</summary>
+        public bool RecommendedOnly { get; set; }
+
+        /// <summary>Only people who have actually used Cowork - the evidence-backed rows.</summary>
+        public bool CoworkUsersOnly { get; set; }
+
+        public double? MinCoordinationLoad { get; set; }
+
+        public double? MinFluency { get; set; }
+
+        /// <summary>One of <see cref="CoworkSortFields"/>.</summary>
+        public string SortBy { get; set; } = CoworkSortFields.CoordinationLoad;
+
+        /// <summary>Descending by default: the strongest cases first.</summary>
+        public bool SortDescending { get; set; } = true;
+    }
+
+    /// <summary>Sortable columns of the Cowork readiness list. An allow-list: nothing here reaches SQL.</summary>
+    public static class CoworkSortFields
+    {
+        public const string CoordinationLoad = "load";
+        public const string Fluency = "fluency";
+        public const string UserPrincipalName = "upn";
+        public const string CoworkInteractions = "coworkInteractions";
+        public const string CoworkActiveDays = "coworkActiveDays";
+        public const string Meetings = "meetings";
+        public const string Department = "department";
+        public const string Tier = "tier";
+    }
+
+    /// <summary>
     /// Filtering, sorting and paging over an analysis result, plus the CSV export schemas.
     ///
     /// All of it operates on the already-scored, already-materialised lists rather than going back to
@@ -439,6 +487,148 @@ namespace Common.Entities.CopilotAdoption
 
         #endregion
 
+        #region Cowork readiness
+
+        /// <summary>Applies the filter, then the sort. Returns a new list; the source is not mutated.</summary>
+        public static List<CoworkReadinessRow> Apply(
+            IEnumerable<CoworkReadinessRow> rows,
+            CoworkReadinessQuery query)
+        {
+            var source = rows ?? Enumerable.Empty<CoworkReadinessRow>();
+            var q = query ?? new CoworkReadinessQuery();
+
+            var filtered = source.Where(row => MatchesCowork(row, q));
+            return SortCowork(filtered, q).ToList();
+        }
+
+        private static bool MatchesCowork(CoworkReadinessRow row, CoworkReadinessQuery q)
+        {
+            if (q.RecommendedOnly && !row.RecommendForPolicy) return false;
+            if (q.CoworkUsersOnly && !row.UsedCowork) return false;
+            if (q.MinCoordinationLoad.HasValue && row.CoordinationLoadScore < q.MinCoordinationLoad.Value) return false;
+            if (q.MinFluency.HasValue && row.FluencyScore < q.MinFluency.Value) return false;
+
+            if (q.Tiers != null && q.Tiers.Count > 0
+                && !q.Tiers.Contains(row.Tier, StringComparer.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (!EqualsOrEmpty(q.Department, row.Department)) return false;
+            if (!EqualsOrEmpty(q.Country, row.Country)) return false;
+
+            return MatchesSearch(q.Search,
+                row.UserPrincipalName, row.Mail, row.Department, row.JobTitle,
+                row.ManagerUserPrincipalName, row.OfficeLocation, row.CompanyName);
+        }
+
+        private static IEnumerable<CoworkReadinessRow> SortCowork(
+            IEnumerable<CoworkReadinessRow> rows,
+            CoworkReadinessQuery q)
+        {
+            switch (q.SortBy)
+            {
+                case CoworkSortFields.UserPrincipalName:
+                    return Order(rows, r => r.UserPrincipalName ?? string.Empty, q.SortDescending);
+                case CoworkSortFields.Fluency:
+                    return OrderThenUpn(rows, r => r.FluencyScore, q.SortDescending);
+                case CoworkSortFields.CoworkInteractions:
+                    return OrderThenUpn(rows, r => (double)r.CoworkInteractions, q.SortDescending);
+                case CoworkSortFields.CoworkActiveDays:
+                    return OrderThenUpn(rows, r => (double)r.CoworkActiveDays, q.SortDescending);
+                case CoworkSortFields.Meetings:
+                    return OrderThenUpn(rows, r => (double)r.TeamsMeetings, q.SortDescending);
+                case CoworkSortFields.Department:
+                    return Order(rows, r => r.Department ?? string.Empty, q.SortDescending);
+                case CoworkSortFields.Tier:
+                    // Ordered by the tier's position in the report order, not alphabetically: "Established"
+                    // before "Trialling" before "Prime candidate" is a meaningful progression, whereas an
+                    // alphabetical sort would interleave the evidence-backed tiers with the inferred ones.
+                    return OrderThenUpn(rows, r => (double)TierRank(r.Tier), q.SortDescending);
+                default:
+                    return OrderThenUpn(rows, r => r.CoordinationLoadScore, q.SortDescending);
+            }
+        }
+
+        private static int TierRank(string tier)
+        {
+            var index = CopilotAdoptionScoring.AllCoworkTiers
+                .ToList()
+                .FindIndex(t => string.Equals(t, tier, StringComparison.OrdinalIgnoreCase));
+
+            // An unknown tier sorts last rather than first, so a future addition cannot silently take over
+            // the top of a list an admin acts on.
+            return index < 0 ? int.MaxValue : index;
+        }
+
+        /// <summary>
+        /// The Cowork CSV, written to be a <b>spending-policy scoping list</b> rather than a data dump.
+        ///
+        /// <para>UPN first, because that is the column an admin pastes into the policy. Then the verdict
+        /// and - immediately next to it - whether that verdict is evidence or a prediction, so the two can
+        /// never be read apart. The measured signals follow, and the ready-written justification is last
+        /// so a row can be quoted straight into a change request.</para>
+        ///
+        /// <para>The modelled hours estimate is deliberately <b>absent</b> from this file. It is a
+        /// cohort-level figure built from an assumption, and a per-user column of modelled minutes would
+        /// be read as a measurement of that individual - which it is not, and which this product cannot
+        /// measure. It lives on its own clearly-labelled workbook sheet instead.</para>
+        /// </summary>
+        public static IReadOnlyList<CsvColumn<CoworkReadinessRow>> CoworkReadinessColumns()
+        {
+            return new List<CsvColumn<CoworkReadinessRow>>
+            {
+                new CsvColumn<CoworkReadinessRow>("User principal name", r => r.UserPrincipalName),
+                new CsvColumn<CoworkReadinessRow>("Email", r => r.Mail),
+                new CsvColumn<CoworkReadinessRow>("Department", r => r.Department),
+                new CsvColumn<CoworkReadinessRow>("Job title", r => r.JobTitle),
+                new CsvColumn<CoworkReadinessRow>("Manager", r => r.ManagerUserPrincipalName),
+                new CsvColumn<CoworkReadinessRow>("Office", r => r.OfficeLocation),
+                new CsvColumn<CoworkReadinessRow>("Country", r => r.Country),
+                new CsvColumn<CoworkReadinessRow>("Company", r => r.CompanyName),
+                new CsvColumn<CoworkReadinessRow>("Account enabled", r => r.AccountEnabled),
+
+                new CsvColumn<CoworkReadinessRow>("Add to Cowork policy", r => r.RecommendForPolicy),
+                new CsvColumn<CoworkReadinessRow>("Cowork tier", r => r.TierLabel),
+                // Evidence or inference. Sits next to the tier on purpose: "Prime candidate" is a
+                // prediction and must never be read as an observation of what the person already does.
+                new CsvColumn<CoworkReadinessRow>("Verdict based on", r => r.Basis),
+
+                new CsvColumn<CoworkReadinessRow>("Coordination load (0-100)", r => r.CoordinationLoadScore),
+                new CsvColumn<CoworkReadinessRow>("Copilot fluency (0-100)", r => r.FluencyScore),
+                new CsvColumn<CoworkReadinessRow>("Copilot adoption score (0-100)", r => r.AdoptionScore),
+                new CsvColumn<CoworkReadinessRow>("Copilot agents used", r => r.AgentsUsed),
+
+                new CsvColumn<CoworkReadinessRow>("Cowork interactions", r => r.CoworkInteractions),
+                new CsvColumn<CoworkReadinessRow>("Cowork active days", r => r.CoworkActiveDays),
+                new CsvColumn<CoworkReadinessRow>("Regular Cowork user", r => r.RegularCoworkUser),
+                new CsvColumn<CoworkReadinessRow>("Last Cowork use (UTC)", r => r.LastCoworkInteractionUtc),
+
+                new CsvColumn<CoworkReadinessRow>("Teams meetings per active day", r => r.TeamsMeetings),
+                new CsvColumn<CoworkReadinessRow>("Teams messages per active day", r => r.TeamsMessages),
+                new CsvColumn<CoworkReadinessRow>("Emails sent per active day", r => r.EmailsSent),
+                new CsvColumn<CoworkReadinessRow>("Emails read per active day", r => r.EmailsRead),
+                new CsvColumn<CoworkReadinessRow>("Files viewed or edited per active day", r => r.FilesViewedOrEdited),
+                new CsvColumn<CoworkReadinessRow>("Last Microsoft 365 activity", r => r.LastM365ActivityUtc),
+
+                new CsvColumn<CoworkReadinessRow>("Meeting score", r => r.MeetingScore),
+                new CsvColumn<CoworkReadinessRow>("Collaboration score", r => r.CollaborationScore),
+                new CsvColumn<CoworkReadinessRow>("Email score", r => r.EmailScore),
+                new CsvColumn<CoworkReadinessRow>("Document score", r => r.DocumentScore),
+
+                // Named "all Copilot Credits", never "Cowork credits". Microsoft meters Cowork against the
+                // shared Copilot Credits pool with no per-row workload discriminator, so a Cowork-only
+                // figure does not exist. Empty means not attributable - NOT zero.
+                new CsvColumn<CoworkReadinessRow>(
+                    "All Copilot Credits in period (not Cowork-only; blank = not attributable)",
+                    r => r.TotalCopilotCredits),
+
+                new CsvColumn<CoworkReadinessRow>("Justification", r => r.Rationale),
+            };
+        }
+
+        #endregion
+
         #region Shared helpers
 
         /// <summary>
@@ -480,6 +670,13 @@ namespace Common.Entities.CopilotAdoption
 
         private static IOrderedEnumerable<LicenceOpportunityRow> OrderThenUpn<TKey>(
             IEnumerable<LicenceOpportunityRow> rows, Func<LicenceOpportunityRow, TKey> key, bool descending)
+        {
+            return Order(rows, key, descending)
+                .ThenBy(r => r.UserPrincipalName ?? string.Empty, StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static IOrderedEnumerable<CoworkReadinessRow> OrderThenUpn<TKey>(
+            IEnumerable<CoworkReadinessRow> rows, Func<CoworkReadinessRow, TKey> key, bool descending)
         {
             return Order(rows, key, descending)
                 .ThenBy(r => r.UserPrincipalName ?? string.Empty, StringComparer.OrdinalIgnoreCase);

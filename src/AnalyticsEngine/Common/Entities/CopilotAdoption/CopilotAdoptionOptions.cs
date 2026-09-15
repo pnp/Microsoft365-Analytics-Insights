@@ -291,6 +291,175 @@ namespace Common.Entities.CopilotAdoption
 
         #endregion
 
+        #region Cowork readiness
+
+        /// <summary>
+        /// Weight of Teams collaboration volume (chat + channel messages) in the coordination-load score.
+        ///
+        /// The four coordination weights should sum to 100, so the resulting score reads as a percentage.
+        /// They are separate from the <c>Opportunity*</c> family on purpose: that family answers "would this
+        /// person use Copilot at all?", this one answers "does this person have work Cowork could take off
+        /// them?". Re-tuning one must not silently move the other.
+        /// </summary>
+        [JsonProperty("coworkCollaborationWeight")]
+        public double CoworkCollaborationWeight { get; set; } = 20;
+
+        /// <summary>
+        /// Weight of meetings in the coordination-load score - the heaviest of the four.
+        ///
+        /// Meetings are weighted above raw message volume because they are the clearest marker of the
+        /// multi-step, multi-person coordination Cowork is built to absorb: a meeting implies preparation,
+        /// notes, follow-ups and scheduling, which is a chain of delegable tasks rather than a single
+        /// message. A person in back-to-back meetings has more recoverable time than one who simply sends a
+        /// lot of chat.
+        /// </summary>
+        [JsonProperty("coworkMeetingWeight")]
+        public double CoworkMeetingWeight { get; set; } = 35;
+
+        /// <summary>Weight of email volume (sent + read) in the coordination-load score.</summary>
+        [JsonProperty("coworkEmailWeight")]
+        public double CoworkEmailWeight { get; set; } = 25;
+
+        /// <summary>
+        /// Weight of document work (SharePoint / OneDrive files viewed or edited) in the coordination-load
+        /// score. Cowork produces and revises artefacts, so document churn is direct evidence of work it
+        /// can do.
+        /// </summary>
+        [JsonProperty("coworkDocumentWeight")]
+        public double CoworkDocumentWeight { get; set; } = 20;
+
+        /// <summary>
+        /// Teams messages on a typical active day that score full marks for the collaboration component.
+        ///
+        /// All four Cowork targets are expressed <b>per active day</b>, matching how
+        /// <see cref="CopilotAdoptionSql"/> reduces Graph's daily usage reports. That is what keeps the
+        /// score meaning the same thing at any reporting-window length - a raw window total would make the
+        /// same person qualify over 180 days and fail over 7.
+        /// </summary>
+        [JsonProperty("coworkCollaborationTarget")]
+        public double CoworkCollaborationTarget { get; set; } = 50;
+
+        /// <summary>Meetings on a typical active day that score full marks. 5 is a heavily-scheduled day.</summary>
+        [JsonProperty("coworkMeetingTarget")]
+        public double CoworkMeetingTarget { get; set; } = 5;
+
+        /// <summary>Emails sent + read on a typical active day that score full marks.</summary>
+        [JsonProperty("coworkEmailTarget")]
+        public double CoworkEmailTarget { get; set; } = 80;
+
+        /// <summary>Files viewed or edited on a typical active day that score full marks.</summary>
+        [JsonProperty("coworkDocumentTarget")]
+        public double CoworkDocumentTarget { get; set; } = 30;
+
+        /// <summary>
+        /// Coordination load at or above which a user has enough delegable work for Cowork to be worth
+        /// enabling. Below it, Cowork is unlikely to repay the credits it consumes.
+        /// </summary>
+        [JsonProperty("coworkLoadMinScore")]
+        public double CoworkLoadMinScore { get; set; } = 50;
+
+        /// <summary>
+        /// Copilot engagement at or above which a user is fluent enough to delegate multi-step work.
+        ///
+        /// Defaults to the same value as <see cref="EstablishedScore"/> - the "habit formed" line - because
+        /// that is exactly the claim being made: Cowork is a step up from Copilot, not an entry point. Left
+        /// as its own option so the Cowork bar can be raised without moving every band on the main report.
+        /// Someone who has not yet formed a Copilot habit will not hand a multi-day task to an agent, and
+        /// enabling them first wastes both the credits and the change-management effort.
+        /// </summary>
+        [JsonProperty("coworkFluencyMinScore")]
+        public double CoworkFluencyMinScore { get; set; } = 50;
+
+        /// <summary>
+        /// Distinct days of Cowork use inside the reporting window that count as regular adoption rather
+        /// than a trial.
+        ///
+        /// Counted in <b>days, not interactions</b>, for the same reason
+        /// <see cref="OpportunityProvenDemandMinActiveDays"/> is: a day is a day whatever the window
+        /// length, so the verdict does not move when the reader changes the period drop-down. One long
+        /// afternoon of experimentation is not adoption.
+        /// </summary>
+        [JsonProperty("coworkRegularMinActiveDays")]
+        public int CoworkRegularMinActiveDays { get; set; } = 3;
+
+        /// <summary>
+        /// Points added to a user's Copilot fluency score when they have already used at least one Copilot
+        /// agent, capped so it can never manufacture fluency on its own.
+        ///
+        /// Using an agent is the nearest existing behaviour to delegating work to Cowork - it is the same
+        /// mental step of handing a task to something that acts on your behalf - so it is genuine evidence
+        /// of readiness that the engagement score does not otherwise capture. Deliberately a modest uplift:
+        /// it should promote a borderline user, not carry an inactive one over the bar.
+        /// </summary>
+        [JsonProperty("coworkAgentFamiliarityUplift")]
+        public double CoworkAgentFamiliarityUplift { get; set; } = 10;
+
+        /// <summary>How many Cowork readiness rows are pulled into memory to be scored.</summary>
+        [JsonProperty("maxCoworkUsersScored")]
+        public int MaxCoworkUsersScored { get; set; } = 50000;
+
+        #endregion
+
+        #region Cowork value estimate (MODELLED - not measured)
+
+        /// <summary>
+        /// Minutes of preparation, note-taking and follow-up that Cowork is assumed to absorb per meeting.
+        /// </summary>
+        /// <remarks>
+        /// <b>This and its siblings are assumptions, not measurements.</b> Nothing in the database observes
+        /// time saved, and this product cannot measure it. What the database <i>does</i> observe is the
+        /// volume of delegable work - meetings, mail threads, document touches - and these constants turn
+        /// that observed volume into an illustrative range.
+        /// <para>
+        /// Everything derived from them must be labelled as modelled, must be rendered with the assumption
+        /// visible on the same surface, and must never be mixed into a figure presented as evidence. The
+        /// rest of this report is defensible because it shows its working; an unlabelled hours-saved number
+        /// quoted in a board pack would discredit all of it.
+        /// </para>
+        /// </remarks>
+        [JsonProperty("coworkMinutesSavedPerMeeting")]
+        public double CoworkMinutesSavedPerMeeting { get; set; } = 5;
+
+        /// <summary>Minutes assumed saved per mail thread Cowork drafts, triages or summarises.</summary>
+        [JsonProperty("coworkMinutesSavedPerMailThread")]
+        public double CoworkMinutesSavedPerMailThread { get; set; } = 1;
+
+        /// <summary>Minutes assumed saved per document Cowork drafts, revises or summarises.</summary>
+        [JsonProperty("coworkMinutesSavedPerDocument")]
+        public double CoworkMinutesSavedPerDocument { get; set; } = 3;
+
+        /// <summary>
+        /// Fraction of the assumption applied to produce the <b>low</b> end of the reported range; the high
+        /// end uses the assumption as stated.
+        ///
+        /// The estimate is published as a range rather than a single number because a point estimate
+        /// invites precision that does not exist. A reader who sees "120-240 hours a month" understands
+        /// they are being shown a model; one who sees "183 hours" believes it was counted.
+        /// </summary>
+        [JsonProperty("coworkEstimateLowerBoundRatio")]
+        public double CoworkEstimateLowerBoundRatio { get; set; } = 0.5;
+
+        /// <summary>
+        /// Fully-loaded hourly cost used to express the modelled time saving in money.
+        ///
+        /// <b>Null by default, and null means no monetary figure is produced at all.</b> There is no
+        /// defensible default for this - it varies by role, country and employer - so the tool does not
+        /// invent one. An admin who wants a currency figure supplies the rate and owns it; until then the
+        /// estimate is reported in hours only.
+        /// </summary>
+        [JsonProperty("coworkLoadedCostPerHour")]
+        public double? CoworkLoadedCostPerHour { get; set; }
+
+        /// <summary>
+        /// Currency code for <see cref="CoworkLoadedCostPerHour"/>, used only as a display label. Not
+        /// defaulted, and no conversion is ever performed: the tool reports the number it was given in the
+        /// units it was given.
+        /// </summary>
+        [JsonProperty("coworkCurrencyCode")]
+        public string CoworkCurrencyCode { get; set; }
+
+        #endregion
+
         /// <summary>
         /// Hard ceiling on how many licensed users are pulled into memory to be scored. The scored set
         /// is held in C# (not SQL) so that the scoring rules have exactly one implementation, which is

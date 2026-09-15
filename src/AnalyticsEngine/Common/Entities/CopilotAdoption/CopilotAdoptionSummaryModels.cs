@@ -463,6 +463,80 @@ namespace Common.Entities.CopilotAdoption
 
         #endregion
 
+        #region Cowork readiness (the Cowork tab)
+
+        /// <summary>
+        /// True when the Cowork readiness analysis ran and produced rows. False on a tenant with no Copilot
+        /// seats, or where the step failed - in which case the tab must say so rather than render an empty
+        /// quadrant that reads as "nobody is a candidate".
+        /// </summary>
+        [JsonProperty("coworkReadinessAvailable")]
+        public bool CoworkReadinessAvailable { get; set; }
+
+        /// <summary>Seat holders scored for Cowork readiness.</summary>
+        [JsonProperty("coworkScoredUsers")]
+        public int CoworkScoredUsers { get; set; }
+
+        /// <summary>Seat holders using Cowork on enough separate days to count as regular use.</summary>
+        [JsonProperty("coworkEstablishedUsers")]
+        public int CoworkEstablishedUsers { get; set; }
+
+        /// <summary>Seat holders who have used Cowork but not yet regularly.</summary>
+        [JsonProperty("coworkTriallingUsers")]
+        public int CoworkTriallingUsers { get; set; }
+
+        /// <summary>
+        /// The headline number: fluent Copilot users carrying a heavy coordination load who are not yet
+        /// using Cowork. This is the population a rollout should target first.
+        /// </summary>
+        [JsonProperty("coworkPrimeCandidates")]
+        public int CoworkPrimeCandidates { get; set; }
+
+        /// <summary>Users with the workload for Cowork but not yet the Copilot habit to delegate to it.</summary>
+        [JsonProperty("coworkBuildFluencyFirst")]
+        public int CoworkBuildFluencyFirst { get; set; }
+
+        /// <summary>
+        /// Everyone who should be in the Cowork spending policy: the prime candidates plus everyone already
+        /// using Cowork. Deliberately includes current users - a policy scoped from candidates alone would
+        /// revoke access from the people already proving the capability works.
+        /// </summary>
+        [JsonProperty("coworkRecommendedForPolicy")]
+        public int CoworkRecommendedForPolicy { get; set; }
+
+        /// <summary>Mean coordination load across scored seat holders.</summary>
+        [JsonProperty("coworkAverageCoordinationLoad")]
+        public double CoworkAverageCoordinationLoad { get; set; }
+
+        /// <summary>Mean Copilot fluency across scored seat holders.</summary>
+        [JsonProperty("coworkAverageFluency")]
+        public double CoworkAverageFluency { get; set; }
+
+        /// <summary>Every Cowork tier with its population, in report order.</summary>
+        [JsonProperty("coworkTiers")]
+        public List<CoworkTierSummary> CoworkTiers { get; set; } = new List<CoworkTierSummary>();
+
+        /// <summary>Departments plotted on the readiness quadrant.</summary>
+        [JsonProperty("coworkQuadrant")]
+        public List<CoworkQuadrantPoint> CoworkQuadrant { get; set; } = new List<CoworkQuadrantPoint>();
+
+        /// <summary>Departments ranked for rollout sequencing.</summary>
+        [JsonProperty("coworkByDepartment")]
+        public List<CoworkSegmentRow> CoworkByDepartment { get; set; } = new List<CoworkSegmentRow>();
+
+        /// <summary>The tenant's shared Copilot Credit position, as rollout headroom.</summary>
+        [JsonProperty("coworkCreditPosition")]
+        public CoworkCreditPosition CoworkCreditPosition { get; set; } = new CoworkCreditPosition();
+
+        /// <summary>
+        /// The modelled time/cost estimate for the recommended cohort. Every figure inside is an
+        /// assumption applied to observed volume - see <see cref="CoworkValueEstimate"/>.
+        /// </summary>
+        [JsonProperty("coworkValueEstimate")]
+        public CoworkValueEstimate CoworkValueEstimate { get; set; } = new CoworkValueEstimate();
+
+        #endregion
+
         #region Licence opportunity
 
         /// <summary>Users with no Copilot seat who nevertheless used Copilot Chat inside the window.</summary>

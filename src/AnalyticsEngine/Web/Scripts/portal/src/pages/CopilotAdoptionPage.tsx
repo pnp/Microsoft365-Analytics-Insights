@@ -43,6 +43,7 @@ import GaugeRing, { bandTone, describeBands } from '../components/charts/GaugeRi
 import RadarChart from '../components/charts/RadarChart';
 import AdoptionFunnel from '../components/copilotAdoption/AdoptionFunnel';
 import LicensedUsersPanel from '../components/copilotAdoption/LicensedUsersPanel';
+import CoworkPanel from '../components/copilotAdoption/CoworkPanel';
 import OpportunitiesPanel from '../components/copilotAdoption/OpportunitiesPanel';
 import HabitStrip from '../components/copilotAdoption/HabitStrip';
 import IntensityScatter from '../components/copilotAdoption/IntensityScatter';
@@ -63,7 +64,7 @@ const WINDOW_OPTIONS = [
   { value: 180, label: 'Last 180 days' },
 ];
 
-type AdoptionTab = 'overview' | 'licensed' | 'unlicensed' | 'agents' | 'opportunities' | 'method';
+type AdoptionTab = 'overview' | 'licensed' | 'cowork' | 'unlicensed' | 'agents' | 'opportunities' | 'method';
 
 const useStyles = makeStyles({
   header: {
@@ -361,6 +362,7 @@ export default function CopilotAdoptionPage() {
             <TabList selectedValue={tab} onTabSelect={onTabSelect}>
               <Tab value="overview">Overview</Tab>
               <Tab value="licensed">Licensed users</Tab>
+              <Tab value="cowork">Cowork</Tab>
               <Tab value="unlicensed">Unlicensed usage</Tab>
               <Tab value="agents">Agents</Tab>
               <Tab value="opportunities">Licence opportunities</Tab>
@@ -447,6 +449,15 @@ export default function CopilotAdoptionPage() {
                   options={summary.options}
                   windowDays={windowDays}
                   sql={sql}
+                />
+              )}
+
+              {tab === 'cowork' && (
+                <CoworkPanel
+                  windowDays={windowDays}
+                  summary={summary}
+                  filterOptions={filterOptions}
+                  options={summary.options}
                 />
               )}
 
@@ -1379,6 +1390,88 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
               <Text>
                 Disabled accounts are excluded from the candidate list. They are, however, kept in the licensed
                 user list - a disabled account still holding a Copilot licence is the clearest reclaim there is.
+              </Text>
+            </div>
+          </AccordionPanel>
+        </AccordionItem>
+
+        <AccordionItem value="cowork">
+          <AccordionHeader>How Cowork readiness is assessed</AccordionHeader>
+          <AccordionPanel>
+            <div className={styles.method}>
+              <Text>
+                <strong>Microsoft 365 Copilot Cowork has no licence of its own.</strong> It requires a
+                Microsoft 365 Copilot licence as a prerequisite, and is then billed by usage against
+                Copilot Credits, with access granted by a <em>spending policy</em> scoped to users or
+                groups in the Microsoft 365 admin centre. So the Cowork tab does not recommend a
+                purchase - it produces the list of people to put in that policy.
+              </Text>
+              <Text>
+                Cowork is an agentic delegation layer: you describe an outcome and it plans and runs
+                multi-step work across Outlook, Teams, the Office apps and SharePoint or OneDrive. Two
+                things therefore have to be true before enabling someone is worthwhile, and they are
+                scored as two independent axes rather than blended into one number - a blend would
+                average a heavy-workload novice and a fluent user with nothing to delegate into the same
+                middling score, and those two need opposite interventions.
+              </Text>
+              <Text>
+                <strong>Coordination load (0-100)</strong> is how much delegable, multi-step work the
+                person carries. Four weighted signals, each a capped ratio against its own target:
+                meetings ({o.coworkMeetingWeight} points, target {o.coworkMeetingTarget} a day), email
+                ({o.coworkEmailWeight}, target {o.coworkEmailTarget}), Teams messages
+                ({o.coworkCollaborationWeight}, target {o.coworkCollaborationTarget}) and document work
+                ({o.coworkDocumentWeight}, target {o.coworkDocumentTarget}). Meetings carry the most
+                weight because a meeting implies preparation, notes and follow-ups - a chain of delegable
+                tasks - rather than a single message. Capping each component is what stops one automated
+                mailbox scoring as a prime candidate.
+              </Text>
+              <Text>
+                <strong>Copilot fluency (0-100)</strong> is the engagement score from the Licensed users
+                tab, plus up to {o.coworkAgentFamiliarityUplift} points where the person has already used
+                a Copilot agent - the nearest existing behaviour to delegating work to Cowork. The uplift
+                is capped so it can promote a borderline user but never carry an inactive one over the
+                bar. The engagement score is joined in from the licensed-user analysis rather than
+                recalculated, so the two tabs can never disagree about whether someone is fluent.
+              </Text>
+              <Text>
+                The bars are {o.coworkLoadMinScore} for coordination load and {o.coworkFluencyMinScore}{' '}
+                for fluency. <strong>Observed Cowork use is tested first and wins outright:</strong>{' '}
+                {o.coworkRegularMinActiveDays} or more separate days of use is &quot;Established&quot;,
+                any use below that is &quot;Trialling&quot;. Regularity is counted in days rather than
+                interactions because a large interaction count on a single day is experimentation, not a
+                habit. Only where there is no Cowork use at all does the prediction apply.
+              </Text>
+              <Text>
+                <strong>Two of the six tiers are evidence; four are predictions.</strong> Established and
+                Trialling describe what somebody has actually done. Prime candidate, Build fluency first,
+                Low coordination load and Not indicated are inferences from workload and Copilot use -
+                nobody has observed those people using Cowork. Every surface labels which is which,
+                because presenting a forecast as a measurement is the most damaging thing this tab could
+                do.
+              </Text>
+              <Text>
+                The recommended policy list is the prime candidates <em>plus</em> everyone already using
+                Cowork. Existing users are included deliberately: a policy scoped from candidates alone
+                would revoke access from the very people proving the capability works.
+              </Text>
+              <Text>
+                <strong>The time-saved estimate is a model, not a measurement.</strong> This product does
+                not and cannot measure time saved. The meeting, email and document volumes are observed
+                from Microsoft&#8217;s usage reports; the hours are those volumes multiplied by an
+                editable assumption ({o.coworkMinutesSavedPerMeeting} minutes per meeting,{' '}
+                {o.coworkMinutesSavedPerMailThread} per email, {o.coworkMinutesSavedPerDocument} per
+                document), published as a range rather than a single figure. No monetary value is shown
+                at all unless a fully-loaded hourly cost has been configured - there is no defensible
+                default for that, so the tool does not invent one.
+              </Text>
+              <Text>
+                <strong>Credit figures are the shared Copilot Credits pool, not Cowork spend.</strong>{' '}
+                Microsoft meters Cowork against the same credit pool as Copilot Studio and other
+                credit-billed workloads, and publishes no per-workload discriminator, so Cowork&#8217;s
+                own share cannot be separated out and is not guessed at. The tenant credit position is
+                shown as rollout headroom, and any per-user credit figure is that person&#8217;s total
+                across every credit-billed Copilot workload. A blank means the credits could not be
+                attributed to that person - not that they cost nothing.
               </Text>
             </div>
           </AccordionPanel>
