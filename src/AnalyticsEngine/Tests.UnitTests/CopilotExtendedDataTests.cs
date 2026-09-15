@@ -680,7 +680,7 @@ namespace Tests.UnitTests
             Assert.IsNotNull(json);
             var messages = JsonConvert.DeserializeObject<List<Message>>(json);
             Assert.AreEqual(2, messages.Count);
-            Assert.IsFalse(messages[0].IsPrompt);
+            Assert.AreEqual(false, messages[0].IsPrompt);
         }
 
         [TestMethod]
