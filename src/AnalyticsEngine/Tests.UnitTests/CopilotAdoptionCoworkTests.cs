@@ -710,5 +710,66 @@ namespace Tests.UnitTests
         }
 
         #endregion
+
+        #region Publication guards
+
+        private static CopilotAdoptionAnalysis AnalysisWithOneCoworkSignal()
+        {
+            var signal = HeavyCoordinator();
+            signal.CoworkInteractions = 12;
+            signal.CoworkActiveDays = 5;
+
+            return new CopilotAdoptionAnalysis
+            {
+                CoworkSignals = new List<CoworkReadinessSignalRow> { signal },
+            };
+        }
+
+        [TestMethod]
+        public void Cowork_IsPublished_WhenTheLicensedUserAnalysisIsPresent()
+        {
+            // The control for the test below: with the fluency input available, the tab publishes.
+            var analysis = AnalysisWithOneCoworkSignal();
+            analysis.LicensedUsers = new List<LicensedUserAdoptionRow>
+            {
+                new LicensedUserAdoptionRow
+                {
+                    UserId = 1,
+                    UserPrincipalName = "aisha.rahman@contoso.com",
+                    AdoptionScore = 70,
+                    AgentsUsed = 2,
+                },
+            };
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.IsTrue(analysis.Summary.CoworkReadinessAvailable);
+            Assert.AreEqual(1, analysis.CoworkReadiness.Count);
+        }
+
+        [TestMethod]
+        public void Cowork_IsNotPublished_WhenTheLicensedUserAnalysisIsMissing()
+        {
+            // Fluency is JOINED IN from the licensed-user analysis, never recalculated. If that analysis
+            // produced nothing while Cowork signals exist, the input is unavailable - it is not a measured
+            // zero. CoworkReadinessSql semi-joins to seat holders, so signals imply seat holders exist,
+            // which means the licensed-user step failed and SafeAsync degraded it to a warning.
+            //
+            // Publishing anyway scored everyone at fluency 0 and banded them "build fluency first": a
+            // missing input rendered as a verdict of "not fluent enough", on the tab that decides who gets
+            // access. This is the same class of mistake as rendering unattributable credits as 0, which the
+            // test above forbids - and the same answer applies.
+            var analysis = AnalysisWithOneCoworkSignal();
+            analysis.LicensedUsers = new List<LicensedUserAdoptionRow>();
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.IsFalse(analysis.Summary.CoworkReadinessAvailable,
+                "An unavailable fluency input must leave the tab unavailable, not published as zeros.");
+            Assert.AreEqual(0, analysis.CoworkReadiness.Count,
+                "Nothing may be published from an analysis that could not be scored.");
+        }
+
+        #endregion
     }
 }

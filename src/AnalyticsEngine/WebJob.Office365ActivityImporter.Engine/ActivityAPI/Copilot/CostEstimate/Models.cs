@@ -55,6 +55,15 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstima
         ///
         /// Consumers must therefore treat null as "direction unknown" and neither bill it nor count it as
         /// a prompt. See <c>CopilotCreditEstimation</c>.
+        ///
+        /// One consequence is worth knowing about, because it is invisible from here. This model is what
+        /// <c>CopilotAuditEventManager.SerializeMessages</c> re-serialises into the staging table's
+        /// <c>messages_json</c>, and the merge derives a fallback <c>persisted_message_id</c> from
+        /// event id + this flag + size for messages that carry no <c>Id</c>. An omitted flag used to
+        /// serialise as <c>false</c> and now serialises as <c>null</c>, so that fallback id changes for
+        /// exactly those messages. See the comment above <c>parsed_messages</c> in
+        /// <c>common_upsert_copilot_agents.sql</c> for the bounded one-time effect that has on re-staged
+        /// events, and do not "fix" it by making this non-nullable again.
         /// </remarks>
         [JsonProperty("isPrompt")]
         public bool? IsPrompt { get; set; }

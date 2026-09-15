@@ -494,6 +494,17 @@ BEGIN
 -- differing only in the jailbreak flag would become two rows sharing one generated persisted_message_id.
 -- MAX keeps the row set byte-identical to before and answers "was a jailbreak flagged for this message",
 -- with NULL preserved when the payload omits the field entirely (MAX ignores NULLs; all-NULL stays NULL).
+--
+-- KNOWN ONE-TIME UPGRADE EFFECT, accepted deliberately. Message.IsPrompt became bool? in the same change
+-- that added jailbreak_detected. Before it, a payload omitting isPrompt deserialised to false and was
+-- re-serialised into messages_json as "isPrompt": false, so this CASE produced 0 and the fallback id ended
+-- ':0:'. It now serialises as null, so the CASE produces NULL and the fallback id ends ':u:'. For a message
+-- that has BOTH no Id AND no isPrompt, a row stored before the upgrade therefore no longer matches the id
+-- computed after it, and the NOT EXISTS below inserts a second row for the same logical message when the
+-- importer re-stages that event inside its rolling look-back window. It is bounded (only that window, only
+-- that intersection, once) and no report reads this table, so it is not worth a data-state guard here - and
+-- the two rows are not equivalent anyway: the pre-upgrade row asserts is_prompt = 0, which is the very
+-- mis-statement the nullability change exists to stop. Recorded so it is not rediscovered as a new defect.
 ;WITH parsed_messages AS (
     SELECT
         imports.event_id,

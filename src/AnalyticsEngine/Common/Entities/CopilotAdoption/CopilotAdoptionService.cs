@@ -1656,10 +1656,23 @@ namespace Common.Entities.CopilotAdoption
                 return;
             }
 
-            // The engagement score and agent count are carried across from the licensed-user analysis.
-            // A seat holder missing from that list scores zero fluency, which is the correct answer: they
-            // had no Copilot activity to score.
+            // The engagement score and agent count are carried across from the licensed-user analysis
+            // rather than recalculated, so the two tabs cannot disagree about the same person.
             var licensed = analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>();
+
+            if (licensed.Count == 0)
+            {
+                // Cowork signals exist but the licensed-user analysis produced nothing. That combination
+                // cannot occur naturally - CoworkReadinessSql semi-joins to seat holders, so signals imply
+                // seat holders - which means the licensed-user step failed and SafeAsync degraded it to a
+                // warning. Publishing anyway would score every one of these people at zero fluency and band
+                // them "build fluency first": an unavailable input rendered as a measured verdict of "not
+                // fluent enough", on the tab used to decide who gets access. Unavailable is the honest
+                // answer, and it is the same call the empty-signals guard above makes.
+                summary.CoworkReadinessAvailable = false;
+                return;
+            }
+
             var scoreByUser = new Dictionary<int, LicensedUserAdoptionRow>();
             foreach (var user in licensed)
             {

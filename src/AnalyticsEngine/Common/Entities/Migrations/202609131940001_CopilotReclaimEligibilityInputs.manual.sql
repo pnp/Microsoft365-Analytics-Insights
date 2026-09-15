@@ -6,8 +6,10 @@
    page treat it as applied.
 
    PREREQUISITE
-     202609101200001_RetireImportDbHacks must already be stamped. This is the only manual script in
-     this release.
+     202609101200001_RetireImportDbHacks must already be stamped. This release ships TWO manual
+     scripts and they must be run in migration-id order: this one first, then
+     202609151440027_CopilotPromptSafetyFields.manual.sql, which refuses to stamp unless this
+     migration is already recorded.
 
    WHAT IT DOES
      Adds dbo.users.created_utc as the Graph user.createdDateTime account-age proxy for reclaim grace
