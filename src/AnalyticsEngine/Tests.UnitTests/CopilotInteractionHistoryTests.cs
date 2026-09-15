@@ -10,6 +10,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHistory;
 using WebJob.Office365ActivityImporter.Engine.Graph.User;
@@ -305,12 +306,12 @@ namespace Tests.UnitTests
         public void TokenPermissions_ReadApplicationRolesAndDelegatedScopes()
         {
             var jwt = FakeJwt("{ \"roles\": [\"AiEnterpriseInteraction.Read.All\", \"User.Read.All\"] }");
-            var permissions = GraphTokenPermissions.Extract(jwt);
+            var permissions = AccessTokenPermissions.Extract(jwt);
 
             CollectionAssert.Contains(permissions.ToList(), "AiEnterpriseInteraction.Read.All");
             Assert.IsTrue(permissions.Any(p => GraphAiInteractionSourceLoader.InteractionReadPermissions.Contains(p)));
 
-            var scoped = GraphTokenPermissions.Extract(FakeJwt("{ \"scp\": \"User.Read Mail.Read\" }"));
+            var scoped = AccessTokenPermissions.Extract(FakeJwt("{ \"scp\": \"User.Read Mail.Read\" }"));
             CollectionAssert.Contains(scoped.ToList(), "Mail.Read");
         }
 
@@ -319,13 +320,13 @@ namespace Tests.UnitTests
         {
             // This is the expected state until an admin consents, so it must be a clean "no", not an
             // exception, and definitely not a 403 per user for the whole pilot group.
-            var permissions = GraphTokenPermissions.Extract(FakeJwt("{ \"roles\": [\"Reports.Read.All\"] }"));
+            var permissions = AccessTokenPermissions.Extract(FakeJwt("{ \"roles\": [\"Reports.Read.All\"] }"));
             Assert.IsFalse(permissions.Any(p => GraphAiInteractionSourceLoader.InteractionReadPermissions.Contains(p)));
 
             // Malformed input must not throw either.
-            Assert.AreEqual(0, GraphTokenPermissions.Extract(null).Count);
-            Assert.AreEqual(0, GraphTokenPermissions.Extract("not-a-jwt").Count);
-            Assert.AreEqual(0, GraphTokenPermissions.Extract("a.!!!notbase64!!!.c").Count);
+            Assert.AreEqual(0, AccessTokenPermissions.Extract(null).Count);
+            Assert.AreEqual(0, AccessTokenPermissions.Extract("not-a-jwt").Count);
+            Assert.AreEqual(0, AccessTokenPermissions.Extract("a.!!!notbase64!!!.c").Count);
         }
 
         #endregion
