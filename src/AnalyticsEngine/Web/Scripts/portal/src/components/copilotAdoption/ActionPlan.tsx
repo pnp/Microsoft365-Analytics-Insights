@@ -14,6 +14,8 @@ export const ACTION_COLOUR: Record<string, string> = {
   grow: '#2b7cc4',
   sustain: '#008272',
   advocate: '#107c10',
+  review: '#8a8886',
+  excluded: '#605e5c',
 };
 
 const useStyles = makeStyles({

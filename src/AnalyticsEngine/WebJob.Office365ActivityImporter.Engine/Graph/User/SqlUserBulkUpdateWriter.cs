@@ -80,6 +80,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 id              INT          NOT NULL,
                 azure_ad_id     NVARCHAR(450) NULL,
                 account_enabled BIT           NULL,
+                created_utc     DATETIME2(7)  NULL,
                 mail            NVARCHAR(450) NULL,
                 postalcode      NVARCHAR(50)  NULL,
                 department_id   INT           NULL,
@@ -93,10 +94,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 last_updated    DATETIME      NOT NULL
             )";
 
+        /// <summary>
+        /// Applies one batch to <c>dbo.users</c>.
+        /// </summary>
+        /// <remarks>
+        /// <c>created_utc</c> is written with a coalescing guard rather than straight through. It
+        /// carries Entra's immutable <c>user.createdDateTime</c>, so a NULL arriving from Graph only
+        /// ever means "this response did not include it" - never "this user has no creation date".
+        /// The <c>/users/delta</c> <c>$select</c> is fixed when the delta token is first minted, so a
+        /// tenant that upgrades with a stored token can keep receiving responses without it. Writing
+        /// those NULLs through would blank the column for every user Graph reports as changed, which
+        /// would silently demote every never-used Copilot seat from "probable" to "review" and empty
+        /// the reclaim recommendation. Every other column here is genuinely mutable and is written as
+        /// supplied.
+        /// </remarks>
         internal const string UPDATE_FROM_TEMP_SQL = @"
             UPDATE u
             SET u.azure_ad_id            = t.azure_ad_id,
                 u.account_enabled        = t.account_enabled,
+                u.created_utc            = ISNULL(t.created_utc, u.created_utc),
                 u.mail                   = t.mail,
                 u.postalcode             = t.postalcode,
                 u.department_id          = t.department_id,

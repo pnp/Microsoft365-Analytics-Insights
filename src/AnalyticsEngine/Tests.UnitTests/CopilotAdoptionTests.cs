@@ -8,9 +8,16 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Security.Claims;
+using System.Security.Principal;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Web.Http;
+using System.Web.Http.Controllers;
+using System.Web.Http.Routing;
 using CopilotAdoptionAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.CopilotAdoptionAPIController;
 
 namespace Tests.UnitTests
@@ -245,8 +252,14 @@ namespace Tests.UnitTests
             Assert.AreEqual(CopilotAdoptionScoring.SignalSourceAudit, scored.SignalSource);
             Assert.AreEqual(2, scored.ActiveDays, "The audit figures, not Microsoft's.");
             Assert.AreEqual(4, scored.Interactions);
-            Assert.AreEqual(AdoptionBand.Developing, scored.Band,
-                "Scored on the audit figures this is a light user; Microsoft's much larger numbers must not leak in.");
+            Assert.AreNotEqual(AdoptionBand.Champion, scored.Band,
+                "Microsoft's 500 prompts across 20 days and 6 apps would band this user Champion. That is "
+                + "the leak this test exists to catch.");
+            Assert.AreEqual(AdoptionBand.Trialling, scored.Band,
+                "Four interactions across two days of a 28-day window is occasional use. (This read "
+                + "Developing until the depth component was made confidence-weighted: two active days "
+                + "used to earn 40% of the depth marks outright, which flattered a two-day user into a "
+                + "band whose advice is 'a habit is forming'.)");
         }
 
         [TestMethod]
@@ -278,6 +291,65 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(20d, CopilotAdoptionScoring.AvailableWorkingDays(options), 0.001);
             Assert.AreEqual(12d, CopilotAdoptionScoring.TargetActiveDays(options), 0.001);
+        }
+
+        [TestMethod]
+        public void BrandNewInactiveUser_IsTooNewToJudgeNotReclaimable()
+        {
+            // New starters are the highest-risk false positive: without a tenure grace period a person
+            // licensed five days ago is scored against a full month and lands in the reclaim list before
+            // onboarding has had a fair chance to work.
+            var row = UsageRow(interactions: 0, activeDays: 0, appsUsed: 0, lastUse: null);
+            row.AccountEnabled = true;
+            row.AccountCreatedUtc = Now.AddDays(-5);
+
+            var scored = CopilotAdoptionScoring.Score(row, WindowStart, Now, auditAvailable: true);
+
+            Assert.AreEqual(AdoptionBand.NeverUsed, scored.Band, "The raw usage state is still true.");
+            Assert.IsTrue(scored.TooNewToJudge);
+            Assert.AreEqual(CopilotAdoptionScoring.ReclaimEligibilityTiers.Review, scored.ReclaimEligibility,
+                "Too-new users need a later review, not an automatic reclaim recommendation.");
+            Assert.AreEqual(CopilotAdoptionScoring.AdoptionActionCodes.Review, scored.RecommendedActionCode);
+            StringAssert.Contains(scored.RecommendedAction, "Too new to judge");
+            Assert.AreEqual(CopilotAdoptionScoring.TenureBasisAccountAge, scored.TenureBasis,
+                "Until seat-tenure history exists, the row must say it used account age.");
+        }
+
+        [TestMethod]
+        public void BrandNewHighlyActiveUser_GetsProratedFrequencyTarget()
+        {
+            // The grace period protects in both directions. A daily user who joined last week is a
+            // champion-in-progress, not a Trialling user, because they could not possibly have been
+            // active on the full-window target days.
+            var row = UsageRow(interactions: 30, activeDays: 5, appsUsed: 3, lastUse: Now.AddDays(-1));
+            row.AccountEnabled = true;
+            row.AccountCreatedUtc = Now.AddDays(-5);
+
+            var scored = CopilotAdoptionScoring.Score(row, WindowStart, Now, auditAvailable: true);
+
+            Assert.IsTrue(scored.ExpectedActiveDays < CopilotAdoptionScoring.TargetActiveDays(CopilotAdoptionOptions.Default),
+                "Frequency must be prorated while the account-age tenure proxy is inside the grace period.");
+            Assert.AreEqual(100, scored.FrequencyScore);
+            Assert.AreEqual(AdoptionBand.Champion, scored.Band);
+            Assert.IsFalse(scored.TooNewToJudge && scored.ReclaimEligibility == CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable,
+                "Active new users must never leak into reclaim tiers.");
+        }
+
+        [TestMethod]
+        public void LongTenuredInactiveUser_IsProbableReclaim()
+        {
+            // This is the low-risk reclaim case: no observed use, account enabled, and the available
+            // tenure signal is comfortably beyond the grace period.
+            var row = UsageRow(interactions: 0, activeDays: 0, appsUsed: 0, lastUse: null);
+            row.AccountEnabled = true;
+            row.AccountCreatedUtc = Now.AddDays(-120);
+
+            var scored = CopilotAdoptionScoring.Score(row, WindowStart, Now, auditAvailable: true);
+
+            Assert.AreEqual(AdoptionBand.NeverUsed, scored.Band);
+            Assert.AreEqual(CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable, scored.ReclaimEligibility);
+            Assert.AreEqual(CopilotAdoptionScoring.AdoptionActionCodes.Reclaim, scored.RecommendedActionCode);
+            StringAssert.Contains(scored.ReclaimEligibilityReason, "beyond the 30-day grace period");
         }
 
         [TestMethod]
@@ -479,7 +551,9 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(100, heavy.OpportunityScore);
             Assert.IsTrue(heavy.Recommended);
-            StringAssert.StartsWith(heavy.Rationale, "Recommended:");
+            Assert.AreEqual(CopilotAdoptionScoring.OpportunityTiers.ProvenDemand, heavy.QualificationTier,
+                "Ten days of unlicensed Copilot use is evidence, not inference.");
+            StringAssert.StartsWith(heavy.Rationale, "Recommended");
         }
 
         [TestMethod]
@@ -490,6 +564,238 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, idle.OpportunityScore);
             Assert.IsFalse(idle.Recommended);
             StringAssert.Contains(idle.Rationale, "No qualifying");
+        }
+
+        [TestMethod]
+        public void OneDayTrialist_IsNotReportedAsFormingAHabit()
+        {
+            // The defect this guards: depth is interactions per *active* day, so a single active day
+            // made full depth marks trivial to reach. Five prompts crammed into one afternoon scored
+            // 40.8 and banded Developing - whose advice is "Deepen to daily use - a habit is forming" -
+            // for somebody who tried Copilot once and never came back. Worse, being active on FEWER
+            // days could outscore being active on more: this user beat the two-day user below.
+            var triedOnce = CopilotAdoptionScoring.Score(
+                UsageRow(interactions: 5, activeDays: 1, appsUsed: 1, lastUse: Now.AddDays(-20)),
+                WindowStart, Now, auditAvailable: true);
+
+            var twoDays = CopilotAdoptionScoring.Score(
+                UsageRow(interactions: 3, activeDays: 2, appsUsed: 1, lastUse: Now.AddDays(-2)),
+                WindowStart, Now, auditAvailable: true);
+
+            Assert.AreEqual(AdoptionBand.Trialling, triedOnce.Band,
+                "One active day in a 28-day window is a trial, not a forming habit.");
+            Assert.IsTrue(triedOnce.AdoptionScore < twoDays.AdoptionScore,
+                $"More active days must never score worse: one day scored {triedOnce.AdoptionScore}, "
+                + $"two days scored {twoDays.AdoptionScore}.");
+            Assert.IsFalse(CopilotAdoptionScoring.IsHabitual(triedOnce.Band));
+        }
+
+        [TestMethod]
+        public void SingleDayOfUse_CannotReachFullDepthMarks()
+        {
+            // The mechanism, pinned separately from the banding so a threshold change cannot quietly
+            // reintroduce the defect: depth is scaled by how much of the minimum sample was observed.
+            var options = CopilotAdoptionOptions.Default;
+
+            var oneDay = CopilotAdoptionScoring.Score(
+                UsageRow(interactions: 50, activeDays: 1, appsUsed: 1, lastUse: Now),
+                WindowStart, Now, auditAvailable: true, options: options);
+
+            Assert.IsTrue(oneDay.DepthScore < 100,
+                "A one-day sample must not earn full depth marks however many interactions it contains.");
+            Assert.AreEqual(
+                Math.Round(100d / options.DepthMinActiveDays, 1), oneDay.DepthScore, 0.05,
+                "One of the three minimum days observed should earn a third of the depth marks.");
+        }
+
+        [TestMethod]
+        public void DepthConfidence_DoesNotPenaliseAGenuinelyDeepUser()
+        {
+            // The other side of the fix: at or above the minimum sample nothing changes at all. If this
+            // fails, the confidence factor is taxing the users it was never meant to touch.
+            var deep = CopilotAdoptionScoring.Score(
+                UsageRow(interactions: 100, activeDays: 20, appsUsed: 1, lastUse: Now),
+                WindowStart, Now, auditAvailable: true);
+
+            Assert.AreEqual(100, deep.FrequencyScore);
+            Assert.AreEqual(100, deep.DepthScore,
+                "Twenty active days is far above the minimum sample, so depth is untouched.");
+        }
+
+        [TestMethod]
+        public void DisabledAccountHoldingASeat_IsAlwaysAReclaim()
+        {
+            // A disabled account cannot be won back or coached - the person has gone. Branching on the
+            // band alone told a previously-active disabled account to "Win back" (write to someone who
+            // has left) and a recently-active one that no action was needed, while the page itself
+            // calls this "the clearest reclaim there is".
+            var wasActive = UsageRow(interactions: 80, activeDays: 18, appsUsed: 3, lastUse: Now.AddDays(-1));
+            wasActive.AccountEnabled = false;
+
+            var scored = CopilotAdoptionScoring.Score(wasActive, WindowStart, Now, auditAvailable: true);
+
+            Assert.AreEqual(CopilotAdoptionScoring.AdoptionActionCodes.Reclaim, scored.RecommendedActionCode,
+                "A disabled account is a reclaim whatever its usage looked like beforehand.");
+            StringAssert.Contains(scored.RecommendedAction, "disabled");
+            Assert.AreNotEqual(CopilotAdoptionScoring.AdoptionActionCodes.Sustain, scored.RecommendedActionCode);
+            Assert.AreNotEqual(CopilotAdoptionScoring.AdoptionActionCodes.Reengage, scored.RecommendedActionCode);
+        }
+
+        [TestMethod]
+        public void ProvenCopilotDemand_QualifiesOnItsOwn()
+        {
+            // The defect this guards: the Copilot-demand weight (35) sits below the recommendation bar
+            // (50), so the one signal that PROVES demand for Copilot could never clear it alone - while
+            // general Microsoft 365 busyness (25 + 20 + 20 = 65) could. Somebody using Copilot Chat
+            // every day without a licence was not recommended for one; somebody who had never opened
+            // Copilot was. Microsoft's own readiness guidance ranks these the other way round.
+            var provenDemand = CopilotAdoptionScoring.ScoreOpportunity(new UnlicensedUserSignalRow
+            {
+                UserPrincipalName = "daily@contoso.com",
+                UnlicensedCopilotInteractions = 1000,
+                UnlicensedCopilotActiveDays = 20,
+            });
+
+            var busyButNeverTriedCopilot = CopilotAdoptionScoring.ScoreOpportunity(new UnlicensedUserSignalRow
+            {
+                UserPrincipalName = "busy@contoso.com",
+                TeamsMessages = 60,
+                TeamsMeetings = 10,
+                EmailsSent = 40,
+                EmailsRead = 40,
+                FilesViewedOrEdited = 40,
+            });
+
+            Assert.IsTrue(provenDemand.Recommended,
+                $"A thousand unlicensed Copilot interactions scored {provenDemand.OpportunityScore} and "
+                + "must be recommended regardless - the composite score cannot express proven demand.");
+            Assert.AreEqual(CopilotAdoptionScoring.OpportunityTiers.ProvenDemand, provenDemand.QualificationTier);
+            StringAssert.Contains(provenDemand.Rationale, "proven demand");
+
+            Assert.AreEqual(
+                CopilotAdoptionScoring.OpportunityTiers.WorkloadInferred,
+                busyButNeverTriedCopilot.QualificationTier,
+                "Busyness is inference, not evidence, and must be labelled as such even when it clears the bar.");
+            StringAssert.StartsWith(busyButNeverTriedCopilot.Rationale, "Candidate for assessment");
+        }
+
+        [TestMethod]
+        public void TryingCopilotOnce_IsNotProvenDemand()
+        {
+            // "Recurrent" is the point. A single day of unlicensed use is curiosity, not demand, and
+            // must not short-circuit the score - otherwise the tier would recommend a seat for anyone
+            // who ever opened Copilot once.
+            var curious = CopilotAdoptionScoring.ScoreOpportunity(new UnlicensedUserSignalRow
+            {
+                UserPrincipalName = "curious@contoso.com",
+                UnlicensedCopilotInteractions = 2,
+                UnlicensedCopilotActiveDays = 1,
+            });
+
+            Assert.AreNotEqual(CopilotAdoptionScoring.OpportunityTiers.ProvenDemand, curious.QualificationTier);
+            Assert.IsFalse(curious.Recommended);
+            Assert.AreEqual(CopilotAdoptionScoring.OpportunityTiers.None, curious.QualificationTier);
+        }
+
+        [TestMethod]
+        public void ProvenDemandCandidates_SurviveTheRowCap()
+        {
+            // The C# tier is not enough on its own. The candidate list is TOP (@maxRows) ORDER BY the
+            // composite score, and that score cannot express proven demand - so on a large tenant a
+            // daily unlicensed Copilot user could be ranked below thousands of merely busy users and
+            // truncated away before the C# scorer ever saw them, silently reinstating the defect.
+            var sql = CopilotAdoptionSql.LicenceOpportunitiesSql(
+                new[] { 1 }, CopilotAdoptionOptions.Default, includeCopilotAudit: true, includeM365Usage: true);
+
+            var orderByIndex = sql.IndexOf("ORDER BY", StringComparison.Ordinal);
+            Assert.IsTrue(orderByIndex >= 0, "The candidate query must be ordered.");
+
+            var orderBy = sql.Substring(orderByIndex);
+            StringAssert.Contains(orderBy, "copilot.ActiveDays",
+                "Proven demand must be part of the ranking, or the row cap can discard it.");
+            Assert.IsTrue(
+                orderBy.IndexOf("copilot.ActiveDays", StringComparison.Ordinal)
+                    < orderBy.IndexOf("RankScore", StringComparison.Ordinal),
+                "Proven demand must sort ahead of the composite score, not after it.");
+        }
+
+        [TestMethod]
+        public void WithoutTheAuditImport_TheCandidateQueryStillOrdersValidly()
+        {
+            // Proven demand is unobservable without the audit import, and a bare constant in an ORDER BY
+            // is a SQL Server error ("a constant expression was encountered in the ORDER BY list"), so
+            // the clause has to be omitted rather than collapsed to a literal.
+            var sql = CopilotAdoptionSql.LicenceOpportunitiesSql(
+                new[] { 1 }, CopilotAdoptionOptions.Default, includeCopilotAudit: false, includeM365Usage: true);
+
+            StringAssert.Contains(sql, "ORDER BY RankScore DESC");
+            Assert.IsFalse(sql.Contains("copilot.ActiveDays"),
+                "Without the audit CTE its columns must not be referenced anywhere, including the ORDER BY.");
+        }
+
+        [TestMethod]
+        public void CopilotDemandTarget_ScalesWithTheReportingWindow()
+        {
+            // The other three opportunity components are per-active-day averages, so they mean the same
+            // thing at any window length. The Copilot component is a raw total, so without scaling the
+            // same person clears the bar over 180 days and misses it over 7 - their recommendation
+            // flipping because the reader changed the period drop-down, in a list used to decide who
+            // gets a paid seat.
+            var week = new CopilotAdoptionOptions { WindowDays = 7 };
+            var month = new CopilotAdoptionOptions { WindowDays = 28 };
+            var halfYear = new CopilotAdoptionOptions { WindowDays = 180 };
+
+            Assert.AreEqual(5, CopilotAdoptionScoring.OpportunityCopilotTargetForWindow(week), 0.01,
+                "A quarter of the 28-day basis is a quarter of the target.");
+            Assert.AreEqual(20, CopilotAdoptionScoring.OpportunityCopilotTargetForWindow(month), 0.01,
+                "The default window must leave the shipped target exactly as documented.");
+            Assert.IsTrue(
+                CopilotAdoptionScoring.OpportunityCopilotTargetForWindow(halfYear) > 100,
+                "Six months of use has to clear a proportionally higher bar.");
+
+            // The behaviour that matters: identical raw usage, scored under two windows.
+            var signals = new Func<UnlicensedUserSignalRow>(() => new UnlicensedUserSignalRow
+            {
+                UserPrincipalName = "same@contoso.com",
+                UnlicensedCopilotInteractions = 20,
+                UnlicensedCopilotActiveDays = 1,
+            });
+
+            var overAWeek = CopilotAdoptionScoring.ScoreOpportunity(signals(), week);
+            var overHalfAYear = CopilotAdoptionScoring.ScoreOpportunity(signals(), halfYear);
+
+            Assert.AreEqual(100, overAWeek.CopilotDemandScore,
+                "Twenty interactions in a week is heavy unlicensed use.");
+            Assert.IsTrue(overHalfAYear.CopilotDemandScore < 20,
+                $"The same twenty interactions spread over six months is not, but scored "
+                + $"{overHalfAYear.CopilotDemandScore}.");
+        }
+
+        [TestMethod]
+        public void CopilotDemandTarget_IsNeverFreeOnAShortWindow()
+        {
+            // A pathologically short window must not scale the target to zero and hand every user who
+            // has ever touched Copilot a full-marks demand score.
+            var tiny = new CopilotAdoptionOptions { WindowDays = 1, OpportunityCopilotTarget = 2 };
+
+            Assert.IsTrue(CopilotAdoptionScoring.OpportunityCopilotTargetForWindow(tiny) >= 1,
+                "The scaled target is floored at one interaction.");
+        }
+
+        [TestMethod]
+        public void OpportunitySqlExpression_UsesTheWindowScaledCopilotTarget()
+        {
+            // The database ranks candidates, so if the SQL used the unscaled target while C# used the
+            // scaled one, the query would return a different set of people from the one the displayed
+            // scores describe - and the drill-through would disagree with its own headline.
+            var halfYear = new CopilotAdoptionOptions { WindowDays = 180 };
+            var expected = CopilotAdoptionScoring.OpportunityCopilotTargetForWindow(halfYear);
+
+            var sql = CopilotAdoptionScoring.BuildOpportunityScoreSql(
+                halfYear, "cop", "teams", "meetings", "sent", "read", "files");
+
+            StringAssert.Contains(sql, expected.ToString(CultureInfo.InvariantCulture),
+                "The ranking expression must use the same window-scaled target as the C# scorer.");
         }
 
         [TestMethod]
@@ -619,6 +925,10 @@ namespace Tests.UnitTests
             // Deterministic truncation, so a capped report is reproducible rather than randomly
             // different between runs.
             StringAssert.Contains(sql, "TOP (@maxRows)");
+            StringAssert.Contains(sql, "u.created_utc AS AccountCreatedUtc",
+                "The user detail rows must carry the account-age tenure proxy used by the grace-period rule.");
+            StringAssert.Contains(sql, "dbo.copilot_adoption_reclaim_exclusions",
+                "Reclaim exclusions must be read with the same user-id key the detail list drills through on.");
             StringAssert.Contains(sql, "ORDER BY u.id");
             StringAssert.Contains(sql, "OPTION (RECOMPILE)");
         }
@@ -1271,13 +1581,47 @@ namespace Tests.UnitTests
             Assert.AreEqual(3, summary.ActiveUsers, "Trialling, Established and Champion are active.");
             Assert.AreEqual(2, summary.NeverUsedUsers);
             Assert.AreEqual(1, summary.DormantUsers);
-            Assert.AreEqual(3, summary.ReclaimableSeats, "Never-used plus dormant seats are the reclaim candidates.");
+            Assert.AreEqual(2, summary.ReclaimableSeats, "Only certain/probable seats are reclaimable; dormant seats are review-only.");
+            Assert.AreEqual(0, summary.ReclaimCertainSeats);
+            Assert.AreEqual(2, summary.ReclaimProbableSeats);
+            Assert.AreEqual(1, summary.ReclaimReviewSeats, "Dormant users need a human review, not automatic reclaim.");
             Assert.AreEqual(2, summary.HabitualUsers, "Established and Champion only.");
             Assert.AreEqual(50, summary.AdoptionRatePct);
             Assert.AreEqual(
                 summary.LicensedUsers,
                 summary.ActiveUsers + summary.NeverUsedUsers + summary.DormantUsers,
                 "Every licensed user must land in exactly one of active / dormant / never used.");
+        }
+
+        [TestMethod]
+        public void Summary_SplitsReclaimByConfidenceAndShowsExclusions()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(new[]
+            {
+                ScoredUser("disabled@contoso.com", 0, AdoptionBand.NeverUsed),
+                ScoredUser("probable@contoso.com", 0, AdoptionBand.NeverUsed),
+                ScoredUser("dormant@contoso.com", 0, AdoptionBand.Dormant),
+                ScoredUser("excluded@contoso.com", 0, AdoptionBand.NeverUsed),
+            });
+            analysis.LicensedUsers[0].AccountEnabled = false;
+            analysis.LicensedUsers[3].ReclaimExclusionReason = "service account";
+            analysis.LicensedUsers[3].ReclaimExcludedBy = "admin@contoso.com";
+            foreach (var user in analysis.LicensedUsers)
+            {
+                CopilotAdoptionScoring.ApplyReclaimEligibility(user);
+                user.RecommendedActionCode = CopilotAdoptionScoring.RecommendedActionCode(user);
+            }
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(1, analysis.Summary.DisabledLicensedUsers);
+            Assert.AreEqual(1, analysis.Summary.ReclaimCertainSeats);
+            Assert.AreEqual(1, analysis.Summary.ReclaimProbableSeats);
+            Assert.AreEqual(1, analysis.Summary.ReclaimReviewSeats);
+            Assert.AreEqual(1, analysis.Summary.ReclaimExcludedUsers);
+            Assert.AreEqual(2, analysis.Summary.ReclaimableSeats,
+                "Excluded and review-only rows remain licensed seats but must not inflate the actionable reclaim KPI.");
         }
 
         [TestMethod]
@@ -1416,6 +1760,25 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void CappedAnalysisWarning_NamesTheOldestRecordBias()
+        {
+            // The denominator warning was true but incomplete: ORDER BY u.id makes the capped set
+            // reproducible, not representative. New joiners and recently-onboarded subsidiaries are the
+            // first people excluded, and they are exactly the population most likely to be never-used.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(
+                Enumerable.Range(0, 10).Select(i => ScoredUser($"u{i}@contoso.com", 80, AdoptionBand.Champion)));
+            analysis.Summary.LicensedUsers = 40;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.IsTrue(
+                analysis.Summary.Warnings.Any(w =>
+                    w.Contains("oldest user records") && w.Contains("newest joiners")),
+                "A capped analysis must say the subset is biased towards older directory records, not merely smaller.");
+        }
+
+        [TestMethod]
         public void WhenEveryLicensedUserIsAnalysed_TheDenominatorsAreIdentical()
         {
             // The normal case must be untouched by the fix above.
@@ -1481,6 +1844,437 @@ namespace Tests.UnitTests
             var finance = analysis.Summary.IntensityByDepartment.Single();
             Assert.AreEqual(6, finance.ActiveUsers,
                 "The intensity view must count the same active population as the headline figures.");
+        }
+
+        [TestMethod]
+        public void MixedSignalSources_DoNotAddMicrosoftPromptsToAuditInteractionTotals()
+        {
+            // A report-sourced row stores Microsoft's prompt count in Interactions because that is what
+            // the per-user score used. Adding it to audit interaction counts publishes one number with
+            // two units, and the same unit mix used to leak into concentration, intensity, score profiles
+            // and the licensed/unlicensed segment comparison.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.LicensedUsers = 12;
+
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 6)
+                .Select(i =>
+                {
+                    var row = Departmentalise(ActiveUser($"audit{i}@contoso.com", activeDays: 5, interactions: 10), "Finance");
+                    row.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+                    return row;
+                }));
+
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 6)
+                .Select(i =>
+                {
+                    var row = Departmentalise(ActiveUser($"report{i}@contoso.com", activeDays: 18, interactions: 1000), "Finance");
+                    row.SignalSource = CopilotAdoptionScoring.SignalSourceUsageReport;
+                    row.ReportPrompts = 1000;
+                    row.ReportActiveDays = 18;
+                    return row;
+                }));
+
+            analysis.UnlicensedUsers.AddRange(Enumerable.Range(0, 6)
+                .Select(i => Unlicensed($"chat{i}@contoso.com", "Finance", activeDays: 10, interactions: 100)));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(6, analysis.Summary.UsageReportSourcedUsers);
+            Assert.AreEqual(50, analysis.Summary.UsageReportSourcedUserPct);
+            Assert.AreEqual(60, analysis.Summary.TotalInteractions,
+                "Only audit interactions may appear in the licensed interaction total.");
+            Assert.AreEqual(6, analysis.Summary.Concentration.Sum(b => b.Users),
+                "Usage concentration is an audit-interaction distribution, not a prompt distribution.");
+            Assert.AreEqual(6, analysis.Summary.ScoreProfiles.Single(p => p.Label == "Typical active user").Users,
+                "The depth profile is interaction-derived, so report-prompt rows must not dilute it.");
+
+            var financeIntensity = analysis.Summary.IntensityByDepartment.Single(r => r.Segment == "Finance");
+            Assert.AreEqual(6, financeIntensity.ActiveUsers,
+                "The intensity plot is interactions per audit active day; report-prompt rows must be disclosed, not mixed.");
+            Assert.AreEqual(2, financeIntensity.ActionsPerActiveDay);
+
+            var financeCombined = analysis.Summary.CombinedByDepartment.Single(r => r.Segment == "Finance");
+            Assert.AreEqual(12, financeCombined.LicensedUsers);
+            Assert.AreEqual(5, financeCombined.InteractionsPerLicensedUser,
+                "The comparison keeps all seats in the denominator but counts only audit interactions in the numerator.");
+
+            Assert.IsTrue(
+                analysis.Summary.Warnings.Any(w => w.Contains("Microsoft prompt counts are not added")),
+                "The summary must disclose that a visible share of rows came from a different source.");
+        }
+
+        [TestMethod]
+        public void ReportPeriodMismatch_ExcludesReportSourcedRowsFromReclaimableSeats()
+        {
+            // We choose exclusion rather than linear normalisation for reclaim decisions. Normalising a
+            // D7/D90/D180 Microsoft prompt window into the selected window would still be inferring an
+            // absence of use for the exact users whose audit signal is already suspect; excluding them
+            // is conservative and avoids taking a licence from someone the fallback says may be active.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.LicensedUsers = 2;
+            analysis.Summary.DataSources.CopilotUsageReportPeriodDays = 90;
+
+            var auditNever = ScoredUser("audit-never@contoso.com", 0, AdoptionBand.NeverUsed);
+            auditNever.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+
+            var reportNever = ScoredUser("report-never@contoso.com", 0, AdoptionBand.NeverUsed);
+            reportNever.SignalSource = CopilotAdoptionScoring.SignalSourceUsageReport;
+
+            analysis.LicensedUsers.Add(auditNever);
+            analysis.LicensedUsers.Add(reportNever);
+
+            new CopilotAdoptionService(new CopilotAdoptionOptions { WindowDays = 28 }).FinaliseSummary(analysis);
+
+            Assert.IsTrue(analysis.Summary.UsageReportWindowMismatch);
+            Assert.AreEqual(2, analysis.Summary.NeverUsedUsers,
+                "The band breakdown still describes the scored rows and carries the source warning.");
+            Assert.AreEqual(1, analysis.Summary.ReclaimableSeats,
+                "A report-sourced row from a mismatched Microsoft period must not be counted as a licence to reclaim.");
+            Assert.IsTrue(
+                analysis.Summary.Warnings.Any(w => w.Contains("pinned Copilot usage-report period is D90")),
+                "The conservative exclusion must be visible in the summary warnings.");
+
+            // The figures must still tie out. Excluding rows from the reclaim headline while the band
+            // breakdown keeps counting them leaves a gap the reader cannot account for, and a number
+            // that does not reconcile loses the argument however defensible the reason behind it.
+            Assert.AreEqual(1, analysis.Summary.ReclaimSeatsHeldBackForWindowMismatch,
+                "The held-back seats must be published, not silently dropped.");
+            AssertReclaimArithmeticTiesOut(analysis.Summary);
+            Assert.IsTrue(
+                analysis.Summary.Warnings.Any(w => w.Contains("held back for window mismatch")),
+                "The warning must name the reconciling figure so the gap is explainable on screen.");
+        }
+
+        [TestMethod]
+        public void ReclaimArithmeticTiesOut_WithConfidenceTiersAndAWindowMismatchAtTheSameTime()
+        {
+            // The two hold-back mechanisms were built on separate branches and had never met: confidence
+            // tiering parks review/excluded seats, and a Microsoft report-period mismatch parks
+            // report-sourced seats. They compose, and the composition is what a reader actually sees, so
+            // this asserts the published figures still reconcile with BOTH active at once.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.LicensedUsers = 7;
+            analysis.Summary.DataSources.CopilotUsageReportPeriodDays = 90;
+
+            // Probable, audit-sourced: the only unambiguously reclaimable idle seat here.
+            var auditProbable = ScoredUser("audit-probable@contoso.com", 0, AdoptionBand.NeverUsed);
+            auditProbable.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+
+            // Probable on the tier, but scored from Microsoft's report over a period that is not the
+            // selected window - held back by the second mechanism.
+            //
+            // NOTE: Score() cannot currently produce this combination. It only prefers the report when
+            // the report has a non-zero signal, and a non-zero signal makes the user active in the
+            // window, so a report-sourced row is never idle and therefore never "probable". The row is
+            // constructed directly here because the hold-back is defence-in-depth against exactly that
+            // rule changing - see ReportSourcedRows_AreNeverIdle_SoTheMismatchHoldBackIsDefenceInDepth,
+            // which pins the reachability fact itself.
+            var reportProbable = ScoredUser("report-probable@contoso.com", 0, AdoptionBand.NeverUsed);
+            reportProbable.SignalSource = CopilotAdoptionScoring.SignalSourceUsageReport;
+
+            // Dormant: review-only, held back by the first mechanism.
+            var dormant = ScoredUser("dormant@contoso.com", 0, AdoptionBand.Dormant);
+            dormant.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+
+            // Inside the grace period: review-only, held back by the first mechanism.
+            var tooNew = ScoredUser("too-new@contoso.com", 0, AdoptionBand.NeverUsed);
+            tooNew.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+            tooNew.AccountCreatedUtc = Now.AddDays(-5);
+            tooNew.TenureStartUtc = tooNew.AccountCreatedUtc;
+            tooNew.DaysSinceTenureStart = 5;
+            tooNew.TooNewToJudge = true;
+
+            // Admin exclusion: held back by the first mechanism, still a licensed seat.
+            var excluded = ScoredUser("excluded@contoso.com", 0, AdoptionBand.NeverUsed);
+            excluded.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+            excluded.ReclaimExclusionReason = "shared mailbox";
+            excluded.ReclaimExcludedBy = "admin@contoso.com";
+
+            // Disabled but was active right up to the day it was disabled. Certain reclaim, and the
+            // reason the identity needs a term for reclaimable seats that are NOT idle.
+            var disabledButActive = ScoredUser("disabled-active@contoso.com", 82, AdoptionBand.Champion);
+            disabledButActive.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+            disabledButActive.AccountEnabled = false;
+
+            // A healthy user, to prove nothing here depends on the population being all-idle.
+            var healthy = ScoredUser("healthy@contoso.com", 70, AdoptionBand.Established);
+            healthy.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+
+            analysis.LicensedUsers.AddRange(new[]
+            {
+                auditProbable, reportProbable, dormant, tooNew, excluded, disabledButActive, healthy,
+            });
+
+            foreach (var user in analysis.LicensedUsers)
+            {
+                CopilotAdoptionScoring.ApplyReclaimEligibility(user);
+                user.RecommendedActionCode = CopilotAdoptionScoring.RecommendedActionCode(user);
+            }
+
+            new CopilotAdoptionService(new CopilotAdoptionOptions { WindowDays = 28 }).FinaliseSummary(analysis);
+
+            var summary = analysis.Summary;
+
+            Assert.IsTrue(summary.UsageReportWindowMismatch, "Both mechanisms must be live for this test to mean anything.");
+            Assert.AreEqual(4, summary.NeverUsedUsers);
+            Assert.AreEqual(1, summary.DormantUsers);
+
+            Assert.AreEqual(1, summary.ReclaimCertainSeats, "The disabled account, even though it was active.");
+            Assert.AreEqual(2, summary.ReclaimProbableSeats, "The two established-tenure never-used accounts.");
+            Assert.AreEqual(2, summary.ReclaimReviewSeats, "Dormant and too-new.");
+            Assert.AreEqual(1, summary.ReclaimExcludedUsers);
+
+            Assert.AreEqual(1, summary.ReclaimSeatsHeldBackForWindowMismatch,
+                "Only the report-sourced probable seat is held back for the window mismatch.");
+            Assert.AreEqual(3, summary.ReclaimSeatsHeldBackForReview,
+                "Dormant, too-new and admin-excluded idle seats are held back by the tiering.");
+            Assert.AreEqual(1, summary.ReclaimSeatsFromActiveBands,
+                "The disabled-but-active seat is reclaimable without being never-used or dormant.");
+
+            Assert.AreEqual(2, summary.ReclaimableSeats,
+                "Certain + probable, minus the report-sourced row on a mismatched window.");
+
+            AssertReclaimArithmeticTiesOut(summary);
+        }
+
+        /// <summary>
+        /// The one identity the Copilot Adoption reclaim figures must always satisfy, whichever hold-back
+        /// mechanisms happen to be active. A reclaim headline that cannot be reconciled against the band
+        /// breakdown on screen loses a licence argument however defensible the reason behind it.
+        /// </summary>
+        private static void AssertReclaimArithmeticTiesOut(CopilotAdoptionSummary summary)
+        {
+            Assert.AreEqual(
+                summary.NeverUsedUsers + summary.DormantUsers + summary.ReclaimSeatsFromActiveBands,
+                summary.ReclaimableSeats
+                    + summary.ReclaimSeatsHeldBackForWindowMismatch
+                    + summary.ReclaimSeatsHeldBackForReview,
+                "NeverUsed + Dormant + ReclaimSeatsFromActiveBands must equal "
+                + "ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview.");
+        }
+
+        [TestMethod]
+        public void TenureProration_HasNoCliffAtTheGracePeriodOnALongWindow()
+        {
+            // Proration answers "how many active days could this person even have had?", which depends
+            // on the reporting window - not on the reclaim grace period, which answers the different
+            // question "is this seat too new to take away?".
+            //
+            // Tying the two together put a cliff at the grace boundary on every window longer than it:
+            // on a 180-day report a 29-day-old account was measured against about 13 active days and a
+            // 30-day-old one against 77, so somebody using Copilot every working day since joining was
+            // scored as a light user for having existed one day longer.
+            foreach (var windowDays in new[] { 7, 28, 90, 180 })
+            {
+                var options = new CopilotAdoptionOptions { WindowDays = windowDays };
+                var fullTarget = CopilotAdoptionScoring.TargetActiveDays(options);
+                // Seeded from age 0, not from zero: the target has a deliberate floor of 1 active day,
+                // so the very first value is a floor rather than a step.
+                var previous = CopilotAdoptionScoring.TargetActiveDaysForTenure(
+                    new LicensedUserUsageRow { AccountCreatedUtc = Now }, Now, options);
+
+                for (var age = 1; age <= windowDays + 5; age++)
+                {
+                    var row = new LicensedUserUsageRow { AccountCreatedUtc = Now.AddDays(-age) };
+                    var target = CopilotAdoptionScoring.TargetActiveDaysForTenure(row, Now, options);
+
+                    Assert.IsTrue(target >= previous,
+                        $"D{windowDays}: the expected-active-days target must never fall as an account gets older (age {age}).");
+
+                    Assert.IsTrue(target <= fullTarget + 0.001,
+                        $"D{windowDays}: proration must never exceed the full-window target (age {age}).");
+
+                    // No step bigger than one window-day's worth of target. A cliff shows up here.
+                    var maxStep = (fullTarget / windowDays) + 0.001;
+                    Assert.IsTrue(target - previous <= maxStep,
+                        $"D{windowDays}: target jumped from {previous} to {target} at age {age} - that is a cliff, not proration.");
+
+                    previous = target;
+                }
+
+                var established = new LicensedUserUsageRow { AccountCreatedUtc = Now.AddDays(-(windowDays + 1)) };
+                Assert.AreEqual(
+                    CopilotAdoptionScoring.TargetActiveDays(options),
+                    CopilotAdoptionScoring.TargetActiveDaysForTenure(established, Now, options),
+                    0.001,
+                    $"D{windowDays}: an account older than the window must use the full target, so the metric stays comparable.");
+            }
+        }
+
+        [TestMethod]
+        public void Opportunities_RankProvenDemandAboveAHigherScoringInferredCandidate()
+        {
+            // The SQL sorts proven-demand candidates into the row cap first; sorting on score alone in
+            // memory would undo that in the list the reader actually sees. It is not an edge case: the
+            // Copilot component is worth 35 and the recommendation bar is 50, so a proven-demand user
+            // with no other Microsoft 365 activity scores BELOW a merely busy one by construction.
+            var proven = CopilotAdoptionScoring.ScoreOpportunity(new UnlicensedUserSignalRow
+            {
+                UserId = 1,
+                UserPrincipalName = "proven@contoso.com",
+                UnlicensedCopilotInteractions = 9,
+                UnlicensedCopilotActiveDays = 6,
+            });
+
+            var busy = CopilotAdoptionScoring.ScoreOpportunity(new UnlicensedUserSignalRow
+            {
+                UserId = 2,
+                UserPrincipalName = "busy@contoso.com",
+                TeamsMessages = 60,
+                TeamsMeetings = 30,
+                EmailsSent = 90,
+                EmailsRead = 90,
+            });
+
+            Assert.AreEqual(CopilotAdoptionScoring.OpportunityTiers.ProvenDemand, proven.QualificationTier);
+            Assert.IsTrue(busy.OpportunityScore > proven.OpportunityScore,
+                "The premise of this test is that the inferred candidate scores higher.");
+
+            var sorted = CopilotAdoptionExports.Apply(
+                new[] { busy, proven },
+                new LicenceOpportunityQuery { SortBy = LicenceOpportunitySortFields.Score, SortDescending = true });
+
+            Assert.AreEqual("proven@contoso.com", sorted[0].UserPrincipalName,
+                "Evidence must outrank inference in the default ordering, not just in the SQL row cap.");
+        }
+
+        [TestMethod]
+        public void AnExclusionThatWasRenewed_IsNotReportedAsExpired()
+        {
+            // The expired lookup matches any exclusion whose review date has passed. A user who was
+            // excluded, allowed to lapse and then excluded again is currently excluded - reporting them
+            // as expired as well sends an admin back to a decision somebody already re-made.
+            var sql = CopilotAdoptionSql.LicensedUsersSql(
+                new[] { 1 }, new[] { 2 }, includeCopilotReport: true);
+
+            StringAssert.Contains(
+                sql,
+                "CASE WHEN expired.user_id IS NOT NULL AND exclusion.excluded_utc IS NULL THEN 1 ELSE 0 END",
+                "ReclaimExclusionExpired must be false while an active exclusion exists for the same user.");
+
+            StringAssert.Contains(
+                sql,
+                "NULLIF(LTRIM(RTRIM(exclusion.reason)), N'')",
+                "A blank reason must still count as an exclusion, or the seat is offered for reclaim anyway.");
+        }
+
+        [TestMethod]
+        public void AWindowMismatch_NeverHoldsBackADisabledAccount()
+        {
+            // A disabled account holding a seat is a CERTAIN reclaim - it is not an inference from an
+            // absence of recorded use, so a Microsoft report-period technicality has no bearing on it.
+            //
+            // This is the case the mismatch hold-back actually reaches, and before it was restricted to
+            // probable seats it held back exactly the wrong rows: a leaver's seat vanished from the
+            // reclaim headline because Microsoft's report period was D90 and the reader had picked D28,
+            // while the row itself still said "Reclaim - the account is disabled".
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.LicensedUsers = 2;
+            analysis.Summary.DataSources.CopilotUsageReportPeriodDays = 90;
+
+            var disabledReportSourced = ScoredUser("disabled-report@contoso.com", 60, AdoptionBand.Established);
+            disabledReportSourced.AccountEnabled = false;
+            disabledReportSourced.SignalSource = CopilotAdoptionScoring.SignalSourceUsageReport;
+
+            var idleAudit = ScoredUser("idle-audit@contoso.com", 0, AdoptionBand.NeverUsed);
+            idleAudit.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+
+            analysis.LicensedUsers.AddRange(new[] { disabledReportSourced, idleAudit });
+            foreach (var user in analysis.LicensedUsers)
+            {
+                CopilotAdoptionScoring.ApplyReclaimEligibility(user);
+                user.RecommendedActionCode = CopilotAdoptionScoring.RecommendedActionCode(user);
+            }
+
+            new CopilotAdoptionService(new CopilotAdoptionOptions { WindowDays = 28 }).FinaliseSummary(analysis);
+
+            var summary = analysis.Summary;
+            Assert.IsTrue(summary.UsageReportWindowMismatch);
+            Assert.AreEqual(1, summary.ReclaimCertainSeats);
+            Assert.AreEqual(0, summary.ReclaimSeatsHeldBackForWindowMismatch,
+                "A disabled seat is certain, not inferred, so a report-period mismatch must not hold it back.");
+            Assert.AreEqual(2, summary.ReclaimableSeats,
+                "Both the disabled seat and the audit-sourced never-used seat remain reclaimable.");
+            Assert.AreEqual(CopilotAdoptionScoring.AdoptionActionCodes.Reclaim, disabledReportSourced.RecommendedActionCode,
+                "The row-level advice and the headline must agree about a disabled seat.");
+            AssertReclaimArithmeticTiesOut(summary);
+        }
+
+        [TestMethod]
+        public void ReportSourcedRows_AreNeverIdle_SoTheMismatchHoldBackIsDefenceInDepth()
+        {
+            // Pins the reachability fact the hold-back's scope depends on. Score() only prefers
+            // Microsoft's report when the report carries a non-zero signal, and a non-zero signal makes
+            // the user active in the window - so a report-sourced row can never band never-used or
+            // dormant, and therefore can never be "probable".
+            //
+            // If the source-selection rule is ever relaxed (for example to mark a user report-sourced
+            // when the audit import is unavailable even though the report is empty), this test fails and
+            // whoever changed it has to decide deliberately what the reclaim hold-back should then do -
+            // rather than discovering that a dormant guard has quietly come alive.
+            var nowUtc = Now;
+
+            var reportOnly = CopilotAdoptionScoring.Score(
+                new LicensedUserUsageRow
+                {
+                    UserId = 1,
+                    UserPrincipalName = "report-only@contoso.com",
+                    AccountEnabled = true,
+                    AccountCreatedUtc = nowUtc.AddDays(-400),
+                    ReportPrompts = 12,
+                    ReportActiveDays = 4,
+                    ReportLastActivityUtc = nowUtc.AddDays(-2),
+                },
+                WindowStart,
+                nowUtc,
+                auditAvailable: false);
+
+            Assert.AreEqual(CopilotAdoptionScoring.SignalSourceUsageReport, reportOnly.SignalSource);
+            Assert.IsTrue(reportOnly.Band > AdoptionBand.Dormant,
+                "A report-sourced row is only ever produced when the report shows activity, so it cannot be idle.");
+
+            var noSignalAnywhere = CopilotAdoptionScoring.Score(
+                new LicensedUserUsageRow
+                {
+                    UserId = 2,
+                    UserPrincipalName = "no-signal@contoso.com",
+                    AccountEnabled = true,
+                    AccountCreatedUtc = nowUtc.AddDays(-400),
+                    ReportPrompts = 0,
+                    ReportActiveDays = 0,
+                },
+                WindowStart,
+                nowUtc,
+                auditAvailable: false);
+
+            Assert.AreEqual(CopilotAdoptionScoring.SignalSourceAudit, noSignalAnywhere.SignalSource,
+                "With nothing from either source the row stays audit-sourced, which is why the window-mismatch "
+                + "hold-back cannot reach it. See the deferred item in the pull request.");
+            Assert.AreEqual(AdoptionBand.NeverUsed, noSignalAnywhere.Band);
+        }
+
+        [TestMethod]
+        public void WithoutAWindowMismatch_NoSeatsAreHeldBack()
+        {
+            // The reconciling figure must be zero in the normal case, not merely ignored - otherwise a
+            // non-zero value would be indistinguishable from an unset one.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.LicensedUsers = 2;
+            analysis.Summary.DataSources.CopilotUsageReportPeriodDays = 28;
+
+            var auditNever = ScoredUser("audit-never@contoso.com", 0, AdoptionBand.NeverUsed);
+            auditNever.SignalSource = CopilotAdoptionScoring.SignalSourceAudit;
+            var reportNever = ScoredUser("report-never@contoso.com", 0, AdoptionBand.NeverUsed);
+            reportNever.SignalSource = CopilotAdoptionScoring.SignalSourceUsageReport;
+            analysis.LicensedUsers.Add(auditNever);
+            analysis.LicensedUsers.Add(reportNever);
+
+            new CopilotAdoptionService(new CopilotAdoptionOptions { WindowDays = 28 }).FinaliseSummary(analysis);
+
+            Assert.IsFalse(analysis.Summary.UsageReportWindowMismatch);
+            Assert.AreEqual(2, analysis.Summary.ReclaimableSeats,
+                "With matching windows a report-sourced idle seat is still an idle seat.");
+            Assert.AreEqual(0, analysis.Summary.ReclaimSeatsHeldBackForWindowMismatch);
         }
 
         #endregion
@@ -2104,6 +2898,132 @@ namespace Tests.UnitTests
                 }).Count);
         }
 
+        [TestMethod]
+        public void EveryLicensedUserColumn_CanBeSortedFromItsHeader()
+        {
+            // The table shows twelve columns and every one of them is now a clickable header, so every
+            // sort key the UI can send has to be handled. An unrecognised key silently falls through to
+            // the score sort, which looks like the click did nothing - the worst kind of failure here,
+            // because the reader concludes the data is wrong rather than the control.
+            var rows = new[]
+            {
+                SortableUser("b@contoso.com", "Sales", 10, AdoptionBand.Trialling, 5, 2, 1, "audit", CopilotAdoptionScoring.ReclaimEligibilityTiers.Review),
+                SortableUser("a@contoso.com", "Ops", 90, AdoptionBand.Champion, 50, 20, 4, "usageReport", null),
+                SortableUser("c@contoso.com", "Eng", 0, AdoptionBand.NeverUsed, 0, 0, 0, "audit", CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain),
+            };
+
+            // Ascending by each key, then the first row's expected UPN.
+            var expectations = new (string SortBy, string FirstUpn, string Because)[]
+            {
+                (LicensedUserSortFields.UserPrincipalName, "a@contoso.com", "alphabetical by sign-in address"),
+                (LicensedUserSortFields.Department, "c@contoso.com", "alphabetical by department"),
+                (LicensedUserSortFields.Score, "c@contoso.com", "lowest engagement first"),
+                (LicensedUserSortFields.Band, "c@contoso.com", "the adoption ladder, not the alphabet"),
+                (LicensedUserSortFields.Interactions, "c@contoso.com", "fewest interactions first"),
+                (LicensedUserSortFields.ActiveDays, "c@contoso.com", "fewest active days first"),
+                (LicensedUserSortFields.Apps, "c@contoso.com", "fewest Copilot surfaces first"),
+                (LicensedUserSortFields.SignalSource, "b@contoso.com", "audit before usageReport"),
+                (LicensedUserSortFields.ReclaimEligibility, "c@contoso.com", "certain before review before none"),
+            };
+
+            foreach (var e in expectations)
+            {
+                var sorted = CopilotAdoptionExports.Apply(rows, new LicensedUserQuery { SortBy = e.SortBy, SortDescending = false });
+                Assert.AreEqual(e.FirstUpn, sorted[0].UserPrincipalName,
+                    $"Ascending by '{e.SortBy}' should lead with {e.FirstUpn} - {e.Because}.");
+
+                // Not asserted as an exact reversal: the stable UPN tie-break stays ascending within
+                // equal keys, so a column with ties (signal source here) is legitimately not the mirror
+                // image. What must hold is that the direction actually changes which row leads.
+                var reversed = CopilotAdoptionExports.Apply(rows, new LicensedUserQuery { SortBy = e.SortBy, SortDescending = true });
+                Assert.AreEqual(rows.Length, reversed.Count, $"Sorting by '{e.SortBy}' must not drop rows.");
+                Assert.AreNotEqual(sorted[0].UserPrincipalName, reversed[0].UserPrincipalName,
+                    $"Descending by '{e.SortBy}' must change the leading row - a header click that does nothing reads as broken.");
+            }
+        }
+
+        [TestMethod]
+        public void ReclaimTierSort_RunsMostActionableFirstNotAlphabetically()
+        {
+            // "certain, excluded, probable, review" is the alphabet. The order an admin works through is
+            // certain, probable, review, excluded - most actionable first - and that is what the column
+            // has to do, or the sort actively misleads.
+            var tiers = new[]
+            {
+                CopilotAdoptionScoring.ReclaimEligibilityTiers.Review,
+                CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded,
+                CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain,
+                CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable,
+            };
+
+            var rows = tiers.Select((t, i) => SortableUser($"u{i}@contoso.com", "Ops", 0, AdoptionBand.NeverUsed, 0, 0, 0, "audit", t)).ToArray();
+
+            var sorted = CopilotAdoptionExports.Apply(
+                rows, new LicensedUserQuery { SortBy = LicensedUserSortFields.ReclaimEligibility, SortDescending = false });
+
+            CollectionAssert.AreEqual(
+                new[]
+                {
+                    CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain,
+                    CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable,
+                    CopilotAdoptionScoring.ReclaimEligibilityTiers.Review,
+                    CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded,
+                },
+                sorted.Select(r => r.ReclaimEligibility).ToArray());
+        }
+
+        [TestMethod]
+        public void OpportunityLastActivityColumn_CanBeSorted()
+        {
+            // Never-seen must sort as the beginning of time rather than being scattered by a null, so an
+            // ascending sort leads with the people there is no recent evidence for.
+            var rows = new[]
+            {
+                OpportunityRow(1, "recent@contoso.com", Now.AddDays(-1)),
+                OpportunityRow(2, "never@contoso.com", null),
+                OpportunityRow(3, "old@contoso.com", Now.AddDays(-100)),
+            };
+
+            var sorted = CopilotAdoptionExports.Apply(
+                rows, new LicenceOpportunityQuery { SortBy = LicenceOpportunitySortFields.LastM365Activity, SortDescending = false });
+
+            CollectionAssert.AreEqual(
+                new[] { "never@contoso.com", "old@contoso.com", "recent@contoso.com" },
+                sorted.Select(r => r.UserPrincipalName).ToArray());
+        }
+
+        private static LicensedUserAdoptionRow SortableUser(
+            string upn, string department, double score, AdoptionBand band,
+            long interactions, int activeDays, int appsUsed, string signalSource, string reclaimTier)
+        {
+            return new LicensedUserAdoptionRow
+            {
+                UserId = upn.GetHashCode(),
+                UserPrincipalName = upn,
+                Department = department,
+                AdoptionScore = score,
+                Band = band,
+                BandName = CopilotAdoptionScoring.BandDisplayName(band),
+                Interactions = interactions,
+                ActiveDays = activeDays,
+                AppsUsed = appsUsed,
+                SignalSource = signalSource,
+                ReclaimEligibility = reclaimTier,
+                RecommendedActionCode = CopilotAdoptionScoring.AdoptionActionCodes.Reclaim,
+                RecommendedActionLabel = CopilotAdoptionScoring.ActionLabel(CopilotAdoptionScoring.AdoptionActionCodes.Reclaim),
+            };
+        }
+
+        private static LicenceOpportunityRow OpportunityRow(int id, string upn, DateTime? lastM365)
+        {
+            return new LicenceOpportunityRow
+            {
+                UserId = id,
+                UserPrincipalName = upn,
+                LastM365ActivityUtc = lastM365,
+            };
+        }
+
         private static LicensedUserAdoptionRow ActionRow(string upn, string actionCode)
         {
             return new LicensedUserAdoptionRow
@@ -2113,6 +3033,7 @@ namespace Tests.UnitTests
                 RecommendedActionLabel = CopilotAdoptionScoring.ActionLabel(actionCode),
             };
         }
+
 
         #endregion
 
@@ -2124,6 +3045,8 @@ namespace Tests.UnitTests
             {
                 UserId = 1,
                 UserPrincipalName = "user@contoso.com",
+                AccountEnabled = true,
+                AccountCreatedUtc = Now.AddDays(-120),
                 Interactions = interactions,
                 ActiveDays = activeDays,
                 AppsUsed = appsUsed,
@@ -2134,14 +3057,23 @@ namespace Tests.UnitTests
 
         private static LicensedUserAdoptionRow ScoredUser(string upn, double score, AdoptionBand band)
         {
-            return new LicensedUserAdoptionRow
+            var row = new LicensedUserAdoptionRow
             {
                 UserId = upn.GetHashCode(),
                 UserPrincipalName = upn,
+                AccountEnabled = true,
+                AccountCreatedUtc = Now.AddDays(-120),
+                TenureStartUtc = Now.AddDays(-120),
+                TenureBasis = CopilotAdoptionScoring.TenureBasisAccountAge,
+                DaysSinceTenureStart = 120,
                 AdoptionScore = score,
                 Band = band,
                 BandName = CopilotAdoptionScoring.BandDisplayName(band),
             };
+            CopilotAdoptionScoring.ApplyReclaimEligibility(row);
+            row.RecommendedActionCode = CopilotAdoptionScoring.RecommendedActionCode(row);
+            row.RecommendedActionLabel = CopilotAdoptionScoring.ActionLabel(row.RecommendedActionCode);
+            return row;
         }
 
         private static LicensedUserAdoptionRow Departmental(string upn, string department, double score)

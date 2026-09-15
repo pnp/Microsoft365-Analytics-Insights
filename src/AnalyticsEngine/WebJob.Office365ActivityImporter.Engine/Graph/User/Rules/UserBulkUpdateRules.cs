@@ -48,6 +48,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             "id",
             "azure_ad_id",
             "account_enabled",
+            "created_utc",
             "mail",
             "postalcode",
             "department_id",
@@ -68,6 +69,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             dt.Columns.Add("id", typeof(int));
             dt.Columns.Add("azure_ad_id", typeof(string));
             dt.Columns.Add("account_enabled", typeof(bool));
+            dt.Columns.Add("created_utc", typeof(DateTime));
             dt.Columns.Add("mail", typeof(string));
             dt.Columns.Add("postalcode", typeof(string));
             dt.Columns.Add("department_id", typeof(int));
@@ -126,6 +128,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 row["id"] = dbUser.ID;
                 row["azure_ad_id"] = (object)plan.AzureAdId ?? DBNull.Value;
                 row["account_enabled"] = plan.AccountEnabled.HasValue ? (object)plan.AccountEnabled.Value : DBNull.Value;
+                row["created_utc"] = plan.AccountCreatedUtc.HasValue ? (object)plan.AccountCreatedUtc.Value : DBNull.Value;
                 row["mail"] = (object)plan.Mail ?? DBNull.Value;
                 row["postalcode"] = (object)plan.PostalCode ?? DBNull.Value;
                 row["department_id"] = ResolveLookupId(plan.DepartmentName, maps.Departments);

@@ -1,4 +1,4 @@
-using Newtonsoft.Json;
+﻿using Newtonsoft.Json;
 
 namespace Common.Entities.CopilotAdoption
 {
@@ -47,6 +47,24 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Interactions per active day that score full marks for depth of use.</summary>
         [JsonProperty("depthTargetInteractionsPerActiveDay")]
         public double DepthTargetInteractionsPerActiveDay { get; set; } = 5;
+
+        /// <summary>
+        /// Active days needed before the depth component is trusted at face value.
+        ///
+        /// Depth is interactions per <i>active</i> day, which is the right shape - it stops an
+        /// intermittent-but-intensive user being penalised twice for the same low frequency. But it
+        /// divides by a number the user controls, so a single active day makes the average trivially
+        /// easy to max out: five prompts crammed into one afternoon scored full marks for depth and
+        /// banded the user <see cref="AdoptionBand.Developing"/> - "a habit is forming" - when they had
+        /// in fact tried Copilot once and never come back. A user active on <i>fewer</i> days could
+        /// therefore outscore one active on more.
+        ///
+        /// Below this many active days the depth component is scaled down in proportion, so a small
+        /// sample earns a correspondingly small share of the marks. At or above it, nothing changes -
+        /// a genuinely deep user is unaffected.
+        /// </summary>
+        [JsonProperty("depthMinActiveDays")]
+        public double DepthMinActiveDays { get; set; } = 3;
 
         /// <summary>Distinct Copilot surfaces (Teams, Word, Outlook, Chat...) that score full marks for breadth.</summary>
         [JsonProperty("breadthTargetApps")]
@@ -123,6 +141,15 @@ namespace Common.Entities.CopilotAdoption
         public int AgentNewDays { get; set; } = 30;
 
         /// <summary>
+        /// How long a newly-created Entra user is protected from reclaim recommendations. This is an
+        /// account-age proxy for the future seat-tenure history (#277): a new starter with five days of
+        /// Copilot ownership must not be judged against a full-window target, and a new starter with no
+        /// prompts yet belongs in "too new to judge", not in a list of seats to take away.
+        /// </summary>
+        [JsonProperty("reclaimGraceDays")]
+        public int ReclaimGraceDays { get; set; } = 30;
+
+        /// <summary>
         /// Distinct users an agent needs before its usage is treated as adoption rather than as its
         /// author testing it. Matches the "minimum 3 users" convention used in Microsoft's own agent
         /// reporting.
@@ -196,9 +223,31 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("opportunityDocumentWeight")]
         public double OpportunityDocumentWeight { get; set; } = 20;
 
-        /// <summary>Unlicensed Copilot interactions in the window that score full marks for that component.</summary>
+        /// <summary>
+        /// Unlicensed Copilot interactions that score full marks for that component, expressed over
+        /// <see cref="OpportunityCopilotTargetBasisDays"/> and scaled to the reporting window by
+        /// <see cref="CopilotAdoptionScoring.OpportunityCopilotTargetForWindow"/>.
+        ///
+        /// It has to be scaled, because the three Microsoft 365 components are per-active-day averages
+        /// while this one is a raw total for the window. Left unscaled, the same person clears the bar
+        /// over 180 days and misses it over 7 - so a candidate's recommendation would flip purely
+        /// because the reader changed the period drop-down, which is indefensible in a list used to
+        /// decide who gets a paid seat.
+        /// </summary>
         [JsonProperty("opportunityCopilotTarget")]
         public double OpportunityCopilotTarget { get; set; } = 20;
+
+        /// <summary>
+        /// The window length <see cref="OpportunityCopilotTarget"/> is expressed over. 28 days matches
+        /// Microsoft's usage-report month, and matches the default reporting window so the out-of-the-box
+        /// behaviour is unchanged.
+        ///
+        /// Deliberately its own value rather than reusing
+        /// <see cref="HabitBucketNormalisationDays"/>: coupling them would mean retuning the habit
+        /// buckets silently changed who is recommended for a licence, which are unrelated decisions.
+        /// </summary>
+        [JsonProperty("opportunityCopilotTargetBasisDays")]
+        public int OpportunityCopilotTargetBasisDays { get; set; } = 28;
 
         /// <summary>Teams messages + meetings on a typical active day that score full marks.</summary>
         [JsonProperty("opportunityCollaborationTarget")]
@@ -219,6 +268,27 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("opportunityRecommendScore")]
         public double OpportunityRecommendScore { get; set; } = 50;
 
+        /// <summary>
+        /// Distinct days of unlicensed Copilot use that prove demand on their own, regardless of the
+        /// composite score.
+        ///
+        /// Without this the weighting contradicts its own stated intent. The Copilot component is worth
+        /// <see cref="OpportunityUnlicensedCopilotWeight"/> (35) and the bar is
+        /// <see cref="OpportunityRecommendScore"/> (50), so the one signal that actually <i>proves</i>
+        /// demand for Copilot could never clear it alone - while general Microsoft 365 busyness
+        /// (25 + 20 + 20 = 65) could. Somebody using Copilot Chat daily without a licence was therefore
+        /// not recommended for one, and somebody who had never opened Copilot was.
+        ///
+        /// Requiring several distinct days rather than a raw interaction count is what makes it
+        /// "recurrent" rather than "tried it once", and it does not need normalising when the reporting
+        /// period changes - a day is a day whatever the window length.
+        ///
+        /// Microsoft's own readiness guidance takes the same position, listing Copilot Chat users as
+        /// licence candidates ahead of the recommendation based on general Microsoft 365 engagement.
+        /// </summary>
+        [JsonProperty("opportunityProvenDemandMinActiveDays")]
+        public int OpportunityProvenDemandMinActiveDays { get; set; } = 3;
+
         #endregion
 
         /// <summary>
@@ -228,6 +298,19 @@ namespace Common.Entities.CopilotAdoption
         /// <see cref="CopilotAdoptionScoring"/>. Copilot seats are purchased individually, so even a
         /// very large customer is far below this; if it is ever hit the result carries an explicit
         /// warning rather than silently truncating a licence-spend report.
+        ///
+        /// <para>
+        /// <b>Deliberately not raised to the 200,000-user design point.</b> Raising it was considered as
+        /// a way to make the oldest-record bias below less likely to bite, and rejected: the scored set
+        /// is materialised in memory and held in a ten-minute result cache, and every row carries
+        /// several strings including a full prose recommendation, so a four-fold raise is a four-fold
+        /// increase in retained memory per cached analysis. This page already has a history of timing
+        /// out and of losing its AppDomain mid-run, which is why the lifecycle telemetry exists. Raising
+        /// the cap would also not fix the bias - a tenant past the new cap is truncated exactly as
+        /// unfairly - so it would trade a real memory risk for no correctness gain. If the cap is ever
+        /// genuinely binding for a customer, the fix is exact SQL aggregates for the headline figures,
+        /// measured per the repository's benchmarking rule, not a bigger number here.
+        /// </para>
         /// </summary>
         [JsonProperty("maxLicensedUsersScored")]
         public int MaxLicensedUsersScored { get; set; } = 50000;

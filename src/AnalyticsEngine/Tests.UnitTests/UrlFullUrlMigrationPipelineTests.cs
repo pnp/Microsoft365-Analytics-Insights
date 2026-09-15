@@ -56,7 +56,9 @@ namespace Tests.UnitTests
         // drops the unused audit extended-property, Yammer and Stream tables,
         // UniqueUrlsFullUrlIndex de-duplicates dbo.urls and makes IX_urls_full_url UNIQUE, and
         // RetireImportDbHacks brings IX_PageRequestID and IX_ai_session_id under the migration chain.
-        private const string LatestId = "202609101200001_RetireImportDbHacks";
+        // CopilotReclaimEligibilityInputs adds users.created_utc and the reclaim-exclusion table. It is
+        // raw-SQL, additive, and reuses the RetireImportDbHacks model snapshot verbatim.
+        private const string LatestId = "202609131940001_CopilotReclaimEligibilityInputs";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

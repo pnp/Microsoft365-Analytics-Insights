@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -439,6 +439,23 @@ namespace Common.Entities.CopilotAdoption
                 "       company.name AS CompanyName,\r\n" +
                 "       manager.user_name AS ManagerUserPrincipalName,\r\n" +
                 "       u.account_enabled AS AccountEnabled,\r\n" +
+                "       u.created_utc AS AccountCreatedUtc,\r\n" +
+                // A blank reason must still count as an exclusion. The tier is decided by whether this
+                // column has text, so an exclusion row saved with an empty reason would otherwise be
+                // silently ignored and the seat would be offered for reclaim - the exact opposite of
+                // what the administrator recorded.
+                "       ISNULL(NULLIF(LTRIM(RTRIM(exclusion.reason)), N''), CASE WHEN exclusion.excluded_utc IS NULL THEN NULL ELSE N'(no reason recorded)' END) AS ReclaimExclusionReason,\r\n" +
+                "       exclusion.note AS ReclaimExclusionNote,\r\n" +
+                "       exclusion.excluded_by AS ReclaimExcludedBy,\r\n" +
+                "       exclusion.excluded_utc AS ReclaimExcludedUtc,\r\n" +
+                "       exclusion.review_after_utc AS ReclaimExclusionReviewAfterUtc,\r\n" +
+                // Expired only when there is no ACTIVE exclusion. The expired lookup matches any row
+                // whose review date has passed, so a user who was excluded, allowed to lapse, and then
+                // excluded again would otherwise be reported as both currently excluded and expired -
+                // inflating the "needs re-review" count with cases an admin has already dealt with.
+                // Keyed on excluded_utc (NOT NULL in the table) rather than reason, so presence is
+                // tested rather than content.
+                "       CAST(CASE WHEN expired.user_id IS NOT NULL AND exclusion.excluded_utc IS NULL THEN 1 ELSE 0 END AS bit) AS ReclaimExclusionExpired,\r\n" +
                 "       CAST(ISNULL(chats.Interactions, 0) AS bigint) AS Interactions,\r\n" +
                 "       CAST(ISNULL(chats.PriorInteractions, 0) AS bigint) AS PriorInteractions,\r\n" +
                 "       ISNULL(chats.ActiveDays, 0) AS ActiveDays,\r\n" +
@@ -468,8 +485,24 @@ namespace Common.Entities.CopilotAdoption
                 "LEFT JOIN dbo.users AS manager ON manager.id = u.manager_id\r\n" +
                 "LEFT JOIN CopilotUsage AS chats ON chats.user_id = u.id\r\n" +
                 (includeCopilotReport ? "LEFT JOIN ReportSnapshot AS report ON report.user_id = u.id\r\n" : string.Empty) +
-                // Ordered by id so the cap truncates deterministically: the same users are dropped on
-                // every run, which makes a capped report reproducible instead of randomly different.
+                "OUTER APPLY (\r\n" +
+                "    SELECT TOP (1) e.reason, e.note, e.excluded_by, e.excluded_utc, e.review_after_utc\r\n" +
+                "    FROM dbo.copilot_adoption_reclaim_exclusions AS e\r\n" +
+                "    WHERE e.user_id = u.id\r\n" +
+                "      AND (e.review_after_utc IS NULL OR e.review_after_utc > SYSUTCDATETIME())\r\n" +
+                "    ORDER BY e.excluded_utc DESC, e.id DESC\r\n" +
+                ") AS exclusion\r\n" +
+                "OUTER APPLY (\r\n" +
+                "    SELECT TOP (1) e.user_id\r\n" +
+                "    FROM dbo.copilot_adoption_reclaim_exclusions AS e\r\n" +
+                "    WHERE e.user_id = u.id\r\n" +
+                "      AND e.review_after_utc <= SYSUTCDATETIME()\r\n" +
+                "    ORDER BY e.review_after_utc DESC, e.excluded_utc DESC, e.id DESC\r\n" +
+                ") AS expired\r\n" +
+                // Ordered by id so the drill-down cap truncates deterministically: the same users are
+                // dropped on every run, which makes a capped report reproducible instead of randomly
+                // different. That is still a biased sample - oldest user records are over-represented -
+                // so the service warns explicitly if the cap ever bites.
                 "ORDER BY u.id\r\n" +
                 "OPTION (RECOMPILE);";
 
@@ -721,6 +754,22 @@ namespace Common.Entities.CopilotAdoption
                   "       CAST(0 AS bigint) AS FilesViewedOrEdited,\r\n" +
                   "       CAST(NULL AS datetime) AS LastM365ActivityUtc,\r\n";
 
+            // Proven demand must survive the row cap. The list is TOP (@maxRows) ORDER BY the composite
+            // score, and that score cannot express proven demand: the Copilot weight sits below the
+            // recommendation bar while general Microsoft 365 volume sits above it. So on a large tenant
+            // a person already using Copilot Chat daily could be ranked below thousands of merely busy
+            // users and truncated away before the C# scorer ever sees them - which would silently
+            // reinstate the very defect the tier was added to fix.
+            //
+            // Sorting them into the first block costs nothing when the cap is not reached, and
+            // guarantees they are present when it is. Omitted entirely without the audit import: proven
+            // demand is unobservable without it, and a constant in ORDER BY is a SQL Server error.
+            var provenDemandOrder = includeCopilotAudit
+                ? "ORDER BY CASE WHEN ISNULL(copilot.ActiveDays, 0) >= "
+                  + $"{Math.Max(1, o.OpportunityProvenDemandMinActiveDays)} THEN 0 ELSE 1 END,\r\n"
+                  + "         RankScore DESC, u.id\r\n"
+                : "ORDER BY RankScore DESC, u.id\r\n";
+
             return
                 "WITH " + string.Join(",\r\n", ctes) + "\r\n" +
                 "SELECT TOP (@maxRows)\r\n" +
@@ -757,7 +806,7 @@ namespace Common.Entities.CopilotAdoption
                 // directory, every one of them ranked as a licence candidate it is impossible to act on.
                 // See issue #360.
                 ExcludeGuests("u") +
-                $"ORDER BY RankScore DESC, u.id\r\n" +
+                provenDemandOrder +
                 "OPTION (RECOMPILE);";
         }
 
