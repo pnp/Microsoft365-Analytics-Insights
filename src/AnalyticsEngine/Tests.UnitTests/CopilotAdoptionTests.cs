@@ -685,6 +685,49 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void EveryQueryBoundsAppHostBeforeUsingItAsAGroupingKey()
+        {
+            // Another performance contract, and the cause of issue: the 90- and 180-day windows of
+            // the Copilot Adoption page timing out on a large tenant while 28 days was fine.
+            //
+            // dbo.copilot_chats.app_host is nvarchar(max) - the EF property carries no MaxLength - so
+            // it is a LOB, even though every value it holds is a short product-surface name. SQL
+            // Server sizes hash tables, sort buffers and above all the query's MEMORY GRANT from the
+            // column's DECLARED width. Using the raw column as a grouping key of a multi-million-row
+            // aggregate was measured asking for 65GB (90-day) / 130GB (180-day) of workspace against
+            // 3.3GB / 6.6GB once bounded - a request no database can grant, so it is capped, the
+            // aggregate spills, and under concurrent load it queues on RESOURCE_SEMAPHORE.
+            //
+            // Dropping the CAST back out is a one-character-looking edit whose damage only appears on
+            // a tenant nobody tests against, so it is pinned here.
+            var seats = new[] { 1 };
+
+            var grouping = new Dictionary<string, string>
+            {
+                { "UnlicensedUsageRowsSql", CopilotAdoptionSql.UnlicensedUsageRowsSql(seats) },
+                { "AgentUsageSql", CopilotAdoptionSql.AgentUsageSql(seats) },
+                { "UsageByAppSql", CopilotAdoptionSql.UsageByAppSql(seats) },
+                { "UnlicensedUsageByAppSql", CopilotAdoptionSql.UnlicensedUsageByAppSql(seats) },
+                { "LicensedUsersSql", CopilotAdoptionSql.LicensedUsersSql(seats, new int[0], includeCopilotReport: true) },
+            };
+
+            foreach (var q in grouping)
+            {
+                StringAssert.Contains(q.Value, "AS nvarchar(100))",
+                    q.Key + " must bound app_host to a fixed width before grouping or DISTINCT-ing on it.");
+
+                Assert.AreEqual(0, CountOccurrences(q.Value, "ISNULL(c.app_host, '(unknown)') AS app_host"),
+                    q.Key + " still projects the raw nvarchar(max) app_host as a grouping key.");
+                Assert.AreEqual(0, CountOccurrences(q.Value, "GROUP BY ISNULL(c.app_host"),
+                    q.Key + " still groups by the raw nvarchar(max) app_host.");
+            }
+
+            // The Cowork test is an EQUALITY against the stored value, not a grouping key, so it must
+            // keep comparing the base column - casting it would change what it matches.
+            StringAssert.Contains(CopilotAdoptionSql.CoworkPredicate(new int[0]), "c.app_host = ");
+        }
+
+        [TestMethod]
         public void LicensedUsersQuery_OmitsTheReportJoinWhenThereIsNoSnapshot()
         {
             var sql = CopilotAdoptionSql.LicensedUsersSql(new[] { 1 }, new int[0], includeCopilotReport: false);
