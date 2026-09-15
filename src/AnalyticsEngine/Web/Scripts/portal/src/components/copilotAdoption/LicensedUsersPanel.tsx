@@ -27,7 +27,7 @@ import type {
   LicensedUserPage,
 } from '../../types/copilotAdoption';
 import Spinner from '../Spinner';
-import { BandBadge, ScoreBar, scoreColour, useAdoptionTableStyles } from './adoptionShared';
+import { BandBadge, ScoreBar, scoreColour, SortableTh, useAdoptionTableStyles } from './adoptionShared';
 import { formatCount, formatDate, formatPct, weightSharePct } from './KpiGrid';
 import InfoTip from './InfoTip';
 import ActionPlan, { ActionBadge } from './ActionPlan';
@@ -35,20 +35,11 @@ import ActionPlan, { ActionBadge } from './ActionPlan';
 const PAGE_SIZE = 50;
 
 /**
- * Sort options, phrased as the question the admin is actually asking rather than as column names.
- * "Least engaged first" is the default because the entire purpose of the list is finding the people
- * who are not getting value from a licence somebody is paying for.
+ * The default sort. "Least engaged first" because the entire purpose of the list is finding the
+ * people who are not getting value from a licence somebody is paying for. Every column is sortable
+ * from its own header, so the old sort drop-down was a second way to do the same thing.
  */
-const SORT_OPTIONS = [
-  { value: 'score:asc', label: 'Least engaged first' },
-  { value: 'score:desc', label: 'Most engaged first' },
-  { value: 'lastUse:asc', label: 'Longest since last use' },
-  { value: 'interactions:desc', label: 'Most interactions' },
-  { value: 'activeDays:desc', label: 'Most active days' },
-  { value: 'cowork:desc', label: 'Most Cowork use' },
-  { value: 'department:asc', label: 'Department (A-Z)' },
-  { value: 'upn:asc', label: 'User name (A-Z)' },
-];
+const DEFAULT_SORT_BY = 'score';
 
 const useStyles = makeStyles({
   filters: {
@@ -102,9 +93,10 @@ const DEFAULT_FILTERS: LicensedUserFilters = {
   actions: [],
   department: '',
   country: '',
+  reclaimEligibility: '',
   coworkOnly: false,
   disabledOnly: false,
-  sortBy: 'score',
+  sortBy: DEFAULT_SORT_BY,
   sortDesc: false,
 };
 
@@ -184,7 +176,14 @@ export default function LicensedUsersPanel({
     };
   }, [windowDays, filters, page, seatLicenceTypeIds, reloadKey]);
 
-  const sortValue = `${filters.sortBy}:${filters.sortDesc ? 'desc' : 'asc'}`;
+  /**
+   * Applies a column-header sort. The effect above already resets the page whenever `filters`
+   * changes, so there is nothing else to do here.
+   */
+  const applySort = (sortBy: string, sortDesc: boolean) => {
+    setFilters((f) => ({ ...f, sortBy, sortDesc }));
+  };
+
   const exportUrl = useMemo(
     () => licensedUsersExportUrl(windowDays, filters, seatLicenceTypeIds),
     [windowDays, filters, seatLicenceTypeIds],
@@ -253,6 +252,18 @@ export default function LicensedUsersPanel({
         </Select>
 
         <Select
+          value={filters.reclaimEligibility}
+          aria-label="Filter by reclaim eligibility"
+          onChange={(_e, d) => setFilters((f) => ({ ...f, reclaimEligibility: d.value }))}
+        >
+          <option value="">All reclaim tiers</option>
+          <option value="certain">Certain reclaim</option>
+          <option value="probable">Probable reclaim</option>
+          <option value="review">Review before reclaim</option>
+          <option value="excluded">Excluded from reclaim</option>
+        </Select>
+
+        <Select
           value={filters.department}
           aria-label="Filter by department"
           onChange={(_e, d) => setFilters((f) => ({ ...f, department: d.value }))}
@@ -261,21 +272,6 @@ export default function LicensedUsersPanel({
           {(filterOptions?.departments ?? []).map((dept) => (
             <option key={dept} value={dept}>
               {dept}
-            </option>
-          ))}
-        </Select>
-
-        <Select
-          value={sortValue}
-          aria-label="Sort licensed users"
-          onChange={(_e, d) => {
-            const [sortBy, direction] = d.value.split(':');
-            setFilters((f) => ({ ...f, sortBy, sortDesc: direction === 'desc' }));
-          }}
-        >
-          {SORT_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
             </option>
           ))}
         </Select>
@@ -344,9 +340,19 @@ export default function LicensedUsersPanel({
           <table className={table.table}>
             <thead>
               <tr>
-                <th className={table.th}>User</th>
-                <th className={table.th}>Department</th>
-                <th className={table.th}>
+                <SortableTh label="user" sortKey="upn" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
+                  User
+                </SortableTh>
+                <SortableTh label="department" sortKey="department" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
+                  Department
+                </SortableTh>
+                <SortableTh
+                  label="engagement score"
+                  sortKey="score"
+                  activeKey={filters.sortBy}
+                  descending={filters.sortDesc}
+                  onSort={applySort}
+                >
                   <span className={styles.thWithInfo}>
                     Engagement
                     <InfoTip
@@ -361,34 +367,62 @@ export default function LicensedUsersPanel({
                           weightSharePct(options.depthWeight, scoreWeights),
                         )}) against ${options.depthTargetInteractionsPerActiveDay} interactions per active day, and breadth (${formatPct(
                           weightSharePct(options.breadthWeight, scoreWeights),
-                        )}) against ${options.breadthTargetApps} Copilot surfaces. Each component is capped at 100% before weighting, so nothing above target buys extra credit.`,
+                        )}) against ${options.breadthTargetApps} Copilot surfaces. Each component is capped at 100% before weighting, so nothing above target buys extra credit. Depth is additionally scaled down below ${options.depthMinActiveDays} active days, because it divides by a number the user controls - a few prompts in one afternoon would otherwise score full marks. Expected active days is prorated for accounts younger than the reporting period.`,
                         formula:
-                          'freq = min(1, activeDays / expectedActiveDays)\n' +
-                          'depth = min(1, interactions / activeDays / depthTarget)\n' +
-                          'breadth = min(1, appsUsed / breadthTarget)\n' +
+                          'freq       = min(1, activeDays / expectedActiveDays)\n' +
+                          `confidence = min(1, activeDays / ${options.depthMinActiveDays})\n` +
+                          'depth      = min(1, interactions / activeDays / depthTarget) x confidence\n' +
+                          'breadth    = min(1, appsUsed / breadthTarget)\n' +
                           `score = (freq*${options.frequencyWeight} + depth*${options.depthWeight} + breadth*${options.breadthWeight})\n` +
                           `        / ${weightSum} x 100`,
                         source: 'Hover the bar on any row for that user\u2019s three component scores.',
                       }}
                     />
                   </span>
-                </th>
-                <th className={table.th}>
+                </SortableTh>
+                <SortableTh
+                  label="band"
+                  sortKey="band"
+                  activeKey={filters.sortBy}
+                  descending={filters.sortDesc}
+                  onSort={applySort}
+                >
                   <span className={styles.thWithInfo}>
                     Band
                     <InfoTip
                       title="Engagement band"
                       content={{
                         what: 'The engagement score turned into a label, so a list of numbers becomes a list of decisions.',
-                        how: `Champion at ${options.championScore}+, Established at ${options.establishedScore}+, Developing at ${options.developingScore}+, Trialling below that. Users with no activity in this period are not scored at all: they are split into Dormant (used Copilot at some point in the last ${options.historyDays} days) and Never used.`,
+                        how: `Champion at ${options.championScore}+, Established at ${options.establishedScore}+, Developing at ${options.developingScore}+, Trialling below that. Users with no activity in this period are not scored at all: they are split into Dormant (used Copilot at some point in the last ${options.historyDays} days) and Never used. Sorting by this column follows the adoption ladder, not the alphabet.`,
                         source:
-                          'Established and above is what the "habitual users" headline counts. Dormant plus Never used is what "reclaimable licences" counts.',
+                          'Established and above is what the "habitual users" headline counts. Dormant plus Never used is the idle-seat population, which is NOT the same as "reclaimable licences" - that figure is the certain and probable reclaim tiers only, after review, exclusion and window-mismatch hold-backs.',
                       }}
                     />
                   </span>
-                </th>
-                <th className={`${table.th} ${table.thNumeric}`}>Interactions</th>
-                <th className={`${table.th} ${table.thNumeric}`}>
+                </SortableTh>
+                <SortableTh label="signal source" sortKey="signalSource" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
+                  Signal source
+                </SortableTh>
+                <SortableTh
+                  label="interactions"
+                  sortKey="interactions"
+                  activeKey={filters.sortBy}
+                  descending={filters.sortDesc}
+                  onSort={applySort}
+                  numeric
+                  defaultDescending
+                >
+                  Interactions
+                </SortableTh>
+                <SortableTh
+                  label="active days"
+                  sortKey="activeDays"
+                  activeKey={filters.sortBy}
+                  descending={filters.sortDesc}
+                  onSort={applySort}
+                  numeric
+                  defaultDescending
+                >
                   <span className={styles.thWithInfo}>
                     Active days
                     <InfoTip
@@ -400,11 +434,43 @@ export default function LicensedUsersPanel({
                       }}
                     />
                   </span>
-                </th>
-                <th className={`${table.th} ${table.thNumeric}`}>Apps</th>
-                <th className={table.th}>Cowork</th>
-                <th className={table.th}>Last used</th>
-                <th className={table.th}>
+                </SortableTh>
+                <SortableTh label="apps used" sortKey="apps" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} numeric defaultDescending>
+                  Apps
+                </SortableTh>
+                <SortableTh label="Cowork use" sortKey="cowork" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} defaultDescending>
+                  Cowork
+                </SortableTh>
+                <SortableTh label="last used" sortKey="lastUse" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
+                  Last used
+                </SortableTh>
+                <SortableTh
+                  label="reclaim tier"
+                  sortKey="reclaimEligibility"
+                  activeKey={filters.sortBy}
+                  descending={filters.sortDesc}
+                  onSort={applySort}
+                >
+                  <span className={styles.thWithInfo}>
+                    Reclaim tier
+                    <InfoTip
+                      title="Reclaim eligibility"
+                      content={{
+                        what: 'Whether this seat is safe to put in the reclaim total. Certain means a disabled account still holds a seat; probable means no observed use beyond the grace period; review means a human must check first; excluded means an admin already reviewed it.',
+                        how: `Uses the same row-level key as the headline reclaim counts. A new user inside the ${options.reclaimGraceDays}-day grace period is review-only, and active new users have their expected active days prorated. Sorting by this column runs most-actionable first, not alphabetically.`,
+                        source: 'Leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from Microsoft 365 usage data, so they must be handled through review or an exclusion.',
+                      }}
+                    />
+                  </span>
+                </SortableTh>
+                <SortableTh
+                  label="recommended action"
+                  sortKey="action"
+                  activeKey={filters.sortBy}
+                  descending={filters.sortDesc}
+                  onSort={applySort}
+                  className={table.stickyRight}
+                >
                   <span className={styles.thWithInfo}>
                     Action
                     <InfoTip
@@ -417,7 +483,7 @@ export default function LicensedUsersPanel({
                       }}
                     />
                   </span>
-                </th>
+                </SortableTh>
               </tr>
             </thead>
             <tbody>
@@ -451,6 +517,7 @@ export default function LicensedUsersPanel({
                   <td className={table.td}>
                     <BandBadge band={row.band} name={row.bandName} />
                   </td>
+                  <td className={table.td}>{row.signalSource}</td>
                   <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.interactions)}</td>
                   <td className={`${table.td} ${table.tdNumeric}`}>
                     {row.activeDays} <span className={styles.muted}>/ {Math.round(row.expectedActiveDays)}</span>
@@ -468,6 +535,16 @@ export default function LicensedUsersPanel({
                     )}
                   </td>
                   <td className={table.td}>
+                    <Tooltip relationship="description" content={row.reclaimEligibilityReason || 'This active seat is not in a reclaim tier.'}>
+                      <Text size={200}>{row.reclaimEligibility || '—'}</Text>
+                    </Tooltip>
+                    {row.reclaimExclusionExpired && (
+                      <Text size={100} block className={table.tdSub}>
+                        exclusion expired
+                      </Text>
+                    )}
+                  </td>
+                  <td className={`${table.td} ${table.stickyRight}`}>
                     <Tooltip relationship="description" content={row.recommendedAction}>
                       <div>
                         <ActionBadge code={row.recommendedActionCode} label={row.recommendedActionLabel} />

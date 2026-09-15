@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.CopilotAdoption;
 using DataUtils;
@@ -350,6 +350,7 @@ namespace Web.AnalyticsWeb.Controllers
             string actions = null,
             string department = null,
             string country = null,
+            string reclaimEligibility = null,
             bool coworkOnly = false,
             bool disabledOnly = false,
             double? minScore = null,
@@ -364,7 +365,7 @@ namespace Web.AnalyticsWeb.Controllers
             if (analysis == null) return StillBuilding();
 
             var query = BuildLicensedUserQuery(
-                search, bands, department, country, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
+                search, bands, department, country, reclaimEligibility, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
 
             var matched = CopilotAdoptionExports.Apply(analysis.LicensedUsers, query);
 
@@ -393,6 +394,7 @@ namespace Web.AnalyticsWeb.Controllers
             string actions = null,
             string department = null,
             string country = null,
+            string reclaimEligibility = null,
             bool coworkOnly = false,
             bool disabledOnly = false,
             double? minScore = null,
@@ -410,13 +412,39 @@ namespace Web.AnalyticsWeb.Controllers
             if (analysis == null) return ExportNotReadyResponse();
 
             var query = BuildLicensedUserQuery(
-                search, bands, department, country, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
+                search, bands, department, country, reclaimEligibility, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
 
             var rows = CopilotAdoptionExports.Apply(analysis.LicensedUsers, query).Take(MaxCsvRows).ToList();
 
             return CsvResponse(
-                CsvSerialiser.ToBytes(rows, CopilotAdoptionExports.LicensedUserColumns()),
+                CsvSerialiser.ToBytes(
+                    rows,
+                    CopilotAdoptionExports.LicensedUserColumns(
+                        analysis.Summary.FiguresIncomplete,
+                        WarningSummary(analysis.Summary))),
                 CsvSerialiser.FileName("copilot-licensed-users", analysis.Summary.GeneratedUtc));
+        }
+
+        /// <summary>
+        /// The on-screen warnings, flattened onto every exported row.
+        /// </summary>
+        /// <remarks>
+        /// A spreadsheet outlives the banner that was above it when it was generated, and it gets
+        /// forwarded without that context. If a source query failed or a figure was computed over a
+        /// biased subset, the file has to say so itself or it will be read as complete.
+        /// </remarks>
+        private static string WarningSummary(CopilotAdoptionSummary summary)
+        {
+            if (summary == null) return null;
+
+            var warnings = new List<string>();
+            if (summary.FiguresIncomplete)
+            {
+                warnings.Add("Figures incomplete: " + string.Join(", ", summary.IncompleteReasons));
+            }
+
+            warnings.AddRange(summary.Warnings ?? new List<string>());
+            return warnings.Count == 0 ? null : string.Join(" | ", warnings);
         }
 
         #endregion
@@ -492,7 +520,11 @@ namespace Web.AnalyticsWeb.Controllers
             var rows = CopilotAdoptionExports.Apply(analysis.Opportunities, query).Take(MaxCsvRows).ToList();
 
             return CsvResponse(
-                CsvSerialiser.ToBytes(rows, CopilotAdoptionExports.LicenceOpportunityColumns()),
+                CsvSerialiser.ToBytes(
+                    rows,
+                    CopilotAdoptionExports.LicenceOpportunityColumns(
+                        analysis.Summary.FiguresIncomplete,
+                        WarningSummary(analysis.Summary))),
                 CsvSerialiser.FileName("copilot-licence-opportunities", analysis.Summary.GeneratedUtc));
         }
 
@@ -681,7 +713,7 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         private static LicensedUserQuery BuildLicensedUserQuery(
-            string search, string bands, string department, string country,
+            string search, string bands, string department, string country, string reclaimEligibility,
             bool coworkOnly, bool disabledOnly, double? minScore, double? maxScore,
             string sortBy, bool sortDesc, string actions = null)
         {
@@ -692,6 +724,7 @@ namespace Web.AnalyticsWeb.Controllers
                 Actions = ParseActions(actions),
                 Department = department,
                 Country = country,
+                ReclaimEligibility = reclaimEligibility,
                 CoworkOnly = coworkOnly,
                 DisabledAccountsOnly = disabledOnly,
                 MinScore = minScore,

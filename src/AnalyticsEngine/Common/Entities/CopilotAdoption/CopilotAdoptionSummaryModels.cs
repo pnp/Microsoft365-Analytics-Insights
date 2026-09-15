@@ -1,4 +1,4 @@
-using Common.Entities.Copilot;
+﻿using Common.Entities.Copilot;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -338,6 +338,31 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("reclaimableSeats")]
         public int ReclaimableSeats { get; set; }
 
+        /// <summary>Disabled accounts that still hold a Copilot seat. This is the zero-risk reclaim KPI.</summary>
+        [JsonProperty("disabledLicensedUsers")]
+        public int DisabledLicensedUsers { get; set; }
+
+        [JsonProperty("reclaimCertainSeats")]
+        public int ReclaimCertainSeats { get; set; }
+
+        [JsonProperty("reclaimProbableSeats")]
+        public int ReclaimProbableSeats { get; set; }
+
+        [JsonProperty("reclaimReviewSeats")]
+        public int ReclaimReviewSeats { get; set; }
+
+        [JsonProperty("reclaimExcludedUsers")]
+        public int ReclaimExcludedUsers { get; set; }
+
+        [JsonProperty("expiredReclaimExclusions")]
+        public int ExpiredReclaimExclusions { get; set; }
+
+        [JsonProperty("tooNewToJudgeUsers")]
+        public int TooNewToJudgeUsers { get; set; }
+
+        [JsonProperty("reclaimCaveat")]
+        public string ReclaimCaveat { get; set; }
+
         /// <summary>Mean engagement score across all licensed users, including the ones scoring zero.</summary>
         [JsonProperty("averageAdoptionScore")]
         public double AverageAdoptionScore { get; set; }
@@ -348,6 +373,72 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("totalInteractions")]
         public long TotalInteractions { get; set; }
+
+        /// <summary>
+        /// Licensed users whose engagement row was scored from Microsoft's per-user usage report rather
+        /// than from this product's Copilot audit import.
+        /// </summary>
+        /// <remarks>
+        /// The fallback is deliberately preserved because it stops a partial or lagging audit import from
+        /// putting active people on a reclaim list. It is nevertheless a different measurement source:
+        /// Microsoft's report supplies prompt counts over its own D7/D28/D90/D180 window, so any
+        /// interaction-volume aggregate must say how much of the scored population was not eligible for
+        /// the audit-interaction totals.
+        /// </remarks>
+        [JsonProperty("usageReportSourcedUsers")]
+        public int UsageReportSourcedUsers { get; set; }
+
+        /// <summary>Share of scored licensed users whose engagement came from Microsoft's usage report.</summary>
+        [JsonProperty("usageReportSourcedUserPct")]
+        public double UsageReportSourcedUserPct { get; set; }
+
+        /// <summary>
+        /// True when report-sourced rows used a Microsoft report period that does not match the selected
+        /// analysis window, so those rows are deliberately excluded from reclaimable-seat totals.
+        /// </summary>
+        [JsonProperty("usageReportWindowMismatch")]
+        public bool UsageReportWindowMismatch { get; set; }
+
+        /// <summary>
+        /// Seats held back from <see cref="ReclaimableSeats"/> because they were scored from Microsoft's
+        /// report over a window that does not match the one selected.
+        /// </summary>
+        /// <remarks>
+        /// Published so the arithmetic still reconciles on screen. Without it
+        /// <c>ReclaimableSeats != NeverUsedUsers + DormantUsers</c> whenever the windows disagree, and a
+        /// reader who adds up the band breakdown finds a gap that nothing on the page accounts for.
+        /// A figure that does not tie out is exactly the kind of thing that loses an argument in a
+        /// licence negotiation, however defensible the reason behind it.
+        /// </remarks>
+        [JsonProperty("reclaimSeatsHeldBackForWindowMismatch")]
+        public int ReclaimSeatsHeldBackForWindowMismatch { get; set; }
+
+        /// <summary>
+        /// Idle seats (never used or dormant) that the confidence tiers deliberately keep out of
+        /// <see cref="ReclaimableSeats"/> because a human has to look at them first - dormant users,
+        /// users still inside the grace period, users with no tenure or account-state evidence, and
+        /// users an administrator has explicitly excluded.
+        /// </summary>
+        /// <remarks>
+        /// Published alongside <see cref="ReclaimSeatsHeldBackForWindowMismatch"/> so the whole
+        /// arithmetic ties out on screen:
+        /// <c>NeverUsedUsers + DormantUsers + ReclaimSeatsFromActiveBands ==
+        /// ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview</c>.
+        /// </remarks>
+        [JsonProperty("reclaimSeatsHeldBackForReview")]
+        public int ReclaimSeatsHeldBackForReview { get; set; }
+
+        /// <summary>
+        /// Reclaimable seats whose engagement band is better than dormant - in practice, disabled
+        /// accounts that were still active right up to the day they were disabled.
+        /// </summary>
+        /// <remarks>
+        /// They are the most certain reclaims there are, and they are <i>not</i> part of
+        /// <c>NeverUsedUsers + DormantUsers</c>. Published so a reader adding up the band breakdown can
+        /// account for the difference rather than finding an unexplained gap.
+        /// </remarks>
+        [JsonProperty("reclaimSeatsFromActiveBands")]
+        public int ReclaimSeatsFromActiveBands { get; set; }
 
         #endregion
 

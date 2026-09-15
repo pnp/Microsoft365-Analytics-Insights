@@ -103,6 +103,7 @@ function applyLicensedUserFilters(params: URLSearchParams, filters: LicensedUser
   if (filters.actions.length > 0) params.set('actions', filters.actions.join(','));
   if (filters.department) params.set('department', filters.department);
   if (filters.country) params.set('country', filters.country);
+  if (filters.reclaimEligibility) params.set('reclaimEligibility', filters.reclaimEligibility);
   if (filters.coworkOnly) params.set('coworkOnly', 'true');
   if (filters.disabledOnly) params.set('disabledOnly', 'true');
   params.set('sortBy', filters.sortBy);

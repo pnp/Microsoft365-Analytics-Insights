@@ -1,4 +1,4 @@
-using Common.Entities.Copilot;
+﻿using Common.Entities.Copilot;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -845,7 +845,9 @@ namespace Common.Entities.CopilotAdoption
             {
                 output.Warnings.Add(
                     $"Only the first {_options.MaxLicensedUsersScored:N0} licensed users were analysed. "
-                    + "The figures below therefore describe that subset, not the whole tenant.");
+                    + "The figures below therefore describe that subset, not the whole tenant. The subset is "
+                    + "ordered by internal user id for reproducibility, so the oldest user records are "
+                    + "over-represented and the newest user records are excluded first.");
             }
 
             foreach (var row in rows)
@@ -1047,7 +1049,12 @@ namespace Common.Entities.CopilotAdoption
 
             analysis.Opportunities = rows
                 .Select(r => CopilotAdoptionScoring.ScoreOpportunity(r, _options))
-                .OrderByDescending(r => r.OpportunityScore)
+                // Proven demand first. The SQL deliberately sorts proven-demand candidates into the
+                // TOP (@maxRows) window ahead of merely busy users so the cap cannot truncate them;
+                // ordering on score alone here would quietly undo that in the list the reader sees,
+                // ranking somebody who has never opened Copilot above somebody already using it.
+                .OrderBy(r => r.QualificationTier == CopilotAdoptionScoring.OpportunityTiers.ProvenDemand ? 0 : 1)
+                .ThenByDescending(r => r.OpportunityScore)
                 .ThenBy(r => r.UserPrincipalName, StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
@@ -1079,6 +1086,17 @@ namespace Common.Entities.CopilotAdoption
             // really was, and the funnel would open with a 75% drop that is pure measurement artefact.
             summary.ScoredUsers = users.Count;
             var denominator = summary.ScoredUsers;
+            var reportSourcedUsers = users
+                .Where(IsUsageReportSourced)
+                .ToList();
+            var auditInteractionUsers = users
+                .Where(u => !IsUsageReportSourced(u))
+                .ToList();
+            summary.UsageReportSourcedUsers = reportSourcedUsers.Count;
+            summary.UsageReportSourcedUserPct = CopilotAdoptionScoring.Percentage(reportSourcedUsers.Count, denominator);
+            summary.UsageReportWindowMismatch = reportSourcedUsers.Count > 0
+                && summary.DataSources.CopilotUsageReportPeriodDays > 0
+                && summary.DataSources.CopilotUsageReportPeriodDays != _options.WindowDays;
 
             if (summary.ScoredUsers > 0 && summary.ScoredUsers < summary.LicensedUsers)
             {
@@ -1086,15 +1104,94 @@ namespace Common.Entities.CopilotAdoption
                     $"This tenant holds {summary.LicensedUsers:N0} Copilot licences, but only {summary.ScoredUsers:N0} "
                     + "users could be analysed in one pass. Every rate and breakdown below describes those "
                     + $"{summary.ScoredUsers:N0} users, not the whole tenant - they are not tenant-wide figures "
-                    + "and must not be quoted as such.");
+                    + "and must not be quoted as such. Because the drill-down query is ordered by internal user id, "
+                    + "the oldest user records are over-represented and the newest joiners or newly onboarded "
+                    + "subsidiaries are excluded first; the subset is reproducible, but not representative.");
+            }
+
+            if (summary.UsageReportSourcedUsers > 0)
+            {
+                summary.Warnings.Add(
+                    $"{summary.UsageReportSourcedUsers:N0} licensed user{(summary.UsageReportSourcedUsers == 1 ? string.Empty : "s")} "
+                    + $"({summary.UsageReportSourcedUserPct:N1}%) were scored from Microsoft's Copilot usage report because "
+                    + "the audit import had no per-user signal for them. Their Microsoft prompt counts are not added to "
+                    + "audit interaction totals, concentration, intensity or licensed/unlicensed interaction comparisons.");
+            }
+
+            if (summary.UsageReportWindowMismatch)
+            {
+                summary.Warnings.Add(
+                    $"Microsoft's pinned Copilot usage-report period is D{summary.DataSources.CopilotUsageReportPeriodDays}, "
+                    + $"but this analysis window is D{_options.WindowDays}. Report-sourced rows are kept in the adoption "
+                    + "population so active people are not marked as never used, but a report-sourced row that would "
+                    + "otherwise be a PROBABLE reclaim is excluded from reclaimable-seat totals rather than normalising "
+                    + "prompt counts across unlike windows. Certain (disabled-account) seats are never held back this "
+                    + "way, because a disabled account is not an inference from an absence of use. The band breakdown "
+                    + "therefore counts more idle seats than the reclaim figure does; the difference is reported as "
+                    + "\"held back for window mismatch\".");
             }
 
             summary.ActiveUsers = users.Count(u => u.Band > AdoptionBand.Dormant);
             summary.NeverUsedUsers = users.Count(u => u.Band == AdoptionBand.NeverUsed);
             summary.DormantUsers = users.Count(u => u.Band == AdoptionBand.Dormant);
             summary.HabitualUsers = users.Count(u => CopilotAdoptionScoring.IsHabitual(u.Band));
-            summary.ReclaimableSeats = summary.NeverUsedUsers + summary.DormantUsers;
-            summary.TotalInteractions = users.Sum(u => u.Interactions);
+            // ----- Reclaim: tiers first, then the two things held back from the headline -----
+            //
+            // Written for the combination, not taken from either side. Two independent mechanisms now
+            // keep a seat out of "Reclaimable licences", and they compose:
+            //
+            //   * confidence tiering  - certain + probable only; review and excluded are parked
+            //   * window mismatch     - a row scored from Microsoft's report over a period that is not
+            //                           the selected window cannot justify taking a licence away
+            //
+            // Both hold-backs are published, because a headline that quietly disagrees with the band
+            // breakdown loses a licence argument however good the reason behind it. The identity that
+            // must hold on screen - asserted by CopilotAdoptionTests - is:
+            //
+            //   NeverUsed + Dormant + ReclaimSeatsFromActiveBands
+            //     == ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview
+            //
+            // The left-hand extra term is there because "certain" is not a subset of the idle bands: a
+            // disabled account that was active right up to the day it was disabled is the clearest
+            // reclaim there is, and it is not in NeverUsed + Dormant.
+            summary.DisabledLicensedUsers = users.Count(u => u.AccountEnabled == false);
+            summary.ReclaimCertainSeats = users.Count(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain));
+            summary.ReclaimProbableSeats = users.Count(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable));
+            summary.ReclaimReviewSeats = users.Count(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Review));
+            summary.ReclaimExcludedUsers = users.Count(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded));
+            summary.ExpiredReclaimExclusions = users.Count(u => u.ReclaimExclusionExpired);
+            summary.TooNewToJudgeUsers = users.Count(u => u.TooNewToJudge);
+
+            var reclaimCandidates = users
+                .Where(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain)
+                         || IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable))
+                .ToList();
+
+            // The window-mismatch hold-back only applies to PROBABLE seats. Probable is an inference
+            // from an absence of recorded use, and an absence measured over Microsoft's period rather
+            // than the selected one is not evidence about the selected one. Certain is not an
+            // inference at all - the account is disabled - so a report-period technicality must never
+            // remove a disabled seat from the reclaim total. Before this was restricted, the mismatch
+            // held back exactly the wrong rows: see the note on IsUsageReportSourced.
+            var heldBackForWindowMismatch = summary.UsageReportWindowMismatch
+                ? reclaimCandidates.Count(u =>
+                    IsUsageReportSourced(u)
+                    && IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable))
+                : 0;
+
+            summary.ReclaimSeatsHeldBackForWindowMismatch = heldBackForWindowMismatch;
+            summary.ReclaimableSeats = reclaimCandidates.Count - heldBackForWindowMismatch;
+            summary.ReclaimSeatsFromActiveBands = reclaimCandidates.Count(u => !IsIdleBand(u.Band));
+            summary.ReclaimSeatsHeldBackForReview = users.Count(u =>
+                IsIdleBand(u.Band)
+                && (IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Review)
+                    || IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded)));
+
+            summary.ReclaimCaveat = "Reclaim excludes admin exclusions and separates review-only cases. Leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from Microsoft 365 usage data.";
+            // Report-sourced rows carry Microsoft's prompt count in Interactions. Do not publish a total
+            // that adds prompts to audit-log interactions; they are different units over potentially
+            // different windows.
+            summary.TotalInteractions = auditInteractionUsers.Sum(u => u.Interactions);
 
             summary.AdoptionRatePct = CopilotAdoptionScoring.Percentage(summary.ActiveUsers, denominator);
             summary.HabitRatePct = CopilotAdoptionScoring.Percentage(summary.HabitualUsers, denominator);
@@ -1115,11 +1212,11 @@ namespace Common.Entities.CopilotAdoption
             summary.HabitBuckets = BuildHabitBuckets(users.Select(u => (double)u.ActiveDays));
             summary.ActionPlan = BuildActionPlan(users);
             summary.Concentration = CopilotAdoptionScoring.Concentration(
-                users.Where(CopilotAdoptionScoring.IsActive).Select(u => u.Interactions));
-            summary.ScoreProfiles = BuildScoreProfiles(users);
+                auditInteractionUsers.Where(CopilotAdoptionScoring.IsActive).Select(u => u.Interactions));
+            summary.ScoreProfiles = BuildScoreProfiles(auditInteractionUsers);
             summary.AdoptionByDepartment = BuildSegments(users, u => u.Department, "(no department)");
             summary.AdoptionByCountry = BuildSegments(users, u => u.Country, "(no country)");
-            summary.IntensityByDepartment = BuildIntensity(users, u => u.Department, "(no department)");
+            summary.IntensityByDepartment = BuildIntensity(auditInteractionUsers, u => u.Department, "(no department)");
 
             FinaliseAgents(analysis);
             FinaliseUnlicensed(analysis);
@@ -1134,6 +1231,43 @@ namespace Common.Entities.CopilotAdoption
                 .OrderByDescending(c => c.Value)
                 .Take(_options.TopSegments)
                 .ToList();
+        }
+
+        /// <summary>
+        /// Whether this row's engagement was scored from Microsoft's usage report rather than from the
+        /// Copilot audit import.
+        /// </summary>
+        /// <remarks>
+        /// Worth knowing when reading the reclaim arithmetic: <c>CopilotAdoptionScoring.Score</c> only
+        /// selects the report when the report has a non-zero signal, and a non-zero signal makes the
+        /// user active in the window. A report-sourced row therefore can never be banded never-used or
+        /// dormant, which means it can never be <c>probable</c> either. The window-mismatch hold-back is
+        /// consequently defence-in-depth rather than a live filter today. It is kept because the
+        /// alternative - deleting it - would silently remove the guard if the source-selection rule ever
+        /// changes, and because a hold-back that is wired up and provably zero is easier to reason about
+        /// than one that has to be remembered. See the deferred item in the pull request: the residual
+        /// exposure is a user with NO audit signal at all while Microsoft's period is shorter than the
+        /// selected window, who is currently banded never-used from audit data that does not cover them.
+        /// </remarks>
+        private static bool IsUsageReportSourced(LicensedUserAdoptionRow row)
+        {
+            return row != null
+                && string.Equals(row.SignalSource, CopilotAdoptionScoring.SignalSourceUsageReport, StringComparison.Ordinal);
+        }
+
+        /// <summary>Whether a row carries the given reclaim confidence tier.</summary>
+        private static bool IsReclaimTier(LicensedUserAdoptionRow row, string tier)
+        {
+            return row != null && string.Equals(row.ReclaimEligibility, tier, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// The two bands that make up the idle-seat population the reclaim arithmetic reconciles
+        /// against. Kept as one definition so the hold-back counts and the headline cannot drift apart.
+        /// </summary>
+        private static bool IsIdleBand(AdoptionBand band)
+        {
+            return band == AdoptionBand.NeverUsed || band == AdoptionBand.Dormant;
         }
 
         /// <summary>
@@ -1374,7 +1508,12 @@ namespace Common.Entities.CopilotAdoption
                     LicensedActiveUsers = seats.Count(CopilotAdoptionScoring.IsActive),
                     // Per seat held, not per active seat: this column exists to be compared with the
                     // unlicensed one, and an idle seat is the whole point of the comparison.
-                    InteractionsPerLicensedUser = PerUserPerMonth(seats.Sum(u => (double)u.Interactions), seats.Count),
+                    // Report-sourced licensed rows hold Microsoft prompt counts in Interactions, not
+                    // audit interaction counts, so they stay in the seat denominator but never in this
+                    // numerator. Otherwise this row adds two different units and labels them as one.
+                    InteractionsPerLicensedUser = PerUserPerMonth(
+                        seats.Where(u => !IsUsageReportSourced(u)).Sum(u => (double)u.Interactions),
+                        seats.Count),
                     LicensedAgentUserPct = CopilotAdoptionScoring.Percentage(
                         seats.Count(u => u.AgentsUsed > 0), seats.Count),
                     UnlicensedActiveUsers = chat.Count,

@@ -1,4 +1,4 @@
-using Common.Entities.Copilot;
+﻿using Common.Entities.Copilot;
 using Common.Entities.Xlsx;
 using System;
 using System.Collections.Generic;
@@ -94,6 +94,12 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "To (UTC)", summary.ToUtc, string.Empty);
             AddMeta(sheet, "History window", $"{summary.Options.HistoryDays} days",
                 "How far back 'ever used Copilot' looks, which is what separates Dormant from Never used.");
+            AddMeta(sheet, "Figures incomplete", YesNo(summary.FiguresIncomplete),
+                summary.FiguresIncomplete
+                    ? "A source query failed or timed out. Treat every individual row and aggregate in this workbook as incomplete."
+                    : "No headline-source query reported an incomplete result.");
+            AddMeta(sheet, "Individual rows", summary.Options == null ? string.Empty : "See per-user sheets",
+                "The Licensed users and Licence opportunities sheets contain individual-level governance data. Do not share externally without a legal basis.");
 
             sheet.AddBlankRow();
             sheet.AddHeaderRow("Data source", "Available", "Notes");
@@ -121,6 +127,7 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Breadth weight", o.BreadthWeight, "Share from number of Copilot surfaces used.");
             AddMeta(sheet, "Frequency target", o.FrequencyTargetRatio, "Share of working days needed for full marks.");
             AddMeta(sheet, "Depth target", o.DepthTargetInteractionsPerActiveDay, "Interactions per active day for full marks.");
+            AddMeta(sheet, "Depth minimum active days", o.DepthMinActiveDays, "Below this many active days the depth component is scaled down in proportion, so one busy afternoon cannot read as a habit.");
             AddMeta(sheet, "Breadth target", o.BreadthTargetApps, "Copilot surfaces for full marks.");
             AddMeta(sheet, "Champion at", o.ChampionScore, "Engagement score for the Champion band.");
             AddMeta(sheet, "Established at", o.EstablishedScore, "The 'habit formed' line - what 'habitual users' counts.");
@@ -154,6 +161,20 @@ namespace Common.Entities.CopilotAdoption
             return value ? "Yes" : "No";
         }
 
+        private static string WarningSummary(CopilotAdoptionSummary summary)
+        {
+            if (summary == null) return string.Empty;
+
+            var warnings = new List<string>();
+            if (summary.FiguresIncomplete)
+            {
+                warnings.Add("Figures incomplete: " + string.Join(", ", summary.IncompleteReasons));
+            }
+
+            warnings.AddRange(summary.Warnings ?? new List<string>());
+            return string.Join(" | ", warnings);
+        }
+
         #endregion
 
         #region Headline figures
@@ -184,8 +205,30 @@ namespace Common.Entities.CopilotAdoption
                 "Used Copilot before this period but not inside it. Needs a conversation about what stopped.");
             AddMeta(sheet, "Never used", summary.NeverUsedUsers,
                 $"No Copilot activity anywhere in the last {summary.Options.HistoryDays} days. Needs onboarding, or the licence back.");
+            AddMeta(sheet, "Disabled accounts with licences", summary.DisabledLicensedUsers,
+                "The raw inventory of disabled accounts still holding a Copilot seat, including any an admin has excluded from reclaim. The actionable subset is the certain tier below.");
             AddMeta(sheet, "Reclaimable licences", summary.ReclaimableSeats,
-                "Dormant plus never used - licences that produced nothing this period.");
+                summary.UsageReportWindowMismatch
+                    ? "Certain plus probable reclaim, minus PROBABLE rows scored from Microsoft's usage report because its pinned period does not match this analysis window. Certain (disabled) seats are never held back that way - a disabled account is not an inference from an absence of use. Excludes admin exclusions and review-only cases; leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from usage data."
+                    : "Certain plus probable reclaim only. Excludes admin exclusions and review-only cases; leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from usage data.");
+            AddMeta(sheet, "Reclaim - certain", summary.ReclaimCertainSeats,
+                "Disabled accounts still holding seats. Act immediately unless there is a known exception.");
+            AddMeta(sheet, "Reclaim - probable", summary.ReclaimProbableSeats,
+                $"No observed use, account enabled, and the account-age tenure proxy is beyond the {summary.Options.ReclaimGraceDays}-day grace period.");
+            AddMeta(sheet, "Reclaim - review", summary.ReclaimReviewSeats,
+                "Dormant, too new, or missing enough account state/tenure context to judge automatically.");
+            AddMeta(sheet, "Reclaim exclusions", summary.ReclaimExcludedUsers,
+                "Reviewed false positives removed from reclaim counts but still included in the licensed denominator.");
+            AddMeta(sheet, "Expired exclusions", summary.ExpiredReclaimExclusions,
+                "Previously excluded seats whose review-after date has passed and should be looked at again.");
+            // The two hold-backs and the disabled-but-active term, so the reader can add the reclaim
+            // figures up against the band breakdown and land exactly on it.
+            AddMeta(sheet, "Held back - review or exclusion", summary.ReclaimSeatsHeldBackForReview,
+                "Never-used or dormant seats kept out of the reclaimable total because a human has to look at them first, or because an admin has already excluded them.");
+            AddMeta(sheet, "Held back - report window mismatch", summary.ReclaimSeatsHeldBackForWindowMismatch,
+                "Seats kept out of the reclaimable total because they were scored from Microsoft's usage report over a period that is not this analysis window.");
+            AddMeta(sheet, "Reclaimable but still active", summary.ReclaimSeatsFromActiveBands,
+                "Reclaimable seats that are not never-used or dormant - disabled accounts that were still active when they were disabled. Never used + Dormant + this = Reclaimable + both held-back figures.");
 
             var last = sheet.CurrentRow;
 
@@ -195,13 +238,15 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Average engagement", summary.AverageAdoptionScore, "Mean score out of 100, including licences scoring zero.");
             AddMeta(sheet, "Median engagement", summary.MedianAdoptionScore,
                 "Reported next to the mean because a few Champions pull the mean up; a large gap means a long tail of light users.");
-            AddMeta(sheet, "Total interactions", summary.TotalInteractions, "All Copilot interactions by licensed users in the period.");
+            AddMeta(sheet, "Total interactions", summary.TotalInteractions, "Audit-log Copilot interactions by licensed users in the period; Microsoft usage-report prompt counts are not mixed into this total.");
+            AddMeta(sheet, "Users scored from Microsoft report", summary.UsageReportSourcedUsers,
+                "Licensed users whose score used Microsoft's per-user report because the audit import had no per-user signal for them.");
 
             sheet.AddBlankRow();
             AddMeta(sheet, "Using Copilot unlicensed", summary.UnlicensedActiveUsers,
                 "People with no licence who used Copilot anyway - proven, unmet demand, and invisible in Microsoft's own reports.");
             AddMeta(sheet, "Recommended for a licence", summary.RecommendedForLicence,
-                $"Unlicensed users whose business-case score reached {summary.Options.OpportunityRecommendScore}.");
+                $"Unlicensed users recommended for a licence: either {summary.Options.OpportunityProvenDemandMinActiveDays} or more distinct days of unlicensed Copilot use (proven demand), or a business-case score of {summary.Options.OpportunityRecommendScore} or above (workload inferred).");
 
             if (summary.CoworkDetected)
             {
@@ -315,7 +360,7 @@ namespace Common.Entities.CopilotAdoption
                     + "restates active days per "
                     + summary.Options.HabitBucketNormalisationDays
                     + "-day month so they mean the same thing whichever period was selected. A licence that was never "
-                    + "used is not 'infrequent' - it is in the reclaimable-licence figure."));
+                    + "used is not 'infrequent' - it is an idle seat, assessed by the reclaim confidence tiers."));
                 sheet.AddHeaderRow("Usage frequency", "Users", "% of active", "Range");
 
                 var habitFirst = sheet.CurrentRow + 1;
@@ -852,7 +897,7 @@ namespace Common.Entities.CopilotAdoption
             if (users.Count == 0) return;
 
             var sheet = workbook.AddSheet("Licensed users");
-            sheet.SetColumnWidths(34, 26, 22, 22, 12, 10, 14, 12, 10, 10, 14, 14, 22, 60);
+            sheet.SetColumnWidths(34, 26, 22, 22, 12, 10, 16, 18, 42, 14, 12, 10, 10, 14, 14, 22, 60);
 
             // A workbook that quietly stops at a row limit is worse than one that refuses to export:
             // the reader has no way of knowing the list is short. Say so on the sheet itself, where it
@@ -868,9 +913,17 @@ namespace Common.Entities.CopilotAdoption
                     + "on the Licensed users tab if you need all of them."));
                 sheet.AddBlankRow();
             }
+            else if (analysis.Summary.FiguresIncomplete)
+            {
+                sheet.AddTitle("Licensed users - FIGURES INCOMPLETE");
+                sheet.AddRow(XlsxCell.Wrapped(
+                    "A source query failed or timed out. This sheet is incomplete and must not be used as a complete employee list."));
+                sheet.AddBlankRow();
+            }
 
             sheet.AddHeaderRow(
-                "User", "Department", "Job title", "Manager", "Engagement", "Band", "Interactions",
+                "User", "Department", "Job title", "Manager", "Engagement", "Band", "Signal source",
+                "Figures incomplete", "Figure warnings", "Interactions",
                 "Active days", "Expected", "Apps", "Used Cowork", "Days since last use", "Recommended action",
                 "Action detail");
 
@@ -885,6 +938,9 @@ namespace Common.Entities.CopilotAdoption
                     user.ManagerUserPrincipalName ?? string.Empty,
                     user.AdoptionScore,
                     user.BandName,
+                    user.SignalSource,
+                    analysis.Summary.FiguresIncomplete ? "Yes" : "No",
+                    XlsxCell.Wrapped(WarningSummary(analysis.Summary)),
                     user.Interactions,
                     user.ActiveDays,
                     user.ExpectedActiveDays,
@@ -896,7 +952,7 @@ namespace Common.Entities.CopilotAdoption
             }
 
             sheet.FreezeTopRows(headerRow);
-            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 14);
+            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 17);
         }
 
         private static void WriteOpportunitiesSheet(XlsxWriter workbook, CopilotAdoptionAnalysis analysis)
@@ -905,24 +961,42 @@ namespace Common.Entities.CopilotAdoption
             if (candidates.Count == 0) return;
 
             var sheet = workbook.AddSheet("Licence opportunities");
-            sheet.SetColumnWidths(34, 26, 22, 14, 14, 22, 14, 14, 14, 60);
+            sheet.SetColumnWidths(34, 26, 22, 14, 14, 18, 42, 22, 14, 14, 14, 60);
 
             if (candidates.Count > MaxUserRows)
             {
                 sheet.AddTitle("Licence opportunities - TRUNCATED");
                 sheet.AddRow(XlsxCell.Wrapped(
-                    $"This sheet lists the {MaxUserRows:N0} strongest of {candidates.Count:N0} candidates. "
-                    + "The headline 'recommended for a licence' figure covers all of them."));
+                    $"This sheet lists the {MaxUserRows:N0} strongest of {candidates.Count:N0} candidates, "
+                    + "proven-demand candidates first so recurrent unlicensed Copilot users cannot be truncated "
+                    + "away by people who have never used it. The headline 'recommended for a licence' figure "
+                    + "covers all of them."));
+                sheet.AddBlankRow();
+            }
+            else if (analysis.Summary.FiguresIncomplete)
+            {
+                sheet.AddTitle("Licence opportunities - FIGURES INCOMPLETE");
+                sheet.AddRow(XlsxCell.Wrapped(
+                    "A source query failed or timed out. This sheet is incomplete and must not be used as a complete employee list."));
                 sheet.AddBlankRow();
             }
 
             sheet.AddHeaderRow(
                 "User", "Department", "Job title", "Business case", "Recommended",
-                "Unlicensed Copilot interactions", "Teams", "Email", "Files", "Justification");
+                "Figures incomplete", "Figure warnings", "Unlicensed Copilot interactions", "Teams", "Email", "Files", "Justification");
 
             var headerRow = sheet.CurrentRow;
 
-            foreach (var candidate in candidates.OrderByDescending(c => c.OpportunityScore).Take(MaxUserRows))
+            // Proven demand first, then score - the same order the service and the CSV use. Re-sorting on
+            // score alone here would undo it precisely where it matters most: this sheet TRUNCATES, and a
+            // proven-demand candidate can score below the recommendation bar by construction (the Copilot
+            // weight sits under it), so a large tenant's workbook would drop people who already use
+            // Copilot in favour of people who never have.
+            foreach (var candidate in candidates
+                .OrderBy(c => c.QualificationTier == CopilotAdoptionScoring.OpportunityTiers.ProvenDemand ? 0 : 1)
+                .ThenByDescending(c => c.OpportunityScore)
+                .ThenBy(c => c.UserPrincipalName, StringComparer.OrdinalIgnoreCase)
+                .Take(MaxUserRows))
             {
                 sheet.AddRow(
                     candidate.UserPrincipalName,
@@ -930,6 +1004,8 @@ namespace Common.Entities.CopilotAdoption
                     candidate.JobTitle ?? string.Empty,
                     candidate.OpportunityScore,
                     candidate.Recommended ? "Yes" : "No",
+                    analysis.Summary.FiguresIncomplete ? "Yes" : "No",
+                    XlsxCell.Wrapped(WarningSummary(analysis.Summary)),
                     candidate.UnlicensedCopilotInteractions,
                     candidate.TeamsMessages + candidate.TeamsMeetings,
                     candidate.EmailsSent + candidate.EmailsRead,
@@ -938,7 +1014,7 @@ namespace Common.Entities.CopilotAdoption
             }
 
             sheet.FreezeTopRows(headerRow);
-            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 10);
+            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 12);
         }
 
         #endregion
@@ -956,7 +1032,11 @@ namespace Common.Entities.CopilotAdoption
             sheet.SetColumnWidths(30, 96);
 
             var o = summary.Options;
-            var targetDays = Math.Round(o.WindowDays * (o.WorkingDaysPerWeek / 7d) * o.FrequencyTargetRatio, 0);
+            // The EXACT value the scorer divides by, not a rounded display figure: a rounded denominator
+            // in a published formula puts the arithmetic on the wrong side of a band boundary for a user
+            // sitting exactly on it, in the one sheet whose purpose is to reproduce the score.
+            var targetDays = CopilotAdoptionScoring.TargetActiveDays(o);
+            var targetDaysLabel = Math.Round(targetDays, 1);
             var weightSum = o.FrequencyWeight + o.DepthWeight + o.BreadthWeight;
 
             sheet.AddTitle("How this is calculated");
@@ -967,14 +1047,21 @@ namespace Common.Entities.CopilotAdoption
                 "Each licensed user scores 0-100 from three capped components, because 'did they use Copilot?' is "
                 + "almost never a yes/no question - someone who opened it twice and someone who lives in it produce "
                 + "the same 'active user' count and need opposite responses.\n"
-                + $"frequency = min(1, activeDays / {targetDays})\n"
-                + $"depth = min(1, (interactions / activeDays) / {o.DepthTargetInteractionsPerActiveDay})\n"
-                + $"breadth = min(1, appsUsed / {o.BreadthTargetApps})\n"
-                + $"score = (frequency x {o.FrequencyWeight} + depth x {o.DepthWeight} + breadth x {o.BreadthWeight}) / {weightSum} x 100");
+                + $"frequency  = min(1, activeDays / {targetDays})\n"
+                + $"confidence = min(1, activeDays / {o.DepthMinActiveDays})\n"
+                + $"depth      = min(1, (interactions / activeDays) / {o.DepthTargetInteractionsPerActiveDay}) x confidence\n"
+                + $"breadth    = min(1, appsUsed / {o.BreadthTargetApps})\n"
+                + $"score = (frequency x {o.FrequencyWeight} + depth x {o.DepthWeight} + breadth x {o.BreadthWeight}) / {weightSum} x 100\n"
+                + $"Depth is scaled down below {o.DepthMinActiveDays} active days, because it divides by a number "
+                + "the user controls: a handful of prompts in one afternoon would otherwise score full marks for "
+                + "depth and read as a habit forming. At or above that many active days nothing changes.\n"
+                + $"The {targetDaysLabel}-day frequency target above is the full-window one. An account younger than the "
+                + "reporting period has its target prorated to the days it has actually existed, so each row's own "
+                + "'Expected active days' column is the number that row was scored against.");
 
             AddMethod(sheet, "Why working days",
                 $"The frequency target is {o.FrequencyTargetRatio:P0} of the working days in the period, assuming "
-                + $"{o.WorkingDaysPerWeek} working days a week - {targetDays} days over {o.WindowDays}. Measured "
+                + $"{o.WorkingDaysPerWeek} working days a week - {targetDaysLabel} days over {o.WindowDays}. Measured "
                 + "against calendar days, someone who used Copilot every single working day would cap out at about "
                 + "71% and look like a partial adopter.");
 
@@ -997,8 +1084,8 @@ namespace Common.Entities.CopilotAdoption
                 + "This is UNWEIGHTED frequency and is deliberately NOT the same measure as 'habitual users' above, "
                 + "which is the weighted engagement score. The two are meant to be compared: a large Daily figure "
                 + "with a low habit rate means people open Copilot constantly and do very little with it.\n"
-                + "Percentages are of ACTIVE users. A licence that was never used is not 'infrequent' - it is a "
-                + "reclaimable licence, and merging the two hides the more expensive problem.");
+                + "Percentages are of ACTIVE users. A licence that was never used is not 'infrequent' - it is "
+                + "an idle seat, assessed by the reclaim confidence tiers, and merging the two hides the more expensive problem.");
 
             AddMethod(sheet, "Usage concentration",
                 "Active licensed users ranked by interaction count and cut into percentile cohorts. Only active "
@@ -1007,13 +1094,26 @@ namespace Common.Entities.CopilotAdoption
 
             AddMethod(sheet, "Business case score",
                 "Unlicensed users score 0-100 on four weighted signals, weighted so evidence beats inference:\n"
-                + $"copilot = min(1, unlicensedCopilotInteractions / {o.OpportunityCopilotTarget}) x {o.OpportunityUnlicensedCopilotWeight}\n"
+                // Written as the computation, not as a rounded product. Printing "64.3" at D90 would make
+                // the published formula disagree with the scorer at the recommendation boundary - a
+                // candidate the scorer puts at exactly 50.0 reads as 49.9 here. This form is exactly
+                // reproducible at every window and says where the number comes from.
+                + $"copilot = min(1, unlicensedCopilotInteractions / ({o.OpportunityCopilotTarget} x {o.WindowDays} / {o.OpportunityCopilotTargetBasisDays})) x {o.OpportunityUnlicensedCopilotWeight}\n"
                 + $"collaboration = min(1, (teamsMessages + teamsMeetings) / {o.OpportunityCollaborationTarget}) x {o.OpportunityCollaborationWeight}\n"
                 + $"email = min(1, (emailsSent + emailsRead) / {o.OpportunityEmailTarget}) x {o.OpportunityEmailWeight}\n"
                 + $"documents = min(1, filesViewedOrEdited / {o.OpportunityDocumentTarget}) x {o.OpportunityDocumentWeight}\n"
-                + $"Recommended at {o.OpportunityRecommendScore} or above. Already using Copilot Chat without a licence "
-                + "carries the most weight because it is the only signal that proves demand for Copilot itself "
-                + "rather than inferring it from general activity.");
+                + $"The Copilot target is {o.OpportunityCopilotTarget} interactions per {o.OpportunityCopilotTargetBasisDays} days, "
+                + $"scaled to the {o.WindowDays}-day window shown above - about {Math.Round(CopilotAdoptionScoring.OpportunityCopilotTargetForWindow(o), 1)}. "
+                + "The formula keeps the exact division rather than that rounded figure, because rounding it "
+                + "would put the published arithmetic on the wrong side of the recommendation bar for a "
+                + "candidate sitting exactly on it. Without the scaling the same person "
+                + "would be recommended over a long window and not over a short one.\n"
+                + $"Recommended when unlicensedCopilotActiveDays is at least {o.OpportunityProvenDemandMinActiveDays} "
+                + $"(proven demand), or when the score reaches {o.OpportunityRecommendScore} (workload inferred). "
+                + "Proven demand qualifies on its own because the Copilot weight "
+                + $"({o.OpportunityUnlicensedCopilotWeight}) sits below the score bar, so the one signal that "
+                + "actually proves demand for Copilot could otherwise never clear it while general Microsoft 365 "
+                + "busyness could. Each row states which route qualified it.");
 
             AddMethod(sheet, "Agent verdicts",
                 $"Retire after {o.AgentRetireInactiveDays} days without use; Review between {o.AgentReviewInactiveDays} "
