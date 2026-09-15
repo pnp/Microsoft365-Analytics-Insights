@@ -314,23 +314,42 @@ export default function CoworkPanel({
     }));
 
   if (!available) {
+    // Read from the SUMMARY, not from `data`: the effect above deliberately does not fetch when the
+    // analysis is unavailable, so `data` is always null on this branch. The summary is a prop and is
+    // always present, which is what makes the diagnosis below reachable at all.
+    const coworkWarnings = (summary.warnings ?? []).filter((w) =>
+      w.toLowerCase().includes('cowork'),
+    );
+
     return (
       <Card>
         <div className={styles.emptyState}>
           <Text weight="semibold" block>
             Cowork readiness could not be assessed for this period.
           </Text>
-          <Text size={200} block className={styles.muted}>
-            This needs two things: at least one Microsoft 365 Copilot licence assigned in the tenant, and
-            Microsoft&#8217;s daily usage reports for Teams, Outlook, SharePoint or OneDrive. The usage
-            reports are what measure coordination load - how much delegable, multi-step work each person
-            carries - and without them there is nothing to rank against.
-          </Text>
-          <Text size={200} block className={styles.muted}>
-            Turn on the Microsoft 365 usage report import in the installer and check the Health page for
-            when it last succeeded. This is deliberately shown instead of an empty list: &#8220;no
-            candidates&#8221; is a finding, and this is a missing import.
-          </Text>
+          {coworkWarnings.length > 0 ? (
+            <div className={styles.warnings}>
+              {coworkWarnings.map((warning) => (
+                <MessageBar key={warning} intent="warning">
+                  <MessageBarBody>{warning}</MessageBarBody>
+                </MessageBar>
+              ))}
+            </div>
+          ) : (
+            <>
+              <Text size={200} block className={styles.muted}>
+                This needs two things: at least one Microsoft 365 Copilot licence assigned in the tenant,
+                and Microsoft&#8217;s daily usage reports for Teams, Outlook, SharePoint or OneDrive. The
+                usage reports are what measure coordination load - how much delegable, multi-step work each
+                person carries - and without them there is nothing to rank against.
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                Turn on the Microsoft 365 usage report import in the installer and check the Health page for
+                when it last succeeded. This is deliberately shown instead of an empty list: &#8220;no
+                candidates&#8221; is a finding, and this is most likely a missing import.
+              </Text>
+            </>
+          )}
         </div>
       </Card>
     );
@@ -652,7 +671,7 @@ export default function CoworkPanel({
             Refresh
           </Button>
           <Tooltip
-            content="A spending-policy scoping list: UPN first, with each person's justification next to it. It exports the rows matching the filters above, so tick 'Recommended only' first if you want just the rollout cohort - and merge the result into your existing policy scope rather than replacing it."
+            content="A spending-policy scoping list: UPN first, with each person's justification next to it. It exports the rows matching the filters above, so tick 'Policy list only' first if you want just the rollout cohort - and merge the result into your existing policy scope rather than replacing it."
             relationship="description"
           >
             <Button size="small" icon={<ArrowDownload16Regular />} as="a" href={exportUrl}>
