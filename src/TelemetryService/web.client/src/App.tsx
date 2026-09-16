@@ -14,13 +14,14 @@ import {
 } from '@fluentui/react-components';
 import { ArrowClockwise20Regular, SignOut20Regular } from '@fluentui/react-icons';
 import type { DashboardAuth } from './auth';
-import type { ClientSummary, DashboardStats } from './types';
+import type { ClientAnnotationUpdate, ClientSummary, DashboardStats } from './types';
 
 // Code-split the tabs so the initial load only pays for the Overview chunk.
 const OverviewTab = lazy(() => import('./tabs/OverviewTab'));
 const TablesTab = lazy(() => import('./tabs/TablesTab'));
 const ClientsTab = lazy(() => import('./tabs/ClientsTab'));
 const AdoptionTab = lazy(() => import('./tabs/AdoptionTab'));
+const CopilotTab = lazy(() => import('./tabs/CopilotTab'));
 
 const useStyles = makeStyles({
     header: {
@@ -65,7 +66,7 @@ const useStyles = makeStyles({
     },
 });
 
-type TabValue = 'overview' | 'tables' | 'clients' | 'adoption';
+type TabValue = 'overview' | 'tables' | 'clients' | 'adoption' | 'copilot';
 
 export default function App({ auth }: { auth: DashboardAuth }) {
     const styles = useStyles();
@@ -122,6 +123,28 @@ export default function App({ auth }: { auth: DashboardAuth }) {
         setReloadKey(k => k + 1);
     }
 
+    /**
+     * Records which customer is behind an anonymous client id.
+     *
+     * Refreshes afterwards rather than patching local state: the annotation is joined onto the client
+     * list server-side, so a re-read is the only way to be sure the UI matches what was stored.
+     */
+    async function saveAnnotation(anonClientId: string, update: ClientAnnotationUpdate) {
+        const accessToken = await auth.getAccessToken();
+        const response = await fetch(`/api/Telemetry/annotations/${encodeURIComponent(anonClientId)}`, {
+            method: 'PUT',
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(update),
+        });
+
+        if (!response.ok) throw new Error(`Save failed: HTTP ${response.status}`);
+
+        refresh();
+    }
+
     const onTabSelect: SelectTabEventHandler = (_event, data) => {
         setSelectedTab(data.value as TabValue);
     };
@@ -168,6 +191,7 @@ export default function App({ auth }: { auth: DashboardAuth }) {
                     <Tab value="tables">Tables</Tab>
                     <Tab value="clients">Clients</Tab>
                     <Tab value="adoption">Adoption</Tab>
+                    <Tab value="copilot">Copilot</Tab>
                 </TabList>
             </div>
 
@@ -211,8 +235,11 @@ export default function App({ auth }: { auth: DashboardAuth }) {
                     >
                         {selectedTab === 'overview' && <OverviewTab stats={stats} />}
                         {selectedTab === 'tables' && <TablesTab stats={stats} />}
-                        {selectedTab === 'clients' && <ClientsTab clients={clients ?? []} />}
+                        {selectedTab === 'clients' && (
+                            <ClientsTab clients={clients ?? []} onSaveAnnotation={saveAnnotation} />
+                        )}
                         {selectedTab === 'adoption' && <AdoptionTab stats={stats} />}
+                        {selectedTab === 'copilot' && <CopilotTab stats={stats} />}
                     </Suspense>
                 )}
             </main>
