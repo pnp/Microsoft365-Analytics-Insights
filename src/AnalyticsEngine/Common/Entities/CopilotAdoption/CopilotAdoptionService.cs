@@ -1688,6 +1688,7 @@ namespace Common.Entities.CopilotAdoption
             }
 
             var rows = new List<CoworkReadinessRow>(signals.Count);
+            var withoutFluency = 0;
             foreach (var signal in signals)
             {
                 if (scoreByUser.TryGetValue(signal.UserId, out var scored))
@@ -1696,8 +1697,41 @@ namespace Common.Entities.CopilotAdoption
                     signal.AgentsUsed = scored.AgentsUsed;
                     signal.CopilotActive = CopilotAdoptionScoring.IsActive(scored);
                 }
+                else
+                {
+                    // No licensed-user row to take fluency from, so this person is scored on a DEFAULT of
+                    // zero rather than a measured one. Same defect as the licensed.Count == 0 guard above,
+                    // only partial: "build fluency first" is then a verdict about a missing input.
+                    //
+                    // It is reachable because the two queries are capped independently and rank
+                    // differently - LicensedUsersSql takes TOP (@maxRows) ORDER BY u.id, CoworkReadinessSql
+                    // takes TOP (@maxRows) ORDER BY existing-Cowork-use then load - so above
+                    // MaxLicensedUsersScored seat holders the two row sets are different subsets of the
+                    // same population, and the overlap is partial rather than total.
+                    //
+                    // Not marked unavailable: the matched majority is correctly scored and withholding the
+                    // whole tab from the largest tenants would be a worse answer than naming the gap. The
+                    // warning contains "Cowork" deliberately - the panel filters on that word.
+                    withoutFluency++;
+                }
 
                 rows.Add(CopilotAdoptionScoring.ScoreCoworkReadiness(signal, _options));
+            }
+
+            if (withoutFluency > 0)
+            {
+                // Stated as a fact with its consequence and no remedy, exactly like the licensed-user
+                // cap warning this one is downstream of. Neither cap is reachable from the portal, and
+                // the excluded users cannot be pulled in by changing the period: SeatUsers is a licence
+                // lookup with no date predicate, so the population and its id ordering are the same on
+                // every window.
+                summary.Warnings.Add(
+                    $"Cowork readiness: {withoutFluency:N0} of {signals.Count:N0} seat holders were scored "
+                    + "without a Copilot fluency figure, because they fall outside the "
+                    + $"{_options.MaxLicensedUsersScored:N0}-row licensed-user analysis this tab joins "
+                    + "against. Their fluency reads as 0 rather than as unknown, so they band lower than "
+                    + "they should - most will show as \"build fluency first\". Treat the tier of those "
+                    + "rows as unreliable; the rest of the tab is unaffected.");
             }
 
             // Ordered so the people to act on are first: recommended before not, then by the strength of
