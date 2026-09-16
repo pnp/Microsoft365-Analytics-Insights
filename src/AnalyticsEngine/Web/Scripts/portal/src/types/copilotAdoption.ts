@@ -1,4 +1,4 @@
-// Mirrors Common/Entities/CopilotAdoption/CopilotAdoptionModels.cs (returned by api/CopilotAdoption).
+﻿// Mirrors Common/Entities/CopilotAdoption/CopilotAdoptionModels.cs (returned by api/CopilotAdoption).
 //
 // The chart shapes (AdoptionSeries / AdoptionCategory) are deliberately identical to the Reports
 // area's ReportSeries / ReportCategory so the existing TimeSeriesChart and CategoryBarChart
@@ -22,6 +22,10 @@ export interface LicenceTypeClassification {
   name: string;
   skuPartNumber: string;
   assignedUsers: number;
+  purchasedUnits: number | null;
+  unassignedUnits: number | null;
+  assignedIdleUsers: number;
+  purchasedUnitsRefreshedUtc: string | null;
   isCopilotSeat: boolean;
 }
 
@@ -85,6 +89,41 @@ export interface AdoptionSegmentRow {
 }
 
 /** Every threshold and weight the adoption maths used, echoed back so a figure can be traced to its rule. */
+export interface AzureCostByCurrency {
+  currency: string;
+  cost: number;
+  includesEstimates?: boolean;
+}
+
+export interface CopilotSeatCostInput {
+  skuPartNumber: string;
+  currency: string;
+  cost: number;
+  period: 'monthly' | 'annual';
+  effectiveDateUtc: string | null;
+}
+
+export interface IdleLicenceSpendTier {
+  tier: string;
+  seats: number;
+  costs: AzureCostByCurrency[];
+}
+
+export interface IdleLicenceSpendCategory {
+  category: string;
+  seats: number;
+  costs: AzureCostByCurrency[];
+}
+
+export interface IdleLicenceSpendSummary {
+  configuredCosts: CopilotSeatCostInput[];
+  spendExposure: AzureCostByCurrency[];
+  reassignable: AzureCostByCurrency[];
+  reducibleAtRenewal: AzureCostByCurrency[];
+  tiers: IdleLicenceSpendTier[];
+  categories: IdleLicenceSpendCategory[];
+}
+
 export interface CopilotAdoptionOptions {
   windowDays: number;
   historyDays: number;
@@ -153,6 +192,7 @@ export interface CopilotAdoptionOptions {
   maxAgents: number;
   maxUnlicensedUsersScored: number;
   maxCoworkUsersScored: number;
+  seatCosts: CopilotSeatCostInput[];
 }
 
 /** One active-day habit bucket (Infrequent / Moderate / Frequent / Daily). */
@@ -289,6 +329,10 @@ export interface CopilotAdoptionSummary {
   habitRatePct: number;
   reclaimableSeats: number;
   disabledLicensedUsers: number;
+  purchasedCopilotSeats: number | null;
+  unassignedCopilotSeats: number | null;
+  subscribedSkusAvailable: boolean;
+  idleLicenceSpend: IdleLicenceSpendSummary | null;
   reclaimCertainSeats: number;
   reclaimProbableSeats: number;
   reclaimReviewSeats: number;

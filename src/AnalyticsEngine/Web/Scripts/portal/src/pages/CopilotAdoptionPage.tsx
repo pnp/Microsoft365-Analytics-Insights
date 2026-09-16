@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import {
   makeStyles,
   tokens,
@@ -31,6 +31,7 @@ import type {
   AdoptionFilterOptions,
   CopilotAdoptionAvailability,
   CopilotAdoptionSummary,
+  CopilotSeatCostInput,
 } from '../types/copilotAdoption';
 import Spinner from '../components/Spinner';
 import SqlPopover from '../components/SqlPopover';
@@ -196,6 +197,7 @@ export default function CopilotAdoptionPage() {
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [filterOptions, setFilterOptions] = useState<AdoptionFilterOptions | null>(null);
   const [sql, setSql] = useState<Record<string, string> | null>(null);
+  const [seatCostDrafts, setSeatCostDrafts] = useState<Record<string, { cost: string; currency: string; period: 'monthly' | 'annual'; effectiveDate: string }>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -228,7 +230,7 @@ export default function CopilotAdoptionPage() {
     setSummaryLoading(true);
     setSummaryError(null);
 
-    fetchAdoptionSummary(windowDays, undefined, controller.signal)
+    fetchAdoptionSummary(windowDays, undefined, controller.signal, buildSeatCostInputs(seatCostDrafts))
       .then((s) => {
         if (!cancelled) setSummary(s);
       })
@@ -261,7 +263,7 @@ export default function CopilotAdoptionPage() {
       // changed or the page unmounted.
       controller.abort();
     };
-  }, [availability, windowDays]);
+  }, [availability, windowDays, seatCostDrafts]);
 
   const onTabSelect: SelectTabEventHandler = (_e, data) => {
     setDrillAction(undefined);
@@ -299,6 +301,10 @@ export default function CopilotAdoptionPage() {
               </option>
             ))}
           </Select>
+
+          {summary && (
+            <SeatCostInputs summary={summary} drafts={seatCostDrafts} onChange={setSeatCostDrafts} />
+          )}
           {availability?.available && (
             <Tooltip
               relationship="description"
@@ -315,7 +321,7 @@ export default function CopilotAdoptionPage() {
                 appearance="primary"
                 icon={<ArrowDownload16Regular />}
                 as="a"
-                href={summary ? workbookExportUrl(windowDays) : undefined}
+                href={summary ? workbookExportUrl(windowDays, undefined, buildSeatCostInputs(seatCostDrafts)) : undefined}
                 disabled={!summary}
               >
                 Excel report
@@ -486,6 +492,60 @@ export default function CopilotAdoptionPage() {
  * quite different causes applies. Zero licensed users is nearly always one of three things, so say
  * which three and what to do about each.
  */
+
+function buildSeatCostInputs(
+  drafts: Record<string, { cost: string; currency: string; period: 'monthly' | 'annual'; effectiveDate: string }>,
+): CopilotSeatCostInput[] {
+  return Object.entries(drafts)
+    .map(([skuPartNumber, d]) => ({
+      skuPartNumber,
+      currency: d.currency.trim().toUpperCase(),
+      cost: Number(d.cost),
+      period: d.period,
+      effectiveDateUtc: d.effectiveDate ? `${d.effectiveDate}T00:00:00Z` : null,
+    }))
+    .filter((d) => d.currency && d.effectiveDateUtc && Number.isFinite(d.cost) && d.cost > 0);
+}
+
+function SeatCostInputs({
+  summary,
+  drafts,
+  onChange,
+}: {
+  summary: CopilotAdoptionSummary;
+  drafts: Record<string, { cost: string; currency: string; period: 'monthly' | 'annual'; effectiveDate: string }>;
+  onChange: (value: Record<string, { cost: string; currency: string; period: 'monthly' | 'annual'; effectiveDate: string }>) => void;
+}) {
+  const seatSkus = summary.seatLicenceTypes.filter((l) => l.isCopilotSeat);
+  if (seatSkus.length === 0) return null;
+
+  const update = (sku: string, patch: Partial<{ cost: string; currency: string; period: 'monthly' | 'annual'; effectiveDate: string }>) => {
+    const current = drafts[sku] ?? { cost: '', currency: '', period: 'monthly', effectiveDate: '' };
+    onChange({ ...drafts, [sku]: { ...current, ...patch } });
+  };
+
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
+      <Text size={200}>Seat cost</Text>
+      {seatSkus.map((sku) => {
+        const d = drafts[sku.skuPartNumber] ?? { cost: '', currency: '', period: 'monthly' as const, effectiveDate: '' };
+        return (
+          <span key={sku.id} style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
+            <Text size={200}>{sku.skuPartNumber}</Text>
+            <input aria-label={`${sku.skuPartNumber} cost`} value={d.cost} onChange={(e) => update(sku.skuPartNumber, { cost: e.target.value })} placeholder="cost" style={{ width: 72 }} />
+            <input aria-label={`${sku.skuPartNumber} currency`} value={d.currency} onChange={(e) => update(sku.skuPartNumber, { currency: e.target.value })} placeholder="GBP" style={{ width: 52 }} />
+            <select aria-label={`${sku.skuPartNumber} period`} value={d.period} onChange={(e) => update(sku.skuPartNumber, { period: e.target.value as 'monthly' | 'annual' })}>
+              <option value="monthly">monthly</option>
+              <option value="annual">annual</option>
+            </select>
+            <input aria-label={`${sku.skuPartNumber} effective date`} type="date" value={d.effectiveDate} onChange={(e) => update(sku.skuPartNumber, { effectiveDate: e.target.value })} />
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 function FirstRunState({ summary }: { summary: CopilotAdoptionSummary }) {
   const styles = useStyles();
 
@@ -570,6 +630,25 @@ function OverviewTab({
   return (
     <>
       <KpiGrid items={kpis} />
+
+      {summary.idleLicenceSpend && (
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>Idle licence spend</Text>
+              <Text size={200} block className={styles.muted}>
+                Monthly exposure only for configured SKU prices. Currencies are listed separately and never added together.
+              </Text>
+            </div>
+          </div>
+          <div className={styles.cardBody}>
+            <p>
+              Exposure {formatCosts(summary.idleLicenceSpend.spendExposure)}; reassignable {formatCosts(summary.idleLicenceSpend.reassignable)}; reducible at renewal {formatCosts(summary.idleLicenceSpend.reducibleAtRenewal)}.
+            </p>
+            <p className={styles.muted}>Reassignable means assigned idle seats that can be given to someone else. Reducible means purchased but unassigned seats that can be reduced at renewal. The Certain tier can be quoted alone: {formatTierCosts(summary.idleLicenceSpend.tiers, 'Certain')}.</p>
+          </div>
+        </Card>
+      )}
 
       <div className={styles.sectionHead}>
         <Text weight="semibold" size={500}>
@@ -1560,14 +1639,17 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
               <Text>
                 Microsoft ships Copilot-branded SKUs that are not a Microsoft 365 Copilot licence (Copilot Studio,
                 Copilot for Sales), and ships new licence SKUs regularly. Everything the tool found is listed below so
-                the licensed population can be checked rather than taken on trust.
+                the licensed population can be checked rather than taken on trust. Purchased and unassigned seats come from Graph subscribedSkus; when that permission is unavailable they are shown as Unknown, not zero.
               </Text>
               <table className={styles.skuTable}>
                 <thead>
                   <tr>
                     <th className={styles.skuCell}>Product</th>
                     <th className={styles.skuCell}>SKU</th>
-                    <th className={styles.skuCell}>Users</th>
+                    <th className={styles.skuCell}>Assigned</th>
+                    <th className={styles.skuCell}>Purchased</th>
+                    <th className={styles.skuCell}>Unassigned</th>
+                    <th className={styles.skuCell}>Assigned idle</th>
                     <th className={styles.skuCell}>Counted as a Copilot licence</th>
                   </tr>
                 </thead>
@@ -1581,6 +1663,9 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                         </Text>
                       </td>
                       <td className={styles.skuCell}>{formatCount(licence.assignedUsers)}</td>
+                      <td className={styles.skuCell}>{licence.purchasedUnits == null ? 'Unknown' : formatCount(licence.purchasedUnits)}</td>
+                      <td className={styles.skuCell}>{licence.unassignedUnits == null ? 'Unknown' : formatCount(licence.unassignedUnits)}</td>
+                      <td className={styles.skuCell}>{formatCount(licence.assignedIdleUsers)}</td>
                       <td className={styles.skuCell}>{licence.isCopilotSeat ? 'Yes' : 'No'}</td>
                     </tr>
                   ))}
@@ -1592,6 +1677,16 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
       </Accordion>
     </Card>
   );
+}
+
+
+function formatCosts(values: { currency: string; cost: number }[]): string {
+  return values.length === 0 ? 'not configured' : values.map((v) => `${v.currency} ${Math.round(v.cost).toLocaleString()}`).join('; ');
+}
+
+function formatTierCosts(tiers: { tier: string; costs: { currency: string; cost: number }[] }[], tier: string): string {
+  const match = tiers.find((t) => t.tier.toLowerCase() === tier.toLowerCase());
+  return match ? formatCosts(match.costs) : 'none';
 }
 
 /**
@@ -1625,6 +1720,18 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
         how: 'Counted from the imported licence assignments, de-duplicated per user - someone holding two Copilot SKUs counts once. Microsoft ships Copilot-branded SKUs that are not a Copilot licence (Copilot Studio, Copilot for Sales), so the classification is listed in full, with the ones that were excluded, under "How this is calculated".',
         source:
           'Needs the user metadata import. It is a licence-assignment count, not a purchase count, so unassigned licences you are paying for do not appear here.',
+      },
+    },
+    {
+      key: 'purchased',
+      label: 'Purchased seats',
+      value: summary.purchasedCopilotSeats == null ? 'Unknown' : formatCount(summary.purchasedCopilotSeats),
+      hint: summary.unassignedCopilotSeats == null ? 'Grant Organization.Read.All and rerun the user import' : `${formatCount(summary.unassignedCopilotSeats)} unassigned`,
+      tone: summary.unassignedCopilotSeats != null && summary.unassignedCopilotSeats > 0 ? 'critical' : undefined,
+      info: {
+        what: 'Microsoft 365 Copilot seats purchased for the tenant, from Graph subscribedSkus prepaidUnits. This is separate from assigned seats.',
+        how: 'Purchased is enabled + warning + suspended prepaid units for the SKUs classified as Microsoft 365 Copilot seats. Unassigned is purchased minus assigned, per SKU, never below zero.',
+        source: summary.subscribedSkusAvailable ? 'Imported by the user metadata job from Graph subscribedSkus.' : 'Unknown because Graph subscribedSkus is unavailable or Organization.Read.All has not been granted; this is deliberately not shown as zero.',
       },
     },
     {

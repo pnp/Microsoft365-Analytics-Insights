@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -164,6 +164,9 @@ namespace Common.Entities.CopilotAdoption
                     Name = licenceType.Name,
                     SkuPartNumber = licenceType.SkuPartNumber,
                     AssignedUsers = licenceType.AssignedUsers,
+                    PurchasedUnits = licenceType.PurchasedUnits,
+                    UnassignedUnits = licenceType.PurchasedUnits.HasValue ? Math.Max(0, licenceType.PurchasedUnits.Value - licenceType.AssignedUsers) : (int?)null,
+                    PurchasedUnitsRefreshedUtc = licenceType.PurchasedUnitsRefreshedUtc,
                     IsCopilotSeat = IsCopilotSeat(licenceType.SkuPartNumber, licenceType.Name),
                 })
                 .ToList();

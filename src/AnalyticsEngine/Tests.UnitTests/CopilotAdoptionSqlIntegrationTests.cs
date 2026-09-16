@@ -1130,7 +1130,11 @@ namespace Tests.UnitTests
                   CREATE TABLE dbo.license_types (
                       id int NOT NULL PRIMARY KEY,
                       name nvarchar(100) NULL,
-                      sku_id nvarchar(max) NULL);
+                      sku_id nvarchar(max) NULL,
+                      prepaid_enabled_units int NULL,
+                      prepaid_warning_units int NULL,
+                      prepaid_suspended_units int NULL,
+                      subscribed_sku_refreshed_utc datetime NULL);
 
                   CREATE TABLE dbo.user_license_type_lookups (
                       id int NOT NULL PRIMARY KEY,

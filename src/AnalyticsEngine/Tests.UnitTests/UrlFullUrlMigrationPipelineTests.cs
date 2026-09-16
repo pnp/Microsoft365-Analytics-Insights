@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Migrations;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -64,7 +64,9 @@ namespace Tests.UnitTests
         // IndexTeamsExplorerQueries then adds date indexes for the Teams Explorer report and widens
         // IX_date on teams_user_device_usage_log. Raw-SQL, additive, and reuses the
         // CopilotPromptSafetyFields model snapshot verbatim.
-        private const string LatestId = "202609161200001_IndexTeamsExplorerQueries";
+        // CopilotSubscribedSkuCapacity adds nullable subscribed SKU capacity columns to
+        // license_types. Raw-SQL, additive, and reuses the predecessor snapshot verbatim.
+        private const string LatestId = "202609170920001_CopilotSubscribedSkuCapacity";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

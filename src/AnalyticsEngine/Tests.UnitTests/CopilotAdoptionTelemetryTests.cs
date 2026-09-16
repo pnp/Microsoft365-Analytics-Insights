@@ -1,4 +1,4 @@
-extern alias AnalyticsWeb;
+﻿extern alias AnalyticsWeb;
 
 using Common.Entities.CopilotAdoption;
 using DataUtils;
@@ -166,6 +166,7 @@ namespace Tests.UnitTests
                 .Select(_ => coordinator.TryGetAsync(
                     28,
                     ids,
+                    new List<CopilotSeatCostInput>(),
                     TimeSpan.FromMilliseconds(40),
                     CancellationToken.None))
                 .ToArray();
@@ -180,9 +181,10 @@ namespace Tests.UnitTests
             var completed = await coordinator.TryGetAsync(
                 28,
                 ids,
+                new List<CopilotSeatCostInput>(),
                 TimeSpan.FromSeconds(2),
                 CancellationToken.None);
-            var cached = await coordinator.GetAsync(28, ids);
+            var cached = await coordinator.GetAsync(28, ids, new List<CopilotSeatCostInput>());
 
             Assert.AreSame(analysis, completed);
             Assert.AreSame(analysis, cached);
@@ -215,7 +217,7 @@ namespace Tests.UnitTests
             var coordinator = NewCoordinator(runner, cache, sink, heartbeat);
             var analysis = new CopilotAdoptionAnalysis();
 
-            var first = coordinator.GetAsync(28, new List<int>());
+            var first = coordinator.GetAsync(28, new List<int>(), new List<CopilotSeatCostInput>());
             runner.Complete(analysis);
 
             Assert.IsTrue(
@@ -223,7 +225,7 @@ namespace Tests.UnitTests
                 "the fake must block the completion telemetry path");
             Assert.AreEqual(1, cache.SetCount, "cache publication must happen first");
 
-            var second = await coordinator.GetAsync(28, new List<int>());
+            var second = await coordinator.GetAsync(28, new List<int>(), new List<CopilotSeatCostInput>());
             Assert.AreSame(
                 analysis,
                 second,
@@ -247,14 +249,14 @@ namespace Tests.UnitTests
 
             try
             {
-                await coordinator.GetAsync(28, new List<int>());
+                await coordinator.GetAsync(28, new List<int>(), new List<CopilotSeatCostInput>());
                 Assert.Fail("the first run should fail");
             }
             catch (InvalidOperationException)
             {
             }
 
-            var recovered = await coordinator.GetAsync(28, new List<int>());
+            var recovered = await coordinator.GetAsync(28, new List<int>(), new List<CopilotSeatCostInput>());
 
             Assert.IsNotNull(recovered);
             Assert.AreEqual(2, runner.CallCount, "a faulted generation must not stay in-flight");
@@ -347,14 +349,14 @@ namespace Tests.UnitTests
 
             try
             {
-                await coordinator.GetAsync(28, new List<int>());
+                await coordinator.GetAsync(28, new List<int>(), new List<CopilotSeatCostInput>());
                 Assert.Fail("the first fake analysis should fail");
             }
             catch (InvalidOperationException)
             {
             }
 
-            var recovered = await coordinator.GetAsync(28, new List<int>());
+            var recovered = await coordinator.GetAsync(28, new List<int>(), new List<CopilotSeatCostInput>());
 
             Assert.IsNotNull(recovered);
             Assert.AreEqual(
@@ -381,7 +383,7 @@ namespace Tests.UnitTests
 
             try
             {
-                await coordinator.GetAsync(28, new List<int>());
+                await coordinator.GetAsync(28, new List<int>(), new List<CopilotSeatCostInput>());
                 Assert.Fail("the fake analysis should fail");
             }
             catch (InvalidOperationException)
@@ -410,7 +412,7 @@ namespace Tests.UnitTests
 
             try
             {
-                await coordinator.GetAsync(28, new List<int>());
+                await coordinator.GetAsync(28, new List<int>(), new List<CopilotSeatCostInput>());
                 Assert.Fail("the fake analysis should fail");
             }
             catch (InvalidOperationException)
@@ -450,7 +452,7 @@ namespace Tests.UnitTests
             Exception observed = null;
             try
             {
-                await coordinator.GetAsync(28, new List<int>());
+                await coordinator.GetAsync(28, new List<int>(), new List<CopilotSeatCostInput>());
                 Assert.Fail("the fake analysis should fail");
             }
             catch (InvalidOperationException ex)
@@ -558,7 +560,7 @@ namespace Tests.UnitTests
 
             try
             {
-                await coordinator.GetAsync(28, new List<int>());
+                await coordinator.GetAsync(28, new List<int>(), new List<CopilotSeatCostInput>());
                 Assert.Fail("the fake analysis should fail");
             }
             catch (InvalidOperationException ex)
@@ -1009,6 +1011,7 @@ namespace Tests.UnitTests
             public Task<CopilotAdoptionAnalysis> RunAsync(
                 int windowDays,
                 List<int> seatLicenceTypeIds,
+                List<CopilotSeatCostInput> seatCosts,
                 ICopilotAdoptionRunTelemetry telemetry)
             {
                 Interlocked.Increment(ref _callCount);
@@ -1036,6 +1039,7 @@ namespace Tests.UnitTests
             public Task<CopilotAdoptionAnalysis> RunAsync(
                 int windowDays,
                 List<int> seatLicenceTypeIds,
+                List<CopilotSeatCostInput> seatCosts,
                 ICopilotAdoptionRunTelemetry telemetry)
             {
                 Interlocked.Increment(ref _callCount);
