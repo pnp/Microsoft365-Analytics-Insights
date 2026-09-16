@@ -351,6 +351,16 @@ function ReportAreaView({
         </Button>
       </div>
 
+      {area === 'calls' && (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            This is the headline call volume only. For meeting size and length, time-of-day patterns,
+            modalities, organiser concentration and call quality, see{' '}
+            <Link href="#/insights/teams">Teams Explorer</Link>.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
       {area === 'copilot' && data.cognitiveConfigured === false && (
         <MessageBar intent="info">
           <MessageBarBody>
