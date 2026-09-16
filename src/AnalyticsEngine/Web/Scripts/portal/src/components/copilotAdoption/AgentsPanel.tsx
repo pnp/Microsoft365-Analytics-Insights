@@ -18,9 +18,9 @@ import CategoryBarChart from '../charts/CategoryBarChart';
 import TreemapChart from '../charts/TreemapChart';
 import DonutChart from '../charts/DonutChart';
 import SqlPopover from '../SqlPopover';
-import InfoTip from './InfoTip';
-import { KpiGrid, formatCount, formatDate } from './KpiGrid';
-import type { KpiDefinition } from './KpiGrid';
+import InfoTip from '../shared/InfoTip';
+import { KpiGrid, formatCount, formatDate } from '../shared/KpiGrid';
+import type { KpiDefinition } from '../shared/KpiGrid';
 import { useAdoptionTableStyles } from './adoptionShared';
 
 /**

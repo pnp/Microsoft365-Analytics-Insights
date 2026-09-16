@@ -23,8 +23,8 @@ import type {
 } from '../../types/copilotAdoption';
 import Spinner from '../Spinner';
 import { ScoreBar, SortableTh, useAdoptionTableStyles } from './adoptionShared';
-import { formatCount, formatDate } from './KpiGrid';
-import InfoTip from './InfoTip';
+import { formatCount, formatDate } from '../shared/KpiGrid';
+import InfoTip from '../shared/InfoTip';
 
 const PAGE_SIZE = 50;
 

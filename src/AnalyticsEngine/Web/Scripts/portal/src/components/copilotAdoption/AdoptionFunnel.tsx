@@ -1,7 +1,7 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { ReportCategory } from '../../types/reports';
 import type { CopilotAdoptionOptions } from '../../types/copilotAdoption';
-import { formatCount, formatPct } from './KpiGrid';
+import { formatCount, formatPct } from '../shared/KpiGrid';
 
 const useStyles = makeStyles({
   root: {
