@@ -12,6 +12,9 @@ export interface UserProfile {
   mail: string | null;
   azureAdId: string | null;
   accountEnabled: boolean | null;
+  /** UTC timestamp for the last user metadata import write; pre-#426 rows may carry the old host-local value. */
+  lastUpdatedUtc: string | null;
+  /** Backward-compatible alias returned by older API builds. */
   lastUpdated: string | null;
   department: string | null;
   jobTitle: string | null;
