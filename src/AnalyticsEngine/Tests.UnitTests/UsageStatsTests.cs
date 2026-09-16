@@ -179,14 +179,24 @@ namespace Tests.UnitTests
         {
             var tenantId = Guid.NewGuid();
 
+            // The anon client id used to be an unsalted SHA-256 of the tenant id, which made it
+            // reversible: Entra tenant GUIDs are publicly discoverable, so anyone holding the
+            // telemetry could hash a list of candidate tenants and identify every reporting client.
+            // It is now RANDOM, and stability comes from carrying the previous report's id forward
+            // rather than from re-deriving it. See AnonUsageStatsModelLoader.ResolveAnonClientId, and
+            // AnonAdoptionStatsTests for the rotation rules.
             var statsModel1 = AnonUsageStatsModelLoader.Load(tenantId, null);
             var statsModel2 = AnonUsageStatsModelLoader.Load(tenantId, null);
-            var statsModelDifferentId = AnonUsageStatsModelLoader.Load(Guid.NewGuid(), null);
 
-            // Make sure we can resolve same tenant ID to same anon ID
             Assert.IsNotNull(statsModel1.AnonClientId);
-            Assert.AreEqual(statsModel1.AnonClientId, statsModel2.AnonClientId);
-            Assert.AreNotEqual(statsModelDifferentId.AnonClientId, statsModel2.AnonClientId);
+            Assert.AreNotEqual(statsModel1.AnonClientId, statsModel2.AnonClientId,
+                "Without a previous report to carry forward, each id must be newly random - not derived from the tenant.");
+            Assert.AreNotEqual(AnonUsageStatsModelLoader.LegacyAnonClientId(tenantId), statsModel1.AnonClientId,
+                "The id must not be derivable from the tenant id.");
+
+            // Stability across reports comes from the stored previous id.
+            var carriedForward = AnonUsageStatsModelLoader.Load(tenantId, null, statsModel1.AnonClientId);
+            Assert.AreEqual(statsModel1.AnonClientId, carriedForward.AnonClientId);
 
             var m1 = new AnonUsageStatsModel()
             {

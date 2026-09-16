@@ -291,8 +291,11 @@
     <Compile Include="RedisSingleDateLoader.cs" />
     <Compile Include="ReportCompletionStore.cs" />
     <Compile Include="SingleDateStore.cs" />
+    <Compile Include="StatsUploader\AdoptionStatsCollector.cs" />
+    <Compile Include="StatsUploader\AnonAdoptionStatsMapper.cs" />
     <Compile Include="StatsUploader\AnonUsageStatsModelLoader.cs" />
     <Compile Include="StatsUploader\BaseClasses.cs" />
+    <Compile Include="StatsUploader\EmbeddedCsvSkuAllowList.cs" />
     <Compile Include="StatsUploader\InMemoryStatsDatesLoader.cs" />
     <Compile Include="StatsUploader\RedisStatsDatesLoader.cs" />
     <Compile Include="StatsUploader\UsageStatsManager.cs" />

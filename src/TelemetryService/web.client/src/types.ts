@@ -47,6 +47,43 @@ export interface SizeDistribution {
     avgTablesPerClient: number;
 }
 
+export interface SkuPopularity {
+    skuPartNumber: string;
+    clientCount: number;
+    assignedUsers: number;
+}
+
+export interface CoverageStatusTotal {
+    workload: string;
+    status: string;
+    clientCount: number;
+}
+
+/**
+ * Cross-client Copilot / licence adoption roll-up.
+ *
+ * Counts are bucketed by the reporting client before they are sent, so sums and medians here are
+ * approximate by design. Every figure is over `clientsReporting`, never over all clients.
+ */
+export interface AdoptionInsights {
+    clientsReporting: number;
+    clientsSuppressed: number;
+    clientsWithCopilotFigures: number;
+    totalLicensedUsers: number;
+    totalActiveUsers: number;
+    medianLicensedUsersPerClient: number;
+    medianActiveUsersPerClient: number;
+    medianAdoptionRatePct: number;
+    lowerQuartileAdoptionRatePct: number;
+    upperQuartileAdoptionRatePct: number;
+    medianHabitRatePct: number;
+    clientsWithCustomAgents: number;
+    freshness: FreshnessBuckets;
+    dataSources: FeatureAdoption[];
+    skus: SkuPopularity[];
+    coverage: CoverageStatusTotal[];
+}
+
 export interface DashboardStats {
     clientCount: number;
     totalRows: number;
@@ -61,6 +98,7 @@ export interface DashboardStats {
     importFeatures: FeatureAdoption[];
     freshness: FreshnessBuckets;
     sizeDistribution: SizeDistribution;
+    adoption: AdoptionInsights;
 }
 
 export interface ClientSummary {
@@ -74,4 +112,18 @@ export interface ClientSummary {
     totalSpaceMB: number;
     tableCount: number;
     enabledImports: string[];
+    /** Maintainer-entered, never reported by the client. Null when nobody has identified it. */
+    annotationDisplayName: string | null;
+    annotationNotes: string | null;
+    adoptionGeneratedUtc: string | null;
+    adoptionSuppressed: boolean;
+    copilotLicensedUsers: number | null;
+    copilotActiveUsers: number | null;
+    copilotAdoptionRatePct: number | null;
+}
+
+/** What a maintainer can set when identifying a client that asked to be recognised. */
+export interface ClientAnnotationUpdate {
+    displayName: string | null;
+    notes: string | null;
 }
