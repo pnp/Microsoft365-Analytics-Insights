@@ -182,6 +182,10 @@ namespace Tests.UnitTests
             StringAssert.Contains(text, "Generated");
             StringAssert.Contains(text, "Licence recommendation at");
             StringAssert.Contains(text, "Agent retire after");
+            StringAssert.Contains(text, "Microsoft guidance catalogue");
+            StringAssert.Contains(text, CopilotAdoptionGuidanceCatalogue.Version);
+            StringAssert.Contains(text, "https://aka.ms/ScenarioLibrary");
+            StringAssert.Contains(text, "https://aka.ms/Copilot/ImplementationSummaryGuide");
         }
 
         [TestMethod]

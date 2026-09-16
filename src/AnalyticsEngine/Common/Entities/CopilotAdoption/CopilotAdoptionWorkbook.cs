@@ -96,6 +96,8 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "To (UTC)", summary.ToUtc, string.Empty);
             AddMeta(sheet, "History window", $"{summary.Options.HistoryDays} days",
                 "How far back 'ever used Copilot' looks, which is what separates Dormant from Never used.");
+            AddMeta(sheet, "Microsoft guidance catalogue", summary.GuidanceCatalogueVersion,
+                "Version of the Microsoft-published guidance links attached to recommended actions in this workbook.");
             AddMeta(sheet, "Figures incomplete", YesNo(summary.FiguresIncomplete),
                 summary.FiguresIncomplete
                     ? "A source query failed or timed out. Treat every individual row and aggregate in this workbook as incomplete."
@@ -876,19 +878,26 @@ namespace Common.Entities.CopilotAdoption
             if (summary.ActionPlan.Count == 0) return;
 
             var sheet = workbook.AddSheet("Enablement plan");
-            sheet.SetColumnWidths(26, 12, 14, 78);
+            sheet.SetColumnWidths(26, 12, 14, 78, 42, 70);
 
             sheet.AddTitle("Enablement plan");
             sheet.AddRow(XlsxCell.Wrapped(
                 "Every licensed user needs exactly one of these next steps, so the counts add up to the whole "
                 + "scored population. This is the size of each job."));
             sheet.AddBlankRow();
-            sheet.AddHeaderRow("Action", "Users", "% of licensed", "What it means and why these users qualify");
+            sheet.AddHeaderRow("Action", "Users", "% of licensed", "What it means and why these users qualify",
+                "Microsoft guidance resources", "Microsoft guidance URLs");
 
             var first = sheet.CurrentRow + 1;
             foreach (var action in summary.ActionPlan)
             {
-                sheet.AddRow(action.Label, action.Users, action.SharePct, XlsxCell.Wrapped(action.Description));
+                sheet.AddRow(
+                    action.Label,
+                    action.Users,
+                    action.SharePct,
+                    XlsxCell.Wrapped(action.Description),
+                    XlsxCell.Wrapped(GuidanceTitles(action.GuidanceLinks)),
+                    XlsxCell.Wrapped(GuidanceUrls(action.GuidanceLinks)));
             }
             var last = sheet.CurrentRow;
 
@@ -911,7 +920,7 @@ namespace Common.Entities.CopilotAdoption
             if (users.Count == 0) return;
 
             var sheet = workbook.AddSheet("Licensed users");
-            sheet.SetColumnWidths(34, 26, 22, 22, 12, 10, 16, 18, 42, 14, 12, 10, 10, 14, 14, 22, 60);
+            sheet.SetColumnWidths(34, 26, 22, 22, 12, 10, 16, 18, 42, 14, 12, 10, 10, 14, 14, 22, 60, 42, 70);
 
             // A workbook that quietly stops at a row limit is worse than one that refuses to export:
             // the reader has no way of knowing the list is short. Say so on the sheet itself, where it
@@ -939,7 +948,7 @@ namespace Common.Entities.CopilotAdoption
                 "User", "Department", "Job title", "Manager", "Engagement", "Band", "Signal source",
                 "Figures incomplete", "Figure warnings", "Interactions",
                 "Active days", "Expected", "Apps", "Used Cowork", "Days since last use", "Recommended action",
-                "Action detail");
+                "Action detail", "Microsoft guidance resources", "Microsoft guidance URLs");
 
             var headerRow = sheet.CurrentRow;
 
@@ -962,11 +971,13 @@ namespace Common.Entities.CopilotAdoption
                     user.UsedCowork ? "Yes" : "No",
                     user.DaysSinceLastUse.HasValue ? (object)user.DaysSinceLastUse.Value : "-",
                     user.RecommendedActionLabel,
-                    XlsxCell.Wrapped(user.RecommendedAction));
+                    XlsxCell.Wrapped(user.RecommendedAction),
+                    XlsxCell.Wrapped(CopilotAdoptionGuidanceCatalogue.TitlesForAction(user.RecommendedActionCode)),
+                    XlsxCell.Wrapped(CopilotAdoptionGuidanceCatalogue.UrlsForAction(user.RecommendedActionCode)));
             }
 
             sheet.FreezeTopRows(headerRow);
-            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 17);
+            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 19);
         }
 
         /// <summary>
@@ -1207,7 +1218,7 @@ namespace Common.Entities.CopilotAdoption
             if (candidates.Count == 0) return;
 
             var sheet = workbook.AddSheet("Licence opportunities");
-            sheet.SetColumnWidths(34, 26, 22, 14, 14, 18, 42, 22, 14, 14, 14, 60);
+            sheet.SetColumnWidths(34, 26, 22, 14, 14, 18, 42, 22, 14, 14, 14, 60, 42, 70);
 
             if (candidates.Count > MaxUserRows)
             {
@@ -1229,7 +1240,8 @@ namespace Common.Entities.CopilotAdoption
 
             sheet.AddHeaderRow(
                 "User", "Department", "Job title", "Business case", "Recommended",
-                "Figures incomplete", "Figure warnings", "Unlicensed Copilot interactions", "Teams", "Email", "Files", "Justification");
+                "Figures incomplete", "Figure warnings", "Unlicensed Copilot interactions", "Teams", "Email", "Files", "Justification",
+                "Microsoft guidance resources", "Microsoft guidance URLs");
 
             var headerRow = sheet.CurrentRow;
 
@@ -1256,11 +1268,23 @@ namespace Common.Entities.CopilotAdoption
                     candidate.TeamsMessages + candidate.TeamsMeetings,
                     candidate.EmailsSent + candidate.EmailsRead,
                     candidate.FilesViewedOrEdited,
-                    XlsxCell.Wrapped(candidate.Rationale));
+                    XlsxCell.Wrapped(candidate.Rationale),
+                    XlsxCell.Wrapped(CopilotAdoptionGuidanceCatalogue.TitlesForAction(CopilotAdoptionGuidanceCatalogue.UnlicensedActionCode)),
+                    XlsxCell.Wrapped(CopilotAdoptionGuidanceCatalogue.UrlsForAction(CopilotAdoptionGuidanceCatalogue.UnlicensedActionCode)));
             }
 
             sheet.FreezeTopRows(headerRow);
-            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 12);
+            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 14);
+        }
+
+        private static string GuidanceTitles(IEnumerable<AdoptionGuidanceLink> links)
+        {
+            return string.Join(" | ", (links ?? Enumerable.Empty<AdoptionGuidanceLink>()).Select(l => l.Title));
+        }
+
+        private static string GuidanceUrls(IEnumerable<AdoptionGuidanceLink> links)
+        {
+            return string.Join(" | ", (links ?? Enumerable.Empty<AdoptionGuidanceLink>()).Select(l => l.Url));
         }
 
         #endregion

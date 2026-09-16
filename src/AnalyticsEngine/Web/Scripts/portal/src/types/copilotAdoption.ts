@@ -86,6 +86,7 @@ export interface AdoptionSegmentRow {
 
 /** Every threshold and weight the adoption maths used, echoed back so a figure can be traced to its rule. */
 export interface CopilotAdoptionOptions {
+  guidanceCatalogueVersion?: string;
   windowDays: number;
   historyDays: number;
   workingDaysPerWeek: number;
@@ -155,6 +156,17 @@ export interface CopilotAdoptionOptions {
   maxCoworkUsersScored: number;
 }
 
+/** One Microsoft-published resource attached to an adoption action. */
+export interface AdoptionGuidanceLink {
+  actionCode: string;
+  title: string;
+  url: string;
+  expectedTitle: string;
+  audience: string;
+  publisher: string;
+  catalogueVersion: string;
+}
+
 /** One active-day habit bucket (Infrequent / Moderate / Frequent / Daily). */
 export interface AdoptionHabitBucket {
   label: string;
@@ -180,6 +192,7 @@ export interface AdoptionActionSummary {
   description: string;
   users: number;
   sharePct: number;
+  guidanceLinks?: AdoptionGuidanceLink[];
 }
 
 /** What to do about an agent. Numeric values match the C# AgentHealth enum, worst first. */
@@ -338,6 +351,8 @@ export interface CopilotAdoptionSummary {
   habitBuckets: AdoptionHabitBucket[];
   intensityByDepartment: AdoptionIntensityPoint[];
   actionPlan: AdoptionActionSummary[];
+  guidanceCatalogueVersion?: string;
+  guidanceLinks?: AdoptionGuidanceLink[];
   adoptionByDepartment: AdoptionSegmentRow[];
   adoptionByCountry: AdoptionSegmentRow[];
   usageByApp: ReportCategory[];

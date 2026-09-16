@@ -2343,6 +2343,94 @@ namespace Tests.UnitTests
             Assert.AreEqual(50, (double)json["opportunityRecommendScore"]);
             Assert.AreEqual(35, (double)json["opportunityUnlicensedCopilotWeight"]);
             Assert.AreEqual(28, (int)json["habitBucketNormalisationDays"]);
+            Assert.AreEqual(CopilotAdoptionGuidanceCatalogue.Version, (string)json["guidanceCatalogueVersion"]);
+        }
+
+        [TestMethod]
+        public void GuidanceCatalogue_AttributesMicrosoftLinksToEveryActionExceptSustain()
+        {
+            var deadUrls = new[]
+            {
+                "https://adoption.microsoft.com/en-us/" + "scenarios/",
+                "https://adoption.microsoft.com/en-us/copilot/" + "plan/",
+                "https://adoption.microsoft.com/en-us/copilot/" + "adopt/",
+                "https://aka.ms/" + "CopilotAdoptionPlaybook",
+            };
+
+            foreach (var code in CopilotAdoptionScoring.AllActionCodes
+                .Where(c => c != CopilotAdoptionScoring.AdoptionActionCodes.Sustain))
+            {
+                var links = CopilotAdoptionGuidanceCatalogue.ForAction(code);
+                Assert.IsTrue(links.Count > 0, $"{code} has no Microsoft guidance link.");
+                Assert.IsTrue(links.All(l => l.Publisher == "Microsoft"), $"{code} has an unattributed link.");
+                Assert.IsTrue(links.All(l => l.CatalogueVersion == CopilotAdoptionGuidanceCatalogue.Version),
+                    $"{code} has a link from the wrong catalogue version.");
+                Assert.IsTrue(links.All(l => !string.IsNullOrWhiteSpace(l.ExpectedTitle)),
+                    $"{code} has a link without a content-check title.");
+            }
+
+            var unlicensedLinks = CopilotAdoptionGuidanceCatalogue.ForAction(CopilotAdoptionGuidanceCatalogue.UnlicensedActionCode);
+            Assert.IsTrue(unlicensedLinks.Count > 0, "Unlicensed licence-opportunity guidance is missing.");
+            Assert.IsTrue(unlicensedLinks.All(l => l.Publisher == "Microsoft"));
+            Assert.AreEqual(0, CopilotAdoptionGuidanceCatalogue.ForAction(CopilotAdoptionScoring.AdoptionActionCodes.Sustain).Count,
+                "Sustain is deliberately not linked: no action is needed.");
+
+            var allUrls = CopilotAdoptionGuidanceCatalogue.All.Select(l => l.Url).ToList();
+            foreach (var deadUrl in deadUrls)
+            {
+                CollectionAssert.DoesNotContain(allUrls, deadUrl);
+            }
+        }
+
+        [TestMethod]
+        public void ActionPlan_AttachesGuidanceToActionNotEveryRow()
+        {
+            var analysis = new CopilotAdoptionAnalysis
+            {
+                LicensedUsers =
+                {
+                    new LicensedUserAdoptionRow { RecommendedActionCode = CopilotAdoptionScoring.AdoptionActionCodes.Coach },
+                    new LicensedUserAdoptionRow { RecommendedActionCode = CopilotAdoptionScoring.AdoptionActionCodes.Coach },
+                },
+            };
+
+            new CopilotAdoptionService(new CopilotAdoptionOptions { WindowDays = 28 }).FinaliseSummary(analysis);
+
+            var coach = analysis.Summary.ActionPlan.Single(a => a.Code == CopilotAdoptionScoring.AdoptionActionCodes.Coach);
+            Assert.AreEqual(2, coach.Users);
+            Assert.IsTrue(coach.GuidanceLinks.Count > 0);
+            Assert.AreEqual(
+                coach.GuidanceLinks.Select(l => l.Url).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                coach.GuidanceLinks.Count,
+                "The same guidance URL should appear once on the action card, not once per row.");
+        }
+
+        [TestMethod]
+        public void CsvExports_CarryGuidanceOnEveryRelevantRow()
+        {
+            var licensedCsv = CsvSerialiser.ToCsv(
+                new[]
+                {
+                    new LicensedUserAdoptionRow
+                    {
+                        UserPrincipalName = "adele@contoso.com",
+                        RecommendedActionCode = CopilotAdoptionScoring.AdoptionActionCodes.Coach,
+                        RecommendedActionLabel = CopilotAdoptionScoring.ActionLabel(CopilotAdoptionScoring.AdoptionActionCodes.Coach),
+                        RecommendedAction = "Build a first habit.",
+                    },
+                },
+                CopilotAdoptionExports.LicensedUserColumns());
+
+            StringAssert.Contains(licensedCsv, "Microsoft guidance resources");
+            StringAssert.Contains(licensedCsv, "Copilot Academy");
+            StringAssert.Contains(licensedCsv, "https://aka.ms/copilot-academy");
+
+            var opportunitiesCsv = CsvSerialiser.ToCsv(
+                new[] { new LicenceOpportunityRow { UserPrincipalName = "alex@contoso.com", Rationale = "Proven demand." } },
+                CopilotAdoptionExports.LicenceOpportunityColumns());
+
+            StringAssert.Contains(opportunitiesCsv, "Microsoft Copilot Readiness Report");
+            StringAssert.Contains(opportunitiesCsv, "https://aka.ms/Copilot/ImplementationSummaryGuide");
         }
 
         #endregion
