@@ -132,14 +132,14 @@ namespace CloudInstallEngine.Azure.InstallTasks
         /// <summary>Snapshot of the server's firewall rules in the shape the pure coverage logic works on.</summary>
         private static List<SqlFirewallRuleRange> ReadRules(SqlServerResource server)
         {
-            return server.GetSqlFirewallRules()
+            return server.GetSqlFirewallRules().AsEnumerable()
                 .Select(r => new SqlFirewallRuleRange(r.Data.Name, r.Data.StartIPAddress, r.Data.EndIPAddress))
                 .ToList();
         }
 
         SqlFirewallRuleResource GetRuleByName(SqlServerResource server, string name)
         {
-            return server.GetSqlFirewallRules().Where(r => r.Data.Name == name).SingleOrDefault();
+            return server.GetSqlFirewallRules().AsEnumerable().Where(r => r.Data.Name == name).SingleOrDefault();
         }
 
         private async Task AddRule(SqlFirewallRuleCollection serverRules, string ruleName, string ip)

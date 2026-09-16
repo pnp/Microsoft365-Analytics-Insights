@@ -1,4 +1,4 @@
-using DataUtils;
+﻿using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using WebJob.Office365ActivityImporter.Engine.Graph;
@@ -22,6 +22,7 @@ namespace Tests.UnitTests
                 UserPrincipalName = "jane.doe@contoso.com",
                 Mail = "jane.doe@contoso.com",
                 AccountEnabled = true,
+                CreatedDateTime = new DateTime(2026, 8, 1, 9, 30, 0, DateTimeKind.Utc),
                 PostalCode = "SW1A 1AA",
                 Department = "Engineering",
                 JobTitle = "Principal Engineer",
@@ -53,6 +54,8 @@ namespace Tests.UnitTests
             var plan = UserMetadataMappingRules.BuildPlan(FullyPopulatedGraphUser());
 
             Assert.AreEqual(true, plan.AccountEnabled);
+            Assert.AreEqual(new DateTime(2026, 8, 1, 9, 30, 0, DateTimeKind.Utc), plan.AccountCreatedUtc,
+                "Copilot Adoption uses Graph user.createdDateTime as its account-age tenure proxy.");
             Assert.AreEqual("SW1A 1AA", plan.PostalCode);
             Assert.AreEqual("00000000-0000-0000-0000-000000000001", plan.AzureAdId);
             Assert.AreEqual("jane.doe@contoso.com", plan.Mail);

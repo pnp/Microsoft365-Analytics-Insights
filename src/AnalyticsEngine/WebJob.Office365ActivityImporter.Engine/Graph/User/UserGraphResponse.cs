@@ -1,4 +1,5 @@
-using Newtonsoft.Json;
+﻿using Newtonsoft.Json;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -8,6 +9,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     {
         [JsonProperty("accountEnabled")]
         public bool? AccountEnabled { get; set; }
+
+        [JsonProperty("createdDateTime")]
+        public DateTime? CreatedDateTime { get; set; }
 
         [JsonProperty("officeLocation")]
         public string OfficeLocation { get; set; }
