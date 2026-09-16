@@ -429,6 +429,7 @@ export default function CopilotAdoptionPage() {
                   filterOptions={filterOptions}
                   actionPlan={summary.actionPlan}
                   options={summary.options}
+                  dataSources={summary.dataSources}
                   initialAction={drillAction}
                 />
               )}
@@ -1530,6 +1531,21 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 <strong>Copilot audit log:</strong>{' '}
                 {summary.dataSources.auditAvailable ? 'available' : 'no data for this period'}. Covers every user,
                 including unlicensed Copilot Chat use, and matches the selected period exactly.
+              </Text>
+              <Text>
+                <strong>Why this differs from Microsoft's report:</strong> Microsoft says audit-log
+                aggregates are not intended to match the official Copilot usage report. That is expected, not a
+                defect: the audit log answers what happened in this tenant, for everyone, during the selected D
+                {o.windowDays} window; Microsoft's report answers what Microsoft recorded for licensed users in
+                Microsoft's settled report window. Neither source corrects the other. Where both cover the same
+                licensed user, the Licensed users tab shows both figures with their source and window.
+              </Text>
+              <Text>
+                <strong>Why the audit log is still the right source here:</strong> Microsoft also states that
+                unlicensed Copilot Chat usage is not available through Microsoft Graph reports APIs, and points to
+                Purview audit data, Search-UnifiedAuditLog or the Office 365 Management Activity API instead.
+                Unlicensed demand is the signal this tool uses to decide who should receive a reclaimed licence,
+                so it must come from the audit log rather than being inferred from licensed-user reports.
               </Text>
               <Text>
                 <strong>Microsoft Copilot usage report:</strong>{' '}

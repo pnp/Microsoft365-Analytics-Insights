@@ -260,6 +260,18 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Workbook_CarriesMethodologyPositionAndDualSourceComparison()
+        {
+            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
+
+            StringAssert.Contains(text, "Why our figures differ from Microsoft's");
+            StringAssert.Contains(text, "unlicensed Copilot Chat usage is not available through Microsoft Graph reports APIs");
+            StringAssert.Contains(text, "Do not average or silently reconcile them into one number");
+            StringAssert.Contains(text, "Audit log (selected D28): 12 interactions, 4 active days, 2 apps");
+            StringAssert.Contains(text, "Microsoft Copilot usage report (D28, snapshot 2026-08-20): 18 prompts, 5 active days");
+        }
+
+        [TestMethod]
         public void Workbook_UsesInvariantNumberFormatting()
         {
             // A European decimal comma inside a cell value produces a corrupt workbook. This is the
@@ -499,6 +511,9 @@ namespace Tests.UnitTests
             summary.ToUtc = Now;
             summary.Options = options;
             summary.DataSources.AuditAvailable = true;
+            summary.DataSources.CopilotUsageReportAvailable = true;
+            summary.DataSources.CopilotUsageReportDate = new DateTime(2026, 8, 20, 0, 0, 0, DateTimeKind.Utc);
+            summary.DataSources.CopilotUsageReportPeriodDays = 28;
             summary.DataSources.UserMetadataAvailable = true;
             summary.Warnings.Add("Synthetic warning containing an ampersand & an <element>.");
 
@@ -537,6 +552,17 @@ namespace Tests.UnitTests
                     Now,
                     true,
                     options);
+
+                if (i == 1)
+                {
+                    row.ReportPrompts = 18;
+                    row.ReportActiveDays = 5;
+                    row.ReportLastActivityUtc = Now.AddDays(-3);
+                    row.AuditInteractions = 12;
+                    row.AuditActiveDays = 4;
+                    row.AuditAppsUsed = 2;
+                    row.SourceComparisonAvailable = true;
+                }
 
                 analysis.LicensedUsers.Add(row);
             }

@@ -263,6 +263,50 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void DualSourceComparison_IsExposedOnlyWhenBothSourcesCoverTheUser()
+        {
+            var both = UsageRow(interactions: 12, activeDays: 4, appsUsed: 2, lastUse: Now.AddDays(-1));
+            both.ReportPrompts = 18;
+            both.ReportActiveDays = 5;
+            both.ReportAppsUsed = 3;
+            both.ReportLastActivityUtc = Now.AddDays(-2);
+
+            var bothScored = CopilotAdoptionScoring.Score(both, WindowStart, Now, auditAvailable: true);
+
+            Assert.IsTrue(bothScored.SourceComparisonAvailable,
+                "A row covered by both the audit log and Microsoft's usage report must carry the side-by-side comparison.");
+            Assert.AreEqual(CopilotAdoptionScoring.SignalSourceAudit, bothScored.SignalSource,
+                "The comparison must not change the scoring source: audit still wins when it has signal.");
+            Assert.AreEqual(12, bothScored.AuditInteractions);
+            Assert.AreEqual(4, bothScored.AuditActiveDays);
+            Assert.AreEqual(2, bothScored.AuditAppsUsed);
+            Assert.AreEqual(18, bothScored.ReportPrompts);
+            Assert.AreEqual(5, bothScored.ReportActiveDays);
+
+            var reportOnly = UsageRow(interactions: 0, activeDays: 0, appsUsed: 0, lastUse: null);
+            reportOnly.ReportPrompts = 18;
+            reportOnly.ReportActiveDays = 5;
+            var reportScored = CopilotAdoptionScoring.Score(reportOnly, WindowStart, Now, auditAvailable: true);
+
+            Assert.IsFalse(reportScored.SourceComparisonAvailable,
+                "A report fallback row has no audit figure to reconcile, so it must not display a fake comparison.");
+
+            var auditOnly = UsageRow(interactions: 12, activeDays: 4, appsUsed: 2, lastUse: Now.AddDays(-1));
+            var auditScored = CopilotAdoptionScoring.Score(auditOnly, WindowStart, Now, auditAvailable: true);
+
+            Assert.IsFalse(auditScored.SourceComparisonAvailable,
+                "An audit-only row has no Microsoft report figure to reconcile.");
+
+            var reportZeroStillCovers = UsageRow(interactions: 12, activeDays: 4, appsUsed: 2, lastUse: Now.AddDays(-1));
+            reportZeroStillCovers.ReportPrompts = 0;
+            reportZeroStillCovers.ReportActiveDays = 0;
+            var zeroReportScored = CopilotAdoptionScoring.Score(reportZeroStillCovers, WindowStart, Now, auditAvailable: true);
+
+            Assert.IsTrue(zeroReportScored.SourceComparisonAvailable,
+                "A Microsoft report row with zero activity is still a source figure to compare against audit activity.");
+        }
+
+        [TestMethod]
         public void SqlScoreExpression_CollapsesUnavailableSourcesToZero()
         {
             // When a data source is unavailable its CTE and join are omitted from the query, so the

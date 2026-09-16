@@ -395,6 +395,10 @@ export interface LicensedUserAdoptionRow {
 
   interactions: number;
   activeDays: number;
+  auditInteractions: number;
+  auditActiveDays: number;
+  auditAppsUsed: number;
+  sourceComparisonAvailable: boolean;
   expectedActiveDays: number;
   appsUsed: number;
   agentsUsed: number;

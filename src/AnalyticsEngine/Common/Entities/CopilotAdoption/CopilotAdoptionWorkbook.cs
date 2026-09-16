@@ -911,7 +911,7 @@ namespace Common.Entities.CopilotAdoption
             if (users.Count == 0) return;
 
             var sheet = workbook.AddSheet("Licensed users");
-            sheet.SetColumnWidths(34, 26, 22, 22, 12, 10, 16, 18, 42, 14, 12, 10, 10, 14, 14, 22, 60);
+            sheet.SetColumnWidths(34, 26, 22, 22, 12, 10, 16, 34, 18, 42, 14, 12, 10, 10, 14, 14, 22, 60);
 
             // A workbook that quietly stops at a row limit is worse than one that refuses to export:
             // the reader has no way of knowing the list is short. Say so on the sheet itself, where it
@@ -937,7 +937,7 @@ namespace Common.Entities.CopilotAdoption
 
             sheet.AddHeaderRow(
                 "User", "Department", "Job title", "Manager", "Engagement", "Band", "Signal source",
-                "Figures incomplete", "Figure warnings", "Interactions",
+                "Source comparison", "Figures incomplete", "Figure warnings", "Interactions",
                 "Active days", "Expected", "Apps", "Used Cowork", "Days since last use", "Recommended action",
                 "Action detail");
 
@@ -953,6 +953,7 @@ namespace Common.Entities.CopilotAdoption
                     user.AdoptionScore,
                     user.BandName,
                     user.SignalSource,
+                    XlsxCell.Wrapped(SourceComparisonSummary(user, analysis.Summary)),
                     analysis.Summary.FiguresIncomplete ? "Yes" : "No",
                     XlsxCell.Wrapped(WarningSummary(analysis.Summary)),
                     user.Interactions,
@@ -966,7 +967,7 @@ namespace Common.Entities.CopilotAdoption
             }
 
             sheet.FreezeTopRows(headerRow);
-            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 17);
+            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 18);
         }
 
         /// <summary>
@@ -1368,6 +1369,17 @@ namespace Common.Entities.CopilotAdoption
                 + $"people. Any agent first seen within {o.AgentNewDays} days is New and exempt from review - a "
                 + "brand-new agent with two users has not failed, it has not started.");
 
+            AddMethod(sheet, "Why our figures differ from Microsoft's",
+                "The Copilot audit log and Microsoft's Copilot usage report answer different questions. "
+                + "Audit-log figures in this workbook cover every user, including unlicensed Copilot Chat users, "
+                + $"and are counted over the selected D{o.WindowDays} window. Microsoft's report covers licensed "
+                + "users only and uses Microsoft's own settled report window, so the two will legitimately differ. "
+                + "Microsoft states that audit-log aggregates are not intended to match the official usage report, "
+                + "but also states that unlicensed Copilot Chat usage is not available through Microsoft Graph reports APIs; "
+                + "audit data via Purview or the Office 365 Management Activity API is the programmatic route for that signal. "
+                + "Where both sources cover the same licensed user, the Licensed users sheet shows both figures side by side "
+                + "with their source and window. Do not average or silently reconcile them into one number.");
+
             AddMethod(sheet, "Comparing two snapshots",
                 "These figures are only comparable between two runs if both used the same thresholds and the same "
                 + "period length. Both are recorded on the Report sheet - check them before subtracting one file "
@@ -1391,6 +1403,24 @@ namespace Common.Entities.CopilotAdoption
             }
 
             sheet.FreezeTopRows(3);
+        }
+
+        private static string SourceComparisonSummary(LicensedUserAdoptionRow user, CopilotAdoptionSummary summary)
+        {
+            if (user == null || summary == null || !user.SourceComparisonAvailable) return string.Empty;
+
+            var reportPeriod = summary.DataSources.CopilotUsageReportPeriodDays > 0
+                ? $"D{summary.DataSources.CopilotUsageReportPeriodDays}"
+                : "Microsoft report window";
+            var reportDate = summary.DataSources.CopilotUsageReportDate.HasValue
+                ? $", snapshot {summary.DataSources.CopilotUsageReportDate.Value:yyyy-MM-dd}"
+                : string.Empty;
+
+            return $"Audit log (selected D{summary.WindowDays}): {user.AuditInteractions:N0} interactions, "
+                + $"{user.AuditActiveDays:N0} active days, {user.AuditAppsUsed:N0} apps. "
+                + $"Microsoft Copilot usage report ({reportPeriod}{reportDate}): "
+                + $"{(user.ReportPrompts.HasValue ? user.ReportPrompts.Value.ToString("N0", CultureInfo.InvariantCulture) : "-")} prompts, "
+                + $"{(user.ReportActiveDays.HasValue ? user.ReportActiveDays.Value.ToString("N0", CultureInfo.InvariantCulture) : "-")} active days.";
         }
 
         private static void AddMethod(XlsxSheet sheet, string name, string definition)
