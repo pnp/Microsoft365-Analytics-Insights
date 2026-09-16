@@ -148,6 +148,7 @@ export interface CopilotAdoptionOptions {
   usageReportLagDays: number;
   topSegments: number;
   minSeatsPerSegment: number;
+  accountabilityDimension: string;
   maxLicensedUsersScored: number;
   maxOpportunityCandidates: number;
   maxAgents: number;
@@ -270,6 +271,25 @@ export interface AdoptionCombinedSegmentRow {
   unlicensedAgentUserPct: number;
 }
 
+/** Adoption, reclaim and next-action counts for one accountable unit. */
+export interface AccountabilityRollupRow extends AdoptionSegmentRow {
+  reclaimableSeats: number;
+  reclaimCertainSeats: number;
+  reclaimProbableSeats: number;
+  reclaimReviewSeats: number;
+  reclaimExcludedUsers: number;
+  reclaimUsers: number;
+  reengageUsers: number;
+  coachUsers: number;
+  broadenUsers: number;
+  growUsers: number;
+  sustainUsers: number;
+  advocateUsers: number;
+  reviewUsers: number;
+  excludedUsers: number;
+  opportunityUsers: number;
+}
+
 /** The executive view. */
 export interface CopilotAdoptionSummary {
   generatedUtc: string;
@@ -340,6 +360,9 @@ export interface CopilotAdoptionSummary {
   actionPlan: AdoptionActionSummary[];
   adoptionByDepartment: AdoptionSegmentRow[];
   adoptionByCountry: AdoptionSegmentRow[];
+  accountabilityDimension: string;
+  accountabilityDimensionLabel: string;
+  accountabilityRollup: AccountabilityRollupRow[];
   usageByApp: ReportCategory[];
   opportunityByDepartment: ReportCategory[];
   weeklyTrend: ReportSeries[];

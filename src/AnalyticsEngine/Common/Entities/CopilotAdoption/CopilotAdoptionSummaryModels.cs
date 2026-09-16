@@ -215,6 +215,62 @@ namespace Common.Entities.CopilotAdoption
         public double AverageAdoptionScore { get; set; }
     }
 
+    /// <summary>
+    /// One accountable organisational unit: by default a direct manager's span, but configurable to
+    /// department, country, office or company for tenants whose Copilot spend is owned differently.
+    /// </summary>
+    public class AccountabilityRollupRow : AdoptionSegmentRow
+    {
+        [JsonProperty("reclaimableSeats")]
+        public int ReclaimableSeats { get; set; }
+
+        [JsonProperty("reclaimCertainSeats")]
+        public int ReclaimCertainSeats { get; set; }
+
+        [JsonProperty("reclaimProbableSeats")]
+        public int ReclaimProbableSeats { get; set; }
+
+        [JsonProperty("reclaimReviewSeats")]
+        public int ReclaimReviewSeats { get; set; }
+
+        [JsonProperty("reclaimExcludedUsers")]
+        public int ReclaimExcludedUsers { get; set; }
+
+        [JsonProperty("reclaimUsers")]
+        public int ReclaimUsers { get; set; }
+
+        [JsonProperty("reengageUsers")]
+        public int ReengageUsers { get; set; }
+
+        [JsonProperty("coachUsers")]
+        public int CoachUsers { get; set; }
+
+        [JsonProperty("broadenUsers")]
+        public int BroadenUsers { get; set; }
+
+        [JsonProperty("growUsers")]
+        public int GrowUsers { get; set; }
+
+        [JsonProperty("sustainUsers")]
+        public int SustainUsers { get; set; }
+
+        [JsonProperty("advocateUsers")]
+        public int AdvocateUsers { get; set; }
+
+        [JsonProperty("reviewUsers")]
+        public int ReviewUsers { get; set; }
+
+        [JsonProperty("excludedUsers")]
+        public int ExcludedUsers { get; set; }
+
+        /// <summary>
+        /// Absolute number of seats with an actionable opportunity, used for sorting. Large teams with
+        /// moderate gaps must outrank tiny teams with terrible percentages.
+        /// </summary>
+        [JsonProperty("opportunityUsers")]
+        public int OpportunityUsers { get; set; }
+    }
+
     /// <summary>Which underlying imports actually supplied data, so no headline number is silently wrong.</summary>
     public class AdoptionDataSources
     {
@@ -584,6 +640,21 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Adoption by country, for organisations that run enablement regionally.</summary>
         [JsonProperty("adoptionByCountry")]
         public List<AdoptionSegmentRow> AdoptionByCountry { get; set; } = new List<AdoptionSegmentRow>();
+
+        /// <summary>The configured accountability dimension used for <see cref="AccountabilityRollup"/>.</summary>
+        [JsonProperty("accountabilityDimension")]
+        public string AccountabilityDimension { get; set; }
+
+        /// <summary>Human-readable label for the configured accountability dimension.</summary>
+        [JsonProperty("accountabilityDimensionLabel")]
+        public string AccountabilityDimensionLabel { get; set; }
+
+        /// <summary>
+        /// Adoption, reclaim and action counts by accountable organisational unit. Small groups are
+        /// suppressed with the same minimum-seat threshold as the existing segment charts.
+        /// </summary>
+        [JsonProperty("accountabilityRollup")]
+        public List<AccountabilityRollupRow> AccountabilityRollup { get; set; } = new List<AccountabilityRollupRow>();
 
         /// <summary>Where Copilot is actually being used (Teams, Word, Outlook, Copilot Chat...).</summary>
         [JsonProperty("usageByApp")]

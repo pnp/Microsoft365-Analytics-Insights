@@ -217,6 +217,16 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Workbook_IncludesTheAccountabilityRollup()
+        {
+            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
+
+            StringAssert.Contains(text, "Accountability roll-up");
+            StringAssert.Contains(text, "Action opportunity");
+            StringAssert.Contains(text, "manager@contoso.com");
+        }
+
+        [TestMethod]
         public void Workbook_SaysWhatEachResourceTypeValueActuallyDescribes()
         {
             // Issue #468: the workbook used to introduce these rows as "what Copilot grounded its

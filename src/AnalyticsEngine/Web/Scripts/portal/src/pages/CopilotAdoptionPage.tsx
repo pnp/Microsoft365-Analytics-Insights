@@ -28,6 +28,7 @@ import {
   workbookExportUrl,
 } from '../api/copilotAdoptionApi';
 import type {
+  AccountabilityRollupRow,
   AdoptionFilterOptions,
   CopilotAdoptionAvailability,
   CopilotAdoptionSummary,
@@ -692,6 +693,35 @@ function OverviewTab({
         <div className={styles.cardHead}>
           <div>
             <Text weight="semibold" size={400}>
+              Accountability roll-up
+            </Text>
+            <Text size={200} block className={styles.muted}>
+              Aggregate-only view by {summary.accountabilityDimensionLabel.toLowerCase()}. Sorted by the largest
+              absolute opportunity first; groups below {o.minSeatsPerSegment} licences are suppressed.
+            </Text>
+          </div>
+          <InfoTip
+            title="Accountability roll-up"
+            content={{
+              what: `A leader-safe aggregate view by ${summary.accountabilityDimensionLabel.toLowerCase()}: seats, adoption, habit, reclaim tiers and action counts.`,
+              how: `The dimension defaults to direct manager. Users without a manager are grouped explicitly as "(no manager)" rather than dropped. The same ${o.minSeatsPerSegment}-seat suppression used for department segments is applied here.`,
+              source:
+                'This deliberately does not add a named per-user leader view; drill-through remains limited to the existing licensed-user table behaviour.',
+            }}
+          />
+        </div>
+        <div className={styles.cardBody}>
+          <AccountabilityRollupTable
+            rows={summary.accountabilityRollup}
+            segmentLabel={summary.accountabilityDimensionLabel}
+          />
+        </div>
+      </Card>
+
+      <Card>
+        <div className={styles.cardHead}>
+          <div>
+            <Text weight="semibold" size={400}>
               Adoption by department
             </Text>
             <Text size={200} block className={styles.muted}>
@@ -1118,6 +1148,59 @@ function OverviewTab({
         </Card>
       )}
     </>
+  );
+}
+
+function AccountabilityRollupTable({
+  rows,
+  segmentLabel,
+}: {
+  rows: AccountabilityRollupRow[];
+  segmentLabel: string;
+}) {
+  const styles = useStyles();
+
+  if (rows.length === 0) {
+    return <Text className={styles.muted}>Not enough licensed users in any accountable group to break down reliably.</Text>;
+  }
+
+  return (
+    <table className={styles.skuTable}>
+      <thead>
+        <tr>
+          <th className={styles.skuCell}>{segmentLabel}</th>
+          <th className={styles.skuCell}>Seats</th>
+          <th className={styles.skuCell}>Adoption</th>
+          <th className={styles.skuCell}>Habit</th>
+          <th className={styles.skuCell}>Reclaim by tier</th>
+          <th className={styles.skuCell}>Action counts</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.segment}>
+            <td className={styles.skuCell}>{row.segment}</td>
+            <td className={styles.skuCell}>{formatCount(row.licensedUsers)}</td>
+            <td className={styles.skuCell}>
+              {formatPct(row.adoptionRatePct)} ({formatCount(row.activeUsers)} active)
+            </td>
+            <td className={styles.skuCell}>
+              {formatPct(row.licensedUsers === 0 ? 0 : (row.habitualUsers / row.licensedUsers) * 100)} (
+              {formatCount(row.habitualUsers)} habitual)
+            </td>
+            <td className={styles.skuCell}>
+              {formatCount(row.reclaimableSeats)} reclaimable: {formatCount(row.reclaimCertainSeats)} certain,{' '}
+              {formatCount(row.reclaimProbableSeats)} probable, {formatCount(row.reclaimReviewSeats)} review
+            </td>
+            <td className={styles.skuCell}>
+              {formatCount(row.opportunityUsers)} need action: {formatCount(row.reclaimUsers)} reclaim,{' '}
+              {formatCount(row.reengageUsers)} win back, {formatCount(row.coachUsers)} coach,{' '}
+              {formatCount(row.broadenUsers)} broaden, {formatCount(row.growUsers)} deepen
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 

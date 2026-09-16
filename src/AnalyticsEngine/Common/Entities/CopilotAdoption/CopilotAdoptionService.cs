@@ -1427,6 +1427,12 @@ namespace Common.Entities.CopilotAdoption
             summary.AdoptionByDepartment = BuildSegments(users, u => u.Department, "(no department)");
             summary.AdoptionByCountry = BuildSegments(users, u => u.Country, "(no country)");
             summary.IntensityByDepartment = BuildIntensity(auditInteractionUsers, u => u.Department, "(no department)");
+            summary.AccountabilityDimension = NormaliseAccountabilityDimension(_options.AccountabilityDimension);
+            summary.AccountabilityDimensionLabel = AccountabilityDimensionLabel(summary.AccountabilityDimension);
+            if (summary.AccountabilityRollup.Count == 0)
+            {
+                summary.AccountabilityRollup = BuildAccountabilityRollup(users, summary.AccountabilityDimension);
+            }
 
             FinaliseAgents(analysis);
             FinaliseUnlicensed(analysis);
@@ -2106,6 +2112,113 @@ namespace Common.Entities.CopilotAdoption
                 .ThenByDescending(s => s.LicensedUsers)
                 .Take(_options.TopSegments)
                 .ToList();
+        }
+
+        /// <summary>
+        /// Aggregates the scored population by the configured accountability unit. This mirrors the
+        /// existing segment suppression, but sorts by absolute opportunity rather than by rate so the
+        /// biggest fixable spans surface first.
+        /// </summary>
+        private List<AccountabilityRollupRow> BuildAccountabilityRollup(
+            IEnumerable<LicensedUserAdoptionRow> users,
+            string dimension)
+        {
+            var resolved = NormaliseAccountabilityDimension(dimension);
+            return users
+                .GroupBy(u => AccountabilityKey(u, resolved))
+                .Where(g => g.Count() >= _options.MinSeatsPerSegment)
+                .Select(g => SummariseAccountability(g.Key, g.ToList()))
+                .OrderByDescending(r => r.OpportunityUsers)
+                .ThenByDescending(r => r.ReclaimableSeats)
+                .ThenByDescending(r => r.NeverUsedUsers)
+                .ThenBy(r => r.Segment, StringComparer.OrdinalIgnoreCase)
+                .Take(_options.TopSegments)
+                .ToList();
+        }
+
+        internal static AccountabilityRollupRow SummariseAccountability(
+            string segment,
+            IEnumerable<LicensedUserAdoptionRow> users)
+        {
+            var list = users as IList<LicensedUserAdoptionRow> ?? users?.ToList() ?? new List<LicensedUserAdoptionRow>();
+            var baseRow = CopilotAdoptionScoring.Summarise(segment, list);
+            var row = new AccountabilityRollupRow
+            {
+                Segment = baseRow.Segment,
+                LicensedUsers = baseRow.LicensedUsers,
+                ActiveUsers = baseRow.ActiveUsers,
+                HabitualUsers = baseRow.HabitualUsers,
+                NeverUsedUsers = baseRow.NeverUsedUsers,
+                AdoptionRatePct = baseRow.AdoptionRatePct,
+                AverageAdoptionScore = baseRow.AverageAdoptionScore,
+                ReclaimCertainSeats = list.Count(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain)),
+                ReclaimProbableSeats = list.Count(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable)),
+                ReclaimReviewSeats = list.Count(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Review)),
+                ReclaimExcludedUsers = list.Count(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded)),
+                ReclaimUsers = list.Count(u => string.Equals(u.RecommendedActionCode, CopilotAdoptionScoring.AdoptionActionCodes.Reclaim, StringComparison.Ordinal)),
+                ReengageUsers = list.Count(u => string.Equals(u.RecommendedActionCode, CopilotAdoptionScoring.AdoptionActionCodes.Reengage, StringComparison.Ordinal)),
+                CoachUsers = list.Count(u => string.Equals(u.RecommendedActionCode, CopilotAdoptionScoring.AdoptionActionCodes.Coach, StringComparison.Ordinal)),
+                BroadenUsers = list.Count(u => string.Equals(u.RecommendedActionCode, CopilotAdoptionScoring.AdoptionActionCodes.Broaden, StringComparison.Ordinal)),
+                GrowUsers = list.Count(u => string.Equals(u.RecommendedActionCode, CopilotAdoptionScoring.AdoptionActionCodes.Grow, StringComparison.Ordinal)),
+                SustainUsers = list.Count(u => string.Equals(u.RecommendedActionCode, CopilotAdoptionScoring.AdoptionActionCodes.Sustain, StringComparison.Ordinal)),
+                AdvocateUsers = list.Count(u => string.Equals(u.RecommendedActionCode, CopilotAdoptionScoring.AdoptionActionCodes.Advocate, StringComparison.Ordinal)),
+                ReviewUsers = list.Count(u => string.Equals(u.RecommendedActionCode, CopilotAdoptionScoring.AdoptionActionCodes.Review, StringComparison.Ordinal)),
+                ExcludedUsers = list.Count(u => string.Equals(u.RecommendedActionCode, CopilotAdoptionScoring.AdoptionActionCodes.Excluded, StringComparison.Ordinal)),
+            };
+
+            row.ReclaimableSeats = row.ReclaimCertainSeats + row.ReclaimProbableSeats;
+            row.OpportunityUsers = row.ReclaimUsers + row.ReengageUsers + row.CoachUsers
+                + row.BroadenUsers + row.GrowUsers + row.ReviewUsers;
+            return row;
+        }
+
+        internal static string NormaliseAccountabilityDimension(string dimension)
+        {
+            switch ((dimension ?? string.Empty).Trim())
+            {
+                case CopilotAdoptionAccountabilityDimensions.Department:
+                    return CopilotAdoptionAccountabilityDimensions.Department;
+                case CopilotAdoptionAccountabilityDimensions.Country:
+                    return CopilotAdoptionAccountabilityDimensions.Country;
+                case CopilotAdoptionAccountabilityDimensions.Office:
+                    return CopilotAdoptionAccountabilityDimensions.Office;
+                case CopilotAdoptionAccountabilityDimensions.Company:
+                    return CopilotAdoptionAccountabilityDimensions.Company;
+                default:
+                    return CopilotAdoptionAccountabilityDimensions.DirectManager;
+            }
+        }
+
+        internal static string AccountabilityDimensionLabel(string dimension)
+        {
+            switch (NormaliseAccountabilityDimension(dimension))
+            {
+                case CopilotAdoptionAccountabilityDimensions.Department: return "Department";
+                case CopilotAdoptionAccountabilityDimensions.Country: return "Country";
+                case CopilotAdoptionAccountabilityDimensions.Office: return "Office";
+                case CopilotAdoptionAccountabilityDimensions.Company: return "Company";
+                default: return "Direct manager";
+            }
+        }
+
+        private static string AccountabilityKey(LicensedUserAdoptionRow user, string dimension)
+        {
+            Func<string, string, string> clean = (value, emptyLabel) =>
+                string.IsNullOrWhiteSpace(value) ? emptyLabel : value.Trim();
+
+            switch (NormaliseAccountabilityDimension(dimension))
+            {
+                case CopilotAdoptionAccountabilityDimensions.Department:
+                    return clean(user?.Department, "(no department)");
+                case CopilotAdoptionAccountabilityDimensions.Country:
+                    return clean(user?.Country, "(no country)");
+                case CopilotAdoptionAccountabilityDimensions.Office:
+                    return clean(user?.OfficeLocation, "(no office)");
+                case CopilotAdoptionAccountabilityDimensions.Company:
+                    return clean(user?.CompanyName, "(no company)");
+                default:
+                    return clean(user?.ManagerUserPrincipalName, "(no manager)");
+            }
         }
 
         #endregion

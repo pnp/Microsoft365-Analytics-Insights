@@ -1720,6 +1720,86 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void AccountabilityRollup_DefaultsToDirectManager()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 5)
+                .Select(i => Managed(ScoredUser($"report{i}@contoso.com", 0, AdoptionBand.NeverUsed), "leader@contoso.com")));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(CopilotAdoptionAccountabilityDimensions.DirectManager, analysis.Summary.AccountabilityDimension);
+            Assert.AreEqual("Direct manager", analysis.Summary.AccountabilityDimensionLabel);
+            Assert.AreEqual("leader@contoso.com", analysis.Summary.AccountabilityRollup.Single().Segment);
+        }
+
+        [TestMethod]
+        public void AccountabilityRollup_SuppressesSmallLeaderGroupsLikeSegments()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 5)
+                .Select(i => Managed(ScoredUser($"large{i}@contoso.com", 0, AdoptionBand.NeverUsed), "large.manager@contoso.com")));
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 2)
+                .Select(i => Managed(ScoredUser($"small{i}@contoso.com", 0, AdoptionBand.NeverUsed), "small.manager@contoso.com")));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            var groups = analysis.Summary.AccountabilityRollup.Select(r => r.Segment).ToList();
+            CollectionAssert.Contains(groups, "large.manager@contoso.com");
+            CollectionAssert.DoesNotContain(groups, "small.manager@contoso.com");
+        }
+
+        [TestMethod]
+        public void AccountabilityRollup_ReportsUsersWithNoManagerAsAnExplicitGroup()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 5)
+                .Select(i => ScoredUser($"orphan{i}@contoso.com", 0, AdoptionBand.NeverUsed)));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual("(no manager)", analysis.Summary.AccountabilityRollup.Single().Segment,
+                "Users with no manager must be visible as their own accountability group, not silently dropped.");
+        }
+
+        [TestMethod]
+        public void AccountabilityRollup_IsSortedByLargestAbsoluteOpportunity()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 10)
+                .Select(i => Managed(ScoredUser($"large-idle{i}@contoso.com", 0, AdoptionBand.NeverUsed), "large.manager@contoso.com")));
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 10)
+                .Select(i => Managed(ScoredUser($"large-ok{i}@contoso.com", 90, AdoptionBand.Champion), "large.manager@contoso.com")));
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 5)
+                .Select(i => Managed(ScoredUser($"small-idle{i}@contoso.com", 0, AdoptionBand.NeverUsed), "small.manager@contoso.com")));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual("large.manager@contoso.com", analysis.Summary.AccountabilityRollup.First().Segment,
+                "A larger team with more people needing action must outrank a smaller team with a worse percentage.");
+            Assert.AreEqual(10, analysis.Summary.AccountabilityRollup.First().OpportunityUsers);
+        }
+
+        [TestMethod]
+        public void AccountabilityRollup_CanUseAConfiguredDimension()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 5)
+                .Select(i => Departmentalise(
+                    Managed(ScoredUser($"finance{i}@contoso.com", 0, AdoptionBand.NeverUsed), "leader@contoso.com"),
+                    "Finance")));
+
+            new CopilotAdoptionService(new CopilotAdoptionOptions
+            {
+                AccountabilityDimension = CopilotAdoptionAccountabilityDimensions.Department
+            }).FinaliseSummary(analysis);
+
+            Assert.AreEqual(CopilotAdoptionAccountabilityDimensions.Department, analysis.Summary.AccountabilityDimension);
+            Assert.AreEqual("Department", analysis.Summary.AccountabilityDimensionLabel);
+            Assert.AreEqual("Finance", analysis.Summary.AccountabilityRollup.Single().Segment);
+        }
+
+        [TestMethod]
         public void MedianIsReportedAlongsideTheMean()
         {
             // A handful of Champions pulls the mean up and makes adoption look healthier than it is.
@@ -2343,6 +2423,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(50, (double)json["opportunityRecommendScore"]);
             Assert.AreEqual(35, (double)json["opportunityUnlicensedCopilotWeight"]);
             Assert.AreEqual(28, (int)json["habitBucketNormalisationDays"]);
+            Assert.AreEqual(CopilotAdoptionAccountabilityDimensions.DirectManager, (string)json["accountabilityDimension"]);
         }
 
         #endregion
@@ -3128,6 +3209,12 @@ namespace Tests.UnitTests
         private static LicensedUserAdoptionRow Departmentalise(LicensedUserAdoptionRow row, string department)
         {
             row.Department = department;
+            return row;
+        }
+
+        private static LicensedUserAdoptionRow Managed(LicensedUserAdoptionRow row, string manager)
+        {
+            row.ManagerUserPrincipalName = manager;
             return row;
         }
 
