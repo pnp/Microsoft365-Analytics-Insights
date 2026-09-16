@@ -782,6 +782,34 @@ namespace Tests.UnitTests
                 "The scaled target is floored at one interaction.");
         }
 
+        /// <summary>
+        /// Formats a double exactly as <c>CopilotAdoptionScoring</c>'s private <c>Num()</c> helper does
+        /// when it embeds a number in generated SQL.
+        /// </summary>
+        /// <remarks>
+        /// Do not replace this with a bare <c>double.ToString(CultureInfo.InvariantCulture)</c>. The two
+        /// agree on .NET Framework and disagree on .NET Core, because the default numeric format changed:
+        /// <c>"G15"</c> on net48 renders the 180-day scaled target as <c>128.571428571429</c>, while the
+        /// shortest-round-trippable default from .NET Core 3.0 onwards renders it as
+        /// <c>128.57142857142858</c>.
+        /// <para>
+        /// The emitted SQL is identical on both runtimes - <c>Num()</c> pins an explicit format - so a
+        /// bare <c>ToString()</c> here asserts against a string the production code never produces, and
+        /// the test fails on .NET 10 while the behaviour it guards is unchanged. That is a false alarm on
+        /// the branch whose whole job is to surface real ones, so the assertion is pinned to the
+        /// production format instead.
+        /// </para>
+        /// <para>
+        /// Currently only the window-scaled target is fractional; the weights and unscaled targets are
+        /// whole numbers and format identically either way. They use this helper too, so making one of
+        /// them fractional later cannot quietly reintroduce the same break.
+        /// </para>
+        /// </remarks>
+        private static string SqlNum(double value)
+        {
+            return value.ToString("0.###############", CultureInfo.InvariantCulture);
+        }
+
         [TestMethod]
         public void OpportunitySqlExpression_UsesTheWindowScaledCopilotTarget()
         {
@@ -794,7 +822,11 @@ namespace Tests.UnitTests
             var sql = CopilotAdoptionScoring.BuildOpportunityScoreSql(
                 halfYear, "cop", "teams", "meetings", "sent", "read", "files");
 
-            StringAssert.Contains(sql, expected.ToString(CultureInfo.InvariantCulture),
+            // Formatted the way the SQL builder's own Num() helper formats it, NOT with a bare
+            // double.ToString() - see SqlNum.
+            var expectedInSql = SqlNum(expected);
+
+            StringAssert.Contains(sql, expectedInSql,
                 "The ranking expression must use the same window-scaled target as the C# scorer.");
         }
 
@@ -818,7 +850,7 @@ namespace Tests.UnitTests
                 options.OpportunityDocumentWeight,
             })
             {
-                StringAssert.Contains(sql, weight.ToString(CultureInfo.InvariantCulture),
+                StringAssert.Contains(sql, SqlNum(weight),
                     "Every C# weight must appear in the generated ranking expression.");
             }
 
@@ -830,7 +862,7 @@ namespace Tests.UnitTests
                 options.OpportunityDocumentTarget,
             })
             {
-                StringAssert.Contains(sql, target.ToString(CultureInfo.InvariantCulture));
+                StringAssert.Contains(sql, SqlNum(target));
             }
 
             StringAssert.Contains(sql, "CAST(cop AS float)", "Integer division would floor every ratio to 0 or 1.");
