@@ -1273,10 +1273,24 @@ namespace Common.Entities.CopilotAdoption
             // Current users are in scope as well as prime candidates. Scoping a policy from candidates
             // alone would silently REMOVE access from the people already using Cowork - turning a rollout
             // list into an outage for exactly the users who proved the capability works.
+            //
+            // A DISABLED account is excluded regardless of tier. It can legitimately reach the evidence
+            // tiers - someone who used Cowork right up to the day they were disabled is Established - but
+            // the same row is simultaneously ReclaimEligibility = Certain ("Reclaim immediately", see
+            // ScoreReclaimEligibility), so recommending it would put "grant this person Cowork" and
+            // "take this person's licence away" on the same person in the same report. The account is
+            // still SHOWN, deliberately: hiding it would stop the tab reconciling with the reclaim
+            // figures. It is only not RECOMMENDED, because a spending policy scoped to a disabled
+            // account grants nothing and just inflates the list an admin has to work through.
+            //
+            // Nullable-safe on purpose: == false is "known disabled". A NULL AccountEnabled means the
+            // directory import did not state it, which is not evidence of being disabled, so those rows
+            // keep their tier-derived recommendation - the same rule the reclaim scoring applies.
             scored.RecommendForPolicy =
-                scored.Tier == CoworkTiers.Established
-                || scored.Tier == CoworkTiers.Trialling
-                || scored.Tier == CoworkTiers.PrimeCandidate;
+                scored.AccountEnabled != false
+                && (scored.Tier == CoworkTiers.Established
+                    || scored.Tier == CoworkTiers.Trialling
+                    || scored.Tier == CoworkTiers.PrimeCandidate);
 
             scored.Rationale = CoworkRationale(scored, o);
             return scored;
