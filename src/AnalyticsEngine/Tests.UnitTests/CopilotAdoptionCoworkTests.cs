@@ -172,6 +172,64 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void DisabledAccount_KeepsItsEvidenceTier_ButIsNotRecommendedForThePolicy()
+        {
+            var row = Idle();
+            row.CoworkInteractions = 25;
+            row.CoworkActiveDays = Options().CoworkRegularMinActiveDays;
+            row.AccountEnabled = false;
+
+            var scored = CopilotAdoptionScoring.ScoreCoworkReadiness(row, Options());
+
+            // The tier is a statement about observed behaviour, and the behaviour did happen - somebody who
+            // used Cowork right up to the day they were disabled really is Established. Suppressing that
+            // would stop this tab reconciling with the reclaim figures, so the row stays and stays honest.
+            Assert.AreEqual(CopilotAdoptionScoring.CoworkTiers.Established, scored.Tier,
+                "A disabled account keeps the tier its observed usage earned; only the recommendation changes.");
+            Assert.AreEqual(CopilotAdoptionScoring.CoworkBasis.Evidence, scored.Basis);
+
+            // ...but the same row is ReclaimEligibility = Certain ("Reclaim immediately"). Recommending it
+            // would put "grant this person Cowork" and "take this person's licence away" side by side in
+            // one report, and scope a spending policy to an account that can never consume from it.
+            Assert.IsFalse(scored.RecommendForPolicy,
+                "A disabled account is a certain reclaim; it must never also be recommended for the Cowork "
+                + "spending policy.");
+        }
+
+        [TestMethod]
+        public void UnknownAccountEnabled_IsNotTreatedAsDisabled()
+        {
+            var row = Idle();
+            row.CoworkInteractions = 25;
+            row.CoworkActiveDays = Options().CoworkRegularMinActiveDays;
+            row.AccountEnabled = null;
+
+            var scored = CopilotAdoptionScoring.ScoreCoworkReadiness(row, Options());
+
+            // The positive direction of the guard above. NULL means the directory import did not state the
+            // flag - it is not evidence of being disabled. Treating it as disabled would silently drop
+            // every existing Cowork user on any tenant whose user import cannot populate the column, which
+            // is precisely the "revoke access from the people already proving it works" failure the
+            // recommendation rule exists to prevent.
+            Assert.IsTrue(scored.RecommendForPolicy,
+                "An unknown account state must not be read as disabled.");
+        }
+
+        [TestMethod]
+        public void DisabledAccount_IsAlsoNotRecommended_WhenItIsOnlyAnInferredCandidate()
+        {
+            var row = HeavyCoordinator();
+            row.AdoptionScore = 70;
+            row.AccountEnabled = false;
+
+            var scored = CopilotAdoptionScoring.ScoreCoworkReadiness(row, Options());
+
+            Assert.AreEqual(CopilotAdoptionScoring.CoworkTiers.PrimeCandidate, scored.Tier);
+            Assert.IsFalse(scored.RecommendForPolicy,
+                "The exclusion is about the account being disabled, not about which tier it reached.");
+        }
+
+        [TestMethod]
         public void OneDayBelowTheBar_IsTriallingNotEstablished()
         {
             var row = Idle();
