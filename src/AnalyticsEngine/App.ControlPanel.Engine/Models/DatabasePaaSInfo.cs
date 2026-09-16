@@ -78,10 +78,17 @@ namespace App.ControlPanel.Engine.Entities
         /// <remarks>
         /// The absence of credentials is what signals Entra authentication - both to
         /// <c>DataUtils.Sql.AzureSqlTokenAuth</c>, which attaches an access token at connection-open time,
-        /// and to anything reading the App Service configuration. Deliberately NOT
-        /// <c>Authentication=Active Directory Managed Identity</c>: that keyword makes SqlClient acquire
-        /// the token itself, which the in-box .NET Framework Microsoft.Data.SqlClient provider EF6 requires
-        /// does not support for managed identity.
+        /// and to anything reading the App Service configuration.
+        /// <para>
+        /// Deliberately NOT <c>Authentication=Active Directory Managed Identity</c>, but note the reason
+        /// changed with issue #511. Under the old <c>System.Data.SqlClient</c> the keyword was genuinely
+        /// unsupported. <c>Microsoft.Data.SqlClient</c> DOES support it, so the keyword is now omitted for
+        /// compatibility rather than capability: every deployment already in the field stores this
+        /// connection string without it, and the token-attaching path
+        /// (<c>AzureSqlAccessTokenInterceptor</c>) is what those deployments run. Adopting the keyword is
+        /// a deliberate follow-up, not an oversight - do not "correct" this comment back to a capability
+        /// claim, which is what a blanket System-to-Microsoft rename did once already.
+        /// </para>
         /// </remarks>
         public static string GetEntraIdConnectionString(string server, string db)
         {
