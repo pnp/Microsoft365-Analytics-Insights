@@ -1094,7 +1094,9 @@ namespace Common.Entities.CopilotAdoption
             if (truncated)
             {
                 sheet.AddRow(XlsxCell.Wrapped(
-                    $"This list shows the {MaxUserRows:N0} strongest of {rows.Count:N0} scored seat holders. "
+                    $"This list shows {MaxUserRows:N0} of {rows.Count:N0} scored seat holders, everyone "
+                    + "with OBSERVED Cowork use first so the people already proving the capability works "
+                    + "cannot be truncated away by inferred candidates. "
                     + "The summary figures above cover the whole population - only this list is shortened. "
                     + "Use the CSV export on the Cowork tab if you need all of them."));
             }
@@ -1106,7 +1108,20 @@ namespace Common.Entities.CopilotAdoption
 
             var headerRow = sheet.CurrentRow;
 
-            foreach (var row in rows.Take(MaxUserRows))
+            // Evidence before inference, but ONLY when the cap actually bites - OrderBy is stable, so an
+            // untruncated sheet keeps FinaliseCowork's order untouched. This is the same protection
+            // CoworkReadinessSql's coworkFirstOrder applies to its own TOP (@maxRows) and that
+            // WriteOpportunitiesSheet applies to proven demand; without it this cap re-opens the hole
+            // one layer up, because FinaliseCowork ranks the recommended block by coordination load and
+            // an established Cowork user with a quiet calendar sorts below thousands of busier
+            // non-users. Dropping them here would scope them out of the spending policy an admin builds
+            // from this sheet - i.e. revoke access from existing users.
+            var listed = truncated
+                ? rows.OrderBy(r => r.Basis == CopilotAdoptionScoring.CoworkBasis.Evidence ? 0 : 1)
+                    .Take(MaxUserRows)
+                : rows.Take(MaxUserRows);
+
+            foreach (var row in listed)
             {
                 sheet.AddRow(
                     row.UserPrincipalName,

@@ -27,6 +27,12 @@ import type {
 import Spinner from '../Spinner';
 import { ScoreBar, useAdoptionTableStyles } from './adoptionShared';
 import { formatCount, formatDate } from './KpiGrid';
+// Credits are fractional and a per-user total over a short window is routinely below 1.
+// formatCount is documented as a WHOLE-number formatter, so it renders a real 0.4 as "0" -
+// the same "we do not know" / "it is nothing" conflation the null path here is careful to
+// avoid, and the reason formatCredits exists (agentCostShared.test.ts pins
+// formatCredits(0.000125) !== '0'). Every credit figure on this tab uses it.
+import { formatCredits } from '../agentCosts/agentCostShared';
 import InfoTip from './InfoTip';
 import CoworkQuadrant from './CoworkQuadrant';
 
@@ -501,7 +507,7 @@ export default function CoworkPanel({
                 <Text size={200} className={styles.muted} block>
                   Entitled
                 </Text>
-                <span className={styles.creditValue}>{formatCount(credits.entitled)}</span>
+                <span className={styles.creditValue}>{formatCredits(credits.entitled)}</span>
               </div>
             )}
             {credits.consumed !== null && (
@@ -509,7 +515,7 @@ export default function CoworkPanel({
                 <Text size={200} className={styles.muted} block>
                   Consumed
                 </Text>
-                <span className={styles.creditValue}>{formatCount(credits.consumed)}</span>
+                <span className={styles.creditValue}>{formatCredits(credits.consumed)}</span>
               </div>
             )}
             {credits.available_credits !== null && (
@@ -517,7 +523,7 @@ export default function CoworkPanel({
                 <Text size={200} className={styles.muted} block>
                   Available
                 </Text>
-                <span className={styles.creditValue}>{formatCount(credits.available_credits)}</span>
+                <span className={styles.creditValue}>{formatCredits(credits.available_credits)}</span>
               </div>
             )}
             {credits.payAsYouGoConsumed !== null && (
@@ -525,7 +531,7 @@ export default function CoworkPanel({
                 <Text size={200} className={styles.muted} block>
                   Pay-as-you-go consumed
                 </Text>
-                <span className={styles.creditValue}>{formatCount(credits.payAsYouGoConsumed)}</span>
+                <span className={styles.creditValue}>{formatCredits(credits.payAsYouGoConsumed)}</span>
               </div>
             )}
             {credits.status && (
@@ -873,7 +879,7 @@ export default function CoworkPanel({
                             </Text>
                           </Tooltip>
                         ) : (
-                          formatCount(row.totalCopilotCredits)
+                          formatCredits(row.totalCopilotCredits)
                         )}
                       </td>
                     )}
