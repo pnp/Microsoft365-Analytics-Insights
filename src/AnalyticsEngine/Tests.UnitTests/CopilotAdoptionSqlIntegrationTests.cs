@@ -1,4 +1,4 @@
-using Common.Entities.CopilotAdoption;
+﻿using Common.Entities.CopilotAdoption;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -484,6 +484,322 @@ namespace Tests.UnitTests
         #region Charts and lookups
 
         [TestMethod]
+        public void CoworkReadinessQuery_JoinsWorkloadToSeatHoldersAndAgreesWithTheCsharpScore()
+        {
+            // The whole point of this query is joining the four Microsoft 365 daily workload tables to
+            // Copilot SEAT HOLDERS - something no other query in the product does. If any of those joins
+            // is wrong the Cowork tab silently reports a coordination load of zero for everybody, which
+            // reads as "nobody is a candidate" rather than as a fault.
+            using (var db = ScratchDatabase.Create("CopilotAdoptCowork"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                CreateM365UsageTables(db);
+
+                var snapshot = DateTime.UtcNow.Date.AddDays(-3);
+
+                db.Execute(
+                    $@"INSERT INTO dbo.user_departments (id, name) VALUES (1, N'Operations');
+                       INSERT INTO dbo.license_types (id, name, sku_id)
+                           VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+
+                       INSERT INTO dbo.users (id, user_name, account_enabled, department_id)
+                           VALUES (1, N'established@contoso.com', 1, 1),
+                                  (2, N'prime@contoso.com',       1, 1),
+                                  (3, N'quiet@contoso.com',       1, 1),
+                                  (4, N'unlicensed@contoso.com',  1, 1),
+                                  (5, N'guest_contoso.com#EXT#@fabrikam.onmicrosoft.com', 1, 1);
+
+                       -- Everyone except the unlicensed user holds a seat, including the guest: a guest
+                       -- holding a seat is a real (if odd) state, and the query must drop it from the
+                       -- list because a guest cannot be put in a Cowork spending policy.
+                       INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id)
+                           VALUES (1, 1, 1), (2, 2, 1), (3, 3, 1), (4, 5, 1);
+
+                       INSERT INTO dbo.teams_user_activity_log
+                           (id, [date], user_id, last_activity_date, private_chat_count, team_chat_count,
+                            post_messages, reply_messages, meetings_attended_count, meetings_organized_count)
+                       VALUES (1, '{snapshot:yyyy-MM-dd}', 2, '{snapshot:yyyy-MM-dd}', 40, 20, 10, 10, 20, 10),
+                              (2, '{snapshot:yyyy-MM-dd}', 3, '{snapshot:yyyy-MM-dd}',  2,  0,  0,  0,  1,  0),
+                              (3, '{snapshot:yyyy-MM-dd}', 4, '{snapshot:yyyy-MM-dd}', 99, 99, 99, 99, 99, 99);
+
+                       INSERT INTO dbo.outlook_user_activity_log
+                           (id, [date], user_id, last_activity_date, email_send_count, email_receive_count, email_read_count)
+                       VALUES (1, '{snapshot:yyyy-MM-dd}', 2, '{snapshot:yyyy-MM-dd}', 60, 100, 90);
+
+                       INSERT INTO dbo.sharepoint_user_activity_log (id, [date], user_id, last_activity_date, viewed_or_edited)
+                       VALUES (1, '{snapshot:yyyy-MM-dd}', 2, '{snapshot:yyyy-MM-dd}', 30);
+
+                       INSERT INTO dbo.onedrive_user_activity_log (id, [date], user_id, last_activity_date, viewed_or_edited)
+                       VALUES (1, '{snapshot:yyyy-MM-dd}', 2, '{snapshot:yyyy-MM-dd}', 25);
+
+                       INSERT INTO dbo.copilot_agents (id, name, agent_id)
+                           VALUES (1, N'Copilot Cowork', N'Copilot.M365Copilot.CoworkChat');");
+
+                // Cowork use on three separate days - the habit, not one long afternoon.
+                SeedCopilotInteraction(db, userId: 1, daysAgo: 2, appHost: "cowork");
+                SeedCopilotInteraction(db, userId: 1, daysAgo: 4, appHost: "cowork");
+                SeedCopilotInteraction(db, userId: 1, daysAgo: 6, appHost: "cowork", agentId: 1);
+                // Ordinary Copilot use must NOT count as Cowork.
+                SeedCopilotInteraction(db, userId: 2, daysAgo: 2, appHost: "Teams");
+
+                var options = CopilotAdoptionOptions.Default;
+                var sql = CopilotAdoptionSql.CoworkReadinessSql(
+                    new[] { 1 }, new[] { 1 }, options, includeCopilotAudit: true, includeM365Usage: true);
+
+                var rows = Query<CoworkReadinessSignalRow>(db, sql,
+                    new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@m365From", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@m365ReportDate", snapshot),
+                    new SqlParameter("@maxRows", 1000));
+
+                var upns = rows.Select(r => r.UserPrincipalName).ToList();
+                CollectionAssert.Contains(upns, "established@contoso.com");
+                CollectionAssert.Contains(upns, "prime@contoso.com");
+                CollectionAssert.Contains(upns, "quiet@contoso.com",
+                    "A seat holder with a light workload still belongs on the list - they are a seat "
+                    + "being paid for, and the tab has to be able to report that Cowork is not indicated.");
+                Assert.IsFalse(upns.Any(u => u.StartsWith("unlicensed")),
+                    "Cowork needs a Copilot licence as a prerequisite, so an unlicensed user cannot be a candidate.");
+                Assert.IsFalse(upns.Any(u => u.Contains("#EXT#")),
+                    "A guest cannot be put in a Cowork spending policy, so proposing one would discredit the list.");
+
+                var prime = rows.Single(r => r.UserPrincipalName == "prime@contoso.com");
+                Assert.AreEqual(80, prime.TeamsMessages, "40 + 20 chat plus 10 + 10 channel messages.");
+                Assert.AreEqual(30, prime.TeamsMeetings, "20 attended plus 10 organised.");
+                Assert.AreEqual(60, prime.EmailsSent);
+                Assert.AreEqual(90, prime.EmailsRead);
+                Assert.AreEqual(55, prime.FilesViewedOrEdited, "SharePoint and OneDrive are one document signal.");
+                Assert.AreEqual("Operations", prime.Department);
+                Assert.AreEqual(0, prime.CoworkInteractions, "Ordinary Copilot use is not Cowork use.");
+
+                var established = rows.Single(r => r.UserPrincipalName == "established@contoso.com");
+                Assert.AreEqual(3, established.CoworkInteractions);
+                Assert.AreEqual(3, established.CoworkActiveDays,
+                    "Active DAYS is what the 'regular use' verdict rests on, not the interaction count.");
+                Assert.IsTrue(established.LastCoworkInteractionUtc.HasValue);
+
+                // The database ranks by coordination load so a large tenant is not pulled into memory;
+                // the published score is always recomputed in C#. Assert the two agree on who is heaviest.
+                var scored = rows
+                    .Select(r => CopilotAdoptionScoring.ScoreCoworkReadiness(r, options))
+                    .ToList();
+
+                var heaviest = scored.OrderByDescending(s => s.CoordinationLoadScore).First();
+                Assert.AreEqual("prime@contoso.com", heaviest.UserPrincipalName,
+                    "The SQL ranking and the C# score must agree about who carries the most delegable work.");
+
+                Assert.AreEqual(CopilotAdoptionScoring.CoworkTiers.Established,
+                    scored.Single(s => s.UserPrincipalName == "established@contoso.com").Tier);
+                Assert.AreEqual(CopilotAdoptionScoring.CoworkTiers.NotIndicated,
+                    scored.Single(s => s.UserPrincipalName == "quiet@contoso.com").Tier);
+            }
+        }
+
+        [TestMethod]
+        public void CoworkReadinessQuery_DegradesWhenTheUsageReportsAreMissing()
+        {
+            // A brand-new installation has the Copilot audit import running long before the Microsoft 365
+            // usage reports have landed. The query must still parse and run - with the workload CTEs
+            // omitted entirely rather than joined against an absent snapshot.
+            using (var db = ScratchDatabase.Create("CopilotAdoptCoworkNoM365"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+
+                db.Execute(
+                    @"INSERT INTO dbo.license_types (id, name, sku_id)
+                          VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                      INSERT INTO dbo.users (id, user_name, account_enabled) VALUES (1, N'a@contoso.com', 1);
+                      INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1);");
+
+                SeedCopilotInteraction(db, userId: 1, daysAgo: 2, appHost: "cowork");
+
+                var sql = CopilotAdoptionSql.CoworkReadinessSql(
+                    new[] { 1 }, new int[0], CopilotAdoptionOptions.Default,
+                    includeCopilotAudit: true, includeM365Usage: false);
+
+                var rows = Query<CoworkReadinessSignalRow>(db, sql,
+                    new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@maxRows", 1000));
+
+                Assert.AreEqual(1, rows.Count);
+                Assert.AreEqual(1, rows[0].CoworkInteractions,
+                    "Cowork use is still observable from the audit log without the usage reports.");
+                Assert.AreEqual(0, rows[0].TeamsMeetings, "Coordination load collapses to zero, not to an error.");
+            }
+        }
+
+        [TestMethod]
+        public void CoworkReadinessQuery_RunsWithoutTheCopilotAuditImport()
+        {
+            // The mirror case: the usage reports are present but the audit import has nothing. Existing
+            // Cowork use is then unobservable, and its columns must collapse to zero rather than joining
+            // a CTE that was never declared.
+            using (var db = ScratchDatabase.Create("CopilotAdoptCoworkNoAudit"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                CreateM365UsageTables(db);
+
+                var snapshot = DateTime.UtcNow.Date.AddDays(-3);
+
+                db.Execute(
+                    $@"INSERT INTO dbo.license_types (id, name, sku_id)
+                           VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                       INSERT INTO dbo.users (id, user_name, account_enabled) VALUES (1, N'a@contoso.com', 1);
+                       INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1);
+                       INSERT INTO dbo.teams_user_activity_log
+                           (id, [date], user_id, last_activity_date, private_chat_count, team_chat_count,
+                            post_messages, reply_messages, meetings_attended_count, meetings_organized_count)
+                       VALUES (1, '{snapshot:yyyy-MM-dd}', 1, '{snapshot:yyyy-MM-dd}', 10, 10, 5, 5, 4, 2);");
+
+                var sql = CopilotAdoptionSql.CoworkReadinessSql(
+                    new[] { 1 }, new int[0], CopilotAdoptionOptions.Default,
+                    includeCopilotAudit: false, includeM365Usage: true);
+
+                var rows = Query<CoworkReadinessSignalRow>(db, sql,
+                    new SqlParameter("@m365From", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@m365ReportDate", snapshot),
+                    new SqlParameter("@maxRows", 1000));
+
+                Assert.AreEqual(1, rows.Count);
+                Assert.AreEqual(0, rows[0].CoworkInteractions);
+                Assert.AreEqual(0, rows[0].CoworkActiveDays);
+                Assert.IsNull(rows[0].LastCoworkInteractionUtc);
+                Assert.AreEqual(6, rows[0].TeamsMeetings, "4 attended plus 2 organised.");
+            }
+        }
+
+        [TestMethod]
+        public void CoworkReadinessQuery_PreservesNonLatinMetadata()
+        {
+            // Department is free text from a customer tenant and routinely non-Latin. The scratch tables
+            // declare the SAME column types as production (see CreateUserTables) so this assertion
+            // actually crosses the encoding boundary rather than being self-fulfilling.
+            using (var db = ScratchDatabase.Create("CopilotAdoptCoworkUni"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+
+                db.Execute(
+                    @"INSERT INTO dbo.user_departments (id, name) VALUES (1, N'Πωλήσεις');
+                      INSERT INTO dbo.user_job_titles (id, name) VALUES (1, N'Διευθυντής');
+                      INSERT INTO dbo.license_types (id, name, sku_id)
+                          VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                      INSERT INTO dbo.users (id, user_name, account_enabled, department_id, job_title_id)
+                          VALUES (1, N'a@contoso.com', 1, 1, 1);
+                      INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1);");
+
+                SeedCopilotInteraction(db, userId: 1, daysAgo: 2, appHost: "cowork");
+
+                var sql = CopilotAdoptionSql.CoworkReadinessSql(
+                    new[] { 1 }, new int[0], CopilotAdoptionOptions.Default,
+                    includeCopilotAudit: true, includeM365Usage: false);
+
+                var rows = Query<CoworkReadinessSignalRow>(db, sql,
+                    new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@maxRows", 1000));
+
+                Assert.AreEqual("Πωλήσεις", rows[0].Department);
+                Assert.AreEqual("Διευθυντής", rows[0].JobTitle);
+            }
+        }
+
+        [TestMethod]
+        public void CoworkCreditQueries_AreSkippedWhenTheAgentCostTablesDoNotExist()
+        {
+            // The credit figures come from a SEPARATE, optional import whose tables a database predating
+            // the agent-cost migration does not have. Without the probe, every Cowork analysis on such a
+            // database raised "Invalid object name" as a warning - which reads as a fault rather than as
+            // an import that was never switched on, and a page whose warnings cry wolf stops being read.
+            using (var db = ScratchDatabase.Create("CopilotAdoptCoworkNoCredits"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+
+                var probe = Query<CopilotAdoptionService.IntValueRow>(db, CopilotAdoptionSql.HasCreditTablesSql);
+
+                Assert.AreEqual(1, probe.Count);
+                Assert.AreEqual(0, probe[0].Value,
+                    "The probe must report the credit tables as absent so the queries are skipped entirely.");
+            }
+        }
+
+        [TestMethod]
+        public void CoworkCreditQueries_RunAgainstTheRealAgentCostSchema()
+        {
+            // The mirror case: the tables exist, so both credit queries must bind against their real
+            // column names. These are hand-written SQL, so a typo is a broken panel in a customer browser.
+            using (var db = ScratchDatabase.Create("CopilotAdoptCoworkCredits"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                CreateAgentCostTables(db);
+
+                db.Execute(
+                    @"INSERT INTO dbo.license_types (id, name, sku_id)
+                          VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                      INSERT INTO dbo.users (id, user_name, account_enabled)
+                          VALUES (1, N'spender@contoso.com', 1), (2, N'nospend@contoso.com', 1),
+                                 (3, N'nettozero@contoso.com', 1);
+                      INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id)
+                          VALUES (1, 1, 1), (2, 2, 1), (3, 3, 1);
+
+                      INSERT INTO dbo.copilot_studio_credit_user_daily
+                          (id, usage_date, entra_object_id, user_id, billed_credits, dimension_hash, imported_utc)
+                      VALUES (1, DATEADD(day, -2, GETUTCDATE()), N'obj-1', 1, 12.5, N'h1', GETUTCDATE()),
+                             (2, DATEADD(day, -3, GETUTCDATE()), N'obj-1', 1,  7.5, N'h2', GETUTCDATE()),
+                             -- An unresolved row: real, but not attributable to a person.
+                             (3, DATEADD(day, -2, GETUTCDATE()), N'obj-9', NULL, 99.0, N'h3', GETUTCDATE()),
+                             -- Imported rows that net to exactly zero. This user IS attributable and their
+                             -- answer is 0, which is a different statement from having no data at all.
+                             (4, DATEADD(day, -2, GETUTCDATE()), N'obj-3', 3,  5.0, N'h4', GETUTCDATE()),
+                             (5, DATEADD(day, -3, GETUTCDATE()), N'obj-3', 3, -5.0, N'h5', GETUTCDATE());
+
+                      INSERT INTO dbo.copilot_studio_credit_capacity
+                          (id, snapshot_utc, entitled, consumed, available, status)
+                      VALUES (1, DATEADD(day, -5, GETUTCDATE()), 1000, 100, 900, N'WithinCapacity'),
+                             (2, DATEADD(day, -1, GETUTCDATE()), 2000, 400, 1600, N'WithinCapacity');");
+
+                var probe = Query<CopilotAdoptionService.IntValueRow>(db, CopilotAdoptionSql.HasCreditTablesSql);
+                Assert.AreEqual(1, probe[0].Value);
+
+                var credits = Query<CopilotAdoptionService.UserCreditRow>(
+                    db, CopilotAdoptionSql.CoworkUserCreditsSql(new[] { 1 }),
+                    new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-28)));
+
+                Assert.AreEqual(2, credits.Count,
+                    "The spender and the net-zero user are both attributable. The seat holder with NO rows "
+                    + "must be ABSENT so the UI can render 'not attributable' rather than a zero.");
+
+                var spender = credits.Single(c => c.UserId == 1);
+                Assert.AreEqual(20m, spender.BilledCredits, "12.5 + 7.5 across the two days.");
+
+                // Regression guard. An earlier revision ended this query with HAVING SUM(...) > 0, which
+                // dropped this user and made the UI say "not attributable" about someone the importer had
+                // measured and found to be zero. "We do not know" and "it is nothing" are different claims,
+                // and the whole credit section of this tab is built on keeping them apart.
+                var netZero = credits.SingleOrDefault(c => c.UserId == 3);
+                Assert.IsNotNull(netZero,
+                    "A seat holder whose imported rows total zero must be RETURNED as zero, not filtered "
+                    + "out into the same bucket as a user the importer never saw.");
+                Assert.AreEqual(0m, netZero.BilledCredits);
+
+                Assert.IsFalse(credits.Any(c => c.UserId == 2),
+                    "The seat holder with no imported rows at all stays absent.");
+
+                var capacity = Query<CopilotAdoptionService.CreditCapacityRow>(
+                    db, CopilotAdoptionSql.CoworkCreditCapacitySql);
+
+                Assert.AreEqual(1, capacity.Count, "Only the latest snapshot - it is a point-in-time total.");
+                Assert.AreEqual(2000m, capacity[0].Entitled);
+                Assert.AreEqual(1600m, capacity[0].AvailableCredits);
+                Assert.AreEqual("WithinCapacity", capacity[0].Status);
+            }
+        }
+
+        [TestMethod]
         public void SupportingQueries_AllRunAgainstTheRealSchema()
         {
             // These are small, but they are hand-written SQL against real column names, so a typo in
@@ -503,7 +819,11 @@ namespace Tests.UnitTests
                       INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1);
                       INSERT INTO dbo.copilot_agents (id, name, agent_id)
                           VALUES (1, N'Copilot Cowork', N'Copilot.M365Copilot.CoworkChat'),
-                                 (2, N'Sales helper', N'SPO_1234');");
+                                 (2, N'Sales helper', N'SPO_1234'),
+                                 -- A tenant's OWN agent that happens to have 'Cowork' in its name. Agent
+                                 -- display names are customer free text, so matching on them would let a
+                                 -- customer promote their own users into the observed-use evidence tiers.
+                                 (3, N'Contoso Cowork Helper', N'SPO_9999');");
 
                 SeedCopilotInteraction(db, userId: 1, daysAgo: 2, appHost: "Teams");
                 SeedCopilotInteraction(db, userId: 1, daysAgo: 2, appHost: "cowork", agentId: 1);
@@ -518,7 +838,10 @@ namespace Tests.UnitTests
 
                 var coworkAgents = Query<CopilotAdoptionService.IntValueRow>(db, CopilotAdoptionSql.CoworkAgentIdsSql);
                 CollectionAssert.AreEqual(new[] { 1 }, coworkAgents.Select(a => a.Value).ToArray(),
-                    "Only the Cowork agent should match - a SharePoint agent must not.");
+                    "Only the first-party Cowork agent id should match. A SharePoint agent must not - and "
+                    + "neither must a customer's own agent whose NAME contains 'Cowork', because observed "
+                    + "Cowork use outranks every inferred tier, so a name match would hand a tenant the "
+                    + "ability to fabricate evidence by typing it.");
 
                 var seats = Query<CopilotAdoptionService.SeatAssignmentRow>(db, CopilotAdoptionSql.SeatAssignmentsSql(new[] { 1 }));
                 Assert.AreEqual(1, seats.Count);
@@ -796,6 +1119,7 @@ namespace Tests.UnitTests
                       user_name varchar(250) NOT NULL,
                       mail nvarchar(max) NULL,
                       account_enabled bit NULL,
+                      created_utc datetime2(7) NULL,
                       department_id int NULL,
                       job_title_id int NULL,
                       country_or_region_id int NULL,
@@ -814,7 +1138,19 @@ namespace Tests.UnitTests
                       license_type_id int NOT NULL);
 
                   CREATE UNIQUE NONCLUSTERED INDEX IX_license_type_id_user_id
-                      ON dbo.user_license_type_lookups (license_type_id, user_id);");
+                      ON dbo.user_license_type_lookups (license_type_id, user_id);
+
+                  CREATE TABLE dbo.copilot_adoption_reclaim_exclusions (
+                      id int NOT NULL PRIMARY KEY,
+                      user_id int NOT NULL,
+                      reason nvarchar(100) NOT NULL,
+                      note nvarchar(1000) NULL,
+                      excluded_by nvarchar(256) NOT NULL,
+                      excluded_utc datetime2(7) NOT NULL,
+                      review_after_utc datetime2(7) NULL);
+
+                  CREATE NONCLUSTERED INDEX IX_copilot_adoption_reclaim_exclusions_user_review
+                      ON dbo.copilot_adoption_reclaim_exclusions (user_id, review_after_utc, excluded_utc DESC);");
         }
 
         private static void CreateCopilotTables(ScratchDatabase db)
@@ -937,9 +1273,42 @@ namespace Tests.UnitTests
         /// The accessed-resource tables, needed only by <see cref="CopilotAdoptionSql.TopResourceTypesSql"/>.
         /// Kept out of <see cref="CreateCopilotTables"/> because most fixtures do not need them.
         /// </summary>
-        private static void CreateCopilotResourceTables(ScratchDatabase db)
+        /// <summary>
+        /// The Copilot Studio credit tables, with the SAME column types as production
+        /// (<c>Common.Entities.Entities.AgentCosts.AgentCostClasses</c>). Declaring looser types here
+        /// would let a query bind in the test and fail against a real database.
+        /// </summary>
+        private static void CreateAgentCostTables(ScratchDatabase db)
         {
             db.Execute(
+                @"CREATE TABLE dbo.copilot_studio_credit_user_daily (
+                      id int NOT NULL PRIMARY KEY,
+                      usage_date datetime NOT NULL,
+                      entra_object_id nvarchar(200) NULL,
+                      user_id int NULL,
+                      environment_id nvarchar(200) NULL,
+                      environment_name nvarchar(255) NULL,
+                      agent_id nvarchar(200) NULL,
+                      billed_credits decimal(18,4) NOT NULL,
+                      unit nvarchar(50) NULL,
+                      dimension_hash nvarchar(64) NOT NULL,
+                      imported_utc datetime NOT NULL);
+
+                  CREATE TABLE dbo.copilot_studio_credit_capacity (
+                      id int NOT NULL PRIMARY KEY,
+                      snapshot_utc datetime NOT NULL,
+                      consumption_as_of datetime NULL,
+                      entitled decimal(18,4) NULL,
+                      consumed decimal(18,4) NULL,
+                      consumption_type nvarchar(50) NULL,
+                      allocated decimal(18,4) NULL,
+                      available decimal(18,4) NULL,
+                      pay_as_you_go_consumed decimal(18,4) NULL,
+                      status nvarchar(50) NULL);");
+        }
+
+        private static void CreateCopilotResourceTables(ScratchDatabase db)
+        {            db.Execute(
                 @"CREATE TABLE dbo.copilot_event_accessed_resource_types (
                       id int NOT NULL PRIMARY KEY, name nvarchar(100) NULL);
 

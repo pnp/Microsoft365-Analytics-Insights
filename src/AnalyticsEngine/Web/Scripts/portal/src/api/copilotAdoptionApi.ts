@@ -3,6 +3,8 @@ import type {
   AdoptionFilterOptions,
   CopilotAdoptionAvailability,
   CopilotAdoptionSummary,
+  CoworkFilters,
+  CoworkReadinessPage,
   LicenceOpportunityPage,
   LicensedUserFilters,
   LicensedUserPage,
@@ -103,6 +105,7 @@ function applyLicensedUserFilters(params: URLSearchParams, filters: LicensedUser
   if (filters.actions.length > 0) params.set('actions', filters.actions.join(','));
   if (filters.department) params.set('department', filters.department);
   if (filters.country) params.set('country', filters.country);
+  if (filters.reclaimEligibility) params.set('reclaimEligibility', filters.reclaimEligibility);
   if (filters.coworkOnly) params.set('coworkOnly', 'true');
   if (filters.disabledOnly) params.set('disabledOnly', 'true');
   params.set('sortBy', filters.sortBy);
@@ -117,6 +120,19 @@ function applyOpportunityFilters(params: URLSearchParams, filters: OpportunityFi
   if (filters.country) params.set('country', filters.country);
   if (filters.recommendedOnly) params.set('recommendedOnly', 'true');
   if (filters.existingCopilotUsersOnly) params.set('existingCopilotUsersOnly', 'true');
+  params.set('sortBy', filters.sortBy);
+  params.set('sortDesc', String(filters.sortDesc));
+  return params;
+}
+
+/** Adds the Cowork readiness filter state to a parameter set. */
+function applyCoworkFilters(params: URLSearchParams, filters: CoworkFilters): URLSearchParams {
+  if (filters.search.trim()) params.set('search', filters.search.trim());
+  if (filters.tiers.length > 0) params.set('tiers', filters.tiers.join(','));
+  if (filters.department) params.set('department', filters.department);
+  if (filters.country) params.set('country', filters.country);
+  if (filters.recommendedOnly) params.set('recommendedOnly', 'true');
+  if (filters.coworkUsersOnly) params.set('coworkUsersOnly', 'true');
   params.set('sortBy', filters.sortBy);
   params.set('sortDesc', String(filters.sortDesc));
   return params;
@@ -180,6 +196,21 @@ export function fetchOpportunities(
   return getJson<LicenceOpportunityPage>(`/opportunities?${params}`, 'the Copilot licence opportunities', signal);
 }
 
+export function fetchCowork(
+  windowDays: number,
+  filters: CoworkFilters,
+  skip: number,
+  take: number,
+  seatLicenceTypeIds?: number[],
+  signal?: AbortSignal,
+): Promise<CoworkReadinessPage> {
+  const params = applyCoworkFilters(scopeParams(windowDays, seatLicenceTypeIds), filters);
+  params.set('skip', String(skip));
+  params.set('take', String(take));
+
+  return getJson<CoworkReadinessPage>(`/cowork?${params}`, 'the Cowork readiness list', signal);
+}
+
 export function fetchAdoptionSql(
   windowDays: number,
   seatLicenceTypeIds?: number[],
@@ -215,6 +246,22 @@ export function opportunitiesExportUrl(
 ): string {
   const params = applyOpportunityFilters(scopeParams(windowDays, seatLicenceTypeIds), filters);
   return `${baseUrl()}/opportunities/export?${params}`;
+}
+
+/**
+ * URL of the Cowork candidate CSV export.
+ *
+ * This file is a spending-policy scoping list: Cowork access is granted by a spending policy scoped
+ * to users or groups, so the useful artefact is a list of UPNs with each one's justification next to
+ * it. Takes the same filters as the list, so the file always matches what is on screen.
+ */
+export function coworkExportUrl(
+  windowDays: number,
+  filters: CoworkFilters,
+  seatLicenceTypeIds?: number[],
+): string {
+  const params = applyCoworkFilters(scopeParams(windowDays, seatLicenceTypeIds), filters);
+  return `${baseUrl()}/cowork/export?${params}`;
 }
 
 /**
