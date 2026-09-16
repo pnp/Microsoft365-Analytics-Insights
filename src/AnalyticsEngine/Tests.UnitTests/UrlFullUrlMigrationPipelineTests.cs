@@ -61,7 +61,7 @@ namespace Tests.UnitTests
         // CopilotPromptSafetyFields then adds the two Copilot prompt-safety flag columns
         // (copilot_event_messages.jailbreak_detected, copilot_event_accessed_resources.xpia_detected).
         // It DOES change the entity model, so unlike its predecessor its snapshot is freshly scaffolded.
-        private const string LatestId = "202609151440027_CopilotPromptSafetyFields";
+        private const string LatestId = "202609170910001_GraphCopilotUsageApiV2";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

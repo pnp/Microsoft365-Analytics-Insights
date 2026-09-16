@@ -7,6 +7,9 @@ using System;
 using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot;
 
@@ -103,7 +106,7 @@ namespace Tests.UnitTests
             'copilotAgentLastActivityDate': '2026-07-01',
             'copilotActivityUserDetailsByPeriod': [
                 { 'reportPeriod': 28, 'promptsSubmitted': 142, 'activeUsageDays': 19,
-                  'promptsSubmittedForCopilotChatWork': 90, 'promptsSubmittedForCopilotChatWeb': 52 }
+                  'promptsSubmittedForCopilotChatWork': 90, 'promptsSubmittedForCopilotChatWeb': 52, 'appsUsed': 5 }
             ]
         }";
 
@@ -157,8 +160,10 @@ namespace Tests.UnitTests
 
             StringAssert.Contains(request.Url, "version='v2'");
             StringAssert.Contains(request.Url, "period='D28'");
-            StringAssert.Contains(request.Url, "$format=application/json");
-            StringAssert.StartsWith(request.Url, "https://graph.microsoft.com/beta/copilot/reports/");
+            StringAssert.Contains(request.Url, "$format=text/csv");
+            StringAssert.StartsWith(request.Url, "https://graph.microsoft.com/v1.0/copilot/reports/");
+            StringAssert.Contains(request.V1FallbackUrl, "period='D30'");
+            StringAssert.StartsWith(request.LegacyJsonFallbackUrl, "https://graph.microsoft.com/beta/reports/");
         }
 
         [TestMethod]
@@ -276,6 +281,50 @@ namespace Tests.UnitTests
 
         // ---- Per-user parsing ----------------------------------------------------------------------
 
+
+        [TestMethod]
+        public void CsvParser_ReadsGaV10UserDetailVersion2Fields()
+        {
+            var csv = "Report Refresh Date,Report Period,User Principal Name,Display Name,Prompts submitted (any app),Copilot Chat (work) prompts submitted,Copilot Chat (web) prompts submitted,Active Days,Apps used,Last activity date of Teams Copilot (UTC),Last activity date of Copilot Chat (work) (UTC),Last activity date of Copilot Chat (web) (UTC),Last activity date of Microsoft 365 App (UTC),Last activity date of Microsoft Edge (UTC),Last activity date of any agent (UTC)\r\n"
+                + "2026-07-03,28,ada@contoso.onmicrosoft.com,Ada Lovelace,142,90,52,19,5,2026-07-01,2026-07-02,2026-06-28,2026-07-02,2026-06-30,2026-07-01\r\n";
+
+            var row = CopilotUsageUserDetailParser.Parse(CopilotReportCsvParser.Parse(CopilotReportNames.UsageUserDetail, csv)).Single();
+
+            Assert.AreEqual(142, row.PromptsAllApps);
+            Assert.AreEqual(90, row.PromptsChatWork);
+            Assert.AreEqual(52, row.PromptsChatWeb);
+            Assert.AreEqual(19, row.ActiveUsageDays);
+            Assert.AreEqual(5, row.AppsUsed);
+            Assert.AreEqual(new DateTime(2026, 7, 2), row.ChatWorkLastActivityDate);
+            Assert.AreEqual(new DateTime(2026, 6, 30), row.EdgeLastActivityDate);
+            Assert.AreEqual(new DateTime(2026, 7, 1), row.AgentLastActivityDate);
+        }
+
+        [TestMethod]
+        public async Task GraphSource_FallsBackToV1WhenV2IsUnavailable()
+        {
+            var handler = new SequencedGraphHandler(
+                new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent("{ 'error': { 'code': 'BadRequest' } }") },
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("Report Refresh Date,Report Period,User Principal Name,Display Name,Last Activity Date\r\n2026-07-03,30,ada@contoso.onmicrosoft.com,Ada Lovelace,2026-07-02\r\n")
+                });
+
+            using (var client = new WebJob.Office365ActivityImporter.Engine.Graph.ManualGraphCallClient(handler, AnalyticsLogger.ConsoleOnlyTracer()))
+            {
+                var source = new GraphCopilotReportSource(client, AnalyticsLogger.ConsoleOnlyTracer());
+                var rows = await source.LoadReportAsync(new CopilotReportRequest(CopilotReportNames.UsageUserDetail, "D28"));
+
+                Assert.AreEqual(2, handler.Requests.Count);
+                StringAssert.Contains(handler.Requests[0].ToString(), "version='v2'");
+                StringAssert.Contains(handler.Requests[1].ToString(), "version='v1'");
+                StringAssert.Contains(handler.Requests[1].ToString(), "period='D30'");
+                Assert.AreEqual(CopilotReportVersions.V1, source.LastSuccessfulVersion);
+                Assert.AreEqual("D30", source.LastSuccessfulPeriod);
+                Assert.AreEqual(1, CopilotUsageUserDetailParser.Parse(rows).Count);
+            }
+        }
+
         [TestMethod]
         public void UserDetailParser_ReadsEveryVersion2Value()
         {
@@ -285,6 +334,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(90, row.PromptsChatWork);
             Assert.AreEqual(52, row.PromptsChatWeb);
             Assert.AreEqual(19, row.ActiveUsageDays);
+            Assert.AreEqual(5, row.AppsUsed);
             Assert.AreEqual(28, row.ReportPeriodDays);
             Assert.AreEqual(new DateTime(2026, 6, 30), row.EdgeLastActivityDate);
             Assert.AreEqual(new DateTime(2026, 7, 2), row.Microsoft365CopilotLastActivityDate);
@@ -705,6 +755,24 @@ namespace Tests.UnitTests
 
             db.CopilotUserCountLogs.RemoveRange(existing);
             await db.SaveChangesAsync();
+        }
+
+
+        private class SequencedGraphHandler : HttpMessageHandler
+        {
+            private readonly Queue<HttpResponseMessage> _responses;
+            public List<Uri> Requests { get; } = new List<Uri>();
+
+            public SequencedGraphHandler(params HttpResponseMessage[] responses)
+            {
+                _responses = new Queue<HttpResponseMessage>(responses);
+            }
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                Requests.Add(request.RequestUri);
+                return Task.FromResult(_responses.Count > 0 ? _responses.Dequeue() : new HttpResponseMessage(HttpStatusCode.NotFound));
+            }
         }
 
         /// <summary>Returns a canned report so the loaders can be exercised with no HTTP and no tenant.</summary>

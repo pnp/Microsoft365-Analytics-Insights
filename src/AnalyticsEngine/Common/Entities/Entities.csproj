@@ -436,6 +436,10 @@
     <Compile Include="Migrations\202609151440027_CopilotPromptSafetyFields.Designer.cs">
       <DependentUpon>202609151440027_CopilotPromptSafetyFields.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202609170910001_GraphCopilotUsageApiV2.cs" />
+    <Compile Include="Migrations\202609170910001_GraphCopilotUsageApiV2.Designer.cs">
+      <DependentUpon>202609170910001_GraphCopilotUsageApiV2.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.cs" />
     <Compile Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.Designer.cs">
       <DependentUpon>202609101100001_UniqueUrlsFullUrlIndex.cs</DependentUpon>
@@ -664,6 +668,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609151440027_CopilotPromptSafetyFields.resx">
       <DependentUpon>202609151440027_CopilotPromptSafetyFields.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609170910001_GraphCopilotUsageApiV2.resx">
+      <DependentUpon>202609170910001_GraphCopilotUsageApiV2.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.resx">
       <DependentUpon>202609101100001_UniqueUrlsFullUrlIndex.cs</DependentUpon>

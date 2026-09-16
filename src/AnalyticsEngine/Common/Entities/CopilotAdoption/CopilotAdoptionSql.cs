@@ -556,7 +556,8 @@ namespace Common.Entities.CopilotAdoption
                 + "OR r.chat_work_last_activity_date >= @from "
                 + "OR r.chat_web_last_activity_date >= @from THEN 1 ELSE 0 END");
 
-            return "(" + string.Join("\r\n              + ", parts) + ")";
+            var derived = "(" + string.Join("\r\n              + ", parts) + ")";
+            return "COALESCE(r.apps_used, " + derived + ")";
         }
 
         /// <summary>

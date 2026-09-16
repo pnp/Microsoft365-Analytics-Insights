@@ -27,6 +27,33 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             return await this.GetAsyncWithThrottleRetries<T>(url, null);
         }
+        public async Task<string> GetStringAsyncWithThrottleRetries(string url)
+        {
+            using (var callResponse = await this.GetAsyncWithThrottleRetries(url, base._logger))
+            {
+                var callResponseBody = await callResponse.Content.ReadAsStringAsync();
+
+                try
+                {
+                    callResponse.EnsureSuccessStatusCode();
+                }
+                catch (HttpRequestException ex)
+                {
+                    if (callResponse.StatusCode == HttpStatusCode.NotFound)
+                    {
+                        var notFound = new GraphResourceNotFoundException(url, callResponseBody, ex);
+                        _logger.LogDebug($"Got HTTP 404 calling {url} (Graph error code '{notFound.GraphErrorCode ?? "unknown"}'). Response body: {callResponseBody}");
+                        throw notFound;
+                    }
+
+                    _logger.LogError(ex, $"Got HTTP exception calling {url}: {ex.Message}. Response body: {callResponseBody}");
+                    throw new GraphHttpException(callResponse.StatusCode, url, callResponseBody, ex);
+                }
+
+                return callResponseBody;
+            }
+        }
+
         public async Task<T> GetAsyncWithThrottleRetries<T>(string url, Action<string> jsonStringAction)
         {
             // 'using' so the underlying socket is released promptly rather than waiting for finalisation.

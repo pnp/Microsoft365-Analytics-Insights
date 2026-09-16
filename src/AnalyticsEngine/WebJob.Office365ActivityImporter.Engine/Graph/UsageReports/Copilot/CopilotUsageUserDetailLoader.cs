@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities.UsageReports;
 using Microsoft.Extensions.Logging;
@@ -123,6 +123,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             try
             {
                 var reports = await _reportSource.LoadReportAsync(request);
+                ApplyLoadProvenance(importLog);
                 parsed = CopilotUsageUserDetailParser.Parse(reports);
 
                 // The response nests the counters under copilotActivityUserDetailsByPeriod, so "no rows"
@@ -226,6 +227,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             return written;
         }
 
+        private void ApplyLoadProvenance(CopilotUsageReportImportLog importLog)
+        {
+            var provenance = _reportSource as ICopilotReportLoadProvenance;
+            if (provenance == null) return;
+            importLog.ReportVersion = provenance.LastSuccessfulVersion ?? importLog.ReportVersion;
+            importLog.ReportPeriod = provenance.LastSuccessfulPeriod ?? importLog.ReportPeriod;
+        }
+
+        private string ReportVersionForRows(CopilotReportRequest request)
+        {
+            var provenance = _reportSource as ICopilotReportLoadProvenance;
+            return provenance?.LastSuccessfulVersion ?? request.Version;
+        }
+
         /// <summary>
         /// Honours the configured Entra group filter, the same way the other per-user usage-report loaders do,
         /// so a customer scoping analytics to a pilot group doesn't silently get the whole tenant here.
@@ -294,6 +309,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
             if (rows.Count == 0) return 0;
 
+            foreach (var row in rows) row.ReportVersion = ReportVersionForRows(request);
+
             var upsert = await persistence.UpsertUserDetailAsync(rows, resolution.IdsByUpn, hasVersion2Data);
             return upsert.Written;
         }
@@ -318,11 +335,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                 changed |= Set(log.PromptsChatWork, row.PromptsChatWork, v => log.PromptsChatWork = v);
                 changed |= Set(log.PromptsChatWeb, row.PromptsChatWeb, v => log.PromptsChatWeb = v);
                 changed |= Set(log.ActiveUsageDays, row.ActiveUsageDays, v => log.ActiveUsageDays = v);
+                changed |= Set(log.AppsUsed, row.AppsUsed, v => log.AppsUsed = v);
                 changed |= Set(log.ChatWorkLastActivityDate, row.ChatWorkLastActivityDate, v => log.ChatWorkLastActivityDate = v);
                 changed |= Set(log.ChatWebLastActivityDate, row.ChatWebLastActivityDate, v => log.ChatWebLastActivityDate = v);
                 changed |= Set(log.Microsoft365CopilotLastActivityDate, row.Microsoft365CopilotLastActivityDate, v => log.Microsoft365CopilotLastActivityDate = v);
                 changed |= Set(log.EdgeLastActivityDate, row.EdgeLastActivityDate, v => log.EdgeLastActivityDate = v);
                 changed |= Set(log.AgentLastActivityDate, row.AgentLastActivityDate, v => log.AgentLastActivityDate = v);
+            }
+
+            if (hasVersion2Data || log.ID == 0)
+            {
+                changed |= Set(log.ReportVersion, row.ReportVersion, v => log.ReportVersion = v);
             }
 
             changed |= Set(log.ChatLastActivityDate, row.ChatLastActivityDate, v => log.ChatLastActivityDate = v);

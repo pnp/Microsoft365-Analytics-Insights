@@ -643,6 +643,8 @@ CREATE TABLE dbo.copilot_usage_user_activity_log
     prompts_chat_work int NULL,
     prompts_chat_web int NULL,
     active_usage_days int NULL,
+    apps_used int NULL,
+    report_version nvarchar(10) NULL,
     chat_last_activity_date datetime NULL,
     teams_last_activity_date datetime NULL,
     word_last_activity_date datetime NULL,
