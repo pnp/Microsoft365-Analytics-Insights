@@ -257,6 +257,7 @@
     <Compile Include="FakeLoaderClasses\InMemoryHealthCache.cs" />
     <Compile Include="FakeLoaderClasses\InMemoryUserDataLookupQuery.cs" />
     <Compile Include="HealthServiceTests.cs" />
+    <Compile Include="SystemStatusOverviewTests.cs" />
     <Compile Include="UserDataLookupServiceTests.cs" />
     <Compile Include="UserDataLookupSqlIntegrationTests.cs" />
     <Compile Include="GraphFileMetadataLoaderTests.cs" />

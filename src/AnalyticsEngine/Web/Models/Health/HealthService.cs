@@ -61,6 +61,33 @@ namespace Web.AnalyticsWeb.Models.Health
         // A full activity import cycle should complete at least this often (see HEALTH-MONITORING-DESIGN.md).
         private const int CycleSlaHours = 24;
 
+        /// <summary>
+        /// The friendly names of the imports switched on for this deployment, in the declaration order of
+        /// <see cref="ImportLabelsBySettingProperty"/>.
+        /// </summary>
+        /// <remarks>
+        /// Shared with the SPA home page (api/SystemStatus) so the two screens can never disagree about
+        /// what is switched on, or label the same toggle differently.
+        /// </remarks>
+        public static List<string> DescribeEnabledImports(ImportTaskSettings settings)
+        {
+            var enabled = new List<string>();
+            if (settings == null) return enabled;
+
+            foreach (var import in ImportLabelsBySettingProperty)
+            {
+                var property = typeof(ImportTaskSettings).GetProperty(import.Key);
+                if (property != null
+                    && property.PropertyType == typeof(bool)
+                    && (bool)property.GetValue(settings))
+                {
+                    enabled.Add(import.Value);
+                }
+            }
+
+            return enabled;
+        }
+
         private const string CacheVersion = "v3";
         private const string SummaryKey = "health:summary:" + CacheVersion;
         private const string DataKey = "health:data:" + CacheVersion;
@@ -256,16 +283,7 @@ namespace Web.AnalyticsWeb.Models.Health
 
                 if (config.ImportJobSettings != null)
                 {
-                    foreach (var import in ImportLabelsBySettingProperty)
-                    {
-                        var property = typeof(ImportTaskSettings).GetProperty(import.Key);
-                        if (property != null
-                            && property.PropertyType == typeof(bool)
-                            && (bool)property.GetValue(config.ImportJobSettings))
-                        {
-                            section.EnabledImports.Add(import.Value);
-                        }
-                    }
+                    section.EnabledImports = DescribeEnabledImports(config.ImportJobSettings);
                 }
 
                 var webhook = await _dataSource.GetCallWebhookStatusAsync();
