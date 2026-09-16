@@ -107,6 +107,7 @@ namespace Common.Entities.CopilotAdoption
                 nowUtc, Math.Max(_options.WindowDays, _options.HistoryDays));
             var settled = nowUtc.Date.AddDays(-Math.Max(0, _options.UsageReportLagDays));
             var trendStart = MondayOf(nowUtc.Date.AddMonths(-TrendMonths));
+            var trendEndExclusive = MondayOf(nowUtc.Date);
 
             var analysis = new CopilotAdoptionAnalysis();
             var summary = analysis.Summary;
@@ -330,7 +331,7 @@ namespace Common.Entities.CopilotAdoption
                 steps.Add(new AnalysisStep(CopilotAdoptionSteps.UsageByApp,
                     output => BuildUsageByAppAsync(analysis, output, seatIds, windowStart, cancellationToken)));
                 steps.Add(new AnalysisStep(CopilotAdoptionSteps.WeeklyTrend,
-                    output => BuildWeeklyTrendAsync(analysis, output, seatIds, trendStart, cancellationToken)));
+                    output => BuildWeeklyTrendAsync(analysis, output, seatIds, trendStart, trendEndExclusive, cancellationToken)));
 
                 // Cowork readiness only means something for people who hold a Copilot seat: Cowork requires
                 // a Copilot licence as a prerequisite, so assessing an unlicensed user for it would produce
@@ -914,6 +915,7 @@ namespace Common.Entities.CopilotAdoption
             StepOutput output,
             List<int> seatIds,
             DateTime trendStart,
+            DateTime trendEndExclusive,
             CancellationToken cancellationToken)
         {
             if (!analysis.Summary.DataSources.AuditAvailable)
@@ -929,7 +931,11 @@ namespace Common.Entities.CopilotAdoption
                 "Cowork agent lookup", cancellationToken) ?? new List<IntValueRow>();
 
             var sql = CopilotAdoptionSql.WeeklyAdoptionTrendSql(seatIds, coworkAgentIds.Select(r => r.Value));
-            var parameters = new Dictionary<string, object> { { "@trendFrom", trendStart } };
+            var parameters = new Dictionary<string, object>
+            {
+                { "@trendFrom", trendStart },
+                { "@trendTo", trendEndExclusive },
+            };
             output.Sql["weeklyTrend"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
 
             var rows = await SafeAsync(
@@ -941,7 +947,23 @@ namespace Common.Entities.CopilotAdoption
 
             if (rows == null) return;
 
-            var weekSpine = WeekSpine(trendStart, MondayOf(DateTime.UtcNow.Date));
+            var coverageSql = CopilotAdoptionSql.WeeklyCopilotAuditCoverageSql;
+            output.Sql["weeklyTrendCoverage"] = CopilotAdoptionSql.ForDisplay(coverageSql, parameters);
+            var coverageRows = await SafeAsync(
+                () => QueryAsync<WeekCoverageRow>(coverageSql, cancellationToken, ToSqlParameters(parameters)),
+                CopilotAdoptionSteps.WeeklyTrend,
+                CopilotAdoptionQueries.WeeklyTrendCoverage,
+                output,
+                "weekly Copilot audit coverage", cancellationToken);
+
+            if (coverageRows == null)
+            {
+                output.MarkIncomplete("weekly Copilot audit coverage");
+                coverageRows = new List<WeekCoverageRow>();
+            }
+
+            var weekSpine = CompletedWeekSpine(trendStart, trendEndExclusive);
+            var coveredWeeks = coverageRows.Select(r => r.WeekStart.Date);
 
             var series = rows
                 .GroupBy(r => r.SeriesName)
@@ -949,7 +971,7 @@ namespace Common.Entities.CopilotAdoption
                 .Select(g => new AdoptionSeries
                 {
                     Name = g.Key,
-                    Points = FillWeeks(weekSpine, g.ToList()),
+                    Points = FillWeeks(weekSpine, g.ToList(), coveredWeeks),
                 })
                 .ToList();
 
@@ -2375,11 +2397,23 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
-        /// Projects query rows onto the full week spine, filling missing weeks with zero. Zero (rather
-        /// than a gap) is right here: these series count audit events, and no events genuinely does
-        /// mean nobody used Copilot that week.
+        /// Every completed week from first to the week before the exclusive end. The current partial
+        /// week is deliberately absent: plotting it always creates an artificial drop.
         /// </summary>
-        internal static List<AdoptionTimePoint> FillWeeks(List<DateTime> weekSpine, List<NamedWeekRow> rows)
+        internal static List<DateTime> CompletedWeekSpine(DateTime firstMonday, DateTime exclusiveMonday)
+        {
+            return WeekSpine(firstMonday, exclusiveMonday.AddDays(-7));
+        }
+
+        /// <summary>
+        /// Projects query rows onto the full completed-week spine. Missing weeks are zero only when the
+        /// Audit.General import has evidence in that week; otherwise they remain null so the chart draws
+        /// a gap instead of pretending an import outage was zero Copilot use.
+        /// </summary>
+        internal static List<AdoptionTimePoint> FillWeeks(
+            List<DateTime> weekSpine,
+            List<NamedWeekRow> rows,
+            IEnumerable<DateTime> verifiedCoverageWeeks)
         {
             var byWeek = new Dictionary<DateTime, double>();
             foreach (var row in rows)
@@ -2387,11 +2421,20 @@ namespace Common.Entities.CopilotAdoption
                 byWeek[row.WeekStart.Date] = row.Value;
             }
 
+            var coveredWeeks = new HashSet<DateTime>(
+                (verifiedCoverageWeeks ?? Enumerable.Empty<DateTime>()).Select(w => w.Date));
+            foreach (var week in byWeek.Keys)
+            {
+                coveredWeeks.Add(week);
+            }
+
             return weekSpine
                 .Select(week => new AdoptionTimePoint
                 {
                     WeekStart = week,
-                    Value = byWeek.TryGetValue(week, out var value) ? value : 0,
+                    Value = byWeek.TryGetValue(week, out var value)
+                        ? value
+                        : coveredWeeks.Contains(week) ? 0 : (double?)null,
                 })
                 .ToList();
         }
@@ -2463,6 +2506,12 @@ namespace Common.Entities.CopilotAdoption
             public DateTime WeekStart { get; set; }
 
             public double Value { get; set; }
+        }
+
+        /// <summary>A completed week where Audit.General has at least one imported event.</summary>
+        public class WeekCoverageRow
+        {
+            public DateTime WeekStart { get; set; }
         }
 
         #endregion

@@ -472,8 +472,9 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddTitle("Weekly trend");
             sheet.AddRow(XlsxCell.Wrapped(
                 "Six months of history regardless of the reporting period, because a trend is the one thing the "
-                + "period cannot show. Weeks start on a Monday, in UTC. A week with no data is written as zero "
-                + "rather than skipped, so a gap in the import is visible instead of being smoothed over."));
+                + "period cannot show. Weeks start on a Monday, in UTC, and the current partial week is excluded. "
+                + "Missing weeks are written as zero only when Audit.General coverage is verified; otherwise the "
+                + "cell is blank. Licence membership is evaluated as of today until #542 supplies as-of-then seat state."));
             sheet.AddBlankRow();
 
             var headers = new List<string> { "Week starting" };
@@ -488,7 +489,7 @@ namespace Common.Entities.CopilotAdoption
                 foreach (var series in allSeries)
                 {
                     var point = series.Points.FirstOrDefault(p => p.WeekStart == week);
-                    row.Add(point?.Value ?? 0d);
+                    row.Add(point == null ? 0d : point.Value.HasValue ? (object)point.Value.Value : null);
                 }
                 sheet.AddRow(row.ToArray());
             }

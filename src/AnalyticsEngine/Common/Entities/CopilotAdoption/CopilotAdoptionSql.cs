@@ -184,6 +184,27 @@ namespace Common.Entities.CopilotAdoption
             "      AND EXISTS (SELECT 1 FROM dbo.audit_events AS ae WHERE ae.id = c.event_id)\r\n" +
             ") THEN 1 ELSE 0 END AS Value;";
 
+        /// <summary>
+        /// Completed weeks where the Audit.General feed has any imported event, used to distinguish a
+        /// genuine zero-Copilot week from a week whose import coverage cannot be verified.
+        /// </summary>
+        /// <remarks>
+        /// This is intentionally a coverage probe, not an activity count. It reads the same Audit.General
+        /// source that supplies Copilot interactions, but does not require a Copilot row to exist: if the
+        /// feed produced some General workload event that week and the Copilot trend has no row, the safest
+        /// interim interpretation is a real zero. If the feed has no evidence at all, the chart leaves a
+        /// gap until #542 can use persisted closed-period facts with as-of seat state.
+        /// </remarks>
+        public static readonly string WeeklyCopilotAuditCoverageSql =
+            "SELECT " + WeekBucket("ae.time_stamp") + " AS WeekStart\r\n" +
+            "FROM dbo.audit_events AS ae\r\n" +
+            "WHERE ae.time_stamp >= @trendFrom\r\n" +
+            "  AND ae.time_stamp < @trendTo\r\n" +
+            "  AND EXISTS (SELECT 1 FROM dbo.event_meta_general AS g WHERE g.event_id = ae.id)\r\n" +
+            "GROUP BY " + WeekBucket("ae.time_stamp") + "\r\n" +
+            "ORDER BY WeekStart\r\n" +
+            "OPTION (RECOMPILE);";
+
         #region Copilot app host
 
         /// <summary>
@@ -1574,6 +1595,7 @@ namespace Common.Entities.CopilotAdoption
                 "           COUNT_BIG(*) AS Interactions\r\n" +
                 "    FROM dbo.copilot_chats AS c\r\n" +
                 "    WHERE c.time_stamp >= @trendFrom\r\n" +
+                "      AND c.time_stamp < @trendTo\r\n" +
                 "      AND c.user_id IS NOT NULL\r\n" +
                 $"    GROUP BY {week}, c.user_id\r\n" +
                 "),\r\n" +
