@@ -412,7 +412,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var webAppName = _config.GetConfigValue(CONFIG_KEY_WEB_APP_NAME);
             var tenantId = TenantGuidFromConfig();
 
-            var webAppWithManagedIdentity = Container.GetWebSites().Where(s => s.Data.Name == webAppName).SingleOrDefault();
+            var webAppWithManagedIdentity = Container.GetWebSites().AsEnumerable().Where(s => s.Data.Name == webAppName).SingleOrDefault();
             if (webAppWithManagedIdentity == null)
                 throw new InstallException($"Can't find web-app with name '{webAppName}'");
 

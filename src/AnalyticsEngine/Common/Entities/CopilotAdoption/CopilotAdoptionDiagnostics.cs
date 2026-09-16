@@ -77,6 +77,7 @@ namespace Common.Entities.CopilotAdoption
         public const string UsageByApp = "UsageByApp";
         public const string WeeklyTrend = "WeeklyTrend";
         public const string LicenceOpportunities = "LicenceOpportunities";
+        public const string CoworkReadiness = "CoworkReadiness";
         public const string AgentEstate = "AgentEstate";
         public const string UnlicensedPopulation = "UnlicensedPopulation";
         public const string ResourceTypes = "ResourceTypes";

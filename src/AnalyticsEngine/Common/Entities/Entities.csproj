@@ -97,6 +97,7 @@
     <Compile Include="CopilotAdoption\CopilotAdoptionAgentModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionAnalysis.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionConcentrationModels.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionCoworkModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionDiagnostics.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionExports.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionOptions.cs" />
@@ -423,9 +424,17 @@
     <Compile Include="Migrations\202608310800001_ColumnstoreUsageReportMetrics.Designer.cs">
       <DependentUpon>202608310800001_ColumnstoreUsageReportMetrics.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202609131940001_CopilotReclaimEligibilityInputs.cs" />
+    <Compile Include="Migrations\202609131940001_CopilotReclaimEligibilityInputs.Designer.cs">
+      <DependentUpon>202609131940001_CopilotReclaimEligibilityInputs.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609101200001_RetireImportDbHacks.cs" />
     <Compile Include="Migrations\202609101200001_RetireImportDbHacks.Designer.cs">
       <DependentUpon>202609101200001_RetireImportDbHacks.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202609151440027_CopilotPromptSafetyFields.cs" />
+    <Compile Include="Migrations\202609151440027_CopilotPromptSafetyFields.Designer.cs">
+      <DependentUpon>202609151440027_CopilotPromptSafetyFields.cs</DependentUpon>
     </Compile>
     <Compile Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.cs" />
     <Compile Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.Designer.cs">
@@ -469,6 +478,7 @@
     <Compile Include="Redis\TeamsRedisManager.cs" />
     <Compile Include="AnalyticsEntitiesContext.cs" />
     <Compile Include="Sql\AzureSqlAccessTokenInterceptor.cs" />
+    <Compile Include="Sql\LegacyProviderNameAliasResolver.cs" />
     <Compile Include="IAnalyticsDbContextFactory.cs" />
     <Compile Include="Entities\Url.cs" />
     <Compile Include="Entities\User.cs" />
@@ -646,8 +656,14 @@
     <EmbeddedResource Include="Migrations\202609101000001_RetireUnusedAuditYammerStreamTables.resx">
       <DependentUpon>202609101000001_RetireUnusedAuditYammerStreamTables.cs</DependentUpon>
     </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609131940001_CopilotReclaimEligibilityInputs.resx">
+      <DependentUpon>202609131940001_CopilotReclaimEligibilityInputs.cs</DependentUpon>
+    </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609101200001_RetireImportDbHacks.resx">
       <DependentUpon>202609101200001_RetireImportDbHacks.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609151440027_CopilotPromptSafetyFields.resx">
+      <DependentUpon>202609151440027_CopilotPromptSafetyFields.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.resx">
       <DependentUpon>202609101100001_UniqueUrlsFullUrlIndex.cs</DependentUpon>
@@ -717,6 +733,12 @@
       <Version>4.0.3</Version>
     </PackageReference>
     <PackageReference Include="EntityFramework">
+      <Version>6.5.2</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Data.SqlClient">
+      <Version>6.1.4</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFramework.SqlServer">
       <Version>6.5.2</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions">

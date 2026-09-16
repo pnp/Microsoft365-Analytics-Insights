@@ -81,7 +81,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var name = base._config.GetNameConfigValue();
             var desiredAccess = _allowPublicAccess ? ServiceBusPublicNetworkAccess.Enabled : ServiceBusPublicNetworkAccess.Disabled;
 
-            var sbNS = allNSs.Where(ns => ns.Data.Name.ToLower() == name.ToLower()).SingleOrDefault();
+            var sbNS = allNSs.AsEnumerable().Where(ns => ns.Data.Name.ToLower() == name.ToLower()).SingleOrDefault();
 
             if (sbNS == null)
             {
