@@ -278,6 +278,10 @@
     <Compile Include="DlpCopilotTests.cs" />
     <Compile Include="DlpApiContractTests.cs" />
     <Compile Include="DlpApiSqlIntegrationTests.cs" />
+    <Compile Include="TeamsExplorerAvailabilityTests.cs" />
+    <Compile Include="TeamsExplorerIndexMigrationTests.cs" />
+    <Compile Include="TeamsExplorerScoringTests.cs" />
+    <Compile Include="TeamsExplorerSqlIntegrationTests.cs" />
     <Compile Include="CopilotInteractionHistoryTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeCopilotEventAdaptor.cs" />
     <Compile Include="FakeLoaderClasses\InMemoryCopilotUsagePersistenceManager.cs" />

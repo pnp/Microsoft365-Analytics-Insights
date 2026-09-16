@@ -61,7 +61,10 @@ namespace Tests.UnitTests
         // CopilotPromptSafetyFields then adds the two Copilot prompt-safety flag columns
         // (copilot_event_messages.jailbreak_detected, copilot_event_accessed_resources.xpia_detected).
         // It DOES change the entity model, so unlike its predecessor its snapshot is freshly scaffolded.
-        private const string LatestId = "202609151440027_CopilotPromptSafetyFields";
+        // IndexTeamsExplorerQueries then adds date indexes for the Teams Explorer report and widens
+        // IX_date on teams_user_device_usage_log. Raw-SQL, additive, and reuses the
+        // CopilotPromptSafetyFields model snapshot verbatim.
+        private const string LatestId = "202609161200001_IndexTeamsExplorerQueries";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

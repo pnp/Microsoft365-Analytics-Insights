@@ -223,6 +223,7 @@
     <Compile Include="Controllers\CopilotAdoptionAPIController.cs" />
     <Compile Include="Controllers\AgentCostsAPIController.cs" />
     <Compile Include="Controllers\DlpAPIController.cs" />
+    <Compile Include="Controllers\TeamsExplorerAPIController.cs" />
     <Compile Include="Controllers\LicenceActivityAPIController.cs" />
     <Compile Include="Controllers\ImportConfigController.cs" />
     <Compile Include="Controllers\InstallLogAPIController.cs" />
