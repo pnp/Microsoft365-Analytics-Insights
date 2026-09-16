@@ -263,7 +263,7 @@ export default function CopilotAdoptionPage() {
     };
   }, [availability, windowDays]);
 
-  const onTabSelect: SelectTabEventHandler = (_e, data) => {
+  const onTabSelect: SelectTabEventHandler = (_e: unknown, data: { value: unknown }) => {
     setDrillAction(undefined);
     setTab(data.value as AdoptionTab);
   };
