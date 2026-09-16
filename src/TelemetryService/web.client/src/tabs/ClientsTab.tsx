@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
     Badge,
     Button,
@@ -225,8 +225,12 @@ export default function ClientsTab({ clients, onSaveAnnotation }: {
                 />
             </Surface>
 
-            {onSaveAnnotation && (
+            {onSaveAnnotation && editing && (
                 <AnnotationDialog
+                    // Keying on the client remounts the dialog when a different row is opened, so its
+                    // state initialisers re-run with that row's values. That is what removes the need
+                    // to re-seed state from an effect (react-hooks/set-state-in-effect).
+                    key={editing.anonClientId}
                     client={editing}
                     onDismiss={() => setEditing(null)}
                     onSave={onSaveAnnotation}
@@ -237,24 +241,15 @@ export default function ClientsTab({ clients, onSaveAnnotation }: {
 }
 
 function AnnotationDialog({ client, onDismiss, onSave }: {
-    client: ClientSummary | null;
+    client: ClientSummary;
     onDismiss: () => void;
     onSave: (anonClientId: string, update: ClientAnnotationUpdate) => Promise<void>;
 }) {
     const styles = useStyles();
-    const [displayName, setDisplayName] = useState('');
-    const [notes, setNotes] = useState('');
+    const [displayName, setDisplayName] = useState(client.annotationDisplayName ?? '');
+    const [notes, setNotes] = useState(client.annotationNotes ?? '');
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
-
-    // Re-seed whenever a different client is opened, so the dialog never shows the previous one's text.
-    useEffect(() => {
-        setDisplayName(client?.annotationDisplayName ?? '');
-        setNotes(client?.annotationNotes ?? '');
-        setError(null);
-    }, [client]);
-
-    if (!client) return null;
 
     const anonClientId = client.anonClientId;
 
