@@ -38,6 +38,49 @@ internal sealed class FakeTelemetryStore : ITelemetrySaveAdaptor, ITelemetryQuer
     }
 }
 
+/// <summary>
+/// In-memory <see cref="IClientAnnotationStore"/>. Annotations are the one place real customer
+/// identity exists, so tests use obviously-synthetic names (Contoso) only.
+/// </summary>
+internal sealed class FakeClientAnnotationStore : IClientAnnotationStore
+{
+    private readonly Dictionary<string, ClientAnnotation> _items = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Set to make every read throw, to prove the dashboard degrades rather than fails.</summary>
+    public bool ThrowOnLoad { get; set; }
+
+    public void Seed(params ClientAnnotation[] annotations)
+    {
+        foreach (var a in annotations) _items[a.id] = a;
+    }
+
+    public Task<IReadOnlyList<ClientAnnotation>> LoadAllAsync()
+    {
+        if (ThrowOnLoad) throw new InvalidOperationException("Annotation store unavailable");
+        return Task.FromResult<IReadOnlyList<ClientAnnotation>>(_items.Values.ToList());
+    }
+
+    public Task<ClientAnnotation> GetAsync(string anonClientId)
+    {
+        _items.TryGetValue(anonClientId, out var found);
+        return Task.FromResult(found!);
+    }
+
+    public Task SaveAsync(ClientAnnotation annotation)
+    {
+        _items[annotation.id] = annotation;
+        return Task.CompletedTask;
+    }
+
+    public Task DeleteAsync(string anonClientId)
+    {
+        _items.Remove(anonClientId);
+        return Task.CompletedTask;
+    }
+
+    public int Count => _items.Count;
+}
+
 internal static class TestData
 {
     /// <summary>Builds a client report. Chain <see cref="WithTables"/> to attach table stats.</summary>
