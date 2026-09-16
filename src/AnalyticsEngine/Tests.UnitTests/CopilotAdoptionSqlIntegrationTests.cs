@@ -1,4 +1,5 @@
-﻿using Common.Entities.CopilotAdoption;
+﻿using Common.Entities;
+using Common.Entities.CopilotAdoption;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -40,6 +41,151 @@ namespace Tests.UnitTests
             {
             }
         }
+
+
+        #region Period facts
+
+        [TestMethod]
+        public void PublishedPeriod_ReReadMatchesLiveScoringForSameClosedWindow()
+        {
+            using (var db = ScratchDatabase.Create("CopilotAdoptFacts"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                CreateCopilotReportTable(db);
+                CreateCopilotImportLogTable(db);
+                CreatePeriodFactTables(db);
+
+                var periodEnd = DateTime.UtcNow.Date.AddDays(-1);
+                db.Execute(
+                    $@"INSERT INTO dbo.user_departments (id, name) VALUES (1, N'Engineering');
+                       INSERT INTO dbo.license_types (id, name, sku_id) VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                       INSERT INTO dbo.users (id, user_name, mail, account_enabled, created_utc, department_id)
+                           VALUES (1, N'active@contoso.com', N'active@contoso.com', 1, '{periodEnd.AddDays(-100):yyyy-MM-dd}', 1),
+                                  (2, N'dormant@contoso.com', N'dormant@contoso.com', 1, '{periodEnd.AddDays(-100):yyyy-MM-dd}', 1),
+                                  (3, N'never@contoso.com', N'never@contoso.com', 1, '{periodEnd.AddDays(-100):yyyy-MM-dd}', 1);
+                       INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1), (2, 2, 1), (3, 3, 1);
+                       INSERT INTO dbo.copilot_usage_report_import_log (id, report_name, imported_utc, rows_read, rows_saved, is_upn_obfuscated)
+                           VALUES (1, N'getMicrosoft365CopilotUsageUserDetail', '{periodEnd.AddDays(-3):yyyy-MM-dd}', 0, 0, 0);");
+
+                SeedCopilotInteraction(db, userId: 1, daysAgo: 2, appHost: "Teams");
+                SeedCopilotInteraction(db, userId: 1, daysAgo: 3, appHost: "Word");
+                SeedCopilotInteraction(db, userId: 2, daysAgo: 120, appHost: "Teams");
+
+                var options = CopilotAdoptionOptions.Default;
+                var service = new CopilotAdoptionService(options, new TestContextFactory(db.ConnectionString), maxConcurrentSteps: 1);
+                var run = service.PublishClosedPeriodAsync(periodEnd, new[] { 1 }).GetAwaiter().GetResult();
+                var stored = service.ReadPublishedPeriodAsync(periodEnd, options.WindowDays).GetAwaiter().GetResult();
+
+                var from = periodEnd.AddDays(-(options.WindowDays - 1));
+                var historyFrom = periodEnd.AddDays(-(Math.Max(options.WindowDays, options.HistoryDays) - 1));
+                var liveRows = Query<LicensedUserUsageRow>(
+                    db,
+                    CopilotAdoptionSql.LicensedUsersSql(new[] { 1 }, new int[0], includeCopilotReport: false),
+                    new SqlParameter("@from", from),
+                    new SqlParameter("@historyFrom", historyFrom),
+                    new SqlParameter("@maxRows", 1000));
+
+                var live = new CopilotAdoptionAnalysis();
+                live.Summary.WindowDays = options.WindowDays;
+                live.Summary.FromUtc = from;
+                live.Summary.ToUtc = periodEnd.AddDays(1);
+                live.Summary.Options = options;
+                live.Summary.LicensedUsers = liveRows.Count;
+                live.Summary.DataSources.AuditAvailable = true;
+                live.LicensedUsers = liveRows
+                    .Select(r => CopilotAdoptionScoring.Score(r, from, periodEnd, auditAvailable: true, options: options))
+                    .ToList();
+                service.FinaliseSummary(live);
+
+                Assert.IsNotNull(run);
+                Assert.AreEqual(CopilotAdoptionSql.PeriodCoverageComplete, run.CoverageStatus);
+                Assert.AreEqual(live.Summary.ScoredUsers, stored.Analysis.Summary.ScoredUsers);
+                Assert.AreEqual(live.Summary.ActiveUsers, stored.Analysis.Summary.ActiveUsers);
+                Assert.AreEqual(live.Summary.DormantUsers, stored.Analysis.Summary.DormantUsers);
+                Assert.AreEqual(live.Summary.NeverUsedUsers, stored.Analysis.Summary.NeverUsedUsers);
+                Assert.AreEqual(live.Summary.AdoptionRatePct, stored.Analysis.Summary.AdoptionRatePct);
+                CollectionAssert.AreEqual(
+                    live.LicensedUsers.Select(u => u.Band).ToArray(),
+                    stored.Analysis.LicensedUsers.Select(u => u.Band).ToArray(),
+                    "Stored facts must be scored by the same code and produce the same bands as the live window.");
+            }
+        }
+
+        [TestMethod]
+        public void PublishClosedPeriod_IsIdempotentForAlreadyPublishedPeriod()
+        {
+            using (var db = ScratchDatabase.Create("CopilotAdoptIdem"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                CreateCopilotReportTable(db);
+                CreateCopilotImportLogTable(db);
+                CreatePeriodFactTables(db);
+
+                var periodEnd = DateTime.UtcNow.Date.AddDays(-1);
+                db.Execute(
+                    @"INSERT INTO dbo.license_types (id, name, sku_id) VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                      INSERT INTO dbo.users (id, user_name, account_enabled) VALUES (1, N'one@contoso.com', 1), (2, N'two@contoso.com', 1);
+                      INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1), (2, 2, 1);
+                      INSERT INTO dbo.copilot_usage_report_import_log (id, report_name, imported_utc, rows_read, rows_saved, is_upn_obfuscated)
+                          VALUES (1, N'getMicrosoft365CopilotUsageUserDetail', SYSUTCDATETIME(), 0, 0, 0);");
+
+                var service = new CopilotAdoptionService(CopilotAdoptionOptions.Default, new TestContextFactory(db.ConnectionString), maxConcurrentSteps: 1);
+                service.PublishClosedPeriodAsync(periodEnd, new[] { 1 }).GetAwaiter().GetResult();
+                service.PublishClosedPeriodAsync(periodEnd, new[] { 1 }).GetAwaiter().GetResult();
+
+                Assert.AreEqual(1, Convert.ToInt32(db.Scalar("SELECT COUNT(*) FROM dbo.copilot_adoption_period_run")));
+                Assert.AreEqual(2, Convert.ToInt32(db.Scalar("SELECT COUNT(*) FROM dbo.copilot_adoption_user_period")));
+            }
+        }
+
+        [TestMethod]
+        public void ComparePublishedPeriods_FlagsDifferentOptionsHash()
+        {
+            using (var db = ScratchDatabase.Create("CopilotAdoptHash"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                CreateCopilotReportTable(db);
+                CreateCopilotImportLogTable(db);
+                CreatePeriodFactTables(db);
+
+                db.Execute(
+                    @"INSERT INTO dbo.license_types (id, name, sku_id) VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                      INSERT INTO dbo.users (id, user_name, account_enabled) VALUES (1, N'one@contoso.com', 1);
+                      INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1);
+                      INSERT INTO dbo.copilot_usage_report_import_log (id, report_name, imported_utc, rows_read, rows_saved, is_upn_obfuscated)
+                          VALUES (1, N'getMicrosoft365CopilotUsageUserDetail', SYSUTCDATETIME(), 0, 0, 0);");
+
+                var leftEnd = DateTime.UtcNow.Date.AddDays(-1);
+                var rightEnd = DateTime.UtcNow.Date.AddDays(-40);
+                var defaults = CopilotAdoptionOptions.Default;
+                var retuned = CopilotAdoptionOptions.Default;
+                retuned.EstablishedScore = defaults.EstablishedScore + 5;
+
+                db.Execute(
+                    $@"INSERT INTO dbo.copilot_adoption_period_run
+                           (period_end, period_days, options_hash, audit_available, report_obfuscated, licensed_users, scored_users, published_utc, data_cutoff_utc, coverage_status)
+                       VALUES ('{leftEnd:yyyy-MM-dd}', {defaults.WindowDays}, N'{CopilotAdoptionService.OptionsHash(defaults)}', 1, 0, 1, 1, SYSUTCDATETIME(), '{leftEnd.AddDays(1):yyyy-MM-dd}', N'complete'),
+                              ('{rightEnd:yyyy-MM-dd}', {defaults.WindowDays}, N'{CopilotAdoptionService.OptionsHash(retuned)}', 1, 0, 1, 1, SYSUTCDATETIME(), '{rightEnd.AddDays(1):yyyy-MM-dd}', N'complete');");
+
+                var left = new CopilotAdoptionService(defaults, new TestContextFactory(db.ConnectionString), maxConcurrentSteps: 1);
+                var gate = left.ComparePublishedPeriodsAsync(leftEnd, rightEnd, defaults.WindowDays).GetAwaiter().GetResult();
+
+                Assert.IsFalse(gate.OptionsComparable);
+                StringAssert.Contains(gate.Message, "different options hashes");
+            }
+        }
+
+        private sealed class TestContextFactory : IAnalyticsDbContextFactory
+        {
+            private readonly string _connectionString;
+            public TestContextFactory(string connectionString) { _connectionString = connectionString; }
+            public AnalyticsEntitiesContext Create() => new AnalyticsEntitiesContext(_connectionString, true, false);
+        }
+
+        #endregion
 
         #region Licensed users
 
@@ -1266,6 +1412,12 @@ namespace Tests.UnitTests
                       user_id int NOT NULL,
                       last_activity_date datetime NULL,
                       viewed_or_edited bigint NOT NULL DEFAULT(0));");
+        }
+
+
+        private static void CreatePeriodFactTables(ScratchDatabase db)
+        {
+            db.Execute(Common.Entities.Migrations.CopilotAdoptionPeriodFacts.Up_Sql);
         }
 
         /// <summary>One Copilot interaction: an audit event plus its copilot_chats row.</summary>

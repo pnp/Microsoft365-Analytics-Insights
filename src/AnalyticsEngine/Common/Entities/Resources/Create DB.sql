@@ -233,6 +233,65 @@ CREATE NONCLUSTERED INDEX [IX_copilot_adoption_reclaim_exclusions_user_review]
     INCLUDE ([reason], [excluded_by]);
 
 
+-- Creating table 'copilot_adoption_period_run'
+CREATE TABLE [dbo].[copilot_adoption_period_run] (
+    [id] int IDENTITY(1,1) NOT NULL,
+    [period_end] date NOT NULL,
+    [period_days] int NOT NULL,
+    [options_hash] nvarchar(64) NOT NULL,
+    [audit_available] bit NOT NULL,
+    [report_obfuscated] bit NOT NULL,
+    [licensed_users] int NOT NULL,
+    [scored_users] int NOT NULL,
+    [published_utc] datetime2(7) NOT NULL CONSTRAINT [DF_copilot_adoption_period_run_published_utc] DEFAULT SYSUTCDATETIME(),
+    [data_cutoff_utc] datetime2(7) NOT NULL,
+    [coverage_status] nvarchar(40) NOT NULL,
+    CONSTRAINT [PK_copilot_adoption_period_run] PRIMARY KEY CLUSTERED ([id] ASC),
+    CONSTRAINT [CK_copilot_adoption_period_run_days] CHECK ([period_days] > 0),
+    CONSTRAINT [CK_copilot_adoption_period_run_options_hash] CHECK (LEN([options_hash]) = 64)
+);
+
+CREATE UNIQUE NONCLUSTERED INDEX [UX_copilot_adoption_period_run_period]
+    ON [dbo].[copilot_adoption_period_run] ([period_end] ASC, [period_days] ASC);
+
+
+-- Creating table 'copilot_adoption_user_period'
+CREATE TABLE [dbo].[copilot_adoption_user_period] (
+    [period_end] date NOT NULL,
+    [period_days] int NOT NULL,
+    [data_cutoff_utc] datetime2(7) NOT NULL,
+    [user_id] int NOT NULL,
+    [seat_licence_type_ids] nvarchar(850) NOT NULL,
+    [account_enabled] bit NULL,
+    [department_id] int NULL,
+    [country_id] int NULL,
+    [manager_id] int NULL,
+    [seat_first_observed_utc] datetime2(7) NULL,
+    [active_days] int NOT NULL CONSTRAINT [DF_copilot_adoption_user_period_active_days] DEFAULT (0),
+    [interactions] bigint NOT NULL CONSTRAINT [DF_copilot_adoption_user_period_interactions] DEFAULT (0),
+    [apps_used] int NOT NULL CONSTRAINT [DF_copilot_adoption_user_period_apps_used] DEFAULT (0),
+    [agents_used] int NOT NULL CONSTRAINT [DF_copilot_adoption_user_period_agents_used] DEFAULT (0),
+    [cowork_interactions] bigint NOT NULL CONSTRAINT [DF_copilot_adoption_user_period_cowork_interactions] DEFAULT (0),
+    [active_weeks] int NOT NULL CONSTRAINT [DF_copilot_adoption_user_period_active_weeks] DEFAULT (0),
+    [first_interaction_utc] datetime2(7) NULL,
+    [last_interaction_utc] datetime2(7) NULL,
+    [prior_interactions] bigint NOT NULL CONSTRAINT [DF_copilot_adoption_user_period_prior_interactions] DEFAULT (0),
+    [signal_source] nvarchar(32) NOT NULL,
+    [report_prompts] int NULL,
+    [report_active_days] int NULL,
+    [report_apps_used] int NULL,
+    [report_last_activity_utc] datetime2(7) NULL,
+    [report_agent_last_activity_utc] datetime2(7) NULL,
+    [coverage_status] nvarchar(40) NOT NULL,
+    CONSTRAINT [PK_copilot_adoption_user_period] PRIMARY KEY NONCLUSTERED ([period_end] ASC, [period_days] ASC, [user_id] ASC),
+    CONSTRAINT [CK_copilot_adoption_user_period_days] CHECK ([period_days] > 0),
+    CONSTRAINT [CK_copilot_adoption_user_period_counts] CHECK ([active_days] >= 0 AND [interactions] >= 0 AND [apps_used] >= 0 AND [agents_used] >= 0 AND [cowork_interactions] >= 0 AND [active_weeks] >= 0 AND [prior_interactions] >= 0)
+);
+
+CREATE CLUSTERED INDEX [CX_copilot_adoption_user_period_period_user]
+    ON [dbo].[copilot_adoption_user_period] ([period_end] ASC, [user_id] ASC);
+
+
 
 -- --------------------------------------------------
 -- Creating all PRIMARY KEY constraints
@@ -379,6 +438,11 @@ ADD CONSTRAINT [PK_users]
 -- Creating foreign key on [user_id] in table 'copilot_adoption_reclaim_exclusions'
 ALTER TABLE [dbo].[copilot_adoption_reclaim_exclusions]
 ADD CONSTRAINT [FK_copilot_adoption_reclaim_exclusions_users]
+    FOREIGN KEY ([user_id]) REFERENCES [dbo].[users] ([id]) ON DELETE CASCADE;
+
+-- Creating foreign key on [user_id] in table 'copilot_adoption_user_period'
+ALTER TABLE [dbo].[copilot_adoption_user_period]
+ADD CONSTRAINT [FK_copilot_adoption_user_period_users]
     FOREIGN KEY ([user_id]) REFERENCES [dbo].[users] ([id]) ON DELETE CASCADE;
 
 
