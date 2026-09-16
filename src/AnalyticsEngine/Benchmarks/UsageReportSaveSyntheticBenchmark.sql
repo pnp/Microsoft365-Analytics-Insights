@@ -12,6 +12,11 @@ same relevant production column types and current query shapes used by AbstractD
 Do not paste production names, row counts, plans or data into this file or into PR/release text. Vary the
 parameters below for small/intermediate/200k-user synthetic runs, narrow/wide reporting windows and cold/warm
 cache runs, then record medians externally with SET STATISTICS IO/TIME and actual execution plans enabled.
+
+SQLCMD variables:
+  - SyntheticUsers: distinct synthetic Entra UPNs to seed (for example 1000, 10000 or 200000)
+  - SyntheticDays: reporting dates to seed (for example 1, 7 or 28)
+  - ChangedRows: rows touched by the changed-row UPDATE shape (for example 100 or 1000)
 */
 SET NOCOUNT ON;
 
@@ -21,9 +26,16 @@ BEGIN
     RETURN;
 END
 
-DECLARE @SyntheticUsers int = 200000;
-DECLARE @SyntheticDays int = 28;
+DECLARE @SyntheticUsers int = $(SyntheticUsers);
+DECLARE @SyntheticDays int = $(SyntheticDays);
 DECLARE @ReportDate date = DATEADD(day, -1, CONVERT(date, SYSUTCDATETIME()));
+DECLARE @ChangedRows int = $(ChangedRows);
+
+PRINT CONCAT('Synthetic benchmark case: users=', @SyntheticUsers,
+             ', days=', @SyntheticDays,
+             ', changedRows=', @ChangedRows,
+             ', database=', DB_NAME(),
+             ', source=synthetic LocalDB/SQL Server fixture');
 
 IF OBJECT_ID(N'dbo.outlook_user_activity_log', N'U') IS NOT NULL DROP TABLE dbo.outlook_user_activity_log;
 IF OBJECT_ID(N'dbo.users', N'U') IS NOT NULL DROP TABLE dbo.users;
@@ -116,7 +128,8 @@ OPTION (RECOMPILE);
 SET STATISTICS IO, TIME OFF;
 
 -- Dirty-check/update shape for a changed existing row. Execute with a small and large changed-row set.
-DECLARE @ChangedRows int = 1000;
+DBCC FREEPROCCACHE WITH NO_INFOMSGS;
+SET STATISTICS IO, TIME ON;
 ;WITH c AS
 (
     SELECT TOP (@ChangedRows) id
@@ -128,3 +141,38 @@ UPDATE l
 SET email_read_count = email_read_count + 1
 FROM dbo.outlook_user_activity_log AS l
 JOIN c ON c.id = l.id;
+SET STATISTICS IO, TIME OFF;
+
+PRINT 'Synthetic benchmark plan operators (estimated text plan; enable Actual Execution Plan in SSMS for actual operators).';
+GO
+SET SHOWPLAN_TEXT ON;
+GO
+DECLARE @ReportDate date = DATEADD(day, -1, CONVERT(date, SYSUTCDATETIME()));
+SELECT id, [date], last_activity_date, user_id, email_send_count, email_receive_count,
+       email_read_count, meeting_created_count, meeting_interacted_count
+FROM dbo.outlook_user_activity_log
+WHERE [date] = CONVERT(datetime, @ReportDate);
+GO
+DECLARE @LookupUpn varchar(250) = 'user1000@contoso.com';
+SELECT TOP (1) id, user_name, mail, last_updated, azure_ad_id, account_enabled, postalcode,
+       org_id, company_name_id, state_or_province_id, manager_id, country_or_region_id,
+       office_location_id, usage_location_id, department_id, job_title_id
+FROM dbo.users
+WHERE user_name = @LookupUpn
+ORDER BY id;
+GO
+DECLARE @ReportDate date = DATEADD(day, -1, CONVERT(date, SYSUTCDATETIME()));
+DECLARE @ChangedRows int = $(ChangedRows);
+;WITH c AS
+(
+    SELECT TOP (@ChangedRows) id
+    FROM dbo.outlook_user_activity_log
+    WHERE [date] = CONVERT(datetime, @ReportDate)
+    ORDER BY id
+)
+UPDATE l
+SET email_read_count = email_read_count + 1
+FROM dbo.outlook_user_activity_log AS l
+JOIN c ON c.id = l.id;
+GO
+SET SHOWPLAN_TEXT OFF;

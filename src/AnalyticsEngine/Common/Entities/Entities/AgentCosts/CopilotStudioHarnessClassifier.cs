@@ -18,6 +18,19 @@ namespace Common.Entities.Entities.AgentCosts
     /// documented by Microsoft, which is why it is an exact match on one known string. Anything unrecognised
     /// becomes <see cref="CopilotStudioHarness.Unknown"/> so a future Microsoft change shows up as visibly
     /// unclassified spend rather than as spend quietly attributed to the wrong harness.</para>
+    ///
+    /// <para><b>Microsoft 365 Copilot Cowork is deliberately absent from this mapping, and must stay
+    /// absent.</b> Cowork meters against the shared <i>Copilot Credits</i> pool - the same currency as
+    /// Copilot Studio and AI Builder - and Microsoft publishes no Cowork-specific meter, feature name or
+    /// workload discriminator. The licensing API reports an aggregate "AI" capacity category only. So
+    /// Cowork consumption genuinely <i>is</i> inside the tenant capacity figures, but it cannot be
+    /// separated out of them, and no per-row signal identifies it.</para>
+    ///
+    /// <para>Inventing a Cowork feature name here to make a "Cowork spend" column possible would be
+    /// precisely the silent mis-attribution the paragraph above exists to prevent - and it would land on a
+    /// page used to justify spend. Cowork <i>usage</i> is reported from the audit log
+    /// (<c>CopilotAdoptionSql.CoworkPredicate</c>) instead, which is real evidence; Cowork <i>cost</i> is
+    /// reported only at the tenant-pool level, where it is honest.</para>
     /// </remarks>
     public static class CopilotStudioHarnessClassifier
     {

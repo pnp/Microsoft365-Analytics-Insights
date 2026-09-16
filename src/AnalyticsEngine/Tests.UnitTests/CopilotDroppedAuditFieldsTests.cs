@@ -129,8 +129,8 @@ namespace Tests.UnitTests
 
             var back = JsonConvert.DeserializeObject<List<Message>>(json);
             Assert.AreEqual(2, back.Count, "Prompts must no longer be filtered out.");
-            Assert.IsTrue(back.Any(m => m.IsPrompt && m.Size == 1234));
-            Assert.IsTrue(back.Any(m => !m.IsPrompt && m.Size == 5678));
+            Assert.IsTrue(back.Any(m => m.IsPrompt == true && m.Size == 1234));
+            Assert.IsTrue(back.Any(m => m.IsPrompt == false && m.Size == 5678));
         }
 
         #endregion

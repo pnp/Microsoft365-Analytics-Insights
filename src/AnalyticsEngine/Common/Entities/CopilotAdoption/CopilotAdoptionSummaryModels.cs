@@ -1,4 +1,4 @@
-using Common.Entities.Copilot;
+﻿using Common.Entities.Copilot;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -338,6 +338,31 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("reclaimableSeats")]
         public int ReclaimableSeats { get; set; }
 
+        /// <summary>Disabled accounts that still hold a Copilot seat. This is the zero-risk reclaim KPI.</summary>
+        [JsonProperty("disabledLicensedUsers")]
+        public int DisabledLicensedUsers { get; set; }
+
+        [JsonProperty("reclaimCertainSeats")]
+        public int ReclaimCertainSeats { get; set; }
+
+        [JsonProperty("reclaimProbableSeats")]
+        public int ReclaimProbableSeats { get; set; }
+
+        [JsonProperty("reclaimReviewSeats")]
+        public int ReclaimReviewSeats { get; set; }
+
+        [JsonProperty("reclaimExcludedUsers")]
+        public int ReclaimExcludedUsers { get; set; }
+
+        [JsonProperty("expiredReclaimExclusions")]
+        public int ExpiredReclaimExclusions { get; set; }
+
+        [JsonProperty("tooNewToJudgeUsers")]
+        public int TooNewToJudgeUsers { get; set; }
+
+        [JsonProperty("reclaimCaveat")]
+        public string ReclaimCaveat { get; set; }
+
         /// <summary>Mean engagement score across all licensed users, including the ones scoring zero.</summary>
         [JsonProperty("averageAdoptionScore")]
         public double AverageAdoptionScore { get; set; }
@@ -348,6 +373,72 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("totalInteractions")]
         public long TotalInteractions { get; set; }
+
+        /// <summary>
+        /// Licensed users whose engagement row was scored from Microsoft's per-user usage report rather
+        /// than from this product's Copilot audit import.
+        /// </summary>
+        /// <remarks>
+        /// The fallback is deliberately preserved because it stops a partial or lagging audit import from
+        /// putting active people on a reclaim list. It is nevertheless a different measurement source:
+        /// Microsoft's report supplies prompt counts over its own D7/D28/D90/D180 window, so any
+        /// interaction-volume aggregate must say how much of the scored population was not eligible for
+        /// the audit-interaction totals.
+        /// </remarks>
+        [JsonProperty("usageReportSourcedUsers")]
+        public int UsageReportSourcedUsers { get; set; }
+
+        /// <summary>Share of scored licensed users whose engagement came from Microsoft's usage report.</summary>
+        [JsonProperty("usageReportSourcedUserPct")]
+        public double UsageReportSourcedUserPct { get; set; }
+
+        /// <summary>
+        /// True when report-sourced rows used a Microsoft report period that does not match the selected
+        /// analysis window, so those rows are deliberately excluded from reclaimable-seat totals.
+        /// </summary>
+        [JsonProperty("usageReportWindowMismatch")]
+        public bool UsageReportWindowMismatch { get; set; }
+
+        /// <summary>
+        /// Seats held back from <see cref="ReclaimableSeats"/> because they were scored from Microsoft's
+        /// report over a window that does not match the one selected.
+        /// </summary>
+        /// <remarks>
+        /// Published so the arithmetic still reconciles on screen. Without it
+        /// <c>ReclaimableSeats != NeverUsedUsers + DormantUsers</c> whenever the windows disagree, and a
+        /// reader who adds up the band breakdown finds a gap that nothing on the page accounts for.
+        /// A figure that does not tie out is exactly the kind of thing that loses an argument in a
+        /// licence negotiation, however defensible the reason behind it.
+        /// </remarks>
+        [JsonProperty("reclaimSeatsHeldBackForWindowMismatch")]
+        public int ReclaimSeatsHeldBackForWindowMismatch { get; set; }
+
+        /// <summary>
+        /// Idle seats (never used or dormant) that the confidence tiers deliberately keep out of
+        /// <see cref="ReclaimableSeats"/> because a human has to look at them first - dormant users,
+        /// users still inside the grace period, users with no tenure or account-state evidence, and
+        /// users an administrator has explicitly excluded.
+        /// </summary>
+        /// <remarks>
+        /// Published alongside <see cref="ReclaimSeatsHeldBackForWindowMismatch"/> so the whole
+        /// arithmetic ties out on screen:
+        /// <c>NeverUsedUsers + DormantUsers + ReclaimSeatsFromActiveBands ==
+        /// ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview</c>.
+        /// </remarks>
+        [JsonProperty("reclaimSeatsHeldBackForReview")]
+        public int ReclaimSeatsHeldBackForReview { get; set; }
+
+        /// <summary>
+        /// Reclaimable seats whose engagement band is better than dormant - in practice, disabled
+        /// accounts that were still active right up to the day they were disabled.
+        /// </summary>
+        /// <remarks>
+        /// They are the most certain reclaims there are, and they are <i>not</i> part of
+        /// <c>NeverUsedUsers + DormantUsers</c>. Published so a reader adding up the band breakdown can
+        /// account for the difference rather than finding an unexplained gap.
+        /// </remarks>
+        [JsonProperty("reclaimSeatsFromActiveBands")]
+        public int ReclaimSeatsFromActiveBands { get; set; }
 
         #endregion
 
@@ -369,6 +460,80 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         [JsonProperty("coworkDetected")]
         public bool CoworkDetected { get; set; }
+
+        #endregion
+
+        #region Cowork readiness (the Cowork tab)
+
+        /// <summary>
+        /// True when the Cowork readiness analysis ran and produced rows. False on a tenant with no Copilot
+        /// seats, or where the step failed - in which case the tab must say so rather than render an empty
+        /// quadrant that reads as "nobody is a candidate".
+        /// </summary>
+        [JsonProperty("coworkReadinessAvailable")]
+        public bool CoworkReadinessAvailable { get; set; }
+
+        /// <summary>Seat holders scored for Cowork readiness.</summary>
+        [JsonProperty("coworkScoredUsers")]
+        public int CoworkScoredUsers { get; set; }
+
+        /// <summary>Seat holders using Cowork on enough separate days to count as regular use.</summary>
+        [JsonProperty("coworkEstablishedUsers")]
+        public int CoworkEstablishedUsers { get; set; }
+
+        /// <summary>Seat holders who have used Cowork but not yet regularly.</summary>
+        [JsonProperty("coworkTriallingUsers")]
+        public int CoworkTriallingUsers { get; set; }
+
+        /// <summary>
+        /// The headline number: fluent Copilot users carrying a heavy coordination load who are not yet
+        /// using Cowork. This is the population a rollout should target first.
+        /// </summary>
+        [JsonProperty("coworkPrimeCandidates")]
+        public int CoworkPrimeCandidates { get; set; }
+
+        /// <summary>Users with the workload for Cowork but not yet the Copilot habit to delegate to it.</summary>
+        [JsonProperty("coworkBuildFluencyFirst")]
+        public int CoworkBuildFluencyFirst { get; set; }
+
+        /// <summary>
+        /// Everyone who should be in the Cowork spending policy: the prime candidates plus everyone already
+        /// using Cowork. Deliberately includes current users - a policy scoped from candidates alone would
+        /// revoke access from the people already proving the capability works.
+        /// </summary>
+        [JsonProperty("coworkRecommendedForPolicy")]
+        public int CoworkRecommendedForPolicy { get; set; }
+
+        /// <summary>Mean coordination load across scored seat holders.</summary>
+        [JsonProperty("coworkAverageCoordinationLoad")]
+        public double CoworkAverageCoordinationLoad { get; set; }
+
+        /// <summary>Mean Copilot fluency across scored seat holders.</summary>
+        [JsonProperty("coworkAverageFluency")]
+        public double CoworkAverageFluency { get; set; }
+
+        /// <summary>Every Cowork tier with its population, in report order.</summary>
+        [JsonProperty("coworkTiers")]
+        public List<CoworkTierSummary> CoworkTiers { get; set; } = new List<CoworkTierSummary>();
+
+        /// <summary>Departments plotted on the readiness quadrant.</summary>
+        [JsonProperty("coworkQuadrant")]
+        public List<CoworkQuadrantPoint> CoworkQuadrant { get; set; } = new List<CoworkQuadrantPoint>();
+
+        /// <summary>Departments ranked for rollout sequencing.</summary>
+        [JsonProperty("coworkByDepartment")]
+        public List<CoworkSegmentRow> CoworkByDepartment { get; set; } = new List<CoworkSegmentRow>();
+
+        /// <summary>The tenant's shared Copilot Credit position, as rollout headroom.</summary>
+        [JsonProperty("coworkCreditPosition")]
+        public CoworkCreditPosition CoworkCreditPosition { get; set; } = new CoworkCreditPosition();
+
+        /// <summary>
+        /// The modelled time/cost estimate for the recommended cohort. Every figure inside is an
+        /// assumption applied to observed volume - see <see cref="CoworkValueEstimate"/>.
+        /// </summary>
+        [JsonProperty("coworkValueEstimate")]
+        public CoworkValueEstimate CoworkValueEstimate { get; set; } = new CoworkValueEstimate();
 
         #endregion
 

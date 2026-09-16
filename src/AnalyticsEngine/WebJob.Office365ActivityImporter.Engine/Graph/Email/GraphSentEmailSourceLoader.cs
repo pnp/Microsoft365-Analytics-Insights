@@ -1,11 +1,9 @@
 using Common.Entities.Config;
 using DataUtils;
 using DataUtils.Http;
-using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
@@ -57,7 +55,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             try
             {
                 var token = await _appIdentity.GetAccessToken();
-                var permissions = ExtractPermissionsFromJwt(token.Token);
+                var permissions = AccessTokenPermissions.Extract(token.Token);
                 return permissions.Any(p => MailReadPermissions.Contains(p));
             }
             catch (Exception ex)
@@ -116,54 +114,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             }
 
             return url;
-        }
-
-        /// <summary>
-        /// Decode the JWT payload and return the union of the application <c>roles</c> claim
-        /// and the delegated <c>scp</c> claim. Signature is not validated - we trust the token
-        /// because it was just issued to us by AAD.
-        /// </summary>
-        internal static IReadOnlyCollection<string> ExtractPermissionsFromJwt(string jwt)
-        {
-            if (string.IsNullOrEmpty(jwt))
-                return Array.Empty<string>();
-
-            var parts = jwt.Split('.');
-            if (parts.Length < 2)
-                return Array.Empty<string>();
-
-            var payloadJson = Encoding.UTF8.GetString(Base64UrlDecode(parts[1]));
-            var payload = JObject.Parse(payloadJson);
-
-            var permissions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            // Application permissions: "roles": ["Mail.Read", ...]
-            if (payload["roles"] is JArray roles)
-            {
-                foreach (var r in roles)
-                    permissions.Add(r.ToString());
-            }
-
-            // Delegated permissions: "scp": "Mail.Read User.Read ..."
-            var scp = payload["scp"]?.ToString();
-            if (!string.IsNullOrEmpty(scp))
-            {
-                foreach (var s in scp.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
-                    permissions.Add(s);
-            }
-
-            return permissions;
-        }
-
-        private static byte[] Base64UrlDecode(string input)
-        {
-            var s = input.Replace('-', '+').Replace('_', '/');
-            switch (s.Length % 4)
-            {
-                case 2: s += "=="; break;
-                case 3: s += "="; break;
-            }
-            return Convert.FromBase64String(s);
         }
     }
 }

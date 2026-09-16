@@ -1,4 +1,4 @@
-using Common.Entities.Copilot;
+﻿using Common.Entities.Copilot;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -331,6 +331,12 @@ namespace Common.Entities.CopilotAdoption
                     output => BuildUsageByAppAsync(analysis, output, seatIds, windowStart, cancellationToken)));
                 steps.Add(new AnalysisStep(CopilotAdoptionSteps.WeeklyTrend,
                     output => BuildWeeklyTrendAsync(analysis, output, seatIds, trendStart, cancellationToken)));
+
+                // Cowork readiness only means something for people who hold a Copilot seat: Cowork requires
+                // a Copilot licence as a prerequisite, so assessing an unlicensed user for it would produce
+                // a recommendation that cannot be acted on. Gated with the other seat-dependent steps.
+                steps.Add(new AnalysisStep(CopilotAdoptionSteps.CoworkReadiness,
+                    output => BuildCoworkReadinessAsync(analysis, output, seatIds, windowStart, cancellationToken)));
             }
 
             // Deliberately not gated on seatIds.Count - see BuildOpportunitiesAsync.
@@ -845,7 +851,9 @@ namespace Common.Entities.CopilotAdoption
             {
                 output.Warnings.Add(
                     $"Only the first {_options.MaxLicensedUsersScored:N0} licensed users were analysed. "
-                    + "The figures below therefore describe that subset, not the whole tenant.");
+                    + "The figures below therefore describe that subset, not the whole tenant. The subset is "
+                    + "ordered by internal user id for reproducibility, so the oldest user records are "
+                    + "over-represented and the newest user records are excluded first.");
             }
 
             foreach (var row in rows)
@@ -1047,9 +1055,218 @@ namespace Common.Entities.CopilotAdoption
 
             analysis.Opportunities = rows
                 .Select(r => CopilotAdoptionScoring.ScoreOpportunity(r, _options))
-                .OrderByDescending(r => r.OpportunityScore)
+                // Proven demand first. The SQL deliberately sorts proven-demand candidates into the
+                // TOP (@maxRows) window ahead of merely busy users so the cap cannot truncate them;
+                // ordering on score alone here would quietly undo that in the list the reader sees,
+                // ranking somebody who has never opened Copilot above somebody already using it.
+                .OrderBy(r => r.QualificationTier == CopilotAdoptionScoring.OpportunityTiers.ProvenDemand ? 0 : 1)
+                .ThenByDescending(r => r.OpportunityScore)
                 .ThenBy(r => r.UserPrincipalName, StringComparer.OrdinalIgnoreCase)
                 .ToList();
+        }
+
+        #endregion
+
+        #region Cowork readiness
+
+        /// <summary>
+        /// Scores every Copilot seat holder for Cowork readiness.
+        ///
+        /// <para>Runs concurrently with the other heavy steps and writes only to its own part of the
+        /// result, so a failure here costs the Cowork tab and nothing else. That matters more than usual:
+        /// this step depends on the Microsoft 365 usage reports, which are a separate import from the
+        /// Copilot audit log and routinely absent on a new installation.</para>
+        ///
+        /// <para>The Copilot engagement score is joined in from the already-scored licensed users rather
+        /// than recomputed, so the two tabs can never disagree about whether someone is fluent. That does
+        /// make this step depend on <see cref="BuildLicensedUsersAsync"/> having populated
+        /// <see cref="CopilotAdoptionAnalysis.LicensedUsers"/> - which is why the join happens in
+        /// <see cref="FinaliseCowork"/> during scoring, after every step has completed, rather than here
+        /// while they are still running in parallel.</para>
+        /// </summary>
+        private async Task BuildCoworkReadinessAsync(
+            CopilotAdoptionAnalysis analysis,
+            StepOutput output,
+            List<int> seatIds,
+            DateTime windowStart,
+            CancellationToken cancellationToken)
+        {
+            var summary = analysis.Summary;
+            var includeAudit = summary.DataSources.AuditAvailable;
+            var includeM365 = summary.DataSources.M365UsageReportsAvailable;
+
+            if (!includeAudit && !includeM365)
+            {
+                output.Warnings.Add(
+                    "Cowork readiness needs either the Copilot audit import or the Microsoft 365 usage "
+                    + "reports. Neither has data for this period, so no readiness assessment is possible.");
+                return;
+            }
+
+            var coworkAgentIds = await SafeAsync(
+                () => QueryAsync<IntValueRow>(CopilotAdoptionSql.CoworkAgentIdsSql, cancellationToken),
+                CopilotAdoptionSteps.CoworkReadiness,
+                CopilotAdoptionQueries.CoworkAgentLookup,
+                output,
+                "Cowork agent lookup", cancellationToken);
+
+            // A failed lookup is NOT the same as a tenant with no Cowork agents. Falling through with an
+            // empty list would silently narrow the Cowork predicate to app_host alone, under-reporting
+            // exactly the usage this tab exists to find - so say so rather than quietly measuring less.
+            if (coworkAgentIds == null)
+            {
+                output.MarkIncomplete("Cowork agent lookup");
+                coworkAgentIds = new List<IntValueRow>();
+            }
+
+            var agentIds = coworkAgentIds.Select(r => r.Value).ToList();
+
+            var sql = CopilotAdoptionSql.CoworkReadinessSql(
+                seatIds, agentIds, _options, includeAudit, includeM365);
+
+            var parameters = new Dictionary<string, object>
+            {
+                { "@maxRows", _options.MaxCoworkUsersScored },
+            };
+            if (includeAudit) parameters["@from"] = windowStart;
+            if (includeM365)
+            {
+                // Date-only columns, so the lower bound is the window's first calendar day rather than the
+                // timestamp - otherwise the earliest day of the window is silently dropped.
+                parameters["@m365From"] = windowStart.Date;
+                parameters["@m365ReportDate"] = summary.DataSources.M365UsageReportDate.Value;
+            }
+
+            output.Sql["coworkReadiness"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
+
+            var rows = await SafeAsync(
+                () => QueryAsync<CoworkReadinessSignalRow>(sql, cancellationToken, ToSqlParameters(parameters)),
+                CopilotAdoptionSteps.CoworkReadiness,
+                CopilotAdoptionQueries.CoworkReadiness,
+                output,
+                "Cowork readiness", cancellationToken);
+
+            if (rows == null)
+            {
+                // The prime-candidate count is a headline KPI and this list drives a whole tab and its CSV
+                // export. An empty list here would read as "nobody is a candidate for Cowork", which is a
+                // finding rather than a fault.
+                output.MarkIncomplete("Cowork readiness");
+                return;
+            }
+
+            if (!includeM365)
+            {
+                output.Warnings.Add(
+                    "The Microsoft 365 usage reports are not available, so coordination load cannot be "
+                    + "measured. Everyone will score zero on that axis and no one will be identified as a "
+                    + "Cowork candidate. Enable the Microsoft 365 usage report import to use this tab.");
+            }
+
+            if (!includeAudit)
+            {
+                output.Warnings.Add(
+                    "The Copilot audit import has no data for this period, so existing Cowork use cannot be "
+                    + "seen. Everyone is assessed as a potential candidate, including people who may already "
+                    + "be using Cowork.");
+            }
+
+            // Credits are a decoration on this tab, not a load-bearing figure, and they come from a
+            // SEPARATE import whose tables a database predating the agent-cost migration does not have
+            // at all. Probe first: without this, every Cowork analysis on such a database would raise
+            // "Invalid object name" as a warning, which reads as a fault rather than as an import that
+            // was never enabled - and a page whose warnings cry wolf stops being read.
+            var hasCreditTables = await SafeScalarAsync(
+                CopilotAdoptionSql.HasCreditTablesSql,
+                CopilotAdoptionSteps.CoworkReadiness,
+                CopilotAdoptionQueries.CoworkCreditProbe,
+                output,
+                "Copilot Credit table probe",
+                // No MarkIncomplete: an absent optional import does not make the readiness figures wrong.
+                null,
+                cancellationToken) == 1;
+
+            if (hasCreditTables)
+            {
+                await AddCoworkCreditsAsync(analysis, output, rows, seatIds, windowStart, cancellationToken);
+            }
+
+            // Stored raw. Scoring happens in FinaliseCowork, once the licensed-user step has finished and
+            // the engagement scores are available to join against - the same raw-then-finalise shape the
+            // unlicensed population already uses.
+            analysis.CoworkSignals = rows;
+        }
+
+        /// <summary>
+        /// Attaches the optional Copilot Credit figures: the tenant's pool position, and each user's
+        /// total where the per-user import has rows for them.
+        ///
+        /// <para><b>Neither figure is Cowork-specific and neither is labelled as such.</b> Microsoft
+        /// meters Cowork against the shared Copilot Credits pool with no per-row workload discriminator,
+        /// so a Cowork-only figure cannot be produced - see
+        /// <see cref="Common.Entities.Entities.AgentCosts.CopilotStudioHarnessClassifier"/>.</para>
+        /// </summary>
+        private async Task AddCoworkCreditsAsync(
+            CopilotAdoptionAnalysis analysis,
+            StepOutput output,
+            List<CoworkReadinessSignalRow> rows,
+            List<int> seatIds,
+            DateTime windowStart,
+            CancellationToken cancellationToken)
+        {
+            var summary = analysis.Summary;
+
+            var creditsSql = CopilotAdoptionSql.CoworkUserCreditsSql(seatIds);
+            var creditRows = await SafeAsync(
+                () => QueryAsync<UserCreditRow>(
+                    creditsSql, cancellationToken, new SqlParameter("@from", windowStart)),
+                CopilotAdoptionSteps.CoworkReadiness,
+                CopilotAdoptionQueries.CoworkUserCredits,
+                output,
+                "Cowork per-user credits", cancellationToken);
+
+            if (creditRows != null && creditRows.Count > 0)
+            {
+                output.Sql["coworkUserCredits"] = CopilotAdoptionSql.ForDisplay(
+                    creditsSql, new Dictionary<string, object> { { "@from", windowStart } });
+
+                var creditsByUser = new Dictionary<int, decimal>();
+                foreach (var credit in creditRows)
+                {
+                    creditsByUser[credit.UserId] = credit.BilledCredits;
+                }
+
+                foreach (var row in rows)
+                {
+                    if (creditsByUser.TryGetValue(row.UserId, out var credits))
+                    {
+                        row.TotalCopilotCredits = credits;
+                    }
+                }
+
+                summary.CoworkCreditPosition.PerUserCreditsAvailable = true;
+            }
+
+            var capacity = await SafeAsync(
+                () => QueryAsync<CreditCapacityRow>(
+                    CopilotAdoptionSql.CoworkCreditCapacitySql, cancellationToken),
+                CopilotAdoptionSteps.CoworkReadiness,
+                CopilotAdoptionQueries.CoworkCreditCapacity,
+                output,
+                "Copilot Credit capacity", cancellationToken);
+
+            var snapshot = capacity?.FirstOrDefault();
+            if (snapshot != null)
+            {
+                var position = summary.CoworkCreditPosition;
+                position.Available = true;
+                position.SnapshotUtc = snapshot.SnapshotUtc;
+                position.Entitled = snapshot.Entitled;
+                position.Consumed = snapshot.Consumed;
+                position.AvailableCredits = snapshot.AvailableCredits;
+                position.PayAsYouGoConsumed = snapshot.PayAsYouGoConsumed;
+                position.Status = snapshot.Status;
+            }
         }
 
         #endregion
@@ -1079,6 +1296,17 @@ namespace Common.Entities.CopilotAdoption
             // really was, and the funnel would open with a 75% drop that is pure measurement artefact.
             summary.ScoredUsers = users.Count;
             var denominator = summary.ScoredUsers;
+            var reportSourcedUsers = users
+                .Where(IsUsageReportSourced)
+                .ToList();
+            var auditInteractionUsers = users
+                .Where(u => !IsUsageReportSourced(u))
+                .ToList();
+            summary.UsageReportSourcedUsers = reportSourcedUsers.Count;
+            summary.UsageReportSourcedUserPct = CopilotAdoptionScoring.Percentage(reportSourcedUsers.Count, denominator);
+            summary.UsageReportWindowMismatch = reportSourcedUsers.Count > 0
+                && summary.DataSources.CopilotUsageReportPeriodDays > 0
+                && summary.DataSources.CopilotUsageReportPeriodDays != _options.WindowDays;
 
             if (summary.ScoredUsers > 0 && summary.ScoredUsers < summary.LicensedUsers)
             {
@@ -1086,15 +1314,94 @@ namespace Common.Entities.CopilotAdoption
                     $"This tenant holds {summary.LicensedUsers:N0} Copilot licences, but only {summary.ScoredUsers:N0} "
                     + "users could be analysed in one pass. Every rate and breakdown below describes those "
                     + $"{summary.ScoredUsers:N0} users, not the whole tenant - they are not tenant-wide figures "
-                    + "and must not be quoted as such.");
+                    + "and must not be quoted as such. Because the drill-down query is ordered by internal user id, "
+                    + "the oldest user records are over-represented and the newest joiners or newly onboarded "
+                    + "subsidiaries are excluded first; the subset is reproducible, but not representative.");
+            }
+
+            if (summary.UsageReportSourcedUsers > 0)
+            {
+                summary.Warnings.Add(
+                    $"{summary.UsageReportSourcedUsers:N0} licensed user{(summary.UsageReportSourcedUsers == 1 ? string.Empty : "s")} "
+                    + $"({summary.UsageReportSourcedUserPct:N1}%) were scored from Microsoft's Copilot usage report because "
+                    + "the audit import had no per-user signal for them. Their Microsoft prompt counts are not added to "
+                    + "audit interaction totals, concentration, intensity or licensed/unlicensed interaction comparisons.");
+            }
+
+            if (summary.UsageReportWindowMismatch)
+            {
+                summary.Warnings.Add(
+                    $"Microsoft's pinned Copilot usage-report period is D{summary.DataSources.CopilotUsageReportPeriodDays}, "
+                    + $"but this analysis window is D{_options.WindowDays}. Report-sourced rows are kept in the adoption "
+                    + "population so active people are not marked as never used, but a report-sourced row that would "
+                    + "otherwise be a PROBABLE reclaim is excluded from reclaimable-seat totals rather than normalising "
+                    + "prompt counts across unlike windows. Certain (disabled-account) seats are never held back this "
+                    + "way, because a disabled account is not an inference from an absence of use. The band breakdown "
+                    + "therefore counts more idle seats than the reclaim figure does; the difference is reported as "
+                    + "\"held back for window mismatch\".");
             }
 
             summary.ActiveUsers = users.Count(u => u.Band > AdoptionBand.Dormant);
             summary.NeverUsedUsers = users.Count(u => u.Band == AdoptionBand.NeverUsed);
             summary.DormantUsers = users.Count(u => u.Band == AdoptionBand.Dormant);
             summary.HabitualUsers = users.Count(u => CopilotAdoptionScoring.IsHabitual(u.Band));
-            summary.ReclaimableSeats = summary.NeverUsedUsers + summary.DormantUsers;
-            summary.TotalInteractions = users.Sum(u => u.Interactions);
+            // ----- Reclaim: tiers first, then the two things held back from the headline -----
+            //
+            // Written for the combination, not taken from either side. Two independent mechanisms now
+            // keep a seat out of "Reclaimable licences", and they compose:
+            //
+            //   * confidence tiering  - certain + probable only; review and excluded are parked
+            //   * window mismatch     - a row scored from Microsoft's report over a period that is not
+            //                           the selected window cannot justify taking a licence away
+            //
+            // Both hold-backs are published, because a headline that quietly disagrees with the band
+            // breakdown loses a licence argument however good the reason behind it. The identity that
+            // must hold on screen - asserted by CopilotAdoptionTests - is:
+            //
+            //   NeverUsed + Dormant + ReclaimSeatsFromActiveBands
+            //     == ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview
+            //
+            // The left-hand extra term is there because "certain" is not a subset of the idle bands: a
+            // disabled account that was active right up to the day it was disabled is the clearest
+            // reclaim there is, and it is not in NeverUsed + Dormant.
+            summary.DisabledLicensedUsers = users.Count(u => u.AccountEnabled == false);
+            summary.ReclaimCertainSeats = users.Count(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain));
+            summary.ReclaimProbableSeats = users.Count(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable));
+            summary.ReclaimReviewSeats = users.Count(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Review));
+            summary.ReclaimExcludedUsers = users.Count(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded));
+            summary.ExpiredReclaimExclusions = users.Count(u => u.ReclaimExclusionExpired);
+            summary.TooNewToJudgeUsers = users.Count(u => u.TooNewToJudge);
+
+            var reclaimCandidates = users
+                .Where(u => IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain)
+                         || IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable))
+                .ToList();
+
+            // The window-mismatch hold-back only applies to PROBABLE seats. Probable is an inference
+            // from an absence of recorded use, and an absence measured over Microsoft's period rather
+            // than the selected one is not evidence about the selected one. Certain is not an
+            // inference at all - the account is disabled - so a report-period technicality must never
+            // remove a disabled seat from the reclaim total. Before this was restricted, the mismatch
+            // held back exactly the wrong rows: see the note on IsUsageReportSourced.
+            var heldBackForWindowMismatch = summary.UsageReportWindowMismatch
+                ? reclaimCandidates.Count(u =>
+                    IsUsageReportSourced(u)
+                    && IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable))
+                : 0;
+
+            summary.ReclaimSeatsHeldBackForWindowMismatch = heldBackForWindowMismatch;
+            summary.ReclaimableSeats = reclaimCandidates.Count - heldBackForWindowMismatch;
+            summary.ReclaimSeatsFromActiveBands = reclaimCandidates.Count(u => !IsIdleBand(u.Band));
+            summary.ReclaimSeatsHeldBackForReview = users.Count(u =>
+                IsIdleBand(u.Band)
+                && (IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Review)
+                    || IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded)));
+
+            summary.ReclaimCaveat = "Reclaim excludes admin exclusions and separates review-only cases. Leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from Microsoft 365 usage data.";
+            // Report-sourced rows carry Microsoft's prompt count in Interactions. Do not publish a total
+            // that adds prompts to audit-log interactions; they are different units over potentially
+            // different windows.
+            summary.TotalInteractions = auditInteractionUsers.Sum(u => u.Interactions);
 
             summary.AdoptionRatePct = CopilotAdoptionScoring.Percentage(summary.ActiveUsers, denominator);
             summary.HabitRatePct = CopilotAdoptionScoring.Percentage(summary.HabitualUsers, denominator);
@@ -1115,14 +1422,15 @@ namespace Common.Entities.CopilotAdoption
             summary.HabitBuckets = BuildHabitBuckets(users.Select(u => (double)u.ActiveDays));
             summary.ActionPlan = BuildActionPlan(users);
             summary.Concentration = CopilotAdoptionScoring.Concentration(
-                users.Where(CopilotAdoptionScoring.IsActive).Select(u => u.Interactions));
-            summary.ScoreProfiles = BuildScoreProfiles(users);
+                auditInteractionUsers.Where(CopilotAdoptionScoring.IsActive).Select(u => u.Interactions));
+            summary.ScoreProfiles = BuildScoreProfiles(auditInteractionUsers);
             summary.AdoptionByDepartment = BuildSegments(users, u => u.Department, "(no department)");
             summary.AdoptionByCountry = BuildSegments(users, u => u.Country, "(no country)");
-            summary.IntensityByDepartment = BuildIntensity(users, u => u.Department, "(no department)");
+            summary.IntensityByDepartment = BuildIntensity(auditInteractionUsers, u => u.Department, "(no department)");
 
             FinaliseAgents(analysis);
             FinaliseUnlicensed(analysis);
+            FinaliseCowork(analysis);
             summary.CombinedByDepartment = BuildCombinedSegments(analysis);
 
             var opportunities = analysis.Opportunities ?? new List<LicenceOpportunityRow>();
@@ -1134,6 +1442,43 @@ namespace Common.Entities.CopilotAdoption
                 .OrderByDescending(c => c.Value)
                 .Take(_options.TopSegments)
                 .ToList();
+        }
+
+        /// <summary>
+        /// Whether this row's engagement was scored from Microsoft's usage report rather than from the
+        /// Copilot audit import.
+        /// </summary>
+        /// <remarks>
+        /// Worth knowing when reading the reclaim arithmetic: <c>CopilotAdoptionScoring.Score</c> only
+        /// selects the report when the report has a non-zero signal, and a non-zero signal makes the
+        /// user active in the window. A report-sourced row therefore can never be banded never-used or
+        /// dormant, which means it can never be <c>probable</c> either. The window-mismatch hold-back is
+        /// consequently defence-in-depth rather than a live filter today. It is kept because the
+        /// alternative - deleting it - would silently remove the guard if the source-selection rule ever
+        /// changes, and because a hold-back that is wired up and provably zero is easier to reason about
+        /// than one that has to be remembered. See the deferred item in the pull request: the residual
+        /// exposure is a user with NO audit signal at all while Microsoft's period is shorter than the
+        /// selected window, who is currently banded never-used from audit data that does not cover them.
+        /// </remarks>
+        private static bool IsUsageReportSourced(LicensedUserAdoptionRow row)
+        {
+            return row != null
+                && string.Equals(row.SignalSource, CopilotAdoptionScoring.SignalSourceUsageReport, StringComparison.Ordinal);
+        }
+
+        /// <summary>Whether a row carries the given reclaim confidence tier.</summary>
+        private static bool IsReclaimTier(LicensedUserAdoptionRow row, string tier)
+        {
+            return row != null && string.Equals(row.ReclaimEligibility, tier, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// The two bands that make up the idle-seat population the reclaim arithmetic reconciles
+        /// against. Kept as one definition so the hold-back counts and the headline cannot drift apart.
+        /// </summary>
+        private static bool IsIdleBand(AdoptionBand band)
+        {
+            return band == AdoptionBand.NeverUsed || band == AdoptionBand.Dormant;
         }
 
         /// <summary>
@@ -1288,6 +1633,224 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
+        /// Scores the raw Cowork signals and rolls them up into the executive view.
+        ///
+        /// <para>This is where the two data sources are joined: the coordination load comes from this
+        /// feature's own query, while the Copilot engagement score is taken from the already-scored
+        /// licensed-user list. Joining here rather than in SQL is what guarantees the Cowork tab and the
+        /// Licensed users tab can never disagree about whether somebody is fluent - there is exactly one
+        /// engagement calculation and both tabs read its output.</para>
+        ///
+        /// <para>Pure - no database - so the whole tab can be unit-tested from hand-written rows.</para>
+        /// </summary>
+        private void FinaliseCowork(CopilotAdoptionAnalysis analysis)
+        {
+            var summary = analysis.Summary;
+            var signals = analysis.CoworkSignals ?? new List<CoworkReadinessSignalRow>();
+
+            if (signals.Count == 0)
+            {
+                // Left explicitly unavailable rather than published as a set of zeros. "0 prime candidates"
+                // is a finding; "this analysis did not run" is a fault, and the tab has to tell them apart.
+                summary.CoworkReadinessAvailable = false;
+                return;
+            }
+
+            // The engagement score and agent count are carried across from the licensed-user analysis
+            // rather than recalculated, so the two tabs cannot disagree about the same person.
+            var licensed = analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>();
+
+            if (licensed.Count == 0)
+            {
+                // Cowork signals exist but the licensed-user analysis produced nothing. That combination
+                // cannot occur naturally - CoworkReadinessSql semi-joins to seat holders, so signals imply
+                // seat holders - which means the licensed-user step failed and SafeAsync degraded it to a
+                // warning. Publishing anyway would score every one of these people at zero fluency and band
+                // them "build fluency first": an unavailable input rendered as a measured verdict of "not
+                // fluent enough", on the tab used to decide who gets access. Unavailable is the honest
+                // answer, and it is the same call the empty-signals guard above makes.
+                //
+                // The warning names Cowork on purpose: the panel filters warnings on that word, so this is
+                // what tells the tab's own diagnostic channel that the fault was upstream rather than the
+                // missing usage-report import its unavailable card would otherwise blame.
+                summary.CoworkReadinessAvailable = false;
+                summary.Warnings.Add(
+                    "Cowork readiness was measured, but the licensed-user analysis it takes Copilot fluency "
+                    + "from did not complete, so the tab could not be scored. This is NOT a missing usage "
+                    + "report import - the Cowork signals imported fine. Check the Health page and re-run.");
+                return;
+            }
+
+            var scoreByUser = new Dictionary<int, LicensedUserAdoptionRow>();
+            foreach (var user in licensed)
+            {
+                scoreByUser[user.UserId] = user;
+            }
+
+            var rows = new List<CoworkReadinessRow>(signals.Count);
+            var withoutFluency = 0;
+            foreach (var signal in signals)
+            {
+                if (scoreByUser.TryGetValue(signal.UserId, out var scored))
+                {
+                    signal.AdoptionScore = scored.AdoptionScore;
+                    signal.AgentsUsed = scored.AgentsUsed;
+                    signal.CopilotActive = CopilotAdoptionScoring.IsActive(scored);
+                }
+                else
+                {
+                    // No licensed-user row to take fluency from, so this person is scored on a DEFAULT of
+                    // zero rather than a measured one. Same defect as the licensed.Count == 0 guard above,
+                    // only partial: "build fluency first" is then a verdict about a missing input.
+                    //
+                    // It is reachable because the two queries are capped independently and rank
+                    // differently - LicensedUsersSql takes TOP (@maxRows) ORDER BY u.id, CoworkReadinessSql
+                    // takes TOP (@maxRows) ORDER BY existing-Cowork-use then load - so above
+                    // MaxLicensedUsersScored seat holders the two row sets are different subsets of the
+                    // same population, and the overlap is partial rather than total.
+                    //
+                    // Not marked unavailable: the matched majority is correctly scored and withholding the
+                    // whole tab from the largest tenants would be a worse answer than naming the gap. The
+                    // warning contains "Cowork" deliberately - the panel filters on that word.
+                    withoutFluency++;
+                }
+
+                rows.Add(CopilotAdoptionScoring.ScoreCoworkReadiness(signal, _options));
+            }
+
+            if (withoutFluency > 0)
+            {
+                // Stated as a fact with its consequence and no remedy, exactly like the licensed-user
+                // cap warning this one is downstream of. Neither cap is reachable from the portal, and
+                // the excluded users cannot be pulled in by changing the period: SeatUsers is a licence
+                // lookup with no date predicate, so the population and its id ordering are the same on
+                // every window.
+                summary.Warnings.Add(
+                    $"Cowork readiness: {withoutFluency:N0} of {signals.Count:N0} seat holders were scored "
+                    + "without a Copilot fluency figure, because they fall outside the "
+                    + $"{_options.MaxLicensedUsersScored:N0}-row licensed-user analysis this tab joins "
+                    + "against. Their fluency reads as 0 rather than as unknown, so they band lower than "
+                    + "they should - most will show as \"build fluency first\". Treat the tier of those "
+                    + "rows as unreliable; the rest of the tab is unaffected.");
+            }
+
+            // Ordered so the people to act on are first: recommended before not, then by the strength of
+            // the case. The CSV export inherits this, so a truncated read of it is still the right people.
+            analysis.CoworkReadiness = rows
+                .OrderByDescending(r => r.RecommendForPolicy)
+                .ThenByDescending(r => r.CoordinationLoadScore)
+                .ThenByDescending(r => r.FluencyScore)
+                .ThenBy(r => r.UserPrincipalName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            summary.CoworkReadinessAvailable = true;
+            summary.CoworkScoredUsers = rows.Count;
+            summary.CoworkEstablishedUsers =
+                rows.Count(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.Established);
+            summary.CoworkTriallingUsers =
+                rows.Count(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.Trialling);
+            summary.CoworkPrimeCandidates =
+                rows.Count(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.PrimeCandidate);
+            summary.CoworkBuildFluencyFirst =
+                rows.Count(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.BuildFluencyFirst);
+            summary.CoworkRecommendedForPolicy = rows.Count(r => r.RecommendForPolicy);
+
+            summary.CoworkAverageCoordinationLoad = Math.Round(
+                rows.Average(r => r.CoordinationLoadScore), 1, MidpointRounding.AwayFromZero);
+            summary.CoworkAverageFluency = Math.Round(
+                rows.Average(r => r.FluencyScore), 1, MidpointRounding.AwayFromZero);
+
+            summary.CoworkTiers = BuildCoworkTiers(rows);
+            summary.CoworkByDepartment = BuildCoworkSegments(rows);
+            summary.CoworkQuadrant = BuildCoworkQuadrant(summary.CoworkByDepartment);
+
+            summary.CoworkValueEstimate = CopilotAdoptionScoring.EstimateCoworkValue(
+                rows.Where(r => r.RecommendForPolicy).ToList(), _options);
+        }
+
+        /// <summary>
+        /// Every tier with its population, stated once with a count rather than repeated per row - the
+        /// same reasoning as <see cref="BuildActionPlan"/>.
+        /// </summary>
+        private List<CoworkTierSummary> BuildCoworkTiers(IReadOnlyCollection<CoworkReadinessRow> rows)
+        {
+            return CopilotAdoptionScoring.AllCoworkTiers
+                .Select(tier =>
+                {
+                    var count = rows.Count(r => r.Tier == tier);
+                    return new CoworkTierSummary
+                    {
+                        Code = tier,
+                        Label = CopilotAdoptionScoring.CoworkTierLabel(tier),
+                        Basis = CopilotAdoptionScoring.CoworkTierBasis(tier),
+                        Description = CopilotAdoptionScoring.CoworkTierDescription(tier, _options),
+                        Users = count,
+                        SharePct = CopilotAdoptionScoring.Percentage(count, rows.Count),
+                    };
+                })
+                .ToList();
+        }
+
+        /// <summary>
+        /// Departments ranked for rollout sequencing: most prime candidates first, so the reader sees the
+        /// business unit with the largest concentration of ready users at the top.
+        ///
+        /// Sorted on the absolute count rather than the rate on purpose. A three-person department where
+        /// everyone qualifies is a 100% rate and not somewhere to start a rollout; a 200-person department
+        /// at 40% is. <see cref="CopilotAdoptionOptions.MinSeatsPerSegment"/> additionally removes the
+        /// segments too small to mean anything, matching the other department tables.
+        /// </summary>
+        private List<CoworkSegmentRow> BuildCoworkSegments(IReadOnlyCollection<CoworkReadinessRow> rows)
+        {
+            return rows
+                .GroupBy(r => string.IsNullOrWhiteSpace(r.Department) ? "(no department)" : r.Department)
+                .Where(g => g.Count() >= _options.MinSeatsPerSegment)
+                .Select(g =>
+                {
+                    var prime = g.Count(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.PrimeCandidate);
+                    var regular = g.Count(r => r.RegularCoworkUser);
+
+                    return new CoworkSegmentRow
+                    {
+                        Segment = g.Key,
+                        LicensedUsers = g.Count(),
+                        PrimeCandidates = prime,
+                        PrimeCandidateRatePct = CopilotAdoptionScoring.Percentage(prime, g.Count()),
+                        RegularCoworkUsers = regular,
+                        CoworkAdoptionPct = CopilotAdoptionScoring.Percentage(regular, g.Count()),
+                        AverageCoordinationLoad = Math.Round(
+                            g.Average(r => r.CoordinationLoadScore), 1, MidpointRounding.AwayFromZero),
+                        AverageFluency = Math.Round(
+                            g.Average(r => r.FluencyScore), 1, MidpointRounding.AwayFromZero),
+                    };
+                })
+                .OrderByDescending(s => s.PrimeCandidates)
+                .ThenByDescending(s => s.AverageCoordinationLoad)
+                .ThenBy(s => s.Segment, StringComparer.OrdinalIgnoreCase)
+                .Take(_options.TopSegments)
+                .ToList();
+        }
+
+        /// <summary>
+        /// The quadrant points, built from the same department rows the sequencing table shows so the
+        /// chart and the table below it cannot describe different populations.
+        /// </summary>
+        private List<CoworkQuadrantPoint> BuildCoworkQuadrant(IEnumerable<CoworkSegmentRow> segments)
+        {
+            return segments
+                .Select(s => new CoworkQuadrantPoint
+                {
+                    Segment = s.Segment,
+                    LicensedUsers = s.LicensedUsers,
+                    CoordinationLoadScore = s.AverageCoordinationLoad,
+                    FluencyScore = s.AverageFluency,
+                    RegularCoworkUsers = s.RegularCoworkUsers,
+                    PrimeCandidates = s.PrimeCandidates,
+                })
+                .ToList();
+        }
+
+        /// <summary>
         /// Rolls the unlicensed rows up, using exactly the same habit rules as the licensed population
         /// so the two distributions can be read against each other.
         /// </summary>
@@ -1374,7 +1937,12 @@ namespace Common.Entities.CopilotAdoption
                     LicensedActiveUsers = seats.Count(CopilotAdoptionScoring.IsActive),
                     // Per seat held, not per active seat: this column exists to be compared with the
                     // unlicensed one, and an idle seat is the whole point of the comparison.
-                    InteractionsPerLicensedUser = PerUserPerMonth(seats.Sum(u => (double)u.Interactions), seats.Count),
+                    // Report-sourced licensed rows hold Microsoft prompt counts in Interactions, not
+                    // audit interaction counts, so they stay in the seat denominator but never in this
+                    // numerator. Otherwise this row adds two different units and labels them as one.
+                    InteractionsPerLicensedUser = PerUserPerMonth(
+                        seats.Where(u => !IsUsageReportSourced(u)).Sum(u => (double)u.Interactions),
+                        seats.Count),
                     LicensedAgentUserPct = CopilotAdoptionScoring.Percentage(
                         seats.Count(u => u.AgentsUsed > 0), seats.Count),
                     UnlicensedActiveUsers = chat.Count,
@@ -1844,6 +2412,39 @@ namespace Common.Entities.CopilotAdoption
         public class IntValueRow
         {
             public int Value { get; set; }
+        }
+
+        /// <summary>
+        /// One user's total billed Copilot Credits in the window.
+        ///
+        /// Users with no credit rows are simply absent, which is what lets the Cowork tab render "not
+        /// attributable" rather than a zero that would read as "this person costs nothing".
+        /// </summary>
+        public class UserCreditRow
+        {
+            public int UserId { get; set; }
+
+            public decimal BilledCredits { get; set; }
+        }
+
+        /// <summary>
+        /// The tenant's Copilot Credit capacity snapshot. Every figure is nullable because the licensing
+        /// API legitimately omits some of them - notably pay-as-you-go consumption, which a tenant on
+        /// pre-purchased capacity simply does not have.
+        /// </summary>
+        public class CreditCapacityRow
+        {
+            public DateTime SnapshotUtc { get; set; }
+
+            public decimal? Entitled { get; set; }
+
+            public decimal? Consumed { get; set; }
+
+            public decimal? AvailableCredits { get; set; }
+
+            public decimal? PayAsYouGoConsumed { get; set; }
+
+            public string Status { get; set; }
         }
 
         /// <summary>A label/value pair for the categorical charts.</summary>

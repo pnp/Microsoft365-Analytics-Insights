@@ -289,6 +289,22 @@ namespace Common.Entities.Entities.AuditLog
         [Column("list_item_unique_id_id")]
         public int? ListItemUniqueIdId { get; set; }
         public CopilotAccessedResourceId ListItemUniqueId { get; set; } = null;
+
+        /// <summary>
+        /// Whether a Cross-Prompt Injection Attack was detected from this resource during the
+        /// interaction (schema field <c>XPIADetected</c>). Null when the payload omits it, or for any
+        /// row imported before the migration that added this column - there is no backfill.
+        /// </summary>
+        /// <remarks>
+        /// PAYLOAD, NOT IDENTITY. This column is deliberately NOT part of the accessed-resource
+        /// de-duplication tuple, and <c>IX_copilot_event_accessed_resources_dedup</c> is unchanged. The
+        /// merge aggregates it per resolved tuple (true if XPIA was flagged on any occurrence of that
+        /// tuple in the batch), which is why widening the dedup key was unnecessary. See the note in
+        /// common_upsert_copilot_agents.sql for why a single aggregated column is safe here whereas the
+        /// two independently-aggregated columns of issue #287 were not.
+        /// </remarks>
+        [Column("xpia_detected")]
+        public bool? XpiaDetected { get; set; }
     }
 
     /// <summary>
@@ -350,12 +366,15 @@ namespace Common.Entities.Entities.AuditLog
     /// response (see <see cref="IsPrompt"/>).
     ///
     /// Historically only response messages were imported, because the only field stored was the
-    /// message id and prompts added rows without adding information. Now that
-    /// <see cref="Size"/> is persisted, the prompt rows carry the input volume of the interaction -
-    /// which is only obtainable from the prompt - and <see cref="IsPrompt"/> would be a constant
-    /// (always false) if prompts were still dropped. Both are therefore imported. The trade-off is
-    /// roughly twice as many rows in this table (payloads normally contain one prompt and one
-    /// response per interaction).
+    /// message id and prompts added rows without adding information. Both are imported now because
+    /// <see cref="IsPrompt"/> would be a constant (always false) if prompts were still dropped, so
+    /// prompt-versus-response counts and ratios would be unobtainable. The trade-off is roughly twice
+    /// as many rows in this table - "roughly", because Microsoft documents that one audit record can
+    /// carry a single prompt with SEVERAL responses, so it is the typical case rather than a rule.
+    ///
+    /// NOTE: this used to be justified by <see cref="Size"/> carrying "the input volume of the
+    /// interaction, only obtainable from the prompt". That reasoning was wrong - see the remarks on
+    /// <see cref="Size"/> - and the prompt rows are retained purely for <see cref="IsPrompt"/>.
     /// </summary>
     [Table("copilot_event_messages")]
     public class CopilotMessage : AbstractEFEntity
@@ -370,18 +389,37 @@ namespace Common.Entities.Entities.AuditLog
         public string MessageId { get; set; } = null;
 
         /// <summary>
-        /// Size of the message as reported by the audit schema (<c>Size</c>, Edm.Int64). Null when
-        /// the payload omits it (Microsoft does not populate it for every host).
+        /// Size of the message as reported by the audit schema (<c>Size</c>, Edm.Int64).
         /// </summary>
+        /// <remarks>
+        /// EXPECT THIS TO BE NULL. The OData Management API schema declares it as Edm.Int64, but the
+        /// Purview audit documentation states "Size is currently not used" and its example payloads omit
+        /// it. The two official sources disagree, so the column is kept for forward compatibility - but
+        /// no report or metric may assume a value is present until a real payload is seen carrying one.
+        /// https://learn.microsoft.com/en-us/purview/audit-copilot
+        /// </remarks>
         [Column("size")]
         public long? Size { get; set; }
 
         /// <summary>
         /// True for the user's prompt, false for Copilot's response (schema field <c>isPrompt</c>).
-        /// Null when the payload omits it.
+        /// Null when the payload omits it - meaning the direction is unknown, NOT that it is a response.
         /// </summary>
         [Column("is_prompt")]
         public bool? IsPrompt { get; set; }
+
+        /// <summary>
+        /// Whether a jailbreak attempt was detected in this prompt message (schema field
+        /// <c>JailbreakDetected</c>). Null when the payload omits it, or for any row imported before the
+        /// migration that added this column - there is no backfill.
+        /// </summary>
+        /// <remarks>
+        /// Only meaningful on a prompt row (<see cref="IsPrompt"/> true); Microsoft describes the flag as
+        /// applying to the prompt message. One of only two prompt-safety signals the audit feed carries.
+        /// https://learn.microsoft.com/en-us/purview/audit-copilot
+        /// </remarks>
+        [Column("jailbreak_detected")]
+        public bool? JailbreakDetected { get; set; }
     }
 
     #endregion

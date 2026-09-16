@@ -1,4 +1,4 @@
-using Newtonsoft.Json;
+﻿using Newtonsoft.Json;
 
 namespace Common.Entities.CopilotAdoption
 {
@@ -47,6 +47,24 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Interactions per active day that score full marks for depth of use.</summary>
         [JsonProperty("depthTargetInteractionsPerActiveDay")]
         public double DepthTargetInteractionsPerActiveDay { get; set; } = 5;
+
+        /// <summary>
+        /// Active days needed before the depth component is trusted at face value.
+        ///
+        /// Depth is interactions per <i>active</i> day, which is the right shape - it stops an
+        /// intermittent-but-intensive user being penalised twice for the same low frequency. But it
+        /// divides by a number the user controls, so a single active day makes the average trivially
+        /// easy to max out: five prompts crammed into one afternoon scored full marks for depth and
+        /// banded the user <see cref="AdoptionBand.Developing"/> - "a habit is forming" - when they had
+        /// in fact tried Copilot once and never come back. A user active on <i>fewer</i> days could
+        /// therefore outscore one active on more.
+        ///
+        /// Below this many active days the depth component is scaled down in proportion, so a small
+        /// sample earns a correspondingly small share of the marks. At or above it, nothing changes -
+        /// a genuinely deep user is unaffected.
+        /// </summary>
+        [JsonProperty("depthMinActiveDays")]
+        public double DepthMinActiveDays { get; set; } = 3;
 
         /// <summary>Distinct Copilot surfaces (Teams, Word, Outlook, Chat...) that score full marks for breadth.</summary>
         [JsonProperty("breadthTargetApps")]
@@ -123,6 +141,15 @@ namespace Common.Entities.CopilotAdoption
         public int AgentNewDays { get; set; } = 30;
 
         /// <summary>
+        /// How long a newly-created Entra user is protected from reclaim recommendations. This is an
+        /// account-age proxy for the future seat-tenure history (#277): a new starter with five days of
+        /// Copilot ownership must not be judged against a full-window target, and a new starter with no
+        /// prompts yet belongs in "too new to judge", not in a list of seats to take away.
+        /// </summary>
+        [JsonProperty("reclaimGraceDays")]
+        public int ReclaimGraceDays { get; set; } = 30;
+
+        /// <summary>
         /// Distinct users an agent needs before its usage is treated as adoption rather than as its
         /// author testing it. Matches the "minimum 3 users" convention used in Microsoft's own agent
         /// reporting.
@@ -196,9 +223,31 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("opportunityDocumentWeight")]
         public double OpportunityDocumentWeight { get; set; } = 20;
 
-        /// <summary>Unlicensed Copilot interactions in the window that score full marks for that component.</summary>
+        /// <summary>
+        /// Unlicensed Copilot interactions that score full marks for that component, expressed over
+        /// <see cref="OpportunityCopilotTargetBasisDays"/> and scaled to the reporting window by
+        /// <see cref="CopilotAdoptionScoring.OpportunityCopilotTargetForWindow"/>.
+        ///
+        /// It has to be scaled, because the three Microsoft 365 components are per-active-day averages
+        /// while this one is a raw total for the window. Left unscaled, the same person clears the bar
+        /// over 180 days and misses it over 7 - so a candidate's recommendation would flip purely
+        /// because the reader changed the period drop-down, which is indefensible in a list used to
+        /// decide who gets a paid seat.
+        /// </summary>
         [JsonProperty("opportunityCopilotTarget")]
         public double OpportunityCopilotTarget { get; set; } = 20;
+
+        /// <summary>
+        /// The window length <see cref="OpportunityCopilotTarget"/> is expressed over. 28 days matches
+        /// Microsoft's usage-report month, and matches the default reporting window so the out-of-the-box
+        /// behaviour is unchanged.
+        ///
+        /// Deliberately its own value rather than reusing
+        /// <see cref="HabitBucketNormalisationDays"/>: coupling them would mean retuning the habit
+        /// buckets silently changed who is recommended for a licence, which are unrelated decisions.
+        /// </summary>
+        [JsonProperty("opportunityCopilotTargetBasisDays")]
+        public int OpportunityCopilotTargetBasisDays { get; set; } = 28;
 
         /// <summary>Teams messages + meetings on a typical active day that score full marks.</summary>
         [JsonProperty("opportunityCollaborationTarget")]
@@ -219,6 +268,196 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("opportunityRecommendScore")]
         public double OpportunityRecommendScore { get; set; } = 50;
 
+        /// <summary>
+        /// Distinct days of unlicensed Copilot use that prove demand on their own, regardless of the
+        /// composite score.
+        ///
+        /// Without this the weighting contradicts its own stated intent. The Copilot component is worth
+        /// <see cref="OpportunityUnlicensedCopilotWeight"/> (35) and the bar is
+        /// <see cref="OpportunityRecommendScore"/> (50), so the one signal that actually <i>proves</i>
+        /// demand for Copilot could never clear it alone - while general Microsoft 365 busyness
+        /// (25 + 20 + 20 = 65) could. Somebody using Copilot Chat daily without a licence was therefore
+        /// not recommended for one, and somebody who had never opened Copilot was.
+        ///
+        /// Requiring several distinct days rather than a raw interaction count is what makes it
+        /// "recurrent" rather than "tried it once", and it does not need normalising when the reporting
+        /// period changes - a day is a day whatever the window length.
+        ///
+        /// Microsoft's own readiness guidance takes the same position, listing Copilot Chat users as
+        /// licence candidates ahead of the recommendation based on general Microsoft 365 engagement.
+        /// </summary>
+        [JsonProperty("opportunityProvenDemandMinActiveDays")]
+        public int OpportunityProvenDemandMinActiveDays { get; set; } = 3;
+
+        #endregion
+
+        #region Cowork readiness
+
+        /// <summary>
+        /// Weight of Teams collaboration volume (chat + channel messages) in the coordination-load score.
+        ///
+        /// The four coordination weights should sum to 100, so the resulting score reads as a percentage.
+        /// They are separate from the <c>Opportunity*</c> family on purpose: that family answers "would this
+        /// person use Copilot at all?", this one answers "does this person have work Cowork could take off
+        /// them?". Re-tuning one must not silently move the other.
+        /// </summary>
+        [JsonProperty("coworkCollaborationWeight")]
+        public double CoworkCollaborationWeight { get; set; } = 20;
+
+        /// <summary>
+        /// Weight of meetings in the coordination-load score - the heaviest of the four.
+        ///
+        /// Meetings are weighted above raw message volume because they are the clearest marker of the
+        /// multi-step, multi-person coordination Cowork is built to absorb: a meeting implies preparation,
+        /// notes, follow-ups and scheduling, which is a chain of delegable tasks rather than a single
+        /// message. A person in back-to-back meetings has more recoverable time than one who simply sends a
+        /// lot of chat.
+        /// </summary>
+        [JsonProperty("coworkMeetingWeight")]
+        public double CoworkMeetingWeight { get; set; } = 35;
+
+        /// <summary>Weight of email volume (sent + read) in the coordination-load score.</summary>
+        [JsonProperty("coworkEmailWeight")]
+        public double CoworkEmailWeight { get; set; } = 25;
+
+        /// <summary>
+        /// Weight of document work (SharePoint / OneDrive files viewed or edited) in the coordination-load
+        /// score. Cowork produces and revises artefacts, so document churn is direct evidence of work it
+        /// can do.
+        /// </summary>
+        [JsonProperty("coworkDocumentWeight")]
+        public double CoworkDocumentWeight { get; set; } = 20;
+
+        /// <summary>
+        /// Teams messages on a typical active day that score full marks for the collaboration component.
+        ///
+        /// All four Cowork targets are expressed <b>per active day</b>, matching how
+        /// <see cref="CopilotAdoptionSql"/> reduces Graph's daily usage reports. That is what keeps the
+        /// score meaning the same thing at any reporting-window length - a raw window total would make the
+        /// same person qualify over 180 days and fail over 7.
+        /// </summary>
+        [JsonProperty("coworkCollaborationTarget")]
+        public double CoworkCollaborationTarget { get; set; } = 50;
+
+        /// <summary>Meetings on a typical active day that score full marks. 5 is a heavily-scheduled day.</summary>
+        [JsonProperty("coworkMeetingTarget")]
+        public double CoworkMeetingTarget { get; set; } = 5;
+
+        /// <summary>Emails sent + read on a typical active day that score full marks.</summary>
+        [JsonProperty("coworkEmailTarget")]
+        public double CoworkEmailTarget { get; set; } = 80;
+
+        /// <summary>Files viewed or edited on a typical active day that score full marks.</summary>
+        [JsonProperty("coworkDocumentTarget")]
+        public double CoworkDocumentTarget { get; set; } = 30;
+
+        /// <summary>
+        /// Coordination load at or above which a user has enough delegable work for Cowork to be worth
+        /// enabling. Below it, Cowork is unlikely to repay the credits it consumes.
+        /// </summary>
+        [JsonProperty("coworkLoadMinScore")]
+        public double CoworkLoadMinScore { get; set; } = 50;
+
+        /// <summary>
+        /// Copilot engagement at or above which a user is fluent enough to delegate multi-step work.
+        ///
+        /// Defaults to the same value as <see cref="EstablishedScore"/> - the "habit formed" line - because
+        /// that is exactly the claim being made: Cowork is a step up from Copilot, not an entry point. Left
+        /// as its own option so the Cowork bar can be raised without moving every band on the main report.
+        /// Someone who has not yet formed a Copilot habit will not hand a multi-day task to an agent, and
+        /// enabling them first wastes both the credits and the change-management effort.
+        /// </summary>
+        [JsonProperty("coworkFluencyMinScore")]
+        public double CoworkFluencyMinScore { get; set; } = 50;
+
+        /// <summary>
+        /// Distinct days of Cowork use inside the reporting window that count as regular adoption rather
+        /// than a trial.
+        ///
+        /// Counted in <b>days, not interactions</b>, for the same reason
+        /// <see cref="OpportunityProvenDemandMinActiveDays"/> is: a day is a day whatever the window
+        /// length, so the verdict does not move when the reader changes the period drop-down. One long
+        /// afternoon of experimentation is not adoption.
+        /// </summary>
+        [JsonProperty("coworkRegularMinActiveDays")]
+        public int CoworkRegularMinActiveDays { get; set; } = 3;
+
+        /// <summary>
+        /// Points added to a user's Copilot fluency score when they have already used at least one Copilot
+        /// agent, capped so it can never manufacture fluency on its own.
+        ///
+        /// Using an agent is the nearest existing behaviour to delegating work to Cowork - it is the same
+        /// mental step of handing a task to something that acts on your behalf - so it is genuine evidence
+        /// of readiness that the engagement score does not otherwise capture. Deliberately a modest uplift:
+        /// it should promote a borderline user, not carry an inactive one over the bar.
+        /// </summary>
+        [JsonProperty("coworkAgentFamiliarityUplift")]
+        public double CoworkAgentFamiliarityUplift { get; set; } = 10;
+
+        /// <summary>How many Cowork readiness rows are pulled into memory to be scored.</summary>
+        [JsonProperty("maxCoworkUsersScored")]
+        public int MaxCoworkUsersScored { get; set; } = 50000;
+
+        #endregion
+
+        #region Cowork value estimate (MODELLED - not measured)
+
+        /// <summary>
+        /// Minutes of preparation, note-taking and follow-up that Cowork is assumed to absorb per meeting.
+        /// </summary>
+        /// <remarks>
+        /// <b>This and its siblings are assumptions, not measurements.</b> Nothing in the database observes
+        /// time saved, and this product cannot measure it. What the database <i>does</i> observe is the
+        /// volume of delegable work - meetings, mail threads, document touches - and these constants turn
+        /// that observed volume into an illustrative range.
+        /// <para>
+        /// Everything derived from them must be labelled as modelled, must be rendered with the assumption
+        /// visible on the same surface, and must never be mixed into a figure presented as evidence. The
+        /// rest of this report is defensible because it shows its working; an unlabelled hours-saved number
+        /// quoted in a board pack would discredit all of it.
+        /// </para>
+        /// </remarks>
+        [JsonProperty("coworkMinutesSavedPerMeeting")]
+        public double CoworkMinutesSavedPerMeeting { get; set; } = 5;
+
+        /// <summary>Minutes assumed saved per mail thread Cowork drafts, triages or summarises.</summary>
+        [JsonProperty("coworkMinutesSavedPerMailThread")]
+        public double CoworkMinutesSavedPerMailThread { get; set; } = 1;
+
+        /// <summary>Minutes assumed saved per document Cowork drafts, revises or summarises.</summary>
+        [JsonProperty("coworkMinutesSavedPerDocument")]
+        public double CoworkMinutesSavedPerDocument { get; set; } = 3;
+
+        /// <summary>
+        /// Fraction of the assumption applied to produce the <b>low</b> end of the reported range; the high
+        /// end uses the assumption as stated.
+        ///
+        /// The estimate is published as a range rather than a single number because a point estimate
+        /// invites precision that does not exist. A reader who sees "120-240 hours a month" understands
+        /// they are being shown a model; one who sees "183 hours" believes it was counted.
+        /// </summary>
+        [JsonProperty("coworkEstimateLowerBoundRatio")]
+        public double CoworkEstimateLowerBoundRatio { get; set; } = 0.5;
+
+        /// <summary>
+        /// Fully-loaded hourly cost used to express the modelled time saving in money.
+        ///
+        /// <b>Null by default, and null means no monetary figure is produced at all.</b> There is no
+        /// defensible default for this - it varies by role, country and employer - so the tool does not
+        /// invent one. An admin who wants a currency figure supplies the rate and owns it; until then the
+        /// estimate is reported in hours only.
+        /// </summary>
+        [JsonProperty("coworkLoadedCostPerHour")]
+        public double? CoworkLoadedCostPerHour { get; set; }
+
+        /// <summary>
+        /// Currency code for <see cref="CoworkLoadedCostPerHour"/>, used only as a display label. Not
+        /// defaulted, and no conversion is ever performed: the tool reports the number it was given in the
+        /// units it was given.
+        /// </summary>
+        [JsonProperty("coworkCurrencyCode")]
+        public string CoworkCurrencyCode { get; set; }
+
         #endregion
 
         /// <summary>
@@ -228,6 +467,19 @@ namespace Common.Entities.CopilotAdoption
         /// <see cref="CopilotAdoptionScoring"/>. Copilot seats are purchased individually, so even a
         /// very large customer is far below this; if it is ever hit the result carries an explicit
         /// warning rather than silently truncating a licence-spend report.
+        ///
+        /// <para>
+        /// <b>Deliberately not raised to the 200,000-user design point.</b> Raising it was considered as
+        /// a way to make the oldest-record bias below less likely to bite, and rejected: the scored set
+        /// is materialised in memory and held in a ten-minute result cache, and every row carries
+        /// several strings including a full prose recommendation, so a four-fold raise is a four-fold
+        /// increase in retained memory per cached analysis. This page already has a history of timing
+        /// out and of losing its AppDomain mid-run, which is why the lifecycle telemetry exists. Raising
+        /// the cap would also not fix the bias - a tenant past the new cap is truncated exactly as
+        /// unfairly - so it would trade a real memory risk for no correctness gain. If the cap is ever
+        /// genuinely binding for a customer, the fix is exact SQL aggregates for the headline figures,
+        /// measured per the repository's benchmarking rule, not a bigger number here.
+        /// </para>
         /// </summary>
         [JsonProperty("maxLicensedUsersScored")]
         public int MaxLicensedUsersScored { get; set; } = 50000;

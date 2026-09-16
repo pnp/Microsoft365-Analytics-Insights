@@ -165,7 +165,11 @@ SELECT
     -- listItemUniqueId is an opaque resource identifier from the same value domain as Id - the audit
     -- payload frequently repeats Id verbatim here - so it is resolved against the SAME
     -- copilot_event_accessed_resource_ids dimension and trimmed to the same 850 chars.
-    LEFT(JSON_VALUE(ar.value, '$.listItemUniqueId'), 850) AS list_item_unique_id
+    LEFT(JSON_VALUE(ar.value, '$.listItemUniqueId'), 850) AS list_item_unique_id,
+    -- XPIADetected: was a Cross-Prompt Injection Attack detected from this resource. Arrives as the JSON
+    -- literal 'true'/'false', which CONVERT(bit, ...) cannot parse, hence the explicit CASE. Kept as
+    -- tinyint here so it can be MAX()'d during resolve (SQL Server has no MAX over bit).
+    CASE JSON_VALUE(ar.value, '$.XPIADetected') WHEN 'true' THEN CAST(1 AS tinyint) WHEN 'false' THEN CAST(0 AS tinyint) ELSE NULL END AS xpia_detected
 INTO #parsed_accessed_resources
 FROM [${STAGING_TABLE_ACTIVITY}] imports
 CROSS APPLY OPENJSON(imports.accessed_resources_json) ar
@@ -331,7 +335,19 @@ SET @t = SYSUTCDATETIME();
 -- WidenCopilotAccessedResourceDedupIndex) so the existence check still seeks the exact tuple. Both extra
 -- columns are ints, so this adds 8 bytes to the index key - the earlier claim that list_item_unique_id_id
 -- would breach the 1700-byte index-key limit was simply wrong (it is an int FK, not a URL).
-SELECT DISTINCT
+--
+-- xpia_detected is PAYLOAD, not identity: it is aggregated with MAX over the eight-column tuple rather
+-- than joining it. DISTINCT became GROUP BY purely to allow that - the grouping columns are exactly the
+-- columns the DISTINCT covered, so the resolved row set is unchanged and the dedup index needs no change.
+--
+-- This is NOT a repeat of the issue #287 mistake. That bug was two INDEPENDENT MIN()s (action and
+-- list-item) over a group, which could pair an action from one source row with a list-item id from
+-- another and fabricate a combination that never occurred. Fabrication requires two or more values being
+-- aggregated independently and then read as a pair. Here exactly ONE value is aggregated and it is read
+-- on its own, so there is nothing to mis-pair: MAX answers "was XPIA flagged on any occurrence of this
+-- resource tuple in this batch", which is the question worth asking of a security signal. NULL (field
+-- absent) is preserved because MAX ignores NULLs, so unknown stays distinguishable from an explicit false.
+SELECT
     par.event_id,
     rid.id AS resource_id_id,
     rname.id AS resource_name_id,
@@ -339,7 +355,8 @@ SELECT DISTINCT
     rtype.id AS resource_type_id,
     slabel.id AS sensitivity_label_id,
     raction.id AS action_id,
-    rlistitem.id AS list_item_unique_id_id
+    rlistitem.id AS list_item_unique_id_id,
+    CONVERT(bit, MAX(par.xpia_detected)) AS xpia_detected
 INTO #resolved_accessed_resources
 FROM #parsed_accessed_resources par
 LEFT JOIN copilot_event_accessed_resource_ids rid 
@@ -355,7 +372,16 @@ LEFT JOIN sensitivity_labels slabel
 LEFT JOIN copilot_event_accessed_resource_actions raction
     ON raction.[name] = par.resource_action
 LEFT JOIN copilot_event_accessed_resource_ids rlistitem
-    ON rlistitem.resource_id = par.list_item_unique_id;
+    ON rlistitem.resource_id = par.list_item_unique_id
+GROUP BY
+    par.event_id,
+    rid.id,
+    rname.id,
+    rsiteurl.id,
+    rtype.id,
+    slabel.id,
+    raction.id,
+    rlistitem.id;
 
 
 SET @rows = @@ROWCOUNT;
@@ -400,9 +426,16 @@ SET @t = SYSUTCDATETIME();
 -- That deliberately declines to add a second action for an event imported pre-upgrade: under the old
 -- five-column tuple such an event only ever stored one row anyway, so this preserves what was recorded
 -- rather than half-revising it. Both branches are keyed on copilot_chat_id, so both seek.
-INSERT INTO copilot_event_accessed_resources (copilot_chat_id, resource_id_id, resource_name_id, resource_site_url_id, resource_type_id, sensitivity_label_id, action_id, list_item_unique_id_id)
+--
+-- xpia_detected rides along as payload and is absent from BOTH existence checks, exactly like the row's
+-- other non-identity content. The consequence is the same "first write wins" behaviour the two columns
+-- above already have: a resource tuple already stored (from an earlier batch, or from before this
+-- column existed) keeps its existing xpia_detected - NULL included - rather than being revised. New
+-- interactions carry the value from their first insert. Historic rows can be backfilled out of
+-- audit_events.event_data, which retains the raw payload; that is deliberately not done here.
+INSERT INTO copilot_event_accessed_resources (copilot_chat_id, resource_id_id, resource_name_id, resource_site_url_id, resource_type_id, sensitivity_label_id, action_id, list_item_unique_id_id, xpia_detected)
 SELECT r.event_id, r.resource_id_id, r.resource_name_id, r.resource_site_url_id, r.resource_type_id, r.sensitivity_label_id,
-       r.action_id, r.list_item_unique_id_id
+       r.action_id, r.list_item_unique_id_id, r.xpia_detected
 FROM #resolved_accessed_resources r
 WHERE NOT EXISTS (
     SELECT 1
@@ -455,15 +488,38 @@ BEGIN
 -- Messages with no Id use a deterministic fallback from the event id + prompt/response flag + size.
 -- parsed_messages is already DISTINCT on exactly that tuple, so this preserves the one-attempt row set
 -- while making a retry of the same audit event idempotent.
+--
+-- JailbreakDetected is AGGREGATED (MAX) over that same tuple rather than added to it. Adding it to the
+-- DISTINCT would break the invariant the fallback id depends on: two otherwise-identical id-less messages
+-- differing only in the jailbreak flag would become two rows sharing one generated persisted_message_id.
+-- MAX keeps the row set byte-identical to before and answers "was a jailbreak flagged for this message",
+-- with NULL preserved when the payload omits the field entirely (MAX ignores NULLs; all-NULL stays NULL).
+--
+-- KNOWN ONE-TIME UPGRADE EFFECT, accepted deliberately. Message.IsPrompt became bool? in the same change
+-- that added jailbreak_detected. Before it, a payload omitting isPrompt deserialised to false and was
+-- re-serialised into messages_json as "isPrompt": false, so this CASE produced 0 and the fallback id ended
+-- ':0:'. It now serialises as null, so the CASE produces NULL and the fallback id ends ':u:'. For a message
+-- that has BOTH no Id AND no isPrompt, a row stored before the upgrade therefore no longer matches the id
+-- computed after it, and the NOT EXISTS below inserts a second row for the same logical message when the
+-- importer re-stages that event inside its rolling look-back window. It is bounded (only that window, only
+-- that intersection, once) and no report reads this table, so it is not worth a data-state guard here - and
+-- the two rows are not equivalent anyway: the pre-upgrade row asserts is_prompt = 0, which is the very
+-- mis-statement the nullability change exists to stop. Recorded so it is not rediscovered as a new defect.
 ;WITH parsed_messages AS (
-    SELECT DISTINCT
+    SELECT
         imports.event_id,
         JSON_VALUE(msg.value, '$.Id') AS message_id,
         TRY_CONVERT(bigint, JSON_VALUE(msg.value, '$.Size')) AS [size],
-        CASE JSON_VALUE(msg.value, '$.isPrompt') WHEN 'true' THEN CAST(1 AS bit) WHEN 'false' THEN CAST(0 AS bit) ELSE NULL END AS is_prompt
+        CASE JSON_VALUE(msg.value, '$.isPrompt') WHEN 'true' THEN CAST(1 AS bit) WHEN 'false' THEN CAST(0 AS bit) ELSE NULL END AS is_prompt,
+        CONVERT(bit, MAX(CASE JSON_VALUE(msg.value, '$.JailbreakDetected') WHEN 'true' THEN 1 WHEN 'false' THEN 0 ELSE NULL END)) AS jailbreak_detected
     FROM [${STAGING_TABLE_ACTIVITY}] imports
     CROSS APPLY OPENJSON(imports.messages_json) msg
     WHERE imports.messages_json IS NOT NULL
+    GROUP BY
+        imports.event_id,
+        JSON_VALUE(msg.value, '$.Id'),
+        TRY_CONVERT(bigint, JSON_VALUE(msg.value, '$.Size')),
+        CASE JSON_VALUE(msg.value, '$.isPrompt') WHEN 'true' THEN CAST(1 AS bit) WHEN 'false' THEN CAST(0 AS bit) ELSE NULL END
 ),
 resolved_messages AS (
     SELECT
@@ -475,15 +531,17 @@ resolved_messages AS (
                 + N':' + COALESCE(CONVERT(nvarchar(20), pm.[size]), N'u')
         ) AS persisted_message_id,
         pm.[size],
-        pm.is_prompt
+        pm.is_prompt,
+        pm.jailbreak_detected
     FROM parsed_messages pm
 )
-INSERT INTO copilot_event_messages (copilot_chat_id, message_id, [size], is_prompt)
+INSERT INTO copilot_event_messages (copilot_chat_id, message_id, [size], is_prompt, jailbreak_detected)
 SELECT
     rm.event_id,
     rm.persisted_message_id,
     rm.[size],
-    rm.is_prompt
+    rm.is_prompt,
+    rm.jailbreak_detected
 FROM resolved_messages rm
 WHERE NOT EXISTS (
     SELECT 1

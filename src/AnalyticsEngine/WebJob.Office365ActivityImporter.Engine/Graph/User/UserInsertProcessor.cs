@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using DataUtils;
 using System;
 using System.Collections.Generic;
@@ -128,6 +128,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     bulkCopy.ColumnMappings.Add("UserPrincipalName", "user_name");
                     bulkCopy.ColumnMappings.Add("AzureAdId", "azure_ad_id");
                     bulkCopy.ColumnMappings.Add("AccountEnabled", "account_enabled");
+                    bulkCopy.ColumnMappings.Add("CreatedDateTime", "created_utc");
                     bulkCopy.ColumnMappings.Add("Mail", "mail");
                     bulkCopy.ColumnMappings.Add("PostalCode", "postalcode");
 
@@ -153,6 +154,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             dataTable.Columns.Add("UserPrincipalName", typeof(string));
             dataTable.Columns.Add("AzureAdId", typeof(string));
             dataTable.Columns.Add("AccountEnabled", typeof(bool));
+            dataTable.Columns.Add("CreatedDateTime", typeof(DateTime));
             dataTable.Columns.Add("Mail", typeof(string));
             dataTable.Columns.Add("PostalCode", typeof(string));
 
@@ -163,6 +165,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 row["UserPrincipalName"] = graphUser.UserPrincipalName ?? (object)DBNull.Value;
                 row["AzureAdId"] = graphUser.Id ?? (object)DBNull.Value;
                 row["AccountEnabled"] = graphUser.AccountEnabled ?? false;
+                row["CreatedDateTime"] = graphUser.CreatedDateTime ?? (object)DBNull.Value;
                 row["Mail"] = graphUser.Mail ?? (object)DBNull.Value;
                 row["PostalCode"] = graphUser.PostalCode ?? (object)DBNull.Value;
 
