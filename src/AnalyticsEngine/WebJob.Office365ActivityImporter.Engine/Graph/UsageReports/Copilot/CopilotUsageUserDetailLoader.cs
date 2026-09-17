@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities.UsageReports;
 using Microsoft.Extensions.Logging;
@@ -344,7 +344,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
             if (hasVersion2Data || log.ID == 0)
             {
-                changed |= Set(log.ReportVersion, row.ReportVersion, v => log.ReportVersion = v);
+                // Stamp the version actually OBSERVED, not the one requested. Without this a first import
+                // (log.ID == 0) recorded report_version = 2 for a payload that carried no v2 values at all,
+                // so the database asserted a schema version the response did not contain.
+                var observedVersion = hasVersion2Data ? row.ReportVersion : CopilotReportVersions.V1;
+                changed |= Set(log.ReportVersion, observedVersion, v => log.ReportVersion = v);
             }
 
             changed |= Set(log.ChatLastActivityDate, row.ChatLastActivityDate, v => log.ChatLastActivityDate = v);

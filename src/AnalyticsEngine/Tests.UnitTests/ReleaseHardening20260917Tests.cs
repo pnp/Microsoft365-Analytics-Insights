@@ -1,4 +1,5 @@
 using Common.Entities.CopilotAdoption;
+using Common.Entities.Entities.UsageReports;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -427,6 +428,106 @@ namespace Tests.UnitTests
             Assert.AreEqual(AdoptionBand.Dormant, scored.Band,
                 "Use that stopped before the window is dormancy, not current activity.");
             Assert.AreEqual(CopilotAdoptionScoring.ReclaimEligibilityTiers.Review, scored.ReclaimEligibility);
+        }
+        /// <summary>
+        /// A report row that covered the user with a MEASURED zero is a real zero and must stay reclaimable.
+        /// This is the both-directions check on the coverage guard: it must not turn genuine zeros into
+        /// "unknown", or the reclaim list quietly empties and the feature stops doing its job.
+        /// </summary>
+        [TestMethod]
+        public void MeasuredZeroFromTheReport_IsStillProbableReclaim()
+        {
+            var row = Row();
+            row.ReportPrompts = 0;
+            row.ReportActiveDays = 0;
+
+            var scored = CopilotAdoptionScoring.Score(row, WindowStart, Now, auditAvailable: false);
+
+            Assert.IsFalse(scored.MeasurementCoverageMissing,
+                "The report covered this user and reported zero - that is a measurement, not a gap.");
+            Assert.AreEqual(AdoptionBand.NeverUsed, scored.Band);
+            Assert.AreEqual(CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable, scored.ReclaimEligibility,
+                "A measured zero must remain a probable reclaim.");
+        }
+
+        /// <summary>
+        /// The reachable gap: the audit import was unavailable AND Microsoft's report carried nothing at all
+        /// for this user. The counters read zero because nothing looked, not because nothing happened, so
+        /// this must be a human review rather than a recommendation to take the seat away.
+        /// </summary>
+        [TestMethod]
+        public void NoMeasurementFromAnySource_IsReviewNotProbable()
+        {
+            var scored = CopilotAdoptionScoring.Score(Row(), WindowStart, Now, auditAvailable: false);
+
+            Assert.IsTrue(scored.MeasurementCoverageMissing);
+            Assert.AreEqual(AdoptionBand.NeverUsed, scored.Band, "The raw usage state is still zero.");
+            Assert.AreEqual(CopilotAdoptionScoring.ReclaimEligibilityTiers.Review, scored.ReclaimEligibility,
+                "With no measurement from either source there is nothing to conclude from.");
+            StringAssert.Contains(scored.ReclaimEligibilityReason, "No Copilot measurement covered this user");
+        }
+
+        /// <summary>
+        /// And when the audit import IS available, its silence is itself a measurement: the user is covered,
+        /// so a genuinely idle seat is still reclaimable.
+        /// </summary>
+        [TestMethod]
+        public void AuditAvailableButSilent_IsStillProbableReclaim()
+        {
+            var scored = CopilotAdoptionScoring.Score(Row(), WindowStart, Now, auditAvailable: true);
+
+            Assert.IsFalse(scored.MeasurementCoverageMissing,
+                "An available audit import that saw nothing has measured this user.");
+            Assert.AreEqual(CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable, scored.ReclaimEligibility);
+        }
+    }
+
+    [TestClass]
+    public class CoworkReportVersionStampTests
+    {
+        /// <summary>
+        /// A first import (log.ID == 0) used to stamp the REQUESTED version, so a v1-shaped payload was
+        /// recorded as report_version = 2 - the database asserting a schema version the response did not
+        /// contain, which is exactly the state that makes NULL metrics look like measured zeros later.
+        /// </summary>
+        [TestMethod]
+        public void FirstImportWithoutVersion2Values_IsStampedV1NotV2()
+        {
+            var log = new CopilotUsageUserActivityLog();
+            var row = new CopilotUsageUserDetailRow { ReportVersion = CopilotReportVersions.V2 };
+
+            CopilotUsageUserDetailLoader.Populate(log, row, hasVersion2Data: false);
+
+            Assert.AreEqual(CopilotReportVersions.V1, log.ReportVersion,
+                "The stamp must record the version actually observed, not the one requested.");
+        }
+
+        /// <summary>The other direction: a genuine v2 payload must still be stamped v2.</summary>
+        [TestMethod]
+        public void FirstImportWithVersion2Values_IsStampedV2()
+        {
+            var log = new CopilotUsageUserActivityLog();
+            var row = new CopilotUsageUserDetailRow { ReportVersion = CopilotReportVersions.V2 };
+
+            CopilotUsageUserDetailLoader.Populate(log, row, hasVersion2Data: true);
+
+            Assert.AreEqual(CopilotReportVersions.V2, log.ReportVersion);
+        }
+
+        /// <summary>
+        /// An EXISTING row must keep the version it already had when the response carries no v2 values -
+        /// the same reasoning that stops the v2 metric columns being blanked.
+        /// </summary>
+        [TestMethod]
+        public void ExistingRowKeepsItsStampedVersion_WhenNoVersion2ValuesArrive()
+        {
+            var log = new CopilotUsageUserActivityLog { ID = 42, ReportVersion = CopilotReportVersions.V2 };
+            var row = new CopilotUsageUserDetailRow { ReportVersion = CopilotReportVersions.V2 };
+
+            CopilotUsageUserDetailLoader.Populate(log, row, hasVersion2Data: false);
+
+            Assert.AreEqual(CopilotReportVersions.V2, log.ReportVersion,
+                "A partial response must not downgrade a version a previous import proved.");
         }
     }
 
