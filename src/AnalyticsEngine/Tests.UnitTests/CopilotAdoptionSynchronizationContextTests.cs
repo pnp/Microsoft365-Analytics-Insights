@@ -1,4 +1,4 @@
-extern alias AnalyticsWeb;
+﻿extern alias AnalyticsWeb;
 
 using Common.Entities.CopilotAdoption;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -48,7 +48,7 @@ namespace Tests.UnitTests
 
             using (var request = new RequestBoundSynchronizationContext())
             {
-                var run = request.StartAndCapture(() => coordinator.GetAsync(28, new List<int>()));
+                var run = request.StartAndCapture(() => coordinator.GetAsync(28, new List<int>(), new List<CopilotSeatCostInput>()));
 
                 Assert.IsTrue(
                     runner.Entered.Wait(Timeout),
@@ -80,7 +80,7 @@ namespace Tests.UnitTests
 
             using (var request = new RequestBoundSynchronizationContext())
             {
-                var run = request.StartAndCapture(() => coordinator.GetAsync(28, new List<int>()));
+                var run = request.StartAndCapture(() => coordinator.GetAsync(28, new List<int>(), new List<CopilotSeatCostInput>()));
                 Assert.IsTrue(runner.Entered.Wait(Timeout), "the analysis should have been started");
 
                 // The 202 has gone back and ASP.NET has torn the request down. Anything posted to
@@ -120,7 +120,7 @@ namespace Tests.UnitTests
 
             using (var request = new RequestBoundSynchronizationContext())
             {
-                var run = request.StartAndCapture(() => coordinator.GetAsync(28, new List<int>()));
+                var run = request.StartAndCapture(() => coordinator.GetAsync(28, new List<int>(), new List<CopilotSeatCostInput>()));
                 Assert.IsTrue(runner.Entered.Wait(Timeout), "the analysis should have been started");
                 request.CompleteRequest();
                 runner.Release();
@@ -134,7 +134,7 @@ namespace Tests.UnitTests
             cache.Evict();
 
             var second = await WithTimeout(
-                coordinator.GetAsync(28, new List<int>()), "the follow-up analysis");
+                coordinator.GetAsync(28, new List<int>(), new List<CopilotSeatCostInput>()), "the follow-up analysis");
 
             Assert.IsNotNull(second);
             Assert.AreEqual(
@@ -278,6 +278,7 @@ namespace Tests.UnitTests
             public async Task<CopilotAdoptionAnalysis> RunAsync(
                 int windowDays,
                 List<int> seatLicenceTypeIds,
+                List<CopilotSeatCostInput> seatCosts,
                 ICopilotAdoptionRunTelemetry telemetry)
             {
                 Interlocked.Increment(ref _callCount);

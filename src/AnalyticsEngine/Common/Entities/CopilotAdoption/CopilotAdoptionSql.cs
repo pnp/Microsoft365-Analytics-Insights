@@ -87,10 +87,12 @@ namespace Common.Entities.CopilotAdoption
             "SELECT lt.id AS Id,\r\n" +
             "       lt.name AS Name,\r\n" +
             "       lt.sku_id AS SkuPartNumber,\r\n" +
-            "       COUNT(ul.user_id) AS AssignedUsers\r\n" +
+            "       COUNT(ul.user_id) AS AssignedUsers,\r\n" +
+            "       CASE WHEN lt.subscribed_sku_refreshed_utc IS NULL THEN NULL ELSE ISNULL(lt.prepaid_enabled_units, 0) + ISNULL(lt.prepaid_warning_units, 0) + ISNULL(lt.prepaid_suspended_units, 0) END AS PurchasedUnits,\r\n" +
+            "       lt.subscribed_sku_refreshed_utc AS PurchasedUnitsRefreshedUtc\r\n" +
             "FROM dbo.license_types AS lt\r\n" +
             "LEFT JOIN dbo.user_license_type_lookups AS ul ON ul.license_type_id = lt.id\r\n" +
-            "GROUP BY lt.id, lt.name, lt.sku_id\r\n" +
+            "GROUP BY lt.id, lt.name, lt.sku_id, lt.prepaid_enabled_units, lt.prepaid_warning_units, lt.prepaid_suspended_units, lt.subscribed_sku_refreshed_utc\r\n" +
             "ORDER BY AssignedUsers DESC, lt.name;";
 
         /// <summary>
@@ -124,6 +126,18 @@ namespace Common.Entities.CopilotAdoption
             "ORDER BY CASE WHEN r.report_period_days IS NULL THEN 1 ELSE 0 END,\r\n" +
             "         ABS(ISNULL(r.report_period_days, 0) - @windowDays),\r\n" +
             "         ISNULL(r.report_period_days, 0);";
+
+        public const string LatestCoworkReportDateSql =
+            "SELECT MAX(r.[date]) AS Value\r\n" +
+            "FROM dbo.cowork_usage_user_activity_log AS r\r\n" +
+            "WHERE r.[date] <= @settled;";
+
+        public const string LatestCoworkReportPeriodSql =
+            "SELECT TOP (1) r.report_period_days AS Value\r\n" +
+            "FROM dbo.cowork_usage_user_activity_log AS r\r\n" +
+            "WHERE r.[date] = @coworkReportDate\r\n" +
+            "GROUP BY r.report_period_days\r\n" +
+            "ORDER BY ABS(r.report_period_days - @windowDays), r.report_period_days;";
 
         /// <summary>
         /// The most recent settled Microsoft 365 usage-report snapshot. Teams is used as the reference
@@ -346,6 +360,8 @@ namespace Common.Entities.CopilotAdoption
         {
             return
                 "SELECT ul.user_id AS UserId,\r\n" +
+                "       ul.license_type_id AS LicenceTypeId,\r\n" +
+                "       lt.sku_id AS SkuPartNumber,\r\n" +
                 "       lt.name AS LicenceName\r\n" +
                 "FROM dbo.user_license_type_lookups AS ul\r\n" +
                 "JOIN dbo.license_types AS lt ON lt.id = ul.license_type_id\r\n" +
@@ -374,7 +390,8 @@ namespace Common.Entities.CopilotAdoption
         public static string LicensedUsersSql(
             IEnumerable<int> seatLicenceTypeIds,
             IEnumerable<int> coworkAgentIds,
-            bool includeCopilotReport)
+            bool includeCopilotReport,
+            bool includeCoworkReport = false)
         {
             var cowork = CoworkPredicate(coworkAgentIds);
 
@@ -474,6 +491,24 @@ namespace Common.Entities.CopilotAdoption
                     ")";
             }
 
+            if (includeCoworkReport)
+            {
+                sql +=
+                    ",\r\n" +
+                    "CoworkReportSnapshot AS (\r\n" +
+                    "    SELECT r.user_id AS user_id,\r\n" +
+                    "           r.total_tasks AS CoworkReportTotalTasks,\r\n" +
+                    "           r.scheduled_tasks AS CoworkReportScheduledTasks,\r\n" +
+                    "           r.user_initiated_tasks AS CoworkReportUserInitiatedTasks,\r\n" +
+                    "           r.active_days AS CoworkReportActiveDays,\r\n" +
+                    "           r.last_activity_date AS CoworkReportLastActivityDate,\r\n" +
+                    "           r.retained_user AS CoworkReportRetainedUser\r\n" +
+                    "    FROM dbo.cowork_usage_user_activity_log AS r\r\n" +
+                    "    WHERE r.[date] = @coworkReportDate\r\n" +
+                    "      AND r.report_period_days = @coworkReportPeriodDays\r\n" +
+                    ")";
+            }
+
             sql +=
                 "\r\n" +
                 "SELECT TOP (@maxRows)\r\n" +
@@ -510,6 +545,19 @@ namespace Common.Entities.CopilotAdoption
                 "       ISNULL(chats.AppsUsed, 0) AS AppsUsed,\r\n" +
                 "       ISNULL(chats.AgentsUsed, 0) AS AgentsUsed,\r\n" +
                 "       CAST(ISNULL(chats.CoworkInteractions, 0) AS bigint) AS CoworkInteractions,\r\n" +
+                (includeCoworkReport
+                    ? "       coworkReport.CoworkReportTotalTasks AS CoworkReportTotalTasks,\r\n" +
+                      "       coworkReport.CoworkReportScheduledTasks AS CoworkReportScheduledTasks,\r\n" +
+                      "       coworkReport.CoworkReportUserInitiatedTasks AS CoworkReportUserInitiatedTasks,\r\n" +
+                      "       coworkReport.CoworkReportActiveDays AS CoworkReportActiveDays,\r\n" +
+                      "       coworkReport.CoworkReportLastActivityDate AS CoworkReportLastActivityDate,\r\n" +
+                      "       coworkReport.CoworkReportRetainedUser AS CoworkReportRetainedUser,\r\n"
+                    : "       CAST(NULL AS int) AS CoworkReportTotalTasks,\r\n" +
+                      "       CAST(NULL AS int) AS CoworkReportScheduledTasks,\r\n" +
+                      "       CAST(NULL AS int) AS CoworkReportUserInitiatedTasks,\r\n" +
+                      "       CAST(NULL AS int) AS CoworkReportActiveDays,\r\n" +
+                      "       CAST(NULL AS datetime) AS CoworkReportLastActivityDate,\r\n" +
+                      "       CAST(NULL AS bit) AS CoworkReportRetainedUser,\r\n") +
                 "       chats.FirstInteractionUtc AS FirstInteractionUtc,\r\n" +
                 "       chats.LastInteractionUtc AS LastInteractionUtc,\r\n" +
                 (includeCopilotReport
@@ -533,6 +581,7 @@ namespace Common.Entities.CopilotAdoption
                 "LEFT JOIN dbo.users AS manager ON manager.id = u.manager_id\r\n" +
                 "LEFT JOIN CopilotUsage AS chats ON chats.user_id = u.id\r\n" +
                 (includeCopilotReport ? "LEFT JOIN ReportSnapshot AS report ON report.user_id = u.id\r\n" : string.Empty) +
+                (includeCoworkReport ? "LEFT JOIN CoworkReportSnapshot AS coworkReport ON coworkReport.user_id = u.id\r\n" : string.Empty) +
                 "OUTER APPLY (\r\n" +
                 "    SELECT TOP (1) e.reason, e.note, e.excluded_by, e.excluded_utc, e.review_after_utc\r\n" +
                 "    FROM dbo.copilot_adoption_reclaim_exclusions AS e\r\n" +
@@ -697,7 +746,8 @@ namespace Common.Entities.CopilotAdoption
             IEnumerable<int> coworkAgentIds,
             CopilotAdoptionOptions options,
             bool includeCopilotAudit,
-            bool includeM365Usage)
+            bool includeM365Usage,
+            bool includeCoworkReport = false)
         {
             var o = options ?? CopilotAdoptionOptions.Default;
             var cowork = CoworkPredicate(coworkAgentIds);
@@ -741,6 +791,24 @@ namespace Common.Entities.CopilotAdoption
                     "      AND c.user_id IS NOT NULL\r\n" +
                     $"      AND ({cowork})\r\n" +
                     "    GROUP BY c.user_id\r\n" +
+                    ")");
+            }
+
+            if (includeCoworkReport)
+            {
+                ctes.Add(
+                    "CoworkReportUsage AS (\r\n" +
+                    "    SELECT r.user_id AS user_id,\r\n" +
+                    "           r.total_tasks AS TotalTasks,\r\n" +
+                    "           r.scheduled_tasks AS ScheduledTasks,\r\n" +
+                    "           r.user_initiated_tasks AS UserInitiatedTasks,\r\n" +
+                    "           r.active_days AS ActiveDays,\r\n" +
+                    "           r.last_activity_date AS LastActivityDate,\r\n" +
+                    "           r.retained_user AS RetainedUser\r\n" +
+                    "    FROM dbo.cowork_usage_user_activity_log AS r\r\n" +
+                    "    WHERE r.[date] = @coworkReportDate\r\n" +
+                    "      AND r.report_period_days = @coworkReportPeriodDays\r\n" +
+                    "      AND EXISTS (SELECT 1 FROM SeatUsers AS s WHERE s.user_id = r.user_id)\r\n" +
                     ")");
             }
 
@@ -806,6 +874,20 @@ namespace Common.Entities.CopilotAdoption
                   "       0 AS CoworkActiveDays,\r\n" +
                   "       CAST(NULL AS datetime) AS LastCoworkInteractionUtc,\r\n";
 
+            var coworkReportSelect = includeCoworkReport
+                ? "       report.TotalTasks AS CoworkReportTotalTasks,\r\n" +
+                  "       report.ScheduledTasks AS CoworkReportScheduledTasks,\r\n" +
+                  "       report.UserInitiatedTasks AS CoworkReportUserInitiatedTasks,\r\n" +
+                  "       report.ActiveDays AS CoworkReportActiveDays,\r\n" +
+                  "       report.LastActivityDate AS CoworkReportLastActivityDate,\r\n" +
+                  "       report.RetainedUser AS CoworkReportRetainedUser,\r\n"
+                : "       CAST(NULL AS int) AS CoworkReportTotalTasks,\r\n" +
+                  "       CAST(NULL AS int) AS CoworkReportScheduledTasks,\r\n" +
+                  "       CAST(NULL AS int) AS CoworkReportUserInitiatedTasks,\r\n" +
+                  "       CAST(NULL AS int) AS CoworkReportActiveDays,\r\n" +
+                  "       CAST(NULL AS datetime) AS CoworkReportLastActivityDate,\r\n" +
+                  "       CAST(NULL AS bit) AS CoworkReportRetainedUser,\r\n";
+
             var m365Select = includeM365Usage
                 ? "       CAST(ISNULL(teams.Messages, 0) AS bigint) AS TeamsMessages,\r\n" +
                   "       CAST(ISNULL(teams.Meetings, 0) AS bigint) AS TeamsMeetings,\r\n" +
@@ -848,6 +930,7 @@ namespace Common.Entities.CopilotAdoption
                 "       manager.user_name AS ManagerUserPrincipalName,\r\n" +
                 "       u.account_enabled AS AccountEnabled,\r\n" +
                 coworkSelect +
+                coworkReportSelect +
                 m365Select +
                 $"       CAST({loadScore} AS float) AS LoadScore\r\n" +
                 "FROM SeatUsers AS seats\r\n" +
@@ -859,6 +942,7 @@ namespace Common.Entities.CopilotAdoption
                 "LEFT JOIN dbo.user_company_name AS company ON company.id = u.company_name_id\r\n" +
                 "LEFT JOIN dbo.users AS manager ON manager.id = u.manager_id\r\n" +
                 (includeCopilotAudit ? "LEFT JOIN CoworkUsage AS cw ON cw.user_id = u.id\r\n" : string.Empty) +
+                (includeCoworkReport ? "LEFT JOIN CoworkReportUsage AS report ON report.user_id = u.id\r\n" : string.Empty) +
                 (includeM365Usage
                     ? "LEFT JOIN TeamsUsage AS teams ON teams.user_id = u.id\r\n" +
                       "LEFT JOIN MailUsage AS mail ON mail.user_id = u.id\r\n" +
@@ -1810,6 +1894,82 @@ namespace Common.Entities.CopilotAdoption
             ") AS expired\r\n" +
             "WHERE f.period_end = @periodEnd AND f.period_days = @periodDays\r\n" +
             "ORDER BY f.user_id;";
+
+        public const string PublishedPeriodCohortRowsSql =
+            "WITH PairRows AS (\r\n" +
+            "    SELECT COALESCE(l.user_id, r.user_id) AS UserId,\r\n" +
+            "           CAST(CASE WHEN l.user_id IS NULL THEN 0 ELSE 1 END AS bit) AS ExistedInEarlierPeriod,\r\n" +
+            "           CAST(CASE WHEN r.user_id IS NULL THEN 0 ELSE 1 END AS bit) AS ExistsInCurrentPeriod,\r\n" +
+            "           CAST(CASE WHEN l.user_id IS NOT NULL AND ((l.interactions > 0 OR l.active_days > 0)\r\n" +
+            "                OR ((ISNULL(l.report_active_days, 0) > 0 OR ISNULL(l.report_prompts, 0) > 0)\r\n" +
+            "                    AND (lr.audit_available = 0 OR (l.interactions = 0 AND l.active_days = 0)))) THEN 1 ELSE 0 END AS bit) AS ActiveInEarlierPeriod,\r\n" +
+            "           CAST(CASE WHEN r.user_id IS NOT NULL AND ((r.interactions > 0 OR r.active_days > 0)\r\n" +
+            "                OR ((ISNULL(r.report_active_days, 0) > 0 OR ISNULL(r.report_prompts, 0) > 0)\r\n" +
+            "                    AND (rr.audit_available = 0 OR (r.interactions = 0 AND r.active_days = 0)))) THEN 1 ELSE 0 END AS bit) AS ActiveInCurrentPeriod,\r\n" +
+            "           CASE WHEN l.user_id IS NULL THEN N'No seat'\r\n" +
+            "                WHEN (l.interactions > 0 OR l.active_days > 0)\r\n" +
+            "                  OR ((ISNULL(l.report_active_days, 0) > 0 OR ISNULL(l.report_prompts, 0) > 0)\r\n" +
+            "                      AND (lr.audit_available = 0 OR (l.interactions = 0 AND l.active_days = 0))) THEN N'Active'\r\n" +
+            "                WHEN l.prior_interactions > 0 OR l.first_interaction_utc < @leftFrom OR l.report_last_activity_utc < @leftFrom THEN N'Dormant'\r\n" +
+            "                ELSE N'Never used' END AS FromBand,\r\n" +
+            "           CASE WHEN r.user_id IS NULL THEN N'No seat'\r\n" +
+            "                WHEN (r.interactions > 0 OR r.active_days > 0)\r\n" +
+            "                  OR ((ISNULL(r.report_active_days, 0) > 0 OR ISNULL(r.report_prompts, 0) > 0)\r\n" +
+            "                      AND (rr.audit_available = 0 OR (r.interactions = 0 AND r.active_days = 0))) THEN N'Active'\r\n" +
+            "                WHEN r.prior_interactions > 0 OR r.first_interaction_utc < @rightFrom OR r.report_last_activity_utc < @rightFrom THEN N'Dormant'\r\n" +
+            "                ELSE N'Never used' END AS ToBand,\r\n" +
+            "           r.seat_first_observed_utc AS SeatFirstObservedUtc,\r\n" +
+            "           r.first_interaction_utc AS FirstInteractionUtc,\r\n" +
+            "           CASE WHEN r.user_id IS NOT NULL AND r.seat_first_observed_utc IS NOT NULL AND r.seat_first_observed_utc >= @rightHistoryFrom AND r.first_interaction_utc IS NOT NULL\r\n" +
+            "                THEN CASE WHEN DATEDIFF(DAY, r.seat_first_observed_utc, r.first_interaction_utc) < 0 THEN 0 ELSE DATEDIFF(DAY, r.seat_first_observed_utc, r.first_interaction_utc) END\r\n" +
+            "                ELSE NULL END AS DaysToFirstUse,\r\n" +
+            "           CASE WHEN r.user_id IS NULL THEN NULL\r\n" +
+            "                WHEN r.seat_first_observed_utc IS NULL THEN N'seatDateUnknown'\r\n" +
+            "                WHEN r.seat_first_observed_utc < @rightHistoryFrom THEN N'assignedBeforeHistory'\r\n" +
+            "                WHEN r.first_interaction_utc IS NOT NULL AND (CASE WHEN DATEDIFF(DAY, r.seat_first_observed_utc, r.first_interaction_utc) < 0 THEN 0 ELSE DATEDIFF(DAY, r.seat_first_observed_utc, r.first_interaction_utc) END) <= @activationWindowDays THEN N'activatedWithinWindow'\r\n" +
+            "                WHEN r.first_interaction_utc IS NOT NULL THEN N'activatedAfterWindow'\r\n" +
+            "                WHEN DATEDIFF(DAY, r.seat_first_observed_utc, @rightPeriodEnd) < @activationWindowDays THEN N'tooNewToJudge'\r\n" +
+            "                ELSE N'neverActivated' END AS ActivationState\r\n" +
+            "    FROM (SELECT * FROM dbo.copilot_adoption_user_period WHERE period_end = @leftPeriodEnd AND period_days = @periodDays) AS l\r\n" +
+            "    FULL OUTER JOIN (SELECT * FROM dbo.copilot_adoption_user_period WHERE period_end = @rightPeriodEnd AND period_days = @periodDays) AS r\r\n" +
+            "      ON r.user_id = l.user_id\r\n" +
+            "    JOIN dbo.copilot_adoption_period_run AS lr ON lr.period_end = @leftPeriodEnd AND lr.period_days = @periodDays\r\n" +
+            "    JOIN dbo.copilot_adoption_period_run AS rr ON rr.period_end = @rightPeriodEnd AND rr.period_days = @periodDays\r\n" +
+            "    WHERE l.user_id IS NOT NULL OR r.user_id IS NOT NULL\r\n" +
+            ")\r\n" +
+            "SELECT p.UserId,\r\n" +
+            "       u.user_name AS UserPrincipalName,\r\n" +
+            "       u.mail AS Mail,\r\n" +
+            "       dept.name AS Department,\r\n" +
+            "       title.name AS JobTitle,\r\n" +
+            "       manager.user_name AS ManagerUserPrincipalName,\r\n" +
+            "       u.account_enabled AS AccountEnabled,\r\n" +
+            "       p.ExistedInEarlierPeriod,\r\n" +
+            "       p.ExistsInCurrentPeriod,\r\n" +
+            "       p.ActiveInEarlierPeriod,\r\n" +
+            "       p.ActiveInCurrentPeriod,\r\n" +
+            "       p.FromBand,\r\n" +
+            "       p.ToBand,\r\n" +
+            "       CASE WHEN p.ExistedInEarlierPeriod = 1 AND p.ExistsInCurrentPeriod = 1 AND p.ActiveInEarlierPeriod = 1 AND p.ActiveInCurrentPeriod = 1 THEN N'retained'\r\n" +
+            "            WHEN p.ExistedInEarlierPeriod = 1 AND p.ExistsInCurrentPeriod = 1 AND p.ActiveInEarlierPeriod = 0 AND p.ActiveInCurrentPeriod = 1 THEN N'reactivated'\r\n" +
+            "            WHEN p.ExistedInEarlierPeriod = 1 AND p.ExistsInCurrentPeriod = 1 AND p.ActiveInEarlierPeriod = 1 AND p.ActiveInCurrentPeriod = 0 THEN N'lapsed'\r\n" +
+            "            WHEN p.ExistedInEarlierPeriod = 1 AND p.ExistsInCurrentPeriod = 0 THEN N'reclaimed'\r\n" +
+            "            WHEN p.ExistedInEarlierPeriod = 0 AND p.ExistsInCurrentPeriod = 1 THEN N'newlyAssigned'\r\n" +
+            "            ELSE N'stillAtRisk' END AS Transition,\r\n" +
+            "       CASE WHEN p.ExistedInEarlierPeriod = 1 AND p.ExistsInCurrentPeriod = 0 AND u.account_enabled = 1 THEN N'Seat removed while the account remains enabled; this is evidence of licence reclaim or reassignment.'\r\n" +
+            "            WHEN p.ExistedInEarlierPeriod = 1 AND p.ExistsInCurrentPeriod = 0 AND u.account_enabled = 0 THEN N'Seat removed and the account is disabled; this may be licence reclaim, user departure, or both.'\r\n" +
+            "            WHEN p.ExistedInEarlierPeriod = 1 AND p.ExistsInCurrentPeriod = 0 THEN N'Seat removed, but account state is unknown; do not infer whether this was reclaim or departure without directory context.'\r\n" +
+            "            ELSE NULL END AS ReclaimInterpretation,\r\n" +
+            "       p.SeatFirstObservedUtc,\r\n" +
+            "       p.FirstInteractionUtc,\r\n" +
+            "       p.DaysToFirstUse,\r\n" +
+            "       p.ActivationState\r\n" +
+            "FROM PairRows AS p\r\n" +
+            "JOIN dbo.users AS u ON u.id = p.UserId\r\n" +
+            "LEFT JOIN dbo.user_departments AS dept ON dept.id = u.department_id\r\n" +
+            "LEFT JOIN dbo.user_job_titles AS title ON title.id = u.job_title_id\r\n" +
+            "LEFT JOIN dbo.users AS manager ON manager.id = u.manager_id\r\n" +
+            "ORDER BY p.UserId;";
 
         public static string PublishPeriodFactsSql(IEnumerable<int> seatLicenceTypeIds, IEnumerable<int> coworkAgentIds, bool includeCopilotReport)
         {

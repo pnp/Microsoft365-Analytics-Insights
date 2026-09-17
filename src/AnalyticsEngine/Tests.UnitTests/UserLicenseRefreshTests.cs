@@ -328,6 +328,94 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public async Task UserLicenseRefresh_SumsCapacityWhenSkuPartNumbersShareALicenceType()
+        {
+            var tick = DateTime.Now.Ticks;
+            var userAUpn = $"sharedcapacityA{tick}@test.com";
+            var userBUpn = $"sharedcapacityB{tick}@test.com";
+            var licenceName = $"Contoso Copilot Shared {tick}";
+            await RemoveTestUsers(userAUpn, userBUpn);
+
+            var skuAId = Guid.NewGuid();
+            var skuBId = Guid.NewGuid();
+            var users = new[]
+            {
+                (userAUpn, Guid.NewGuid().ToString()),
+                (userBUpn, Guid.NewGuid().ToString()),
+            };
+            var skus = new List<SubscribedSku>
+            {
+                new SubscribedSku
+                {
+                    SkuId = skuAId,
+                    SkuPartNumber = "M365_Copilot",
+                    PrepaidUnits = new LicenseUnitsDetail { Enabled = 10, Warning = 2, Suspended = 1 },
+                },
+                new SubscribedSku
+                {
+                    SkuId = skuBId,
+                    SkuPartNumber = "Microsoft_365_Copilot",
+                    PrepaidUnits = new LicenseUnitsDetail { Enabled = 20, Warning = 3, Suspended = 4 },
+                },
+            };
+
+            try
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    await EnsureSubscribedSkuCapacityColumns(db);
+                    var dbUsers = new List<Common.Entities.User>
+                    {
+                        await InsertUser(db, userAUpn),
+                        await InsertUser(db, userBUpn),
+                    };
+
+                    var loader = new FakeUserMetadataLoader(
+                        null,
+                        skus,
+                        new Dictionary<Guid, List<SkuUser>>
+                        {
+                            { skuAId, new List<SkuUser> { new SkuUser { UserPrincipalName = userAUpn, Id = users[0].Item2 } } },
+                            { skuBId, new List<SkuUser> { new SkuUser { UserPrincipalName = userBUpn, Id = users[1].Item2 } } },
+                        });
+
+                    await new UserLicenseProcessor(
+                            AnalyticsLogger.ConsoleOnlyTracer(),
+                            loader,
+                            new UserMetadataCache(db),
+                            new FixedLicenseNameResolver(licenceName))
+                        .ProcessSKUsForAllUsers(skus, dbUsers, db);
+
+                    var capacity = await db.Database.SqlQuery<int>(
+                        @"SELECT ISNULL(prepaid_enabled_units, -1) + ISNULL(prepaid_warning_units, -1) + ISNULL(prepaid_suspended_units, -1)
+                          FROM dbo.license_types
+                          WHERE name = @name",
+                        new Microsoft.Data.SqlClient.SqlParameter("@name", licenceName)).SingleAsync();
+
+                    Assert.AreEqual(40, capacity,
+                        "Two Copilot SKU part numbers can resolve to the same licence-type row; their capacity must be summed, not last-writer-wins.");
+                }
+            }
+            finally
+            {
+                await RemoveTestUsers(userAUpn, userBUpn);
+            }
+        }
+
+        private static Task EnsureSubscribedSkuCapacityColumns(AnalyticsEntitiesContext db)
+        {
+            return db.Database.ExecuteSqlCommandAsync(
+                @"IF COL_LENGTH(N'dbo.license_types', N'prepaid_enabled_units') IS NULL
+                      ALTER TABLE dbo.license_types ADD prepaid_enabled_units int NULL;
+                  IF COL_LENGTH(N'dbo.license_types', N'prepaid_warning_units') IS NULL
+                      ALTER TABLE dbo.license_types ADD prepaid_warning_units int NULL;
+                  IF COL_LENGTH(N'dbo.license_types', N'prepaid_suspended_units') IS NULL
+                      ALTER TABLE dbo.license_types ADD prepaid_suspended_units int NULL;
+                  IF COL_LENGTH(N'dbo.license_types', N'subscribed_sku_refreshed_utc') IS NULL
+                      ALTER TABLE dbo.license_types ADD subscribed_sku_refreshed_utc datetime NULL;");
+        }
+
         /// <summary>
         /// A single SKU reporting zero holders while the tenant's own SKU record says seats are
         /// consumed is Graph contradicting itself. Believing the empty answer would delete every

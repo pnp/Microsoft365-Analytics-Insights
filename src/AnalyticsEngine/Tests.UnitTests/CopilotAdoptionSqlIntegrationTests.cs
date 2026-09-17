@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.CopilotAdoption;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -396,6 +396,45 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void ComparePublishedPeriodCohorts_PartitionsEarlierPopulationAndDrillsThrough()
+        {
+            using (var db = ScratchDatabase.Create("CopilotAdoptCohorts"))
+            {
+                CreateUserTables(db);
+                CreatePeriodFactTables(db);
+                SeedCohortPeriodFacts(db, CopilotAdoptionService.OptionsHash(CopilotAdoptionOptions.Default));
+
+                var service = new CopilotAdoptionService(CopilotAdoptionOptions.Default, new TestContextFactory(db.ConnectionString), maxConcurrentSteps: 1);
+                var leftEnd = new DateTime(2026, 7, 31, 0, 0, 0, DateTimeKind.Utc);
+                var rightEnd = new DateTime(2026, 8, 31, 0, 0, 0, DateTimeKind.Utc);
+
+                var comparison = service.ComparePublishedPeriodCohortsAsync(leftEnd, rightEnd, 28).GetAwaiter().GetResult();
+
+                Assert.IsTrue(comparison.Gate.OptionsComparable);
+                Assert.AreEqual(5, comparison.Summary.EarlierPopulation);
+                Assert.AreEqual(5, comparison.Summary.EarlierPopulationTransitionTotal);
+                Assert.IsTrue(comparison.Summary.TransitionsSumToEarlierPopulation,
+                    "Retained + reactivated + lapsed + reclaimed + still-at-risk must partition the earlier period exactly.");
+                Assert.AreEqual(1, comparison.Transitions.Single(t => t.Code == CopilotAdoptionCohortTransitions.Retained).Users);
+                Assert.AreEqual(1, comparison.Transitions.Single(t => t.Code == CopilotAdoptionCohortTransitions.Reactivated).Users);
+                Assert.AreEqual(1, comparison.Transitions.Single(t => t.Code == CopilotAdoptionCohortTransitions.Lapsed).Users);
+                Assert.AreEqual(1, comparison.Transitions.Single(t => t.Code == CopilotAdoptionCohortTransitions.Reclaimed).Users);
+                Assert.AreEqual(1, comparison.Transitions.Single(t => t.Code == CopilotAdoptionCohortTransitions.StillAtRisk).Users);
+                Assert.AreEqual(4, comparison.Summary.NewlyAssigned);
+
+                var reactivated = service.ReadPublishedPeriodCohortUsersAsync(leftEnd, rightEnd, 28, transition: CopilotAdoptionCohortTransitions.Reactivated)
+                    .GetAwaiter()
+                    .GetResult();
+                Assert.AreEqual(1, reactivated.Total);
+                Assert.AreEqual("reactivated@contoso.com", reactivated.Rows.Single().UserPrincipalName);
+
+                var reclaimed = comparison.Rows.Single(r => r.Transition == CopilotAdoptionCohortTransitions.Reclaimed);
+                StringAssert.Contains(reclaimed.ReclaimInterpretation, "account remains enabled",
+                    "A seat removed from an enabled account is distinguishable from a disabled/departed user where directory state allows.");
+            }
+        }
+
+        [TestMethod]
         public void EnrichProgress_RefusesDifferentOptionsHashRatherThanSilentDelta()
         {
             using (var db = ScratchDatabase.Create("CopilotAdoptDeltaHash"))
@@ -424,6 +463,46 @@ namespace Tests.UnitTests
                 Assert.IsFalse(analysis.Summary.PeriodMovement.Comparable);
                 Assert.AreEqual(0, analysis.Summary.PeriodMovement.Deltas.Count);
                 StringAssert.Contains(analysis.Summary.PeriodMovement.Message, "different options hashes");
+            }
+        }
+
+        [TestMethod]
+        public void ComparePublishedPeriodCohorts_ExcludesUnknownSeatDatesFromActivation()
+        {
+            using (var db = ScratchDatabase.Create("CopilotAdoptActivate"))
+            {
+                CreateUserTables(db);
+                CreatePeriodFactTables(db);
+                SeedCohortPeriodFacts(db, CopilotAdoptionService.OptionsHash(CopilotAdoptionOptions.Default));
+
+                var service = new CopilotAdoptionService(CopilotAdoptionOptions.Default, new TestContextFactory(db.ConnectionString), maxConcurrentSteps: 1);
+                var comparison = service.ComparePublishedPeriodCohortsAsync(
+                    new DateTime(2026, 7, 31, 0, 0, 0, DateTimeKind.Utc),
+                    new DateTime(2026, 8, 31, 0, 0, 0, DateTimeKind.Utc),
+                    28).GetAwaiter().GetResult();
+
+                Assert.AreEqual(1, comparison.Activation.SeatDateUnknownUsers,
+                    "Unknown seat-assignment dates must be counted explicitly, not silently dropped.");
+                Assert.AreEqual(1, comparison.Activation.AssignedBeforeHistoryUsers,
+                    "Seats assigned before retained history began must be excluded rather than reported as instant or infinite activation.");
+                Assert.AreEqual(2, comparison.Activation.NewSeatsAssignedInPeriod,
+                    "Only new seats with a real, in-history seat date are eligible for the activation-rate denominator.");
+                Assert.AreEqual(1, comparison.Activation.ActivatedWithinWindow);
+                Assert.AreEqual(50d, comparison.Activation.ActivationRatePct);
+                Assert.AreEqual(2, comparison.Activation.NeverActivatedUsers);
+                Assert.AreEqual(214d, comparison.Activation.MedianDaysToFirstUse);
+                Assert.IsTrue(comparison.Activation.Distribution.Any(b => b.Label == "0-7 days" && b.Users == 1),
+                    "Time to first use must include a distribution, not just the median.");
+
+                var neverActivated = service.ReadPublishedPeriodCohortUsersAsync(
+                        new DateTime(2026, 7, 31, 0, 0, 0, DateTimeKind.Utc),
+                        new DateTime(2026, 8, 31, 0, 0, 0, DateTimeKind.Utc),
+                        28,
+                        activationState: "neverActivated")
+                    .GetAwaiter()
+                    .GetResult();
+                Assert.AreEqual(2, neverActivated.Total);
+                Assert.IsTrue(neverActivated.Rows.Any(r => r.UserPrincipalName == "never.activated@contoso.com"));
             }
         }
 
@@ -484,6 +563,73 @@ namespace Tests.UnitTests
                 Assert.IsFalse(analysis.Summary.Targets.Single().Comparable);
                 StringAssert.Contains(analysis.Summary.Targets.Single().Message, "frozen baseline");
             }
+        }
+
+        public void ComparePublishedPeriodCohorts_RespectsComparabilityGate()
+        {
+            using (var db = ScratchDatabase.Create("CopilotAdoptGate"))
+            {
+                CreateUserTables(db);
+                CreatePeriodFactTables(db);
+                var hash = CopilotAdoptionService.OptionsHash(CopilotAdoptionOptions.Default);
+                SeedCohortPeriodFacts(db, hash, rightOptionsHash: new string(hash.Reverse().ToArray()));
+
+                var service = new CopilotAdoptionService(CopilotAdoptionOptions.Default, new TestContextFactory(db.ConnectionString), maxConcurrentSteps: 1);
+                var comparison = service.ComparePublishedPeriodCohortsAsync(
+                    new DateTime(2026, 7, 31, 0, 0, 0, DateTimeKind.Utc),
+                    new DateTime(2026, 8, 31, 0, 0, 0, DateTimeKind.Utc),
+                    28).GetAwaiter().GetResult();
+
+                Assert.IsFalse(comparison.Gate.OptionsComparable);
+                Assert.AreEqual(0, comparison.Rows.Count, "Uncomparable stored periods must not produce cohort figures.");
+                Assert.AreEqual(0, comparison.Summary.EarlierPopulation);
+                StringAssert.Contains(comparison.Summary.Warnings.Single(), "different options hashes");
+            }
+        }
+
+        private static void SeedCohortPeriodFacts(ScratchDatabase db, string leftOptionsHash, string rightOptionsHash = null)
+        {
+            var leftEnd = new DateTime(2026, 7, 31, 0, 0, 0, DateTimeKind.Utc);
+            var rightEnd = new DateTime(2026, 8, 31, 0, 0, 0, DateTimeKind.Utc);
+            var hashRight = rightOptionsHash ?? leftOptionsHash;
+
+            db.Execute(
+                $@"INSERT INTO dbo.user_departments (id, name) VALUES (1, N'Finance'), (2, N'Engineering');
+                   INSERT INTO dbo.license_types (id, name, sku_id) VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                   INSERT INTO dbo.users (id, user_name, mail, account_enabled, created_utc, department_id)
+                       VALUES (1, N'retained@contoso.com', N'retained@contoso.com', 1, '2026-01-01', 1),
+                              (2, N'reactivated@contoso.com', N'reactivated@contoso.com', 1, '2026-01-01', 1),
+                              (3, N'lapsed@contoso.com', N'lapsed@contoso.com', 1, '2026-01-01', 1),
+                              (4, N'reclaimed@contoso.com', N'reclaimed@contoso.com', 1, '2026-01-01', 2),
+                              (5, N'still.risk@contoso.com', N'still.risk@contoso.com', 1, '2026-01-01', 2),
+                              (6, N'new.active@contoso.com', N'new.active@contoso.com', 1, '2026-08-20', 1),
+                              (7, N'unknown.seat@contoso.com', N'unknown.seat@contoso.com', 1, '2026-01-01', 1),
+                              (8, N'prehistory.seat@contoso.com', N'prehistory.seat@contoso.com', 1, '2025-01-01', 2),
+                              (9, N'never.activated@contoso.com', N'never.activated@contoso.com', 1, '2026-01-01', 2);
+
+                   INSERT INTO dbo.copilot_adoption_period_run
+                       (period_end, period_days, options_hash, audit_available, report_obfuscated, report_period_days, licensed_users, scored_users, published_utc, data_cutoff_utc, coverage_status)
+                   VALUES ('{leftEnd:yyyy-MM-dd}', 28, N'{leftOptionsHash}', 1, 0, 0, 5, 5, '2026-08-01', '2026-08-01', N'complete'),
+                          ('{rightEnd:yyyy-MM-dd}', 28, N'{hashRight}', 1, 0, 0, 8, 8, '2026-09-01', '2026-09-01', N'complete');
+
+                   INSERT INTO dbo.copilot_adoption_user_period
+                       (period_end, period_days, data_cutoff_utc, user_id, seat_licence_type_ids, account_enabled, department_id, seat_first_observed_utc, account_created_utc,
+                        active_days, interactions, apps_used, agents_used, cowork_interactions, active_weeks, first_interaction_utc, last_interaction_utc, prior_interactions, signal_source, coverage_status)
+                   VALUES
+                       ('{leftEnd:yyyy-MM-dd}', 28, '2026-08-01', 1, N'1', 1, 1, '2026-01-01', '2026-01-01', 4, 20, 2, 0, 0, 1, '2026-07-10', '2026-07-20', 0, N'audit', N'complete'),
+                       ('{leftEnd:yyyy-MM-dd}', 28, '2026-08-01', 2, N'1', 1, 1, '2026-01-01', '2026-01-01', 0, 0, 0, 0, 0, 0, NULL, NULL, 0, N'audit', N'complete'),
+                       ('{leftEnd:yyyy-MM-dd}', 28, '2026-08-01', 3, N'1', 1, 1, '2026-01-01', '2026-01-01', 3, 12, 1, 0, 0, 1, '2026-07-08', '2026-07-15', 0, N'audit', N'complete'),
+                       ('{leftEnd:yyyy-MM-dd}', 28, '2026-08-01', 4, N'1', 1, 2, '2026-01-01', '2026-01-01', 0, 0, 0, 0, 0, 0, NULL, NULL, 0, N'audit', N'complete'),
+                       ('{leftEnd:yyyy-MM-dd}', 28, '2026-08-01', 5, N'1', 1, 2, '2026-01-01', '2026-01-01', 0, 0, 0, 0, 0, 0, NULL, NULL, 0, N'audit', N'complete'),
+
+                       ('{rightEnd:yyyy-MM-dd}', 28, '2026-09-01', 1, N'1', 1, 1, '2026-01-01', '2026-01-01', 5, 25, 2, 0, 0, 1, '2026-08-05', '2026-08-28', 0, N'audit', N'complete'),
+                       ('{rightEnd:yyyy-MM-dd}', 28, '2026-09-01', 2, N'1', 1, 1, '2026-01-01', '2026-01-01', 2, 8, 1, 0, 0, 1, '2026-08-15', '2026-08-16', 0, N'audit', N'complete'),
+                       ('{rightEnd:yyyy-MM-dd}', 28, '2026-09-01', 3, N'1', 1, 1, '2026-01-01', '2026-01-01', 0, 0, 0, 0, 0, 0, '2026-08-01', '2026-08-01', 12, N'audit', N'complete'),
+                       ('{rightEnd:yyyy-MM-dd}', 28, '2026-09-01', 5, N'1', 1, 2, '2026-01-01', '2026-01-01', 0, 0, 0, 0, 0, 0, NULL, NULL, 0, N'audit', N'complete'),
+                       ('{rightEnd:yyyy-MM-dd}', 28, '2026-09-01', 6, N'1', 1, 1, '2026-08-20', '2026-08-20', 1, 3, 1, 0, 0, 1, '2026-08-25', '2026-08-25', 0, N'audit', N'complete'),
+                       ('{rightEnd:yyyy-MM-dd}', 28, '2026-09-01', 7, N'1', 1, 1, NULL, '2026-01-01', 0, 0, 0, 0, 0, 0, NULL, NULL, 0, N'audit', N'complete'),
+                       ('{rightEnd:yyyy-MM-dd}', 28, '2026-09-01', 8, N'1', 1, 2, '2025-01-01', '2025-01-01', 0, 0, 0, 0, 0, 0, NULL, NULL, 0, N'audit', N'complete'),
+                       ('{rightEnd:yyyy-MM-dd}', 28, '2026-09-01', 9, N'1', 1, 2, '2026-07-01', '2026-01-01', 0, 0, 0, 0, 0, 0, NULL, NULL, 0, N'audit', N'complete');");
         }
 
         private sealed class TestContextFactory : IAnalyticsDbContextFactory
@@ -1254,6 +1400,35 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void LicenceTypesQuery_ReturnsPurchasedCapacityAndKeepsMissingInventoryUnknown()
+        {
+            using (var db = ScratchDatabase.Create("CopilotLicenceTypesCapacity"))
+            {
+                CreateUserTables(db);
+                db.Execute(
+                    @"INSERT INTO dbo.license_types
+                          (id, name, sku_id, prepaid_enabled_units, prepaid_warning_units, prepaid_suspended_units, subscribed_sku_refreshed_utc)
+                      VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot', 10, 2, 1, '2026-09-01T00:00:00'),
+                             (2, N'Microsoft Copilot for Microsoft 365 EDU', N'Microsoft_365_Copilot_EDU', NULL, NULL, NULL, NULL);
+                      INSERT INTO dbo.users (id, user_name, account_enabled) VALUES (1, 'a@contoso.com', 1), (2, 'b@contoso.com', 1);
+                      INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id)
+                          VALUES (1, 1, 1), (2, 2, 1);");
+
+                var rows = Query<LicenceTypeRow>(db, CopilotAdoptionSql.LicenceTypesSql);
+
+                var known = rows.Single(r => r.Id == 1);
+                Assert.AreEqual(2, known.AssignedUsers);
+                Assert.AreEqual(13, known.PurchasedUnits, "Enabled, warning and suspended prepaid units all contribute to purchased seats.");
+                Assert.AreEqual(new DateTime(2026, 9, 1, 0, 0, 0), known.PurchasedUnitsRefreshedUtc);
+
+                var unknown = rows.Single(r => r.Id == 2);
+                Assert.AreEqual(0, unknown.AssignedUsers);
+                Assert.IsNull(unknown.PurchasedUnits, "No subscribedSkus snapshot is unknown, not zero.");
+                Assert.IsNull(unknown.PurchasedUnitsRefreshedUtc);
+            }
+        }
+
+        [TestMethod]
         public void SupportingQueries_AllRunAgainstTheRealSchema()
         {
             // These are small, but they are hand-written SQL against real column names, so a typo in
@@ -1292,13 +1467,14 @@ namespace Tests.UnitTests
 
                 var coworkAgents = Query<CopilotAdoptionService.IntValueRow>(db, CopilotAdoptionSql.CoworkAgentIdsSql);
                 CollectionAssert.AreEqual(new[] { 1 }, coworkAgents.Select(a => a.Value).ToArray(),
-                    "Only the first-party Cowork agent id should match. A SharePoint agent must not - and "
-                    + "neither must a customer's own agent whose NAME contains 'Cowork', because observed "
-                    + "Cowork use outranks every inferred tier, so a name match would hand a tenant the "
-                    + "ability to fabricate evidence by typing it.");
+                    "Cowork audit reconciliation must use the documented first-party prefix only. The ids flow "
+                    + "into the observed-use path, so a customer's own agent whose name contains 'Cowork' must "
+                    + "not promote its users into evidence tiers or remove them from the candidate list.");
 
                 var seats = Query<CopilotAdoptionService.SeatAssignmentRow>(db, CopilotAdoptionSql.SeatAssignmentsSql(new[] { 1 }));
                 Assert.AreEqual(1, seats.Count);
+                Assert.AreEqual(1, seats[0].LicenceTypeId);
+                Assert.AreEqual("Microsoft_365_Copilot", seats[0].SkuPartNumber);
                 Assert.AreEqual("Microsoft Copilot for Microsoft 365", seats[0].LicenceName);
 
                 var byApp = Query<CopilotAdoptionService.CategoryQueryRow>(db,
@@ -1592,7 +1768,11 @@ namespace Tests.UnitTests
                   CREATE TABLE dbo.license_types (
                       id int NOT NULL PRIMARY KEY,
                       name nvarchar(100) NULL,
-                      sku_id nvarchar(max) NULL);
+                      sku_id nvarchar(max) NULL,
+                      prepaid_enabled_units int NULL,
+                      prepaid_warning_units int NULL,
+                      prepaid_suspended_units int NULL,
+                      subscribed_sku_refreshed_utc datetime NULL);
 
                   CREATE TABLE dbo.user_license_type_lookups (
                       id int NOT NULL PRIMARY KEY,

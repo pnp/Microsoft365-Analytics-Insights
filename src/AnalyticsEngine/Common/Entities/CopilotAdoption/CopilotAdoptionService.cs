@@ -1,4 +1,5 @@
-﻿using Common.Entities.Copilot;
+using Common.Entities.Copilot;
+using Common.Entities.AgentCosts;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -597,6 +598,80 @@ namespace Common.Entities.CopilotAdoption
             }
         }
 
+        public async Task<CopilotAdoptionCohortComparison> ComparePublishedPeriodCohortsAsync(
+            DateTime leftPeriodEndUtc,
+            DateTime rightPeriodEndUtc,
+            int periodDays,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var leftEnd = leftPeriodEndUtc.Date;
+            var rightEnd = rightPeriodEndUtc.Date;
+            var days = Math.Max(1, periodDays);
+            var gate = await ComparePublishedPeriodsAsync(leftEnd, rightEnd, days, cancellationToken);
+            var result = new CopilotAdoptionCohortComparison { Gate = gate };
+
+            if (!gate.OptionsComparable)
+            {
+                result.Summary.Warnings.Add(gate.Message);
+                return result;
+            }
+
+            var activationWindowDays = Math.Max(1, _options.ActivationWindowDays <= 0
+                ? _options.ReclaimGraceDays
+                : _options.ActivationWindowDays);
+            var historyDays = Math.Max(days, _options.HistoryDays);
+
+            var rows = await QueryAsync<CopilotAdoptionCohortUserRow>(
+                CopilotAdoptionSql.PublishedPeriodCohortRowsSql,
+                cancellationToken,
+                new SqlParameter("@leftPeriodEnd", leftEnd),
+                new SqlParameter("@rightPeriodEnd", rightEnd),
+                new SqlParameter("@periodDays", days),
+                new SqlParameter("@leftFrom", leftEnd.AddDays(-(days - 1))),
+                new SqlParameter("@rightFrom", rightEnd.AddDays(-(days - 1))),
+                new SqlParameter("@rightHistoryFrom", rightEnd.AddDays(-(historyDays - 1))),
+                new SqlParameter("@activationWindowDays", activationWindowDays));
+
+            foreach (var row in rows)
+            {
+                row.TransitionLabel = TransitionLabel(row.Transition);
+            }
+
+            result.Rows = rows;
+            FinaliseCohortComparison(result, activationWindowDays);
+            return result;
+        }
+
+        public async Task<CopilotAdoptionCohortUserPage> ReadPublishedPeriodCohortUsersAsync(
+            DateTime leftPeriodEndUtc,
+            DateTime rightPeriodEndUtc,
+            int periodDays,
+            string transition = null,
+            string fromBand = null,
+            string toBand = null,
+            string department = null,
+            string activationState = null,
+            int skip = 0,
+            int take = 50,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var comparison = await ComparePublishedPeriodCohortsAsync(
+                leftPeriodEndUtc, rightPeriodEndUtc, periodDays, cancellationToken);
+            var matched = ApplyCohortUserFilters(
+                comparison.Rows, transition, fromBand, toBand, department, activationState);
+            var pageSize = Math.Min(Math.Max(1, take), 500);
+            var offset = Math.Max(0, skip);
+
+            return new CopilotAdoptionCohortUserPage
+            {
+                Total = matched.Count,
+                Skip = offset,
+                Take = pageSize,
+                Rows = matched.Skip(offset).Take(pageSize).ToList(),
+                Warnings = comparison.Summary.Warnings,
+            };
+        }
+
         public static string OptionsHash(CopilotAdoptionOptions options)
         {
             var o = options ?? CopilotAdoptionOptions.Default;
@@ -629,6 +704,219 @@ namespace Common.Entities.CopilotAdoption
                 new SqlParameter("@periodEnd", periodEnd.Date),
                 new SqlParameter("@periodDays", periodDays));
             return rows.FirstOrDefault();
+        }
+
+        private static void FinaliseCohortComparison(CopilotAdoptionCohortComparison result, int activationWindowDays)
+        {
+            var rows = result.Rows ?? new List<CopilotAdoptionCohortUserRow>();
+            var earlier = rows.Where(r => r.ExistedInEarlierPeriod).ToList();
+            var current = rows.Where(r => r.ExistsInCurrentPeriod).ToList();
+
+            result.Summary.EarlierPopulation = earlier.Count;
+            result.Summary.CurrentPopulation = current.Count;
+            result.Summary.NewlyAssigned = rows.Count(r => string.Equals(r.Transition, CopilotAdoptionCohortTransitions.NewlyAssigned, StringComparison.OrdinalIgnoreCase));
+            result.Summary.ReclaimCaveat =
+                "Reclaimed means a user held a Copilot seat in the earlier published period and has no seat in the current published period. "
+                + "When the account remains enabled this is evidence of licence reclaim or reassignment; when the account is disabled it may also be user departure.";
+
+            result.Transitions = new[]
+                {
+                    CopilotAdoptionCohortTransitions.Retained,
+                    CopilotAdoptionCohortTransitions.Reactivated,
+                    CopilotAdoptionCohortTransitions.Lapsed,
+                    CopilotAdoptionCohortTransitions.Reclaimed,
+                    CopilotAdoptionCohortTransitions.StillAtRisk,
+                    CopilotAdoptionCohortTransitions.NewlyAssigned,
+                }
+                .Select(code => new CopilotAdoptionCohortTransitionSummary
+                {
+                    Code = code,
+                    Label = TransitionLabel(code),
+                    Description = TransitionDescription(code),
+                    Users = rows.Count(r => string.Equals(r.Transition, code, StringComparison.OrdinalIgnoreCase)),
+                    ShareOfEarlierPopulationPct = code == CopilotAdoptionCohortTransitions.NewlyAssigned
+                        ? 0
+                        : CopilotAdoptionScoring.Percentage(rows.Count(r => string.Equals(r.Transition, code, StringComparison.OrdinalIgnoreCase)), result.Summary.EarlierPopulation),
+                })
+                .Where(t => t.Users > 0 || t.Code != CopilotAdoptionCohortTransitions.NewlyAssigned)
+                .ToList();
+
+            result.Summary.EarlierPopulationTransitionTotal = result.Transitions
+                .Where(t => t.Code != CopilotAdoptionCohortTransitions.NewlyAssigned)
+                .Sum(t => t.Users);
+            result.Summary.TransitionsSumToEarlierPopulation =
+                result.Summary.EarlierPopulationTransitionTotal == result.Summary.EarlierPopulation;
+
+            result.Flows = rows
+                .GroupBy(r => new { r.FromBand, r.ToBand, r.Transition })
+                .Select(g => new CopilotAdoptionCohortFlowSummary
+                {
+                    FromBand = g.Key.FromBand,
+                    ToBand = g.Key.ToBand,
+                    Transition = g.Key.Transition,
+                    Users = g.Count(),
+                })
+                .OrderByDescending(f => f.Users)
+                .ThenBy(f => f.FromBand)
+                .ThenBy(f => f.ToBand)
+                .ToList();
+
+            result.Activation = BuildActivationSummary(current, activationWindowDays);
+        }
+
+        private static CopilotAdoptionActivationSummary BuildActivationSummary(
+            List<CopilotAdoptionCohortUserRow> currentRows,
+            int activationWindowDays)
+        {
+            var activation = new CopilotAdoptionActivationSummary
+            {
+                ActivationWindowDays = activationWindowDays,
+                SeatDateUnknownUsers = currentRows.Count(r => string.Equals(r.ActivationState, "seatDateUnknown", StringComparison.OrdinalIgnoreCase)),
+                AssignedBeforeHistoryUsers = currentRows.Count(r => string.Equals(r.ActivationState, "assignedBeforeHistory", StringComparison.OrdinalIgnoreCase)),
+                NewSeatsAssignedInPeriod = currentRows.Count(r => string.Equals(r.Transition, CopilotAdoptionCohortTransitions.NewlyAssigned, StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(r.ActivationState, "seatDateUnknown", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(r.ActivationState, "assignedBeforeHistory", StringComparison.OrdinalIgnoreCase)),
+                ActivatedWithinWindow = currentRows.Count(r => string.Equals(r.ActivationState, "activatedWithinWindow", StringComparison.OrdinalIgnoreCase)),
+                NeverActivatedUsers = currentRows.Count(r => string.Equals(r.ActivationState, "neverActivated", StringComparison.OrdinalIgnoreCase)),
+                TooNewToJudgeUsers = currentRows.Count(r => string.Equals(r.ActivationState, "tooNewToJudge", StringComparison.OrdinalIgnoreCase)),
+                Caveat = "Time-to-first-use uses seat_first_observed_utc only. Rows with unknown seat dates are counted separately and excluded; account creation is not substituted for seat assignment.",
+            };
+
+            var knownActivations = currentRows
+                .Where(r => r.DaysToFirstUse.HasValue)
+                .Select(r => (double)r.DaysToFirstUse.Value)
+                .ToList();
+            activation.KnownSeatStartUsers = currentRows.Count
+                - activation.SeatDateUnknownUsers
+                - activation.AssignedBeforeHistoryUsers;
+            activation.MedianDaysToFirstUse = knownActivations.Count == 0
+                ? (double?)null
+                : CopilotAdoptionScoring.Median(knownActivations);
+
+            var denominator = currentRows.Count(r => string.Equals(r.Transition, CopilotAdoptionCohortTransitions.NewlyAssigned, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(r.ActivationState, "seatDateUnknown", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(r.ActivationState, "assignedBeforeHistory", StringComparison.OrdinalIgnoreCase));
+            var activatedNewSeats = currentRows.Count(r => string.Equals(r.Transition, CopilotAdoptionCohortTransitions.NewlyAssigned, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(r.ActivationState, "activatedWithinWindow", StringComparison.OrdinalIgnoreCase));
+            activation.ActivationRatePct = CopilotAdoptionScoring.Percentage(activatedNewSeats, denominator);
+
+            activation.Distribution = BuildActivationDistribution(knownActivations);
+            activation.ByDepartment = currentRows
+                .GroupBy(r => string.IsNullOrWhiteSpace(r.Department) ? "(no department)" : r.Department.Trim())
+                .Select(g =>
+                {
+                    var groupRows = g.ToList();
+                    var newKnown = groupRows.Count(r => string.Equals(r.Transition, CopilotAdoptionCohortTransitions.NewlyAssigned, StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(r.ActivationState, "seatDateUnknown", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(r.ActivationState, "assignedBeforeHistory", StringComparison.OrdinalIgnoreCase));
+                    var activated = groupRows.Count(r => string.Equals(r.Transition, CopilotAdoptionCohortTransitions.NewlyAssigned, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(r.ActivationState, "activatedWithinWindow", StringComparison.OrdinalIgnoreCase));
+                    return new CopilotAdoptionActivationSegment
+                    {
+                        Segment = g.Key,
+                        NewSeatsAssignedInPeriod = newKnown,
+                        ActivatedWithinWindow = activated,
+                        ActivationRatePct = CopilotAdoptionScoring.Percentage(activated, newKnown),
+                        NeverActivatedUsers = groupRows.Count(r => string.Equals(r.ActivationState, "neverActivated", StringComparison.OrdinalIgnoreCase)),
+                        SeatDateUnknownUsers = groupRows.Count(r => string.Equals(r.ActivationState, "seatDateUnknown", StringComparison.OrdinalIgnoreCase)),
+                    };
+                })
+                .Where(s => s.NewSeatsAssignedInPeriod > 0 || s.NeverActivatedUsers > 0 || s.SeatDateUnknownUsers > 0)
+                .OrderByDescending(s => s.NeverActivatedUsers)
+                .ThenBy(s => s.ActivationRatePct)
+                .ThenBy(s => s.Segment)
+                .ToList();
+
+            return activation;
+        }
+
+        private static List<CopilotAdoptionActivationDistributionBucket> BuildActivationDistribution(List<double> days)
+        {
+            var ranges = new[]
+            {
+                new { Label = "0-7 days", Min = 0d, Max = 7d },
+                new { Label = "8-14 days", Min = 8d, Max = 14d },
+                new { Label = "15-30 days", Min = 15d, Max = 30d },
+                new { Label = "31-60 days", Min = 31d, Max = 60d },
+                new { Label = "61+ days", Min = 61d, Max = double.MaxValue },
+            };
+
+            return ranges
+                .Select(r =>
+                {
+                    var count = days.Count(d => d >= r.Min && d <= r.Max);
+                    return new CopilotAdoptionActivationDistributionBucket
+                    {
+                        Label = r.Label,
+                        Users = count,
+                        SharePct = CopilotAdoptionScoring.Percentage(count, days.Count),
+                    };
+                })
+                .ToList();
+        }
+
+        private static List<CopilotAdoptionCohortUserRow> ApplyCohortUserFilters(
+            IEnumerable<CopilotAdoptionCohortUserRow> rows,
+            string transition,
+            string fromBand,
+            string toBand,
+            string department,
+            string activationState)
+        {
+            var filtered = rows ?? Enumerable.Empty<CopilotAdoptionCohortUserRow>();
+            if (!string.IsNullOrWhiteSpace(transition))
+            {
+                filtered = filtered.Where(r => string.Equals(r.Transition, transition.Trim(), StringComparison.OrdinalIgnoreCase));
+            }
+            if (!string.IsNullOrWhiteSpace(fromBand))
+            {
+                filtered = filtered.Where(r => string.Equals(r.FromBand, fromBand.Trim(), StringComparison.OrdinalIgnoreCase));
+            }
+            if (!string.IsNullOrWhiteSpace(toBand))
+            {
+                filtered = filtered.Where(r => string.Equals(r.ToBand, toBand.Trim(), StringComparison.OrdinalIgnoreCase));
+            }
+            if (!string.IsNullOrWhiteSpace(department))
+            {
+                filtered = filtered.Where(r => string.Equals(r.Department ?? string.Empty, department.Trim(), StringComparison.OrdinalIgnoreCase));
+            }
+            if (!string.IsNullOrWhiteSpace(activationState))
+            {
+                filtered = filtered.Where(r => string.Equals(r.ActivationState ?? string.Empty, activationState.Trim(), StringComparison.OrdinalIgnoreCase));
+            }
+
+            return filtered
+                .OrderBy(r => r.Transition)
+                .ThenBy(r => r.UserPrincipalName)
+                .ToList();
+        }
+
+        private static string TransitionLabel(string code)
+        {
+            switch (code)
+            {
+                case CopilotAdoptionCohortTransitions.Retained: return "Retained";
+                case CopilotAdoptionCohortTransitions.Reactivated: return "Reactivated";
+                case CopilotAdoptionCohortTransitions.Lapsed: return "Lapsed";
+                case CopilotAdoptionCohortTransitions.Reclaimed: return "Reclaimed / reassigned";
+                case CopilotAdoptionCohortTransitions.NewlyAssigned: return "Newly assigned";
+                case CopilotAdoptionCohortTransitions.StillAtRisk: return "Still at risk";
+                default: return code ?? string.Empty;
+            }
+        }
+
+        private static string TransitionDescription(string code)
+        {
+            switch (code)
+            {
+                case CopilotAdoptionCohortTransitions.Retained: return "Active in both published periods.";
+                case CopilotAdoptionCohortTransitions.Reactivated: return "Inactive in the earlier period and active in the current period.";
+                case CopilotAdoptionCohortTransitions.Lapsed: return "Active in the earlier period and inactive in the current period.";
+                case CopilotAdoptionCohortTransitions.Reclaimed: return "Held a Copilot seat in the earlier period and no longer holds one.";
+                case CopilotAdoptionCohortTransitions.NewlyAssigned: return "Did not hold a Copilot seat in the earlier period and holds one now.";
+                case CopilotAdoptionCohortTransitions.StillAtRisk: return "Inactive in both published periods.";
+                default: return string.Empty;
+            }
         }
 
         private async Task<int> CountLicensedUsersAsync(List<int> seatIds, CancellationToken cancellationToken)
@@ -710,6 +998,7 @@ namespace Common.Entities.CopilotAdoption
             summary.SeatLicenceTypes = CopilotLicenceClassifier.Classify(licenceTypes);
             var seatIds = CopilotLicenceClassifier.ResolveSeatLicenceTypeIds(licenceTypes, seatLicenceTypeIdOverride);
             summary.DataSources.UserMetadataAvailable = true;
+            SummarisePurchasedSeatCapacity(summary);
 
             // When an explicit override is supplied, the classification shown to the admin has to reflect
             // what was ACTUALLY counted. Leaving the automatic verdict in place meant the methodology page
@@ -721,6 +1010,8 @@ namespace Common.Entities.CopilotAdoption
                 {
                     licence.IsCopilotSeat = effective.Contains(licence.Id);
                 }
+
+                SummarisePurchasedSeatCapacity(summary);
             }
 
             if (seatIds.Count == 0)
@@ -803,6 +1094,31 @@ namespace Common.Entities.CopilotAdoption
                     () => summary.MarkFiguresIncomplete("Copilot usage-report snapshot period"),
                     cancellationToken,
                     new SqlParameter("@copilotReportDate", summary.DataSources.CopilotUsageReportDate.Value),
+                    new SqlParameter("@windowDays", _options.WindowDays));
+            }
+
+            summary.DataSources.CoworkUsageReportDate = await SafeDateAsync(
+                CopilotAdoptionSql.LatestCoworkReportDateSql,
+                CopilotAdoptionSteps.DataSourceProbes,
+                CopilotAdoptionQueries.CoworkReportDate,
+                summary.Warnings,
+                "Cowork usage-report snapshot date",
+                () => summary.MarkFiguresIncomplete("Cowork usage report"),
+                cancellationToken,
+                new SqlParameter("@settled", settled));
+            summary.DataSources.CoworkUsageReportAvailable = summary.DataSources.CoworkUsageReportDate.HasValue;
+
+            if (summary.DataSources.CoworkUsageReportDate.HasValue)
+            {
+                summary.DataSources.CoworkUsageReportPeriodDays = await SafeScalarAsync(
+                    CopilotAdoptionSql.LatestCoworkReportPeriodSql,
+                    CopilotAdoptionSteps.DataSourceProbes,
+                    CopilotAdoptionQueries.CoworkReportPeriod,
+                    summary.Warnings,
+                    "Cowork usage-report snapshot period",
+                    () => summary.MarkFiguresIncomplete("Cowork usage-report snapshot period"),
+                    cancellationToken,
+                    new SqlParameter("@coworkReportDate", summary.DataSources.CoworkUsageReportDate.Value),
                     new SqlParameter("@windowDays", _options.WindowDays));
             }
 
@@ -1346,11 +1662,14 @@ namespace Common.Entities.CopilotAdoption
                 assignments = new List<SeatAssignmentRow>();
             }
 
-            var licencesByUser = assignments
+            var assignmentsByUser = assignments
                 .GroupBy(a => a.UserId)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            var licencesByUser = assignmentsByUser
                 .ToDictionary(
                     g => g.Key,
-                    g => string.Join(", ", g.Select(a => a.LicenceName)
+                    g => string.Join(", ", g.Value.Select(a => a.LicenceName)
                                             .Where(n => !string.IsNullOrWhiteSpace(n))
                                             .Distinct()
                                             .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)));
@@ -1369,7 +1688,9 @@ namespace Common.Entities.CopilotAdoption
 
             var coworkIds = coworkAgentIds.Select(r => r.Value).ToList();
 
-            var detailSql = CopilotAdoptionSql.LicensedUsersSql(seatIds, coworkIds, includeReport);
+            var includeCoworkReport = summary.DataSources.CoworkUsageReportDate.HasValue;
+
+            var detailSql = CopilotAdoptionSql.LicensedUsersSql(seatIds, coworkIds, includeReport, includeCoworkReport);
             var parameters = new Dictionary<string, object>
             {
                 { "@from", windowStart },
@@ -1380,6 +1701,11 @@ namespace Common.Entities.CopilotAdoption
             {
                 parameters["@copilotReportDate"] = summary.DataSources.CopilotUsageReportDate.Value;
                 parameters["@copilotReportPeriodDays"] = summary.DataSources.CopilotUsageReportPeriodDays;
+            }
+            if (includeCoworkReport)
+            {
+                parameters["@coworkReportDate"] = summary.DataSources.CoworkUsageReportDate.Value;
+                parameters["@coworkReportPeriodDays"] = summary.DataSources.CoworkUsageReportPeriodDays;
             }
 
             output.Sql["licensedUsers"] = CopilotAdoptionSql.ForDisplay(detailSql, parameters);
@@ -1413,6 +1739,13 @@ namespace Common.Entities.CopilotAdoption
             {
                 string licences;
                 row.SeatLicences = licencesByUser.TryGetValue(row.UserId, out licences) ? licences : null;
+                if (assignmentsByUser.TryGetValue(row.UserId, out var userAssignments))
+                {
+                    row.SeatLicenceTypeIds = userAssignments
+                        .Select(a => a.LicenceTypeId)
+                        .Distinct()
+                        .ToList();
+                }
             }
 
             analysis.LicensedUsers = rows
@@ -1580,8 +1913,9 @@ namespace Common.Entities.CopilotAdoption
 
             var includeAudit = summary.DataSources.AuditAvailable;
             var includeM365 = summary.DataSources.M365UsageReportsAvailable;
+            var includeCoworkReport = summary.DataSources.CoworkUsageReportAvailable;
 
-            if (!includeAudit && !includeM365)
+            if (!includeAudit && !includeM365 && !includeCoworkReport)
             {
                 output.Warnings.Add(
                     "Licence opportunities need either the Copilot audit import or the Microsoft 365 usage "
@@ -1671,35 +2005,37 @@ namespace Common.Entities.CopilotAdoption
             var summary = analysis.Summary;
             var includeAudit = summary.DataSources.AuditAvailable;
             var includeM365 = summary.DataSources.M365UsageReportsAvailable;
+            var includeCoworkReport = summary.DataSources.CoworkUsageReportAvailable;
 
-            if (!includeAudit && !includeM365)
+            if (!includeAudit && !includeM365 && !includeCoworkReport)
             {
                 output.Warnings.Add(
-                    "Cowork readiness needs either the Copilot audit import or the Microsoft 365 usage "
-                    + "reports. Neither has data for this period, so no readiness assessment is possible.");
+                    "Cowork readiness needs the Cowork usage report, the Copilot audit import or the Microsoft 365 usage "
+                    + "reports. None has data for this period, so no readiness assessment is possible.");
                 return;
             }
 
-            var coworkAgentIds = await SafeAsync(
-                () => QueryAsync<IntValueRow>(CopilotAdoptionSql.CoworkAgentIdsSql, cancellationToken),
-                CopilotAdoptionSteps.CoworkReadiness,
-                CopilotAdoptionQueries.CoworkAgentLookup,
-                output,
-                "Cowork agent lookup", cancellationToken);
-
-            // A failed lookup is NOT the same as a tenant with no Cowork agents. Falling through with an
-            // empty list would silently narrow the Cowork predicate to app_host alone, under-reporting
-            // exactly the usage this tab exists to find - so say so rather than quietly measuring less.
-            if (coworkAgentIds == null)
+            var coworkAgentIds = new List<IntValueRow>();
+            if (includeAudit)
             {
-                output.MarkIncomplete("Cowork agent lookup");
-                coworkAgentIds = new List<IntValueRow>();
+                coworkAgentIds = await SafeAsync(
+                    () => QueryAsync<IntValueRow>(CopilotAdoptionSql.CoworkAgentIdsSql, cancellationToken),
+                    CopilotAdoptionSteps.CoworkReadiness,
+                    CopilotAdoptionQueries.CoworkAgentLookup,
+                    output,
+                    "Cowork agent lookup", cancellationToken);
+
+                if (coworkAgentIds == null)
+                {
+                    output.MarkIncomplete("Cowork agent lookup");
+                    coworkAgentIds = new List<IntValueRow>();
+                }
             }
 
             var agentIds = coworkAgentIds.Select(r => r.Value).ToList();
 
             var sql = CopilotAdoptionSql.CoworkReadinessSql(
-                seatIds, agentIds, _options, includeAudit, includeM365);
+                seatIds, agentIds, _options, includeAudit, includeM365, includeCoworkReport);
 
             var parameters = new Dictionary<string, object>
             {
@@ -1712,6 +2048,11 @@ namespace Common.Entities.CopilotAdoption
                 // timestamp - otherwise the earliest day of the window is silently dropped.
                 parameters["@m365From"] = windowStart.Date;
                 parameters["@m365ReportDate"] = summary.DataSources.M365UsageReportDate.Value;
+            }
+            if (includeCoworkReport)
+            {
+                parameters["@coworkReportDate"] = summary.DataSources.CoworkUsageReportDate.Value;
+                parameters["@coworkReportPeriodDays"] = summary.DataSources.CoworkUsageReportPeriodDays;
             }
 
             output.Sql["coworkReadiness"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
@@ -1740,12 +2081,18 @@ namespace Common.Entities.CopilotAdoption
                     + "Cowork candidate. Enable the Microsoft 365 usage report import to use this tab.");
             }
 
+            if (!includeCoworkReport)
+            {
+                output.Warnings.Add(
+                    "The first-party Cowork usage report is not available, so Cowork task counts, automation ratio "
+                    + "and retention cannot be measured. Audit-derived Cowork interactions are retained only as a reconciliation signal.");
+            }
+
             if (!includeAudit)
             {
                 output.Warnings.Add(
-                    "The Copilot audit import has no data for this period, so existing Cowork use cannot be "
-                    + "seen. Everyone is assessed as a potential candidate, including people who may already "
-                    + "be using Cowork.");
+                    "The Copilot audit import has no data for this period, so Cowork audit interactions cannot be "
+                    + "reconciled against Microsoft's Cowork task report.");
             }
 
             // Credits are a decoration on this tab, not a load-bearing figure, and they come from a
@@ -1860,6 +2207,7 @@ namespace Common.Entities.CopilotAdoption
 
             var summary = analysis.Summary;
             var users = analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>();
+            SummarisePurchasedSeatCapacity(summary);
             summary.GuidanceCatalogueVersion = CopilotAdoptionGuidanceCatalogue.Version;
             summary.GuidanceLinks = CopilotAdoptionGuidanceCatalogue.All.ToList();
 
@@ -1978,6 +2326,8 @@ namespace Common.Entities.CopilotAdoption
                     || IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded)));
 
             summary.ReclaimCaveat = "Reclaim excludes admin exclusions and separates review-only cases. Leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from Microsoft 365 usage data.";
+            PopulateAssignedIdleBySku(summary, users);
+            BuildIdleLicenceSpend(summary, users);
             // Report-sourced rows carry Microsoft's prompt count in Interactions. Do not publish a total
             // that adds prompts to audit-log interactions; they are different units over potentially
             // different windows.
@@ -1990,12 +2340,37 @@ namespace Common.Entities.CopilotAdoption
                 : Math.Round(users.Average(u => u.AdoptionScore), 1, MidpointRounding.AwayFromZero);
             summary.MedianAdoptionScore = CopilotAdoptionScoring.Median(users.Select(u => u.AdoptionScore));
 
-            summary.CoworkUsers = users.Count(u => u.UsedCowork);
+            summary.CoworkAuditUsers = users.Count(u => u.CoworkInteractions > 0);
             summary.CoworkInteractions = users.Sum(u => u.CoworkInteractions);
-            summary.CoworkAdoptionPct = CopilotAdoptionScoring.Percentage(summary.CoworkUsers, denominator);
-            // Only claim a Cowork adoption rate when Cowork was actually seen. On a tenant that has not
-            // been enabled for it, "0% Cowork adoption" reads as a failure rather than as "not available".
-            summary.CoworkDetected = summary.CoworkInteractions > 0;
+            summary.CoworkReportUsers = users.Count(u => u.CoworkReportTotalTasks.GetValueOrDefault() > 0);
+            summary.CoworkReportTotalTasks = users.Sum(u => u.CoworkReportTotalTasks.GetValueOrDefault());
+            summary.CoworkReportScheduledTasks = users.Sum(u => u.CoworkReportScheduledTasks.GetValueOrDefault());
+            summary.CoworkReportUserInitiatedTasks = users.Sum(u => u.CoworkReportUserInitiatedTasks.GetValueOrDefault());
+            summary.CoworkReportRetainedUsers = users.Any(u => u.CoworkReportRetainedUser.HasValue)
+                ? (int?)users.Count(u => u.CoworkReportRetainedUser == true)
+                : null;
+            summary.CoworkAutomationRatioPct = summary.CoworkReportTotalTasks > 0
+                ? (double?)CopilotAdoptionScoring.Percentage(summary.CoworkReportScheduledTasks, summary.CoworkReportTotalTasks)
+                : null;
+            summary.CoworkTasksPerActiveUser = summary.CoworkReportUsers > 0
+                ? (double?)Math.Round(summary.CoworkReportTotalTasks / (double)summary.CoworkReportUsers, 1, MidpointRounding.AwayFromZero)
+                : null;
+            summary.CoworkReportRetentionPct = summary.CoworkReportRetainedUsers.HasValue && summary.CoworkReportUsers > 0
+                ? (double?)CopilotAdoptionScoring.Percentage(summary.CoworkReportRetainedUsers.Value, summary.CoworkReportUsers)
+                : null;
+
+            summary.CoworkUsers = summary.CoworkReportUsers > 0 ? summary.CoworkReportUsers : summary.CoworkAuditUsers;
+            summary.CoworkEligibilityKnown = summary.CoworkEligibleUsers.HasValue;
+            summary.CoworkAdoptionPct = summary.CoworkEligibilityKnown
+                ? (double?)CopilotAdoptionScoring.Percentage(summary.CoworkUsers, summary.CoworkEligibleUsers.Value)
+                : null;
+            if (!summary.CoworkEligibilityKnown && summary.CoworkUsers > 0)
+            {
+                summary.Warnings.Add("Cowork adoption percentage is suppressed because Cowork eligibility is controlled by spending-policy scope and this import does not know that denominator. The deprecated Cowork agent entry is not used as an eligibility source.");
+            }
+            // Only claim a Cowork signal when Cowork was actually seen in either source. On a tenant that has
+            // not been enabled for it, "0% Cowork adoption" reads as a failure rather than as "not available".
+            summary.CoworkDetected = summary.CoworkReportUsers > 0 || summary.CoworkInteractions > 0;
 
             summary.Funnel = BuildFunnel(summary, users);
             summary.BandBreakdown = BuildBandBreakdown(users);
@@ -2029,6 +2404,213 @@ namespace Common.Entities.CopilotAdoption
                 .OrderByDescending(c => c.Value)
                 .Take(_options.TopSegments)
                 .ToList();
+        }
+
+
+        private static void PopulateAssignedIdleBySku(CopilotAdoptionSummary summary, IReadOnlyCollection<LicensedUserAdoptionRow> users)
+        {
+            foreach (var licence in summary.SeatLicenceTypes.Where(l => l.IsCopilotSeat))
+            {
+                licence.AssignedIdleUsers = users.Count(user =>
+                    UserHasLicence(user, licence)
+                    && (IsReclaimTier(user, CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain)
+                        || IsReclaimTier(user, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable))
+                    && !(summary.UsageReportWindowMismatch
+                         && IsUsageReportSourced(user)
+                         && IsReclaimTier(user, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable)));
+            }
+        }
+
+        private void BuildIdleLicenceSpend(CopilotAdoptionSummary summary, IReadOnlyCollection<LicensedUserAdoptionRow> users)
+        {
+            var configuredCosts = (_options.SeatCosts ?? new List<CopilotSeatCostInput>())
+                .Where(c => c != null
+                            && !string.IsNullOrWhiteSpace(c.SkuPartNumber)
+                            && !string.IsNullOrWhiteSpace(c.Currency)
+                            && c.Cost > 0
+                            && c.EffectiveDateUtc.HasValue)
+                .ToList();
+            if (configuredCosts.Count == 0)
+            {
+                summary.IdleLicenceSpend = null;
+                return;
+            }
+
+            var costBySku = configuredCosts
+                .GroupBy(c => c.SkuPartNumber.Trim(), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+            var spend = new IdleLicenceSpendSummary { ConfiguredCosts = configuredCosts };
+            var seatSkus = summary.SeatLicenceTypes.Where(l => l.IsCopilotSeat).ToList();
+
+            var reassignable = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+            var reducible = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+            var exposure = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+            var tierSeats = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var tierSeatUsers = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
+            var tierCosts = new Dictionary<string, Dictionary<string, decimal>>(StringComparer.OrdinalIgnoreCase);
+            var categorySeats = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var categorySeatUsers = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
+            var categoryCosts = new Dictionary<string, Dictionary<string, decimal>>(StringComparer.OrdinalIgnoreCase);
+
+            void AddMoney(Dictionary<string, decimal> bucket, string currency, decimal amount)
+            {
+                if (!bucket.ContainsKey(currency)) bucket[currency] = 0m;
+                bucket[currency] += amount;
+            }
+
+            void AddNested(Dictionary<string, Dictionary<string, decimal>> bucket, string key, string currency, decimal amount)
+            {
+                if (!bucket.TryGetValue(key, out var byCurrency))
+                {
+                    byCurrency = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+                    bucket[key] = byCurrency;
+                }
+                AddMoney(byCurrency, currency, amount);
+            }
+
+            void AddSeatUser(Dictionary<string, HashSet<int>> bucket, string key, int userId)
+            {
+                if (!bucket.TryGetValue(key, out var usersInBucket))
+                {
+                    usersInBucket = new HashSet<int>();
+                    bucket[key] = usersInBucket;
+                }
+                usersInBucket.Add(userId);
+            }
+
+            decimal MonthlyTotal(CopilotSeatCostInput c, int seats) =>
+                string.Equals(c.Period, "annual", StringComparison.OrdinalIgnoreCase)
+                    ? decimal.Round(c.Cost * seats / 12m, 2, MidpointRounding.ToEven)
+                    : c.Cost * seats;
+
+            foreach (var licence in seatSkus)
+            {
+                if (!costBySku.TryGetValue(licence.SkuPartNumber ?? string.Empty, out var cost)) continue;
+                var currency = cost.Currency.Trim().ToUpperInvariant();
+                if (!licence.UnassignedUnits.HasValue)
+                {
+                    spend.UnassignedSpendUnknown = true;
+                    continue;
+                }
+                var unassigned = licence.UnassignedUnits.Value;
+                if (unassigned > 0)
+                {
+                    var amount = MonthlyTotal(cost, unassigned);
+                    AddMoney(exposure, currency, amount);
+                    AddMoney(reducible, currency, amount);
+                    categorySeats["Unassigned"] = categorySeats.TryGetValue("Unassigned", out var current) ? current + unassigned : unassigned;
+                    AddNested(categoryCosts, "Unassigned", currency, amount);
+                }
+            }
+
+            foreach (var user in users)
+            {
+                var tier = user.ReclaimEligibility;
+                var eligible = IsReclaimTier(user, CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain)
+                               || IsReclaimTier(user, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable);
+                if (!eligible) continue;
+                if (summary.UsageReportWindowMismatch
+                    && IsUsageReportSourced(user)
+                    && IsReclaimTier(user, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable)) continue;
+
+                foreach (var licence in seatSkus)
+                {
+                    if (!UserHasLicence(user, licence)) continue;
+                    if (!costBySku.TryGetValue(licence.SkuPartNumber ?? string.Empty, out var cost)) continue;
+                    var currency = cost.Currency.Trim().ToUpperInvariant();
+                    var amount = MonthlyTotal(cost, 1);
+                    AddMoney(exposure, currency, amount);
+                    AddMoney(reassignable, currency, amount);
+                    AddSeatUser(tierSeatUsers, tier, user.UserId);
+                    AddNested(tierCosts, tier, currency, amount);
+                    AddSeatUser(categorySeatUsers, "Assigned idle", user.UserId);
+                    AddNested(categoryCosts, "Assigned idle", currency, amount);
+                }
+            }
+
+            foreach (var kvp in tierSeatUsers)
+            {
+                tierSeats[kvp.Key] = kvp.Value.Count;
+            }
+
+            foreach (var kvp in categorySeatUsers)
+            {
+                categorySeats[kvp.Key] = kvp.Value.Count;
+            }
+
+            spend.SpendExposure = ToCosts(exposure);
+            spend.Reassignable = ToCosts(reassignable);
+            spend.ReducibleAtRenewal = ToCosts(reducible);
+            spend.Tiers = tierSeats.Select(kvp => new IdleLicenceSpendTier
+            {
+                Tier = kvp.Key,
+                Seats = kvp.Value,
+                Costs = ToCosts(tierCosts[kvp.Key]),
+            }).OrderBy(t => ReclaimTierRank(t.Tier)).ToList();
+            spend.Categories = categorySeats.Select(kvp => new IdleLicenceSpendCategory
+            {
+                Category = kvp.Key,
+                Seats = kvp.Value,
+                Costs = ToCosts(categoryCosts[kvp.Key]),
+            }).OrderBy(c => c.Category, StringComparer.OrdinalIgnoreCase).ToList();
+            summary.IdleLicenceSpend = spend;
+        }
+
+        private static bool UserHasLicence(LicensedUserAdoptionRow user, LicenceTypeClassification licence)
+        {
+            return user.SeatLicenceTypeIds != null && user.SeatLicenceTypeIds.Contains(licence.Id);
+        }
+
+        private static void SummarisePurchasedSeatCapacity(CopilotAdoptionSummary summary)
+        {
+            var copilotSkus = summary.SeatLicenceTypes.Where(l => l.IsCopilotSeat).ToList();
+            var hasCopilotSkus = copilotSkus.Count > 0;
+            var allPurchasedKnown = hasCopilotSkus && copilotSkus.All(l => l.PurchasedUnits.HasValue);
+            var allUnassignedKnown = allPurchasedKnown && copilotSkus.All(l => l.UnassignedUnits.HasValue);
+
+            summary.SubscribedSkusAvailable = allPurchasedKnown;
+            summary.PurchasedCopilotSeats = allPurchasedKnown
+                ? copilotSkus.Sum(l => l.PurchasedUnits.GetValueOrDefault())
+                : (int?)null;
+            summary.UnassignedCopilotSeats = allUnassignedKnown
+                ? copilotSkus.Sum(l => l.UnassignedUnits.GetValueOrDefault())
+                : (int?)null;
+
+            if (hasCopilotSkus && !allPurchasedKnown && !summary.Warnings.Any(w => w.Contains("subscribedSkus/prepaidUnits")))
+            {
+                summary.Warnings.Add(
+                    "Purchased and unassigned Copilot seats are unknown because Graph subscribedSkus/prepaidUnits "
+                    + "has not been imported. Grant Organization.Read.All and rerun the user metadata import; the "
+                    + "report deliberately does not show zero for unassigned seats when the purchase inventory is missing.");
+            }
+
+            foreach (var licence in copilotSkus.Where(l => l.PurchasedUnits.HasValue && !l.UnassignedUnits.HasValue))
+            {
+                var warning = $"Purchased and assigned Copilot seats disagree for {licence.SkuPartNumber ?? licence.Name}: Graph reports {licence.PurchasedUnits.Value:N0} purchased but {licence.AssignedUsers:N0} assigned, so unassigned seats are shown as Unknown rather than zero.";
+                if (!summary.Warnings.Contains(warning))
+                {
+                    summary.Warnings.Add(warning);
+                }
+            }
+        }
+
+        private static List<AzureCostByCurrency> ToCosts(Dictionary<string, decimal> values)
+        {
+            return values
+                .Where(kvp => kvp.Value != 0m)
+                .OrderBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(kvp => new AzureCostByCurrency { Currency = kvp.Key, Cost = kvp.Value })
+                .ToList();
+        }
+
+        private static int ReclaimTierRank(string tier)
+        {
+            if (string.Equals(tier, CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain, StringComparison.OrdinalIgnoreCase)) return 0;
+            if (string.Equals(tier, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable, StringComparison.OrdinalIgnoreCase)) return 1;
+            if (string.Equals(tier, CopilotAdoptionScoring.ReclaimEligibilityTiers.Review, StringComparison.OrdinalIgnoreCase)) return 2;
+            if (string.Equals(tier, CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded, StringComparison.OrdinalIgnoreCase)) return 3;
+            return 4;
         }
 
         /// <summary>
@@ -2396,6 +2978,12 @@ namespace Common.Entities.CopilotAdoption
                 {
                     var prime = g.Count(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.PrimeCandidate);
                     var regular = g.Count(r => r.RegularCoworkUser);
+                    var totalTasks = g.Sum(r => r.CoworkReportTotalTasks.GetValueOrDefault());
+                    var scheduledTasks = g.Sum(r => r.CoworkReportScheduledTasks.GetValueOrDefault());
+                    var retained = g.Any(r => r.CoworkReportRetainedUser.HasValue)
+                        ? (int?)g.Count(r => r.CoworkReportRetainedUser == true)
+                        : null;
+                    var reportUsers = g.Count(r => r.CoworkReportTotalTasks.GetValueOrDefault() > 0);
 
                     return new CoworkSegmentRow
                     {
@@ -2404,6 +2992,15 @@ namespace Common.Entities.CopilotAdoption
                         PrimeCandidates = prime,
                         PrimeCandidateRatePct = CopilotAdoptionScoring.Percentage(prime, g.Count()),
                         RegularCoworkUsers = regular,
+                        CoworkReportTotalTasks = totalTasks,
+                        CoworkReportScheduledTasks = scheduledTasks,
+                        CoworkAutomationRatioPct = totalTasks > 0
+                            ? (double?)CopilotAdoptionScoring.Percentage(scheduledTasks, totalTasks)
+                            : null,
+                        CoworkReportRetainedUsers = retained,
+                        CoworkReportRetentionPct = retained.HasValue && reportUsers > 0
+                            ? (double?)CopilotAdoptionScoring.Percentage(retained.Value, reportUsers)
+                            : null,
                         CoworkAdoptionPct = CopilotAdoptionScoring.Percentage(regular, g.Count()),
                         AverageCoordinationLoad = Math.Round(
                             g.Average(r => r.CoordinationLoadScore), 1, MidpointRounding.AwayFromZero),
@@ -3177,6 +3774,10 @@ namespace Common.Entities.CopilotAdoption
         public class SeatAssignmentRow
         {
             public int UserId { get; set; }
+
+            public int LicenceTypeId { get; set; }
+
+            public string SkuPartNumber { get; set; }
 
             public string LicenceName { get; set; }
         }

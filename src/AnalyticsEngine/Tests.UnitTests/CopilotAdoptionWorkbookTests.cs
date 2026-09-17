@@ -222,6 +222,19 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void CohortWorkbook_CarriesTransitionsActivationAndDrillRows()
+        {
+            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticCohortComparison()));
+
+            StringAssert.Contains(text, "Cohort transitions");
+            StringAssert.Contains(text, "Reactivated");
+            StringAssert.Contains(text, "Time to first use and activation");
+            StringAssert.Contains(text, "Seat date unknown");
+            StringAssert.Contains(text, "new.active@contoso.com");
+            StringAssert.Contains(text, "Account age is not substituted");
+        }
+
+        [TestMethod]
         public void Workbook_SurvivesGreekAndAmpersandsInTenantText()
         {
             // Department names, user names and file titles come from the customer's tenant. Greek is
@@ -272,6 +285,43 @@ namespace Tests.UnitTests
             AssertFollowedBy(table, "Kind", "References");
             AssertFollowedBy(table, "CITATION", "How it was used");
             AssertFollowedBy(table, "docx", "Tenant content");
+        }
+
+        [TestMethod]
+        public void Workbook_RecordsIdleSpendUnknownsAndSeatPricesUsed()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.IdleLicenceSpend = new IdleLicenceSpendSummary
+            {
+                UnassignedSpendUnknown = true,
+                ConfiguredCosts = new List<CopilotSeatCostInput>
+                {
+                    new CopilotSeatCostInput
+                    {
+                        SkuPartNumber = "Microsoft_365_Copilot",
+                        Currency = "GBP",
+                        Cost = 30m,
+                        Period = "monthly",
+                        EffectiveDateUtc = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc),
+                    },
+                },
+                SpendExposure = new List<Common.Entities.AgentCosts.AzureCostByCurrency>
+                {
+                    new Common.Entities.AgentCosts.AzureCostByCurrency { Currency = "GBP", Cost = 30m },
+                },
+                Reassignable = new List<Common.Entities.AgentCosts.AzureCostByCurrency>
+                {
+                    new Common.Entities.AgentCosts.AzureCostByCurrency { Currency = "GBP", Cost = 30m },
+                },
+            };
+
+            var text = SheetText(CopilotAdoptionWorkbook.Build(analysis));
+
+            StringAssert.Contains(text, "GBP 30.00; Unknown unassigned",
+                "Unknown unassigned inventory must be visible beside the money figure, not rendered as not configured.");
+            StringAssert.Contains(text, "Seat price used - Microsoft_365_Copilot");
+            StringAssert.Contains(text, "GBP 30.00 monthly");
+            StringAssert.Contains(text, "Effective 2026-09-01");
         }
 
         /// <summary>
@@ -698,6 +748,75 @@ namespace Tests.UnitTests
 
             new CopilotAdoptionService().FinaliseSummary(analysis);
             return analysis;
+        }
+
+        private static CopilotAdoptionCohortComparison SyntheticCohortComparison()
+        {
+            return new CopilotAdoptionCohortComparison
+            {
+                Gate = new CopilotAdoptionPeriodComparisonGate
+                {
+                    Left = new CopilotAdoptionPeriodRun { PeriodEnd = Now.AddDays(-28), PeriodDays = 28 },
+                    Right = new CopilotAdoptionPeriodRun { PeriodEnd = Now, PeriodDays = 28 },
+                    OptionsComparable = true,
+                    Message = "Comparable synthetic periods.",
+                },
+                Summary = new CopilotAdoptionCohortSummary
+                {
+                    EarlierPopulation = 3,
+                    CurrentPopulation = 3,
+                    NewlyAssigned = 1,
+                    EarlierPopulationTransitionTotal = 3,
+                    TransitionsSumToEarlierPopulation = true,
+                    ReclaimCaveat = "Synthetic reclaim caveat.",
+                },
+                Transitions = new List<CopilotAdoptionCohortTransitionSummary>
+                {
+                    new CopilotAdoptionCohortTransitionSummary { Code = CopilotAdoptionCohortTransitions.Retained, Label = "Retained", Users = 1, ShareOfEarlierPopulationPct = 33.3, Description = "Active in both." },
+                    new CopilotAdoptionCohortTransitionSummary { Code = CopilotAdoptionCohortTransitions.Reactivated, Label = "Reactivated", Users = 1, ShareOfEarlierPopulationPct = 33.3, Description = "Inactive then active." },
+                    new CopilotAdoptionCohortTransitionSummary { Code = CopilotAdoptionCohortTransitions.Reclaimed, Label = "Reclaimed / reassigned", Users = 1, ShareOfEarlierPopulationPct = 33.3, Description = "Seat removed." },
+                },
+                Flows = new List<CopilotAdoptionCohortFlowSummary>
+                {
+                    new CopilotAdoptionCohortFlowSummary { FromBand = "Never used", ToBand = "Active", Transition = CopilotAdoptionCohortTransitions.Reactivated, Users = 1 },
+                },
+                Activation = new CopilotAdoptionActivationSummary
+                {
+                    ActivationWindowDays = 30,
+                    KnownSeatStartUsers = 2,
+                    SeatDateUnknownUsers = 1,
+                    AssignedBeforeHistoryUsers = 1,
+                    NewSeatsAssignedInPeriod = 1,
+                    ActivatedWithinWindow = 1,
+                    ActivationRatePct = 100,
+                    MedianDaysToFirstUse = 5,
+                    Caveat = "Time-to-first-use uses seat_first_observed_utc only. Rows with unknown seat dates are counted separately and excluded; Account age is not substituted for seat assignment.",
+                    Distribution = new List<CopilotAdoptionActivationDistributionBucket>
+                    {
+                        new CopilotAdoptionActivationDistributionBucket { Label = "0-7 days", Users = 1, SharePct = 100 },
+                    },
+                    ByDepartment = new List<CopilotAdoptionActivationSegment>
+                    {
+                        new CopilotAdoptionActivationSegment { Segment = GreekDepartment, NewSeatsAssignedInPeriod = 1, ActivatedWithinWindow = 1, ActivationRatePct = 100, SeatDateUnknownUsers = 1 },
+                    },
+                },
+                Rows = new List<CopilotAdoptionCohortUserRow>
+                {
+                    new CopilotAdoptionCohortUserRow
+                    {
+                        UserPrincipalName = "new.active@contoso.com",
+                        Department = GreekDepartment,
+                        Transition = CopilotAdoptionCohortTransitions.NewlyAssigned,
+                        TransitionLabel = "Newly assigned",
+                        FromBand = "No seat",
+                        ToBand = "Active",
+                        SeatFirstObservedUtc = Now.AddDays(-5),
+                        FirstInteractionUtc = Now,
+                        DaysToFirstUse = 5,
+                        ActivationState = "activatedWithinWindow",
+                    },
+                },
+            };
         }
 
         #endregion

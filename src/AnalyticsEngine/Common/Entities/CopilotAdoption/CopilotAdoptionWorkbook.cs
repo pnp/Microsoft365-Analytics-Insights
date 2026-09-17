@@ -56,6 +56,20 @@ namespace Common.Entities.CopilotAdoption
             }
         }
 
+        public static byte[] Build(CopilotAdoptionCohortComparison comparison)
+        {
+            if (comparison == null) throw new ArgumentNullException(nameof(comparison));
+
+            using (var workbook = new XlsxWriter())
+            {
+                WriteCohortReportSheet(workbook, comparison);
+                WriteCohortTransitionSheet(workbook, comparison);
+                WriteCohortActivationSheet(workbook, comparison);
+                WriteCohortUsersSheet(workbook, comparison);
+                return workbook.ToArray();
+            }
+        }
+
         /// <summary>File name carrying the period and the run date, so two snapshots never collide.</summary>
         public static string FileName(CopilotAdoptionSummary summary)
         {
@@ -67,6 +81,154 @@ namespace Common.Entities.CopilotAdoption
                 "copilot-adoption-{0}d-{1:yyyy-MM-dd}.xlsx",
                 windowDays,
                 generated);
+        }
+
+        public static string CohortFileName(CopilotAdoptionPeriodComparisonGate gate)
+        {
+            var left = gate?.Left?.PeriodEnd ?? DateTime.UtcNow.Date;
+            var right = gate?.Right?.PeriodEnd ?? DateTime.UtcNow.Date;
+
+            return string.Format(
+                CultureInfo.InvariantCulture,
+                "copilot-adoption-cohorts-{0:yyyy-MM-dd}-to-{1:yyyy-MM-dd}.xlsx",
+                left,
+                right);
+        }
+
+        private static void WriteCohortReportSheet(XlsxWriter workbook, CopilotAdoptionCohortComparison comparison)
+        {
+            var sheet = workbook.AddSheet("Report");
+            sheet.SetColumnWidths(38, 34, 70);
+            sheet.AddTitle("Microsoft 365 Copilot - cohort progression");
+            sheet.AddBlankRow();
+            sheet.AddHeaderRow("Property", "Value", "Notes");
+            AddMeta(sheet, "Earlier period end", comparison.Gate.Left?.PeriodEnd, "The closed period the cohort starts from.");
+            AddMeta(sheet, "Current period end", comparison.Gate.Right?.PeriodEnd, "The closed period the cohort is measured against.");
+            AddMeta(sheet, "Period length", comparison.Gate.Left?.PeriodDays ?? comparison.Gate.Right?.PeriodDays ?? 0, "Both periods must have the same length.");
+            AddMeta(sheet, "Options comparable", YesNo(comparison.Gate.OptionsComparable), comparison.Gate.Message);
+            AddMeta(sheet, "Earlier population", comparison.Summary.EarlierPopulation, "Every transition except Newly assigned partitions this population.");
+            AddMeta(sheet, "Current population", comparison.Summary.CurrentPopulation, "Current period seat holders.");
+            AddMeta(sheet, "Integrity check", YesNo(comparison.Summary.TransitionsSumToEarlierPopulation),
+                "Retained + Reactivated + Lapsed + Reclaimed + Still at risk must equal the earlier population.");
+            AddMeta(sheet, "Activation window", $"{comparison.Activation.ActivationWindowDays} days",
+                "Defaults to the reclaim grace-period concept so a seat is not both too new and failed.");
+            AddMeta(sheet, "Activation caveat", string.Empty, comparison.Activation.Caveat);
+            AddMeta(sheet, "Reclaim caveat", string.Empty, comparison.Summary.ReclaimCaveat);
+            sheet.FreezeTopRows(1);
+        }
+
+        private static void WriteCohortTransitionSheet(XlsxWriter workbook, CopilotAdoptionCohortComparison comparison)
+        {
+            var sheet = workbook.AddSheet("Cohort transitions");
+            sheet.SetColumnWidths(28, 14, 18, 70, 22, 22, 18);
+            sheet.AddTitle("Cohort transitions");
+            sheet.AddBlankRow();
+            sheet.AddHeaderRow("Transition", "Users", "% of earlier", "Definition");
+            var first = sheet.CurrentRow + 1;
+            foreach (var transition in comparison.Transitions)
+            {
+                sheet.AddRow(transition.Label, transition.Users, transition.ShareOfEarlierPopulationPct, XlsxCell.Wrapped(transition.Description));
+            }
+            var last = sheet.CurrentRow;
+            if (last >= first)
+            {
+                var chart = new XlsxChart
+                {
+                    Type = XlsxChartType.Column,
+                    Title = "Cohort transitions",
+                    CategoryRange = sheet.RangeReference(first, 1, last, 1),
+                    AnchorCell = "F3",
+                    ShowDataLabels = true,
+                    ShowLegend = false,
+                };
+                chart.AddSeries("Users", sheet.RangeReference(first, 2, last, 2));
+                sheet.AddChart(chart);
+            }
+
+            sheet.AddBlankRow();
+            sheet.AddHeaderRow("From band", "To band", "Transition", "Users");
+            foreach (var flow in comparison.Flows)
+            {
+                sheet.AddRow(flow.FromBand, flow.ToBand, flow.Transition, flow.Users);
+            }
+            sheet.FreezeTopRows(3);
+        }
+
+        private static void WriteCohortActivationSheet(XlsxWriter workbook, CopilotAdoptionCohortComparison comparison)
+        {
+            var a = comparison.Activation;
+            var sheet = workbook.AddSheet("Activation");
+            sheet.SetColumnWidths(36, 16, 18, 24, 24, 18);
+            sheet.AddTitle("Time to first use and activation");
+            sheet.AddBlankRow();
+            sheet.AddHeaderRow("Measure", "Value", "Notes");
+            AddMeta(sheet, "Known seat-start users", a.KnownSeatStartUsers, "Rows with a real seat_first_observed_utc inside the stored history.");
+            AddMeta(sheet, "Seat date unknown", a.SeatDateUnknownUsers, "Excluded from time-to-first-use. Account age is not substituted.");
+            AddMeta(sheet, "Assigned before history", a.AssignedBeforeHistoryUsers, "Excluded because first use may predate the retained history.");
+            AddMeta(sheet, "New seats assigned in period", a.NewSeatsAssignedInPeriod, "Denominator for activation rate.");
+            AddMeta(sheet, $"Activated within {a.ActivationWindowDays} days", a.ActivatedWithinWindow, "Seats that reached first use inside the configured window.");
+            AddMeta(sheet, "Activation rate %", a.ActivationRatePct, "New seats activated within the configured window.");
+            AddMeta(sheet, "Never activated", a.NeverActivatedUsers, "Known seat date, outside the activation window, and no first use.");
+            AddMeta(sheet, "Too new to judge", a.TooNewToJudgeUsers, "Known seat date but still inside the activation window.");
+            AddMeta(sheet, "Median days to first use", a.MedianDaysToFirstUse.HasValue ? (object)a.MedianDaysToFirstUse.Value : "-", "Median, not a mean.");
+
+            sheet.AddBlankRow();
+            sheet.AddHeaderRow("Distribution", "Users", "% of activated");
+            var distFirst = sheet.CurrentRow + 1;
+            foreach (var bucket in a.Distribution)
+            {
+                sheet.AddRow(bucket.Label, bucket.Users, bucket.SharePct);
+            }
+            var distLast = sheet.CurrentRow;
+            if (distLast >= distFirst)
+            {
+                var chart = new XlsxChart
+                {
+                    Type = XlsxChartType.Column,
+                    Title = "Days to first use",
+                    CategoryRange = sheet.RangeReference(distFirst, 1, distLast, 1),
+                    AnchorCell = "E4",
+                    ShowDataLabels = true,
+                    ShowLegend = false,
+                };
+                chart.AddSeries("Users", sheet.RangeReference(distFirst, 2, distLast, 2));
+                sheet.AddChart(chart);
+            }
+
+            sheet.AddBlankRow();
+            sheet.AddHeaderRow("Department", "New seats", "Activated in window", "Activation rate %", "Never activated", "Seat date unknown");
+            foreach (var segment in a.ByDepartment)
+            {
+                sheet.AddRow(segment.Segment, segment.NewSeatsAssignedInPeriod, segment.ActivatedWithinWindow,
+                    segment.ActivationRatePct, segment.NeverActivatedUsers, segment.SeatDateUnknownUsers);
+            }
+            sheet.FreezeTopRows(3);
+        }
+
+        private static void WriteCohortUsersSheet(XlsxWriter workbook, CopilotAdoptionCohortComparison comparison)
+        {
+            var rows = comparison.Rows ?? new List<CopilotAdoptionCohortUserRow>();
+            if (rows.Count == 0) return;
+
+            var sheet = workbook.AddSheet("Cohort users");
+            sheet.SetColumnWidths(34, 24, 20, 24, 18, 18, 18, 34, 18, 18, 18, 60);
+            sheet.AddTitle(rows.Count > MaxUserRows ? "Cohort users - TRUNCATED" : "Cohort users");
+            if (rows.Count > MaxUserRows)
+            {
+                sheet.AddRow(XlsxCell.Wrapped($"This sheet lists the first {MaxUserRows:N0} of {rows.Count:N0} cohort rows. Use the API drill-through for the full population."));
+            }
+            sheet.AddBlankRow();
+            sheet.AddHeaderRow("User", "Department", "Job title", "Manager", "Transition", "From band", "To band",
+                "Reclaim interpretation", "Seat first observed", "First use", "Days to first use", "Activation state");
+            var headerRow = sheet.CurrentRow;
+            foreach (var row in rows.Take(MaxUserRows))
+            {
+                sheet.AddRow(row.UserPrincipalName, row.Department, row.JobTitle, row.ManagerUserPrincipalName,
+                    row.TransitionLabel, row.FromBand, row.ToBand, XlsxCell.Wrapped(row.ReclaimInterpretation),
+                    row.SeatFirstObservedUtc, row.FirstInteractionUtc, row.DaysToFirstUse, row.ActivationState);
+            }
+            sheet.FreezeTopRows(headerRow);
+            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 12);
         }
 
         #region Report metadata
@@ -143,6 +305,7 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Agent review after", $"{o.AgentReviewInactiveDays} days", "Inactivity before an agent is reviewed.");
             AddMeta(sheet, "Agent retire after", $"{o.AgentRetireInactiveDays} days", "Inactivity before an agent is proposed for retirement.");
             AddMeta(sheet, "Agent minimum users", o.AgentMinUsers, "Users an agent needs before its use counts as adoption.");
+            AddMeta(sheet, "New-seat activation window", $"{o.ActivationWindowDays} days", "Days from first observed seat assignment to first use for activation-rate reporting.");
 
             if (summary.Warnings.Count > 0)
             {
@@ -254,7 +417,11 @@ namespace Common.Entities.CopilotAdoption
             var first = sheet.CurrentRow + 1;
 
             AddMeta(sheet, "Copilot licences", summary.LicensedUsers,
-                "Users holding at least one licence classified as a Microsoft 365 Copilot licence. The true licence count.");
+                "Users holding at least one licence classified as a Microsoft 365 Copilot licence. The assigned-seat count.");
+            AddMeta(sheet, "Purchased Copilot seats", summary.PurchasedCopilotSeats.HasValue ? (object)summary.PurchasedCopilotSeats.Value : "Unknown",
+                "Purchased seats from Graph subscribedSkus prepaidUnits for the SKUs classified as Copilot seats. Unknown means subscribedSkus was unavailable or the permission is missing - deliberately not zero.");
+            AddMeta(sheet, "Unassigned Copilot seats", summary.UnassignedCopilotSeats.HasValue ? (object)summary.UnassignedCopilotSeats.Value : "Unknown",
+                "Purchased minus assigned, per Copilot SKU. Feeds idle spend as its own reducible-at-renewal category, not merged with assigned-but-idle seats.");
             AddMeta(sheet, "Users analysed", summary.ScoredUsers,
                 summary.ScoredUsers < summary.LicensedUsers
                     ? "FEWER THAN THE SEAT COUNT. Every rate below is of these users, not of the whole tenant, "
@@ -293,6 +460,29 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Reclaimable but still active", summary.ReclaimSeatsFromActiveBands,
                 "Reclaimable seats that are not never-used or dormant - disabled accounts that were still active when they were disabled. Never used + Dormant + this = Reclaimable + both held-back figures.");
 
+            if (summary.IdleLicenceSpend != null)
+            {
+                AddMeta(sheet, "Idle spend exposure", FormatCosts(summary.IdleLicenceSpend.SpendExposure, summary.IdleLicenceSpend.UnassignedSpendUnknown),
+                    "Monthly exposure for configured SKU prices only. This is assigned idle seats plus unassigned seats; currencies are never added together.");
+                AddMeta(sheet, "Idle spend - reassignable", FormatCosts(summary.IdleLicenceSpend.Reassignable),
+                    "Assigned idle seats that can be given to another user. This is not a cash saving unless the tenant later buys fewer seats.");
+                AddMeta(sheet, "Idle spend - reducible at renewal", FormatCosts(summary.IdleLicenceSpend.ReducibleAtRenewal, summary.IdleLicenceSpend.UnassignedSpendUnknown),
+                    "Purchased but unassigned seats. This is the renewal reduction opportunity, separate from reassignable seats.");
+                foreach (var cost in summary.IdleLicenceSpend.ConfiguredCosts)
+                {
+                    AddMeta(sheet, "Seat price used - " + cost.SkuPartNumber,
+                        $"{cost.Currency} {cost.Cost:N2} {cost.Period}",
+                        cost.EffectiveDateUtc.HasValue
+                            ? $"Effective {cost.EffectiveDateUtc.Value:yyyy-MM-dd}. This is the configured price used for the idle-spend figures in this workbook."
+                            : "No effective date was supplied.");
+                }
+                foreach (var tier in summary.IdleLicenceSpend.Tiers)
+                {
+                    AddMeta(sheet, "Idle spend - " + tier.Tier, FormatCosts(tier.Costs),
+                        "Assigned idle spend in this reclaim-confidence tier. Certain can be quoted on its own.");
+                }
+            }
+
             var last = sheet.CurrentRow;
 
             sheet.AddBlankRow();
@@ -313,8 +503,10 @@ namespace Common.Entities.CopilotAdoption
 
             if (summary.CoworkDetected)
             {
-                AddMeta(sheet, "Cowork users", summary.CoworkUsers, "Licensed users who used Microsoft 365 Copilot Cowork.");
-                AddMeta(sheet, "Cowork adoption %", summary.CoworkAdoptionPct, "Cowork users as a share of licensed users.");
+                AddMeta(sheet, "Cowork users", summary.CoworkUsers, "Users who used Microsoft 365 Copilot Cowork, preferring Microsoft's Cowork usage-report task source when present.");
+                AddMeta(sheet, "Cowork adoption %", summary.CoworkAdoptionPct, "Null when spending-policy eligibility is unknown; never divided by all licensed users.");
+                AddMeta(sheet, "Cowork tasks", summary.CoworkReportTotalTasks, "Microsoft's Cowork usage-report task count. Not comparable with audit interactions.");
+                AddMeta(sheet, "Cowork audit interactions", summary.CoworkInteractions, "Audit-derived Cowork interactions retained only for reconciliation, not as task counts.");
             }
 
             if (summary.CoworkReadinessAvailable)
@@ -1170,7 +1362,7 @@ namespace Common.Entities.CopilotAdoption
                     + "everyone qualifies is a 100% rate and not where a rollout should start."));
                 sheet.AddHeaderRow(
                     "Department", "Copilot seats", "Prime candidates", "Prime candidate %",
-                    "Regular Cowork users", "Cowork adoption %", "Avg coordination load", "Avg fluency");
+                    "Regular Cowork users", "Avg coordination load", "Avg fluency");
 
                 foreach (var segment in summary.CoworkByDepartment)
                 {
@@ -1180,7 +1372,6 @@ namespace Common.Entities.CopilotAdoption
                         segment.PrimeCandidates,
                         segment.PrimeCandidateRatePct,
                         segment.RegularCoworkUsers,
-                        segment.CoworkAdoptionPct,
                         segment.AverageCoordinationLoad,
                         segment.AverageFluency);
                 }
@@ -1204,8 +1395,8 @@ namespace Common.Entities.CopilotAdoption
 
             sheet.AddHeaderRow(
                 "User", "Department", "Job title", "Manager", "Cowork tier", "Verdict based on",
-                "Coordination load", "Copilot fluency", "Cowork interactions", "Cowork active days",
-                "Justification");
+                "Coordination load", "Copilot fluency", "Cowork report tasks", "Cowork automation %",
+                "Cowork audit interactions", "Justification");
 
             var headerRow = sheet.CurrentRow;
 
@@ -1233,8 +1424,9 @@ namespace Common.Entities.CopilotAdoption
                     row.Basis,
                     row.CoordinationLoadScore,
                     row.FluencyScore,
+                    row.CoworkReportTotalTasks,
+                    row.CoworkAutomationRatioPct,
                     row.CoworkInteractions,
-                    row.CoworkActiveDays,
                     XlsxCell.Wrapped(row.Rationale));
             }
 
@@ -1509,15 +1701,37 @@ namespace Common.Entities.CopilotAdoption
             if (summary.SeatLicenceTypes.Count > 0)
             {
                 sheet.AddBlankRow();
-                sheet.AddHeaderRow("Product", "SKU", "Users", "Counted as a Copilot licence");
+                sheet.AddHeaderRow("Product", "SKU", "Assigned users", "Purchased", "Unassigned", "Assigned idle", "Purchased refreshed UTC", "Counted as a Copilot licence");
                 foreach (var licence in summary.SeatLicenceTypes)
                 {
                     sheet.AddRow(licence.Name, licence.SkuPartNumber, licence.AssignedUsers,
+                        licence.PurchasedUnits.HasValue ? (object)licence.PurchasedUnits.Value : "Unknown",
+                        licence.UnassignedUnits.HasValue ? (object)licence.UnassignedUnits.Value : "Unknown",
+                        licence.AssignedIdleUsers,
+                        licence.PurchasedUnitsRefreshedUtc.HasValue ? licence.PurchasedUnitsRefreshedUtc.Value.ToString("yyyy-MM-dd HH:mm:ss") : "",
                         licence.IsCopilotSeat ? "Yes" : "No");
                 }
             }
 
             sheet.FreezeTopRows(3);
+        }
+
+        private static string FormatCosts(List<Common.Entities.AgentCosts.AzureCostByCurrency> costs, bool unknown = false)
+        {
+            if (unknown)
+            {
+                return costs == null || costs.Count == 0
+                    ? "Unknown"
+                    : string.Join("; ", costs.Select(FormatCost)) + "; Unknown unassigned";
+            }
+
+            if (costs == null || costs.Count == 0) return "Not configured";
+            return string.Join("; ", costs.Select(FormatCost));
+        }
+
+        private static string FormatCost(Common.Entities.AgentCosts.AzureCostByCurrency cost)
+        {
+            return cost.Currency + " " + cost.Cost.ToString("N2");
         }
 
         private static string SourceComparisonSummary(LicensedUserAdoptionRow user, CopilotAdoptionSummary summary)

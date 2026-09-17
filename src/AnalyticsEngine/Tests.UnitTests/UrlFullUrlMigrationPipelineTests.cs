@@ -74,6 +74,11 @@ namespace Tests.UnitTests
         // CopilotAdoptionTargets then adds the customer-defined adoption target tables. Raw-SQL,
         // purely additive, and reuses the GraphCopilotUsageApiV2 model snapshot verbatim.
         private const string LatestId = "202609171000001_CopilotAdoptionTargets";
+        // CopilotSubscribedSkuCapacity adds nullable subscribed SKU capacity columns to
+        // license_types. Raw-SQL, additive, and reuses the predecessor snapshot verbatim.
+        // CoworkUsageReportTables then adds the first-party Cowork usage-report tables. Raw-SQL,
+        // purely additive, and reuses the preceding model snapshot verbatim - the new activity-log
+        // type is not exposed as a DbSet, so the entity model is unchanged.
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).
