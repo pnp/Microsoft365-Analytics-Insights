@@ -1,6 +1,6 @@
 import { makeStyles, tokens, Text, Badge } from '@fluentui/react-components';
 import type { AdoptionActionSummary } from '../../types/copilotAdoption';
-import { formatCount, formatPct } from './KpiGrid';
+import { formatCount, formatPct } from '../shared/KpiGrid';
 
 /**
  * Action colours run from "this licence is costing money" through to "this licence is paying for itself",

@@ -113,6 +113,14 @@
     <Compile Include="CopilotAdoption\CopilotLicenceClassifier.cs" />
     <Compile Include="CopilotAdoption\CopilotLicenceModels.cs" />
     <Compile Include="CopilotAdoption\CsvSerialiser.cs" />
+    <Compile Include="TeamsExplorer\SqlTeamsExplorerStore.cs" />
+    <Compile Include="TeamsExplorer\TeamsExplorerAvailability.cs" />
+    <Compile Include="TeamsExplorer\TeamsExplorerExports.cs" />
+    <Compile Include="TeamsExplorer\TeamsExplorerModels.cs" />
+    <Compile Include="TeamsExplorer\TeamsExplorerQuery.cs" />
+    <Compile Include="TeamsExplorer\TeamsExplorerRows.cs" />
+    <Compile Include="TeamsExplorer\TeamsExplorerScoring.cs" />
+    <Compile Include="TeamsExplorer\TeamsExplorerSql.cs" />
     <Compile Include="Copilot\CopilotAccessedResourceTaxonomy.cs" />
     <Compile Include="Config\ImportConfig.cs" />
     <Compile Include="Config\UserGroupsFilterModel.cs" />
@@ -433,6 +441,10 @@
     <Compile Include="Migrations\202609101200001_RetireImportDbHacks.Designer.cs">
       <DependentUpon>202609101200001_RetireImportDbHacks.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202609161200001_IndexTeamsExplorerQueries.cs" />
+    <Compile Include="Migrations\202609161200001_IndexTeamsExplorerQueries.Designer.cs">
+      <DependentUpon>202609161200001_IndexTeamsExplorerQueries.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609151440027_CopilotPromptSafetyFields.cs" />
     <Compile Include="Migrations\202609170900001_CopilotAdoptionPeriodFacts.cs" />
     <Compile Include="Migrations\202609170900001_CopilotAdoptionPeriodFacts.Designer.cs">
@@ -666,6 +678,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609101200001_RetireImportDbHacks.resx">
       <DependentUpon>202609101200001_RetireImportDbHacks.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609161200001_IndexTeamsExplorerQueries.resx">
+      <DependentUpon>202609161200001_IndexTeamsExplorerQueries.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609151440027_CopilotPromptSafetyFields.resx">
       <DependentUpon>202609151440027_CopilotPromptSafetyFields.cs</DependentUpon>
