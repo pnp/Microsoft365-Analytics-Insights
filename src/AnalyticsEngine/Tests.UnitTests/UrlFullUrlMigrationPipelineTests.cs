@@ -64,6 +64,10 @@ namespace Tests.UnitTests
         // IndexTeamsExplorerQueries then adds date indexes for the Teams Explorer report and widens
         // IX_date on teams_user_device_usage_log. Raw-SQL, additive, and reuses the
         // CopilotPromptSafetyFields model snapshot verbatim.
+        // CopilotAdoptionPeriodFacts then adds the raw period-fact history tables
+        // (copilot_adoption_user_period, copilot_adoption_period_run). Raw-SQL, purely additive, and
+        // reuses the IndexTeamsExplorerQueries model snapshot verbatim - the new tables are not
+        // exposed as DbSets, so the entity model is unchanged.
         // GraphCopilotUsageApiV2 then adds the report_version column carrying the Graph usage-report
         // schema version each snapshot came from. It DOES change the entity model, so its snapshot is
         // freshly scaffolded rather than reused.

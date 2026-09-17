@@ -22,14 +22,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private UserMetadataCache _userMetaCache;
         private readonly IUserMetadataLoader _userLoader;
         private readonly IAnalyticsDbContextFactory _contextFactory;
+        private readonly IClock _clock;
         private UserBatchProcessor _batchProcessor;
         private UserInsertProcessor _insertProcessor;
         private UserLicenseProcessor _licenseProcessor;
         private UserDataMapper _dataMapper;
 
-        public UserMetadataUpdater(AnalyticsLogger logger, AppConfig settings, TokenCredential creds, ManualGraphCallClient manualGraphCallClient)
+        public UserMetadataUpdater(AnalyticsLogger logger, AppConfig settings, TokenCredential creds, ManualGraphCallClient manualGraphCallClient, IClock clock = null)
             : base(logger, settings)
         {
+            _clock = clock ?? SystemClock.Instance;
             IDeltaValueProvider deltaProvider = null;
             if (!string.IsNullOrEmpty(settings.ConnectionStrings.RedisConnectionString))
             {
@@ -57,25 +59,26 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <summary>
         /// Constructor with injectable user loader for testing and alternate implementations
         /// </summary>
-        public UserMetadataUpdater(AnalyticsLogger logger, AppConfig settings, IUserMetadataLoader userLoader)
-            : this(logger, settings, userLoader, DefaultAnalyticsDbContextFactory.Instance)
+        public UserMetadataUpdater(AnalyticsLogger logger, AppConfig settings, IUserMetadataLoader userLoader, IClock clock = null)
+            : this(logger, settings, userLoader, DefaultAnalyticsDbContextFactory.Instance, clock)
         {
         }
 
         /// <summary>
         /// Constructor with an injectable user loader and database context factory (#372).
         /// </summary>
-        public UserMetadataUpdater(AnalyticsLogger logger, AppConfig settings, IUserMetadataLoader userLoader, IAnalyticsDbContextFactory contextFactory)
+        public UserMetadataUpdater(AnalyticsLogger logger, AppConfig settings, IUserMetadataLoader userLoader, IAnalyticsDbContextFactory contextFactory, IClock clock = null)
             : base(logger, settings)
         {
             _userLoader = userLoader;
             _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
+            _clock = clock ?? SystemClock.Instance;
             InitializeHelpers();
         }
 
         private void InitializeHelpers()
         {
-            _batchProcessor = new UserBatchProcessor(_logger);
+            _batchProcessor = new UserBatchProcessor(_logger, _clock);
             _insertProcessor = new UserInsertProcessor(_logger, _batchProcessor);
         }
 
@@ -97,7 +100,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 _userMetaCache = new UserMetadataCache(db);
                 _licenseProcessor = new UserLicenseProcessor(_logger, _userLoader, _userMetaCache);
-                _dataMapper = new UserDataMapper(_logger, _userMetaCache, new SqlUserLookupStore(db));
+                _dataMapper = new UserDataMapper(_logger, _userMetaCache, new SqlUserLookupStore(db), _clock);
+                var importCycleLastUpdatedUtc = _clock.UtcNow;
 
                 _logger.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - start");
 
@@ -149,7 +153,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var graphMentionedExistingDbUsers = _dataMapper.GetDbUsersFromGraphUsers(allActiveGraphUsers, allDbUsers);
 
                 // Insert any user we've not seen so far
-                var insertedDbUsers = await InsertMissingUsers(db, allActiveGraphUsers, graphMentionedExistingDbUsers, skus == null);
+                var insertedDbUsers = await InsertMissingUsers(db, allActiveGraphUsers, graphMentionedExistingDbUsers, skus == null, importCycleLastUpdatedUtc);
                 phaseResults.InsertPhaseSucceeded = true;
                 _logger.LogInformation($"User import - Insert phase completed. {insertedDbUsers.Count.ToString("N0")} new users inserted.");
 
@@ -263,7 +267,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             dbUsersByAadId,
                             _dataMapper.GraphUsersByAadId,
                             _userMetaCache,
-                            new SqlUserBulkUpdateWriter(db.Database.Connection.ConnectionString));
+                            new SqlUserBulkUpdateWriter(db.Database.Connection.ConnectionString),
+                            importCycleLastUpdatedUtc);
                     }
                     else
                     {
@@ -273,7 +278,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             notInsertedUpns,
                             dbUsersByUpn,
                             dbUsersByAadId,
-                            async (graphUser, dbUser) => await UpdateDbUserWithGraphData(db, graphUser, allActiveGraphUsers, new List<Common.Entities.User>(), dbUser, true, dbUsersByAadId),
+                            async (graphUser, dbUser) => await UpdateDbUserWithGraphData(db, graphUser, allActiveGraphUsers, new List<Common.Entities.User>(), dbUser, true, dbUsersByAadId, importCycleLastUpdatedUtc),
                             // Resolve the whole batch's managers in one query rather than one per
                             // user - see UserDataMapper.PrefetchManagersForBatchAsync (#371).
                             batch => _dataMapper.PrefetchManagersForBatchAsync(batch),
@@ -393,9 +398,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
         }
 
-        private async Task UpdateDbUserWithGraphData(AnalyticsEntitiesContext db, GraphUser graphUser, List<GraphUser> allGraphUsers, List<Common.Entities.User> allDbUsers, Common.Entities.User dbUser, bool readUserSkus, Dictionary<string, Common.Entities.User> dbUsersByAadId = null)
+        private async Task UpdateDbUserWithGraphData(AnalyticsEntitiesContext db, GraphUser graphUser, List<GraphUser> allGraphUsers, List<Common.Entities.User> allDbUsers, Common.Entities.User dbUser, bool readUserSkus, Dictionary<string, Common.Entities.User> dbUsersByAadId = null, DateTime? lastUpdatedUtc = null)
         {
-            await _dataMapper.UpdateUserMetadata(db, graphUser, allGraphUsers, dbUser, dbUsersByAadId, allDbUsers);
+            await _dataMapper.UpdateUserMetadata(db, graphUser, allGraphUsers, dbUser, dbUsersByAadId, allDbUsers, lastUpdatedUtc);
 
             // This is only done per user if can't be done at tenant level (due to extra permission)
             if (readUserSkus)
@@ -408,7 +413,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Inserts missing users into DB using two-phase approach: fast bulk insert, then metadata enrichment.
         /// Delegates to UserInsertProcessor for the heavy lifting.
         /// </summary>
-        public async Task<List<Common.Entities.User>> InsertMissingUsers(AnalyticsEntitiesContext db, List<GraphUser> allGraphUsers, List<Common.Entities.User> graphMentionedDbUsers, bool readUserSkus)
+        public async Task<List<Common.Entities.User>> InsertMissingUsers(AnalyticsEntitiesContext db, List<GraphUser> allGraphUsers, List<Common.Entities.User> graphMentionedDbUsers, bool readUserSkus, DateTime? importCycleLastUpdatedUtc = null)
         {
             // Ensure cache and helpers are initialized (for direct method calls from tests)
             if (_userMetaCache == null)
@@ -417,7 +422,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
             if (_dataMapper == null)
             {
-                _dataMapper = new UserDataMapper(_logger, _userMetaCache, new SqlUserLookupStore(db));
+                _dataMapper = new UserDataMapper(_logger, _userMetaCache, new SqlUserLookupStore(db), _clock);
             }
             if (_licenseProcessor == null)
             {
@@ -433,7 +438,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 _dataMapper,
                 _licenseProcessor,
                 async (ctx, graphUser, allGraph, allDb, dbUser, readSkus, dbByAadId) =>
-                    await UpdateDbUserWithGraphData(ctx, graphUser, allGraph, allDb, dbUser, readSkus, dbByAadId));
+                    await UpdateDbUserWithGraphData(ctx, graphUser, allGraph, allDb, dbUser, readSkus, dbByAadId, importCycleLastUpdatedUtc));
         }
 
         /// <summary>
@@ -444,7 +449,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // Ensure mapper is initialized
             if (_dataMapper == null && _userMetaCache != null)
             {
-                _dataMapper = new UserDataMapper(_logger, _userMetaCache);
+                _dataMapper = new UserDataMapper(_logger, _userMetaCache, _clock);
             }
 
             if (_dataMapper != null)
@@ -479,7 +484,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // Ensure mapper is initialized
             if (_dataMapper == null && _userMetaCache != null)
             {
-                _dataMapper = new UserDataMapper(_logger, _userMetaCache);
+                _dataMapper = new UserDataMapper(_logger, _userMetaCache, _clock);
             }
 
             // If mapper is available, use it; otherwise do direct mapping

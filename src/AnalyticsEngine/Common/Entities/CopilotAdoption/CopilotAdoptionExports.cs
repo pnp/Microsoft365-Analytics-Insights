@@ -325,6 +325,10 @@ namespace Common.Entities.CopilotAdoption
                 new CsvColumn<LicensedUserAdoptionRow>("Active days in period", r => r.ActiveDays),
                 new CsvColumn<LicensedUserAdoptionRow>("Active days for full marks", r => r.ExpectedActiveDays),
                 new CsvColumn<LicensedUserAdoptionRow>("Copilot apps used", r => r.AppsUsed),
+                new CsvColumn<LicensedUserAdoptionRow>("Source comparison available", r => r.SourceComparisonAvailable),
+                new CsvColumn<LicensedUserAdoptionRow>("Audit interactions in selected period", r => r.AuditInteractions),
+                new CsvColumn<LicensedUserAdoptionRow>("Audit active days in selected period", r => r.AuditActiveDays),
+                new CsvColumn<LicensedUserAdoptionRow>("Audit apps used in selected period", r => r.AuditAppsUsed),
                 new CsvColumn<LicensedUserAdoptionRow>("Copilot agents used", r => r.AgentsUsed),
                 new CsvColumn<LicensedUserAdoptionRow>("Used Cowork", r => r.UsedCowork),
                 new CsvColumn<LicensedUserAdoptionRow>("Cowork interactions", r => r.CoworkInteractions),
@@ -339,6 +343,8 @@ namespace Common.Entities.CopilotAdoption
 
                 new CsvColumn<LicensedUserAdoptionRow>("Recommended action", r => r.RecommendedActionLabel),
                 new CsvColumn<LicensedUserAdoptionRow>("Recommended action detail", r => r.RecommendedAction),
+                new CsvColumn<LicensedUserAdoptionRow>("Microsoft guidance resources", r => CopilotAdoptionGuidanceCatalogue.TitlesForAction(r.RecommendedActionCode)),
+                new CsvColumn<LicensedUserAdoptionRow>("Microsoft guidance URLs", r => CopilotAdoptionGuidanceCatalogue.UrlsForAction(r.RecommendedActionCode)),
             };
         }
 
@@ -482,6 +488,8 @@ namespace Common.Entities.CopilotAdoption
                 new CsvColumn<LicenceOpportunityRow>("Document score", r => r.DocumentScore),
 
                 new CsvColumn<LicenceOpportunityRow>("Justification", r => r.Rationale),
+                new CsvColumn<LicenceOpportunityRow>("Microsoft guidance resources", r => CopilotAdoptionGuidanceCatalogue.TitlesForAction(CopilotAdoptionGuidanceCatalogue.UnlicensedActionCode)),
+                new CsvColumn<LicenceOpportunityRow>("Microsoft guidance URLs", r => CopilotAdoptionGuidanceCatalogue.UrlsForAction(CopilotAdoptionGuidanceCatalogue.UnlicensedActionCode)),
             };
         }
 

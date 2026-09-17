@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
@@ -100,7 +100,9 @@
     <Compile Include="CopilotAdoption\CopilotAdoptionCoworkModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionDiagnostics.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionExports.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionGuidanceCatalogue.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionOptions.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionPeriodModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionScoring.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionService.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionSql.cs" />
@@ -445,6 +447,10 @@
       <DependentUpon>202609161200001_IndexTeamsExplorerQueries.cs</DependentUpon>
     </Compile>
     <Compile Include="Migrations\202609151440027_CopilotPromptSafetyFields.cs" />
+    <Compile Include="Migrations\202609170900001_CopilotAdoptionPeriodFacts.cs" />
+    <Compile Include="Migrations\202609170900001_CopilotAdoptionPeriodFacts.Designer.cs">
+      <DependentUpon>202609170900001_CopilotAdoptionPeriodFacts.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609151440027_CopilotPromptSafetyFields.Designer.cs">
       <DependentUpon>202609151440027_CopilotPromptSafetyFields.cs</DependentUpon>
     </Compile>
@@ -683,6 +689,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609151440027_CopilotPromptSafetyFields.resx">
       <DependentUpon>202609151440027_CopilotPromptSafetyFields.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609170900001_CopilotAdoptionPeriodFacts.resx">
+      <DependentUpon>202609170900001_CopilotAdoptionPeriodFacts.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609170910001_GraphCopilotUsageApiV2.resx">
       <DependentUpon>202609170910001_GraphCopilotUsageApiV2.cs</DependentUpon>
