@@ -152,6 +152,7 @@ namespace Common.Entities.CopilotAdoption
             "SELECT CASE WHEN EXISTS (\r\n" +
             "    SELECT 1 FROM dbo.copilot_chats AS c\r\n" +
             "    WHERE c.time_stamp >= @from\r\n" +
+            "      AND c.time_stamp < @toExclusive\r\n" +
             ") THEN 1 ELSE 0 END AS Value;";
 
         /// <summary>
@@ -1654,6 +1655,7 @@ namespace Common.Entities.CopilotAdoption
             "       options_hash AS OptionsHash,\r\n" +
             "       CAST(audit_available AS bit) AS AuditAvailable,\r\n" +
             "       CAST(report_obfuscated AS bit) AS ReportObfuscated,\r\n" +
+            "       report_period_days AS ReportPeriodDays,\r\n" +
             "       licensed_users AS LicensedUsers,\r\n" +
             "       scored_users AS ScoredUsers,\r\n" +
             "       published_utc AS PublishedUtc,\r\n" +
@@ -1686,9 +1688,15 @@ namespace Common.Entities.CopilotAdoption
             "       company.name AS CompanyName,\r\n" +
             "       manager.user_name AS ManagerUserPrincipalName,\r\n" +
             "       f.account_enabled AS AccountEnabled,\r\n" +
-            "       f.seat_first_observed_utc AS AccountCreatedUtc,\r\n" +
+            "       f.account_created_utc AS AccountCreatedUtc,\r\n" +
             "       f.seat_licence_type_ids AS SeatLicenceTypeIds,\r\n" +
-            "       f.seat_licence_type_ids AS SeatLicences,\r\n" +
+            "       licences.SeatLicences AS SeatLicences,\r\n" +
+            "       ISNULL(NULLIF(LTRIM(RTRIM(exclusion.reason)), N''), CASE WHEN exclusion.excluded_utc IS NULL THEN NULL ELSE N'(no reason recorded)' END) AS ReclaimExclusionReason,\r\n" +
+            "       exclusion.note AS ReclaimExclusionNote,\r\n" +
+            "       exclusion.excluded_by AS ReclaimExcludedBy,\r\n" +
+            "       exclusion.excluded_utc AS ReclaimExcludedUtc,\r\n" +
+            "       exclusion.review_after_utc AS ReclaimExclusionReviewAfterUtc,\r\n" +
+            "       CAST(CASE WHEN expired.user_id IS NOT NULL AND exclusion.excluded_utc IS NULL THEN 1 ELSE 0 END AS bit) AS ReclaimExclusionExpired,\r\n" +
             "       f.active_days AS ActiveDays,\r\n" +
             "       f.interactions AS Interactions,\r\n" +
             "       f.apps_used AS AppsUsed,\r\n" +
@@ -1714,6 +1722,26 @@ namespace Common.Entities.CopilotAdoption
             "LEFT JOIN dbo.user_office_locations AS office ON office.id = u.office_location_id\r\n" +
             "LEFT JOIN dbo.user_company_name AS company ON company.id = u.company_name_id\r\n" +
             "LEFT JOIN dbo.users AS manager ON manager.id = f.manager_id\r\n" +
+            "OUTER APPLY (\r\n" +
+            "    SELECT STUFF((SELECT N', ' + lt.name\r\n" +
+            "                  FROM dbo.license_types AS lt\r\n" +
+            "                  WHERE CHARINDEX(N',' + CONVERT(nvarchar(20), lt.id) + N',', N',' + f.seat_licence_type_ids + N',') > 0\r\n" +
+            "                  ORDER BY lt.name FOR XML PATH(''), TYPE).value('.', 'nvarchar(max)'), 1, 2, N'') AS SeatLicences\r\n" +
+            ") AS licences\r\n" +
+            "OUTER APPLY (\r\n" +
+            "    SELECT TOP (1) e.reason, e.note, e.excluded_by, e.excluded_utc, e.review_after_utc\r\n" +
+            "    FROM dbo.copilot_adoption_reclaim_exclusions AS e\r\n" +
+            "    WHERE e.user_id = f.user_id\r\n" +
+            "      AND (e.review_after_utc IS NULL OR e.review_after_utc > SYSUTCDATETIME())\r\n" +
+            "    ORDER BY e.excluded_utc DESC, e.id DESC\r\n" +
+            ") AS exclusion\r\n" +
+            "OUTER APPLY (\r\n" +
+            "    SELECT TOP (1) e.user_id\r\n" +
+            "    FROM dbo.copilot_adoption_reclaim_exclusions AS e\r\n" +
+            "    WHERE e.user_id = f.user_id\r\n" +
+            "      AND e.review_after_utc <= SYSUTCDATETIME()\r\n" +
+            "    ORDER BY e.review_after_utc DESC, e.excluded_utc DESC, e.id DESC\r\n" +
+            ") AS expired\r\n" +
             "WHERE f.period_end = @periodEnd AND f.period_days = @periodDays\r\n" +
             "ORDER BY f.user_id;";
 
@@ -1762,10 +1790,10 @@ namespace Common.Entities.CopilotAdoption
                 "CopilotApps AS (SELECT user_id, COUNT(*) AS AppsUsed FROM (SELECT DISTINCT user_id, app_host FROM CopilotWindow WHERE time_stamp >= @from AND app_host IS NOT NULL) AS a GROUP BY user_id),\r\n" +
                 "CopilotAgents AS (SELECT user_id, COUNT(*) AS AgentsUsed FROM (SELECT DISTINCT user_id, agent_id FROM CopilotWindow WHERE time_stamp >= @from AND agent_id IS NOT NULL) AS g GROUP BY user_id)" + reportCte + "\r\n" +
                 "INSERT INTO dbo.copilot_adoption_user_period\r\n" +
-                "    (period_end, period_days, data_cutoff_utc, user_id, seat_licence_type_ids, account_enabled, department_id, country_id, manager_id, seat_first_observed_utc,\r\n" +
+                "    (period_end, period_days, data_cutoff_utc, user_id, seat_licence_type_ids, account_enabled, department_id, country_id, manager_id, seat_first_observed_utc, account_created_utc,\r\n" +
                 "     active_days, interactions, apps_used, agents_used, cowork_interactions, active_weeks, first_interaction_utc, last_interaction_utc, prior_interactions,\r\n" +
                 "     signal_source, report_prompts, report_active_days, report_apps_used, report_last_activity_utc, report_agent_last_activity_utc, coverage_status)\r\n" +
-                "SELECT @periodEnd, @periodDays, @toExclusive, u.id, seats.seat_licence_type_ids, u.account_enabled, u.department_id, u.country_or_region_id, u.manager_id, u.created_utc,\r\n" +
+                "SELECT @periodEnd, @periodDays, @toExclusive, u.id, seats.seat_licence_type_ids, u.account_enabled, u.department_id, u.country_or_region_id, u.manager_id, NULL, u.created_utc,\r\n" +
                 "       ISNULL(days.ActiveDays, 0), CAST(ISNULL(t.Interactions, 0) AS bigint), ISNULL(apps.AppsUsed, 0), ISNULL(agents.AgentsUsed, 0),\r\n" +
                 "       CAST(ISNULL(t.CoworkInteractions, 0) AS bigint), ISNULL(weeks.ActiveWeeks, 0), t.FirstInteractionUtc, t.LastInteractionUtc, CAST(ISNULL(t.PriorInteractions, 0) AS bigint),\r\n" +
                 "       CASE WHEN @auditAvailable = 1 THEN N'audit' WHEN @includeCopilotReport = 1 THEN N'usageReport' ELSE N'none' END,\r\n" +
@@ -1778,8 +1806,8 @@ namespace Common.Entities.CopilotAdoption
                 "LEFT JOIN CopilotApps AS apps ON apps.user_id = u.id\r\n" +
                 "LEFT JOIN CopilotAgents AS agents ON agents.user_id = u.id\r\n" + reportJoin +
                 "ORDER BY u.id;\r\nDECLARE @scored int = @@ROWCOUNT;\r\n" +
-                "INSERT INTO dbo.copilot_adoption_period_run (period_end, period_days, options_hash, audit_available, report_obfuscated, licensed_users, scored_users, published_utc, data_cutoff_utc, coverage_status)\r\n" +
-                "VALUES (@periodEnd, @periodDays, @optionsHash, @auditAvailable, @reportObfuscated, @licensedUsers, @scored, SYSUTCDATETIME(), @toExclusive,\r\n" +
+                "INSERT INTO dbo.copilot_adoption_period_run (period_end, period_days, options_hash, audit_available, report_obfuscated, report_period_days, licensed_users, scored_users, published_utc, data_cutoff_utc, coverage_status)\r\n" +
+                "VALUES (@periodEnd, @periodDays, @optionsHash, @auditAvailable, @reportObfuscated, @copilotReportPeriodDays, @licensedUsers, @scored, SYSUTCDATETIME(), @toExclusive,\r\n" +
                 "        CASE WHEN @auditAvailable = 1 THEN N'complete' WHEN @includeCopilotReport = 1 THEN N'usage-report-only' ELSE N'unverifiable' END);\r\nCOMMIT TRANSACTION;";
         }
 

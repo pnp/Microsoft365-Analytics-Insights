@@ -74,7 +74,13 @@ namespace Tests.UnitTests
 
                 var options = CopilotAdoptionOptions.Default;
                 var service = new CopilotAdoptionService(options, new TestContextFactory(db.ConnectionString), maxConcurrentSteps: 1);
-                var run = service.PublishClosedPeriodAsync(periodEnd, new[] { 1 }).GetAwaiter().GetResult();
+                db.Execute(
+                    $@"INSERT INTO dbo.copilot_adoption_reclaim_exclusions
+                           (id, user_id, reason, note, excluded_by, excluded_utc, review_after_utc)
+                       VALUES (1, 3, N'service account', N'Synthetic admin note', N'admin@contoso.com', '{periodEnd.AddDays(-2):yyyy-MM-dd}', NULL);");
+
+                var publish = service.PublishClosedPeriodAsync(periodEnd, new[] { 1 }).GetAwaiter().GetResult();
+                var run = publish.Run;
                 var stored = service.ReadPublishedPeriodAsync(periodEnd, options.WindowDays).GetAwaiter().GetResult();
 
                 var from = periodEnd.AddDays(-(options.WindowDays - 1));
@@ -99,12 +105,26 @@ namespace Tests.UnitTests
                 service.FinaliseSummary(live);
 
                 Assert.IsNotNull(run);
+                Assert.AreEqual(CopilotAdoptionPeriodPublishStatus.Published, publish.Status);
                 Assert.AreEqual(CopilotAdoptionSql.PeriodCoverageComplete, run.CoverageStatus);
                 Assert.AreEqual(live.Summary.ScoredUsers, stored.Analysis.Summary.ScoredUsers);
                 Assert.AreEqual(live.Summary.ActiveUsers, stored.Analysis.Summary.ActiveUsers);
                 Assert.AreEqual(live.Summary.DormantUsers, stored.Analysis.Summary.DormantUsers);
                 Assert.AreEqual(live.Summary.NeverUsedUsers, stored.Analysis.Summary.NeverUsedUsers);
                 Assert.AreEqual(live.Summary.AdoptionRatePct, stored.Analysis.Summary.AdoptionRatePct);
+                Assert.AreEqual(1, stored.Analysis.Summary.ReclaimExcludedUsers,
+                    "The stored read must re-join current reclaim exclusions before applying reclaim eligibility.");
+                Assert.AreEqual(
+                    "Microsoft Copilot for Microsoft 365",
+                    stored.Analysis.LicensedUsers[0].SeatLicences,
+                    "Stored licence ids must be resolved back to licence names for display and CSV export.");
+                Assert.IsNull(
+                    Query<DateTime?>(db, "SELECT seat_first_observed_utc FROM dbo.copilot_adoption_user_period WHERE user_id = 1").Single(),
+                    "Until seat-assignment history exists, the stored seat-first-observed field must remain unknown.");
+                Assert.AreEqual(
+                    periodEnd.AddDays(-100),
+                    Query<DateTime?>(db, "SELECT account_created_utc FROM dbo.copilot_adoption_user_period WHERE user_id = 1").Single(),
+                    "Account creation is a separate tenure proxy and must not be written as seat-first-observed.");
                 CollectionAssert.AreEqual(
                     live.LicensedUsers.Select(u => u.Band).ToArray(),
                     stored.Analysis.LicensedUsers.Select(u => u.Band).ToArray(),
@@ -113,7 +133,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void PublishClosedPeriod_IsIdempotentForAlreadyPublishedPeriod()
+        public void PublishClosedPeriod_ReturnsAlreadyPublishedForExactRetry()
         {
             using (var db = ScratchDatabase.Create("CopilotAdoptIdem"))
             {
@@ -132,11 +152,156 @@ namespace Tests.UnitTests
                           VALUES (1, N'getMicrosoft365CopilotUsageUserDetail', SYSUTCDATETIME(), 0, 0, 0);");
 
                 var service = new CopilotAdoptionService(CopilotAdoptionOptions.Default, new TestContextFactory(db.ConnectionString), maxConcurrentSteps: 1);
-                service.PublishClosedPeriodAsync(periodEnd, new[] { 1 }).GetAwaiter().GetResult();
-                service.PublishClosedPeriodAsync(periodEnd, new[] { 1 }).GetAwaiter().GetResult();
+                var first = service.PublishClosedPeriodAsync(periodEnd, new[] { 1 }).GetAwaiter().GetResult();
+                var second = service.PublishClosedPeriodAsync(periodEnd, new[] { 1 }).GetAwaiter().GetResult();
 
+                Assert.AreEqual(CopilotAdoptionPeriodPublishStatus.Published, first.Status);
+                Assert.AreEqual(CopilotAdoptionPeriodPublishStatus.AlreadyPublished, second.Status);
+                Assert.IsNotNull(second.Run);
                 Assert.AreEqual(1, Convert.ToInt32(db.Scalar("SELECT COUNT(*) FROM dbo.copilot_adoption_period_run")));
                 Assert.AreEqual(2, Convert.ToInt32(db.Scalar("SELECT COUNT(*) FROM dbo.copilot_adoption_user_period")));
+            }
+        }
+
+        [TestMethod]
+        public void PublishClosedPeriod_ReturnsNotDueForCurrentOlderAndOverlappingPeriods()
+        {
+            using (var db = ScratchDatabase.Create("CopilotAdoptDue"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                CreateCopilotReportTable(db);
+                CreateCopilotImportLogTable(db);
+                CreatePeriodFactTables(db);
+
+                var yesterday = DateTime.UtcNow.Date.AddDays(-1);
+                db.Execute(
+                    $@"INSERT INTO dbo.license_types (id, name, sku_id) VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                       INSERT INTO dbo.users (id, user_name, account_enabled) VALUES (1, N'one@contoso.com', 1);
+                       INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1);
+                       INSERT INTO dbo.copilot_usage_report_import_log (id, report_name, imported_utc, rows_read, rows_saved, is_upn_obfuscated)
+                           VALUES (1, N'getMicrosoft365CopilotUsageUserDetail', SYSUTCDATETIME(), 0, 0, 0);
+                       INSERT INTO dbo.copilot_adoption_period_run
+                           (period_end, period_days, options_hash, audit_available, report_obfuscated, report_period_days, licensed_users, scored_users, published_utc, data_cutoff_utc, coverage_status)
+                       VALUES ('{yesterday.AddDays(-7):yyyy-MM-dd}', 28, N'{CopilotAdoptionService.OptionsHash(CopilotAdoptionOptions.Default)}', 1, 0, 0, 1, 1, SYSUTCDATETIME(), '{yesterday.AddDays(-6):yyyy-MM-dd}', N'complete');");
+
+                var service = new CopilotAdoptionService(CopilotAdoptionOptions.Default, new TestContextFactory(db.ConnectionString), maxConcurrentSteps: 1);
+
+                Assert.AreEqual(
+                    CopilotAdoptionPeriodPublishStatus.NotDue,
+                    service.PublishClosedPeriodAsync(DateTime.UtcNow.Date, new[] { 1 }).GetAwaiter().GetResult().Status,
+                    "A scheduler must be able to probe the current incomplete period without exception-driven control flow.");
+                Assert.AreEqual(
+                    CopilotAdoptionPeriodPublishStatus.NotDue,
+                    service.PublishClosedPeriodAsync(yesterday.AddDays(-40), new[] { 1 }).GetAwaiter().GetResult().Status,
+                    "Missed historical periods remain unknown instead of throwing on every scheduler run.");
+                Assert.AreEqual(
+                    CopilotAdoptionPeriodPublishStatus.NotDue,
+                    service.PublishClosedPeriodAsync(yesterday, new[] { 1 }).GetAwaiter().GetResult().Status,
+                    "Overlapping periods are expected scheduler no-ops until the next non-overlapping period is due.");
+            }
+        }
+
+        [TestMethod]
+        public void PublishClosedPeriod_StoresUnverifiableWhenNoAuditDataFallsInsideThePeriod()
+        {
+            using (var db = ScratchDatabase.Create("CopilotAdoptCoverage"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                CreateCopilotReportTable(db);
+                CreateCopilotImportLogTable(db);
+                CreatePeriodFactTables(db);
+
+                var periodEnd = DateTime.UtcNow.Date.AddDays(-1);
+                db.Execute(
+                    @"INSERT INTO dbo.license_types (id, name, sku_id) VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                      INSERT INTO dbo.users (id, user_name, account_enabled) VALUES (1, N'one@contoso.com', 1);
+                      INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1);
+                      INSERT INTO dbo.copilot_usage_report_import_log (id, report_name, imported_utc, rows_read, rows_saved, is_upn_obfuscated)
+                          VALUES (1, N'getMicrosoft365CopilotUsageUserDetail', SYSUTCDATETIME(), 0, 0, 0);");
+                SeedCopilotInteraction(db, userId: 1, daysAgo: 0, appHost: "Teams");
+
+                var service = new CopilotAdoptionService(CopilotAdoptionOptions.Default, new TestContextFactory(db.ConnectionString), maxConcurrentSteps: 1);
+                var publish = service.PublishClosedPeriodAsync(periodEnd, new[] { 1 }).GetAwaiter().GetResult();
+                var stored = service.ReadPublishedPeriodAsync(periodEnd, CopilotAdoptionOptions.Default.WindowDays).GetAwaiter().GetResult();
+
+                Assert.AreEqual(CopilotAdoptionSql.PeriodCoverageUnverifiable, publish.Run.CoverageStatus);
+                Assert.IsFalse(publish.Run.AuditAvailable);
+                Assert.AreEqual(
+                    CopilotAdoptionSql.PeriodCoverageUnverifiable,
+                    Query<string>(db, "SELECT coverage_status FROM dbo.copilot_adoption_user_period WHERE user_id = 1").Single());
+                Assert.IsTrue(stored.Analysis.Summary.FiguresIncomplete);
+            }
+        }
+
+        [TestMethod]
+        public void PublishClosedPeriod_DowngradesCoverageWhileCopilotBackfillIsPending()
+        {
+            using (var db = ScratchDatabase.Create("CopilotAdoptBackfill"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                CreateCopilotReportTable(db);
+                CreateCopilotImportLogTable(db);
+                CreatePeriodFactTables(db);
+
+                var periodEnd = DateTime.UtcNow.Date.AddDays(-1);
+                var pendingId = Guid.NewGuid();
+                db.Execute(
+                    $@"INSERT INTO dbo.license_types (id, name, sku_id) VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                       INSERT INTO dbo.users (id, user_name, account_enabled) VALUES (1, N'one@contoso.com', 1);
+                       INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1);
+                       INSERT INTO dbo.copilot_usage_report_import_log (id, report_name, imported_utc, rows_read, rows_saved, is_upn_obfuscated)
+                           VALUES (1, N'getMicrosoft365CopilotUsageUserDetail', SYSUTCDATETIME(), 0, 0, 0);
+                       INSERT INTO dbo.audit_events (id, time_stamp, user_id) VALUES ('{pendingId}', '{periodEnd:yyyy-MM-dd} 09:00:00', 1);
+                       INSERT INTO dbo.copilot_chats (event_id, app_host, user_id, time_stamp) VALUES ('{pendingId}', N'Teams', NULL, NULL);");
+                SeedCopilotInteraction(db, userId: 1, daysAgo: 1, appHost: "Teams");
+
+                var service = new CopilotAdoptionService(CopilotAdoptionOptions.Default, new TestContextFactory(db.ConnectionString), maxConcurrentSteps: 1);
+                var publish = service.PublishClosedPeriodAsync(periodEnd, new[] { 1 }).GetAwaiter().GetResult();
+
+                Assert.AreEqual(CopilotAdoptionSql.PeriodCoverageUnverifiable, publish.Run.CoverageStatus);
+                Assert.IsFalse(publish.Run.AuditAvailable);
+            }
+        }
+
+        [TestMethod]
+        public void ReadPublishedPeriod_ScoresStoredFactsWithTheStoredPeriodLength()
+        {
+            using (var db = ScratchDatabase.Create("CopilotAdoptWindow"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                CreatePeriodFactTables(db);
+
+                var periodEnd = DateTime.UtcNow.Date.AddDays(-1);
+                var publishedOptions = CopilotAdoptionOptions.Default;
+                var retunedOptions = CopilotAdoptionOptions.Default;
+                retunedOptions.WindowDays = 90;
+
+                db.Execute(
+                    $@"INSERT INTO dbo.license_types (id, name, sku_id) VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                       INSERT INTO dbo.users (id, user_name, account_enabled, created_utc) VALUES (1, N'one@contoso.com', 1, '{periodEnd.AddDays(-120):yyyy-MM-dd}');
+                       INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1);
+                       INSERT INTO dbo.copilot_adoption_period_run
+                           (period_end, period_days, options_hash, audit_available, report_obfuscated, report_period_days, licensed_users, scored_users, published_utc, data_cutoff_utc, coverage_status)
+                       VALUES ('{periodEnd:yyyy-MM-dd}', 28, N'{CopilotAdoptionService.OptionsHash(publishedOptions)}', 1, 0, 0, 1, 1, SYSUTCDATETIME(), '{periodEnd.AddDays(1):yyyy-MM-dd}', N'complete');
+                       INSERT INTO dbo.copilot_adoption_user_period
+                           (period_end, period_days, data_cutoff_utc, user_id, seat_licence_type_ids, account_enabled, account_created_utc,
+                            active_days, interactions, apps_used, agents_used, cowork_interactions, active_weeks, prior_interactions, signal_source, coverage_status)
+                       VALUES ('{periodEnd:yyyy-MM-dd}', 28, '{periodEnd.AddDays(1):yyyy-MM-dd}', 1, N'1', 1, '{periodEnd.AddDays(-120):yyyy-MM-dd}',
+                               6, 30, 1, 0, 0, 1, 0, N'audit', N'complete');");
+
+                var stored = new CopilotAdoptionService(retunedOptions, new TestContextFactory(db.ConnectionString), maxConcurrentSteps: 1)
+                    .ReadPublishedPeriodAsync(periodEnd, 28)
+                    .GetAwaiter()
+                    .GetResult();
+
+                Assert.AreEqual(28, stored.Analysis.Summary.WindowDays);
+                Assert.AreEqual(periodEnd, stored.Analysis.Summary.ToUtc);
+                Assert.AreEqual(12d, stored.Analysis.LicensedUsers.Single().ExpectedActiveDays,
+                    "Stored D28 facts must not be rescored against the current D90 WindowDays target.");
             }
         }
 
@@ -162,13 +327,13 @@ namespace Tests.UnitTests
                 var rightEnd = DateTime.UtcNow.Date.AddDays(-40);
                 var defaults = CopilotAdoptionOptions.Default;
                 var retuned = CopilotAdoptionOptions.Default;
-                retuned.EstablishedScore = defaults.EstablishedScore + 5;
+                retuned.HistoryDays = defaults.HistoryDays + 30;
 
                 db.Execute(
                     $@"INSERT INTO dbo.copilot_adoption_period_run
-                           (period_end, period_days, options_hash, audit_available, report_obfuscated, licensed_users, scored_users, published_utc, data_cutoff_utc, coverage_status)
-                       VALUES ('{leftEnd:yyyy-MM-dd}', {defaults.WindowDays}, N'{CopilotAdoptionService.OptionsHash(defaults)}', 1, 0, 1, 1, SYSUTCDATETIME(), '{leftEnd.AddDays(1):yyyy-MM-dd}', N'complete'),
-                              ('{rightEnd:yyyy-MM-dd}', {defaults.WindowDays}, N'{CopilotAdoptionService.OptionsHash(retuned)}', 1, 0, 1, 1, SYSUTCDATETIME(), '{rightEnd.AddDays(1):yyyy-MM-dd}', N'complete');");
+                           (period_end, period_days, options_hash, audit_available, report_obfuscated, report_period_days, licensed_users, scored_users, published_utc, data_cutoff_utc, coverage_status)
+                       VALUES ('{leftEnd:yyyy-MM-dd}', {defaults.WindowDays}, N'{CopilotAdoptionService.OptionsHash(defaults)}', 1, 0, 0, 1, 1, SYSUTCDATETIME(), '{leftEnd.AddDays(1):yyyy-MM-dd}', N'complete'),
+                              ('{rightEnd:yyyy-MM-dd}', {defaults.WindowDays}, N'{CopilotAdoptionService.OptionsHash(retuned)}', 1, 0, 0, 1, 1, SYSUTCDATETIME(), '{rightEnd.AddDays(1):yyyy-MM-dd}', N'complete');");
 
                 var left = new CopilotAdoptionService(defaults, new TestContextFactory(db.ConnectionString), maxConcurrentSteps: 1);
                 var gate = left.ComparePublishedPeriodsAsync(leftEnd, rightEnd, defaults.WindowDays).GetAwaiter().GetResult();
@@ -1029,7 +1194,7 @@ namespace Tests.UnitTests
                     new SqlParameter("@from", from));
                 Assert.AreEqual(0, unlicensed.Single(), "The only Copilot user in this fixture holds a seat.");
 
-                var hasAudit = Query<int?>(db, CopilotAdoptionSql.HasCopilotAuditDataSql, new SqlParameter("@from", from));
+                var hasAudit = Query<int?>(db, CopilotAdoptionSql.HasCopilotAuditDataSql, new SqlParameter("@from", from), new SqlParameter("@toExclusive", DateTime.UtcNow));
                 Assert.AreEqual(1, hasAudit.Single());
 
                 // These two return NULL against an empty table, which must materialise rather than throw.

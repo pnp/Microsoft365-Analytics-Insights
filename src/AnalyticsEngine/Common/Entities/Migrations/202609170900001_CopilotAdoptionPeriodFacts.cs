@@ -32,6 +32,7 @@ BEGIN
         [options_hash] nvarchar(64) NOT NULL,
         [audit_available] bit NOT NULL,
         [report_obfuscated] bit NOT NULL,
+        [report_period_days] int NOT NULL CONSTRAINT [DF_copilot_adoption_period_run_report_period_days] DEFAULT (0),
         [licensed_users] int NOT NULL,
         [scored_users] int NOT NULL,
         [published_utc] datetime2(7) NOT NULL CONSTRAINT [DF_copilot_adoption_period_run_published_utc] DEFAULT SYSUTCDATETIME(),
@@ -46,6 +47,14 @@ END
 ELSE
 BEGIN
     RAISERROR('CopilotAdoptionPeriodFacts: dbo.copilot_adoption_period_run already exists.', 0, 1) WITH NOWAIT;
+END
+
+IF OBJECT_ID(N'dbo.copilot_adoption_period_run', N'U') IS NOT NULL
+   AND COL_LENGTH(N'dbo.copilot_adoption_period_run', N'report_period_days') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[copilot_adoption_period_run]
+        ADD [report_period_days] int NOT NULL CONSTRAINT [DF_copilot_adoption_period_run_report_period_days] DEFAULT (0);
+    RAISERROR('CopilotAdoptionPeriodFacts: added copilot_adoption_period_run.report_period_days.', 0, 1) WITH NOWAIT;
 END
 
 IF OBJECT_ID(N'dbo.copilot_adoption_period_run', N'U') IS NOT NULL
@@ -70,6 +79,7 @@ BEGIN
         [country_id] int NULL,
         [manager_id] int NULL,
         [seat_first_observed_utc] datetime2(7) NULL,
+        [account_created_utc] datetime2(7) NULL,
         [active_days] int NOT NULL CONSTRAINT [DF_copilot_adoption_user_period_active_days] DEFAULT (0),
         [interactions] bigint NOT NULL CONSTRAINT [DF_copilot_adoption_user_period_interactions] DEFAULT (0),
         [apps_used] int NOT NULL CONSTRAINT [DF_copilot_adoption_user_period_apps_used] DEFAULT (0),
@@ -95,6 +105,14 @@ END
 ELSE
 BEGIN
     RAISERROR('CopilotAdoptionPeriodFacts: dbo.copilot_adoption_user_period already exists.', 0, 1) WITH NOWAIT;
+END
+
+IF OBJECT_ID(N'dbo.copilot_adoption_user_period', N'U') IS NOT NULL
+   AND COL_LENGTH(N'dbo.copilot_adoption_user_period', N'account_created_utc') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[copilot_adoption_user_period]
+        ADD [account_created_utc] datetime2(7) NULL;
+    RAISERROR('CopilotAdoptionPeriodFacts: added copilot_adoption_user_period.account_created_utc.', 0, 1) WITH NOWAIT;
 END
 
 IF OBJECT_ID(N'dbo.copilot_adoption_user_period', N'U') IS NOT NULL

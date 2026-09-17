@@ -35,6 +35,13 @@ namespace Common.Entities.CopilotAdoption
         public const int QueryTimeoutSecs = 90;
 
         /// <summary>
+        /// The scheduled period publisher is explicitly off the interactive request path, so it must not
+        /// inherit the request-path budget. A closed-period publish deletes and rebuilds up to one row per
+        /// Copilot seat and can legitimately run longer than an HTTP request on a 200k-seat tenant.
+        /// </summary>
+        public const int PublishCommandTimeoutSecs = 0;
+
+        /// <summary>
         /// How many analysis steps may query the database at once.
         /// </summary>
         /// <remarks>
@@ -91,22 +98,13 @@ namespace Common.Entities.CopilotAdoption
 
 
         /// <summary>Publishes threshold-independent raw facts for a closed period. This is deliberately not called by the interactive analysis path.</summary>
-        public async Task<CopilotAdoptionPeriodRun> PublishClosedPeriodAsync(
+        public async Task<CopilotAdoptionPeriodPublishResult> PublishClosedPeriodAsync(
             DateTime periodEndUtc,
             IEnumerable<int> seatLicenceTypeIdOverride = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
             var periodEnd = periodEndUtc.Date;
             var latestClosedPeriodEnd = DateTime.UtcNow.Date.AddDays(-1);
-            if (periodEnd >= DateTime.UtcNow.Date)
-            {
-                throw new ArgumentException("Only closed periods can be published; the current incomplete period must never be persisted.", nameof(periodEndUtc));
-            }
-            if (periodEnd < latestClosedPeriodEnd)
-            {
-                throw new InvalidOperationException("Refusing to backfill an older Copilot Adoption period from current licence or user metadata. Publish periods as they close; until seat/metadata history exists, missed historical periods must remain unknown.");
-            }
-
             var periodDays = Math.Max(1, _options.WindowDays);
             var from = periodEnd.AddDays(-(periodDays - 1));
             var historyFrom = periodEnd.AddDays(-(Math.Max(periodDays, _options.HistoryDays) - 1));
@@ -114,6 +112,23 @@ namespace Common.Entities.CopilotAdoption
             var settled = periodEnd.AddDays(-Math.Max(0, _options.UsageReportLagDays));
 
             cancellationToken.ThrowIfCancellationRequested();
+
+            var existing = await GetPublishedPeriodRunAsync(periodEnd, periodDays, cancellationToken);
+            if (existing != null)
+            {
+                return CopilotAdoptionPeriodPublishResult.AlreadyPublished(existing);
+            }
+
+            if (periodEnd >= DateTime.UtcNow.Date)
+            {
+                return CopilotAdoptionPeriodPublishResult.NotDue(
+                    "Only closed periods can be published; the current incomplete period must never be persisted.");
+            }
+            if (periodEnd < latestClosedPeriodEnd)
+            {
+                return CopilotAdoptionPeriodPublishResult.NotDue(
+                    "Older Copilot Adoption periods are not backfilled from current licence or user metadata. Publish periods as they close; until seat/metadata history exists, missed historical periods remain unknown.");
+            }
 
             var overlaps = await ScalarAsync(
                 CopilotAdoptionSql.OverlappingPublishedPeriodSql,
@@ -123,16 +138,23 @@ namespace Common.Entities.CopilotAdoption
                 new SqlParameter("@from", from));
             if (overlaps > 0)
             {
-                throw new InvalidOperationException("A published Copilot Adoption period with the same length already overlaps this window. Period-fact history must be closed and non-overlapping.");
+                return CopilotAdoptionPeriodPublishResult.NotDue(
+                    "A published Copilot Adoption period with the same length already overlaps this window. The next publish is not due yet.");
             }
 
             var licenceTypes = await QueryAsync<LicenceTypeRow>(CopilotAdoptionSql.LicenceTypesSql, cancellationToken);
             var seatIds = CopilotLicenceClassifier.ResolveSeatLicenceTypeIds(licenceTypes, seatLicenceTypeIdOverride);
 
+            var backfillPending = await ScalarAsync(
+                CopilotAdoptionSql.PendingCopilotBackfillSql,
+                cancellationToken) == 1;
+
             var auditAvailable = await ScalarAsync(
                 CopilotAdoptionSql.HasCopilotAuditDataSql,
                 cancellationToken,
-                new SqlParameter("@from", from)) == 1;
+                new SqlParameter("@from", from),
+                new SqlParameter("@toExclusive", toExclusive)) == 1
+                && !backfillPending;
 
             var reportDate = await DateAsync(
                 CopilotAdoptionSql.LatestCopilotReportDateSql,
@@ -160,6 +182,7 @@ namespace Common.Entities.CopilotAdoption
             await ExecuteAsync(
                 publishSql,
                 cancellationToken,
+                PublishCommandTimeoutSecs,
                 new SqlParameter("@periodEnd", periodEnd),
                 new SqlParameter("@periodDays", periodDays),
                 new SqlParameter("@from", from),
@@ -173,7 +196,8 @@ namespace Common.Entities.CopilotAdoption
                 new SqlParameter("@copilotReportDate", (object)reportDate ?? DBNull.Value),
                 new SqlParameter("@copilotReportPeriodDays", reportPeriodDays));
 
-            return await GetPublishedPeriodRunAsync(periodEnd, periodDays, cancellationToken);
+            return CopilotAdoptionPeriodPublishResult.Published(
+                await GetPublishedPeriodRunAsync(periodEnd, periodDays, cancellationToken));
         }
 
         /// <summary>Reads stored facts and recomputes all bands, actions and rates under the current options.</summary>
@@ -197,12 +221,14 @@ namespace Common.Entities.CopilotAdoption
             summary.GeneratedUtc = DateTime.UtcNow;
             summary.WindowDays = periodDays;
             summary.FromUtc = periodEnd.AddDays(-(Math.Max(1, periodDays) - 1));
-            summary.ToUtc = run.DataCutoffUtc;
-            summary.Options = _options;
+            summary.ToUtc = periodEnd;
+            var periodOptions = OptionsForStoredPeriod(_options, periodDays);
+            summary.Options = periodOptions;
             summary.LicensedUsers = run.LicensedUsers;
             summary.DataSources.UserMetadataAvailable = true;
             summary.DataSources.AuditAvailable = run.AuditAvailable;
             summary.DataSources.CopilotUsageReportObfuscated = run.ReportObfuscated;
+            summary.DataSources.CopilotUsageReportPeriodDays = run.ReportPeriodDays;
             summary.DataSources.CopilotUsageReportAvailable = rows.Any(r => r.ReportPrompts.HasValue || r.ReportActiveDays.HasValue);
 
             if (string.Equals(run.CoverageStatus, CopilotAdoptionSql.PeriodCoverageUnverifiable, StringComparison.OrdinalIgnoreCase))
@@ -212,7 +238,7 @@ namespace Common.Entities.CopilotAdoption
             }
 
             analysis.LicensedUsers = rows
-                .Select(row => CopilotAdoptionScoring.Score(row, summary.FromUtc, periodEnd, run.AuditAvailable, _options))
+                .Select(row => CopilotAdoptionScoring.Score(row, summary.FromUtc, periodEnd, run.AuditAvailable, periodOptions))
                 .ToList();
 
             FinaliseSummary(analysis);
@@ -243,11 +269,26 @@ namespace Common.Entities.CopilotAdoption
 
         public static string OptionsHash(CopilotAdoptionOptions options)
         {
-            var json = JsonConvert.SerializeObject(options ?? CopilotAdoptionOptions.Default, Formatting.None);
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var factShapingOptions = new
+            {
+                WindowDays = Math.Max(1, o.WindowDays),
+                HistoryDays = Math.Max(1, o.HistoryDays),
+                UsageReportLagDays = Math.Max(0, o.UsageReportLagDays)
+            };
+            var json = JsonConvert.SerializeObject(factShapingOptions, Formatting.None);
             using (var sha = SHA256.Create())
             {
                 return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(json))).Replace("-", string.Empty).ToLowerInvariant();
             }
+        }
+
+        private static CopilotAdoptionOptions OptionsForStoredPeriod(CopilotAdoptionOptions options, int periodDays)
+        {
+            var clone = JsonConvert.DeserializeObject<CopilotAdoptionOptions>(
+                JsonConvert.SerializeObject(options ?? CopilotAdoptionOptions.Default, Formatting.None));
+            clone.WindowDays = Math.Max(1, periodDays);
+            return clone;
         }
 
         private async Task<CopilotAdoptionPeriodRun> GetPublishedPeriodRunAsync(DateTime periodEnd, int periodDays, CancellationToken cancellationToken)
@@ -376,7 +417,8 @@ namespace Common.Entities.CopilotAdoption
                 "Copilot audit data probe",
                 () => summary.MarkFiguresIncomplete("Copilot audit data"),
                 cancellationToken,
-                new SqlParameter("@from", windowStart)) == 1;
+                new SqlParameter("@from", windowStart),
+                new SqlParameter("@toExclusive", nowUtc)) == 1;
 
             // Every Copilot query filters on copilot_chats.time_stamp, so an interaction whose denormalised
             // columns have not been written yet is simply missing from the figures. Migration
@@ -1482,11 +1524,12 @@ namespace Common.Entities.CopilotAdoption
             var auditInteractionUsers = users
                 .Where(u => !IsUsageReportSourced(u))
                 .ToList();
+            var analysisWindowDays = summary.WindowDays > 0 ? summary.WindowDays : _options.WindowDays;
             summary.UsageReportSourcedUsers = reportSourcedUsers.Count;
             summary.UsageReportSourcedUserPct = CopilotAdoptionScoring.Percentage(reportSourcedUsers.Count, denominator);
             summary.UsageReportWindowMismatch = reportSourcedUsers.Count > 0
                 && summary.DataSources.CopilotUsageReportPeriodDays > 0
-                && summary.DataSources.CopilotUsageReportPeriodDays != _options.WindowDays;
+                && summary.DataSources.CopilotUsageReportPeriodDays != analysisWindowDays;
 
             if (summary.ScoredUsers > 0 && summary.ScoredUsers < summary.LicensedUsers)
             {
@@ -1512,7 +1555,7 @@ namespace Common.Entities.CopilotAdoption
             {
                 summary.Warnings.Add(
                     $"Microsoft's pinned Copilot usage-report period is D{summary.DataSources.CopilotUsageReportPeriodDays}, "
-                    + $"but this analysis window is D{_options.WindowDays}. Report-sourced rows are kept in the adoption "
+                    + $"but this analysis window is D{analysisWindowDays}. Report-sourced rows are kept in the adoption "
                     + "population so active people are not marked as never used, but a report-sourced row that would "
                     + "otherwise be a PROBABLE reclaim is excluded from reclaimable-seat totals rather than normalising "
                     + "prompt counts across unlike windows. Certain (disabled-account) seats are never held back this "
@@ -2293,11 +2336,15 @@ namespace Common.Entities.CopilotAdoption
         #region Query plumbing
 
 
-        private async Task<int> ExecuteAsync(string sql, CancellationToken cancellationToken, params SqlParameter[] parameters)
+        private async Task<int> ExecuteAsync(
+            string sql,
+            CancellationToken cancellationToken,
+            int commandTimeoutSecs = QueryTimeoutSecs,
+            params SqlParameter[] parameters)
         {
             using (var db = _contextFactory.Create())
             {
-                db.Database.CommandTimeout = QueryTimeoutSecs;
+                db.Database.CommandTimeout = commandTimeoutSecs;
                 return await db.Database.ExecuteSqlCommandAsync(sql, cancellationToken, parameters);
             }
         }
