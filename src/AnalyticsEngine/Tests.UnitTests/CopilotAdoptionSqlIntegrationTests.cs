@@ -495,11 +495,11 @@ namespace Tests.UnitTests
 
                        INSERT INTO dbo.copilot_usage_user_activity_log
                            (id, [date], user_id, last_activity_date, report_period_days,
-                            prompts_all_apps, active_usage_days,
+                            prompts_all_apps, active_usage_days, report_version,
                             teams_last_activity_date, word_last_activity_date, excel_last_activity_date,
                             chat_last_activity_date)
                        VALUES (1, '{snapshot:yyyy-MM-dd}', 1, '{inWindow:yyyy-MM-dd}', 28,
-                               47, 12,
+                               47, 12, N'v2',
                                '{inWindow:yyyy-MM-dd}', '{inWindow:yyyy-MM-dd}', '{beforeWindow:yyyy-MM-dd}',
                                '{inWindow:yyyy-MM-dd}');");
 
@@ -518,7 +518,7 @@ namespace Tests.UnitTests
                 Assert.AreEqual(47, row.ReportPrompts);
                 Assert.AreEqual(12, row.ReportActiveDays);
                 Assert.AreEqual(3, row.ReportAppsUsed,
-                    "Teams, Word and the collapsed chat surface are inside the window; Excel is not.");
+                    "Report app breadth is derived from documented per-app last-activity dates; chat work/web collapse to one surface.");
                 Assert.AreEqual(inWindow, row.ReportLastActivityUtc,
                     "The last-activity date is the latest across every per-app column.");
             }
@@ -1521,6 +1521,7 @@ namespace Tests.UnitTests
                       prompts_chat_work int NULL,
                       prompts_chat_web int NULL,
                       active_usage_days int NULL,
+                      report_version nvarchar(10) NULL,
                       chat_last_activity_date datetime NULL,
                       teams_last_activity_date datetime NULL,
                       word_last_activity_date datetime NULL,

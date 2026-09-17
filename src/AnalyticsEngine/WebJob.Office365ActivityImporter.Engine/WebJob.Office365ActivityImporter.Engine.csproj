@@ -238,6 +238,7 @@
     <Compile Include="Graph\UsageReports\Aggregate\SharePointSitesWeeklyUsageReportLoader.cs" />
     <Compile Include="Graph\UsageReports\Copilot\CopilotReportRequest.cs" />
     <Compile Include="Graph\UsageReports\Copilot\CopilotReportSource.cs" />
+    <Compile Include="Graph\UsageReports\Copilot\CopilotReportCsvParser.cs" />
     <Compile Include="Graph\UsageReports\Copilot\CopilotUsageUserDetailLoader.cs" />
     <Compile Include="Graph\UsageReports\Copilot\CopilotUsageReportPolicy.cs" />
     <Compile Include="Graph\UsageReports\Copilot\ICopilotUsagePersistenceManager.cs" />

@@ -68,7 +68,10 @@ namespace Tests.UnitTests
         // (copilot_adoption_user_period, copilot_adoption_period_run). Raw-SQL, purely additive, and
         // reuses the IndexTeamsExplorerQueries model snapshot verbatim - the new tables are not
         // exposed as DbSets, so the entity model is unchanged.
-        private const string LatestId = "202609170900001_CopilotAdoptionPeriodFacts";
+        // GraphCopilotUsageApiV2 then adds the report_version column carrying the Graph usage-report
+        // schema version each snapshot came from. It DOES change the entity model, so its snapshot is
+        // freshly scaffolded rather than reused.
+        private const string LatestId = "202609170910001_GraphCopilotUsageApiV2";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).
