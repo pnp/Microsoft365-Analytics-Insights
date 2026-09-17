@@ -410,7 +410,7 @@ export default function LicenceActivityPage() {
                   value={departmentId == null ? '' : String(departmentId)}
                   aria-label="Filter by department"
                   disabled={departmentOptions.options.length === 0}
-                  onChange={(_e, d) => setDepartmentId(d.value === '' ? null : Number(d.value))}
+                  onChange={(_e: unknown, d: { value: string }) => setDepartmentId(d.value === '' ? null : Number(d.value))}
                 >
                   <option value="">All departments</option>
                   {departmentOptions.options.map((dept) => (
@@ -434,7 +434,7 @@ export default function LicenceActivityPage() {
                   value={countryId == null ? '' : String(countryId)}
                   aria-label="Filter by country"
                   disabled={countryOptions.options.length === 0}
-                  onChange={(_e, d) => setCountryId(d.value === '' ? null : Number(d.value))}
+                  onChange={(_e: unknown, d: { value: string }) => setCountryId(d.value === '' ? null : Number(d.value))}
                 >
                   <option value="">All countries</option>
                   {countryOptions.options.map((country) => (

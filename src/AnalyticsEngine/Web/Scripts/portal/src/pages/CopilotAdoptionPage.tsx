@@ -346,7 +346,7 @@ export default function CopilotAdoptionPage() {
           </Text>
           <Select
             value={String(windowDays)}
-            onChange={(_e, d) => setWindowDays(Number(d.value))}
+            onChange={(_e: unknown, d: { value: string }) => setWindowDays(Number(d.value))}
             aria-label="Reporting period"
           >
             {WINDOW_OPTIONS.map((o) => (
