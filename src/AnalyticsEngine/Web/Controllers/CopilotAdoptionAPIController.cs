@@ -417,7 +417,7 @@ namespace Web.AnalyticsWeb.Controllers
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, null, ExportWaitBudget, cancellationToken);
             if (analysis == null) return StatusCode(HttpStatusCode.ServiceUnavailable);
             request = request ?? new CopilotAdoptionCreateCohortRequest();
             request.CreatedBy = CurrentUserName();
@@ -433,7 +433,7 @@ namespace Web.AnalyticsWeb.Controllers
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, null, ExportWaitBudget, cancellationToken);
             if (analysis == null) return StatusCode(HttpStatusCode.ServiceUnavailable);
             request = request ?? new CopilotAdoptionCreateInterventionRequest();
             request.CreatedBy = CurrentUserName();
