@@ -377,7 +377,7 @@ export default function CopilotAdoptionPage() {
               </Text>
               <Select
                 value={comparisonMode}
-                onChange={(_e, d) => setComparisonMode(d.value)}
+                onChange={(_e: unknown, d: { value: string }) => setComparisonMode(d.value)}
                 aria-label="Comparison period"
               >
                 {COMPARISON_OPTIONS.map((o) => (
