@@ -5,7 +5,6 @@ using Microsoft.Data.SqlClient;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
-using System.Configuration;
 using System.Data.Entity;
 using System.Linq;
 using System.Threading;
@@ -124,7 +123,6 @@ namespace Tests.UnitTests
 
         private static AppConfig Config(IEnumerable<string> recipients = null, string senderUser = null)
         {
-            ConfigurationManager.AppSettings.Set("TenantGUID", "00000000-0000-0000-0000-000000000000");
             return new TestsAppConfig
             {
                 ImportJobSettings = new ImportTaskSettings { GraphUsersMetadata = true, Copilot = true },
