@@ -534,6 +534,25 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("minSeatsPerSegment")]
         public int MinSeatsPerSegment { get; set; } = 5;
 
+        /// <summary>
+        /// Organisational field used for the accountability roll-up. Defaults to the direct manager:
+        /// that is the narrow governance-safe first cut for issue #556, while still allowing tenants
+        /// whose spending is owned by department, country, office or company to point the same roll-up
+        /// at the unit they actually manage.
+        /// </summary>
+        [JsonProperty("accountabilityDimension")]
+        public string AccountabilityDimension { get; set; } = CopilotAdoptionAccountabilityDimensions.DirectManager;
+
         public static CopilotAdoptionOptions Default => new CopilotAdoptionOptions();
+    }
+
+    /// <summary>Allowed accountability dimensions. Used as an allow-list before anything reaches SQL.</summary>
+    public static class CopilotAdoptionAccountabilityDimensions
+    {
+        public const string DirectManager = "directManager";
+        public const string Department = "department";
+        public const string Country = "country";
+        public const string Office = "office";
+        public const string Company = "company";
     }
 }

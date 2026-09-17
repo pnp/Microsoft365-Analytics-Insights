@@ -562,6 +562,7 @@ namespace Common.Entities.CopilotAdoption
                 && summary.CombinedByDepartment.Count == 0
                 && summary.IntensityByDepartment.Count == 0
                 && summary.AdoptionByCountry.Count == 0
+                && summary.AccountabilityRollup.Count == 0
                 && summary.UsageByApp.Count == 0
                 && summary.TopResourceTypes.Count == 0)
             {
@@ -637,6 +638,33 @@ namespace Common.Entities.CopilotAdoption
                     sheet.AddRow(row.Segment, row.LicensedUsers, row.LicensedActiveUsers,
                         row.InteractionsPerLicensedUser, row.LicensedAgentUserPct, row.UnlicensedActiveUsers,
                         row.InteractionsPerUnlicensedUser, row.UnlicensedAgentUserPct);
+                }
+            }
+
+            if (summary.AccountabilityRollup.Count > 0)
+            {
+                sheet.AddBlankRow();
+                sheet.AddRow(XlsxCell.Wrapped(
+                    $"Accountability roll-up by {summary.AccountabilityDimensionLabel ?? "direct manager"}, sorted by the "
+                    + "largest absolute opportunity first. This is aggregate-only: it applies the same minimum-seat "
+                    + $"suppression ({summary.Options.MinSeatsPerSegment}) as the segment charts and does not add a new "
+                    + "named per-user leader view."));
+                sheet.AddHeaderRow(
+                    summary.AccountabilityDimensionLabel ?? "Accountability unit",
+                    "Seats", "Active", "Habitual", "Never used", "Adoption rate %",
+                    "Reclaimable", "Certain reclaim", "Probable reclaim", "Review reclaim",
+                    "Reclaim/onboard", "Win back", "Coach", "Broaden", "Deepen", "No action",
+                    "Advocate", "Review", "Excluded", "Action opportunity");
+
+                foreach (var row in summary.AccountabilityRollup)
+                {
+                    sheet.AddRow(
+                        row.Segment, row.LicensedUsers, row.ActiveUsers, row.HabitualUsers,
+                        row.NeverUsedUsers, row.AdoptionRatePct, row.ReclaimableSeats,
+                        row.ReclaimCertainSeats, row.ReclaimProbableSeats, row.ReclaimReviewSeats,
+                        row.ReclaimUsers, row.ReengageUsers, row.CoachUsers, row.BroadenUsers,
+                        row.GrowUsers, row.SustainUsers, row.AdvocateUsers, row.ReviewUsers,
+                        row.ExcludedUsers, row.OpportunityUsers);
                 }
             }
 
