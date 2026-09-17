@@ -81,7 +81,7 @@ export default function HealthPage() {
     [navigate],
   );
 
-  const onTabSelect: SelectTabEventHandler = (_e, data) => openTab(String(data.value));
+  const onTabSelect: SelectTabEventHandler = (_e: unknown, data: { value: unknown }) => openTab(String(data.value));
 
   const overallStatus = summary.data?.overallStatus ?? null;
   const buildLabel = summary.data?.buildLabel ?? null;

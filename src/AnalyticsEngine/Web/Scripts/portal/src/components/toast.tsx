@@ -50,5 +50,5 @@ export function AppToaster() {
     };
   }, [dispatchToast]);
 
-  return <Toaster toasterId={toasterId} position="top-end" />;
+  return <Toaster toasterId={toasterId} position="top-end" mountNode={undefined} />;
 }

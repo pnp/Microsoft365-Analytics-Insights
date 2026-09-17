@@ -96,6 +96,8 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "To (UTC)", summary.ToUtc, string.Empty);
             AddMeta(sheet, "History window", $"{summary.Options.HistoryDays} days",
                 "How far back 'ever used Copilot' looks, which is what separates Dormant from Never used.");
+            AddMeta(sheet, "Microsoft guidance catalogue", summary.GuidanceCatalogueVersion,
+                "Version of the Microsoft-published guidance links attached to recommended actions in this workbook.");
             AddMeta(sheet, "Figures incomplete", YesNo(summary.FiguresIncomplete),
                 summary.FiguresIncomplete
                     ? "A source query failed or timed out. Treat every individual row and aggregate in this workbook as incomplete."
@@ -499,8 +501,9 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddTitle("Weekly trend");
             sheet.AddRow(XlsxCell.Wrapped(
                 "Six months of history regardless of the reporting period, because a trend is the one thing the "
-                + "period cannot show. Weeks start on a Monday, in UTC. A week with no data is written as zero "
-                + "rather than skipped, so a gap in the import is visible instead of being smoothed over."));
+                + "period cannot show. Weeks start on a Monday, in UTC, and the current partial week is excluded. "
+                + "Missing weeks are written as zero only when Audit.General coverage is verified; otherwise the "
+                + "cell is blank. Licence membership is evaluated as of today until closed-period seat snapshots land."));
             sheet.AddBlankRow();
 
             var headers = new List<string> { "Week starting" };
@@ -515,7 +518,7 @@ namespace Common.Entities.CopilotAdoption
                 foreach (var series in allSeries)
                 {
                     var point = series.Points.FirstOrDefault(p => p.WeekStart == week);
-                    row.Add(point?.Value ?? 0d);
+                    row.Add(point == null ? 0d : point.Value.HasValue ? (object)point.Value.Value : null);
                 }
                 sheet.AddRow(row.ToArray());
             }
@@ -528,8 +531,9 @@ namespace Common.Entities.CopilotAdoption
             AddTrendChart(sheet, summary.WeeklyTrend, allSeries, first, last, headerRow,
                 "Weekly active users", "N3", XlsxChartType.Line);
 
+            var volumeHasGaps = summary.WeeklyVolumeTrend.Any(s => s.Points.Any(p => !p.Value.HasValue));
             AddTrendChart(sheet, summary.WeeklyVolumeTrend, allSeries, first, last, headerRow,
-                "Weekly Copilot volume", "N22", XlsxChartType.StackedArea);
+                "Weekly Copilot volume", "N22", volumeHasGaps ? XlsxChartType.Line : XlsxChartType.StackedArea);
 
             sheet.FreezeTopRows(4);
         }
@@ -585,6 +589,7 @@ namespace Common.Entities.CopilotAdoption
                 && summary.CombinedByDepartment.Count == 0
                 && summary.IntensityByDepartment.Count == 0
                 && summary.AdoptionByCountry.Count == 0
+                && summary.AccountabilityRollup.Count == 0
                 && summary.UsageByApp.Count == 0
                 && summary.TopResourceTypes.Count == 0)
             {
@@ -660,6 +665,33 @@ namespace Common.Entities.CopilotAdoption
                     sheet.AddRow(row.Segment, row.LicensedUsers, row.LicensedActiveUsers,
                         row.InteractionsPerLicensedUser, row.LicensedAgentUserPct, row.UnlicensedActiveUsers,
                         row.InteractionsPerUnlicensedUser, row.UnlicensedAgentUserPct);
+                }
+            }
+
+            if (summary.AccountabilityRollup.Count > 0)
+            {
+                sheet.AddBlankRow();
+                sheet.AddRow(XlsxCell.Wrapped(
+                    $"Accountability roll-up by {summary.AccountabilityDimensionLabel ?? "direct manager"}, sorted by the "
+                    + "largest absolute opportunity first. This is aggregate-only: it applies the same minimum-seat "
+                    + $"suppression ({summary.Options.MinSeatsPerSegment}) as the segment charts and does not add a new "
+                    + "named per-user leader view."));
+                sheet.AddHeaderRow(
+                    summary.AccountabilityDimensionLabel ?? "Accountability unit",
+                    "Seats", "Active", "Habitual", "Never used", "Adoption rate %",
+                    "Reclaimable", "Certain reclaim", "Probable reclaim", "Review reclaim",
+                    "Reclaim/onboard", "Win back", "Coach", "Broaden", "Deepen", "No action",
+                    "Advocate", "Review", "Excluded", "Action opportunity");
+
+                foreach (var row in summary.AccountabilityRollup)
+                {
+                    sheet.AddRow(
+                        row.Segment, row.LicensedUsers, row.ActiveUsers, row.HabitualUsers,
+                        row.NeverUsedUsers, row.AdoptionRatePct, row.ReclaimableSeats,
+                        row.ReclaimCertainSeats, row.ReclaimProbableSeats, row.ReclaimReviewSeats,
+                        row.ReclaimUsers, row.ReengageUsers, row.CoachUsers, row.BroadenUsers,
+                        row.GrowUsers, row.SustainUsers, row.AdvocateUsers, row.ReviewUsers,
+                        row.ExcludedUsers, row.OpportunityUsers);
                 }
             }
 
@@ -903,19 +935,26 @@ namespace Common.Entities.CopilotAdoption
             if (summary.ActionPlan.Count == 0) return;
 
             var sheet = workbook.AddSheet("Enablement plan");
-            sheet.SetColumnWidths(26, 12, 14, 78);
+            sheet.SetColumnWidths(26, 12, 14, 78, 42, 70);
 
             sheet.AddTitle("Enablement plan");
             sheet.AddRow(XlsxCell.Wrapped(
                 "Every licensed user needs exactly one of these next steps, so the counts add up to the whole "
                 + "scored population. This is the size of each job."));
             sheet.AddBlankRow();
-            sheet.AddHeaderRow("Action", "Users", "% of licensed", "What it means and why these users qualify");
+            sheet.AddHeaderRow("Action", "Users", "% of licensed", "What it means and why these users qualify",
+                "Microsoft guidance resources", "Microsoft guidance URLs");
 
             var first = sheet.CurrentRow + 1;
             foreach (var action in summary.ActionPlan)
             {
-                sheet.AddRow(action.Label, action.Users, action.SharePct, XlsxCell.Wrapped(action.Description));
+                sheet.AddRow(
+                    action.Label,
+                    action.Users,
+                    action.SharePct,
+                    XlsxCell.Wrapped(action.Description),
+                    XlsxCell.Wrapped(GuidanceTitles(action.GuidanceLinks)),
+                    XlsxCell.Wrapped(GuidanceUrls(action.GuidanceLinks)));
             }
             var last = sheet.CurrentRow;
 
@@ -938,7 +977,7 @@ namespace Common.Entities.CopilotAdoption
             if (users.Count == 0) return;
 
             var sheet = workbook.AddSheet("Licensed users");
-            sheet.SetColumnWidths(34, 26, 22, 22, 12, 10, 16, 18, 42, 14, 12, 10, 10, 14, 14, 22, 60);
+            sheet.SetColumnWidths(34, 26, 22, 22, 12, 10, 16, 34, 18, 42, 14, 12, 10, 10, 14, 14, 22, 60, 42, 70);
 
             // A workbook that quietly stops at a row limit is worse than one that refuses to export:
             // the reader has no way of knowing the list is short. Say so on the sheet itself, where it
@@ -964,9 +1003,9 @@ namespace Common.Entities.CopilotAdoption
 
             sheet.AddHeaderRow(
                 "User", "Department", "Job title", "Manager", "Engagement", "Band", "Signal source",
-                "Figures incomplete", "Figure warnings", "Interactions",
+                "Source comparison", "Figures incomplete", "Figure warnings", "Interactions",
                 "Active days", "Expected", "Apps", "Used Cowork", "Days since last use", "Recommended action",
-                "Action detail");
+                "Action detail", "Microsoft guidance resources", "Microsoft guidance URLs");
 
             var headerRow = sheet.CurrentRow;
 
@@ -980,6 +1019,7 @@ namespace Common.Entities.CopilotAdoption
                     user.AdoptionScore,
                     user.BandName,
                     user.SignalSource,
+                    XlsxCell.Wrapped(SourceComparisonSummary(user, analysis.Summary)),
                     analysis.Summary.FiguresIncomplete ? "Yes" : "No",
                     XlsxCell.Wrapped(WarningSummary(analysis.Summary)),
                     user.Interactions,
@@ -989,11 +1029,13 @@ namespace Common.Entities.CopilotAdoption
                     user.UsedCowork ? "Yes" : "No",
                     user.DaysSinceLastUse.HasValue ? (object)user.DaysSinceLastUse.Value : "-",
                     user.RecommendedActionLabel,
-                    XlsxCell.Wrapped(user.RecommendedAction));
+                    XlsxCell.Wrapped(user.RecommendedAction),
+                    XlsxCell.Wrapped(CopilotAdoptionGuidanceCatalogue.TitlesForAction(user.RecommendedActionCode)),
+                    XlsxCell.Wrapped(CopilotAdoptionGuidanceCatalogue.UrlsForAction(user.RecommendedActionCode)));
             }
 
             sheet.FreezeTopRows(headerRow);
-            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 17);
+            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 20);
         }
 
         /// <summary>
@@ -1234,7 +1276,7 @@ namespace Common.Entities.CopilotAdoption
             if (candidates.Count == 0) return;
 
             var sheet = workbook.AddSheet("Licence opportunities");
-            sheet.SetColumnWidths(34, 26, 22, 14, 14, 18, 42, 22, 14, 14, 14, 60);
+            sheet.SetColumnWidths(34, 26, 22, 14, 14, 18, 42, 22, 14, 14, 14, 60, 42, 70);
 
             if (candidates.Count > MaxUserRows)
             {
@@ -1256,7 +1298,8 @@ namespace Common.Entities.CopilotAdoption
 
             sheet.AddHeaderRow(
                 "User", "Department", "Job title", "Business case", "Recommended",
-                "Figures incomplete", "Figure warnings", "Unlicensed Copilot interactions", "Teams", "Email", "Files", "Justification");
+                "Figures incomplete", "Figure warnings", "Unlicensed Copilot interactions", "Teams", "Email", "Files", "Justification",
+                "Microsoft guidance resources", "Microsoft guidance URLs");
 
             var headerRow = sheet.CurrentRow;
 
@@ -1283,11 +1326,23 @@ namespace Common.Entities.CopilotAdoption
                     candidate.TeamsMessages + candidate.TeamsMeetings,
                     candidate.EmailsSent + candidate.EmailsRead,
                     candidate.FilesViewedOrEdited,
-                    XlsxCell.Wrapped(candidate.Rationale));
+                    XlsxCell.Wrapped(candidate.Rationale),
+                    XlsxCell.Wrapped(CopilotAdoptionGuidanceCatalogue.TitlesForAction(CopilotAdoptionGuidanceCatalogue.UnlicensedActionCode)),
+                    XlsxCell.Wrapped(CopilotAdoptionGuidanceCatalogue.UrlsForAction(CopilotAdoptionGuidanceCatalogue.UnlicensedActionCode)));
             }
 
             sheet.FreezeTopRows(headerRow);
-            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 12);
+            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 14);
+        }
+
+        private static string GuidanceTitles(IEnumerable<AdoptionGuidanceLink> links)
+        {
+            return string.Join(" | ", (links ?? Enumerable.Empty<AdoptionGuidanceLink>()).Select(l => l.Title));
+        }
+
+        private static string GuidanceUrls(IEnumerable<AdoptionGuidanceLink> links)
+        {
+            return string.Join(" | ", (links ?? Enumerable.Empty<AdoptionGuidanceLink>()).Select(l => l.Url));
         }
 
         #endregion
@@ -1395,6 +1450,19 @@ namespace Common.Entities.CopilotAdoption
                 + $"people. Any agent first seen within {o.AgentNewDays} days is New and exempt from review - a "
                 + "brand-new agent with two users has not failed, it has not started.");
 
+            AddMethod(sheet, "Why our figures differ from Microsoft's",
+                "The Copilot audit log and Microsoft's Copilot usage report answer different questions. "
+                + "Audit-log figures in this workbook cover every user, including unlicensed Copilot Chat users, "
+                + $"and are counted over the selected D{o.WindowDays} window. Microsoft's report covers licensed "
+                + "users only and uses Microsoft's own settled report window, so the two will legitimately differ. "
+                + "Microsoft states that audit-log aggregates are not intended to match the official usage report, "
+                + "(https://learn.microsoft.com/en-us/microsoft-365/admin/activity-reports/microsoft-365-copilot-usage?view=o365-worldwide#whats-the-difference-between-the-user-activity-table-and-audit-log), "
+                + "but also states that unlicensed Copilot Chat usage is not available through Microsoft Graph reports APIs; "
+                + "(https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/api/admin-settings/reports/copilotreportroot-getmicrosoft365copilotusageuserdetail). "
+                + "Audit data via Purview or the Office 365 Management Activity API is the programmatic route for that signal. "
+                + "Where both sources cover the same licensed user, the Licensed users sheet shows both figures side by side "
+                + "with their source and window. Do not average or silently reconcile them into one number.");
+
             AddMethod(sheet, "Comparing two snapshots",
                 "These figures are only comparable between two runs if both used the same thresholds and the same "
                 + "period length. Both are recorded on the Report sheet - check them before subtracting one file "
@@ -1440,6 +1508,24 @@ namespace Common.Entities.CopilotAdoption
         private static string FormatCost(Common.Entities.AgentCosts.AzureCostByCurrency cost)
         {
             return cost.Currency + " " + cost.Cost.ToString("N2");
+        }
+
+        private static string SourceComparisonSummary(LicensedUserAdoptionRow user, CopilotAdoptionSummary summary)
+        {
+            if (user == null || summary == null || !user.SourceComparisonAvailable) return string.Empty;
+
+            var reportPeriod = summary.DataSources.CopilotUsageReportPeriodDays > 0
+                ? $"D{summary.DataSources.CopilotUsageReportPeriodDays}"
+                : "Microsoft report window";
+            var reportDate = summary.DataSources.CopilotUsageReportDate.HasValue
+                ? $", snapshot {summary.DataSources.CopilotUsageReportDate.Value:yyyy-MM-dd}"
+                : string.Empty;
+
+            return $"Audit log (selected D{summary.WindowDays}): {user.AuditInteractions:N0} interactions, "
+                + $"{user.AuditActiveDays:N0} active days, {user.AuditAppsUsed:N0} apps. "
+                + $"Microsoft Copilot usage report ({reportPeriod}{reportDate}): "
+                + $"{(user.ReportPrompts.HasValue ? user.ReportPrompts.Value.ToString("N0", CultureInfo.InvariantCulture) : "-")} prompts, "
+                + $"{(user.ReportActiveDays.HasValue ? user.ReportActiveDays.Value.ToString("N0", CultureInfo.InvariantCulture) : "-")} active days.";
         }
 
         private static void AddMethod(XlsxSheet sheet, string name, string definition)

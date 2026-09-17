@@ -14,6 +14,10 @@ namespace Common.Entities.CopilotAdoption
     /// </summary>
     public class CopilotAdoptionOptions
     {
+        /// <summary>Version of the Microsoft guidance catalogue attached to recommended actions.</summary>
+        [JsonProperty("guidanceCatalogueVersion")]
+        public string GuidanceCatalogueVersion { get; set; } = CopilotAdoptionGuidanceCatalogue.Version;
+
         /// <summary>Length of the reporting window in days. 28 matches Microsoft's own D28 usage reports.</summary>
         [JsonProperty("windowDays")]
         public int WindowDays { get; set; } = 28;
@@ -532,7 +536,6 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("minSeatsPerSegment")]
         public int MinSeatsPerSegment { get; set; } = 5;
 
-
         #region Licence cost inputs
 
         /// <summary>
@@ -544,6 +547,15 @@ namespace Common.Entities.CopilotAdoption
         public List<CopilotSeatCostInput> SeatCosts { get; set; } = new List<CopilotSeatCostInput>();
 
         #endregion
+
+        /// <summary>
+        /// Organisational field used for the accountability roll-up. Defaults to the direct manager:
+        /// that is the narrow governance-safe first cut for issue #556, while still allowing tenants
+        /// whose spending is owned by department, country, office or company to point the same roll-up
+        /// at the unit they actually manage.
+        /// </summary>
+        [JsonProperty("accountabilityDimension")]
+        public string AccountabilityDimension { get; set; } = CopilotAdoptionAccountabilityDimensions.DirectManager;
 
         public static CopilotAdoptionOptions Default => new CopilotAdoptionOptions();
     }
@@ -565,5 +577,15 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("effectiveDateUtc")]
         public DateTime? EffectiveDateUtc { get; set; }
+    }
+
+    /// <summary>Allowed accountability dimensions. Used as an allow-list before anything reaches SQL.</summary>
+    public static class CopilotAdoptionAccountabilityDimensions
+    {
+        public const string DirectManager = "directManager";
+        public const string Department = "department";
+        public const string Country = "country";
+        public const string Office = "office";
+        public const string Company = "company";
     }
 }

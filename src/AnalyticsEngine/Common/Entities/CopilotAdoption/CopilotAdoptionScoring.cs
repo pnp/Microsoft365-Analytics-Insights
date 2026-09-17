@@ -167,6 +167,9 @@ namespace Common.Entities.CopilotAdoption
             // Microsoft's own rather than the one that was requested here.
             var auditHasSignal = row.Interactions > 0 || row.ActiveDays > 0;
             var reportHasSignal = (row.ReportActiveDays ?? 0) > 0 || (row.ReportPrompts ?? 0) > 0;
+            var reportCoversUser = row.ReportActiveDays.HasValue
+                || row.ReportPrompts.HasValue
+                || row.ReportLastActivityUtc.HasValue;
             var useReport = (!auditAvailable || !auditHasSignal) && reportHasSignal;
 
             var activeDays = useReport ? (row.ReportActiveDays ?? 0) : row.ActiveDays;
@@ -232,6 +235,10 @@ namespace Common.Entities.CopilotAdoption
 
                 Interactions = interactions,
                 ActiveDays = activeDays,
+                AuditInteractions = row.Interactions,
+                AuditActiveDays = row.ActiveDays,
+                AuditAppsUsed = row.AppsUsed,
+                SourceComparisonAvailable = auditAvailable && reportCoversUser,
                 ExpectedActiveDays = Round(targetActiveDays, 1),
                 AppsUsed = appsUsed,
                 AgentsUsed = row.AgentsUsed,

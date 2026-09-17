@@ -3,6 +3,7 @@ using Common.Entities.AgentCosts;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Common.Entities.CopilotAdoption
 {
@@ -73,6 +74,35 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("sharePct")]
         public double SharePct { get; set; }
+
+        /// <summary>Microsoft-published resources for the person who executes this action.</summary>
+        [JsonProperty("guidanceLinks")]
+        public List<AdoptionGuidanceLink> GuidanceLinks { get; set; } = new List<AdoptionGuidanceLink>();
+    }
+
+    /// <summary>One Microsoft-published resource in the versioned adoption-guidance catalogue.</summary>
+    public class AdoptionGuidanceLink
+    {
+        [JsonProperty("actionCode")]
+        public string ActionCode { get; set; }
+
+        [JsonProperty("title")]
+        public string Title { get; set; }
+
+        [JsonProperty("url")]
+        public string Url { get; set; }
+
+        [JsonProperty("expectedTitle")]
+        public string ExpectedTitle { get; set; }
+
+        [JsonProperty("audience")]
+        public string Audience { get; set; }
+
+        [JsonProperty("publisher")]
+        public string Publisher { get; set; }
+
+        [JsonProperty("catalogueVersion")]
+        public string CatalogueVersion { get; set; }
     }
 
     /// <summary>
@@ -216,6 +246,62 @@ namespace Common.Entities.CopilotAdoption
         public double AverageAdoptionScore { get; set; }
     }
 
+    /// <summary>
+    /// One accountable organisational unit: by default a direct manager's span, but configurable to
+    /// department, country, office or company for tenants whose Copilot spend is owned differently.
+    /// </summary>
+    public class AccountabilityRollupRow : AdoptionSegmentRow
+    {
+        [JsonProperty("reclaimableSeats")]
+        public int ReclaimableSeats { get; set; }
+
+        [JsonProperty("reclaimCertainSeats")]
+        public int ReclaimCertainSeats { get; set; }
+
+        [JsonProperty("reclaimProbableSeats")]
+        public int ReclaimProbableSeats { get; set; }
+
+        [JsonProperty("reclaimReviewSeats")]
+        public int ReclaimReviewSeats { get; set; }
+
+        [JsonProperty("reclaimExcludedUsers")]
+        public int ReclaimExcludedUsers { get; set; }
+
+        [JsonProperty("reclaimUsers")]
+        public int ReclaimUsers { get; set; }
+
+        [JsonProperty("reengageUsers")]
+        public int ReengageUsers { get; set; }
+
+        [JsonProperty("coachUsers")]
+        public int CoachUsers { get; set; }
+
+        [JsonProperty("broadenUsers")]
+        public int BroadenUsers { get; set; }
+
+        [JsonProperty("growUsers")]
+        public int GrowUsers { get; set; }
+
+        [JsonProperty("sustainUsers")]
+        public int SustainUsers { get; set; }
+
+        [JsonProperty("advocateUsers")]
+        public int AdvocateUsers { get; set; }
+
+        [JsonProperty("reviewUsers")]
+        public int ReviewUsers { get; set; }
+
+        [JsonProperty("excludedUsers")]
+        public int ExcludedUsers { get; set; }
+
+        /// <summary>
+        /// Absolute number of seats with an actionable opportunity, used for sorting. Large teams with
+        /// moderate gaps must outrank tiny teams with terrible percentages.
+        /// </summary>
+        [JsonProperty("opportunityUsers")]
+        public int OpportunityUsers { get; set; }
+    }
+
     /// <summary>Which underlying imports actually supplied data, so no headline number is silently wrong.</summary>
     public class AdoptionDataSources
     {
@@ -280,6 +366,12 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("dataSources")]
         public AdoptionDataSources DataSources { get; set; } = new AdoptionDataSources();
+
+        [JsonProperty("guidanceCatalogueVersion")]
+        public string GuidanceCatalogueVersion { get; set; } = CopilotAdoptionGuidanceCatalogue.Version;
+
+        [JsonProperty("guidanceLinks")]
+        public List<AdoptionGuidanceLink> GuidanceLinks { get; set; } = CopilotAdoptionGuidanceCatalogue.All.ToList();
 
         /// <summary>Which licence types were counted as Copilot seats, so the population is auditable.</summary>
         [JsonProperty("seatLicenceTypes")]
@@ -596,9 +688,28 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("adoptionByDepartment")]
         public List<AdoptionSegmentRow> AdoptionByDepartment { get; set; } = new List<AdoptionSegmentRow>();
 
+        /// <summary>Departments with the weakest habit formation, for the executive league table.</summary>
+        [JsonProperty("habitByDepartment")]
+        public List<AdoptionSegmentRow> HabitByDepartment { get; set; } = new List<AdoptionSegmentRow>();
+
         /// <summary>Adoption by country, for organisations that run enablement regionally.</summary>
         [JsonProperty("adoptionByCountry")]
         public List<AdoptionSegmentRow> AdoptionByCountry { get; set; } = new List<AdoptionSegmentRow>();
+
+        /// <summary>The configured accountability dimension used for <see cref="AccountabilityRollup"/>.</summary>
+        [JsonProperty("accountabilityDimension")]
+        public string AccountabilityDimension { get; set; } = CopilotAdoptionAccountabilityDimensions.DirectManager;
+
+        /// <summary>Human-readable label for the configured accountability dimension.</summary>
+        [JsonProperty("accountabilityDimensionLabel")]
+        public string AccountabilityDimensionLabel { get; set; } = "Direct manager";
+
+        /// <summary>
+        /// Adoption, reclaim and action counts by accountable organisational unit. Small groups are
+        /// suppressed with the same minimum-seat threshold as the existing segment charts.
+        /// </summary>
+        [JsonProperty("accountabilityRollup")]
+        public List<AccountabilityRollupRow> AccountabilityRollup { get; set; } = new List<AccountabilityRollupRow>();
 
         /// <summary>Where Copilot is actually being used (Teams, Word, Outlook, Copilot Chat...).</summary>
         [JsonProperty("usageByApp")]

@@ -191,6 +191,22 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("activeDays")]
         public int ActiveDays { get; set; }
 
+        /// <summary>Audit-log interactions in the selected analysis window, kept even when the scored source is Microsoft's report.</summary>
+        [JsonProperty("auditInteractions")]
+        public long AuditInteractions { get; set; }
+
+        /// <summary>Audit-log active days in the selected analysis window.</summary>
+        [JsonProperty("auditActiveDays")]
+        public int AuditActiveDays { get; set; }
+
+        /// <summary>Audit-log Copilot surfaces used in the selected analysis window.</summary>
+        [JsonProperty("auditAppsUsed")]
+        public int AuditAppsUsed { get; set; }
+
+        /// <summary>True only when both the audit log and Microsoft's report have per-user figures to compare.</summary>
+        [JsonProperty("sourceComparisonAvailable")]
+        public bool SourceComparisonAvailable { get; set; }
+
         [JsonProperty("expectedActiveDays")]
         public double ExpectedActiveDays { get; set; }
 
