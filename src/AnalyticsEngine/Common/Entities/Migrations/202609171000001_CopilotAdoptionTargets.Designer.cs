@@ -13,7 +13,7 @@ namespace Common.Entities.Migrations
 
         string IMigrationMetadata.Id
         {
-            get { return "202609170900001_CopilotAdoptionTargets"; }
+            get { return "202609171000001_CopilotAdoptionTargets"; }
         }
 
         string IMigrationMetadata.Source
