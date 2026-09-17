@@ -89,7 +89,7 @@ export default function InsightsOverviewPage() {
       .then((s) => {
         if (!cancelled) setStatus(s);
       })
-      .catch((e) => {
+      .catch((e: any) => {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load the data overview.');
       })
       .finally(() => {
@@ -107,7 +107,7 @@ export default function InsightsOverviewPage() {
       .then((s) => {
         if (!cancelled) setHealth(s);
       })
-      .catch((e) => {
+      .catch((e: any) => {
         if (!cancelled) setHealthError(e instanceof Error ? e.message : 'unknown error');
       });
     return () => {

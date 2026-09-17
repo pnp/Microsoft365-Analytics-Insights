@@ -294,6 +294,61 @@ CREATE CLUSTERED INDEX [CX_copilot_adoption_user_period_period_user]
     ON [dbo].[copilot_adoption_user_period] ([period_end] ASC, [user_id] ASC);
 
 
+-- Creating table 'copilot_adoption_cohort'
+CREATE TABLE [dbo].[copilot_adoption_cohort] (
+    [cohort_id] int IDENTITY(1,1) NOT NULL,
+    [name] nvarchar(200) NOT NULL,
+    [action_code] nvarchar(40) NOT NULL,
+    [created_utc] datetime2(7) NOT NULL CONSTRAINT [DF_copilot_adoption_cohort_created_utc] DEFAULT SYSUTCDATETIME(),
+    [created_by] nvarchar(256) NOT NULL,
+    [baseline_period_end] date NOT NULL,
+    [baseline_period_days] int NOT NULL CONSTRAINT [DF_copilot_adoption_cohort_baseline_period_days] DEFAULT (28),
+    [baseline_options_hash] nvarchar(64) NOT NULL,
+    [closed_utc] datetime2(7) NULL,
+    [closed_by] nvarchar(256) NULL,
+    CONSTRAINT [PK_copilot_adoption_cohort] PRIMARY KEY CLUSTERED ([cohort_id] ASC),
+    CONSTRAINT [CK_copilot_adoption_cohort_period_days] CHECK ([baseline_period_days] > 0),
+    CONSTRAINT [CK_copilot_adoption_cohort_options_hash] CHECK (LEN([baseline_options_hash]) = 64)
+);
+
+
+-- Creating table 'copilot_adoption_cohort_member'
+CREATE TABLE [dbo].[copilot_adoption_cohort_member] (
+    [cohort_id] int NOT NULL,
+    [user_id] int NOT NULL,
+    [baseline_band] int NOT NULL,
+    [baseline_score] float NOT NULL,
+    [baseline_active_days] int NOT NULL,
+    [baseline_department] nvarchar(100) NULL,
+    [holdout_control] bit NOT NULL CONSTRAINT [DF_copilot_adoption_cohort_member_holdout_control] DEFAULT (0),
+    CONSTRAINT [PK_copilot_adoption_cohort_member] PRIMARY KEY CLUSTERED ([cohort_id] ASC, [user_id] ASC),
+    CONSTRAINT [CK_copilot_adoption_cohort_member_band] CHECK ([baseline_band] BETWEEN 0 AND 5),
+    CONSTRAINT [CK_copilot_adoption_cohort_member_score] CHECK ([baseline_score] >= 0 AND [baseline_score] <= 100),
+    CONSTRAINT [CK_copilot_adoption_cohort_member_days] CHECK ([baseline_active_days] >= 0)
+);
+
+
+-- Creating table 'copilot_adoption_intervention'
+CREATE TABLE [dbo].[copilot_adoption_intervention] (
+    [intervention_id] int IDENTITY(1,1) NOT NULL,
+    [cohort_id] int NOT NULL,
+    [owner] nvarchar(256) NULL,
+    [intervention_type] nvarchar(40) NOT NULL,
+    [guidance_resource] nvarchar(200) NULL,
+    [started_utc] datetime2(7) NULL,
+    [due_utc] datetime2(7) NULL,
+    [completed_utc] datetime2(7) NULL,
+    [status] nvarchar(40) NOT NULL CONSTRAINT [DF_copilot_adoption_intervention_status] DEFAULT (N'planned'),
+    [intended_outcome] nvarchar(1000) NULL,
+    [notes] nvarchar(max) NULL,
+    [intended_reinvestment_type] nvarchar(80) NOT NULL CONSTRAINT [DF_copilot_adoption_intervention_reinvestment_type] DEFAULT (N'other'),
+    [intended_reinvestment_description] nvarchar(1000) NULL,
+    [created_utc] datetime2(7) NOT NULL CONSTRAINT [DF_copilot_adoption_intervention_created_utc] DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT [PK_copilot_adoption_intervention] PRIMARY KEY CLUSTERED ([intervention_id] ASC),
+    CONSTRAINT [CK_copilot_adoption_intervention_status] CHECK ([status] IN (N'planned', N'started', N'completed', N'cancelled')),
+    CONSTRAINT [CK_copilot_adoption_intervention_type] CHECK ([intervention_type] IN (N'briefing', N'scenario workshop', N'champion session', N'comms', N'one-to-one', N'licence reassignment'))
+);
+
 -- Creating table 'copilot_adoption_digest_run'
 CREATE TABLE [dbo].[copilot_adoption_digest_run] (
     [id] int IDENTITY(1,1) NOT NULL,
@@ -478,6 +533,22 @@ ADD CONSTRAINT [FK_copilot_adoption_reclaim_exclusions_users]
 ALTER TABLE [dbo].[copilot_adoption_user_period]
 ADD CONSTRAINT [FK_copilot_adoption_user_period_users]
     FOREIGN KEY ([user_id]) REFERENCES [dbo].[users] ([id]) ON DELETE CASCADE;
+
+
+-- Creating foreign key on [cohort_id] in table 'copilot_adoption_cohort_member'
+ALTER TABLE [dbo].[copilot_adoption_cohort_member]
+ADD CONSTRAINT [FK_copilot_adoption_cohort_member_cohort]
+    FOREIGN KEY ([cohort_id]) REFERENCES [dbo].[copilot_adoption_cohort] ([cohort_id]) ON DELETE CASCADE;
+
+-- Creating foreign key on [user_id] in table 'copilot_adoption_cohort_member'
+ALTER TABLE [dbo].[copilot_adoption_cohort_member]
+ADD CONSTRAINT [FK_copilot_adoption_cohort_member_users]
+    FOREIGN KEY ([user_id]) REFERENCES [dbo].[users] ([id]) ON DELETE CASCADE;
+
+-- Creating foreign key on [cohort_id] in table 'copilot_adoption_intervention'
+ALTER TABLE [dbo].[copilot_adoption_intervention]
+ADD CONSTRAINT [FK_copilot_adoption_intervention_cohort]
+    FOREIGN KEY ([cohort_id]) REFERENCES [dbo].[copilot_adoption_cohort] ([cohort_id]) ON DELETE CASCADE;
 
 
 -- --------------------------------------------------

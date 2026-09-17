@@ -78,6 +78,9 @@ namespace Tests.UnitTests
         // type is not exposed as a DbSet, so the entity model is unchanged.
         // CopilotAdoptionTargets then adds the customer-defined adoption target tables. Raw-SQL,
         // purely additive, and reuses the GraphCopilotUsageApiV2 model snapshot verbatim.
+        // CopilotAdoptionCohorts and CopilotAdoptionInterventions then add the adoption cohort and
+        // intervention tables. They are raw-SQL, additive, and reuse the GraphCopilotUsageApiV2
+        // model snapshot verbatim because the new tables are not exposed as DbSets.
         // CopilotAdoptionDigest then adds the scheduled digest send-state table. It is raw-SQL,
         // additive, and reuses the GraphCopilotUsageApiV2 model snapshot verbatim.
         private const string LatestId = "202609171030001_CopilotAdoptionDigest";

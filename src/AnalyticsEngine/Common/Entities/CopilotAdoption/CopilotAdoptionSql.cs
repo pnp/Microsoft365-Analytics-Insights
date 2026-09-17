@@ -2037,6 +2037,198 @@ namespace Common.Entities.CopilotAdoption
                 "        CASE WHEN @auditAvailable = 1 THEN N'complete' WHEN @includeCopilotReport = 1 THEN N'usage-report-only' ELSE N'unverifiable' END);\r\nCOMMIT TRANSACTION;";
         }
 
+
+
+        #region Cohorts and interventions
+
+        public const string InsertCohortSql = @"DECLARE @ids TABLE (cohort_id int);
+INSERT INTO dbo.copilot_adoption_cohort
+    (name, action_code, created_by, baseline_period_end, baseline_period_days, baseline_options_hash)
+OUTPUT INSERTED.cohort_id INTO @ids
+VALUES (@name, @actionCode, @createdBy, @baselinePeriodEnd, @baselinePeriodDays, @baselineOptionsHash);
+
+DECLARE @cohortId int = (SELECT TOP (1) cohort_id FROM @ids);
+
+INSERT INTO dbo.copilot_adoption_cohort_member
+    (cohort_id, user_id, baseline_band, baseline_score, baseline_active_days, baseline_department, holdout_control)
+SELECT @cohortId,
+       m.userId,
+       m.baselineBand,
+       m.baselineScore,
+       m.baselineActiveDays,
+       NULLIF(m.department, N''),
+       m.holdoutControl
+FROM OPENJSON(@membersJson)
+WITH
+(
+    userId int '$.userId',
+    baselineBand int '$.baselineBand',
+    baselineScore float '$.baselineScore',
+    baselineActiveDays int '$.baselineActiveDays',
+    department nvarchar(100) '$.department',
+    holdoutControl bit '$.holdoutControl'
+) AS m;
+
+SELECT @cohortId AS Value;";
+
+        public const string InsertInterventionSql = @"DECLARE @ids TABLE (intervention_id int);
+INSERT INTO dbo.copilot_adoption_intervention
+    (cohort_id, owner, intervention_type, guidance_resource, started_utc, due_utc, completed_utc, status, intended_outcome, notes, intended_reinvestment_type, intended_reinvestment_description)
+OUTPUT INSERTED.intervention_id INTO @ids
+VALUES
+    (@cohortId, @owner, @interventionType, @guidanceResource, @startedUtc, @dueUtc, @completedUtc, @status, @intendedOutcome, @notes, @intendedReinvestmentType, @intendedReinvestmentDescription);
+SELECT TOP (1) intervention_id AS Value FROM @ids;";
+
+        public const string CohortsSql = @"SELECT c.cohort_id AS CohortId,
+       c.name AS Name,
+       c.action_code AS ActionCode,
+       c.created_utc AS CreatedUtc,
+       c.created_by AS CreatedBy,
+       c.baseline_period_end AS BaselinePeriodEnd,
+       c.baseline_period_days AS BaselinePeriodDays,
+       c.baseline_options_hash AS BaselineOptionsHash,
+       c.closed_utc AS ClosedUtc,
+       c.closed_by AS ClosedBy,
+       COUNT(m.user_id) AS MemberCount,
+       SUM(CASE WHEN m.holdout_control = 1 THEN 1 ELSE 0 END) AS HoldoutCount
+FROM dbo.copilot_adoption_cohort AS c
+LEFT JOIN dbo.copilot_adoption_cohort_member AS m ON m.cohort_id = c.cohort_id
+GROUP BY c.cohort_id, c.name, c.action_code, c.created_utc, c.created_by, c.baseline_period_end, c.baseline_period_days, c.baseline_options_hash, c.closed_utc, c.closed_by
+ORDER BY c.created_utc DESC, c.cohort_id DESC;";
+
+        public const string CohortByIdSql = @"SELECT c.cohort_id AS CohortId,
+       c.name AS Name,
+       c.action_code AS ActionCode,
+       c.created_utc AS CreatedUtc,
+       c.created_by AS CreatedBy,
+       c.baseline_period_end AS BaselinePeriodEnd,
+       c.baseline_period_days AS BaselinePeriodDays,
+       c.baseline_options_hash AS BaselineOptionsHash,
+       c.closed_utc AS ClosedUtc,
+       c.closed_by AS ClosedBy,
+       COUNT(m.user_id) AS MemberCount,
+       SUM(CASE WHEN m.holdout_control = 1 THEN 1 ELSE 0 END) AS HoldoutCount
+FROM dbo.copilot_adoption_cohort AS c
+LEFT JOIN dbo.copilot_adoption_cohort_member AS m ON m.cohort_id = c.cohort_id
+WHERE c.cohort_id = @cohortId
+GROUP BY c.cohort_id, c.name, c.action_code, c.created_utc, c.created_by, c.baseline_period_end, c.baseline_period_days, c.baseline_options_hash, c.closed_utc, c.closed_by;";
+
+        public const string CohortMembersSql = @"SELECT m.cohort_id AS CohortId,
+       m.user_id AS UserId,
+       u.user_name AS UserPrincipalName,
+       u.mail AS Mail,
+       ISNULL(m.baseline_department, dept.name) AS Department,
+       m.baseline_band AS BaselineBand,
+       m.baseline_score AS BaselineScore,
+       m.baseline_active_days AS BaselineActiveDays,
+       CAST(m.holdout_control AS bit) AS HoldoutControl
+FROM dbo.copilot_adoption_cohort_member AS m
+JOIN dbo.users AS u ON u.id = m.user_id
+LEFT JOIN dbo.user_departments AS dept ON dept.id = u.department_id
+WHERE m.cohort_id = @cohortId
+ORDER BY m.user_id;";
+
+        public const string CloseCohortSql = @"UPDATE dbo.copilot_adoption_cohort
+SET closed_utc = COALESCE(closed_utc, SYSUTCDATETIME()),
+    closed_by = CASE WHEN closed_utc IS NULL THEN @closedBy ELSE closed_by END
+WHERE cohort_id = @cohortId;";
+
+        public const string InterventionsSql = @"SELECT i.intervention_id AS InterventionId,
+       i.cohort_id AS CohortId,
+       c.name AS CohortName,
+       c.action_code AS ActionCode,
+       i.owner AS Owner,
+       i.intervention_type AS InterventionType,
+       i.guidance_resource AS GuidanceResource,
+       i.started_utc AS StartedUtc,
+       i.due_utc AS DueUtc,
+       i.completed_utc AS CompletedUtc,
+       i.status AS Status,
+       i.intended_outcome AS IntendedOutcome,
+       i.notes AS Notes,
+       i.intended_reinvestment_type AS IntendedReinvestmentType,
+       i.intended_reinvestment_description AS IntendedReinvestmentDescription,
+       i.created_utc AS CreatedUtc,
+       COUNT(m.user_id) AS MemberCount,
+       CAST(CASE WHEN i.completed_utc IS NULL AND i.due_utc IS NOT NULL AND i.due_utc < SYSUTCDATETIME() THEN 1 ELSE 0 END AS bit) AS IsOverdue,
+       CAST(CASE WHEN i.started_utc IS NULL AND i.completed_utc IS NULL THEN 1 ELSE 0 END AS bit) AS IsUnstarted
+FROM dbo.copilot_adoption_intervention AS i
+JOIN dbo.copilot_adoption_cohort AS c ON c.cohort_id = i.cohort_id
+LEFT JOIN dbo.copilot_adoption_cohort_member AS m ON m.cohort_id = c.cohort_id
+GROUP BY i.intervention_id, i.cohort_id, c.name, c.action_code, i.owner, i.intervention_type, i.guidance_resource, i.started_utc, i.due_utc, i.completed_utc, i.status, i.intended_outcome, i.notes, i.intended_reinvestment_type, i.intended_reinvestment_description, i.created_utc
+ORDER BY i.created_utc DESC, i.intervention_id DESC;";
+
+        public const string InterventionByIdSql = @"SELECT i.intervention_id AS InterventionId,
+       i.cohort_id AS CohortId,
+       c.name AS CohortName,
+       c.action_code AS ActionCode,
+       i.owner AS Owner,
+       i.intervention_type AS InterventionType,
+       i.guidance_resource AS GuidanceResource,
+       i.started_utc AS StartedUtc,
+       i.due_utc AS DueUtc,
+       i.completed_utc AS CompletedUtc,
+       i.status AS Status,
+       i.intended_outcome AS IntendedOutcome,
+       i.notes AS Notes,
+       i.intended_reinvestment_type AS IntendedReinvestmentType,
+       i.intended_reinvestment_description AS IntendedReinvestmentDescription,
+       i.created_utc AS CreatedUtc,
+       COUNT(m.user_id) AS MemberCount,
+       CAST(CASE WHEN i.completed_utc IS NULL AND i.due_utc IS NOT NULL AND i.due_utc < SYSUTCDATETIME() THEN 1 ELSE 0 END AS bit) AS IsOverdue,
+       CAST(CASE WHEN i.started_utc IS NULL AND i.completed_utc IS NULL THEN 1 ELSE 0 END AS bit) AS IsUnstarted
+FROM dbo.copilot_adoption_intervention AS i
+JOIN dbo.copilot_adoption_cohort AS c ON c.cohort_id = i.cohort_id
+LEFT JOIN dbo.copilot_adoption_cohort_member AS m ON m.cohort_id = c.cohort_id
+WHERE i.intervention_id = @interventionId
+GROUP BY i.intervention_id, i.cohort_id, c.name, c.action_code, i.owner, i.intervention_type, i.guidance_resource, i.started_utc, i.due_utc, i.completed_utc, i.status, i.intended_outcome, i.notes, i.intended_reinvestment_type, i.intended_reinvestment_description, i.created_utc;";
+
+        public const string WorkloadSnapshotSql = @"WITH TargetUsers AS (
+    SELECT user_id FROM dbo.copilot_adoption_cohort_member WHERE cohort_id = @cohortId
+    UNION
+    SELECT user_id FROM dbo.copilot_adoption_user_period WHERE period_end IN (@baselinePeriodEnd, @followupPeriodEnd) AND period_days = @periodDays
+),
+TeamsUsage AS (
+    SELECT t.user_id,
+           SUM(t.private_chat_count + t.team_chat_count + t.post_messages + t.reply_messages) AS TeamsMessages,
+           SUM(t.meetings_attended_count + t.meetings_organized_count) AS TeamsMeetings
+    FROM dbo.teams_user_activity_log AS t
+    WHERE t.[date] >= @from AND t.[date] <= @to
+      AND EXISTS (SELECT 1 FROM TargetUsers AS u WHERE u.user_id = t.user_id)
+    GROUP BY t.user_id
+),
+MailUsage AS (
+    SELECT o.user_id,
+           SUM(o.email_send_count) AS EmailsSent,
+           SUM(o.email_read_count) AS EmailsRead
+    FROM dbo.outlook_user_activity_log AS o
+    WHERE o.[date] >= @from AND o.[date] <= @to
+      AND EXISTS (SELECT 1 FROM TargetUsers AS u WHERE u.user_id = o.user_id)
+    GROUP BY o.user_id
+),
+FileUsage AS (
+    SELECT f.user_id, SUM(f.viewed_or_edited) AS FilesViewedOrEdited
+    FROM (
+        SELECT sp.user_id, sp.[date], sp.viewed_or_edited FROM dbo.sharepoint_user_activity_log AS sp WHERE sp.[date] >= @from AND sp.[date] <= @to
+        UNION ALL
+        SELECT od.user_id, od.[date], od.viewed_or_edited FROM dbo.onedrive_user_activity_log AS od WHERE od.[date] >= @from AND od.[date] <= @to
+    ) AS f
+    WHERE EXISTS (SELECT 1 FROM TargetUsers AS u WHERE u.user_id = f.user_id)
+    GROUP BY f.user_id
+)
+SELECT u.user_id AS UserId,
+       CAST(ISNULL(t.TeamsMessages, 0) AS bigint) AS TeamsMessages,
+       CAST(ISNULL(t.TeamsMeetings, 0) AS bigint) AS TeamsMeetings,
+       CAST(ISNULL(m.EmailsSent, 0) AS bigint) AS EmailsSent,
+       CAST(ISNULL(m.EmailsRead, 0) AS bigint) AS EmailsRead,
+       CAST(ISNULL(f.FilesViewedOrEdited, 0) AS bigint) AS FilesViewedOrEdited
+FROM TargetUsers AS u
+LEFT JOIN TeamsUsage AS t ON t.user_id = u.user_id
+LEFT JOIN MailUsage AS m ON m.user_id = u.user_id
+LEFT JOIN FileUsage AS f ON f.user_id = u.user_id;";
+
+        #endregion
+
         #endregion
 
         #region Helpers

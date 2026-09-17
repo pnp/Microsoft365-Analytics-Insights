@@ -460,6 +460,14 @@
     <Compile Include="Migrations\202609171000001_CopilotAdoptionTargets.Designer.cs">
       <DependentUpon>202609171000001_CopilotAdoptionTargets.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202609171020001_CopilotAdoptionCohorts.cs" />
+    <Compile Include="Migrations\202609171020001_CopilotAdoptionCohorts.Designer.cs">
+      <DependentUpon>202609171020001_CopilotAdoptionCohorts.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202609171020002_CopilotAdoptionInterventions.cs" />
+    <Compile Include="Migrations\202609171020002_CopilotAdoptionInterventions.Designer.cs">
+      <DependentUpon>202609171020002_CopilotAdoptionInterventions.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609171030001_CopilotAdoptionDigest.cs" />
     <Compile Include="Migrations\202609171030001_CopilotAdoptionDigest.Designer.cs">
       <DependentUpon>202609171030001_CopilotAdoptionDigest.cs</DependentUpon>
@@ -721,6 +729,12 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609171000001_CopilotAdoptionTargets.resx">
       <DependentUpon>202609171000001_CopilotAdoptionTargets.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609171020001_CopilotAdoptionCohorts.resx">
+      <DependentUpon>202609171020001_CopilotAdoptionCohorts.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609171020002_CopilotAdoptionInterventions.resx">
+      <DependentUpon>202609171020002_CopilotAdoptionInterventions.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609171030001_CopilotAdoptionDigest.resx">
       <DependentUpon>202609171030001_CopilotAdoptionDigest.cs</DependentUpon>

@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Data.Entity;
 using Microsoft.Data.SqlClient;
+using Newtonsoft.Json;
 using System.Linq;
 
 namespace Tests.UnitTests
@@ -1729,6 +1730,149 @@ namespace Tests.UnitTests
         }
 
         /// <summary>Users plus the metadata lookup tables the detail queries join to.</summary>
+
+
+        [TestMethod]
+        public void CreateCohortFromAction_FreezesMembershipAndBaselineState()
+        {
+            using (var db = ScratchDatabase.Create("CopilotCohortFreeze"))
+            {
+                CreateUserTables(db);
+                CreateCohortAndInterventionTables(db);
+                db.Execute(
+                    @"INSERT INTO dbo.user_departments (id, name) VALUES (1, N'Finance');
+                      INSERT INTO dbo.users (id, user_name, mail, account_enabled, department_id)
+                          VALUES (1, 'one@contoso.com', N'one@contoso.com', 1, 1),
+                                 (2, 'two@contoso.com', N'two@contoso.com', 1, 1);");
+
+                var analysis = new CopilotAdoptionAnalysis();
+                analysis.Summary.ToUtc = new DateTime(2026, 9, 16, 0, 0, 0, DateTimeKind.Utc);
+                analysis.Summary.WindowDays = 28;
+                analysis.Summary.Options = CopilotAdoptionOptions.Default;
+                analysis.LicensedUsers.Add(new LicensedUserAdoptionRow
+                {
+                    UserId = 1,
+                    Department = "Finance",
+                    RecommendedActionCode = "coach",
+                    Band = AdoptionBand.Trialling,
+                    AdoptionScore = 24.5,
+                    ActiveDays = 2,
+                });
+
+                var service = new CopilotAdoptionService(CopilotAdoptionOptions.Default, new TestContextFactory(db.ConnectionString), maxConcurrentSteps: 1);
+                var cohort = service.CreateCohortFromActionAsync(analysis, new CopilotAdoptionCreateCohortRequest { ActionCode = "coach", Name = "Contoso coaching wave", CreatedBy = "admin@contoso.com" }).GetAwaiter().GetResult();
+
+                analysis.LicensedUsers.Add(new LicensedUserAdoptionRow { UserId = 2, RecommendedActionCode = "coach", Band = AdoptionBand.NeverUsed, AdoptionScore = 0, ActiveDays = 0 });
+                var members = service.GetCohortMembersAsync(cohort.CohortId).GetAwaiter().GetResult();
+
+                Assert.AreEqual(1, members.Count, "Membership must be the list that was frozen at T0, not a recomputed action group.");
+                Assert.AreEqual(1, members[0].UserId);
+                Assert.AreEqual(AdoptionBand.Trialling, members[0].BaselineBand);
+                Assert.AreEqual(24.5, members[0].BaselineScore);
+                Assert.AreEqual(2, members[0].BaselineActiveDays);
+                Assert.AreEqual("Finance", members[0].Department);
+            }
+        }
+
+        [TestMethod]
+        public void CreateInterventionFromAction_FreezesCohortAndShowsOverdueUnstartedRecord()
+        {
+            using (var db = ScratchDatabase.Create("CopilotIntervention"))
+            {
+                CreateUserTables(db);
+                CreateCohortAndInterventionTables(db);
+                db.Execute("INSERT INTO dbo.users (id, user_name, mail, account_enabled) VALUES " + string.Join(",", Enumerable.Range(1, 20).Select(i => $"({i}, 'user{i}@contoso.com', N'user{i}@contoso.com', 1)")) + ";");
+
+                var analysis = new CopilotAdoptionAnalysis();
+                analysis.Summary.ToUtc = new DateTime(2026, 9, 16, 0, 0, 0, DateTimeKind.Utc);
+                analysis.Summary.WindowDays = 28;
+                analysis.Summary.Options = CopilotAdoptionOptions.Default;
+                foreach (var id in Enumerable.Range(1, 20))
+                {
+                    analysis.LicensedUsers.Add(new LicensedUserAdoptionRow { UserId = id, RecommendedActionCode = "reengage", Band = AdoptionBand.Dormant, AdoptionScore = 0, ActiveDays = 0 });
+                }
+
+                var service = new CopilotAdoptionService(CopilotAdoptionOptions.Default, new TestContextFactory(db.ConnectionString), maxConcurrentSteps: 1);
+                var intervention = service.CreateInterventionFromActionAsync(
+                    analysis,
+                    new CopilotAdoptionCreateInterventionRequest
+                    {
+                        ActionCode = "reengage",
+                        Name = "Contoso dormant-seat winback",
+                        CreatedBy = "admin@contoso.com",
+                        Owner = "Finance enablement",
+                        InterventionType = "scenario workshop",
+                        DueUtc = DateTime.UtcNow.AddDays(-1),
+                        IntendedOutcome = "Καλημέρα κόσμε adoption habit",
+                        Notes = "Synthetic Contoso note",
+                        IntendedReinvestmentType = "shorter cycle time",
+                        IntendedReinvestmentDescription = "Finance: shorten month-end close",
+                    }).GetAwaiter().GetResult();
+
+                var rows = service.GetInterventionsAsync().GetAwaiter().GetResult();
+                Assert.AreEqual(20, intervention.MemberCount);
+                Assert.AreEqual(2, Convert.ToInt32(db.Scalar("SELECT COUNT(*) FROM dbo.copilot_adoption_cohort_member WHERE cohort_id = " + intervention.CohortId + " AND holdout_control = 1")), "The default 10% hold-out is recorded on the frozen membership.");
+                Assert.IsTrue(rows.Single().IsOverdue);
+                Assert.IsTrue(rows.Single().IsUnstarted);
+                Assert.AreEqual("Καλημέρα κόσμε adoption habit", rows.Single().IntendedOutcome, "Free text must be stored as nvarchar.");
+                Assert.AreEqual("shorter cycle time", rows.Single().IntendedReinvestmentType);
+            }
+        }
+
+        [TestMethod]
+        public void MeasureIntervention_RefusesSmallGroupsInsteadOfReportingNoisyEffect()
+        {
+            using (var db = ScratchDatabase.Create("CopilotDidSmall"))
+            {
+                CreateUserTables(db);
+                CreatePeriodFactTables(db);
+                CreateCohortAndInterventionTables(db);
+                SeedPublishedPeriodsForOutcome(db, treatedCount: 1, controlCount: 1);
+
+                var service = new CopilotAdoptionService(CopilotAdoptionOptions.Default, new TestContextFactory(db.ConnectionString), maxConcurrentSteps: 1);
+                var outcome = service.MeasureInterventionAsync(1, new DateTime(2026, 10, 31)).GetAwaiter().GetResult();
+
+                Assert.IsTrue(outcome.Refused);
+                StringAssert.Contains(outcome.RefusalReason, "below the minimum segment size");
+                Assert.AreEqual(0, outcome.DifferenceInDifferences, "A refused result must not print a noisy effect number.");
+            }
+        }
+
+        [TestMethod]
+        public void MeasureIntervention_ReportsLeadingIndicatorsWithoutHoursOrMoneyClaims()
+        {
+            using (var db = ScratchDatabase.Create("CopilotNoRoi"))
+            {
+                CreateUserTables(db);
+                CreateM365UsageTables(db);
+                CreatePeriodFactTables(db);
+                CreateCohortAndInterventionTables(db);
+                SeedPublishedPeriodsForOutcome(db, treatedCount: 1, controlCount: 1);
+                db.Execute(@"INSERT INTO dbo.copilot_adoption_cohort_member (cohort_id, user_id, baseline_band, baseline_score, baseline_active_days, baseline_department, holdout_control) VALUES (1, 2, 2, 5, 1, N'Finance', 1);");
+                db.Execute(@"INSERT INTO dbo.teams_user_activity_log (id, [date], user_id, private_chat_count, team_chat_count, post_messages, reply_messages, meetings_attended_count, meetings_organized_count)
+                                 VALUES (1, '2026-09-30', 1, 1, 0, 0, 0, 1, 0), (2, '2026-10-31', 1, 4, 0, 0, 0, 2, 0),
+                                        (3, '2026-09-30', 2, 1, 0, 0, 0, 1, 0), (4, '2026-10-31', 2, 2, 0, 0, 0, 1, 0);
+                              INSERT INTO dbo.outlook_user_activity_log (id, [date], user_id, email_send_count, email_receive_count, email_read_count)
+                                 VALUES (1, '2026-09-30', 1, 1, 0, 1), (2, '2026-10-31', 1, 2, 0, 2),
+                                        (3, '2026-09-30', 2, 1, 0, 1), (4, '2026-10-31', 2, 1, 0, 1);
+                              INSERT INTO dbo.sharepoint_user_activity_log (id, [date], user_id, viewed_or_edited)
+                                 VALUES (1, '2026-09-30', 1, 1), (2, '2026-10-31', 1, 3), (3, '2026-09-30', 2, 1), (4, '2026-10-31', 2, 1);");
+
+                var options = CopilotAdoptionOptions.Default;
+                options.MinSeatsPerSegment = 1;
+                var service = new CopilotAdoptionService(options, new TestContextFactory(db.ConnectionString), maxConcurrentSteps: 1);
+                var outcome = service.MeasureInterventionAsync(1, new DateTime(2026, 10, 31)).GetAwaiter().GetResult();
+                var json = JsonConvert.SerializeObject(outcome);
+
+                Assert.IsFalse(outcome.Refused);
+                Assert.IsTrue(outcome.LeadingIndicators.Any(i => i.Code == "teamsMeetings"));
+                StringAssert.Contains(json, "Finance: shorten month-end close");
+                Assert.IsFalse(json.IndexOf("hours saved", StringComparison.OrdinalIgnoreCase) >= 0, "The outcome must not claim saved hours.");
+                Assert.IsFalse(json.Contains("$"), "The outcome must not imply a monetary value.");
+                Assert.IsFalse(json.IndexOf("ROI", StringComparison.OrdinalIgnoreCase) >= 0, "The outcome must not present ROI.");
+            }
+        }
+
         private static void CreateUserTables(ScratchDatabase db)
         {
             db.Execute(
@@ -1909,6 +2053,48 @@ namespace Tests.UnitTests
                       viewed_or_edited bigint NOT NULL DEFAULT(0));");
         }
 
+
+
+        private static void CreateCohortAndInterventionTables(ScratchDatabase db)
+        {
+            db.Execute(Common.Entities.Migrations.CopilotAdoptionCohorts.Up_Sql);
+            db.Execute(Common.Entities.Migrations.CopilotAdoptionInterventions.Up_Sql);
+        }
+
+        private static void SeedPublishedPeriodsForOutcome(ScratchDatabase db, int treatedCount, int controlCount)
+        {
+            db.Execute(@"INSERT INTO dbo.user_departments (id, name) VALUES (1, N'Finance');
+                         INSERT INTO dbo.license_types (id, name, sku_id) VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');");
+            var users = Enumerable.Range(1, treatedCount + controlCount).Select(i => $"({i}, 'user{i}@contoso.com', N'user{i}@contoso.com', 1, '2026-01-01', 1)");
+            db.Execute("INSERT INTO dbo.users (id, user_name, mail, account_enabled, created_utc, department_id) VALUES " + string.Join(",", users) + ";");
+            db.Execute("INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES " + string.Join(",", Enumerable.Range(1, treatedCount + controlCount).Select(i => $"({i}, {i}, 1)")) + ";");
+            db.Execute($@"INSERT INTO dbo.copilot_adoption_period_run
+                           (period_end, period_days, options_hash, audit_available, report_obfuscated, report_period_days, licensed_users, scored_users, published_utc, data_cutoff_utc, coverage_status)
+                         VALUES ('2026-09-30', 28, N'{CopilotAdoptionService.OptionsHash(CopilotAdoptionOptions.Default)}', 1, 0, 0, {treatedCount + controlCount}, {treatedCount + controlCount}, SYSUTCDATETIME(), '2026-10-01', N'complete'),
+                                ('2026-10-31', 28, N'{CopilotAdoptionService.OptionsHash(CopilotAdoptionOptions.Default)}', 1, 0, 0, {treatedCount + controlCount}, {treatedCount + controlCount}, SYSUTCDATETIME(), '2026-11-01', N'complete');");
+            var periodRows = new List<string>();
+            foreach (var userId in Enumerable.Range(1, treatedCount + controlCount))
+            {
+                var followupActive = userId <= treatedCount ? 10 : 5;
+                periodRows.Add($"('2026-09-30', 28, '2026-10-01', {userId}, N'1', 1, 1, 0, 0, NULL, '2026-01-01', 1, 1, 1, 0, 0, 1, '2026-09-15', '2026-09-15', 0, N'audit', NULL, NULL, NULL, NULL, NULL, N'complete')");
+                periodRows.Add($"('2026-10-31', 28, '2026-11-01', {userId}, N'1', 1, 1, 0, 0, NULL, '2026-01-01', {followupActive}, {followupActive * 5}, 3, 0, 0, 4, '2026-10-15', '2026-10-31', 0, N'audit', NULL, NULL, NULL, NULL, NULL, N'complete')");
+            }
+            db.Execute(@"INSERT INTO dbo.copilot_adoption_user_period
+                         (period_end, period_days, data_cutoff_utc, user_id, seat_licence_type_ids, account_enabled, department_id, country_id, manager_id, seat_first_observed_utc, account_created_utc,
+                          active_days, interactions, apps_used, agents_used, cowork_interactions, active_weeks, first_interaction_utc, last_interaction_utc, prior_interactions,
+                          signal_source, report_prompts, report_active_days, report_apps_used, report_last_activity_utc, report_agent_last_activity_utc, coverage_status)
+                         VALUES " + string.Join(",", periodRows) + ";");
+            db.Execute($@"SET IDENTITY_INSERT dbo.copilot_adoption_cohort ON;
+                         INSERT INTO dbo.copilot_adoption_cohort (cohort_id, name, action_code, created_by, baseline_period_end, baseline_period_days, baseline_options_hash)
+                          VALUES (1, N'Contoso treated cohort', N'coach', N'admin@contoso.com', '2026-09-30', 28, N'{CopilotAdoptionService.OptionsHash(CopilotAdoptionOptions.Default)}');
+                         SET IDENTITY_INSERT dbo.copilot_adoption_cohort OFF;
+                         INSERT INTO dbo.copilot_adoption_cohort_member (cohort_id, user_id, baseline_band, baseline_score, baseline_active_days, baseline_department, holdout_control)
+                          VALUES " + string.Join(",", Enumerable.Range(1, treatedCount).Select(i => $"(1, {i}, 2, 5, 1, N'Finance', 0)")) + @";
+                         SET IDENTITY_INSERT dbo.copilot_adoption_intervention ON;
+                         INSERT INTO dbo.copilot_adoption_intervention (intervention_id, cohort_id, owner, intervention_type, status, intended_outcome, intended_reinvestment_type, intended_reinvestment_description)
+                          VALUES (1, 1, N'Finance enablement', N'briefing', N'planned', N'Improve adoption', N'shorter cycle time', N'Finance: shorten month-end close');
+                         SET IDENTITY_INSERT dbo.copilot_adoption_intervention OFF;");
+        }
 
         private static void CreatePeriodFactTables(ScratchDatabase db)
         {

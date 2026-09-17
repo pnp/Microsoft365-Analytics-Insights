@@ -398,6 +398,116 @@ namespace Web.AnalyticsWeb.Controllers
 
         #endregion
 
+
+        #region Cohorts and interventions
+
+        [HttpGet]
+        [Route("cohorts")]
+        public async Task<IHttpActionResult> Cohorts(CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var service = new CopilotAdoptionService();
+            return Ok(await service.GetCohortsAsync(cancellationToken));
+        }
+
+        [HttpPost]
+        [Route("cohorts/from-action")]
+        public async Task<IHttpActionResult> CreateCohortFromAction(
+            [FromBody] CopilotAdoptionCreateCohortRequest request,
+            int windowDays = 28,
+            string seatLicenceTypeIds = null,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+            if (analysis == null) return StatusCode(HttpStatusCode.ServiceUnavailable);
+            request = request ?? new CopilotAdoptionCreateCohortRequest();
+            request.CreatedBy = CurrentUserName();
+            var service = new CopilotAdoptionService(analysis.Summary.Options);
+            return Ok(await service.CreateCohortFromActionAsync(analysis, request, cancellationToken));
+        }
+
+        [HttpPost]
+        [Route("interventions/from-action")]
+        public async Task<IHttpActionResult> CreateInterventionFromAction(
+            [FromBody] CopilotAdoptionCreateInterventionRequest request,
+            int windowDays = 28,
+            string seatLicenceTypeIds = null,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+            if (analysis == null) return StatusCode(HttpStatusCode.ServiceUnavailable);
+            request = request ?? new CopilotAdoptionCreateInterventionRequest();
+            request.CreatedBy = CurrentUserName();
+            var service = new CopilotAdoptionService(analysis.Summary.Options);
+            return Ok(await service.CreateInterventionFromActionAsync(analysis, request, cancellationToken));
+        }
+
+        [HttpGet]
+        [Route("cohorts/{cohortId:int}/members")]
+        public async Task<IHttpActionResult> CohortMembers(int cohortId, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var service = new CopilotAdoptionService();
+            return Ok(await service.GetCohortMembersAsync(cohortId, cancellationToken));
+        }
+
+        [HttpGet]
+        [Route("cohorts/{cohortId:int}/members/export")]
+        public async Task<HttpResponseMessage> ExportCohortMembers(int cohortId, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var service = new CopilotAdoptionService();
+            var members = await service.GetCohortMembersAsync(cohortId, cancellationToken);
+            return CsvResponse(
+                CsvSerialiser.ToBytes(
+                    members,
+                    new[]
+                    {
+                        new CsvColumn<CopilotAdoptionCohortMember>("User principal name", r => r.UserPrincipalName),
+                        new CsvColumn<CopilotAdoptionCohortMember>("Email", r => r.Mail),
+                        new CsvColumn<CopilotAdoptionCohortMember>("Department", r => r.Department),
+                        new CsvColumn<CopilotAdoptionCohortMember>("Baseline band", r => r.BaselineBandName),
+                        new CsvColumn<CopilotAdoptionCohortMember>("Baseline score", r => r.BaselineScore),
+                        new CsvColumn<CopilotAdoptionCohortMember>("Baseline active days", r => r.BaselineActiveDays),
+                        new CsvColumn<CopilotAdoptionCohortMember>("Hold-out control", r => r.HoldoutControl),
+                    }),
+                CsvSerialiser.FileName("copilot-adoption-cohort-" + cohortId, DateTime.UtcNow));
+        }
+
+        [HttpPost]
+        [Route("cohorts/{cohortId:int}/close")]
+        public async Task<IHttpActionResult> CloseCohort(int cohortId, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var service = new CopilotAdoptionService();
+            await service.CloseCohortAsync(cohortId, CurrentUserName(), cancellationToken);
+            return Ok(await service.GetCohortAsync(cohortId, cancellationToken));
+        }
+
+        [HttpGet]
+        [Route("interventions")]
+        public async Task<IHttpActionResult> Interventions(CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var service = new CopilotAdoptionService();
+            return Ok(await service.GetInterventionsAsync(cancellationToken));
+        }
+
+        [HttpGet]
+        [Route("interventions/{interventionId:int}/outcome")]
+        public async Task<IHttpActionResult> InterventionOutcome(
+            int interventionId,
+            DateTime? followupPeriodEnd = null,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var service = new CopilotAdoptionService();
+            var outcome = await service.MeasureInterventionAsync(interventionId, followupPeriodEnd, cancellationToken);
+            if (outcome == null) return NotFound();
+            return Ok(outcome);
+        }
+
+        private string CurrentUserName()
+        {
+            return User?.Identity?.Name ?? "unknown";
+        }
+
+        #endregion
+
         #region Licensed users
 
         /// <summary>

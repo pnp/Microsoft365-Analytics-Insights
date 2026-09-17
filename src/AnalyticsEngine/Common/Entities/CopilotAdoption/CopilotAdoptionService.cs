@@ -6,6 +6,7 @@ using System.Data.Entity;
 using Microsoft.Data.SqlClient;
 using Newtonsoft.Json;
 using System.Linq;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -694,6 +695,336 @@ namespace Common.Entities.CopilotAdoption
                 JsonConvert.SerializeObject(options ?? CopilotAdoptionOptions.Default, Formatting.None));
             clone.WindowDays = Math.Max(1, periodDays);
             return clone;
+        }
+
+
+
+        public async Task<CopilotAdoptionCohort> CreateCohortFromActionAsync(
+            CopilotAdoptionAnalysis analysis,
+            CopilotAdoptionCreateCohortRequest request,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            if (analysis == null) throw new ArgumentNullException(nameof(analysis));
+            if (request == null) throw new ArgumentNullException(nameof(request));
+
+            var actionCode = NormaliseActionCode(request.ActionCode);
+            var members = (analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>())
+                .Where(u => string.Equals(u.RecommendedActionCode, actionCode, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(u => u.UserId)
+                .ToList();
+
+            if (members.Count == 0)
+            {
+                throw new InvalidOperationException("No users currently match that Copilot Adoption action, so an empty cohort was not created.");
+            }
+
+            var holdoutPercentage = Math.Max(0, Math.Min(50, request.HoldoutPercentage));
+            var memberJson = JsonConvert.SerializeObject(members.Select((u, index) => new
+            {
+                userId = u.UserId,
+                baselineBand = (int)u.Band,
+                baselineScore = u.AdoptionScore,
+                baselineActiveDays = u.ActiveDays,
+                department = string.IsNullOrWhiteSpace(u.Department) ? null : u.Department.Trim(),
+                holdoutControl = holdoutPercentage > 0 && (index * 100 / members.Count) < holdoutPercentage,
+            }));
+
+            var name = string.IsNullOrWhiteSpace(request.Name)
+                ? $"{CopilotAdoptionScoring.ActionLabel(actionCode)} cohort - {DateTime.UtcNow:yyyy-MM-dd}"
+                : request.Name.Trim();
+
+            var createdBy = string.IsNullOrWhiteSpace(request.CreatedBy) ? "unknown" : request.CreatedBy.Trim();
+            var baselineEnd = (analysis.Summary?.ToUtc ?? DateTime.UtcNow).Date;
+            var baselineDays = analysis.Summary?.WindowDays > 0 ? analysis.Summary.WindowDays : _options.WindowDays;
+            var cohortId = (await QueryAsync<int?>(
+                CopilotAdoptionSql.InsertCohortSql,
+                cancellationToken,
+                new SqlParameter("@name", name),
+                new SqlParameter("@actionCode", actionCode),
+                new SqlParameter("@createdBy", createdBy),
+                new SqlParameter("@baselinePeriodEnd", baselineEnd),
+                new SqlParameter("@baselinePeriodDays", baselineDays),
+                new SqlParameter("@baselineOptionsHash", OptionsHash(analysis.Summary?.Options ?? _options)),
+                new SqlParameter("@membersJson", memberJson))).FirstOrDefault();
+
+            if (!cohortId.HasValue) throw new InvalidOperationException("The cohort insert did not return an id.");
+            return await GetCohortAsync(cohortId.Value, cancellationToken);
+        }
+
+        public async Task<CopilotAdoptionIntervention> CreateInterventionFromActionAsync(
+            CopilotAdoptionAnalysis analysis,
+            CopilotAdoptionCreateInterventionRequest request,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            if (request == null) throw new ArgumentNullException(nameof(request));
+            if (request.HoldoutPercentage == 0) request.HoldoutPercentage = 10;
+            var cohort = await CreateCohortFromActionAsync(analysis, request, cancellationToken);
+            var interventionId = (await QueryAsync<int?>(
+                CopilotAdoptionSql.InsertInterventionSql,
+                cancellationToken,
+                new SqlParameter("@cohortId", cohort.CohortId),
+                new SqlParameter("@owner", DbValue(request.Owner)),
+                new SqlParameter("@interventionType", NormaliseInterventionType(request.InterventionType)),
+                new SqlParameter("@guidanceResource", DbValue(request.GuidanceResource)),
+                new SqlParameter("@startedUtc", DbValue(request.StartedUtc)),
+                new SqlParameter("@dueUtc", DbValue(request.DueUtc)),
+                new SqlParameter("@completedUtc", DbValue(request.CompletedUtc)),
+                new SqlParameter("@status", NormaliseInterventionStatus(request.Status, request.StartedUtc, request.CompletedUtc)),
+                new SqlParameter("@intendedOutcome", DbValue(request.IntendedOutcome)),
+                new SqlParameter("@notes", DbValue(request.Notes)),
+                new SqlParameter("@intendedReinvestmentType", NormaliseReinvestmentType(request.IntendedReinvestmentType)),
+                new SqlParameter("@intendedReinvestmentDescription", DbValue(request.IntendedReinvestmentDescription)))).FirstOrDefault();
+
+            if (!interventionId.HasValue) throw new InvalidOperationException("The intervention insert did not return an id.");
+            return (await QueryAsync<CopilotAdoptionIntervention>(
+                CopilotAdoptionSql.InterventionByIdSql,
+                cancellationToken,
+                new SqlParameter("@interventionId", interventionId.Value))).FirstOrDefault();
+        }
+
+        public async Task<List<CopilotAdoptionCohort>> GetCohortsAsync(CancellationToken cancellationToken = default(CancellationToken))
+        {
+            return await QueryAsync<CopilotAdoptionCohort>(CopilotAdoptionSql.CohortsSql, cancellationToken);
+        }
+
+        public async Task<CopilotAdoptionCohort> GetCohortAsync(int cohortId, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            return (await QueryAsync<CopilotAdoptionCohort>(
+                CopilotAdoptionSql.CohortByIdSql,
+                cancellationToken,
+                new SqlParameter("@cohortId", cohortId))).FirstOrDefault();
+        }
+
+        public async Task<List<CopilotAdoptionCohortMember>> GetCohortMembersAsync(int cohortId, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var rows = await QueryAsync<CopilotAdoptionCohortMember>(
+                CopilotAdoptionSql.CohortMembersSql,
+                cancellationToken,
+                new SqlParameter("@cohortId", cohortId));
+            foreach (var row in rows)
+            {
+                row.BaselineBandName = CopilotAdoptionScoring.BandDisplayName(row.BaselineBand);
+            }
+            return rows;
+        }
+
+        public async Task CloseCohortAsync(int cohortId, string closedBy, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            await ExecuteAsync(
+                CopilotAdoptionSql.CloseCohortSql,
+                cancellationToken,
+                QueryTimeoutSecs,
+                new SqlParameter("@cohortId", cohortId),
+                new SqlParameter("@closedBy", DbValue(closedBy)));
+        }
+
+        public async Task<List<CopilotAdoptionIntervention>> GetInterventionsAsync(CancellationToken cancellationToken = default(CancellationToken))
+        {
+            return await QueryAsync<CopilotAdoptionIntervention>(CopilotAdoptionSql.InterventionsSql, cancellationToken);
+        }
+
+        public async Task<CopilotAdoptionInterventionOutcome> MeasureInterventionAsync(
+            int interventionId,
+            DateTime? followupPeriodEndUtc = null,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var intervention = (await QueryAsync<CopilotAdoptionIntervention>(
+                CopilotAdoptionSql.InterventionByIdSql,
+                cancellationToken,
+                new SqlParameter("@interventionId", interventionId))).FirstOrDefault();
+            if (intervention == null) return null;
+
+            var cohort = await GetCohortAsync(intervention.CohortId, cancellationToken);
+            var members = await GetCohortMembersAsync(intervention.CohortId, cancellationToken);
+            var followupEnd = (followupPeriodEndUtc ?? DateTime.UtcNow.Date.AddDays(-1)).Date;
+            var outcome = new CopilotAdoptionInterventionOutcome
+            {
+                Intervention = intervention,
+                Cohort = cohort,
+                FollowupPeriodEnd = followupEnd,
+                MatchingCriteria = "Baseline adoption band, 10-point score bucket and department. Tenure is not matched until licence assignment history is available (#277).",
+                Observational = !members.Any(m => m.HoldoutControl),
+                MethodLabel = members.Any(m => m.HoldoutControl)
+                    ? "Random hold-out comparison (near-causal, not a proof)"
+                    : "Matched untreated comparison (observational, not a randomised trial)",
+            };
+
+            var baseline = await ReadPublishedPeriodAsync(cohort.BaselinePeriodEnd, cohort.BaselinePeriodDays, cancellationToken);
+            var followup = await ReadPublishedPeriodAsync(followupEnd, cohort.BaselinePeriodDays, cancellationToken);
+            if (baseline == null || followup == null)
+            {
+                outcome.Refused = true;
+                outcome.RefusalReason = "The baseline and follow-up published period facts are both required before an intervention effect can be reported.";
+                return outcome;
+            }
+
+            var baselineRows = baseline.Analysis.LicensedUsers.ToDictionary(u => u.UserId);
+            var followupRows = followup.Analysis.LicensedUsers.ToDictionary(u => u.UserId);
+            var memberIds = new HashSet<int>(members.Select(m => m.UserId));
+            var holdout = new HashSet<int>(members.Where(m => m.HoldoutControl).Select(m => m.UserId));
+            var treatedIds = members.Where(m => !m.HoldoutControl).Select(m => m.UserId).ToList();
+            var controlIds = holdout.Count > 0
+                ? holdout.ToList()
+                : BuildMatchedControlIds(members, baselineRows.Values, memberIds);
+
+            outcome.TreatedN = treatedIds.Count(id => followupRows.ContainsKey(id));
+            outcome.ControlN = controlIds.Count(id => followupRows.ContainsKey(id));
+            if (outcome.TreatedN < _options.MinSeatsPerSegment || outcome.ControlN < _options.MinSeatsPerSegment)
+            {
+                outcome.Refused = true;
+                outcome.RefusalReason = $"No effect is reported because the treated group (n={outcome.TreatedN}) or control group (n={outcome.ControlN}) is below the minimum segment size of {_options.MinSeatsPerSegment}.";
+                return outcome;
+            }
+
+            outcome.TreatedChange = AverageScoreChange(treatedIds, id => members.First(m => m.UserId == id).BaselineScore, followupRows);
+            outcome.ControlChange = AverageScoreChange(controlIds, id => baselineRows[id].AdoptionScore, followupRows);
+            outcome.DifferenceInDifferences = Math.Round(outcome.TreatedChange - outcome.ControlChange, 1, MidpointRounding.AwayFromZero);
+            outcome.EffectSizeLabel = EffectLabel(outcome.DifferenceInDifferences);
+            outcome.ControlComposition = BuildControlComposition(controlIds, baselineRows);
+            outcome.LeadingIndicators = await BuildLeadingIndicatorOutcomesAsync(cohort, treatedIds, controlIds, followupEnd, cancellationToken);
+            return outcome;
+        }
+
+        private List<int> BuildMatchedControlIds(
+            List<CopilotAdoptionCohortMember> members,
+            IEnumerable<LicensedUserAdoptionRow> baselineRows,
+            HashSet<int> memberIds)
+        {
+            var keys = new HashSet<string>(members.Select(m => MatchKey(m.BaselineBand, m.BaselineScore, m.Department)));
+            return baselineRows
+                .Where(u => !memberIds.Contains(u.UserId) && keys.Contains(MatchKey(u.Band, u.AdoptionScore, u.Department)))
+                .Select(u => u.UserId)
+                .ToList();
+        }
+
+        private static string MatchKey(AdoptionBand band, double score, string department)
+        {
+            var bucket = Math.Floor(Math.Max(0, Math.Min(100, score)) / 10d) * 10;
+            return ((int)band).ToString(CultureInfo.InvariantCulture) + "|" + bucket.ToString(CultureInfo.InvariantCulture) + "|" + (department ?? string.Empty).Trim();
+        }
+
+        private static double AverageScoreChange(IEnumerable<int> ids, Func<int, double> baselineScore, Dictionary<int, LicensedUserAdoptionRow> followupRows)
+        {
+            var changes = ids.Where(followupRows.ContainsKey).Select(id => followupRows[id].AdoptionScore - baselineScore(id)).ToList();
+            return changes.Count == 0 ? 0 : Math.Round(changes.Average(), 1, MidpointRounding.AwayFromZero);
+        }
+
+        private List<CopilotAdoptionControlCompositionRow> BuildControlComposition(IEnumerable<int> ids, Dictionary<int, LicensedUserAdoptionRow> baselineRows)
+        {
+            return ids.Where(baselineRows.ContainsKey)
+                .Select(id => baselineRows[id])
+                .GroupBy(u => new { Department = string.IsNullOrWhiteSpace(u.Department) ? "(no department)" : u.Department.Trim(), u.Band, Bucket = Math.Floor(Math.Max(0, Math.Min(100, u.AdoptionScore)) / 10d) * 10 })
+                .Select(g => new CopilotAdoptionControlCompositionRow
+                {
+                    Department = g.Key.Department,
+                    Band = CopilotAdoptionScoring.BandDisplayName(g.Key.Band),
+                    ScoreBucket = g.Key.Bucket.ToString("0", CultureInfo.InvariantCulture) + "-" + Math.Min(100, g.Key.Bucket + 9).ToString("0", CultureInfo.InvariantCulture),
+                    Users = g.Count(),
+                })
+                .OrderByDescending(r => r.Users)
+                .ThenBy(r => r.Department, StringComparer.OrdinalIgnoreCase)
+                .Take(_options.TopSegments)
+                .ToList();
+        }
+
+        private async Task<List<CopilotAdoptionLeadingIndicatorOutcome>> BuildLeadingIndicatorOutcomesAsync(
+            CopilotAdoptionCohort cohort,
+            List<int> treatedIds,
+            List<int> controlIds,
+            DateTime followupEnd,
+            CancellationToken cancellationToken)
+        {
+            var baseline = await WorkloadSnapshotsAsync(cohort, cohort.BaselinePeriodEnd, cancellationToken);
+            var followup = await WorkloadSnapshotsAsync(cohort, followupEnd, cancellationToken);
+            var indicators = new[]
+            {
+                new { Code = "teamsMessages", Label = "Teams messages", Selector = new Func<CopilotAdoptionWorkloadSnapshotRow, double>(r => r.TeamsMessages) },
+                new { Code = "teamsMeetings", Label = "Teams meetings", Selector = new Func<CopilotAdoptionWorkloadSnapshotRow, double>(r => r.TeamsMeetings) },
+                new { Code = "email", Label = "Email sent/read", Selector = new Func<CopilotAdoptionWorkloadSnapshotRow, double>(r => r.EmailsSent + r.EmailsRead) },
+                new { Code = "files", Label = "SharePoint/OneDrive file activity", Selector = new Func<CopilotAdoptionWorkloadSnapshotRow, double>(r => r.FilesViewedOrEdited) },
+            };
+            return indicators.Select(i =>
+            {
+                var treated = AverageIndicatorChange(treatedIds, baseline, followup, i.Selector);
+                var control = AverageIndicatorChange(controlIds, baseline, followup, i.Selector);
+                var diff = Math.Round(treated - control, 1, MidpointRounding.AwayFromZero);
+                return new CopilotAdoptionLeadingIndicatorOutcome
+                {
+                    Code = i.Code,
+                    Label = i.Label,
+                    TreatedChange = treated,
+                    ControlChange = control,
+                    DifferenceInDifferences = diff,
+                    MovementLabel = diff == 0 ? "No movement against the matched control." : (diff > 0 ? "Moved up against the matched control." : "Moved down against the matched control."),
+                };
+            }).ToList();
+        }
+
+        private async Task<Dictionary<int, CopilotAdoptionWorkloadSnapshotRow>> WorkloadSnapshotsAsync(CopilotAdoptionCohort cohort, DateTime periodEnd, CancellationToken cancellationToken)
+        {
+            var rows = await QueryAsync<CopilotAdoptionWorkloadSnapshotRow>(
+                CopilotAdoptionSql.WorkloadSnapshotSql,
+                cancellationToken,
+                new SqlParameter("@cohortId", cohort.CohortId),
+                new SqlParameter("@baselinePeriodEnd", cohort.BaselinePeriodEnd),
+                new SqlParameter("@followupPeriodEnd", periodEnd),
+                new SqlParameter("@periodDays", cohort.BaselinePeriodDays),
+                new SqlParameter("@from", periodEnd.AddDays(-(Math.Max(1, cohort.BaselinePeriodDays) - 1))),
+                new SqlParameter("@to", periodEnd));
+            return rows.ToDictionary(r => r.UserId);
+        }
+
+        private static double AverageIndicatorChange(IEnumerable<int> ids, Dictionary<int, CopilotAdoptionWorkloadSnapshotRow> baseline, Dictionary<int, CopilotAdoptionWorkloadSnapshotRow> followup, Func<CopilotAdoptionWorkloadSnapshotRow, double> selector)
+        {
+            var changes = ids.Select(id => (followup.ContainsKey(id) ? selector(followup[id]) : 0) - (baseline.ContainsKey(id) ? selector(baseline[id]) : 0)).ToList();
+            return changes.Count == 0 ? 0 : Math.Round(changes.Average(), 1, MidpointRounding.AwayFromZero);
+        }
+
+        private static string EffectLabel(double effect)
+        {
+            if (Math.Abs(effect) < 1) return "No meaningful movement against the matched control.";
+            return effect > 0
+                ? "The treated cohort improved more than the matched control. This is an intervention comparison, not proof that Copilot caused the change."
+                : "The treated cohort improved less than the matched control. This is an intervention comparison, not proof of causation.";
+        }
+
+        private static object DbValue(object value)
+        {
+            if (value == null) return DBNull.Value;
+            if (value is string text) return string.IsNullOrWhiteSpace(text) ? (object)DBNull.Value : text.Trim();
+            return value;
+        }
+
+        private static string NormaliseActionCode(string actionCode)
+        {
+            var code = (actionCode ?? string.Empty).Trim();
+            if (!CopilotAdoptionScoring.AllActionCodes.Any(c => string.Equals(c, code, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new ArgumentException("Unknown Copilot Adoption action code.", nameof(actionCode));
+            }
+            return CopilotAdoptionScoring.AllActionCodes.First(c => string.Equals(c, code, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static string NormaliseInterventionType(string interventionType)
+        {
+            var allowed = new[] { "briefing", "scenario workshop", "champion session", "comms", "one-to-one", "licence reassignment" };
+            var value = (interventionType ?? "briefing").Trim();
+            return allowed.FirstOrDefault(a => string.Equals(a, value, StringComparison.OrdinalIgnoreCase)) ?? "briefing";
+        }
+
+        private static string NormaliseInterventionStatus(string status, DateTime? started, DateTime? completed)
+        {
+            if (completed.HasValue) return "completed";
+            var allowed = new[] { "planned", "started", "completed", "cancelled" };
+            var value = (status ?? (started.HasValue ? "started" : "planned")).Trim();
+            return allowed.FirstOrDefault(a => string.Equals(a, value, StringComparison.OrdinalIgnoreCase)) ?? "planned";
+        }
+
+        private static string NormaliseReinvestmentType(string value)
+        {
+            var allowed = new[] { "customer-facing work", "shorter cycle time", "quality improvement", "employee development", "capacity buffer", "other" };
+            var text = (value ?? "other").Trim();
+            return allowed.FirstOrDefault(a => string.Equals(a, text, StringComparison.OrdinalIgnoreCase)) ?? "other";
         }
 
         private async Task<CopilotAdoptionPeriodRun> GetPublishedPeriodRunAsync(DateTime periodEnd, int periodDays, CancellationToken cancellationToken)

@@ -206,7 +206,7 @@ export default function TeamsExplorerPage() {
     return () => controller.abort();
   }, [selectedTab, days, groupBy, reloadToken, overview, adoption, meetings, collaboration, conversations, people]);
 
-  const onTabSelect: SelectTabEventHandler = (_, d) => setSelectedTab(d.value as TabKey);
+  const onTabSelect: SelectTabEventHandler = (_: any, d: any) => setSelectedTab(d.value as TabKey);
 
   const runExport = useCallback(
     async (section: TeamsExportSection) => {
@@ -246,7 +246,7 @@ export default function TeamsExplorerPage() {
         <div className={styles.controls}>
           <Select
             value={String(days)}
-            onChange={(_, d) => setDays(Number(d.value))}
+            onChange={(_: any, d: any) => setDays(Number(d.value))}
             aria-label="Reporting period"
           >
             {WINDOWS.map((w) => (
