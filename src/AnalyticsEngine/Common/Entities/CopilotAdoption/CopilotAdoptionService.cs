@@ -1283,6 +1283,8 @@ namespace Common.Entities.CopilotAdoption
 
             var summary = analysis.Summary;
             var users = analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>();
+            summary.GuidanceCatalogueVersion = CopilotAdoptionGuidanceCatalogue.Version;
+            summary.GuidanceLinks = CopilotAdoptionGuidanceCatalogue.All.ToList();
 
             if (summary.LicensedUsers == 0)
             {
@@ -2027,6 +2029,7 @@ namespace Common.Entities.CopilotAdoption
                         // Passed the real options, not the defaults: the descriptions quote thresholds,
                         // and a tuned deployment must not be shown the shipped numbers.
                         Description = CopilotAdoptionScoring.ActionDescription(code, _options),
+                        GuidanceLinks = CopilotAdoptionGuidanceCatalogue.ForAction(code).ToList(),
                         Users = count,
                         SharePct = CopilotAdoptionScoring.Percentage(count, users.Count),
                     };

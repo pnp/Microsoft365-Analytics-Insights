@@ -466,6 +466,7 @@ export default function CopilotAdoptionPage() {
                   windowDays={windowDays}
                   filterOptions={filterOptions}
                   options={summary.options}
+                  guidanceLinks={summary.guidanceLinks}
                 />
               )}
 
