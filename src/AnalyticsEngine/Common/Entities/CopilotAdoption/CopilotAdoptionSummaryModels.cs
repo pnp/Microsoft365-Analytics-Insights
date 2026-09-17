@@ -643,11 +643,11 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>The configured accountability dimension used for <see cref="AccountabilityRollup"/>.</summary>
         [JsonProperty("accountabilityDimension")]
-        public string AccountabilityDimension { get; set; }
+        public string AccountabilityDimension { get; set; } = CopilotAdoptionAccountabilityDimensions.DirectManager;
 
         /// <summary>Human-readable label for the configured accountability dimension.</summary>
         [JsonProperty("accountabilityDimensionLabel")]
-        public string AccountabilityDimensionLabel { get; set; }
+        public string AccountabilityDimensionLabel { get; set; } = "Direct manager";
 
         /// <summary>
         /// Adoption, reclaim and action counts by accountable organisational unit. Small groups are

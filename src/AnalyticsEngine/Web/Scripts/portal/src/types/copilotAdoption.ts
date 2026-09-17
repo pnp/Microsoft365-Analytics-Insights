@@ -360,8 +360,8 @@ export interface CopilotAdoptionSummary {
   actionPlan: AdoptionActionSummary[];
   adoptionByDepartment: AdoptionSegmentRow[];
   adoptionByCountry: AdoptionSegmentRow[];
-  accountabilityDimension: string;
-  accountabilityDimensionLabel: string;
+  accountabilityDimension: string | null;
+  accountabilityDimensionLabel: string | null;
   accountabilityRollup: AccountabilityRollupRow[];
   usageByApp: ReportCategory[];
   opportunityByDepartment: ReportCategory[];

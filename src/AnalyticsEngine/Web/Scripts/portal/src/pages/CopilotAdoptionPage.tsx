@@ -551,6 +551,8 @@ function OverviewTab({
   const styles = useStyles();
   const kpis = buildKpis(summary);
   const o = summary.options;
+  const accountabilityDimensionLabel = summary.accountabilityDimensionLabel ?? 'Direct manager';
+  const accountabilityDimensionDescription = accountabilityDimensionLabel.toLowerCase();
 
   // The band slices and the action plan are built from the users actually scored, which is capped by
   // MaxLicensedUsersScored. That cap is far above any real Copilot deployment and raises an explicit
@@ -696,14 +698,14 @@ function OverviewTab({
               Accountability roll-up
             </Text>
             <Text size={200} block className={styles.muted}>
-              Aggregate-only view by {summary.accountabilityDimensionLabel.toLowerCase()}. Sorted by the largest
+              Aggregate-only view by {accountabilityDimensionDescription}. Sorted by the largest
               absolute opportunity first; groups below {o.minSeatsPerSegment} licences are suppressed.
             </Text>
           </div>
           <InfoTip
             title="Accountability roll-up"
             content={{
-              what: `A leader-safe aggregate view by ${summary.accountabilityDimensionLabel.toLowerCase()}: seats, adoption, habit, reclaim tiers and action counts.`,
+              what: `A leader-safe aggregate view by ${accountabilityDimensionDescription}: seats, adoption, habit, reclaim tiers and action counts.`,
               how: `The dimension defaults to direct manager. Users without a manager are grouped explicitly as "(no manager)" rather than dropped. The same ${o.minSeatsPerSegment}-seat suppression used for department segments is applied here.`,
               source:
                 'This deliberately does not add a named per-user leader view; drill-through remains limited to the existing licensed-user table behaviour.',
@@ -713,7 +715,7 @@ function OverviewTab({
         <div className={styles.cardBody}>
           <AccountabilityRollupTable
             rows={summary.accountabilityRollup}
-            segmentLabel={summary.accountabilityDimensionLabel}
+            segmentLabel={accountabilityDimensionLabel}
           />
         </div>
       </Card>
@@ -1195,7 +1197,8 @@ function AccountabilityRollupTable({
             <td className={styles.skuCell}>
               {formatCount(row.opportunityUsers)} need action: {formatCount(row.reclaimUsers)} reclaim,{' '}
               {formatCount(row.reengageUsers)} win back, {formatCount(row.coachUsers)} coach,{' '}
-              {formatCount(row.broadenUsers)} broaden, {formatCount(row.growUsers)} deepen
+              {formatCount(row.broadenUsers)} broaden, {formatCount(row.growUsers)} deepen,{' '}
+              {formatCount(row.reviewUsers)} review
             </td>
           </tr>
         ))}
