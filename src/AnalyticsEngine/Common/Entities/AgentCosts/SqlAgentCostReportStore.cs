@@ -56,6 +56,10 @@ namespace Common.Entities.AgentCosts
                 {
                     result.EarliestUsageDate = await db.CopilotStudioCreditDaily.MinAsync(r => (DateTime?)r.UsageDate);
                     result.LatestUsageDate = await db.CopilotStudioCreditDaily.MaxAsync(r => (DateTime?)r.UsageDate);
+
+                    // Same reasoning as the Azure dimensions: Microsoft fills the per-agent metadata
+                    // sparsely, so which pivots can answer anything has to be read from the data.
+                    result.CreditDimensionsWithData = await GetPopulatedCreditDimensionsAsync(db);
                 }
 
                 var creditLog = await LatestLogAsync(db, AgentCostImportNames.CopilotStudioCredits);
@@ -111,8 +115,18 @@ namespace Common.Entities.AgentCosts
             {
                 if (!string.IsNullOrEmpty(result.CopilotStudioCreditsLastError))
                 {
-                    result.Messages.Add("The Copilot Studio credit import is switched on but is failing. Most often this "
-                        + "means the app registration has not been given a Power Platform role: "
+                    // Deliberately does NOT lead with "assign a Power Platform role". That advice sends an
+                    // admin who has ALREADY assigned it round in circles, which is the common case once the
+                    // obvious setup step has been done: the licensing entitlement routes have been observed
+                    // returning 403 to an application-only token whose service principal already holds
+                    // Power Platform Reader at tenant scope, and returning 403 for the per-agent route even
+                    // to a signed-in Global Administrator. Both possibilities are named so the reader can
+                    // tell "not finished setting up" apart from "cannot work on this tenant".
+                    result.Messages.Add("The Copilot Studio credit import is switched on but is failing. Check the "
+                        + "app registration holds a Power Platform role at tenant scope - but if it already does, "
+                        + "this is most likely Microsoft refusing application-only access to the licensing API "
+                        + "rather than anything left undone here, in which case the import cannot currently "
+                        + "succeed and is best switched off. The error was: "
                         + result.CopilotStudioCreditsLastError);
                 }
                 else if (result.CopilotStudioCreditsHasRunCleanly)
@@ -203,6 +217,34 @@ namespace Common.Entities.AgentCosts
             if (await rows.AnyAsync(r => r.ResourceId != null)) populated.Add(AzureCostDimensions.Resource);
             if (await rows.AnyAsync(r => r.ResourceGroup != null)) populated.Add(AzureCostDimensions.ResourceGroup);
             if (await rows.AnyAsync(r => r.SubscriptionId != null)) populated.Add(AzureCostDimensions.Subscription);
+            if (await rows.AnyAsync(r => r.TagValue != null)) populated.Add(AzureCostDimensions.Tag);
+
+            return populated;
+        }
+
+        /// <summary>
+        /// The credit breakdown dimensions that have at least one non-null value stored.
+        /// </summary>
+        /// <remarks>
+        /// Harness is treated as present only when something was actually classified: every row carries a
+        /// harness string, but <c>NotAssessed</c> and <c>Unknown</c> both mean "could not tell", and a pivot
+        /// whose only bucket is "we could not tell" is a dead end dressed up as an answer.
+        /// </remarks>
+        private static async Task<List<string>> GetPopulatedCreditDimensionsAsync(AnalyticsEntitiesContext db)
+        {
+            var populated = new List<string>();
+            var rows = db.CopilotStudioCreditDaily;
+
+            if (await rows.AnyAsync(r => r.AgentId != null)) populated.Add(AgentCostDimensions.Agent);
+            if (await rows.AnyAsync(r => r.EnvironmentId != null)) populated.Add(AgentCostDimensions.Environment);
+            if (await rows.AnyAsync(r => r.FeatureName != null)) populated.Add(AgentCostDimensions.Feature);
+
+            if (await rows.AnyAsync(r => r.Harness != null
+                    && r.Harness != CopilotStudioHarness.NotAssessed
+                    && r.Harness != CopilotStudioHarness.Unknown))
+            {
+                populated.Add(AgentCostDimensions.Harness);
+            }
 
             return populated;
         }
@@ -258,23 +300,35 @@ namespace Common.Entities.AgentCosts
 
                 // Grouped by currency and never added up: a tenant billed in more than one currency has no
                 // meaningful single total without an exchange rate we do not hold.
-                var azure = await db.AzureCostDaily
+                //
+                // Grouped by meter and tag as well, purely so the quantity can be judged. Quantities of
+                // different meters are different UNITS - credits, GB, hours, operations - so summing them
+                // produces a number that means nothing. Measured on a real subscription the naive sum came to
+                // "5,342,761 metered units", which is worse than showing nothing at all.
+                var azureRaw = await db.AzureCostDaily
                     .Where(r => r.UsageDate >= query.FromUtc && r.UsageDate <= query.ToUtc)
-                    .GroupBy(r => r.Currency)
+                    .GroupBy(r => new { r.Currency, r.MeterName, r.TagValue })
                     .Select(g => new
                     {
-                        Currency = g.Key,
+                        g.Key.Currency,
                         Cost = g.Sum(r => (decimal?)r.Cost),
+                        Quantity = g.Sum(r => r.Quantity),
                         AnyEstimated = g.Any(r => r.IsEstimated),
                     })
                     .ToListAsync();
 
-                summary.AzureCost = azure
-                    .Select(a => new AzureCostByCurrency
+                summary.AzureCost = azureRaw
+                    .GroupBy(a => a.Currency, StringComparer.OrdinalIgnoreCase)
+                    .Select(g => new AzureCostByCurrency
                     {
-                        Currency = a.Currency,
-                        Cost = a.Cost ?? 0m,
-                        IncludesEstimates = a.AnyEstimated,
+                        Currency = g.Key,
+                        Cost = g.Sum(a => a.Cost ?? 0m),
+
+                        // Only when a single meter/tag combination contributes, so the unit is unambiguous.
+                        // On an unfiltered subscription import that is null; on an import narrowed to the
+                        // Copilot Credits meter it is the credit count, which is the figure worth showing.
+                        Quantity = g.Count() == 1 ? g.First().Quantity : null,
+                        IncludesEstimates = g.Any(a => a.AnyEstimated),
                     })
                     .OrderByDescending(a => a.Cost)
                     .ToList();
@@ -323,14 +377,11 @@ namespace Common.Entities.AgentCosts
                 var filtered = Filter(db.CopilotStudioCreditDaily, query);
 
                 // Projected to (key, label) first so the grouping below is one expression per dimension
-                // rather than eight near-identical GroupBy blocks. The label is only meaningful for the two
+                // rather than four near-identical GroupBy blocks. The label is only meaningful for the two
                 // dimensions that have a display name; elsewhere it repeats the key.
                 IQueryable<KeyedRow> keyed;
                 switch (dimension.ToLowerInvariant())
                 {
-                    case AgentCostDimensions.Agent:
-                        keyed = filtered.Select(r => new KeyedRow { Key = r.AgentId, Label = r.AgentName, Row = r });
-                        break;
                     case AgentCostDimensions.Environment:
                         keyed = filtered.Select(r => new KeyedRow { Key = r.EnvironmentId, Label = r.EnvironmentName, Row = r });
                         break;
@@ -340,17 +391,8 @@ namespace Common.Entities.AgentCosts
                     case AgentCostDimensions.Feature:
                         keyed = filtered.Select(r => new KeyedRow { Key = r.FeatureName, Label = r.FeatureName, Row = r });
                         break;
-                    case AgentCostDimensions.Model:
-                        keyed = filtered.Select(r => new KeyedRow { Key = r.LlmModel, Label = r.LlmModel, Row = r });
-                        break;
-                    case AgentCostDimensions.Tool:
-                        keyed = filtered.Select(r => new KeyedRow { Key = r.ToolInvoked, Label = r.ToolInvoked, Row = r });
-                        break;
-                    case AgentCostDimensions.KnowledgeSource:
-                        keyed = filtered.Select(r => new KeyedRow { Key = r.KnowledgeSources, Label = r.KnowledgeSources, Row = r });
-                        break;
                     default:
-                        keyed = filtered.Select(r => new KeyedRow { Key = r.ChannelId, Label = r.ChannelId, Row = r });
+                        keyed = filtered.Select(r => new KeyedRow { Key = r.AgentId, Label = r.AgentName, Row = r });
                         break;
                 }
 
@@ -429,10 +471,6 @@ namespace Common.Entities.AgentCosts
                         AgentName = r.AgentName,
                         Harness = r.Harness,
                         FeatureName = r.FeatureName,
-                        ChannelId = r.ChannelId,
-                        LlmModel = r.LlmModel,
-                        ToolInvoked = r.ToolInvoked,
-                        KnowledgeSources = r.KnowledgeSources,
                         BilledCredits = r.BilledCredits,
                         NonBilledCredits = r.NonBilledCredits,
                         DistinctUsers = r.DistinctUsers,
@@ -479,6 +517,9 @@ namespace Common.Entities.AgentCosts
                         break;
                     case AzureCostDimensions.Subscription:
                         keyed = filtered.Select(r => new AzureKeyedRow { Key = r.SubscriptionId, Row = r });
+                        break;
+                    case AzureCostDimensions.Tag:
+                        keyed = filtered.Select(r => new AzureKeyedRow { Key = r.TagValue, Row = r });
                         break;
                     default:
                         keyed = filtered.Select(r => new AzureKeyedRow { Key = r.MeterName, Row = r });
@@ -549,10 +590,6 @@ namespace Common.Entities.AgentCosts
 
                 var harnesses = await inWindow.Where(r => r.Harness != null).Select(r => r.Harness).Distinct().ToListAsync();
                 var features = await inWindow.Where(r => r.FeatureName != null).Select(r => r.FeatureName).Distinct().Take(200).ToListAsync();
-                var models = await inWindow.Where(r => r.LlmModel != null).Select(r => r.LlmModel).Distinct().Take(200).ToListAsync();
-                var tools = await inWindow.Where(r => r.ToolInvoked != null).Select(r => r.ToolInvoked).Distinct().Take(200).ToListAsync();
-                var knowledge = await inWindow.Where(r => r.KnowledgeSources != null).Select(r => r.KnowledgeSources).Distinct().Take(200).ToListAsync();
-                var channels = await inWindow.Where(r => r.ChannelId != null).Select(r => r.ChannelId).Distinct().Take(200).ToListAsync();
 
                 return new AgentCostFilterOptions
                 {
@@ -566,10 +603,6 @@ namespace Common.Entities.AgentCosts
                         .ToList(),
                     Harnesses = harnesses.OrderBy(h => h, StringComparer.Ordinal).ToList(),
                     Features = features.OrderBy(f => f, StringComparer.CurrentCultureIgnoreCase).ToList(),
-                    Models = models.OrderBy(m => m, StringComparer.CurrentCultureIgnoreCase).ToList(),
-                    Tools = tools.OrderBy(t => t, StringComparer.CurrentCultureIgnoreCase).ToList(),
-                    KnowledgeSources = knowledge.OrderBy(k => k, StringComparer.CurrentCultureIgnoreCase).ToList(),
-                    Channels = channels.OrderBy(c => c, StringComparer.CurrentCultureIgnoreCase).ToList(),
                 };
             }
         }
@@ -652,10 +685,6 @@ namespace Common.Entities.AgentCosts
             if (!string.IsNullOrWhiteSpace(query.EnvironmentId)) filtered = filtered.Where(r => r.EnvironmentId == query.EnvironmentId);
             if (!string.IsNullOrWhiteSpace(query.Harness)) filtered = filtered.Where(r => r.Harness == query.Harness);
             if (!string.IsNullOrWhiteSpace(query.FeatureName)) filtered = filtered.Where(r => r.FeatureName == query.FeatureName);
-            if (!string.IsNullOrWhiteSpace(query.LlmModel)) filtered = filtered.Where(r => r.LlmModel == query.LlmModel);
-            if (!string.IsNullOrWhiteSpace(query.ToolInvoked)) filtered = filtered.Where(r => r.ToolInvoked == query.ToolInvoked);
-            if (!string.IsNullOrWhiteSpace(query.KnowledgeSources)) filtered = filtered.Where(r => r.KnowledgeSources == query.KnowledgeSources);
-            if (!string.IsNullOrWhiteSpace(query.ChannelId)) filtered = filtered.Where(r => r.ChannelId == query.ChannelId);
 
             if (!string.IsNullOrWhiteSpace(query.Search))
             {

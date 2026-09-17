@@ -448,6 +448,14 @@
     <Compile Include="Migrations\202609151440027_CopilotPromptSafetyFields.Designer.cs">
       <DependentUpon>202609151440027_CopilotPromptSafetyFields.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202609161425295_AzureCostTagColumns.cs" />
+    <Compile Include="Migrations\202609161425295_AzureCostTagColumns.Designer.cs">
+      <DependentUpon>202609161425295_AzureCostTagColumns.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202609171125117_DropUnreportedCopilotStudioCreditColumns.cs" />
+    <Compile Include="Migrations\202609171125117_DropUnreportedCopilotStudioCreditColumns.Designer.cs">
+      <DependentUpon>202609171125117_DropUnreportedCopilotStudioCreditColumns.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.cs" />
     <Compile Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.Designer.cs">
       <DependentUpon>202609101100001_UniqueUrlsFullUrlIndex.cs</DependentUpon>
@@ -679,6 +687,12 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609151440027_CopilotPromptSafetyFields.resx">
       <DependentUpon>202609151440027_CopilotPromptSafetyFields.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609161425295_AzureCostTagColumns.resx">
+      <DependentUpon>202609161425295_AzureCostTagColumns.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609171125117_DropUnreportedCopilotStudioCreditColumns.resx">
+      <DependentUpon>202609171125117_DropUnreportedCopilotStudioCreditColumns.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.resx">
       <DependentUpon>202609101100001_UniqueUrlsFullUrlIndex.cs</DependentUpon>

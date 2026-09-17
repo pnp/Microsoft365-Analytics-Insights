@@ -64,7 +64,12 @@ namespace Tests.UnitTests
         // IndexTeamsExplorerQueries then adds date indexes for the Teams Explorer report and widens
         // IX_date on teams_user_device_usage_log. Raw-SQL, additive, and reuses the
         // CopilotPromptSafetyFields model snapshot verbatim.
-        private const string LatestId = "202609161200001_IndexTeamsExplorerQueries";
+        // AzureCostTagColumns adds azure_cost_daily.tag_key / .tag_value so the Azure cost import can record
+        // the tag it grouped by - the only discriminator between Copilot Cowork, Work IQ API and Copilot
+        // Studio spend, which Microsoft bills through one shared meter. Also a model change, so also freshly
+        // scaffolded. DropUnreportedCopilotStudioCreditColumns then removes the four credit columns
+        // Microsoft's API never populates (channel_id, llm_model, tool_invoked, knowledge_sources).
+        private const string LatestId = "202609171125117_DropUnreportedCopilotStudioCreditColumns";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

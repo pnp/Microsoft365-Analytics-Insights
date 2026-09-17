@@ -16,8 +16,7 @@ namespace Web.AnalyticsWeb.Controllers
     ///
     /// <para>Written for an M365 admin who has been asked "why has our Copilot bill gone up?". The answer
     /// they need is not a single number but a path: which agent, on which day, doing what - so the API
-    /// exposes the full billing tuple (agent x environment x harness x feature x model x tool x knowledge
-    /// source x channel) rather than a fixed set of pre-canned charts.</para>
+    /// exposes the full billing tuple (agent x environment x harness x feature)     rather than a fixed set of pre-canned charts.</para>
     ///
     /// <para><b>Per-user attribution is available for Copilot Studio only, and comes from Microsoft.</b>
     /// The per-user entitlement routes Microsoft added in July 2026 report a user's billed credits directly;
@@ -66,21 +65,21 @@ namespace Web.AnalyticsWeb.Controllers
 
         [HttpGet, Route("summary")]
         public Task<IHttpActionResult> Summary(string from = null, string to = null, string agentId = null,
-            string environmentId = null, string harness = null, string feature = null, string model = null,
-            string search = null, string tool = null, string knowledge = null, string channel = null)
+            string environmentId = null, string harness = null, string feature = null,
+            string search = null)
             => Execute(async () =>
             {
-                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, model, search, tool, knowledge, channel);
+                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, search);
                 return Ok(await _store.GetSummaryAsync(query));
             });
 
         [HttpGet, Route("trend")]
         public Task<IHttpActionResult> Trend(string from = null, string to = null, string agentId = null,
-            string environmentId = null, string harness = null, string feature = null, string model = null,
-            string search = null, string tool = null, string knowledge = null, string channel = null)
+            string environmentId = null, string harness = null, string feature = null,
+            string search = null)
             => Execute(async () =>
             {
-                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, model, search, tool, knowledge, channel);
+                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, search);
                 return Ok(await _store.GetDailyTrendAsync(query));
             });
 
@@ -91,7 +90,7 @@ namespace Web.AnalyticsWeb.Controllers
         [HttpGet, Route("breakdown")]
         public Task<IHttpActionResult> Breakdown(string dimension, string from = null, string to = null,
             string agentId = null, string environmentId = null, string harness = null, string feature = null,
-            string model = null, string search = null, string tool = null, string knowledge = null, string channel = null, int top = 20)
+            string search = null, int top = 20)
             => Execute(async () =>
             {
                 if (!AgentCostDimensions.IsValid(dimension))
@@ -103,19 +102,19 @@ namespace Web.AnalyticsWeb.Controllers
                     });
                 }
 
-                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, model, search, tool, knowledge, channel);
+                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, search);
                 return Ok(await _store.GetBreakdownAsync(query, dimension, top));
             });
 
         /// <summary>The full billing tuple, paged. The deepest view the source data supports.</summary>
         [HttpGet, Route("detail")]
         public Task<IHttpActionResult> Detail(string from = null, string to = null, string agentId = null,
-            string environmentId = null, string harness = null, string feature = null, string model = null,
-            string search = null, string tool = null, string knowledge = null, string channel = null,
+            string environmentId = null, string harness = null, string feature = null,
+            string search = null,
             int page = 1, int pageSize = 50, string sort = "credits", string direction = "desc")
             => Execute(async () =>
             {
-                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, model, search, tool, knowledge, channel);
+                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, search);
                 query.Page = page;
                 query.PageSize = pageSize;
                 query.Sort = sort;
@@ -137,7 +136,7 @@ namespace Web.AnalyticsWeb.Controllers
                     });
                 }
 
-                var query = BuildQuery(from, to, null, null, null, null, null, null, null, null, null);
+                var query = BuildQuery(from, to, null, null, null, null, null);
                 return Ok(await _store.GetAzureBreakdownAsync(query, dimension, top));
             });
 
@@ -146,7 +145,7 @@ namespace Web.AnalyticsWeb.Controllers
         public Task<IHttpActionResult> Filters(string from = null, string to = null)
             => Execute(async () =>
             {
-                var query = BuildQuery(from, to, null, null, null, null, null, null, null, null, null);
+                var query = BuildQuery(from, to, null, null, null, null, null);
                 return Ok(await _store.GetFilterOptionsAsync(query));
             });
 
@@ -161,7 +160,7 @@ namespace Web.AnalyticsWeb.Controllers
         public Task<IHttpActionResult> Users(string from = null, string to = null, string environmentId = null, int top = 20)
             => Execute(async () =>
             {
-                var query = BuildQuery(from, to, null, environmentId, null, null, null, null, null, null, null);
+                var query = BuildQuery(from, to, null, environmentId, null, null, null);
                 return Ok(await _store.GetTopUsersAsync(query, top));
             });
 
@@ -171,8 +170,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// whole report by a day for anyone not on UTC.
         /// </summary>
         private static AgentCostQuery BuildQuery(string from, string to, string agentId, string environmentId,
-            string harness, string feature, string model, string search,
-            string tool = null, string knowledge = null, string channel = null)
+            string harness, string feature, string search)
         {
             var today = DateTime.UtcNow.Date;
 
@@ -204,11 +202,7 @@ namespace Web.AnalyticsWeb.Controllers
                 EnvironmentId = Trimmed(environmentId),
                 Harness = Trimmed(harness),
                 FeatureName = Trimmed(feature),
-                LlmModel = Trimmed(model),
                 Search = Trimmed(search),
-                ToolInvoked = Trimmed(tool),
-                KnowledgeSources = Trimmed(knowledge),
-                ChannelId = Trimmed(channel),
             };
         }
 

@@ -218,8 +218,7 @@ namespace Tests.FakeDataGen.Demo
         // importers' own numbering.
         public static readonly DemoTable StudioCredits = T("copilot_studio_credit_daily", false,
             D("usage_date"), N("environment_id", 200), N("environment_name", 255), N("agent_id", 200),
-            N("agent_name", 255), N("harness", 50), N("feature_name", 200), N("channel_id", 200),
-            N("llm_model", 200), N("tool_invoked", 400), N("knowledge_sources", 400),
+            N("agent_name", 255), N("harness", 50), N("feature_name", 200),
             M("billed_credits"), M("non_billed_credits"), I("distinct_users"), D("last_refreshed_utc"),
             N("dimension_hash", 64), D("imported_utc"));
         public static readonly DemoTable StudioUserCredits = T("copilot_studio_credit_user_daily", false,
@@ -233,7 +232,8 @@ namespace Tests.FakeDataGen.Demo
             D("usage_date"), N("scope", 400), N("subscription_id", 100), N("resource_id", 850),
             N("resource_group", 255), N("service_name", 255), N("meter_category", 255),
             N("meter_sub_category", 255), N("meter_name", 255), M("cost"), N("currency", 10),
-            M("quantity"), B("is_estimated"), N("row_hash", 64), D("imported_utc"));
+            M("quantity"), B("is_estimated"), N("tag_key", 256), N("tag_value", 512),
+            N("row_hash", 64), D("imported_utc"));
         public static readonly DemoTable AgentCostImports = T("agent_cost_import_log", false,
             N("import_name", 100), D("imported_utc"), D("window_from"), D("window_to"),
             I("rows_read"), I("rows_saved"), N("error", 1000));

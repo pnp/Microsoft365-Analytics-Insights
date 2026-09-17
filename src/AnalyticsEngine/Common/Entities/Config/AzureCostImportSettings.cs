@@ -79,6 +79,14 @@ namespace Common.Entities.Config
         /// <summary>
         /// The dimensions to group the daily query by. Empty means <see cref="DefaultGroupBy"/>.
         /// </summary>
+        /// <remarks>
+        /// An entry of the form <c>TagKey:&lt;tag name&gt;</c> - for example <c>TagKey:serviceName</c> - groups
+        /// by a tag instead of a dimension. That is the only way the <c>query</c> API returns tags at all, and
+        /// it is what separates Copilot Cowork from Work IQ API and Copilot Studio: Microsoft bills all three
+        /// through one <c>Pay As You Go Copilot Credit</c> meter and documents no per-experience line item, so
+        /// the tag is the only discriminator. It consumes one of the two permitted grouping slots, which is why
+        /// it is opt-in: <c>ResourceId;TagKey:serviceName</c> trades the meter split for the service split.
+        /// </remarks>
         public IReadOnlyList<string> GroupBy { get; set; } = new List<string>();
 
         /// <summary>
