@@ -581,6 +581,10 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("adoptionByDepartment")]
         public List<AdoptionSegmentRow> AdoptionByDepartment { get; set; } = new List<AdoptionSegmentRow>();
 
+        /// <summary>Departments with the weakest habit formation, for the executive league table.</summary>
+        [JsonProperty("habitByDepartment")]
+        public List<AdoptionSegmentRow> HabitByDepartment { get; set; } = new List<AdoptionSegmentRow>();
+
         /// <summary>Adoption by country, for organisations that run enablement regionally.</summary>
         [JsonProperty("adoptionByCountry")]
         public List<AdoptionSegmentRow> AdoptionByCountry { get; set; } = new List<AdoptionSegmentRow>();

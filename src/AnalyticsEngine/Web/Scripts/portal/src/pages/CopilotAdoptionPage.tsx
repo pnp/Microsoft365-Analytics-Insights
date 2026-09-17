@@ -685,15 +685,15 @@ function ExecutiveTab({
                 Department league table
               </Text>
               <Text size={200} block className={styles.muted}>
-                Ranked by habit rate, with unused seats and recommended candidates shown as numbers rather than
-                colour alone.
+                Lowest habit-rate departments, capped to the top {o.topSegments} departments above the seat threshold,
+                with unused seats and recommended candidates shown as numbers rather than colour alone.
               </Text>
             </div>
             <InfoTip
               title="Department league table"
               content={{
                 what: 'Departments ranked by the share of licensed users who have formed a Copilot habit.',
-                how: `Habitual users are Established or Champion. Departments below ${o.minSeatsPerSegment} licences are omitted. The candidate column comes from the licence-opportunity analysis, so a department can show both unused seats and people with a business case for reassignment.`,
+                how: `Habitual users are Established or Champion. Departments below ${o.minSeatsPerSegment} licences are omitted, and the executive table keeps the ${o.topSegments} lowest habit-rate departments before showing the first 8 rows. The candidate column comes from the licence-opportunity analysis, so a department can show both unused seats and people with a business case for reassignment.`,
                 source:
                   'The Analyst view keeps the full adoption and opportunity breakdowns, and the detail tabs contain the users behind each count.',
               }}
@@ -768,7 +768,7 @@ function ExecutiveTab({
 function ExecutiveDepartmentTable({ summary }: { summary: CopilotAdoptionSummary }) {
   const styles = useStyles();
   const candidatesByDepartment = new Map(summary.opportunityByDepartment.map((r) => [r.label, r.value]));
-  const rows = [...summary.adoptionByDepartment]
+  const rows = [...summary.habitByDepartment]
     .map((row) => {
       const habitRatePct = row.licensedUsers > 0 ? (row.habitualUsers / row.licensedUsers) * 100 : 0;
       const idleSeats = row.neverUsedUsers;

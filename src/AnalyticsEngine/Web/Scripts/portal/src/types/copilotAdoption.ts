@@ -339,6 +339,7 @@ export interface CopilotAdoptionSummary {
   intensityByDepartment: AdoptionIntensityPoint[];
   actionPlan: AdoptionActionSummary[];
   adoptionByDepartment: AdoptionSegmentRow[];
+  habitByDepartment: AdoptionSegmentRow[];
   adoptionByCountry: AdoptionSegmentRow[];
   usageByApp: ReportCategory[];
   opportunityByDepartment: ReportCategory[];

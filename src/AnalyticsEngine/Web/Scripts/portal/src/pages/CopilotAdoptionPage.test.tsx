@@ -171,6 +171,10 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
       { segment: 'Finance', licensedUsers: 30, activeUsers: 10, habitualUsers: 3, neverUsedUsers: 15, adoptionRatePct: 33.3, averageAdoptionScore: 22 },
       { segment: 'Sales', licensedUsers: 50, activeUsers: 40, habitualUsers: 25, neverUsedUsers: 5, adoptionRatePct: 80, averageAdoptionScore: 62 },
     ],
+    habitByDepartment: [
+      { segment: 'Support', licensedUsers: 25, activeUsers: 25, habitualUsers: 0, neverUsedUsers: 0, adoptionRatePct: 100, averageAdoptionScore: 30 },
+      { segment: 'Finance', licensedUsers: 30, activeUsers: 10, habitualUsers: 3, neverUsedUsers: 15, adoptionRatePct: 33.3, averageAdoptionScore: 22 },
+    ],
     adoptionByCountry: [{ segment: 'United Kingdom', licensedUsers: 120, activeUsers: 72, habitualUsers: 36, neverUsedUsers: 30, adoptionRatePct: 60, averageAdoptionScore: 42 }],
     usageByApp: [{ label: 'Teams', value: 1200 }, { label: 'Word', value: 400 }],
     opportunityByDepartment: [{ label: 'Finance', value: 6 }, { label: 'Sales', value: 3 }],
@@ -230,6 +234,7 @@ describe('CopilotAdoptionPage view split', () => {
     expect(screen.getByText('What we are doing about it')).toBeVisible();
     expect(screen.getByText('Department league table')).toBeVisible();
     expect(screen.getByText('Finance')).toBeVisible();
+    expect(screen.getByText('Support')).toBeVisible();
     expect(screen.queryByText('The shape of adoption')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'SQL' })).not.toBeInTheDocument();
   });
@@ -275,6 +280,7 @@ describe('CopilotAdoptionPage view split', () => {
       recommendedForLicence: 0,
       actionPlan: [],
       adoptionByDepartment: [],
+      habitByDepartment: [],
       funnel: [],
       bandBreakdown: [],
     }));

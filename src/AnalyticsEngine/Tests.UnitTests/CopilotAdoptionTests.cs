@@ -1720,6 +1720,41 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void DepartmentHabitBreakdown_IsRankedByHabitNotAdoption()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(
+                Enumerable.Range(0, 5).Select(i => Departmental($"ops{i}@contoso.com", "Operations", i == 0 ? 80 : 0)));
+            analysis.LicensedUsers.AddRange(
+                Enumerable.Range(0, 5).Select(i => Departmental($"support{i}@contoso.com", "Support", 10)));
+
+            var options = new CopilotAdoptionOptions { TopSegments = 1 };
+
+            new CopilotAdoptionService(options).FinaliseSummary(analysis);
+
+            Assert.AreEqual("Operations", analysis.Summary.AdoptionByDepartment.Single().Segment,
+                "The analyst adoption breakdown remains ordered by adoption rate.");
+            Assert.AreEqual("Support", analysis.Summary.HabitByDepartment.Single().Segment,
+                "The executive league table must still surface departments where everyone tried Copilot but no habit formed.");
+        }
+
+        [TestMethod]
+        public void OpportunityByDepartment_TrimsDepartmentNamesToMatchSegmentKeys()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Opportunities.Add(new LicenceOpportunityRow
+            {
+                Department = "Finance ",
+                Recommended = true,
+            });
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual("Finance", analysis.Summary.OpportunityByDepartment.Single().Label,
+                "Candidate counts must use the same trimmed department key as the adoption segments.");
+        }
+
+        [TestMethod]
         public void MedianIsReportedAlongsideTheMean()
         {
             // A handful of Champions pulls the mean up and makes adoption look healthier than it is.

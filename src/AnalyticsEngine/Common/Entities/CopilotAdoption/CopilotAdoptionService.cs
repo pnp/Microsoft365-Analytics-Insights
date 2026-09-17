@@ -1424,8 +1424,9 @@ namespace Common.Entities.CopilotAdoption
             summary.Concentration = CopilotAdoptionScoring.Concentration(
                 auditInteractionUsers.Where(CopilotAdoptionScoring.IsActive).Select(u => u.Interactions));
             summary.ScoreProfiles = BuildScoreProfiles(auditInteractionUsers);
-            summary.AdoptionByDepartment = BuildSegments(users, u => u.Department, "(no department)");
-            summary.AdoptionByCountry = BuildSegments(users, u => u.Country, "(no country)");
+            summary.AdoptionByDepartment = BuildSegments(users, u => u.Department, "(no department)", s => s.AdoptionRatePct);
+            summary.HabitByDepartment = BuildSegments(users, u => u.Department, "(no department)", HabitRatePct);
+            summary.AdoptionByCountry = BuildSegments(users, u => u.Country, "(no country)", s => s.AdoptionRatePct);
             summary.IntensityByDepartment = BuildIntensity(auditInteractionUsers, u => u.Department, "(no department)");
 
             FinaliseAgents(analysis);
@@ -1437,7 +1438,7 @@ namespace Common.Entities.CopilotAdoption
             summary.RecommendedForLicence = opportunities.Count(o => o.Recommended);
             summary.OpportunityByDepartment = opportunities
                 .Where(o => o.Recommended)
-                .GroupBy(o => string.IsNullOrWhiteSpace(o.Department) ? "(no department)" : o.Department)
+                .GroupBy(o => string.IsNullOrWhiteSpace(o.Department) ? "(no department)" : o.Department.Trim())
                 .Select(g => new AdoptionCategory { Label = g.Key, Value = g.Count() })
                 .OrderByDescending(c => c.Value)
                 .Take(_options.TopSegments)
@@ -2096,16 +2097,24 @@ namespace Common.Entities.CopilotAdoption
         private List<AdoptionSegmentRow> BuildSegments(
             IEnumerable<LicensedUserAdoptionRow> users,
             Func<LicensedUserAdoptionRow, string> selector,
-            string emptyLabel)
+            string emptyLabel,
+            Func<AdoptionSegmentRow, double> primarySort)
         {
             return users
                 .GroupBy(u => string.IsNullOrWhiteSpace(selector(u)) ? emptyLabel : selector(u).Trim())
                 .Where(g => g.Count() >= _options.MinSeatsPerSegment)
                 .Select(g => CopilotAdoptionScoring.Summarise(g.Key, g.ToList()))
-                .OrderBy(s => s.AdoptionRatePct)
+                .OrderBy(primarySort)
                 .ThenByDescending(s => s.LicensedUsers)
                 .Take(_options.TopSegments)
                 .ToList();
+        }
+
+        private static double HabitRatePct(AdoptionSegmentRow segment)
+        {
+            return segment.LicensedUsers > 0
+                ? segment.HabitualUsers * 100d / segment.LicensedUsers
+                : 0d;
         }
 
         #endregion
