@@ -235,18 +235,28 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
 
             var refreshedUtc = DateTime.UtcNow;
-            foreach (var pair in skuLicenseTypes)
+            var capacityByLicenceType = skuLicenseTypes
+                .GroupBy(pair => pair.Value.ID)
+                .Select(g => new
+                {
+                    LicenceTypeId = g.Key,
+                    Enabled = g.Any(pair => pair.Key.PrepaidUnits?.Enabled != null) ? g.Sum(pair => pair.Key.PrepaidUnits?.Enabled) : (int?)null,
+                    Warning = g.Any(pair => pair.Key.PrepaidUnits?.Warning != null) ? g.Sum(pair => pair.Key.PrepaidUnits?.Warning) : (int?)null,
+                    Suspended = g.Any(pair => pair.Key.PrepaidUnits?.Suspended != null) ? g.Sum(pair => pair.Key.PrepaidUnits?.Suspended) : (int?)null,
+                })
+                .ToList();
+
+            foreach (var capacity in capacityByLicenceType)
             {
-                var units = pair.Key.PrepaidUnits;
                 await db.Database.ExecuteSqlCommandAsync(
                     "UPDATE dbo.license_types " +
                     "SET prepaid_enabled_units = @enabled, prepaid_warning_units = @warning, prepaid_suspended_units = @suspended, subscribed_sku_refreshed_utc = @refreshedUtc " +
                     "WHERE id = @id",
-                    new SqlParameter("@enabled", (object)units?.Enabled ?? DBNull.Value),
-                    new SqlParameter("@warning", (object)units?.Warning ?? DBNull.Value),
-                    new SqlParameter("@suspended", (object)units?.Suspended ?? DBNull.Value),
+                    new SqlParameter("@enabled", (object)capacity.Enabled ?? DBNull.Value),
+                    new SqlParameter("@warning", (object)capacity.Warning ?? DBNull.Value),
+                    new SqlParameter("@suspended", (object)capacity.Suspended ?? DBNull.Value),
                     new SqlParameter("@refreshedUtc", refreshedUtc),
-                    new SqlParameter("@id", pair.Value.ID));
+                    new SqlParameter("@id", capacity.LicenceTypeId));
             }
         }
 

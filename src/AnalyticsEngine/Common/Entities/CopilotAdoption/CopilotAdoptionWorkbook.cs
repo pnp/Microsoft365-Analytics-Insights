@@ -238,12 +238,20 @@ namespace Common.Entities.CopilotAdoption
 
             if (summary.IdleLicenceSpend != null)
             {
-                AddMeta(sheet, "Idle spend exposure", FormatCosts(summary.IdleLicenceSpend.SpendExposure),
+                AddMeta(sheet, "Idle spend exposure", FormatCosts(summary.IdleLicenceSpend.SpendExposure, summary.IdleLicenceSpend.UnassignedSpendUnknown),
                     "Monthly exposure for configured SKU prices only. This is assigned idle seats plus unassigned seats; currencies are never added together.");
                 AddMeta(sheet, "Idle spend - reassignable", FormatCosts(summary.IdleLicenceSpend.Reassignable),
                     "Assigned idle seats that can be given to another user. This is not a cash saving unless the tenant later buys fewer seats.");
-                AddMeta(sheet, "Idle spend - reducible at renewal", FormatCosts(summary.IdleLicenceSpend.ReducibleAtRenewal),
+                AddMeta(sheet, "Idle spend - reducible at renewal", FormatCosts(summary.IdleLicenceSpend.ReducibleAtRenewal, summary.IdleLicenceSpend.UnassignedSpendUnknown),
                     "Purchased but unassigned seats. This is the renewal reduction opportunity, separate from reassignable seats.");
+                foreach (var cost in summary.IdleLicenceSpend.ConfiguredCosts)
+                {
+                    AddMeta(sheet, "Seat price used - " + cost.SkuPartNumber,
+                        $"{cost.Currency} {cost.Cost:N2} {cost.Period}",
+                        cost.EffectiveDateUtc.HasValue
+                            ? $"Effective {cost.EffectiveDateUtc.Value:yyyy-MM-dd}. This is the configured price used for the idle-spend figures in this workbook."
+                            : "No effective date was supplied.");
+                }
                 foreach (var tier in summary.IdleLicenceSpend.Tiers)
                 {
                     AddMeta(sheet, "Idle spend - " + tier.Tier, FormatCosts(tier.Costs),
@@ -1416,10 +1424,22 @@ namespace Common.Entities.CopilotAdoption
             sheet.FreezeTopRows(3);
         }
 
-        private static string FormatCosts(List<Common.Entities.AgentCosts.AzureCostByCurrency> costs)
+        private static string FormatCosts(List<Common.Entities.AgentCosts.AzureCostByCurrency> costs, bool unknown = false)
         {
+            if (unknown)
+            {
+                return costs == null || costs.Count == 0
+                    ? "Unknown"
+                    : string.Join("; ", costs.Select(FormatCost)) + "; Unknown unassigned";
+            }
+
             if (costs == null || costs.Count == 0) return "Not configured";
-            return string.Join("; ", costs.Select(c => c.Currency + " " + c.Cost.ToString("N2")));
+            return string.Join("; ", costs.Select(FormatCost));
+        }
+
+        private static string FormatCost(Common.Entities.AgentCosts.AzureCostByCurrency cost)
+        {
+            return cost.Currency + " " + cost.Cost.ToString("N2");
         }
 
         private static void AddMethod(XlsxSheet sheet, string name, string definition)

@@ -794,6 +794,9 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("reducibleAtRenewal")]
         public List<AzureCostByCurrency> ReducibleAtRenewal { get; set; } = new List<AzureCostByCurrency>();
 
+        [JsonProperty("unassignedSpendUnknown")]
+        public bool UnassignedSpendUnknown { get; set; }
+
         [JsonProperty("tiers")]
         public List<IdleLicenceSpendTier> Tiers { get; set; } = new List<IdleLicenceSpendTier>();
 

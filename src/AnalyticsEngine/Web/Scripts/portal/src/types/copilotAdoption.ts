@@ -120,6 +120,7 @@ export interface IdleLicenceSpendSummary {
   spendExposure: AzureCostByCurrency[];
   reassignable: AzureCostByCurrency[];
   reducibleAtRenewal: AzureCostByCurrency[];
+  unassignedSpendUnknown?: boolean;
   tiers: IdleLicenceSpendTier[];
   categories: IdleLicenceSpendCategory[];
 }

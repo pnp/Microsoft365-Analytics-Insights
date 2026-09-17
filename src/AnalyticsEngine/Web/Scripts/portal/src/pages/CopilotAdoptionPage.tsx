@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react';
+﻿import { useEffect, useRef, useState } from 'react';
 import {
   makeStyles,
   tokens,
@@ -198,6 +198,8 @@ export default function CopilotAdoptionPage() {
   const [filterOptions, setFilterOptions] = useState<AdoptionFilterOptions | null>(null);
   const [sql, setSql] = useState<Record<string, string> | null>(null);
   const [seatCostDrafts, setSeatCostDrafts] = useState<Record<string, { cost: string; currency: string; period: 'monthly' | 'annual'; effectiveDate: string }>>({});
+  const [appliedSeatCosts, setAppliedSeatCosts] = useState<CopilotSeatCostInput[]>([]);
+  const lastSummaryWindow = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -223,16 +225,21 @@ export default function CopilotAdoptionPage() {
 
     let cancelled = false;
     const controller = new AbortController();
-    // Clear the previous period's summary immediately. Leaving it in place kept the Excel button enabled
-    // against a stale analysis while its URL already pointed at the new period, so a click could sit
-    // waiting out a whole cold run - which is the request length the platform kills.
-    setSummary(null);
+    if (lastSummaryWindow.current !== windowDays) {
+      // Clear the previous period's summary immediately. Leaving it in place kept the Excel button enabled
+      // against a stale analysis while its URL already pointed at the new period, so a click could sit
+      // waiting out a whole cold run - which is the request length the platform kills.
+      setSummary(null);
+    }
     setSummaryLoading(true);
     setSummaryError(null);
 
-    fetchAdoptionSummary(windowDays, undefined, controller.signal, buildSeatCostInputs(seatCostDrafts))
+    fetchAdoptionSummary(windowDays, undefined, controller.signal, appliedSeatCosts)
       .then((s) => {
-        if (!cancelled) setSummary(s);
+        if (!cancelled) {
+          lastSummaryWindow.current = windowDays;
+          setSummary(s);
+        }
       })
       .catch((e) => {
         if (cancelled || controller.signal.aborted) return;
@@ -263,7 +270,7 @@ export default function CopilotAdoptionPage() {
       // changed or the page unmounted.
       controller.abort();
     };
-  }, [availability, windowDays, seatCostDrafts]);
+  }, [availability, windowDays, appliedSeatCosts]);
 
   const onTabSelect: SelectTabEventHandler = (_e, data) => {
     setDrillAction(undefined);
@@ -303,7 +310,12 @@ export default function CopilotAdoptionPage() {
           </Select>
 
           {summary && (
-            <SeatCostInputs summary={summary} drafts={seatCostDrafts} onChange={setSeatCostDrafts} />
+            <SeatCostInputs
+              summary={summary}
+              drafts={seatCostDrafts}
+              onChange={setSeatCostDrafts}
+              onApply={() => setAppliedSeatCosts(buildSeatCostInputs(seatCostDrafts))}
+            />
           )}
           {availability?.available && (
             <Tooltip
@@ -321,7 +333,7 @@ export default function CopilotAdoptionPage() {
                 appearance="primary"
                 icon={<ArrowDownload16Regular />}
                 as="a"
-                href={summary ? workbookExportUrl(windowDays, undefined, buildSeatCostInputs(seatCostDrafts)) : undefined}
+                href={summary ? workbookExportUrl(windowDays, undefined, appliedSeatCosts) : undefined}
                 disabled={!summary}
               >
                 Excel report
@@ -511,10 +523,12 @@ function SeatCostInputs({
   summary,
   drafts,
   onChange,
+  onApply,
 }: {
   summary: CopilotAdoptionSummary;
   drafts: Record<string, { cost: string; currency: string; period: 'monthly' | 'annual'; effectiveDate: string }>;
   onChange: (value: Record<string, { cost: string; currency: string; period: 'monthly' | 'annual'; effectiveDate: string }>) => void;
+  onApply: () => void;
 }) {
   const seatSkus = summary.seatLicenceTypes.filter((l) => l.isCopilotSeat);
   if (seatSkus.length === 0) return null;
@@ -542,6 +556,9 @@ function SeatCostInputs({
           </span>
         );
       })}
+      <Button size="small" onClick={onApply} disabled={buildSeatCostInputs(drafts).length === 0}>
+        Apply
+      </Button>
     </div>
   );
 }
@@ -638,12 +655,13 @@ function OverviewTab({
               <Text weight="semibold" size={400}>Idle licence spend</Text>
               <Text size={200} block className={styles.muted}>
                 Monthly exposure only for configured SKU prices. Currencies are listed separately and never added together.
+                {' '}Prices used: {formatConfiguredSeatCosts(summary.idleLicenceSpend.configuredCosts)}.
               </Text>
             </div>
           </div>
           <div className={styles.cardBody}>
             <p>
-              Exposure {formatCosts(summary.idleLicenceSpend.spendExposure)}; reassignable {formatCosts(summary.idleLicenceSpend.reassignable)}; reducible at renewal {formatCosts(summary.idleLicenceSpend.reducibleAtRenewal)}.
+              Exposure {formatCosts(summary.idleLicenceSpend.spendExposure, summary.idleLicenceSpend.unassignedSpendUnknown)}; reassignable {formatCosts(summary.idleLicenceSpend.reassignable)}; reducible at renewal {formatCosts(summary.idleLicenceSpend.reducibleAtRenewal, summary.idleLicenceSpend.unassignedSpendUnknown)}.
             </p>
             <p className={styles.muted}>Reassignable means assigned idle seats that can be given to someone else. Reducible means purchased but unassigned seats that can be reduced at renewal. The Certain tier can be quoted alone: {formatTierCosts(summary.idleLicenceSpend.tiers, 'Certain')}.</p>
           </div>
@@ -1680,13 +1698,28 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
 }
 
 
-function formatCosts(values: { currency: string; cost: number }[]): string {
-  return values.length === 0 ? 'not configured' : values.map((v) => `${v.currency} ${Math.round(v.cost).toLocaleString()}`).join('; ');
+export function formatCosts(values: { currency: string; cost: number }[], unknown = false): string {
+  if (unknown) return values.length === 0 ? 'Unknown' : `${values.map(formatCost).join('; ')}; Unknown unassigned`;
+  return values.length === 0 ? 'not configured' : values.map(formatCost).join('; ');
 }
 
 function formatTierCosts(tiers: { tier: string; costs: { currency: string; cost: number }[] }[], tier: string): string {
   const match = tiers.find((t) => t.tier.toLowerCase() === tier.toLowerCase());
   return match ? formatCosts(match.costs) : 'none';
+}
+
+function formatCost(value: { currency: string; cost: number }): string {
+  return `${value.currency} ${Math.round(value.cost).toLocaleString()}`;
+}
+
+function formatConfiguredSeatCosts(costs: CopilotSeatCostInput[]): string {
+  if (!costs.length) return 'none';
+  return costs
+    .map((cost) => {
+      const effectiveDate = cost.effectiveDateUtc ? formatDate(cost.effectiveDateUtc) : 'unknown date';
+      return `${cost.skuPartNumber}: ${cost.currency} ${cost.cost.toLocaleString()} ${cost.period}, effective ${effectiveDate}`;
+    })
+    .join('; ');
 }
 
 /**

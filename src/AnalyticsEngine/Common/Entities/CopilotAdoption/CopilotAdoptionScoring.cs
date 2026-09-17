@@ -228,6 +228,7 @@ namespace Common.Entities.CopilotAdoption
                 ReclaimExclusionReviewAfterUtc = row.ReclaimExclusionReviewAfterUtc,
                 ReclaimExclusionExpired = row.ReclaimExclusionExpired,
                 SeatLicences = row.SeatLicences,
+                SeatLicenceTypeIds = row.SeatLicenceTypeIds,
 
                 Interactions = interactions,
                 ActiveDays = activeDays,

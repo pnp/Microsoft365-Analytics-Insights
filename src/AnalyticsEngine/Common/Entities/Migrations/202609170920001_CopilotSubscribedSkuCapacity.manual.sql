@@ -7,7 +7,7 @@
 
    RUN ORDER
      The manual scripts form a strict prerequisite chain. This one's predecessor is
-     202609151440027_CopilotPromptSafetyFields and must already be stamped in __MigrationHistory.
+     202609161200001_IndexTeamsExplorerQueries and must already be stamped in __MigrationHistory.
 
    CLASSIFICATION / RUNTIME
      Purely additive. Four nullable columns on a small lookup table; no index, no default, no backfill.
@@ -58,9 +58,9 @@ GO
 
 IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609170920001_CopilotSubscribedSkuCapacity')
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609151440027_CopilotPromptSafetyFields')
+    IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609161200001_IndexTeamsExplorerQueries')
     BEGIN
-        RAISERROR('CopilotSubscribedSkuCapacity: NOT stamped - predecessor 202609151440027_CopilotPromptSafetyFields is not present. Run scripts in migration-id order.', 16, 1);
+        RAISERROR('CopilotSubscribedSkuCapacity: NOT stamped - predecessor 202609161200001_IndexTeamsExplorerQueries is not present. Run scripts in migration-id order.', 16, 1);
     END
     ELSE IF COL_LENGTH(N'dbo.license_types', N'prepaid_enabled_units') IS NULL
         OR COL_LENGTH(N'dbo.license_types', N'prepaid_warning_units') IS NULL
@@ -74,7 +74,7 @@ BEGIN
         INSERT INTO dbo.__MigrationHistory (MigrationId, ContextKey, Model, ProductVersion)
         SELECT N'202609170920001_CopilotSubscribedSkuCapacity', ContextKey, Model, ProductVersion
         FROM dbo.__MigrationHistory
-        WHERE MigrationId = N'202609151440027_CopilotPromptSafetyFields';
+        WHERE MigrationId = N'202609161200001_IndexTeamsExplorerQueries';
         RAISERROR('CopilotSubscribedSkuCapacity: stamped __MigrationHistory.', 0, 1) WITH NOWAIT;
     END
 END

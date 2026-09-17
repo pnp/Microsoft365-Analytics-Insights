@@ -96,6 +96,9 @@ function scopeParams(windowDays: number, seatLicenceTypeIds?: number[], seatCost
   if (seatLicenceTypeIds && seatLicenceTypeIds.length > 0) {
     params.set('seatLicenceTypeIds', seatLicenceTypeIds.join(','));
   }
+  if (seatCosts && seatCosts.length > 0) {
+    params.set('seatCosts', JSON.stringify(seatCosts));
+  }
   return params;
 }
 

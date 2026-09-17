@@ -800,6 +800,35 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void LicenceTypesQuery_ReturnsPurchasedCapacityAndKeepsMissingInventoryUnknown()
+        {
+            using (var db = ScratchDatabase.Create("CopilotLicenceTypesCapacity"))
+            {
+                CreateUserTables(db);
+                db.Execute(
+                    @"INSERT INTO dbo.license_types
+                          (id, name, sku_id, prepaid_enabled_units, prepaid_warning_units, prepaid_suspended_units, subscribed_sku_refreshed_utc)
+                      VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot', 10, 2, 1, '2026-09-01T00:00:00'),
+                             (2, N'Microsoft Copilot for Microsoft 365 EDU', N'Microsoft_365_Copilot_EDU', NULL, NULL, NULL, NULL);
+                      INSERT INTO dbo.users (id, user_name, account_enabled) VALUES (1, 'a@contoso.com', 1), (2, 'b@contoso.com', 1);
+                      INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id)
+                          VALUES (1, 1, 1), (2, 2, 1);");
+
+                var rows = Query<LicenceTypeRow>(db, CopilotAdoptionSql.LicenceTypesSql);
+
+                var known = rows.Single(r => r.Id == 1);
+                Assert.AreEqual(2, known.AssignedUsers);
+                Assert.AreEqual(13, known.PurchasedUnits, "Enabled, warning and suspended prepaid units all contribute to purchased seats.");
+                Assert.AreEqual(new DateTime(2026, 9, 1, 0, 0, 0), known.PurchasedUnitsRefreshedUtc);
+
+                var unknown = rows.Single(r => r.Id == 2);
+                Assert.AreEqual(0, unknown.AssignedUsers);
+                Assert.IsNull(unknown.PurchasedUnits, "No subscribedSkus snapshot is unknown, not zero.");
+                Assert.IsNull(unknown.PurchasedUnitsRefreshedUtc);
+            }
+        }
+
+        [TestMethod]
         public void SupportingQueries_AllRunAgainstTheRealSchema()
         {
             // These are small, but they are hand-written SQL against real column names, so a typo in
@@ -845,6 +874,8 @@ namespace Tests.UnitTests
 
                 var seats = Query<CopilotAdoptionService.SeatAssignmentRow>(db, CopilotAdoptionSql.SeatAssignmentsSql(new[] { 1 }));
                 Assert.AreEqual(1, seats.Count);
+                Assert.AreEqual(1, seats[0].LicenceTypeId);
+                Assert.AreEqual("Microsoft_365_Copilot", seats[0].SkuPartNumber);
                 Assert.AreEqual("Microsoft Copilot for Microsoft 365", seats[0].LicenceName);
 
                 var byApp = Query<CopilotAdoptionService.CategoryQueryRow>(db,
