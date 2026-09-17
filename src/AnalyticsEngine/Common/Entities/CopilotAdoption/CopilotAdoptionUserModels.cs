@@ -1,5 +1,6 @@
 ﻿using Newtonsoft.Json;
 using System;
+using System.Collections.Generic;
 
 namespace Common.Entities.CopilotAdoption
 {
@@ -51,6 +52,8 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>Copilot seat SKUs held, comma separated (a user can hold more than one).</summary>
         public string SeatLicences { get; set; }
+
+        public List<int> SeatLicenceTypeIds { get; set; } = new List<int>();
 
         #region Audit-log derived (all users, including Copilot Chat with no seat)
 
@@ -185,6 +188,9 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("seatLicences")]
         public string SeatLicences { get; set; }
+
+        [JsonIgnore]
+        public List<int> SeatLicenceTypeIds { get; set; } = new List<int>();
 
         [JsonProperty("interactions")]
         public long Interactions { get; set; }

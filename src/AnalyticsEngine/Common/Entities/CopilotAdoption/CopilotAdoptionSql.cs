@@ -87,10 +87,12 @@ namespace Common.Entities.CopilotAdoption
             "SELECT lt.id AS Id,\r\n" +
             "       lt.name AS Name,\r\n" +
             "       lt.sku_id AS SkuPartNumber,\r\n" +
-            "       COUNT(ul.user_id) AS AssignedUsers\r\n" +
+            "       COUNT(ul.user_id) AS AssignedUsers,\r\n" +
+            "       CASE WHEN lt.subscribed_sku_refreshed_utc IS NULL THEN NULL ELSE ISNULL(lt.prepaid_enabled_units, 0) + ISNULL(lt.prepaid_warning_units, 0) + ISNULL(lt.prepaid_suspended_units, 0) END AS PurchasedUnits,\r\n" +
+            "       lt.subscribed_sku_refreshed_utc AS PurchasedUnitsRefreshedUtc\r\n" +
             "FROM dbo.license_types AS lt\r\n" +
             "LEFT JOIN dbo.user_license_type_lookups AS ul ON ul.license_type_id = lt.id\r\n" +
-            "GROUP BY lt.id, lt.name, lt.sku_id\r\n" +
+            "GROUP BY lt.id, lt.name, lt.sku_id, lt.prepaid_enabled_units, lt.prepaid_warning_units, lt.prepaid_suspended_units, lt.subscribed_sku_refreshed_utc\r\n" +
             "ORDER BY AssignedUsers DESC, lt.name;";
 
         /// <summary>
@@ -358,6 +360,8 @@ namespace Common.Entities.CopilotAdoption
         {
             return
                 "SELECT ul.user_id AS UserId,\r\n" +
+                "       ul.license_type_id AS LicenceTypeId,\r\n" +
+                "       lt.sku_id AS SkuPartNumber,\r\n" +
                 "       lt.name AS LicenceName\r\n" +
                 "FROM dbo.user_license_type_lookups AS ul\r\n" +
                 "JOIN dbo.license_types AS lt ON lt.id = ul.license_type_id\r\n" +

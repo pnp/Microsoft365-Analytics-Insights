@@ -451,12 +451,16 @@
     <Compile Include="Migrations\202609170900001_CopilotAdoptionPeriodFacts.Designer.cs">
       <DependentUpon>202609170900001_CopilotAdoptionPeriodFacts.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202609170920001_CopilotSubscribedSkuCapacity.cs" />
     <Compile Include="Migrations\202609151440027_CopilotPromptSafetyFields.Designer.cs">
       <DependentUpon>202609151440027_CopilotPromptSafetyFields.cs</DependentUpon>
     </Compile>
     <Compile Include="Migrations\202609170910001_GraphCopilotUsageApiV2.cs" />
     <Compile Include="Migrations\202609170910001_GraphCopilotUsageApiV2.Designer.cs">
       <DependentUpon>202609170910001_GraphCopilotUsageApiV2.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202609170920001_CopilotSubscribedSkuCapacity.Designer.cs">
+      <DependentUpon>202609170920001_CopilotSubscribedSkuCapacity.cs</DependentUpon>
     </Compile>
     <Compile Include="Migrations\202609170940001_CoworkUsageReportTables.cs" />
     <Compile Include="Migrations\202609170940001_CoworkUsageReportTables.Designer.cs">
@@ -699,6 +703,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609170910001_GraphCopilotUsageApiV2.resx">
       <DependentUpon>202609170910001_GraphCopilotUsageApiV2.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609170920001_CopilotSubscribedSkuCapacity.resx">
+      <DependentUpon>202609170920001_CopilotSubscribedSkuCapacity.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609170940001_CoworkUsageReportTables.resx">
       <DependentUpon>202609170940001_CoworkUsageReportTables.cs</DependentUpon>
