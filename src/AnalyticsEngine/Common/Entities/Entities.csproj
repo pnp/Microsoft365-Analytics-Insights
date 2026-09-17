@@ -462,6 +462,10 @@
     <Compile Include="Migrations\202609170920001_CopilotSubscribedSkuCapacity.Designer.cs">
       <DependentUpon>202609170920001_CopilotSubscribedSkuCapacity.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202609170940001_CoworkUsageReportTables.cs" />
+    <Compile Include="Migrations\202609170940001_CoworkUsageReportTables.Designer.cs">
+      <DependentUpon>202609170940001_CoworkUsageReportTables.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.cs" />
     <Compile Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.Designer.cs">
       <DependentUpon>202609101100001_UniqueUrlsFullUrlIndex.cs</DependentUpon>
@@ -702,6 +706,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609170920001_CopilotSubscribedSkuCapacity.resx">
       <DependentUpon>202609170920001_CopilotSubscribedSkuCapacity.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609170940001_CoworkUsageReportTables.resx">
+      <DependentUpon>202609170940001_CoworkUsageReportTables.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.resx">
       <DependentUpon>202609101100001_UniqueUrlsFullUrlIndex.cs</DependentUpon>

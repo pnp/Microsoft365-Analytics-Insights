@@ -1015,11 +1015,11 @@ function AnalystTab({
             label="Habit rate"
             sublabel={`${formatCount(summary.habitualUsers)} have made it part of the working week`}
           />
-          {summary.coworkDetected && (
+          {summary.coworkDetected && summary.coworkAdoptionPct !== null && (
             <GaugeRing
               value={summary.coworkAdoptionPct}
               label="Cowork adoption"
-              sublabel={`${formatCount(summary.coworkUsers)} licensed users have used Cowork`}
+              sublabel={`${formatCount(summary.coworkUsers)} eligible users have used Cowork`}
             />
           )}
         </div>
@@ -2332,17 +2332,19 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
   if (summary.coworkDetected) {
     items.push({
       key: 'cowork',
-      label: 'Cowork adoption',
-      value: formatPct(summary.coworkAdoptionPct),
-      hint: `${formatCount(summary.coworkUsers)} licensed users, ${formatCount(
-        summary.coworkInteractions,
-      )} interactions`,
+      label: summary.coworkAdoptionPct === null ? 'Cowork usage observed' : 'Cowork adoption',
+      value: summary.coworkAdoptionPct === null ? formatCount(summary.coworkUsers) : formatPct(summary.coworkAdoptionPct),
+      hint: summary.coworkReportTotalTasks > 0
+        ? `${formatCount(summary.coworkReportTotalTasks)} Cowork tasks in Microsoft's usage report; ${formatCount(summary.coworkInteractions)} audit interactions kept for reconciliation`
+        : `${formatCount(summary.coworkInteractions)} audit interactions (not Microsoft task count)`,
       tone: 'opportunity',
       info: {
-        what: 'Licensed users who used Microsoft 365 Copilot Cowork in the period, as a share of all licensed users.',
-        how: 'Cowork interactions are identified from the agents recorded against each Copilot interaction in the audit log. A user counts once no matter how many Cowork interactions they had.',
+        what: summary.coworkAdoptionPct === null
+          ? 'Cowork users are shown, but the adoption percentage is suppressed because spending-policy eligibility is unknown.'
+          : 'Cowork users as a share of known Cowork spending-policy eligibility.',
+        how: "Microsoft\'s Cowork usage report supplies task counts where available. Audit-derived interactions are retained separately for reconciliation and are not comparable with tasks.",
         source:
-          'This card only appears when Cowork activity was actually detected. On a tenant that has not enabled it, showing "0%" would read as a failure rather than as "not applicable here".',
+          'Cowork eligibility is controlled by spending-policy scope, not by the deprecated Cowork agent entry or by the Microsoft 365 Copilot licence count.',
       },
     });
   }
