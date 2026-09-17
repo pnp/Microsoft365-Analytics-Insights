@@ -136,7 +136,7 @@ export default function ReportsPage() {
     });
   }, [areas, areasError, enabledAreas]);
 
-  const onTabSelect: SelectTabEventHandler = (_e, data) => {
+  const onTabSelect: SelectTabEventHandler = (_e: unknown, data: { value: unknown }) => {
     const area = enabledAreas.find((a) => a.key === data.value);
     if (area) setSelectedTab(area.key);
   };

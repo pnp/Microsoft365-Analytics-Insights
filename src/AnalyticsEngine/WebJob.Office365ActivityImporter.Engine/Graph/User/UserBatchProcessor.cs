@@ -14,11 +14,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     internal class UserBatchProcessor
     {
         private readonly AnalyticsLogger _logger;
+        private readonly IClock _clock;
         private const int DEFAULT_BATCH_SIZE = 500;
 
-        public UserBatchProcessor(AnalyticsLogger logger)
+        public UserBatchProcessor(AnalyticsLogger logger, IClock clock = null)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _clock = clock ?? SystemClock.Instance;
         }
 
         /// <summary>
@@ -262,8 +264,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             Dictionary<string, Common.Entities.User> dbUsersByAadId,
             Dictionary<string, GraphUser> graphUsersByAadId,
             UserMetadataCache userMetaCache,
-            IUserBulkUpdateWriter bulkUpdateWriter)
+            IUserBulkUpdateWriter bulkUpdateWriter,
+            DateTime? importCycleLastUpdatedUtc = null,
+            int bulkBatchSize = 50000)
         {
+            if (bulkBatchSize <= 0) throw new ArgumentOutOfRangeException(nameof(bulkBatchSize));
+
             var graphUsersToUpdate = new List<GraphUser>(userUpnsToProcess.Count);
             foreach (var u in allActiveGraphUsers)
             {
@@ -287,20 +293,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             await db.SaveChangesAsync();
 
             int totalProcessed = 0;
-            const int BULK_BATCH_SIZE = 50000;
+            var lastUpdatedUtc = importCycleLastUpdatedUtc ?? _clock.UtcNow;
 
-            for (int i = 0; i < graphUsersToUpdate.Count; i += BULK_BATCH_SIZE)
+            for (int i = 0; i < graphUsersToUpdate.Count; i += bulkBatchSize)
             {
-                var batchCount = Math.Min(BULK_BATCH_SIZE, graphUsersToUpdate.Count - i);
+                var batchCount = Math.Min(bulkBatchSize, graphUsersToUpdate.Count - i);
                 var batch = graphUsersToUpdate.GetRange(i, batchCount);
 
-                // Read per batch, exactly as the inlined table builder used to: on a tenant large
-                // enough to need more than one batch the later batches carry a later last_updated.
-                // Local time, not UTC - see the note on UserBulkUpdateRules.BuildUpdateTable.
-                var now = DateTime.Now;
-
                 using (var dataTable = UserBulkUpdateRules.BuildUpdateTable(
-                    batch, lookupMaps, dbUsersByAadId, dbUsersByUpn, graphUsersByAadId, now))
+                    batch, lookupMaps, dbUsersByAadId, dbUsersByUpn, graphUsersByAadId, lastUpdatedUtc))
                 {
                     await bulkUpdateWriter.ExecuteAsync(dataTable);
                 }

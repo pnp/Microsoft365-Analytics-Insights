@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using System;
 using System.Collections.Generic;
 using System.Data;
@@ -88,11 +88,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Builds one bulk-update batch.
         /// </summary>
         /// <param name="lastUpdated">
-        /// The value stamped into <c>users.last_updated</c> for every row. Supplied by the caller,
-        /// which still reads <c>DateTime.Now</c> - note that is local time, not UTC. #371 suggests
-        /// moving it behind <c>IClock</c>, but <c>IClock</c> only exposes <c>UtcNow</c>, so doing so
-        /// would change every stored value on a non-UTC host. That is a behavioural change and is
-        /// deliberately out of scope here, exactly as it was for the mapping rules in #371 part 1.
+        /// The UTC value stamped into <c>users.last_updated</c> for every row. The caller captures it
+        /// once per import cycle so all bulk batches from the same cycle carry the same timestamp.
         /// </param>
         /// <remarks>
         /// A Graph user with no UPN, or whose UPN has no saved <c>dbo.users</c> row, is skipped: the
