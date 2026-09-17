@@ -2,6 +2,8 @@
 import type {
   AdoptionFilterOptions,
   CopilotAdoptionAvailability,
+  CopilotAdoptionCohortComparison,
+  CopilotAdoptionCohortUserPage,
   CopilotAdoptionSummary,
   CopilotSeatCostInput,
   CoworkFilters,
@@ -231,6 +233,72 @@ export function fetchAdoptionSql(
     'the Copilot adoption queries',
     signal,
   );
+}
+
+export function fetchPeriodCohorts(
+  leftPeriodEnd: string,
+  rightPeriodEnd: string,
+  periodDays: number,
+  signal?: AbortSignal,
+): Promise<CopilotAdoptionCohortComparison> {
+  const params = new URLSearchParams({
+    leftPeriodEnd,
+    rightPeriodEnd,
+    periodDays: String(periodDays),
+  });
+  return getJson<CopilotAdoptionCohortComparison>(
+    `/period-cohorts?${params}`,
+    'the Copilot adoption cohort comparison',
+    signal,
+  );
+}
+
+export function fetchPeriodCohortUsers(
+  leftPeriodEnd: string,
+  rightPeriodEnd: string,
+  periodDays: number,
+  filters: {
+    transition?: string;
+    fromBand?: string;
+    toBand?: string;
+    department?: string;
+    activationState?: string;
+  },
+  skip: number,
+  take: number,
+  signal?: AbortSignal,
+): Promise<CopilotAdoptionCohortUserPage> {
+  const params = new URLSearchParams({
+    leftPeriodEnd,
+    rightPeriodEnd,
+    periodDays: String(periodDays),
+    skip: String(skip),
+    take: String(take),
+  });
+  if (filters.transition) params.set('transition', filters.transition);
+  if (filters.fromBand) params.set('fromBand', filters.fromBand);
+  if (filters.toBand) params.set('toBand', filters.toBand);
+  if (filters.department) params.set('department', filters.department);
+  if (filters.activationState) params.set('activationState', filters.activationState);
+
+  return getJson<CopilotAdoptionCohortUserPage>(
+    `/period-cohorts/users?${params}`,
+    'the Copilot adoption cohort users',
+    signal,
+  );
+}
+
+export function periodCohortWorkbookExportUrl(
+  leftPeriodEnd: string,
+  rightPeriodEnd: string,
+  periodDays: number,
+): string {
+  const params = new URLSearchParams({
+    leftPeriodEnd,
+    rightPeriodEnd,
+    periodDays: String(periodDays),
+  });
+  return `${baseUrl()}/period-cohorts/export/workbook?${params}`;
 }
 
 /**

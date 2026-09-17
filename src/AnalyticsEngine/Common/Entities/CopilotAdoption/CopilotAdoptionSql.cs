@@ -1863,6 +1863,82 @@ namespace Common.Entities.CopilotAdoption
             "WHERE f.period_end = @periodEnd AND f.period_days = @periodDays\r\n" +
             "ORDER BY f.user_id;";
 
+        public const string PublishedPeriodCohortRowsSql =
+            "WITH PairRows AS (\r\n" +
+            "    SELECT COALESCE(l.user_id, r.user_id) AS UserId,\r\n" +
+            "           CAST(CASE WHEN l.user_id IS NULL THEN 0 ELSE 1 END AS bit) AS ExistedInEarlierPeriod,\r\n" +
+            "           CAST(CASE WHEN r.user_id IS NULL THEN 0 ELSE 1 END AS bit) AS ExistsInCurrentPeriod,\r\n" +
+            "           CAST(CASE WHEN l.user_id IS NOT NULL AND ((l.interactions > 0 OR l.active_days > 0)\r\n" +
+            "                OR ((ISNULL(l.report_active_days, 0) > 0 OR ISNULL(l.report_prompts, 0) > 0)\r\n" +
+            "                    AND (lr.audit_available = 0 OR (l.interactions = 0 AND l.active_days = 0)))) THEN 1 ELSE 0 END AS bit) AS ActiveInEarlierPeriod,\r\n" +
+            "           CAST(CASE WHEN r.user_id IS NOT NULL AND ((r.interactions > 0 OR r.active_days > 0)\r\n" +
+            "                OR ((ISNULL(r.report_active_days, 0) > 0 OR ISNULL(r.report_prompts, 0) > 0)\r\n" +
+            "                    AND (rr.audit_available = 0 OR (r.interactions = 0 AND r.active_days = 0)))) THEN 1 ELSE 0 END AS bit) AS ActiveInCurrentPeriod,\r\n" +
+            "           CASE WHEN l.user_id IS NULL THEN N'No seat'\r\n" +
+            "                WHEN (l.interactions > 0 OR l.active_days > 0)\r\n" +
+            "                  OR ((ISNULL(l.report_active_days, 0) > 0 OR ISNULL(l.report_prompts, 0) > 0)\r\n" +
+            "                      AND (lr.audit_available = 0 OR (l.interactions = 0 AND l.active_days = 0))) THEN N'Active'\r\n" +
+            "                WHEN l.prior_interactions > 0 OR l.first_interaction_utc < @leftFrom OR l.report_last_activity_utc < @leftFrom THEN N'Dormant'\r\n" +
+            "                ELSE N'Never used' END AS FromBand,\r\n" +
+            "           CASE WHEN r.user_id IS NULL THEN N'No seat'\r\n" +
+            "                WHEN (r.interactions > 0 OR r.active_days > 0)\r\n" +
+            "                  OR ((ISNULL(r.report_active_days, 0) > 0 OR ISNULL(r.report_prompts, 0) > 0)\r\n" +
+            "                      AND (rr.audit_available = 0 OR (r.interactions = 0 AND r.active_days = 0))) THEN N'Active'\r\n" +
+            "                WHEN r.prior_interactions > 0 OR r.first_interaction_utc < @rightFrom OR r.report_last_activity_utc < @rightFrom THEN N'Dormant'\r\n" +
+            "                ELSE N'Never used' END AS ToBand,\r\n" +
+            "           r.seat_first_observed_utc AS SeatFirstObservedUtc,\r\n" +
+            "           r.first_interaction_utc AS FirstInteractionUtc,\r\n" +
+            "           CASE WHEN r.user_id IS NOT NULL AND r.seat_first_observed_utc IS NOT NULL AND r.seat_first_observed_utc >= @rightHistoryFrom AND r.first_interaction_utc IS NOT NULL\r\n" +
+            "                THEN CASE WHEN DATEDIFF(DAY, r.seat_first_observed_utc, r.first_interaction_utc) < 0 THEN 0 ELSE DATEDIFF(DAY, r.seat_first_observed_utc, r.first_interaction_utc) END\r\n" +
+            "                ELSE NULL END AS DaysToFirstUse,\r\n" +
+            "           CASE WHEN r.user_id IS NULL THEN NULL\r\n" +
+            "                WHEN r.seat_first_observed_utc IS NULL THEN N'seatDateUnknown'\r\n" +
+            "                WHEN r.seat_first_observed_utc < @rightHistoryFrom THEN N'assignedBeforeHistory'\r\n" +
+            "                WHEN r.first_interaction_utc IS NOT NULL AND (CASE WHEN DATEDIFF(DAY, r.seat_first_observed_utc, r.first_interaction_utc) < 0 THEN 0 ELSE DATEDIFF(DAY, r.seat_first_observed_utc, r.first_interaction_utc) END) <= @activationWindowDays THEN N'activatedWithinWindow'\r\n" +
+            "                WHEN r.first_interaction_utc IS NOT NULL THEN N'activatedAfterWindow'\r\n" +
+            "                WHEN DATEDIFF(DAY, r.seat_first_observed_utc, @rightPeriodEnd) < @activationWindowDays THEN N'tooNewToJudge'\r\n" +
+            "                ELSE N'neverActivated' END AS ActivationState\r\n" +
+            "    FROM (SELECT * FROM dbo.copilot_adoption_user_period WHERE period_end = @leftPeriodEnd AND period_days = @periodDays) AS l\r\n" +
+            "    FULL OUTER JOIN (SELECT * FROM dbo.copilot_adoption_user_period WHERE period_end = @rightPeriodEnd AND period_days = @periodDays) AS r\r\n" +
+            "      ON r.user_id = l.user_id\r\n" +
+            "    JOIN dbo.copilot_adoption_period_run AS lr ON lr.period_end = @leftPeriodEnd AND lr.period_days = @periodDays\r\n" +
+            "    JOIN dbo.copilot_adoption_period_run AS rr ON rr.period_end = @rightPeriodEnd AND rr.period_days = @periodDays\r\n" +
+            "    WHERE l.user_id IS NOT NULL OR r.user_id IS NOT NULL\r\n" +
+            ")\r\n" +
+            "SELECT p.UserId,\r\n" +
+            "       u.user_name AS UserPrincipalName,\r\n" +
+            "       u.mail AS Mail,\r\n" +
+            "       dept.name AS Department,\r\n" +
+            "       title.name AS JobTitle,\r\n" +
+            "       manager.user_name AS ManagerUserPrincipalName,\r\n" +
+            "       u.account_enabled AS AccountEnabled,\r\n" +
+            "       p.ExistedInEarlierPeriod,\r\n" +
+            "       p.ExistsInCurrentPeriod,\r\n" +
+            "       p.ActiveInEarlierPeriod,\r\n" +
+            "       p.ActiveInCurrentPeriod,\r\n" +
+            "       p.FromBand,\r\n" +
+            "       p.ToBand,\r\n" +
+            "       CASE WHEN p.ExistedInEarlierPeriod = 1 AND p.ExistsInCurrentPeriod = 1 AND p.ActiveInEarlierPeriod = 1 AND p.ActiveInCurrentPeriod = 1 THEN N'retained'\r\n" +
+            "            WHEN p.ExistedInEarlierPeriod = 1 AND p.ExistsInCurrentPeriod = 1 AND p.ActiveInEarlierPeriod = 0 AND p.ActiveInCurrentPeriod = 1 THEN N'reactivated'\r\n" +
+            "            WHEN p.ExistedInEarlierPeriod = 1 AND p.ExistsInCurrentPeriod = 1 AND p.ActiveInEarlierPeriod = 1 AND p.ActiveInCurrentPeriod = 0 THEN N'lapsed'\r\n" +
+            "            WHEN p.ExistedInEarlierPeriod = 1 AND p.ExistsInCurrentPeriod = 0 THEN N'reclaimed'\r\n" +
+            "            WHEN p.ExistedInEarlierPeriod = 0 AND p.ExistsInCurrentPeriod = 1 THEN N'newlyAssigned'\r\n" +
+            "            ELSE N'stillAtRisk' END AS Transition,\r\n" +
+            "       CASE WHEN p.ExistedInEarlierPeriod = 1 AND p.ExistsInCurrentPeriod = 0 AND u.account_enabled = 1 THEN N'Seat removed while the account remains enabled; this is evidence of licence reclaim or reassignment.'\r\n" +
+            "            WHEN p.ExistedInEarlierPeriod = 1 AND p.ExistsInCurrentPeriod = 0 AND u.account_enabled = 0 THEN N'Seat removed and the account is disabled; this may be licence reclaim, user departure, or both.'\r\n" +
+            "            WHEN p.ExistedInEarlierPeriod = 1 AND p.ExistsInCurrentPeriod = 0 THEN N'Seat removed, but account state is unknown; do not infer whether this was reclaim or departure without directory context.'\r\n" +
+            "            ELSE NULL END AS ReclaimInterpretation,\r\n" +
+            "       p.SeatFirstObservedUtc,\r\n" +
+            "       p.FirstInteractionUtc,\r\n" +
+            "       p.DaysToFirstUse,\r\n" +
+            "       p.ActivationState\r\n" +
+            "FROM PairRows AS p\r\n" +
+            "JOIN dbo.users AS u ON u.id = p.UserId\r\n" +
+            "LEFT JOIN dbo.user_departments AS dept ON dept.id = u.department_id\r\n" +
+            "LEFT JOIN dbo.user_job_titles AS title ON title.id = u.job_title_id\r\n" +
+            "LEFT JOIN dbo.users AS manager ON manager.id = u.manager_id\r\n" +
+            "ORDER BY p.UserId;";
+
         public static string PublishPeriodFactsSql(IEnumerable<int> seatLicenceTypeIds, IEnumerable<int> coworkAgentIds, bool includeCopilotReport)
         {
             var seats = IdList(seatLicenceTypeIds);

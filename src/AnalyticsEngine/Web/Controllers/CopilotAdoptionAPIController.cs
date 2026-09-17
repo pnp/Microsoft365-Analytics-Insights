@@ -470,6 +470,95 @@ namespace Web.AnalyticsWeb.Controllers
 
         #endregion
 
+        #region Published period cohorts
+
+        // GET: api/CopilotAdoption/period-cohorts?leftPeriodEnd=2026-06-30&rightPeriodEnd=2026-09-30&periodDays=28
+        [HttpGet]
+        [Route("period-cohorts")]
+        public async Task<IHttpActionResult> PeriodCohorts(
+            DateTime leftPeriodEnd,
+            DateTime rightPeriodEnd,
+            int periodDays = 28,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var service = new CopilotAdoptionService(
+                CopilotAdoptionOptions.Default,
+                DefaultAnalyticsDbContextFactory.Instance,
+                maxConcurrentSteps: 1);
+            var comparison = await service.ComparePublishedPeriodCohortsAsync(
+                leftPeriodEnd,
+                rightPeriodEnd,
+                NormaliseWindowDays(periodDays),
+                cancellationToken);
+            return Ok(comparison);
+        }
+
+        // GET: api/CopilotAdoption/period-cohorts/users?leftPeriodEnd=...&rightPeriodEnd=...&transition=reactivated
+        [HttpGet]
+        [Route("period-cohorts/users")]
+        public async Task<IHttpActionResult> PeriodCohortUsers(
+            DateTime leftPeriodEnd,
+            DateTime rightPeriodEnd,
+            int periodDays = 28,
+            string transition = null,
+            string fromBand = null,
+            string toBand = null,
+            string department = null,
+            string activationState = null,
+            int skip = 0,
+            int take = DefaultTake,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var service = new CopilotAdoptionService(
+                CopilotAdoptionOptions.Default,
+                DefaultAnalyticsDbContextFactory.Instance,
+                maxConcurrentSteps: 1);
+            var page = await service.ReadPublishedPeriodCohortUsersAsync(
+                leftPeriodEnd,
+                rightPeriodEnd,
+                NormaliseWindowDays(periodDays),
+                transition,
+                fromBand,
+                toBand,
+                department,
+                activationState,
+                skip,
+                take,
+                cancellationToken);
+            return Ok(page);
+        }
+
+        // GET: api/CopilotAdoption/period-cohorts/export/workbook?leftPeriodEnd=...&rightPeriodEnd=...
+        [HttpGet]
+        [Route("period-cohorts/export/workbook")]
+        public async Task<HttpResponseMessage> ExportPeriodCohortWorkbook(
+            DateTime leftPeriodEnd,
+            DateTime rightPeriodEnd,
+            int periodDays = 28,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var service = new CopilotAdoptionService(
+                CopilotAdoptionOptions.Default,
+                DefaultAnalyticsDbContextFactory.Instance,
+                maxConcurrentSteps: 1);
+            var comparison = await service.ComparePublishedPeriodCohortsAsync(
+                leftPeriodEnd,
+                rightPeriodEnd,
+                NormaliseWindowDays(periodDays),
+                cancellationToken);
+            var response = Request.CreateResponse(HttpStatusCode.OK);
+            response.Content = new ByteArrayContent(CopilotAdoptionWorkbook.Build(comparison));
+            response.Content.Headers.ContentType = new MediaTypeHeaderValue(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+            response.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment")
+            {
+                FileName = CopilotAdoptionWorkbook.CohortFileName(comparison.Gate),
+            };
+            return response;
+        }
+
+        #endregion
+
         #region Licence opportunities
 
         /// <summary>
