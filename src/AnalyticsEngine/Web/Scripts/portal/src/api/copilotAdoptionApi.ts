@@ -165,9 +165,12 @@ export function fetchAdoptionSummary(
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
   seatCosts?: CopilotSeatCostInput[],
+  comparisonMode = 'previousPeriod',
 ): Promise<CopilotAdoptionSummary> {
+  const params = scopeParams(windowDays, seatLicenceTypeIds, seatCosts);
+  params.set('comparisonMode', comparisonMode);
   return getJson<CopilotAdoptionSummary>(
-    `/summary?${scopeParams(windowDays, seatLicenceTypeIds, seatCosts)}`,
+    `/summary?${params}`,
     'the Copilot adoption summary',
     signal,
   );
@@ -365,8 +368,15 @@ export function coworkExportUrl(
  * before an enablement programme starts and again afterwards, and the two files are directly
  * comparable in a way a screenshot never is.
  */
-export function workbookExportUrl(windowDays: number, seatLicenceTypeIds?: number[], seatCosts?: CopilotSeatCostInput[]): string {
-  return `${baseUrl()}/export/workbook?${scopeParams(windowDays, seatLicenceTypeIds, seatCosts)}`;
+export function workbookExportUrl(
+  windowDays: number,
+  seatLicenceTypeIds?: number[],
+  seatCosts?: CopilotSeatCostInput[],
+  comparisonMode = 'previousPeriod',
+): string {
+  const params = scopeParams(windowDays, seatLicenceTypeIds, seatCosts);
+  params.set('comparisonMode', comparisonMode);
+  return `${baseUrl()}/export/workbook?${params}`;
 }
 
 

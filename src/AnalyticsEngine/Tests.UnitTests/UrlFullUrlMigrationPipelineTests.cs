@@ -71,6 +71,8 @@ namespace Tests.UnitTests
         // GraphCopilotUsageApiV2 then adds the report_version column carrying the Graph usage-report
         // schema version each snapshot came from. It DOES change the entity model, so its snapshot is
         // freshly scaffolded rather than reused.
+        // CopilotAdoptionTargets then adds the customer-defined adoption target tables. Raw-SQL,
+        // purely additive, and reuses the GraphCopilotUsageApiV2 model snapshot verbatim.
         // CopilotSubscribedSkuCapacity adds nullable subscribed SKU capacity columns to
         // license_types. Raw-SQL, additive, and reuses the predecessor snapshot verbatim.
         // CoworkUsageReportTables then adds the first-party Cowork usage-report tables. Raw-SQL,
