@@ -197,7 +197,8 @@ namespace Tests.UnitTests
             return types
                 .Where(t => t.Namespace == usageReportNamespace)
                 .Select(t => t.GetCustomAttribute<TableAttribute>())
-                .Where(a => a != null && a.Name.StartsWith("copilot_", StringComparison.OrdinalIgnoreCase))
+                .Where(a => a != null && (a.Name.StartsWith("copilot_", StringComparison.OrdinalIgnoreCase)
+                    || a.Name.StartsWith("cowork_", StringComparison.OrdinalIgnoreCase)))
                 .Select(a => a.Name)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
@@ -219,6 +220,7 @@ namespace Tests.UnitTests
             var mustBeBatched = new[]
             {
                 "copilot_usage_user_activity_log",
+                "cowork_usage_user_activity_log",
                 "copilot_user_count_log",
                 "copilot_usage_report_import_log",
             };

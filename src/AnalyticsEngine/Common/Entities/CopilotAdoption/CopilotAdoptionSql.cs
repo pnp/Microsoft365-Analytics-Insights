@@ -77,7 +77,8 @@ namespace Common.Entities.CopilotAdoption
         public const string CoworkAgentIdsSql =
             "SELECT ag.id AS Value\r\n" +
             "FROM dbo.copilot_agents AS ag\r\n" +
-            "WHERE ag.agent_id LIKE 'Copilot.M365Copilot.Cowork%';";
+            "WHERE ag.agent_id LIKE 'Copilot.M365Copilot.Cowork%'\r\n" +
+            "   OR ag.name LIKE '%Cowork%';";
 
         /// <summary>
         /// Every licence type with how many users hold it, so the tool can classify them and show the
@@ -124,6 +125,18 @@ namespace Common.Entities.CopilotAdoption
             "ORDER BY CASE WHEN r.report_period_days IS NULL THEN 1 ELSE 0 END,\r\n" +
             "         ABS(ISNULL(r.report_period_days, 0) - @windowDays),\r\n" +
             "         ISNULL(r.report_period_days, 0);";
+
+        public const string LatestCoworkReportDateSql =
+            "SELECT MAX(r.[date]) AS Value\r\n" +
+            "FROM dbo.cowork_usage_user_activity_log AS r\r\n" +
+            "WHERE r.[date] <= @settled;";
+
+        public const string LatestCoworkReportPeriodSql =
+            "SELECT TOP (1) r.report_period_days AS Value\r\n" +
+            "FROM dbo.cowork_usage_user_activity_log AS r\r\n" +
+            "WHERE r.[date] = @coworkReportDate\r\n" +
+            "GROUP BY r.report_period_days\r\n" +
+            "ORDER BY ABS(r.report_period_days - @windowDays), r.report_period_days;";
 
         /// <summary>
         /// The most recent settled Microsoft 365 usage-report snapshot. Teams is used as the reference
@@ -341,7 +354,8 @@ namespace Common.Entities.CopilotAdoption
         public static string LicensedUsersSql(
             IEnumerable<int> seatLicenceTypeIds,
             IEnumerable<int> coworkAgentIds,
-            bool includeCopilotReport)
+            bool includeCopilotReport,
+            bool includeCoworkReport = false)
         {
             var cowork = CoworkPredicate(coworkAgentIds);
 
@@ -441,6 +455,24 @@ namespace Common.Entities.CopilotAdoption
                     ")";
             }
 
+            if (includeCoworkReport)
+            {
+                sql +=
+                    ",\r\n" +
+                    "CoworkReportSnapshot AS (\r\n" +
+                    "    SELECT r.user_id AS user_id,\r\n" +
+                    "           r.total_tasks AS CoworkReportTotalTasks,\r\n" +
+                    "           r.scheduled_tasks AS CoworkReportScheduledTasks,\r\n" +
+                    "           r.user_initiated_tasks AS CoworkReportUserInitiatedTasks,\r\n" +
+                    "           r.active_days AS CoworkReportActiveDays,\r\n" +
+                    "           r.last_activity_date AS CoworkReportLastActivityDate,\r\n" +
+                    "           r.retained_user AS CoworkReportRetainedUser\r\n" +
+                    "    FROM dbo.cowork_usage_user_activity_log AS r\r\n" +
+                    "    WHERE r.[date] = @coworkReportDate\r\n" +
+                    "      AND r.report_period_days = @coworkReportPeriodDays\r\n" +
+                    ")";
+            }
+
             sql +=
                 "\r\n" +
                 "SELECT TOP (@maxRows)\r\n" +
@@ -477,6 +509,19 @@ namespace Common.Entities.CopilotAdoption
                 "       ISNULL(chats.AppsUsed, 0) AS AppsUsed,\r\n" +
                 "       ISNULL(chats.AgentsUsed, 0) AS AgentsUsed,\r\n" +
                 "       CAST(ISNULL(chats.CoworkInteractions, 0) AS bigint) AS CoworkInteractions,\r\n" +
+                (includeCoworkReport
+                    ? "       coworkReport.CoworkReportTotalTasks AS CoworkReportTotalTasks,\r\n" +
+                      "       coworkReport.CoworkReportScheduledTasks AS CoworkReportScheduledTasks,\r\n" +
+                      "       coworkReport.CoworkReportUserInitiatedTasks AS CoworkReportUserInitiatedTasks,\r\n" +
+                      "       coworkReport.CoworkReportActiveDays AS CoworkReportActiveDays,\r\n" +
+                      "       coworkReport.CoworkReportLastActivityDate AS CoworkReportLastActivityDate,\r\n" +
+                      "       coworkReport.CoworkReportRetainedUser AS CoworkReportRetainedUser,\r\n"
+                    : "       CAST(NULL AS int) AS CoworkReportTotalTasks,\r\n" +
+                      "       CAST(NULL AS int) AS CoworkReportScheduledTasks,\r\n" +
+                      "       CAST(NULL AS int) AS CoworkReportUserInitiatedTasks,\r\n" +
+                      "       CAST(NULL AS int) AS CoworkReportActiveDays,\r\n" +
+                      "       CAST(NULL AS datetime) AS CoworkReportLastActivityDate,\r\n" +
+                      "       CAST(NULL AS bit) AS CoworkReportRetainedUser,\r\n") +
                 "       chats.FirstInteractionUtc AS FirstInteractionUtc,\r\n" +
                 "       chats.LastInteractionUtc AS LastInteractionUtc,\r\n" +
                 (includeCopilotReport
@@ -500,6 +545,7 @@ namespace Common.Entities.CopilotAdoption
                 "LEFT JOIN dbo.users AS manager ON manager.id = u.manager_id\r\n" +
                 "LEFT JOIN CopilotUsage AS chats ON chats.user_id = u.id\r\n" +
                 (includeCopilotReport ? "LEFT JOIN ReportSnapshot AS report ON report.user_id = u.id\r\n" : string.Empty) +
+                (includeCoworkReport ? "LEFT JOIN CoworkReportSnapshot AS coworkReport ON coworkReport.user_id = u.id\r\n" : string.Empty) +
                 "OUTER APPLY (\r\n" +
                 "    SELECT TOP (1) e.reason, e.note, e.excluded_by, e.excluded_utc, e.review_after_utc\r\n" +
                 "    FROM dbo.copilot_adoption_reclaim_exclusions AS e\r\n" +
@@ -663,7 +709,8 @@ namespace Common.Entities.CopilotAdoption
             IEnumerable<int> coworkAgentIds,
             CopilotAdoptionOptions options,
             bool includeCopilotAudit,
-            bool includeM365Usage)
+            bool includeM365Usage,
+            bool includeCoworkReport = false)
         {
             var o = options ?? CopilotAdoptionOptions.Default;
             var cowork = CoworkPredicate(coworkAgentIds);
@@ -707,6 +754,24 @@ namespace Common.Entities.CopilotAdoption
                     "      AND c.user_id IS NOT NULL\r\n" +
                     $"      AND ({cowork})\r\n" +
                     "    GROUP BY c.user_id\r\n" +
+                    ")");
+            }
+
+            if (includeCoworkReport)
+            {
+                ctes.Add(
+                    "CoworkReportUsage AS (\r\n" +
+                    "    SELECT r.user_id AS user_id,\r\n" +
+                    "           r.total_tasks AS TotalTasks,\r\n" +
+                    "           r.scheduled_tasks AS ScheduledTasks,\r\n" +
+                    "           r.user_initiated_tasks AS UserInitiatedTasks,\r\n" +
+                    "           r.active_days AS ActiveDays,\r\n" +
+                    "           r.last_activity_date AS LastActivityDate,\r\n" +
+                    "           r.retained_user AS RetainedUser\r\n" +
+                    "    FROM dbo.cowork_usage_user_activity_log AS r\r\n" +
+                    "    WHERE r.[date] = @coworkReportDate\r\n" +
+                    "      AND r.report_period_days = @coworkReportPeriodDays\r\n" +
+                    "      AND EXISTS (SELECT 1 FROM SeatUsers AS s WHERE s.user_id = r.user_id)\r\n" +
                     ")");
             }
 
@@ -772,6 +837,20 @@ namespace Common.Entities.CopilotAdoption
                   "       0 AS CoworkActiveDays,\r\n" +
                   "       CAST(NULL AS datetime) AS LastCoworkInteractionUtc,\r\n";
 
+            var coworkReportSelect = includeCoworkReport
+                ? "       report.TotalTasks AS CoworkReportTotalTasks,\r\n" +
+                  "       report.ScheduledTasks AS CoworkReportScheduledTasks,\r\n" +
+                  "       report.UserInitiatedTasks AS CoworkReportUserInitiatedTasks,\r\n" +
+                  "       report.ActiveDays AS CoworkReportActiveDays,\r\n" +
+                  "       report.LastActivityDate AS CoworkReportLastActivityDate,\r\n" +
+                  "       report.RetainedUser AS CoworkReportRetainedUser,\r\n"
+                : "       CAST(NULL AS int) AS CoworkReportTotalTasks,\r\n" +
+                  "       CAST(NULL AS int) AS CoworkReportScheduledTasks,\r\n" +
+                  "       CAST(NULL AS int) AS CoworkReportUserInitiatedTasks,\r\n" +
+                  "       CAST(NULL AS int) AS CoworkReportActiveDays,\r\n" +
+                  "       CAST(NULL AS datetime) AS CoworkReportLastActivityDate,\r\n" +
+                  "       CAST(NULL AS bit) AS CoworkReportRetainedUser,\r\n";
+
             var m365Select = includeM365Usage
                 ? "       CAST(ISNULL(teams.Messages, 0) AS bigint) AS TeamsMessages,\r\n" +
                   "       CAST(ISNULL(teams.Meetings, 0) AS bigint) AS TeamsMeetings,\r\n" +
@@ -814,6 +893,7 @@ namespace Common.Entities.CopilotAdoption
                 "       manager.user_name AS ManagerUserPrincipalName,\r\n" +
                 "       u.account_enabled AS AccountEnabled,\r\n" +
                 coworkSelect +
+                coworkReportSelect +
                 m365Select +
                 $"       CAST({loadScore} AS float) AS LoadScore\r\n" +
                 "FROM SeatUsers AS seats\r\n" +
@@ -825,6 +905,7 @@ namespace Common.Entities.CopilotAdoption
                 "LEFT JOIN dbo.user_company_name AS company ON company.id = u.company_name_id\r\n" +
                 "LEFT JOIN dbo.users AS manager ON manager.id = u.manager_id\r\n" +
                 (includeCopilotAudit ? "LEFT JOIN CoworkUsage AS cw ON cw.user_id = u.id\r\n" : string.Empty) +
+                (includeCoworkReport ? "LEFT JOIN CoworkReportUsage AS report ON report.user_id = u.id\r\n" : string.Empty) +
                 (includeM365Usage
                     ? "LEFT JOIN TeamsUsage AS teams ON teams.user_id = u.id\r\n" +
                       "LEFT JOIN MailUsage AS mail ON mail.user_id = u.id\r\n" +

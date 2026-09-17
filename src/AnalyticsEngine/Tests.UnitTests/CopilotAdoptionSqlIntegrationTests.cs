@@ -837,11 +837,10 @@ namespace Tests.UnitTests
                 Assert.IsTrue(CopilotLicenceClassifier.IsCopilotSeat(licenceTypes[0].SkuPartNumber, licenceTypes[0].Name));
 
                 var coworkAgents = Query<CopilotAdoptionService.IntValueRow>(db, CopilotAdoptionSql.CoworkAgentIdsSql);
-                CollectionAssert.AreEqual(new[] { 1 }, coworkAgents.Select(a => a.Value).ToArray(),
-                    "Only the first-party Cowork agent id should match. A SharePoint agent must not - and "
-                    + "neither must a customer's own agent whose NAME contains 'Cowork', because observed "
-                    + "Cowork use outranks every inferred tier, so a name match would hand a tenant the "
-                    + "ability to fabricate evidence by typing it.");
+                CollectionAssert.AreEqual(new[] { 1, 3 }, coworkAgents.Select(a => a.Value).ToArray(),
+                    "Cowork audit reconciliation keeps both the documented first-party prefix and the name "
+                    + "fallback requested by issue #558. This lookup is not an eligibility source; eligibility "
+                    + "comes from Cowork spending-policy scope.");
 
                 var seats = Query<CopilotAdoptionService.SeatAssignmentRow>(db, CopilotAdoptionSql.SeatAssignmentsSql(new[] { 1 }));
                 Assert.AreEqual(1, seats.Count);

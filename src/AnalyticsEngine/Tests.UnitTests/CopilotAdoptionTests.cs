@@ -1,4 +1,4 @@
-extern alias AnalyticsWeb;
+﻿extern alias AnalyticsWeb;
 
 using Common.Entities.CopilotAdoption;
 using UnitTests.FakeLoaderClasses;
@@ -1756,7 +1756,7 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(0, analysis.Summary.AdoptionRatePct);
             Assert.AreEqual(0, analysis.Summary.HabitRatePct);
-            Assert.AreEqual(0, analysis.Summary.CoworkAdoptionPct);
+            Assert.IsNull(analysis.Summary.CoworkAdoptionPct);
             Assert.AreEqual(0, CopilotAdoptionScoring.Percentage(5, 0));
         }
 

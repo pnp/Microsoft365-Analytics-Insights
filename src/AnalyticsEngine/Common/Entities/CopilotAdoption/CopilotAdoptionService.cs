@@ -253,6 +253,31 @@ namespace Common.Entities.CopilotAdoption
                     new SqlParameter("@windowDays", _options.WindowDays));
             }
 
+            summary.DataSources.CoworkUsageReportDate = await SafeDateAsync(
+                CopilotAdoptionSql.LatestCoworkReportDateSql,
+                CopilotAdoptionSteps.DataSourceProbes,
+                CopilotAdoptionQueries.CoworkReportDate,
+                summary.Warnings,
+                "Cowork usage-report snapshot date",
+                () => summary.MarkFiguresIncomplete("Cowork usage report"),
+                cancellationToken,
+                new SqlParameter("@settled", settled));
+            summary.DataSources.CoworkUsageReportAvailable = summary.DataSources.CoworkUsageReportDate.HasValue;
+
+            if (summary.DataSources.CoworkUsageReportDate.HasValue)
+            {
+                summary.DataSources.CoworkUsageReportPeriodDays = await SafeScalarAsync(
+                    CopilotAdoptionSql.LatestCoworkReportPeriodSql,
+                    CopilotAdoptionSteps.DataSourceProbes,
+                    CopilotAdoptionQueries.CoworkReportPeriod,
+                    summary.Warnings,
+                    "Cowork usage-report snapshot period",
+                    () => summary.MarkFiguresIncomplete("Cowork usage-report snapshot period"),
+                    cancellationToken,
+                    new SqlParameter("@coworkReportDate", summary.DataSources.CoworkUsageReportDate.Value),
+                    new SqlParameter("@windowDays", _options.WindowDays));
+            }
+
             summary.DataSources.M365UsageReportDate = await SafeDateAsync(
                 CopilotAdoptionSql.LatestM365ReportDateSql,
                 CopilotAdoptionSteps.DataSourceProbes,
@@ -816,7 +841,9 @@ namespace Common.Entities.CopilotAdoption
 
             var coworkIds = coworkAgentIds.Select(r => r.Value).ToList();
 
-            var detailSql = CopilotAdoptionSql.LicensedUsersSql(seatIds, coworkIds, includeReport);
+            var includeCoworkReport = summary.DataSources.CoworkUsageReportDate.HasValue;
+
+            var detailSql = CopilotAdoptionSql.LicensedUsersSql(seatIds, coworkIds, includeReport, includeCoworkReport);
             var parameters = new Dictionary<string, object>
             {
                 { "@from", windowStart },
@@ -827,6 +854,11 @@ namespace Common.Entities.CopilotAdoption
             {
                 parameters["@copilotReportDate"] = summary.DataSources.CopilotUsageReportDate.Value;
                 parameters["@copilotReportPeriodDays"] = summary.DataSources.CopilotUsageReportPeriodDays;
+            }
+            if (includeCoworkReport)
+            {
+                parameters["@coworkReportDate"] = summary.DataSources.CoworkUsageReportDate.Value;
+                parameters["@coworkReportPeriodDays"] = summary.DataSources.CoworkUsageReportPeriodDays;
             }
 
             output.Sql["licensedUsers"] = CopilotAdoptionSql.ForDisplay(detailSql, parameters);
@@ -1003,8 +1035,9 @@ namespace Common.Entities.CopilotAdoption
 
             var includeAudit = summary.DataSources.AuditAvailable;
             var includeM365 = summary.DataSources.M365UsageReportsAvailable;
+            var includeCoworkReport = summary.DataSources.CoworkUsageReportAvailable;
 
-            if (!includeAudit && !includeM365)
+            if (!includeAudit && !includeM365 && !includeCoworkReport)
             {
                 output.Warnings.Add(
                     "Licence opportunities need either the Copilot audit import or the Microsoft 365 usage "
@@ -1094,35 +1127,37 @@ namespace Common.Entities.CopilotAdoption
             var summary = analysis.Summary;
             var includeAudit = summary.DataSources.AuditAvailable;
             var includeM365 = summary.DataSources.M365UsageReportsAvailable;
+            var includeCoworkReport = summary.DataSources.CoworkUsageReportAvailable;
 
-            if (!includeAudit && !includeM365)
+            if (!includeAudit && !includeM365 && !includeCoworkReport)
             {
                 output.Warnings.Add(
-                    "Cowork readiness needs either the Copilot audit import or the Microsoft 365 usage "
-                    + "reports. Neither has data for this period, so no readiness assessment is possible.");
+                    "Cowork readiness needs the Cowork usage report, the Copilot audit import or the Microsoft 365 usage "
+                    + "reports. None has data for this period, so no readiness assessment is possible.");
                 return;
             }
 
-            var coworkAgentIds = await SafeAsync(
-                () => QueryAsync<IntValueRow>(CopilotAdoptionSql.CoworkAgentIdsSql, cancellationToken),
-                CopilotAdoptionSteps.CoworkReadiness,
-                CopilotAdoptionQueries.CoworkAgentLookup,
-                output,
-                "Cowork agent lookup", cancellationToken);
-
-            // A failed lookup is NOT the same as a tenant with no Cowork agents. Falling through with an
-            // empty list would silently narrow the Cowork predicate to app_host alone, under-reporting
-            // exactly the usage this tab exists to find - so say so rather than quietly measuring less.
-            if (coworkAgentIds == null)
+            var coworkAgentIds = new List<IntValueRow>();
+            if (includeAudit)
             {
-                output.MarkIncomplete("Cowork agent lookup");
-                coworkAgentIds = new List<IntValueRow>();
+                coworkAgentIds = await SafeAsync(
+                    () => QueryAsync<IntValueRow>(CopilotAdoptionSql.CoworkAgentIdsSql, cancellationToken),
+                    CopilotAdoptionSteps.CoworkReadiness,
+                    CopilotAdoptionQueries.CoworkAgentLookup,
+                    output,
+                    "Cowork agent lookup", cancellationToken);
+
+                if (coworkAgentIds == null)
+                {
+                    output.MarkIncomplete("Cowork agent lookup");
+                    coworkAgentIds = new List<IntValueRow>();
+                }
             }
 
             var agentIds = coworkAgentIds.Select(r => r.Value).ToList();
 
             var sql = CopilotAdoptionSql.CoworkReadinessSql(
-                seatIds, agentIds, _options, includeAudit, includeM365);
+                seatIds, agentIds, _options, includeAudit, includeM365, includeCoworkReport);
 
             var parameters = new Dictionary<string, object>
             {
@@ -1135,6 +1170,11 @@ namespace Common.Entities.CopilotAdoption
                 // timestamp - otherwise the earliest day of the window is silently dropped.
                 parameters["@m365From"] = windowStart.Date;
                 parameters["@m365ReportDate"] = summary.DataSources.M365UsageReportDate.Value;
+            }
+            if (includeCoworkReport)
+            {
+                parameters["@coworkReportDate"] = summary.DataSources.CoworkUsageReportDate.Value;
+                parameters["@coworkReportPeriodDays"] = summary.DataSources.CoworkUsageReportPeriodDays;
             }
 
             output.Sql["coworkReadiness"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
@@ -1163,12 +1203,18 @@ namespace Common.Entities.CopilotAdoption
                     + "Cowork candidate. Enable the Microsoft 365 usage report import to use this tab.");
             }
 
+            if (!includeCoworkReport)
+            {
+                output.Warnings.Add(
+                    "The first-party Cowork usage report is not available, so Cowork task counts, automation ratio "
+                    + "and retention cannot be measured. Audit-derived Cowork interactions are retained only as a reconciliation signal.");
+            }
+
             if (!includeAudit)
             {
                 output.Warnings.Add(
-                    "The Copilot audit import has no data for this period, so existing Cowork use cannot be "
-                    + "seen. Everyone is assessed as a potential candidate, including people who may already "
-                    + "be using Cowork.");
+                    "The Copilot audit import has no data for this period, so Cowork audit interactions cannot be "
+                    + "reconciled against Microsoft's Cowork task report.");
             }
 
             // Credits are a decoration on this tab, not a load-bearing figure, and they come from a
@@ -1410,12 +1456,37 @@ namespace Common.Entities.CopilotAdoption
                 : Math.Round(users.Average(u => u.AdoptionScore), 1, MidpointRounding.AwayFromZero);
             summary.MedianAdoptionScore = CopilotAdoptionScoring.Median(users.Select(u => u.AdoptionScore));
 
-            summary.CoworkUsers = users.Count(u => u.UsedCowork);
+            summary.CoworkAuditUsers = users.Count(u => u.CoworkInteractions > 0);
             summary.CoworkInteractions = users.Sum(u => u.CoworkInteractions);
-            summary.CoworkAdoptionPct = CopilotAdoptionScoring.Percentage(summary.CoworkUsers, denominator);
-            // Only claim a Cowork adoption rate when Cowork was actually seen. On a tenant that has not
-            // been enabled for it, "0% Cowork adoption" reads as a failure rather than as "not available".
-            summary.CoworkDetected = summary.CoworkInteractions > 0;
+            summary.CoworkReportUsers = users.Count(u => u.CoworkReportTotalTasks.GetValueOrDefault() > 0);
+            summary.CoworkReportTotalTasks = users.Sum(u => u.CoworkReportTotalTasks.GetValueOrDefault());
+            summary.CoworkReportScheduledTasks = users.Sum(u => u.CoworkReportScheduledTasks.GetValueOrDefault());
+            summary.CoworkReportUserInitiatedTasks = users.Sum(u => u.CoworkReportUserInitiatedTasks.GetValueOrDefault());
+            summary.CoworkReportRetainedUsers = users.Any(u => u.CoworkReportRetainedUser.HasValue)
+                ? (int?)users.Count(u => u.CoworkReportRetainedUser == true)
+                : null;
+            summary.CoworkAutomationRatioPct = summary.CoworkReportTotalTasks > 0
+                ? (double?)CopilotAdoptionScoring.Percentage(summary.CoworkReportScheduledTasks, summary.CoworkReportTotalTasks)
+                : null;
+            summary.CoworkTasksPerActiveUser = summary.CoworkReportUsers > 0
+                ? (double?)Math.Round(summary.CoworkReportTotalTasks / (double)summary.CoworkReportUsers, 1, MidpointRounding.AwayFromZero)
+                : null;
+            summary.CoworkReportRetentionPct = summary.CoworkReportRetainedUsers.HasValue && summary.CoworkReportUsers > 0
+                ? (double?)CopilotAdoptionScoring.Percentage(summary.CoworkReportRetainedUsers.Value, summary.CoworkReportUsers)
+                : null;
+
+            summary.CoworkUsers = summary.CoworkReportUsers > 0 ? summary.CoworkReportUsers : summary.CoworkAuditUsers;
+            summary.CoworkEligibilityKnown = summary.CoworkEligibleUsers.HasValue;
+            summary.CoworkAdoptionPct = summary.CoworkEligibilityKnown
+                ? (double?)CopilotAdoptionScoring.Percentage(summary.CoworkUsers, summary.CoworkEligibleUsers.Value)
+                : null;
+            if (!summary.CoworkEligibilityKnown && summary.CoworkUsers > 0)
+            {
+                summary.Warnings.Add("Cowork adoption percentage is suppressed because Cowork eligibility is controlled by spending-policy scope and this import does not know that denominator. The deprecated Cowork agent entry is not used as an eligibility source.");
+            }
+            // Only claim a Cowork signal when Cowork was actually seen in either source. On a tenant that has
+            // not been enabled for it, "0% Cowork adoption" reads as a failure rather than as "not available".
+            summary.CoworkDetected = summary.CoworkReportUsers > 0 || summary.CoworkInteractions > 0;
 
             summary.Funnel = BuildFunnel(summary, users);
             summary.BandBreakdown = BuildBandBreakdown(users);
@@ -1809,6 +1880,12 @@ namespace Common.Entities.CopilotAdoption
                 {
                     var prime = g.Count(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.PrimeCandidate);
                     var regular = g.Count(r => r.RegularCoworkUser);
+                    var totalTasks = g.Sum(r => r.CoworkReportTotalTasks.GetValueOrDefault());
+                    var scheduledTasks = g.Sum(r => r.CoworkReportScheduledTasks.GetValueOrDefault());
+                    var retained = g.Any(r => r.CoworkReportRetainedUser.HasValue)
+                        ? (int?)g.Count(r => r.CoworkReportRetainedUser == true)
+                        : null;
+                    var reportUsers = g.Count(r => r.CoworkReportTotalTasks.GetValueOrDefault() > 0);
 
                     return new CoworkSegmentRow
                     {
@@ -1817,6 +1894,15 @@ namespace Common.Entities.CopilotAdoption
                         PrimeCandidates = prime,
                         PrimeCandidateRatePct = CopilotAdoptionScoring.Percentage(prime, g.Count()),
                         RegularCoworkUsers = regular,
+                        CoworkReportTotalTasks = totalTasks,
+                        CoworkReportScheduledTasks = scheduledTasks,
+                        CoworkAutomationRatioPct = totalTasks > 0
+                            ? (double?)CopilotAdoptionScoring.Percentage(scheduledTasks, totalTasks)
+                            : null,
+                        CoworkReportRetainedUsers = retained,
+                        CoworkReportRetentionPct = retained.HasValue && reportUsers > 0
+                            ? (double?)CopilotAdoptionScoring.Percentage(retained.Value, reportUsers)
+                            : null,
                         CoworkAdoptionPct = CopilotAdoptionScoring.Percentage(regular, g.Count()),
                         AverageCoordinationLoad = Math.Round(
                             g.Average(r => r.CoordinationLoadScore), 1, MidpointRounding.AwayFromZero),

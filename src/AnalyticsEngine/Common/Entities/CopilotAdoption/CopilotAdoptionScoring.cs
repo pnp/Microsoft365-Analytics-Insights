@@ -235,7 +235,16 @@ namespace Common.Entities.CopilotAdoption
                 AppsUsed = appsUsed,
                 AgentsUsed = row.AgentsUsed,
                 CoworkInteractions = row.CoworkInteractions,
-                UsedCowork = row.CoworkInteractions > 0,
+                CoworkReportTotalTasks = row.CoworkReportTotalTasks,
+                CoworkReportScheduledTasks = row.CoworkReportScheduledTasks,
+                CoworkReportUserInitiatedTasks = row.CoworkReportUserInitiatedTasks,
+                CoworkReportActiveDays = row.CoworkReportActiveDays,
+                CoworkReportLastActivityDate = row.CoworkReportLastActivityDate,
+                CoworkReportRetainedUser = row.CoworkReportRetainedUser,
+                CoworkAutomationRatioPct = row.CoworkReportTotalTasks.GetValueOrDefault() > 0 && row.CoworkReportScheduledTasks.HasValue
+                    ? (double?)Percentage(row.CoworkReportScheduledTasks.Value, row.CoworkReportTotalTasks.Value)
+                    : null,
+                UsedCowork = row.CoworkReportTotalTasks.GetValueOrDefault() > 0 || row.CoworkInteractions > 0,
                 FirstInteractionUtc = row.FirstInteractionUtc,
                 LastInteractionUtc = lastUse,
                 DaysSinceLastUse = lastUse.HasValue
@@ -1241,7 +1250,16 @@ namespace Common.Entities.CopilotAdoption
                 CoworkInteractions = row.CoworkInteractions,
                 CoworkActiveDays = row.CoworkActiveDays,
                 LastCoworkInteractionUtc = row.LastCoworkInteractionUtc,
-                UsedCowork = row.CoworkInteractions > 0,
+                CoworkReportTotalTasks = row.CoworkReportTotalTasks,
+                CoworkReportScheduledTasks = row.CoworkReportScheduledTasks,
+                CoworkReportUserInitiatedTasks = row.CoworkReportUserInitiatedTasks,
+                CoworkReportActiveDays = row.CoworkReportActiveDays,
+                CoworkReportLastActivityDate = row.CoworkReportLastActivityDate,
+                CoworkReportRetainedUser = row.CoworkReportRetainedUser,
+                CoworkAutomationRatioPct = row.CoworkReportTotalTasks.GetValueOrDefault() > 0 && row.CoworkReportScheduledTasks.HasValue
+                    ? (double?)Percentage(row.CoworkReportScheduledTasks.Value, row.CoworkReportTotalTasks.Value)
+                    : null,
+                UsedCowork = row.CoworkReportTotalTasks.GetValueOrDefault() > 0 || row.CoworkInteractions > 0,
 
                 TeamsMessages = row.TeamsMessages,
                 TeamsMeetings = row.TeamsMeetings,
@@ -1263,8 +1281,13 @@ namespace Common.Entities.CopilotAdoption
                 TotalCopilotCredits = row.TotalCopilotCredits,
             };
 
+            if (scored.CoworkReportTotalTasks.GetValueOrDefault() > 0 && scored.TotalCopilotCredits.HasValue)
+            {
+                scored.CoworkCreditsPerTask = Math.Round(scored.TotalCopilotCredits.Value / scored.CoworkReportTotalTasks.Value, 4, MidpointRounding.AwayFromZero);
+            }
+
             scored.RegularCoworkUser =
-                row.CoworkActiveDays >= Math.Max(1, o.CoworkRegularMinActiveDays);
+                (row.CoworkReportActiveDays ?? row.CoworkActiveDays) >= Math.Max(1, o.CoworkRegularMinActiveDays);
 
             scored.Tier = CoworkTierFor(scored, o);
             scored.TierLabel = CoworkTierLabel(scored.Tier);
@@ -1359,7 +1382,7 @@ namespace Common.Entities.CopilotAdoption
                 return CoworkTiers.Established;
             }
 
-            if (row.CoworkInteractions > 0)
+            if (row.UsedCowork)
             {
                 return CoworkTiers.Trialling;
             }
@@ -1486,12 +1509,27 @@ namespace Common.Entities.CopilotAdoption
             switch (row.Tier)
             {
                 case CoworkTiers.Established:
-                    return $"Already established: {row.CoworkInteractions:N0} Cowork interaction"
+                    if (row.CoworkReportTotalTasks.HasValue)
+                    {
+                        var days = row.CoworkReportActiveDays ?? 0;
+                        return $"Already established: {row.CoworkReportTotalTasks.Value:N0} Cowork task"
+                             + $"{Plural(row.CoworkReportTotalTasks.Value)} across {days:N0} active day"
+                             + $"{Plural(days)} in Microsoft's Cowork usage report. Keep in scope.";
+                    }
+                    return $"Already established by audit reconciliation: {row.CoworkInteractions:N0} Cowork interaction"
                          + $"{Plural(row.CoworkInteractions)} across {row.CoworkActiveDays:N0} day"
                          + $"{Plural(row.CoworkActiveDays)}. Keep in scope.";
 
                 case CoworkTiers.Trialling:
-                    return $"Trialling: {row.CoworkInteractions:N0} Cowork interaction"
+                    if (row.CoworkReportTotalTasks.HasValue)
+                    {
+                        var days = row.CoworkReportActiveDays ?? 0;
+                        return $"Trialling: {row.CoworkReportTotalTasks.Value:N0} Cowork task"
+                             + $"{Plural(row.CoworkReportTotalTasks.Value)} on {days:N0} active day"
+                             + $"{Plural(days)} in Microsoft's Cowork usage report, short of the {Math.Max(1, o.CoworkRegularMinActiveDays)} "
+                             + "needed to count as regular use. Keep in scope and follow up.";
+                    }
+                    return $"Trialling by audit reconciliation: {row.CoworkInteractions:N0} Cowork interaction"
                          + $"{Plural(row.CoworkInteractions)} on {row.CoworkActiveDays:N0} day"
                          + $"{Plural(row.CoworkActiveDays)}, short of the {Math.Max(1, o.CoworkRegularMinActiveDays)} "
                          + "needed to count as regular use. Keep in scope and follow up.";

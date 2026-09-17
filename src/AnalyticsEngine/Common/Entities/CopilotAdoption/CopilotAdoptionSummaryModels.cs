@@ -226,6 +226,10 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("copilotUsageReportAvailable")]
         public bool CopilotUsageReportAvailable { get; set; }
 
+        /// <summary>The first-party Cowork usage report has been imported.</summary>
+        [JsonProperty("coworkUsageReportAvailable")]
+        public bool CoworkUsageReportAvailable { get; set; }
+
         /// <summary>The Microsoft 365 workload usage reports (Teams/Outlook/SharePoint/OneDrive) have data.</summary>
         [JsonProperty("m365UsageReportsAvailable")]
         public bool M365UsageReportsAvailable { get; set; }
@@ -245,6 +249,12 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         [JsonProperty("copilotUsageReportPeriodDays")]
         public int CopilotUsageReportPeriodDays { get; set; }
+
+        [JsonProperty("coworkUsageReportDate")]
+        public DateTime? CoworkUsageReportDate { get; set; }
+
+        [JsonProperty("coworkUsageReportPeriodDays")]
+        public int CoworkUsageReportPeriodDays { get; set; }
 
         /// <summary>
         /// The last daily Microsoft 365 usage report available. It bounds the period the workload
@@ -449,10 +459,43 @@ namespace Common.Entities.CopilotAdoption
         public int CoworkUsers { get; set; }
 
         [JsonProperty("coworkAdoptionPct")]
-        public double CoworkAdoptionPct { get; set; }
+        public double? CoworkAdoptionPct { get; set; }
+
+        [JsonProperty("coworkEligibilityKnown")]
+        public bool CoworkEligibilityKnown { get; set; }
+
+        [JsonProperty("coworkEligibleUsers")]
+        public int? CoworkEligibleUsers { get; set; }
+
+        [JsonProperty("coworkAuditUsers")]
+        public int CoworkAuditUsers { get; set; }
 
         [JsonProperty("coworkInteractions")]
         public long CoworkInteractions { get; set; }
+
+        [JsonProperty("coworkReportUsers")]
+        public int CoworkReportUsers { get; set; }
+
+        [JsonProperty("coworkReportTotalTasks")]
+        public int CoworkReportTotalTasks { get; set; }
+
+        [JsonProperty("coworkReportScheduledTasks")]
+        public int CoworkReportScheduledTasks { get; set; }
+
+        [JsonProperty("coworkReportUserInitiatedTasks")]
+        public int CoworkReportUserInitiatedTasks { get; set; }
+
+        [JsonProperty("coworkAutomationRatioPct")]
+        public double? CoworkAutomationRatioPct { get; set; }
+
+        [JsonProperty("coworkTasksPerActiveUser")]
+        public double? CoworkTasksPerActiveUser { get; set; }
+
+        [JsonProperty("coworkReportRetainedUsers")]
+        public int? CoworkReportRetainedUsers { get; set; }
+
+        [JsonProperty("coworkReportRetentionPct")]
+        public double? CoworkReportRetentionPct { get; set; }
 
         /// <summary>
         /// False when nothing in the data identifies Cowork at all - which on a tenant that has not
