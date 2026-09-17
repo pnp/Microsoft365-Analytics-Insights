@@ -195,6 +195,52 @@ namespace Tests.UnitTests
             Assert.IsFalse(scored.UsedCowork);
             Assert.AreNotEqual(CopilotAdoptionScoring.CoworkTiers.Established, scored.Tier);
         }
+
+        /// <summary>
+        /// Widening UsedCowork to count report active days broke the codebase's "a task count means the
+        /// row is report-sourced" proxy: the rationale fell through to the audit wording and told the
+        /// admin "established by audit reconciliation: 0 Cowork interactions across 0 days" about a user
+        /// Microsoft's report showed as active on 12 days.
+        /// </summary>
+        [TestMethod]
+        public void Rationale_ForAReportOnlyUserWithNoTaskCount_DoesNotClaimAuditEvidence()
+        {
+            var scored = CopilotAdoptionScoring.ScoreCoworkReadiness(
+                new CoworkReadinessSignalRow
+                {
+                    UserId = 3,
+                    CoworkActiveDays = 0,
+                    CoworkInteractions = 0,
+                    CoworkReportActiveDays = 12,
+                    CoworkReportTotalTasks = null,
+                },
+                Options());
+
+            StringAssert.Contains(scored.Rationale, "Cowork usage report",
+                "The rationale must attribute the evidence to Microsoft's report, which is where it came from.");
+            Assert.IsFalse(scored.Rationale.Contains("audit reconciliation"),
+                "There is no audit evidence for this user - claiming it invents a source.");
+            Assert.IsFalse(scored.Rationale.Contains("0 Cowork task"),
+                "An unknown task count must not be printed as a measured zero.");
+        }
+
+        /// <summary>
+        /// The other direction: a genuinely audit-sourced user must still say so.
+        /// </summary>
+        [TestMethod]
+        public void Rationale_ForAnAuditOnlyUser_StillCitesAuditReconciliation()
+        {
+            var scored = CopilotAdoptionScoring.ScoreCoworkReadiness(
+                new CoworkReadinessSignalRow
+                {
+                    UserId = 4,
+                    CoworkActiveDays = 7,
+                    CoworkInteractions = 20,
+                },
+                Options());
+
+            StringAssert.Contains(scored.Rationale, "audit reconciliation");
+        }
     }
 
     /// <summary>

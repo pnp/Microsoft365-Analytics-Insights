@@ -855,7 +855,7 @@ export default function CoworkPanel({
                     <td className={table.td}>
                       {row.usedCowork ? (
                         <Badge className={styles.evidence} size="small">
-                          {row.coworkReportTotalTasks !== null ? `${formatCount(row.coworkReportTotalTasks)} tasks in ${row.coworkReportActiveDays ?? 0}d` : `${formatCount(row.coworkInteractions)} audit interactions in ${row.coworkActiveDays}d`}
+                          {row.coworkReportTotalTasks !== null ? `${formatCount(row.coworkReportTotalTasks)} tasks in ${row.coworkReportActiveDays ?? 0}d` : row.coworkReportActiveDays !== null && row.coworkReportActiveDays > 0 ? `${formatCount(row.coworkReportActiveDays)}d reported` : `${formatCount(row.coworkInteractions)} audit interactions in ${row.coworkActiveDays}d`}
                         </Badge>
                       ) : (
                         <Text size={200} className={styles.muted}>

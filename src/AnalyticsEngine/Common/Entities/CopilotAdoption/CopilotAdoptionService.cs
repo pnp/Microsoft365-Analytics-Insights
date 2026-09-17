@@ -2687,8 +2687,7 @@ namespace Common.Entities.CopilotAdoption
 
             summary.CoworkAuditUsers = users.Count(u => u.CoworkInteractions > 0);
             summary.CoworkInteractions = users.Sum(u => u.CoworkInteractions);
-            summary.CoworkReportUsers = users.Count(u => u.CoworkReportTotalTasks.GetValueOrDefault() > 0);
-            summary.CoworkReportTotalTasks = users.Sum(u => u.CoworkReportTotalTasks.GetValueOrDefault());
+            summary.CoworkReportUsers = users.Count(u => u.CoworkReportTotalTasks.GetValueOrDefault() > 0);            summary.CoworkReportTotalTasks = users.Sum(u => u.CoworkReportTotalTasks.GetValueOrDefault());
             summary.CoworkReportScheduledTasks = users.Sum(u => u.CoworkReportScheduledTasks.GetValueOrDefault());
             summary.CoworkReportUserInitiatedTasks = users.Sum(u => u.CoworkReportUserInitiatedTasks.GetValueOrDefault());
             summary.CoworkReportRetainedUsers = users.Any(u => u.CoworkReportRetainedUser.HasValue)
@@ -2704,7 +2703,15 @@ namespace Common.Entities.CopilotAdoption
                 ? (double?)CopilotAdoptionScoring.Percentage(summary.CoworkReportRetainedUsers.Value, summary.CoworkReportUsers)
                 : null;
 
-            summary.CoworkUsers = summary.CoworkReportUsers > 0 ? summary.CoworkReportUsers : summary.CoworkAuditUsers;
+            // "Has a row in Microsoft's report" is not the same as "has a task count in it": the report can
+            // report active days with a blank task cell, which the parser preserves as unknown rather than
+            // zero. CoworkReportUsers stays tasks-only because it is the denominator of tasks-per-user and
+            // retention; presence is counted separately so the headline does not deny a user the readiness
+            // tab is simultaneously calling Established.
+            var coworkReportSignalUsers = users.Count(u => u.CoworkReportTotalTasks.GetValueOrDefault() > 0
+                || u.CoworkReportActiveDays.GetValueOrDefault() > 0);
+
+            summary.CoworkUsers = coworkReportSignalUsers > 0 ? coworkReportSignalUsers : summary.CoworkAuditUsers;
             summary.CoworkEligibilityKnown = summary.CoworkEligibleUsers.HasValue;
             summary.CoworkAdoptionPct = summary.CoworkEligibilityKnown
                 ? (double?)CopilotAdoptionScoring.Percentage(summary.CoworkUsers, summary.CoworkEligibleUsers.Value)
@@ -2715,7 +2722,7 @@ namespace Common.Entities.CopilotAdoption
             }
             // Only claim a Cowork signal when Cowork was actually seen in either source. On a tenant that has
             // not been enabled for it, "0% Cowork adoption" reads as a failure rather than as "not available".
-            summary.CoworkDetected = summary.CoworkReportUsers > 0 || summary.CoworkInteractions > 0;
+            summary.CoworkDetected = coworkReportSignalUsers > 0 || summary.CoworkInteractions > 0;
 
             summary.Funnel = BuildFunnel(summary, users);
             summary.BandBreakdown = BuildBandBreakdown(users);
