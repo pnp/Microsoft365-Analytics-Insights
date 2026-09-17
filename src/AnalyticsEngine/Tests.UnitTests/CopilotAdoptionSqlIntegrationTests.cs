@@ -380,6 +380,8 @@ namespace Tests.UnitTests
                 var reclaimed = comparison.Rows.Single(r => r.Transition == CopilotAdoptionCohortTransitions.Reclaimed);
                 StringAssert.Contains(reclaimed.ReclaimInterpretation, "account remains enabled",
                     "A seat removed from an enabled account is distinguishable from a disabled/departed user where directory state allows.");
+            }
+        }
 
         [TestMethod]
         public void EnrichProgress_UsesLatestClosedPeriodAndReportsSeatMovement()
@@ -469,6 +471,10 @@ namespace Tests.UnitTests
                     .GetResult();
                 Assert.AreEqual(2, neverActivated.Total);
                 Assert.IsTrue(neverActivated.Rows.Any(r => r.UserPrincipalName == "never.activated@contoso.com"));
+            }
+        }
+
+        [TestMethod]
         public void EnrichProgress_RefusesDifferentOptionsHashRatherThanSilentDelta()
         {
             using (var db = ScratchDatabase.Create("CopilotAdoptDeltaHash"))
@@ -568,6 +574,7 @@ namespace Tests.UnitTests
                        ('{rightEnd:yyyy-MM-dd}', 28, '2026-09-01', 9, N'1', 1, 2, '2026-07-01', '2026-01-01', 0, 0, 0, 0, 0, 0, NULL, NULL, 0, N'audit', N'complete');");
         }
 
+        [TestMethod]
         public void CreateTarget_FreezesBaselineAndFlagsRetunedScoringOptions()
         {
             using (var db = ScratchDatabase.Create("CopilotAdoptTarget"))
