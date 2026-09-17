@@ -1461,13 +1461,20 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
-        /// The task clause of a report-sourced rationale, or an empty string when the report gave active
-        /// days but no task count. Never prints a fabricated "0 Cowork tasks".
+        /// The evidence clause of a report-sourced rationale. When the report gave active days but no task
+        /// count, the task clause is dropped entirely rather than printing a fabricated "0 Cowork tasks" -
+        /// and the sentence still reads grammatically instead of "Already established: across 12 days".
         /// </summary>
-        private static string ReportTaskPhrase(CoworkReadinessRow row)
+        private static string ReportEvidencePhrase(CoworkReadinessRow row)
         {
-            if (!row.CoworkReportTotalTasks.HasValue) return string.Empty;
-            return $"{row.CoworkReportTotalTasks.Value:N0} Cowork task{Plural(row.CoworkReportTotalTasks.Value)} ";
+            var days = row.CoworkReportActiveDays ?? 0;
+            if (row.CoworkReportTotalTasks.HasValue)
+            {
+                return $"{row.CoworkReportTotalTasks.Value:N0} Cowork task"
+                     + $"{Plural(row.CoworkReportTotalTasks.Value)} across {days:N0} active day{Plural(days)}";
+            }
+
+            return $"active on {days:N0} day{Plural(days)}";
         }
 
         /// <summary>What a Cowork tier means and what to do about it. Stated once per group.</summary>
@@ -1557,9 +1564,8 @@ namespace Common.Entities.CopilotAdoption
                 case CoworkTiers.Established:
                     if (CoworkReportHasSignal(row))
                     {
-                        var days = row.CoworkReportActiveDays ?? 0;
-                        return $"Already established: {ReportTaskPhrase(row)}across {days:N0} active day"
-                             + $"{Plural(days)} in Microsoft's Cowork usage report. Keep in scope.";
+                        return $"Already established: {ReportEvidencePhrase(row)} in Microsoft's Cowork "
+                             + "usage report. Keep in scope.";
                     }
                     return $"Already established by audit reconciliation: {row.CoworkInteractions:N0} Cowork interaction"
                          + $"{Plural(row.CoworkInteractions)} across {row.CoworkActiveDays:N0} day"
@@ -1568,9 +1574,8 @@ namespace Common.Entities.CopilotAdoption
                 case CoworkTiers.Trialling:
                     if (CoworkReportHasSignal(row))
                     {
-                        var days = row.CoworkReportActiveDays ?? 0;
-                        return $"Trialling: {ReportTaskPhrase(row)}on {days:N0} active day"
-                             + $"{Plural(days)} in Microsoft's Cowork usage report, short of the {Math.Max(1, o.CoworkRegularMinActiveDays)} "
+                        return $"Trialling: {ReportEvidencePhrase(row)} in Microsoft's Cowork usage report, "
+                             + $"short of the {Math.Max(1, o.CoworkRegularMinActiveDays)} "
                              + "needed to count as regular use. Keep in scope and follow up.";
                     }
                     return $"Trialling by audit reconciliation: {row.CoworkInteractions:N0} Cowork interaction"

@@ -2687,7 +2687,8 @@ namespace Common.Entities.CopilotAdoption
 
             summary.CoworkAuditUsers = users.Count(u => u.CoworkInteractions > 0);
             summary.CoworkInteractions = users.Sum(u => u.CoworkInteractions);
-            summary.CoworkReportUsers = users.Count(u => u.CoworkReportTotalTasks.GetValueOrDefault() > 0);            summary.CoworkReportTotalTasks = users.Sum(u => u.CoworkReportTotalTasks.GetValueOrDefault());
+            summary.CoworkReportUsers = users.Count(u => u.CoworkReportTotalTasks.GetValueOrDefault() > 0);
+            summary.CoworkReportTotalTasks = users.Sum(u => u.CoworkReportTotalTasks.GetValueOrDefault());
             summary.CoworkReportScheduledTasks = users.Sum(u => u.CoworkReportScheduledTasks.GetValueOrDefault());
             summary.CoworkReportUserInitiatedTasks = users.Sum(u => u.CoworkReportUserInitiatedTasks.GetValueOrDefault());
             summary.CoworkReportRetainedUsers = users.Any(u => u.CoworkReportRetainedUser.HasValue)
