@@ -55,12 +55,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
     /// </summary>
     public class CopilotReportRequest
     {
-        /// <summary>
-        /// The beta endpoint, matching every other Graph usage-report loader in this solution. The v1.0
-        /// endpoints stream CSV rather than JSON, which would need a parallel transport for no benefit; beta
-        /// returns the same data as JSON and is what the existing loaders already consume.
-        /// </summary>
-        public const string GraphBetaBaseUrl = "https://graph.microsoft.com/beta/copilot/reports";
+        /// <summary>The GA Microsoft 365 Copilot usage-report endpoint Microsoft now recommends.</summary>
+        public const string GraphV10CopilotBaseUrl = "https://graph.microsoft.com/v1.0/copilot/reports";
+
+        /// <summary>Preview Microsoft 365 Copilot usage-report endpoint used before the GA v1.0 CSV stream.</summary>
+        public const string GraphBetaCopilotBaseUrl = "https://graph.microsoft.com/beta/copilot/reports";
+
+        /// <summary>Superseded root-level beta reports endpoint, kept only as the final v1 fallback.</summary>
+        public const string GraphBetaLegacyReportsBaseUrl = "https://graph.microsoft.com/beta/reports";
 
         /// <summary>Periods Graph accepts for report version 1. Note D30.</summary>
         public static readonly IReadOnlyList<string> V1Periods = new[] { "D7", "D30", "D90", "D180", "ALL" };
@@ -130,10 +132,30 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             }
         }
 
+        /// <summary>Primary GA URL. v1.0 returns a CSV stream, so the importer parses CSV explicitly.</summary>
+        public string Url => BuildUrl(GraphV10CopilotBaseUrl, Period, Version, "text/csv");
+
+        /// <summary>GA /copilot fallback URL for version 1 when a tenant has not rolled out version 2 yet.</summary>
+        public string V1FallbackUrl => BuildUrl(GraphV10CopilotBaseUrl, V1PeriodFor(Period), CopilotReportVersions.V1, "text/csv");
+
         /// <summary>
-        /// Requests JSON explicitly, exactly as the other Graph usage-report loaders here do.
+        /// Preview /copilot JSON fallback for tenants that have v2 data but have not rolled out the GA CSV
+        /// stream yet. This is the endpoint the importer used before #541.
         /// </summary>
-        public string Url => $"{GraphBetaBaseUrl}/{ReportName}(period='{Period}',version='{Version}')?$format=application/json";
+        public string BetaV2JsonFallbackUrl => BuildUrl(GraphBetaCopilotBaseUrl, Period, CopilotReportVersions.V2, "application/json");
+
+        /// <summary>Legacy beta /reports JSON URL, kept as the last mid-rollout fallback.</summary>
+        public string LegacyJsonFallbackUrl => $"{GraphBetaLegacyReportsBaseUrl}/{ReportName}(period='{V1PeriodFor(Period)}')?$format=application/json";
+
+        private string BuildUrl(string baseUrl, string period, string version, string format)
+        {
+            return $"{baseUrl}/{ReportName}(period='{period}',version='{version}')?$format={format}";
+        }
+
+        internal static string V1PeriodFor(string period)
+        {
+            return string.Equals(period, "D28", StringComparison.OrdinalIgnoreCase) ? "D30" : period;
+        }
 
         public override string ToString() => $"{ReportName}(period='{Period}',version='{Version}')";
     }

@@ -176,6 +176,11 @@ namespace Common.Entities.Entities.UsageReports
         [Column("active_usage_days")]
         public int? ActiveUsageDays { get; set; }
 
+        /// <summary>Graph schema version that produced this row (v1/v2), stored with the snapshot facts.</summary>
+        [Column("report_version")]
+        [MaxLength(10)]
+        public string ReportVersion { get; set; }
+
         #endregion
 
         #region Per-app last activity dates
