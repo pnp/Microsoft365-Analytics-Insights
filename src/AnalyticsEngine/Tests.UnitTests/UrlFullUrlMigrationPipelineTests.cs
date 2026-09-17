@@ -76,7 +76,9 @@ namespace Tests.UnitTests
         // CoworkUsageReportTables then adds the first-party Cowork usage-report tables. Raw-SQL,
         // purely additive, and reuses the preceding model snapshot verbatim - the new activity-log
         // type is not exposed as a DbSet, so the entity model is unchanged.
-        private const string LatestId = "202609170940001_CoworkUsageReportTables";
+        // CopilotAdoptionDigest then adds the scheduled digest send-state table. It is raw-SQL,
+        // additive, and reuses the GraphCopilotUsageApiV2 model snapshot verbatim.
+        private const string LatestId = "202609171030001_CopilotAdoptionDigest";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

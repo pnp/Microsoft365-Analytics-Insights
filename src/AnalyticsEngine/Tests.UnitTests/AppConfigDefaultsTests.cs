@@ -34,6 +34,10 @@ namespace Tests.UnitTests
         private const string GraphTeamsImportIntervalHours = "GraphTeamsImportIntervalHours";
         private const string ForceGraphMetadataImport = "ForceGraphMetadataImport";
         private const string ImportStartStaggerMinutes = "ImportStartStaggerMinutes";
+        private const string CopilotAdoptionDigestRecipients = "CopilotAdoptionDigestRecipients";
+        private const string CopilotAdoptionDigestSenderUserId = "CopilotAdoptionDigestSenderUserId";
+        private const string CopilotAdoptionDigestIntervalHours = "CopilotAdoptionDigestIntervalHours";
+        private const string TenantGUID = "TenantGUID";
 
         private static readonly string[] _trackedKeys =
         {
@@ -51,6 +55,10 @@ namespace Tests.UnitTests
             GraphTeamsImportIntervalHours,
             ForceGraphMetadataImport,
             ImportStartStaggerMinutes,
+            CopilotAdoptionDigestRecipients,
+            CopilotAdoptionDigestSenderUserId,
+            CopilotAdoptionDigestIntervalHours,
+            TenantGUID,
         };
 
         private Dictionary<string, string> _originalAppSettings;
@@ -63,6 +71,8 @@ namespace Tests.UnitTests
             {
                 _originalAppSettings[key] = ConfigurationManager.AppSettings[key];
             }
+
+            ConfigurationManager.AppSettings.Set(TenantGUID, "00000000-0000-0000-0000-000000000000");
         }
 
         [TestCleanup]
@@ -447,6 +457,35 @@ namespace Tests.UnitTests
 
             ConfigurationManager.AppSettings.Set(ForceGraphMetadataImport, "garbage");
             Assert.IsFalse(new AppConfig().ForceGraphMetadataImport, "Unparseable must not flip to true.");
+        }
+
+        [TestMethod]
+        public void CopilotAdoptionDigest_UnconfiguredByDefaultAndMonthlyCadence()
+        {
+            ConfigurationManager.AppSettings.Set(CopilotAdoptionDigestRecipients, string.Empty);
+            ConfigurationManager.AppSettings.Set(CopilotAdoptionDigestSenderUserId, string.Empty);
+            ConfigurationManager.AppSettings.Set(CopilotAdoptionDigestIntervalHours, string.Empty);
+
+            var cfg = new AppConfig();
+
+            Assert.IsFalse(cfg.CopilotAdoptionDigestConfigured, "Upgraded deployments must not send a digest until recipients and sender are configured.");
+            Assert.AreEqual(0, cfg.CopilotAdoptionDigestRecipients.Count);
+            Assert.AreEqual(AppConfig.DefaultCopilotAdoptionDigestIntervalHours, cfg.CopilotAdoptionDigestIntervalHours);
+        }
+
+        [TestMethod]
+        public void CopilotAdoptionDigest_ParsesRecipientsSenderAndInterval()
+        {
+            ConfigurationManager.AppSettings.Set(CopilotAdoptionDigestRecipients, " execs@contoso.example; finance@contoso.example,EXECS@contoso.example ");
+            ConfigurationManager.AppSettings.Set(CopilotAdoptionDigestSenderUserId, " digest-sender@contoso.example ");
+            ConfigurationManager.AppSettings.Set(CopilotAdoptionDigestIntervalHours, "168");
+
+            var cfg = new AppConfig();
+
+            CollectionAssert.AreEqual(new[] { "execs@contoso.example", "finance@contoso.example" }, cfg.CopilotAdoptionDigestRecipients);
+            Assert.AreEqual("digest-sender@contoso.example", cfg.CopilotAdoptionDigestSenderUserId);
+            Assert.AreEqual(168, cfg.CopilotAdoptionDigestIntervalHours);
+            Assert.IsTrue(cfg.CopilotAdoptionDigestConfigured);
         }
     }
 }
