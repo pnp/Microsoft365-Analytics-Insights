@@ -1,4 +1,5 @@
-using Newtonsoft.Json;
+﻿using Newtonsoft.Json;
+using System;
 
 namespace Common.Entities.CopilotAdoption
 {
@@ -12,6 +13,10 @@ namespace Common.Entities.CopilotAdoption
         public string SkuPartNumber { get; set; }
 
         public int AssignedUsers { get; set; }
+
+        public int? PurchasedUnits { get; set; }
+
+        public DateTime? PurchasedUnitsRefreshedUtc { get; set; }
     }
 
     /// <summary>A licence type and whether the tool counted it as a Microsoft 365 Copilot seat.</summary>
@@ -28,6 +33,19 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("assignedUsers")]
         public int AssignedUsers { get; set; }
+
+        /// <summary>Purchased seats from Graph subscribedSkus.prepaidUnits, or null when tenant SKU inventory is unavailable.</summary>
+        [JsonProperty("purchasedUnits")]
+        public int? PurchasedUnits { get; set; }
+
+        [JsonProperty("unassignedUnits")]
+        public int? UnassignedUnits { get; set; }
+
+        [JsonProperty("assignedIdleUsers")]
+        public int AssignedIdleUsers { get; set; }
+
+        [JsonProperty("purchasedUnitsRefreshedUtc")]
+        public DateTime? PurchasedUnitsRefreshedUtc { get; set; }
 
         [JsonProperty("isCopilotSeat")]
         public bool IsCopilotSeat { get; set; }

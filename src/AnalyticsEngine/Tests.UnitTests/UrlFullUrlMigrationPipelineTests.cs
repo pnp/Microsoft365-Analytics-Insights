@@ -71,7 +71,9 @@ namespace Tests.UnitTests
         // GraphCopilotUsageApiV2 then adds the report_version column carrying the Graph usage-report
         // schema version each snapshot came from. It DOES change the entity model, so its snapshot is
         // freshly scaffolded rather than reused.
-        private const string LatestId = "202609170910001_GraphCopilotUsageApiV2";
+        // CopilotSubscribedSkuCapacity adds nullable subscribed SKU capacity columns to
+        // license_types. Raw-SQL, additive, and reuses the predecessor snapshot verbatim.
+        private const string LatestId = "202609170920001_CopilotSubscribedSkuCapacity";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

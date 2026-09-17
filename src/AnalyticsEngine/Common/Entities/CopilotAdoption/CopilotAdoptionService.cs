@@ -1,4 +1,5 @@
-﻿using Common.Entities.Copilot;
+using Common.Entities.Copilot;
+using Common.Entities.AgentCosts;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -380,6 +381,7 @@ namespace Common.Entities.CopilotAdoption
             summary.SeatLicenceTypes = CopilotLicenceClassifier.Classify(licenceTypes);
             var seatIds = CopilotLicenceClassifier.ResolveSeatLicenceTypeIds(licenceTypes, seatLicenceTypeIdOverride);
             summary.DataSources.UserMetadataAvailable = true;
+            SummarisePurchasedSeatCapacity(summary);
 
             // When an explicit override is supplied, the classification shown to the admin has to reflect
             // what was ACTUALLY counted. Leaving the automatic verdict in place meant the methodology page
@@ -391,6 +393,8 @@ namespace Common.Entities.CopilotAdoption
                 {
                     licence.IsCopilotSeat = effective.Contains(licence.Id);
                 }
+
+                SummarisePurchasedSeatCapacity(summary);
             }
 
             if (seatIds.Count == 0)
@@ -1016,11 +1020,14 @@ namespace Common.Entities.CopilotAdoption
                 assignments = new List<SeatAssignmentRow>();
             }
 
-            var licencesByUser = assignments
+            var assignmentsByUser = assignments
                 .GroupBy(a => a.UserId)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            var licencesByUser = assignmentsByUser
                 .ToDictionary(
                     g => g.Key,
-                    g => string.Join(", ", g.Select(a => a.LicenceName)
+                    g => string.Join(", ", g.Value.Select(a => a.LicenceName)
                                             .Where(n => !string.IsNullOrWhiteSpace(n))
                                             .Distinct()
                                             .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)));
@@ -1083,6 +1090,13 @@ namespace Common.Entities.CopilotAdoption
             {
                 string licences;
                 row.SeatLicences = licencesByUser.TryGetValue(row.UserId, out licences) ? licences : null;
+                if (assignmentsByUser.TryGetValue(row.UserId, out var userAssignments))
+                {
+                    row.SeatLicenceTypeIds = userAssignments
+                        .Select(a => a.LicenceTypeId)
+                        .Distinct()
+                        .ToList();
+                }
             }
 
             analysis.LicensedUsers = rows
@@ -1530,6 +1544,7 @@ namespace Common.Entities.CopilotAdoption
 
             var summary = analysis.Summary;
             var users = analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>();
+            SummarisePurchasedSeatCapacity(summary);
             summary.GuidanceCatalogueVersion = CopilotAdoptionGuidanceCatalogue.Version;
             summary.GuidanceLinks = CopilotAdoptionGuidanceCatalogue.All.ToList();
 
@@ -1648,6 +1663,8 @@ namespace Common.Entities.CopilotAdoption
                     || IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded)));
 
             summary.ReclaimCaveat = "Reclaim excludes admin exclusions and separates review-only cases. Leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from Microsoft 365 usage data.";
+            PopulateAssignedIdleBySku(summary, users);
+            BuildIdleLicenceSpend(summary, users);
             // Report-sourced rows carry Microsoft's prompt count in Interactions. Do not publish a total
             // that adds prompts to audit-log interactions; they are different units over potentially
             // different windows.
@@ -1699,6 +1716,213 @@ namespace Common.Entities.CopilotAdoption
                 .OrderByDescending(c => c.Value)
                 .Take(_options.TopSegments)
                 .ToList();
+        }
+
+
+        private static void PopulateAssignedIdleBySku(CopilotAdoptionSummary summary, IReadOnlyCollection<LicensedUserAdoptionRow> users)
+        {
+            foreach (var licence in summary.SeatLicenceTypes.Where(l => l.IsCopilotSeat))
+            {
+                licence.AssignedIdleUsers = users.Count(user =>
+                    UserHasLicence(user, licence)
+                    && (IsReclaimTier(user, CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain)
+                        || IsReclaimTier(user, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable))
+                    && !(summary.UsageReportWindowMismatch
+                         && IsUsageReportSourced(user)
+                         && IsReclaimTier(user, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable)));
+            }
+        }
+
+        private void BuildIdleLicenceSpend(CopilotAdoptionSummary summary, IReadOnlyCollection<LicensedUserAdoptionRow> users)
+        {
+            var configuredCosts = (_options.SeatCosts ?? new List<CopilotSeatCostInput>())
+                .Where(c => c != null
+                            && !string.IsNullOrWhiteSpace(c.SkuPartNumber)
+                            && !string.IsNullOrWhiteSpace(c.Currency)
+                            && c.Cost > 0
+                            && c.EffectiveDateUtc.HasValue)
+                .ToList();
+            if (configuredCosts.Count == 0)
+            {
+                summary.IdleLicenceSpend = null;
+                return;
+            }
+
+            var costBySku = configuredCosts
+                .GroupBy(c => c.SkuPartNumber.Trim(), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+            var spend = new IdleLicenceSpendSummary { ConfiguredCosts = configuredCosts };
+            var seatSkus = summary.SeatLicenceTypes.Where(l => l.IsCopilotSeat).ToList();
+
+            var reassignable = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+            var reducible = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+            var exposure = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+            var tierSeats = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var tierSeatUsers = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
+            var tierCosts = new Dictionary<string, Dictionary<string, decimal>>(StringComparer.OrdinalIgnoreCase);
+            var categorySeats = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var categorySeatUsers = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
+            var categoryCosts = new Dictionary<string, Dictionary<string, decimal>>(StringComparer.OrdinalIgnoreCase);
+
+            void AddMoney(Dictionary<string, decimal> bucket, string currency, decimal amount)
+            {
+                if (!bucket.ContainsKey(currency)) bucket[currency] = 0m;
+                bucket[currency] += amount;
+            }
+
+            void AddNested(Dictionary<string, Dictionary<string, decimal>> bucket, string key, string currency, decimal amount)
+            {
+                if (!bucket.TryGetValue(key, out var byCurrency))
+                {
+                    byCurrency = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+                    bucket[key] = byCurrency;
+                }
+                AddMoney(byCurrency, currency, amount);
+            }
+
+            void AddSeatUser(Dictionary<string, HashSet<int>> bucket, string key, int userId)
+            {
+                if (!bucket.TryGetValue(key, out var usersInBucket))
+                {
+                    usersInBucket = new HashSet<int>();
+                    bucket[key] = usersInBucket;
+                }
+                usersInBucket.Add(userId);
+            }
+
+            decimal MonthlyTotal(CopilotSeatCostInput c, int seats) =>
+                string.Equals(c.Period, "annual", StringComparison.OrdinalIgnoreCase)
+                    ? decimal.Round(c.Cost * seats / 12m, 2, MidpointRounding.ToEven)
+                    : c.Cost * seats;
+
+            foreach (var licence in seatSkus)
+            {
+                if (!costBySku.TryGetValue(licence.SkuPartNumber ?? string.Empty, out var cost)) continue;
+                var currency = cost.Currency.Trim().ToUpperInvariant();
+                if (!licence.UnassignedUnits.HasValue)
+                {
+                    spend.UnassignedSpendUnknown = true;
+                    continue;
+                }
+                var unassigned = licence.UnassignedUnits.Value;
+                if (unassigned > 0)
+                {
+                    var amount = MonthlyTotal(cost, unassigned);
+                    AddMoney(exposure, currency, amount);
+                    AddMoney(reducible, currency, amount);
+                    categorySeats["Unassigned"] = categorySeats.TryGetValue("Unassigned", out var current) ? current + unassigned : unassigned;
+                    AddNested(categoryCosts, "Unassigned", currency, amount);
+                }
+            }
+
+            foreach (var user in users)
+            {
+                var tier = user.ReclaimEligibility;
+                var eligible = IsReclaimTier(user, CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain)
+                               || IsReclaimTier(user, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable);
+                if (!eligible) continue;
+                if (summary.UsageReportWindowMismatch
+                    && IsUsageReportSourced(user)
+                    && IsReclaimTier(user, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable)) continue;
+
+                foreach (var licence in seatSkus)
+                {
+                    if (!UserHasLicence(user, licence)) continue;
+                    if (!costBySku.TryGetValue(licence.SkuPartNumber ?? string.Empty, out var cost)) continue;
+                    var currency = cost.Currency.Trim().ToUpperInvariant();
+                    var amount = MonthlyTotal(cost, 1);
+                    AddMoney(exposure, currency, amount);
+                    AddMoney(reassignable, currency, amount);
+                    AddSeatUser(tierSeatUsers, tier, user.UserId);
+                    AddNested(tierCosts, tier, currency, amount);
+                    AddSeatUser(categorySeatUsers, "Assigned idle", user.UserId);
+                    AddNested(categoryCosts, "Assigned idle", currency, amount);
+                }
+            }
+
+            foreach (var kvp in tierSeatUsers)
+            {
+                tierSeats[kvp.Key] = kvp.Value.Count;
+            }
+
+            foreach (var kvp in categorySeatUsers)
+            {
+                categorySeats[kvp.Key] = kvp.Value.Count;
+            }
+
+            spend.SpendExposure = ToCosts(exposure);
+            spend.Reassignable = ToCosts(reassignable);
+            spend.ReducibleAtRenewal = ToCosts(reducible);
+            spend.Tiers = tierSeats.Select(kvp => new IdleLicenceSpendTier
+            {
+                Tier = kvp.Key,
+                Seats = kvp.Value,
+                Costs = ToCosts(tierCosts[kvp.Key]),
+            }).OrderBy(t => ReclaimTierRank(t.Tier)).ToList();
+            spend.Categories = categorySeats.Select(kvp => new IdleLicenceSpendCategory
+            {
+                Category = kvp.Key,
+                Seats = kvp.Value,
+                Costs = ToCosts(categoryCosts[kvp.Key]),
+            }).OrderBy(c => c.Category, StringComparer.OrdinalIgnoreCase).ToList();
+            summary.IdleLicenceSpend = spend;
+        }
+
+        private static bool UserHasLicence(LicensedUserAdoptionRow user, LicenceTypeClassification licence)
+        {
+            return user.SeatLicenceTypeIds != null && user.SeatLicenceTypeIds.Contains(licence.Id);
+        }
+
+        private static void SummarisePurchasedSeatCapacity(CopilotAdoptionSummary summary)
+        {
+            var copilotSkus = summary.SeatLicenceTypes.Where(l => l.IsCopilotSeat).ToList();
+            var hasCopilotSkus = copilotSkus.Count > 0;
+            var allPurchasedKnown = hasCopilotSkus && copilotSkus.All(l => l.PurchasedUnits.HasValue);
+            var allUnassignedKnown = allPurchasedKnown && copilotSkus.All(l => l.UnassignedUnits.HasValue);
+
+            summary.SubscribedSkusAvailable = allPurchasedKnown;
+            summary.PurchasedCopilotSeats = allPurchasedKnown
+                ? copilotSkus.Sum(l => l.PurchasedUnits.GetValueOrDefault())
+                : (int?)null;
+            summary.UnassignedCopilotSeats = allUnassignedKnown
+                ? copilotSkus.Sum(l => l.UnassignedUnits.GetValueOrDefault())
+                : (int?)null;
+
+            if (hasCopilotSkus && !allPurchasedKnown && !summary.Warnings.Any(w => w.Contains("subscribedSkus/prepaidUnits")))
+            {
+                summary.Warnings.Add(
+                    "Purchased and unassigned Copilot seats are unknown because Graph subscribedSkus/prepaidUnits "
+                    + "has not been imported. Grant Organization.Read.All and rerun the user metadata import; the "
+                    + "report deliberately does not show zero for unassigned seats when the purchase inventory is missing.");
+            }
+
+            foreach (var licence in copilotSkus.Where(l => l.PurchasedUnits.HasValue && !l.UnassignedUnits.HasValue))
+            {
+                var warning = $"Purchased and assigned Copilot seats disagree for {licence.SkuPartNumber ?? licence.Name}: Graph reports {licence.PurchasedUnits.Value:N0} purchased but {licence.AssignedUsers:N0} assigned, so unassigned seats are shown as Unknown rather than zero.";
+                if (!summary.Warnings.Contains(warning))
+                {
+                    summary.Warnings.Add(warning);
+                }
+            }
+        }
+
+        private static List<AzureCostByCurrency> ToCosts(Dictionary<string, decimal> values)
+        {
+            return values
+                .Where(kvp => kvp.Value != 0m)
+                .OrderBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(kvp => new AzureCostByCurrency { Currency = kvp.Key, Cost = kvp.Value })
+                .ToList();
+        }
+
+        private static int ReclaimTierRank(string tier)
+        {
+            if (string.Equals(tier, CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain, StringComparison.OrdinalIgnoreCase)) return 0;
+            if (string.Equals(tier, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable, StringComparison.OrdinalIgnoreCase)) return 1;
+            if (string.Equals(tier, CopilotAdoptionScoring.ReclaimEligibilityTiers.Review, StringComparison.OrdinalIgnoreCase)) return 2;
+            if (string.Equals(tier, CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded, StringComparison.OrdinalIgnoreCase)) return 3;
+            return 4;
         }
 
         /// <summary>
@@ -2847,6 +3071,10 @@ namespace Common.Entities.CopilotAdoption
         public class SeatAssignmentRow
         {
             public int UserId { get; set; }
+
+            public int LicenceTypeId { get; set; }
+
+            public string SkuPartNumber { get; set; }
 
             public string LicenceName { get; set; }
         }

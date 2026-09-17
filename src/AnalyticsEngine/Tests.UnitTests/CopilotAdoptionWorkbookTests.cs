@@ -274,6 +274,43 @@ namespace Tests.UnitTests
             AssertFollowedBy(table, "docx", "Tenant content");
         }
 
+        [TestMethod]
+        public void Workbook_RecordsIdleSpendUnknownsAndSeatPricesUsed()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.IdleLicenceSpend = new IdleLicenceSpendSummary
+            {
+                UnassignedSpendUnknown = true,
+                ConfiguredCosts = new List<CopilotSeatCostInput>
+                {
+                    new CopilotSeatCostInput
+                    {
+                        SkuPartNumber = "Microsoft_365_Copilot",
+                        Currency = "GBP",
+                        Cost = 30m,
+                        Period = "monthly",
+                        EffectiveDateUtc = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc),
+                    },
+                },
+                SpendExposure = new List<Common.Entities.AgentCosts.AzureCostByCurrency>
+                {
+                    new Common.Entities.AgentCosts.AzureCostByCurrency { Currency = "GBP", Cost = 30m },
+                },
+                Reassignable = new List<Common.Entities.AgentCosts.AzureCostByCurrency>
+                {
+                    new Common.Entities.AgentCosts.AzureCostByCurrency { Currency = "GBP", Cost = 30m },
+                },
+            };
+
+            var text = SheetText(CopilotAdoptionWorkbook.Build(analysis));
+
+            StringAssert.Contains(text, "GBP 30.00; Unknown unassigned",
+                "Unknown unassigned inventory must be visible beside the money figure, not rendered as not configured.");
+            StringAssert.Contains(text, "Seat price used - Microsoft_365_Copilot");
+            StringAssert.Contains(text, "GBP 30.00 monthly");
+            StringAssert.Contains(text, "Effective 2026-09-01");
+        }
+
         /// <summary>
         /// Asserts that a cell holding <paramref name="value"/> is immediately followed by one holding
         /// <paramref name="expectedNext"/>. Cells come back in document order, so this pins the value

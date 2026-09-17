@@ -1,4 +1,4 @@
-using Azure.Core;
+﻿using Azure.Core;
 using Common.Entities;
 using Common.Entities.Config;
 using DataUtils;
@@ -358,6 +358,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
                 else
                 {
+                    await UserLicenseProcessor.MarkSubscribedSkuCapacityUnavailableAsync(db, _logger);
+
                     // No separate licence phase runs at all when tenant SKUs are unavailable:
                     // ProcessUserLicenses already ran per user inside the update phase above, so
                     // there is no outstanding licence work that committing the delta could skip.

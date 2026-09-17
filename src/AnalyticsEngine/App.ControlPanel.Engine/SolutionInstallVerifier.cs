@@ -1,4 +1,4 @@
-using App.ControlPanel.Engine.Entities;
+﻿using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.InstallerTasks;
 using App.ControlPanel.Engine.Models;
 using Azure.Identity;
@@ -891,7 +891,7 @@ namespace App.ControlPanel.Engine
                 + "on a Graph or Management API grant."),
 
             new ImportToggleCoverage(nameof(ImportTaskSettings.GraphUsersMetadata),
-                "Graph token roles include User.Read.All and Directory.Read.All"),
+                "Graph token roles include User.Read.All, Directory.Read.All and Organization.Read.All"),
 
             new ImportToggleCoverage(nameof(ImportTaskSettings.Calls),
                 "Graph token roles include CallRecords.Read.All (permission only; subscription and queue are post-install resources)"),
@@ -1015,7 +1015,9 @@ namespace App.ControlPanel.Engine
             else _logger.LogInformation("Skipping verifying Copilot AI interaction history import as not being targeted");
 
             // Graph user metadata. The user delta call needs User.Read.All; group membership reads also need
-            // Directory.Read.All in real tenants, so verify both roles while we have the Graph token.
+            // Directory.Read.All in real tenants. subscribedSkus/prepaidUnits needs Organization.Read.All;
+            // without it Copilot Adoption can still see assigned licences but purchased/unassigned seats
+            // are deliberately unknown rather than reported as zero.
             if (Config.SolutionConfig.ImportTaskSettings.GraphUsersMetadata)
             {
                 await VerifyRequiredTokenPermission(
@@ -1033,6 +1035,14 @@ namespace App.ControlPanel.Engine
                     "Graph user group membership import",
                     "Microsoft Graph",
                     "the per-user memberOf calls used for group filters will fail at runtime.");
+
+                await VerifyRequiredTokenPermission(
+                    auth,
+                    new[] { "Organization.Read.All" },
+                    "Organization.Read.All",
+                    "Graph subscribed SKUs import",
+                    "Microsoft Graph",
+                    "Copilot Adoption will show purchased and unassigned Copilot seats as unknown rather than zero.");
             }
             else _logger.LogInformation("Skipping verifying Graph API for user metadata import as not being targeted");
 

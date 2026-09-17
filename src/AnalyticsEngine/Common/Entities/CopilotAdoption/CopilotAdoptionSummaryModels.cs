@@ -1,4 +1,5 @@
 ﻿using Common.Entities.Copilot;
+using Common.Entities.AgentCosts;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -433,6 +434,20 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Disabled accounts that still hold a Copilot seat. This is the zero-risk reclaim KPI.</summary>
         [JsonProperty("disabledLicensedUsers")]
         public int DisabledLicensedUsers { get; set; }
+
+        /// <summary>Purchased-vs-assigned Copilot seat inventory. Purchased is null when Graph subscribedSkUs was unavailable.</summary>
+        [JsonProperty("purchasedCopilotSeats")]
+        public int? PurchasedCopilotSeats { get; set; }
+
+        [JsonProperty("unassignedCopilotSeats")]
+        public int? UnassignedCopilotSeats { get; set; }
+
+        [JsonProperty("subscribedSkusAvailable")]
+        public bool SubscribedSkusAvailable { get; set; }
+
+        [JsonProperty("idleLicenceSpend")]
+        public IdleLicenceSpendSummary IdleLicenceSpend { get; set; }
+
 
         [JsonProperty("reclaimCertainSeats")]
         public int ReclaimCertainSeats { get; set; }
@@ -874,5 +889,53 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("warnings")]
         public List<string> Warnings { get; set; } = new List<string>();
+    }
+
+    public class IdleLicenceSpendSummary
+    {
+        [JsonProperty("configuredCosts")]
+        public List<CopilotSeatCostInput> ConfiguredCosts { get; set; } = new List<CopilotSeatCostInput>();
+
+        [JsonProperty("spendExposure")]
+        public List<AzureCostByCurrency> SpendExposure { get; set; } = new List<AzureCostByCurrency>();
+
+        [JsonProperty("reassignable")]
+        public List<AzureCostByCurrency> Reassignable { get; set; } = new List<AzureCostByCurrency>();
+
+        [JsonProperty("reducibleAtRenewal")]
+        public List<AzureCostByCurrency> ReducibleAtRenewal { get; set; } = new List<AzureCostByCurrency>();
+
+        [JsonProperty("unassignedSpendUnknown")]
+        public bool UnassignedSpendUnknown { get; set; }
+
+        [JsonProperty("tiers")]
+        public List<IdleLicenceSpendTier> Tiers { get; set; } = new List<IdleLicenceSpendTier>();
+
+        [JsonProperty("categories")]
+        public List<IdleLicenceSpendCategory> Categories { get; set; } = new List<IdleLicenceSpendCategory>();
+    }
+
+    public class IdleLicenceSpendTier
+    {
+        [JsonProperty("tier")]
+        public string Tier { get; set; }
+
+        [JsonProperty("seats")]
+        public int Seats { get; set; }
+
+        [JsonProperty("costs")]
+        public List<AzureCostByCurrency> Costs { get; set; } = new List<AzureCostByCurrency>();
+    }
+
+    public class IdleLicenceSpendCategory
+    {
+        [JsonProperty("category")]
+        public string Category { get; set; }
+
+        [JsonProperty("seats")]
+        public int Seats { get; set; }
+
+        [JsonProperty("costs")]
+        public List<AzureCostByCurrency> Costs { get; set; } = new List<AzureCostByCurrency>();
     }
 }
