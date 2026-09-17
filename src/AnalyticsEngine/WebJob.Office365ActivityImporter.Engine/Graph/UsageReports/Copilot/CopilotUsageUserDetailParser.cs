@@ -23,6 +23,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         public int? PromptsChatWork { get; set; }
         public int? PromptsChatWeb { get; set; }
         public int? ActiveUsageDays { get; set; }
+        public string ReportVersion { get; set; }
 
         public DateTime? ChatLastActivityDate { get; set; }
         public DateTime? TeamsLastActivityDate { get; set; }
@@ -136,7 +137,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         private static readonly string[] PromptsAllAppsProperties = { "promptsSubmitted", "promptsSubmittedForAllApps", "totalPromptsSubmitted" };
         private static readonly string[] PromptsChatWorkProperties = { "promptsSubmittedForCopilotChatWork", "copilotChatWorkPromptsSubmitted" };
         private static readonly string[] PromptsChatWebProperties = { "promptsSubmittedForCopilotChatWeb", "copilotChatWebPromptsSubmitted" };
-        private static readonly string[] ActiveUsageDaysProperties = { "activeUsageDays", "activeUsageDaysForAllApps" };
+        private static readonly string[] ActiveUsageDaysProperties = { "activeUsageDays", "activeUsageDaysForAllApps", "activeDays" };
 
         /// <summary>True when any row in the response carried report-version 2 data.</summary>
         public static bool HasVersion2Data(IEnumerable<CopilotUsageUserDetailRow> rows)

@@ -30,6 +30,11 @@ function yesNo(value: boolean | null): string {
   return value ? 'Yes' : 'No';
 }
 
+function formatUtc(value: string | null): string {
+  if (!value) return '—';
+  return new Date(value).toLocaleString(undefined, { timeZone: 'UTC', timeZoneName: 'short' });
+}
+
 export default function UserProfileCard({ profile }: { profile: UserProfile }) {
   const styles = useStyles();
   const rows: Array<[string, string]> = [
@@ -46,7 +51,7 @@ export default function UserProfileCard({ profile }: { profile: UserProfile }) {
     ['State / province', profile.stateOrProvince || '—'],
     ['Postal code', profile.postalCode || '—'],
     ['Manager', profile.managerUserPrincipalName || '—'],
-    ['Last updated', profile.lastUpdated ? new Date(profile.lastUpdated).toLocaleString() : '—'],
+    ['Last updated (UTC)', formatUtc(profile.lastUpdatedUtc ?? profile.lastUpdated)],
   ];
 
   return (
@@ -60,6 +65,9 @@ export default function UserProfileCard({ profile }: { profile: UserProfile }) {
           </Fragment>
         ))}
       </div>
+      <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+        Values written before this UTC contract may reflect the web-job host's old local time.
+      </Text>
       <div>
         <Text weight="semibold">Licenses ({profile.licenses.length})</Text>
         {profile.licenses.length > 0 ? (

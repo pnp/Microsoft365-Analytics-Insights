@@ -720,7 +720,7 @@ export default function AgentCostsPage() {
             </div>
             <TabList
               selectedValue={dimension}
-              onTabSelect={((_, d) => setDimension(d.value as CreditDimension)) as SelectTabEventHandler}
+              onTabSelect={((_: unknown, d: { value: unknown }) => setDimension(d.value as CreditDimension)) as SelectTabEventHandler}
             >
               {CREDIT_DIMENSIONS.map((d) => (
                 <Tab key={d.key} value={d.key}>

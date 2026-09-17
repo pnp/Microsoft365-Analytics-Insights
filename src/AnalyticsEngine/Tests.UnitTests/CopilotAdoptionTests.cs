@@ -263,6 +263,52 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void DualSourceComparison_IsExposedOnlyWhenBothSourcesCoverTheUser()
+        {
+            var both = UsageRow(interactions: 12, activeDays: 4, appsUsed: 2, lastUse: Now.AddDays(-1));
+            both.ReportPrompts = 18;
+            both.ReportActiveDays = 5;
+            both.ReportAppsUsed = 3;
+            both.ReportLastActivityUtc = Now.AddDays(-2);
+
+            var bothScored = CopilotAdoptionScoring.Score(both, WindowStart, Now, auditAvailable: true);
+
+            Assert.IsTrue(bothScored.SourceComparisonAvailable,
+                "A row covered by both the audit log and Microsoft's usage report must carry the side-by-side comparison.");
+            Assert.AreEqual(CopilotAdoptionScoring.SignalSourceAudit, bothScored.SignalSource,
+                "The comparison must not change the scoring source: audit still wins when it has signal.");
+            Assert.AreEqual(12, bothScored.AuditInteractions);
+            Assert.AreEqual(4, bothScored.AuditActiveDays);
+            Assert.AreEqual(2, bothScored.AuditAppsUsed);
+            Assert.AreEqual(18, bothScored.ReportPrompts);
+            Assert.AreEqual(5, bothScored.ReportActiveDays);
+
+            var reportOnly = UsageRow(interactions: 0, activeDays: 0, appsUsed: 0, lastUse: null);
+            reportOnly.ReportPrompts = 18;
+            reportOnly.ReportActiveDays = 5;
+            var reportScored = CopilotAdoptionScoring.Score(reportOnly, WindowStart, Now, auditAvailable: true);
+
+            Assert.IsTrue(reportScored.SourceComparisonAvailable,
+                "A report fallback row is exactly where the audit zero and Microsoft activity must be reconciled.");
+            Assert.AreEqual(0, reportScored.AuditInteractions);
+            Assert.AreEqual(0, reportScored.AuditActiveDays);
+
+            var auditOnly = UsageRow(interactions: 12, activeDays: 4, appsUsed: 2, lastUse: Now.AddDays(-1));
+            var auditScored = CopilotAdoptionScoring.Score(auditOnly, WindowStart, Now, auditAvailable: true);
+
+            Assert.IsFalse(auditScored.SourceComparisonAvailable,
+                "An audit-only row has no Microsoft report figure to reconcile.");
+
+            var reportZeroStillCovers = UsageRow(interactions: 12, activeDays: 4, appsUsed: 2, lastUse: Now.AddDays(-1));
+            reportZeroStillCovers.ReportPrompts = 0;
+            reportZeroStillCovers.ReportActiveDays = 0;
+            var zeroReportScored = CopilotAdoptionScoring.Score(reportZeroStillCovers, WindowStart, Now, auditAvailable: true);
+
+            Assert.IsTrue(zeroReportScored.SourceComparisonAvailable,
+                "A Microsoft report row with zero activity is still a source figure to compare against audit activity.");
+        }
+
+        [TestMethod]
         public void SqlScoreExpression_CollapsesUnavailableSourcesToZero()
         {
             // When a data source is unavailable its CTE and join are omitted from the query, so the
@@ -1154,6 +1200,127 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void WeeklyTrend_FiltersOutTheCurrentPartialWeek()
+        {
+            var now = new DateTime(2026, 9, 16, 12, 0, 0, DateTimeKind.Utc);
+            var currentMonday = CopilotAdoptionService.MondayOf(now.Date);
+            var firstMonday = currentMonday.AddDays(-14);
+
+            var weeks = CopilotAdoptionService.CompletedWeekSpine(firstMonday, currentMonday);
+
+            CollectionAssert.AreEqual(
+                new[] { firstMonday, firstMonday.AddDays(7) },
+                weeks,
+                "A mid-week report must plot only completed weeks; the Monday that began the current week is partial.");
+
+            var sql = CopilotAdoptionSql.WeeklyAdoptionTrendSql(new[] { 1 }, new int[0]);
+            StringAssert.Contains(sql, "c.time_stamp < @trendTo",
+                "The query must not fetch the partial current week and rely on the renderer to hide it.");
+        }
+
+        [TestMethod]
+        public void WeeklyTrendCoverage_UsesAuditGeneralEvidenceRatherThanCopilotRows()
+        {
+            var sql = CopilotAdoptionSql.WeeklyCopilotAuditCoverageSql;
+
+            StringAssert.Contains(sql, "dbo.event_meta_general",
+                "Coverage comes from the Audit.General feed, not from Copilot activity rows.");
+            StringAssert.Contains(sql, "ae.time_stamp < @trendTo");
+            StringAssert.Contains(sql, "CROSS APPLY",
+                "Coverage must be driven from the small week spine, not from a full-window row aggregate.");
+            StringAssert.Contains(sql, "TOP (1)",
+                "Each weekly seek should stop as soon as coverage is proven.");
+            Assert.IsFalse(sql.Contains("GROUP BY"),
+                "Grouping every matching audit row is unbounded over the largest fact table.");
+            Assert.IsFalse(sql.Contains("dbo.copilot_chats"),
+                "Using copilot_chats for coverage would make a genuine zero indistinguishable from an import gap.");
+        }
+
+        [TestMethod]
+        public void WeeklyTrend_ClipsLeadingWeeksBeforeAuditEvidence()
+        {
+            var firstWeek = new DateTime(2026, 8, 3, 0, 0, 0, DateTimeKind.Utc);
+            var weekSpine = CopilotAdoptionService.WeekSpine(firstWeek, firstWeek.AddDays(28));
+
+            var clipped = CopilotAdoptionService.ClipLeadingUnverifiedWeeks(
+                weekSpine,
+                new[] { firstWeek.AddDays(14) },
+                new List<CopilotAdoptionService.NamedWeekRow>());
+
+            CollectionAssert.AreEqual(
+                new[] { firstWeek.AddDays(14), firstWeek.AddDays(21), firstWeek.AddDays(28) },
+                clipped,
+                "Weeks before the tenant's first audit evidence should not create permanent trend gaps.");
+        }
+
+        [TestMethod]
+        public void WeeklyTrend_KeepsInteriorUnverifiedWeeksAfterAuditEvidence()
+        {
+            var firstWeek = new DateTime(2026, 8, 3, 0, 0, 0, DateTimeKind.Utc);
+            var weekSpine = CopilotAdoptionService.WeekSpine(firstWeek, firstWeek.AddDays(28));
+
+            var clipped = CopilotAdoptionService.ClipLeadingUnverifiedWeeks(
+                weekSpine,
+                new[] { firstWeek.AddDays(7), firstWeek.AddDays(28) },
+                new List<CopilotAdoptionService.NamedWeekRow>());
+
+            CollectionAssert.AreEqual(
+                new[] { firstWeek.AddDays(7), firstWeek.AddDays(14), firstWeek.AddDays(21), firstWeek.AddDays(28) },
+                clipped,
+                "Interior unverifiable weeks after audit evidence begins must remain in the spine so charts show a gap.");
+        }
+
+        [TestMethod]
+        public void FillWeeks_UsesNullForUnverifiableCoverage()
+        {
+            var week = new DateTime(2026, 9, 7, 0, 0, 0, DateTimeKind.Utc);
+
+            var points = CopilotAdoptionService.FillWeeks(
+                new List<DateTime> { week },
+                new List<CopilotAdoptionService.NamedWeekRow>(),
+                new DateTime[0]);
+
+            Assert.IsNull(points.Single().Value,
+                "No trend row and no Audit.General coverage evidence is an unknown import window, not zero adoption.");
+        }
+
+        [TestMethod]
+        public void FillWeeks_KeepsZeroForVerifiedNoActivityWeeks()
+        {
+            var week = new DateTime(2026, 9, 7, 0, 0, 0, DateTimeKind.Utc);
+
+            var points = CopilotAdoptionService.FillWeeks(
+                new List<DateTime> { week },
+                new List<CopilotAdoptionService.NamedWeekRow>(),
+                new[] { week });
+
+            Assert.AreEqual(0, points.Single().Value,
+                "A covered Audit.General week with no Copilot trend row is a genuine zero.");
+        }
+
+        [TestMethod]
+        public void FillWeeks_KeepsExplicitZeroRowsEvenWhenCoverageIsNotVerifiedSeparately()
+        {
+            var week = new DateTime(2026, 9, 7, 0, 0, 0, DateTimeKind.Utc);
+
+            var points = CopilotAdoptionService.FillWeeks(
+                new List<DateTime> { week },
+                new List<CopilotAdoptionService.NamedWeekRow>
+                {
+                    new CopilotAdoptionService.NamedWeekRow
+                    {
+                        SeriesName = "Cowork users",
+                        WeekStart = week,
+                        Value = 0,
+                    },
+                },
+                new DateTime[0]);
+
+            Assert.AreEqual(0, points.Single().Value,
+                "If SQL emitted an explicit zero, keep it; null is only for gaps whose coverage cannot be verified.");
+        }
+
+        [TestMethod]
         public void AgentEstate_DoesNotExcludeGuests()
         {
             // The agent inventory is deliberately tenant-wide - an agent's value does not depend on the
@@ -1717,6 +1884,121 @@ namespace Tests.UnitTests
 
             Assert.AreEqual("Operations", analysis.Summary.AdoptionByDepartment.First().Segment,
                 "The department needing the most help must be first - it is the running order for an enablement plan.");
+        }
+
+        [TestMethod]
+        public void AccountabilityRollup_DefaultsToDirectManager()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 5)
+                .Select(i => Managed(ScoredUser($"report{i}@contoso.com", 0, AdoptionBand.NeverUsed), "leader@contoso.com")));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(CopilotAdoptionAccountabilityDimensions.DirectManager, analysis.Summary.AccountabilityDimension);
+            Assert.AreEqual("Direct manager", analysis.Summary.AccountabilityDimensionLabel);
+            Assert.AreEqual("leader@contoso.com", analysis.Summary.AccountabilityRollup.Single().Segment);
+        }
+
+        [TestMethod]
+        public void AccountabilityRollup_SuppressesSmallLeaderGroupsLikeSegments()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 5)
+                .Select(i => Managed(ScoredUser($"large{i}@contoso.com", 0, AdoptionBand.NeverUsed), "large.manager@contoso.com")));
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 2)
+                .Select(i => Managed(ScoredUser($"small{i}@contoso.com", 0, AdoptionBand.NeverUsed), "small.manager@contoso.com")));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            var groups = analysis.Summary.AccountabilityRollup.Select(r => r.Segment).ToList();
+            CollectionAssert.Contains(groups, "large.manager@contoso.com");
+            CollectionAssert.DoesNotContain(groups, "small.manager@contoso.com");
+        }
+
+        [TestMethod]
+        public void AccountabilityRollup_ReportsUsersWithNoManagerAsAnExplicitGroup()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 5)
+                .Select(i => ScoredUser($"orphan{i}@contoso.com", 0, AdoptionBand.NeverUsed)));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual("(no manager)", analysis.Summary.AccountabilityRollup.Single().Segment,
+                "Users with no manager must be visible as their own accountability group, not silently dropped.");
+        }
+
+        [TestMethod]
+        public void AccountabilityRollup_IsSortedByLargestAbsoluteOpportunity()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 10)
+                .Select(i => Managed(ScoredUser($"large-idle{i}@contoso.com", 0, AdoptionBand.NeverUsed), "large.manager@contoso.com")));
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 10)
+                .Select(i => Managed(ScoredUser($"large-ok{i}@contoso.com", 90, AdoptionBand.Champion), "large.manager@contoso.com")));
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 5)
+                .Select(i => Managed(ScoredUser($"small-idle{i}@contoso.com", 0, AdoptionBand.NeverUsed), "small.manager@contoso.com")));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual("large.manager@contoso.com", analysis.Summary.AccountabilityRollup.First().Segment,
+                "A larger team with more people needing action must outrank a smaller team with a worse percentage.");
+            Assert.AreEqual(10, analysis.Summary.AccountabilityRollup.First().OpportunityUsers);
+        }
+
+        [TestMethod]
+        public void AccountabilityRollup_CanUseAConfiguredDimension()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 5)
+                .Select(i => Departmentalise(
+                    Managed(ScoredUser($"finance{i}@contoso.com", 0, AdoptionBand.NeverUsed), "leader@contoso.com"),
+                    "Finance")));
+
+            new CopilotAdoptionService(new CopilotAdoptionOptions
+            {
+                AccountabilityDimension = CopilotAdoptionAccountabilityDimensions.Department
+            }).FinaliseSummary(analysis);
+
+            Assert.AreEqual(CopilotAdoptionAccountabilityDimensions.Department, analysis.Summary.AccountabilityDimension);
+            Assert.AreEqual("Department", analysis.Summary.AccountabilityDimensionLabel);
+            Assert.AreEqual("Finance", analysis.Summary.AccountabilityRollup.Single().Segment);
+        }
+
+        [TestMethod]
+        public void DepartmentHabitBreakdown_IsRankedByHabitNotAdoption()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(
+                Enumerable.Range(0, 5).Select(i => Departmental($"ops{i}@contoso.com", "Operations", i == 0 ? 80 : 0)));
+            analysis.LicensedUsers.AddRange(
+                Enumerable.Range(0, 5).Select(i => Departmental($"support{i}@contoso.com", "Support", 10)));
+
+            var options = new CopilotAdoptionOptions { TopSegments = 1 };
+
+            new CopilotAdoptionService(options).FinaliseSummary(analysis);
+
+            Assert.AreEqual("Operations", analysis.Summary.AdoptionByDepartment.Single().Segment,
+                "The analyst adoption breakdown remains ordered by adoption rate.");
+            Assert.AreEqual("Support", analysis.Summary.HabitByDepartment.Single().Segment,
+                "The executive league table must still surface departments where everyone tried Copilot but no habit formed.");
+        }
+
+        [TestMethod]
+        public void OpportunityByDepartment_TrimsDepartmentNamesToMatchSegmentKeys()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Opportunities.Add(new LicenceOpportunityRow
+            {
+                Department = "Finance ",
+                Recommended = true,
+            });
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual("Finance", analysis.Summary.OpportunityByDepartment.Single().Label,
+                "Candidate counts must use the same trimmed department key as the adoption segments.");
         }
 
         [TestMethod]
@@ -2343,6 +2625,98 @@ namespace Tests.UnitTests
             Assert.AreEqual(50, (double)json["opportunityRecommendScore"]);
             Assert.AreEqual(35, (double)json["opportunityUnlicensedCopilotWeight"]);
             Assert.AreEqual(28, (int)json["habitBucketNormalisationDays"]);
+            Assert.AreEqual(CopilotAdoptionAccountabilityDimensions.DirectManager, (string)json["accountabilityDimension"]);
+            Assert.AreEqual(CopilotAdoptionGuidanceCatalogue.Version, (string)json["guidanceCatalogueVersion"]);
+        }
+
+        [TestMethod]
+        public void GuidanceCatalogue_AttributesMicrosoftLinksToEveryActionExceptSustain()
+        {
+            var deadUrls = new[]
+            {
+                "https://adoption.microsoft.com/en-us/" + "scenarios/",
+                "https://adoption.microsoft.com/en-us/copilot/" + "plan/",
+                "https://adoption.microsoft.com/en-us/copilot/" + "adopt/",
+                "https://aka.ms/" + "CopilotAdoptionPlaybook",
+            };
+
+            Assert.AreEqual(CopilotAdoptionGuidanceCatalogue.ExpectedLinkCount, CopilotAdoptionGuidanceCatalogue.All.Count,
+                "The scheduled link checker relies on this count so a parser miss fails loudly instead of skipping a link.");
+
+            foreach (var code in CopilotAdoptionScoring.AllActionCodes
+                .Where(c => c != CopilotAdoptionScoring.AdoptionActionCodes.Sustain))
+            {
+                var links = CopilotAdoptionGuidanceCatalogue.ForAction(code);
+                Assert.IsTrue(links.Count > 0, $"{code} has no Microsoft guidance link.");
+                Assert.IsTrue(links.All(l => l.Publisher == "Microsoft"), $"{code} has an unattributed link.");
+                Assert.IsTrue(links.All(l => l.CatalogueVersion == CopilotAdoptionGuidanceCatalogue.Version),
+                    $"{code} has a link from the wrong catalogue version.");
+                Assert.IsTrue(links.All(l => !string.IsNullOrWhiteSpace(l.ExpectedTitle)),
+                    $"{code} has a link without a content-check title.");
+            }
+
+            var unlicensedLinks = CopilotAdoptionGuidanceCatalogue.ForAction(CopilotAdoptionGuidanceCatalogue.UnlicensedActionCode);
+            Assert.IsTrue(unlicensedLinks.Count > 0, "Unlicensed licence-opportunity guidance is missing.");
+            Assert.IsTrue(unlicensedLinks.All(l => l.Publisher == "Microsoft"));
+            Assert.AreEqual(0, CopilotAdoptionGuidanceCatalogue.ForAction(CopilotAdoptionScoring.AdoptionActionCodes.Sustain).Count,
+                "Sustain is deliberately not linked: no action is needed.");
+
+            var allUrls = CopilotAdoptionGuidanceCatalogue.All.Select(l => l.Url).ToList();
+            foreach (var deadUrl in deadUrls)
+            {
+                CollectionAssert.DoesNotContain(allUrls, deadUrl);
+            }
+        }
+
+        [TestMethod]
+        public void ActionPlan_AttachesGuidanceToActionNotEveryRow()
+        {
+            var analysis = new CopilotAdoptionAnalysis
+            {
+                LicensedUsers =
+                {
+                    new LicensedUserAdoptionRow { RecommendedActionCode = CopilotAdoptionScoring.AdoptionActionCodes.Coach },
+                    new LicensedUserAdoptionRow { RecommendedActionCode = CopilotAdoptionScoring.AdoptionActionCodes.Coach },
+                },
+            };
+
+            new CopilotAdoptionService(new CopilotAdoptionOptions { WindowDays = 28 }).FinaliseSummary(analysis);
+
+            var coach = analysis.Summary.ActionPlan.Single(a => a.Code == CopilotAdoptionScoring.AdoptionActionCodes.Coach);
+            Assert.AreEqual(2, coach.Users);
+            Assert.IsTrue(coach.GuidanceLinks.Count > 0);
+            Assert.AreEqual(
+                coach.GuidanceLinks.Select(l => l.Url).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                coach.GuidanceLinks.Count,
+                "The same guidance URL should appear once on the action card, not once per row.");
+        }
+
+        [TestMethod]
+        public void CsvExports_CarryGuidanceOnEveryRelevantRow()
+        {
+            var licensedCsv = CsvSerialiser.ToCsv(
+                new[]
+                {
+                    new LicensedUserAdoptionRow
+                    {
+                        UserPrincipalName = "adele@contoso.com",
+                        RecommendedActionCode = CopilotAdoptionScoring.AdoptionActionCodes.Coach,
+                        RecommendedActionLabel = CopilotAdoptionScoring.ActionLabel(CopilotAdoptionScoring.AdoptionActionCodes.Coach),
+                        RecommendedAction = "Build a first habit.",
+                    },
+                },
+                CopilotAdoptionExports.LicensedUserColumns());
+
+            StringAssert.Contains(licensedCsv, "Microsoft guidance resources");
+            StringAssert.Contains(licensedCsv, "Copilot Academy");
+            StringAssert.Contains(licensedCsv, "https://aka.ms/copilot-academy");
+
+            var opportunitiesCsv = CsvSerialiser.ToCsv(
+                new[] { new LicenceOpportunityRow { UserPrincipalName = "alex@contoso.com", Rationale = "Proven demand." } },
+                CopilotAdoptionExports.LicenceOpportunityColumns());
+
+            StringAssert.Contains(opportunitiesCsv, "Microsoft Copilot Readiness Report");
+            StringAssert.Contains(opportunitiesCsv, "https://aka.ms/Copilot/ImplementationSummaryGuide");
         }
 
         #endregion
@@ -3128,6 +3502,12 @@ namespace Tests.UnitTests
         private static LicensedUserAdoptionRow Departmentalise(LicensedUserAdoptionRow row, string department)
         {
             row.Department = department;
+            return row;
+        }
+
+        private static LicensedUserAdoptionRow Managed(LicensedUserAdoptionRow row, string manager)
+        {
+            row.ManagerUserPrincipalName = manager;
             return row;
         }
 

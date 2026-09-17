@@ -185,7 +185,7 @@ export default function LicenceActivityPage() {
   // Which top-level tab is showing. Kept out of the overview scope key so it survives a date/filter
   // change - an admin reading the People tab stays on it when they widen the window.
   const [tab, setTab] = useState<LaTab>('overview');
-  const onTabSelect: SelectTabEventHandler = (_e, data) => setTab(data.value as LaTab);
+  const onTabSelect: SelectTabEventHandler = (_e: unknown, data: { value: unknown }) => setTab(data.value as LaTab);
 
   const overviewSeqRef = useRef(0);
 

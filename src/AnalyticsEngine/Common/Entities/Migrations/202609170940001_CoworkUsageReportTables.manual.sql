@@ -38,13 +38,13 @@ IF OBJECT_ID(N'dbo.cowork_usage_user_activity_log', N'U') IS NULL
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.cowork_usage_user_activity_log', N'U') AND name = N'IX_cowork_usage_user_activity_log_date_user_period')
     RAISERROR(N'202609170940001_CoworkUsageReportTables NOT stamped - IX_cowork_usage_user_activity_log_date_user_period is missing.', 16, 1);
 
-IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609151440027_CopilotPromptSafetyFields')
-    RAISERROR(N'202609170940001_CoworkUsageReportTables NOT stamped - predecessor migration 202609151440027_CopilotPromptSafetyFields is missing.', 16, 1);
+IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609170920001_CopilotSubscribedSkuCapacity')
+    RAISERROR(N'202609170940001_CoworkUsageReportTables NOT stamped - predecessor migration 202609170920001_CopilotSubscribedSkuCapacity is missing.', 16, 1);
 
 IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609170940001_CoworkUsageReportTables')
 BEGIN
     INSERT dbo.__MigrationHistory (MigrationId, ContextKey, Model, ProductVersion)
     SELECT N'202609170940001_CoworkUsageReportTables', ContextKey, Model, ProductVersion
     FROM dbo.__MigrationHistory
-    WHERE MigrationId = N'202609151440027_CopilotPromptSafetyFields';
+    WHERE MigrationId = N'202609170920001_CopilotSubscribedSkuCapacity';
 END;

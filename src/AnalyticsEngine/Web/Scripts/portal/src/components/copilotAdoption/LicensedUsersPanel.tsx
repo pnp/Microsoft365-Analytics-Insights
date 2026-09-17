@@ -22,7 +22,9 @@ import { AdoptionBand } from '../../types/copilotAdoption';
 import type {
   AdoptionActionSummary,
   AdoptionFilterOptions,
+  AdoptionDataSources,
   CopilotAdoptionOptions,
+  LicensedUserAdoptionRow,
   LicensedUserFilters,
   LicensedUserPage,
 } from '../../types/copilotAdoption';
@@ -112,6 +114,7 @@ export default function LicensedUsersPanel({
   filterOptions,
   actionPlan,
   options,
+  dataSources,
   seatLicenceTypeIds,
   initialBands,
   initialAction,
@@ -122,6 +125,8 @@ export default function LicensedUsersPanel({
   actionPlan: AdoptionActionSummary[];
   /** The thresholds actually used, so the column explanations quote real numbers rather than prose. */
   options: CopilotAdoptionOptions;
+  /** Source dates and periods used to label dual-source comparisons. */
+  dataSources?: AdoptionDataSources;
   seatLicenceTypeIds?: number[];
   initialBands?: AdoptionBand[];
   /**
@@ -401,7 +406,17 @@ export default function LicensedUsersPanel({
                   </span>
                 </SortableTh>
                 <SortableTh label="signal source" sortKey="signalSource" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
-                  Signal source
+                  <span className={styles.thWithInfo}>
+                    Signal source
+                    <InfoTip
+                      title="Signal source and reconciliation"
+                      content={{
+                        what: "Which source produced this row's engagement score, and whether both source figures are available for comparison.",
+                        how: `Audit rows use this product's Copilot audit-log import over the selected D${windowDays} window. usageReport rows use Microsoft's per-user Copilot usage report when the audit import has no signal for that user. Where both sources have signal, the cell shows both figures side by side instead of pretending one corrects the other.`,
+                        source: "Microsoft's report uses Microsoft's settled report period and covers licensed users only; the audit log covers the selected period and includes unlicensed Copilot Chat.",
+                      }}
+                    />
+                  </span>
                 </SortableTh>
                 <SortableTh
                   label="interactions"
@@ -517,7 +532,14 @@ export default function LicensedUsersPanel({
                   <td className={table.td}>
                     <BandBadge band={row.band} name={row.bandName} />
                   </td>
-                  <td className={table.td}>{row.signalSource}</td>
+                  <td className={table.td}>
+                    <Text size={200}>{sourceLabel(row.signalSource)}</Text>
+                    {row.sourceComparisonAvailable && (
+                      <Text size={100} block className={table.tdSub}>
+                        {sourceComparisonText(row, windowDays, dataSources)}
+                      </Text>
+                    )}
+                  </td>
                   <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.interactions)}</td>
                   <td className={`${table.td} ${table.tdNumeric}`}>
                     {row.activeDays} <span className={styles.muted}>/ {Math.round(row.expectedActiveDays)}</span>
@@ -584,4 +606,22 @@ export default function LicensedUsersPanel({
       )}
     </Card>
   );
+}
+
+
+function sourceLabel(source: string): string {
+  return source === 'usageReport' ? 'Microsoft usage report' : source === 'audit' ? 'Audit log' : source;
+}
+
+function sourceComparisonText(row: LicensedUserAdoptionRow, windowDays: number, dataSources?: AdoptionDataSources): string {
+  const reportPeriod = dataSources?.copilotUsageReportPeriodDays
+    ? `D${dataSources.copilotUsageReportPeriodDays}`
+    : 'Microsoft window';
+  const snapshot = dataSources?.copilotUsageReportDate ? `, ${formatDate(dataSources.copilotUsageReportDate)}` : '';
+
+  return `Audit D${windowDays}: ${formatCount(row.auditInteractions)} interactions, ${formatCount(
+    row.auditActiveDays,
+  )} days. Microsoft report ${reportPeriod}${snapshot}: ${
+    row.reportPrompts === null ? '—' : formatCount(row.reportPrompts)
+  } prompts, ${row.reportActiveDays === null ? '—' : formatCount(row.reportActiveDays)} days.`;
 }

@@ -165,6 +165,21 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public void Workbook_UsesLineChartForVolumeTrendWhenCoverageHasGaps()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.WeeklyVolumeTrend.Single().Points[3].Value = null;
+
+            var volumeChart = ChartXmls(CopilotAdoptionWorkbook.Build(analysis))
+                .Single(xml => xml.Contains("Weekly Copilot volume"));
+
+            StringAssert.Contains(volumeChart, "<c:lineChart>",
+                "A stacked area collapses blank cells to the baseline; the workbook must use a line chart when gaps exist.");
+            Assert.IsFalse(volumeChart.Contains("<c:areaChart>"),
+                "The gapped volume trend must not be emitted as any area chart.");
+        }
+
         #endregion
 
         #region Content
@@ -182,6 +197,10 @@ namespace Tests.UnitTests
             StringAssert.Contains(text, "Generated");
             StringAssert.Contains(text, "Licence recommendation at");
             StringAssert.Contains(text, "Agent retire after");
+            StringAssert.Contains(text, "Microsoft guidance catalogue");
+            StringAssert.Contains(text, CopilotAdoptionGuidanceCatalogue.Version);
+            StringAssert.Contains(text, "https://aka.ms/ScenarioLibrary");
+            StringAssert.Contains(text, "https://aka.ms/Copilot/ImplementationSummaryGuide");
         }
 
         [TestMethod]
@@ -214,6 +233,16 @@ namespace Tests.UnitTests
                 "Non-Latin department names must survive the export verbatim.");
             StringAssert.Contains(text, AmpersandDepartment,
                 "An ampersand and angle brackets must be escaped on write and decode back to the original.");
+        }
+
+        [TestMethod]
+        public void Workbook_IncludesTheAccountabilityRollup()
+        {
+            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
+
+            StringAssert.Contains(text, "Accountability roll-up");
+            StringAssert.Contains(text, "Action opportunity");
+            StringAssert.Contains(text, "manager@contoso.com");
         }
 
         [TestMethod]
@@ -257,6 +286,20 @@ namespace Tests.UnitTests
             Assert.IsTrue(index + 1 < cells.Count, $"'{value}' is the last cell in the workbook.");
             Assert.AreEqual(expectedNext, cells[index + 1],
                 $"'{value}' should be followed by '{expectedNext}', not '{cells[index + 1]}'.");
+        }
+
+        [TestMethod]
+        public void Workbook_CarriesMethodologyPositionAndDualSourceComparison()
+        {
+            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
+
+            StringAssert.Contains(text, "Why our figures differ from Microsoft's");
+            StringAssert.Contains(text, "unlicensed Copilot Chat usage is not available through Microsoft Graph reports APIs");
+            StringAssert.Contains(text, "https://learn.microsoft.com/en-us/microsoft-365/admin/activity-reports/microsoft-365-copilot-usage");
+            StringAssert.Contains(text, "https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/api/admin-settings/reports/copilotreportroot-getmicrosoft365copilotusageuserdetail");
+            StringAssert.Contains(text, "Do not average or silently reconcile them into one number");
+            StringAssert.Contains(text, "Audit log (selected D28): 12 interactions, 4 active days, 2 apps");
+            StringAssert.Contains(text, "Microsoft Copilot usage report (D28, snapshot 2026-08-20): 18 prompts, 5 active days");
         }
 
         [TestMethod]
@@ -457,6 +500,25 @@ namespace Tests.UnitTests
             }
         }
 
+        private static List<string> ChartXmls(byte[] bytes)
+        {
+            using (var stream = new MemoryStream(bytes))
+            using (var zip = new ZipArchive(stream, ZipArchiveMode.Read))
+            {
+                return zip.Entries
+                    .Where(e => e.FullName.StartsWith("xl/charts/chart", StringComparison.Ordinal)
+                             && e.FullName.EndsWith(".xml", StringComparison.Ordinal))
+                    .Select(e =>
+                    {
+                        using (var reader = new StreamReader(e.Open(), Encoding.UTF8))
+                        {
+                            return reader.ReadToEnd();
+                        }
+                    })
+                    .ToList();
+            }
+        }
+
         /// <summary>All worksheet XML concatenated and XML-decoded, for asserting on visible content.</summary>
         private static string SheetText(byte[] bytes)
         {
@@ -499,6 +561,9 @@ namespace Tests.UnitTests
             summary.ToUtc = Now;
             summary.Options = options;
             summary.DataSources.AuditAvailable = true;
+            summary.DataSources.CopilotUsageReportAvailable = true;
+            summary.DataSources.CopilotUsageReportDate = new DateTime(2026, 8, 20, 0, 0, 0, DateTimeKind.Utc);
+            summary.DataSources.CopilotUsageReportPeriodDays = 28;
             summary.DataSources.UserMetadataAvailable = true;
             summary.Warnings.Add("Synthetic warning containing an ampersand & an <element>.");
 
@@ -537,6 +602,17 @@ namespace Tests.UnitTests
                     Now,
                     true,
                     options);
+
+                if (i == 1)
+                {
+                    row.ReportPrompts = 18;
+                    row.ReportActiveDays = 5;
+                    row.ReportLastActivityUtc = Now.AddDays(-3);
+                    row.AuditInteractions = 12;
+                    row.AuditActiveDays = 4;
+                    row.AuditAppsUsed = 2;
+                    row.SourceComparisonAvailable = true;
+                }
 
                 analysis.LicensedUsers.Add(row);
             }

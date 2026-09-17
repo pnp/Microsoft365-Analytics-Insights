@@ -164,6 +164,7 @@ namespace Common.Entities.CopilotAdoption
             "SELECT CASE WHEN EXISTS (\r\n" +
             "    SELECT 1 FROM dbo.copilot_chats AS c\r\n" +
             "    WHERE c.time_stamp >= @from\r\n" +
+            "      AND c.time_stamp < @toExclusive\r\n" +
             ") THEN 1 ELSE 0 END AS Value;";
 
         /// <summary>
@@ -195,6 +196,38 @@ namespace Common.Entities.CopilotAdoption
             "    WHERE c.time_stamp IS NULL\r\n" +
             "      AND EXISTS (SELECT 1 FROM dbo.audit_events AS ae WHERE ae.id = c.event_id)\r\n" +
             ") THEN 1 ELSE 0 END AS Value;";
+
+        /// <summary>
+        /// Completed weeks where the Audit.General feed has any imported event, used to distinguish a
+        /// genuine zero-Copilot week from a week whose import coverage cannot be verified.
+        /// </summary>
+        /// <remarks>
+        /// This is intentionally a coverage probe, not an activity count. It reads the same Audit.General
+        /// source that supplies Copilot interactions, but does not require a Copilot row to exist: if the
+        /// feed produced some General workload event that week and the Copilot trend has no row, the safest
+        /// interim interpretation is a real zero. If the feed has no evidence at all, the chart leaves a
+        /// gap until persisted closed-period facts can use as-of seat state.
+        /// </remarks>
+        public static readonly string WeeklyCopilotAuditCoverageSql =
+            "WITH WeekSpine AS (\r\n" +
+            "    SELECT CAST(" + WeekBucket("CAST(@trendFrom AS date)") + " AS date) AS WeekStart\r\n" +
+            "    UNION ALL\r\n" +
+            "    SELECT CAST(DATEADD(DAY, 7, WeekStart) AS date)\r\n" +
+            "    FROM WeekSpine\r\n" +
+            "    WHERE WeekStart < DATEADD(DAY, -7, CAST(" + WeekBucket("CAST(@trendTo AS date)") + " AS date))\r\n" +
+            ")\r\n" +
+            "SELECT w.WeekStart\r\n" +
+            "FROM WeekSpine AS w\r\n" +
+            "CROSS APPLY (\r\n" +
+            "    SELECT TOP (1) 1 AS Covered\r\n" +
+            "    FROM dbo.audit_events AS ae\r\n" +
+            "    WHERE ae.time_stamp >= w.WeekStart\r\n" +
+            "      AND ae.time_stamp < DATEADD(DAY, 7, w.WeekStart)\r\n" +
+            "      AND ae.time_stamp < @trendTo\r\n" +
+            "      AND EXISTS (SELECT 1 FROM dbo.event_meta_general AS g WHERE g.event_id = ae.id)\r\n" +
+            ") AS c\r\n" +
+            "ORDER BY WeekStart\r\n" +
+            "OPTION (MAXRECURSION 100, RECOMPILE);";
 
         #region Copilot app host
 
@@ -601,7 +634,8 @@ namespace Common.Entities.CopilotAdoption
                 + "OR r.chat_work_last_activity_date >= @from "
                 + "OR r.chat_web_last_activity_date >= @from THEN 1 ELSE 0 END");
 
-            return "(" + string.Join("\r\n              + ", parts) + ")";
+            var derived = "(" + string.Join("\r\n              + ", parts) + ")";
+            return derived;
         }
 
         /// <summary>
@@ -1654,6 +1688,7 @@ namespace Common.Entities.CopilotAdoption
                 "           COUNT_BIG(*) AS Interactions\r\n" +
                 "    FROM dbo.copilot_chats AS c\r\n" +
                 "    WHERE c.time_stamp >= @trendFrom\r\n" +
+                "      AND c.time_stamp < @trendTo\r\n" +
                 "      AND c.user_id IS NOT NULL\r\n" +
                 $"    GROUP BY {week}, c.user_id\r\n" +
                 "),\r\n" +
@@ -1719,6 +1754,176 @@ namespace Common.Entities.CopilotAdoption
             "Licensed interactions",
             "Unlicensed interactions",
         };
+
+        #endregion
+
+        #region Persisted period facts
+
+        public const string PeriodCoverageComplete = "complete";
+        public const string PeriodCoverageUsageReportOnly = "usage-report-only";
+        public const string PeriodCoverageUnverifiable = "unverifiable";
+
+        public const string PublishedPeriodRunSql =
+            "SELECT TOP (1) period_end AS PeriodEnd,\r\n" +
+            "       period_days AS PeriodDays,\r\n" +
+            "       options_hash AS OptionsHash,\r\n" +
+            "       CAST(audit_available AS bit) AS AuditAvailable,\r\n" +
+            "       CAST(report_obfuscated AS bit) AS ReportObfuscated,\r\n" +
+            "       report_period_days AS ReportPeriodDays,\r\n" +
+            "       licensed_users AS LicensedUsers,\r\n" +
+            "       scored_users AS ScoredUsers,\r\n" +
+            "       published_utc AS PublishedUtc,\r\n" +
+            "       data_cutoff_utc AS DataCutoffUtc,\r\n" +
+            "       coverage_status AS CoverageStatus\r\n" +
+            "FROM dbo.copilot_adoption_period_run\r\n" +
+            "WHERE period_end = @periodEnd AND period_days = @periodDays\r\n" +
+            "ORDER BY published_utc DESC;";
+
+
+        public const string OverlappingPublishedPeriodSql =
+            "SELECT COUNT(*) AS Value\r\n" +
+            "FROM dbo.copilot_adoption_period_run AS r\r\n" +
+            "WHERE r.period_days = @periodDays\r\n" +
+            "  AND r.period_end <> @periodEnd\r\n" +
+            "  AND DATEADD(DAY, -r.period_days + 1, CAST(r.period_end AS datetime2)) <= @periodEnd\r\n" +
+            "  AND r.period_end >= @from;";
+
+        public const string PublishedPeriodFactsSql =
+            "SELECT f.period_end AS PeriodEnd,\r\n" +
+            "       f.period_days AS PeriodDays,\r\n" +
+            "       f.data_cutoff_utc AS DataCutoffUtc,\r\n" +
+            "       f.user_id AS UserId,\r\n" +
+            "       u.user_name AS UserPrincipalName,\r\n" +
+            "       u.mail AS Mail,\r\n" +
+            "       dept.name AS Department,\r\n" +
+            "       title.name AS JobTitle,\r\n" +
+            "       country.name AS Country,\r\n" +
+            "       office.name AS OfficeLocation,\r\n" +
+            "       company.name AS CompanyName,\r\n" +
+            "       manager.user_name AS ManagerUserPrincipalName,\r\n" +
+            "       f.account_enabled AS AccountEnabled,\r\n" +
+            "       f.account_created_utc AS AccountCreatedUtc,\r\n" +
+            "       f.seat_licence_type_ids AS SeatLicenceTypeIds,\r\n" +
+            "       licences.SeatLicences AS SeatLicences,\r\n" +
+            "       ISNULL(NULLIF(LTRIM(RTRIM(exclusion.reason)), N''), CASE WHEN exclusion.excluded_utc IS NULL THEN NULL ELSE N'(no reason recorded)' END) AS ReclaimExclusionReason,\r\n" +
+            "       exclusion.note AS ReclaimExclusionNote,\r\n" +
+            "       exclusion.excluded_by AS ReclaimExcludedBy,\r\n" +
+            "       exclusion.excluded_utc AS ReclaimExcludedUtc,\r\n" +
+            "       exclusion.review_after_utc AS ReclaimExclusionReviewAfterUtc,\r\n" +
+            "       CAST(CASE WHEN expired.user_id IS NOT NULL AND exclusion.excluded_utc IS NULL THEN 1 ELSE 0 END AS bit) AS ReclaimExclusionExpired,\r\n" +
+            "       f.active_days AS ActiveDays,\r\n" +
+            "       f.interactions AS Interactions,\r\n" +
+            "       f.apps_used AS AppsUsed,\r\n" +
+            "       f.agents_used AS AgentsUsed,\r\n" +
+            "       f.cowork_interactions AS CoworkInteractions,\r\n" +
+            "       f.active_weeks AS ActiveWeeks,\r\n" +
+            "       f.first_interaction_utc AS FirstInteractionUtc,\r\n" +
+            "       f.last_interaction_utc AS LastInteractionUtc,\r\n" +
+            "       f.prior_interactions AS PriorInteractions,\r\n" +
+            "       f.signal_source AS SignalSource,\r\n" +
+            "       f.report_prompts AS ReportPrompts,\r\n" +
+            "       f.report_active_days AS ReportActiveDays,\r\n" +
+            "       f.report_apps_used AS ReportAppsUsed,\r\n" +
+            "       f.report_last_activity_utc AS ReportLastActivityUtc,\r\n" +
+            "       f.report_agent_last_activity_utc AS ReportAgentLastActivityUtc,\r\n" +
+            "       f.seat_first_observed_utc AS SeatFirstObservedUtc,\r\n" +
+            "       f.coverage_status AS CoverageStatus\r\n" +
+            "FROM dbo.copilot_adoption_user_period AS f\r\n" +
+            "JOIN dbo.users AS u ON u.id = f.user_id\r\n" +
+            "LEFT JOIN dbo.user_departments AS dept ON dept.id = f.department_id\r\n" +
+            "LEFT JOIN dbo.user_job_titles AS title ON title.id = u.job_title_id\r\n" +
+            "LEFT JOIN dbo.user_country_or_region AS country ON country.id = f.country_id\r\n" +
+            "LEFT JOIN dbo.user_office_locations AS office ON office.id = u.office_location_id\r\n" +
+            "LEFT JOIN dbo.user_company_name AS company ON company.id = u.company_name_id\r\n" +
+            "LEFT JOIN dbo.users AS manager ON manager.id = f.manager_id\r\n" +
+            "OUTER APPLY (\r\n" +
+            "    SELECT STUFF((SELECT N', ' + lt.name\r\n" +
+            "                  FROM dbo.license_types AS lt\r\n" +
+            "                  WHERE CHARINDEX(N',' + CONVERT(nvarchar(20), lt.id) + N',', N',' + f.seat_licence_type_ids + N',') > 0\r\n" +
+            "                  ORDER BY lt.name FOR XML PATH(''), TYPE).value('.', 'nvarchar(max)'), 1, 2, N'') AS SeatLicences\r\n" +
+            ") AS licences\r\n" +
+            "OUTER APPLY (\r\n" +
+            "    SELECT TOP (1) e.reason, e.note, e.excluded_by, e.excluded_utc, e.review_after_utc\r\n" +
+            "    FROM dbo.copilot_adoption_reclaim_exclusions AS e\r\n" +
+            "    WHERE e.user_id = f.user_id\r\n" +
+            "      AND (e.review_after_utc IS NULL OR e.review_after_utc > SYSUTCDATETIME())\r\n" +
+            "    ORDER BY e.excluded_utc DESC, e.id DESC\r\n" +
+            ") AS exclusion\r\n" +
+            "OUTER APPLY (\r\n" +
+            "    SELECT TOP (1) e.user_id\r\n" +
+            "    FROM dbo.copilot_adoption_reclaim_exclusions AS e\r\n" +
+            "    WHERE e.user_id = f.user_id\r\n" +
+            "      AND e.review_after_utc <= SYSUTCDATETIME()\r\n" +
+            "    ORDER BY e.review_after_utc DESC, e.excluded_utc DESC, e.id DESC\r\n" +
+            ") AS expired\r\n" +
+            "WHERE f.period_end = @periodEnd AND f.period_days = @periodDays\r\n" +
+            "ORDER BY f.user_id;";
+
+        public static string PublishPeriodFactsSql(IEnumerable<int> seatLicenceTypeIds, IEnumerable<int> coworkAgentIds, bool includeCopilotReport)
+        {
+            var seats = IdList(seatLicenceTypeIds);
+            var cowork = CoworkPredicate(coworkAgentIds);
+            var reportCte = includeCopilotReport
+                ? ",\r\nReportSnapshot AS (\r\n" +
+                  "    SELECT r.user_id AS user_id, r.prompts_all_apps AS ReportPrompts, r.active_usage_days AS ReportActiveDays,\r\n" +
+                  "           " + ReportAppsUsedExpression() + " AS ReportAppsUsed, " + ReportLastActivityExpression() + " AS ReportLastActivityUtc,\r\n" +
+                  "           r.agent_last_activity_date AS ReportAgentLastActivityUtc\r\n" +
+                  "    FROM dbo.copilot_usage_user_activity_log AS r\r\n" +
+                  "    WHERE r.[date] = @copilotReportDate\r\n" +
+                  "      AND ((@copilotReportPeriodDays > 0 AND r.report_period_days = @copilotReportPeriodDays)\r\n" +
+                  "           OR (@copilotReportPeriodDays = 0 AND r.report_period_days IS NULL))\r\n" +
+                  ")"
+                : string.Empty;
+            var reportJoin = includeCopilotReport ? "LEFT JOIN ReportSnapshot AS report ON report.user_id = u.id\r\n" : string.Empty;
+            var reportSelect = includeCopilotReport
+                ? "       report.ReportPrompts, report.ReportActiveDays, report.ReportAppsUsed, report.ReportLastActivityUtc, report.ReportAgentLastActivityUtc,\r\n"
+                : "       CAST(NULL AS int), CAST(NULL AS int), CAST(NULL AS int), CAST(NULL AS datetime2), CAST(NULL AS datetime2),\r\n";
+
+            return
+                "SET XACT_ABORT ON;\r\nBEGIN TRANSACTION;\r\n" +
+                "DELETE FROM dbo.copilot_adoption_user_period WHERE period_end = @periodEnd AND period_days = @periodDays;\r\n" +
+                "DELETE FROM dbo.copilot_adoption_period_run WHERE period_end = @periodEnd AND period_days = @periodDays;\r\n" +
+                "WITH SeatUsers AS (\r\n" +
+                "    SELECT ul.user_id,\r\n" +
+                "           STUFF((SELECT N',' + CONVERT(nvarchar(20), ul2.license_type_id) FROM dbo.user_license_type_lookups AS ul2\r\n" +
+                "                  WHERE ul2.user_id = ul.user_id\r\n" +
+                $"                    AND ul2.license_type_id IN ({seats})\r\n" +
+                "                  ORDER BY ul2.license_type_id FOR XML PATH(''), TYPE).value('.', 'nvarchar(max)'), 1, 1, N'') AS seat_licence_type_ids\r\n" +
+                "    FROM dbo.user_license_type_lookups AS ul\r\n" +
+                $"    WHERE ul.license_type_id IN ({seats}) GROUP BY ul.user_id\r\n" +
+                "),\r\nCopilotWindow AS (\r\n" +
+                "    SELECT c.user_id, c.time_stamp, " + AppHostKey("c.app_host") + " AS app_host, c.agent_id FROM dbo.copilot_chats AS c\r\n" +
+                "    JOIN SeatUsers AS seats ON seats.user_id = c.user_id WHERE c.time_stamp >= @historyFrom AND c.time_stamp < @toExclusive\r\n" +
+                "),\r\nCopilotTotals AS (\r\n" +
+                "    SELECT c.user_id, SUM(CASE WHEN c.time_stamp >= @from THEN 1 ELSE 0 END) AS Interactions,\r\n" +
+                "           SUM(CASE WHEN c.time_stamp < @from THEN 1 ELSE 0 END) AS PriorInteractions,\r\n" +
+                $"           SUM(CASE WHEN c.time_stamp >= @from AND ({cowork}) THEN 1 ELSE 0 END) AS CoworkInteractions,\r\n" +
+                "           MIN(c.time_stamp) AS FirstInteractionUtc, MAX(c.time_stamp) AS LastInteractionUtc FROM CopilotWindow AS c GROUP BY c.user_id\r\n" +
+                "),\r\nCopilotActiveDays AS (SELECT user_id, COUNT(*) AS ActiveDays FROM (SELECT DISTINCT user_id, CAST(time_stamp AS date) AS active_date FROM CopilotWindow WHERE time_stamp >= @from) AS d GROUP BY user_id),\r\n" +
+                "CopilotActiveWeeks AS (SELECT user_id, COUNT(*) AS ActiveWeeks FROM (SELECT DISTINCT user_id, " + WeekBucket("time_stamp") + " AS active_week FROM CopilotWindow WHERE time_stamp >= @from) AS w GROUP BY user_id),\r\n" +
+                "CopilotApps AS (SELECT user_id, COUNT(*) AS AppsUsed FROM (SELECT DISTINCT user_id, app_host FROM CopilotWindow WHERE time_stamp >= @from AND app_host IS NOT NULL) AS a GROUP BY user_id),\r\n" +
+                "CopilotAgents AS (SELECT user_id, COUNT(*) AS AgentsUsed FROM (SELECT DISTINCT user_id, agent_id FROM CopilotWindow WHERE time_stamp >= @from AND agent_id IS NOT NULL) AS g GROUP BY user_id)" + reportCte + "\r\n" +
+                "INSERT INTO dbo.copilot_adoption_user_period\r\n" +
+                "    (period_end, period_days, data_cutoff_utc, user_id, seat_licence_type_ids, account_enabled, department_id, country_id, manager_id, seat_first_observed_utc, account_created_utc,\r\n" +
+                "     active_days, interactions, apps_used, agents_used, cowork_interactions, active_weeks, first_interaction_utc, last_interaction_utc, prior_interactions,\r\n" +
+                "     signal_source, report_prompts, report_active_days, report_apps_used, report_last_activity_utc, report_agent_last_activity_utc, coverage_status)\r\n" +
+                "SELECT @periodEnd, @periodDays, @toExclusive, u.id, seats.seat_licence_type_ids, u.account_enabled, u.department_id, u.country_or_region_id, u.manager_id, NULL, u.created_utc,\r\n" +
+                "       ISNULL(days.ActiveDays, 0), CAST(ISNULL(t.Interactions, 0) AS bigint), ISNULL(apps.AppsUsed, 0), ISNULL(agents.AgentsUsed, 0),\r\n" +
+                "       CAST(ISNULL(t.CoworkInteractions, 0) AS bigint), ISNULL(weeks.ActiveWeeks, 0), t.FirstInteractionUtc, t.LastInteractionUtc, CAST(ISNULL(t.PriorInteractions, 0) AS bigint),\r\n" +
+                "       CASE WHEN @auditAvailable = 1 THEN N'audit' WHEN @includeCopilotReport = 1 THEN N'usageReport' ELSE N'none' END,\r\n" +
+                reportSelect +
+                "       CASE WHEN @auditAvailable = 1 THEN N'complete' WHEN @includeCopilotReport = 1 THEN N'usage-report-only' ELSE N'unverifiable' END\r\n" +
+                "FROM SeatUsers AS seats JOIN dbo.users AS u ON u.id = seats.user_id\r\n" +
+                "LEFT JOIN CopilotTotals AS t ON t.user_id = u.id\r\n" +
+                "LEFT JOIN CopilotActiveDays AS days ON days.user_id = u.id\r\n" +
+                "LEFT JOIN CopilotActiveWeeks AS weeks ON weeks.user_id = u.id\r\n" +
+                "LEFT JOIN CopilotApps AS apps ON apps.user_id = u.id\r\n" +
+                "LEFT JOIN CopilotAgents AS agents ON agents.user_id = u.id\r\n" + reportJoin +
+                "ORDER BY u.id;\r\nDECLARE @scored int = @@ROWCOUNT;\r\n" +
+                "INSERT INTO dbo.copilot_adoption_period_run (period_end, period_days, options_hash, audit_available, report_obfuscated, report_period_days, licensed_users, scored_users, published_utc, data_cutoff_utc, coverage_status)\r\n" +
+                "VALUES (@periodEnd, @periodDays, @optionsHash, @auditAvailable, @reportObfuscated, @copilotReportPeriodDays, @licensedUsers, @scored, SYSUTCDATETIME(), @toExclusive,\r\n" +
+                "        CASE WHEN @auditAvailable = 1 THEN N'complete' WHEN @includeCopilotReport = 1 THEN N'usage-report-only' ELSE N'unverifiable' END);\r\nCOMMIT TRANSACTION;";
+        }
 
         #endregion
 

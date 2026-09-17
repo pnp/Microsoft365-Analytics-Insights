@@ -1,4 +1,5 @@
 using Common.Entities;
+using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -6,6 +7,8 @@ using System.Data;
 using System.Linq;
 using System.Text.RegularExpressions;
 using WebJob.Office365ActivityImporter.Engine.Graph;
+using Tests.UnitTests.FakeLoaderClasses;
+using UnitTests.FakeLoaderClasses;
 
 namespace Tests.UnitTests
 {
@@ -359,6 +362,102 @@ namespace Tests.UnitTests
             foreach (DataRow row in table.Rows)
             {
                 Assert.AreEqual(Stamp, row["last_updated"]);
+            }
+        }
+
+
+        [TestMethod]
+        public async System.Threading.Tasks.Task UserDataMapper_LastUpdated_UsesInjectedUtcClock()
+        {
+            var stamp = new DateTime(2030, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+            var graphUser = new GraphUser
+            {
+                Id = "00000000-0000-0000-0000-000000000001",
+                UserPrincipalName = "mapper.utc@contoso.com",
+                AccountEnabled = true,
+            };
+            var dbUser = new Common.Entities.User { UserPrincipalName = graphUser.UserPrincipalName };
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var mapper = new UserDataMapper(
+                    AnalyticsLogger.ConsoleOnlyTracer(),
+                    new UserMetadataCache(db),
+                    new FixedClock(stamp));
+
+                await mapper.UpdateUserMetadata(db, graphUser, new List<GraphUser>(), dbUser);
+            }
+
+            Assert.AreEqual(stamp, dbUser.LastUpdated);
+            Assert.AreEqual(DateTimeKind.Utc, dbUser.LastUpdated.Value.Kind,
+                "The EF path must stamp users.last_updated with the UTC clock, not DateTime.Now/local time.");
+        }
+
+        [TestMethod]
+        public async System.Threading.Tasks.Task UserBulkUpdate_LastUpdated_ReadsUtcClockOnceForAllBatches()
+        {
+            var firstStamp = new DateTime(2030, 2, 3, 4, 5, 6, DateTimeKind.Utc);
+            var clock = new SteppingClock(firstStamp, TimeSpan.FromHours(1));
+            var graphUsers = new List<GraphUser>
+            {
+                new GraphUser { Id = "00000000-0000-0000-0000-000000000001", UserPrincipalName = "batch1@contoso.com" },
+                new GraphUser { Id = "00000000-0000-0000-0000-000000000002", UserPrincipalName = "batch2@contoso.com" },
+                new GraphUser { Id = "00000000-0000-0000-0000-000000000003", UserPrincipalName = "batch3@contoso.com" },
+            };
+            var dbUsersByUpn = UsersByUpn(
+                new Common.Entities.User { ID = 1, UserPrincipalName = "batch1@contoso.com" },
+                new Common.Entities.User { ID = 2, UserPrincipalName = "batch2@contoso.com" },
+                new Common.Entities.User { ID = 3, UserPrincipalName = "batch3@contoso.com" });
+            var writer = new InMemoryUserBulkUpdateWriter();
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var processor = new UserBatchProcessor(AnalyticsLogger.ConsoleOnlyTracer(), clock);
+
+                await processor.BulkUpdateExistingUsers(
+                    db,
+                    graphUsers,
+                    new HashSet<string>(dbUsersByUpn.Keys, StringComparer.OrdinalIgnoreCase),
+                    dbUsersByUpn,
+                    UsersByAadId(),
+                    graphUsers.ToDictionary(u => u.Id, StringComparer.OrdinalIgnoreCase),
+                    new UserMetadataCache(db),
+                    writer,
+                    bulkBatchSize: 2);
+            }
+
+            Assert.AreEqual(2, writer.Batches.Count, "The test must cross a batch boundary.");
+            Assert.AreEqual(1, clock.ReadCount, "The bulk path must capture one timestamp per import cycle, not one per batch.");
+            foreach (DataRow row in writer.Batches.SelectMany(b => b.Rows.Cast<DataRow>()))
+            {
+                Assert.AreEqual(firstStamp, row["last_updated"]);
+            }
+        }
+
+        private sealed class SteppingClock : IClock
+        {
+            private readonly DateTime _firstUtc;
+            private readonly TimeSpan _step;
+
+            public SteppingClock(DateTime firstUtc, TimeSpan step)
+            {
+                if (firstUtc.Kind == DateTimeKind.Local)
+                    throw new ArgumentException("Use a UTC or unspecified instant so the host timezone is not part of the test.", nameof(firstUtc));
+
+                _firstUtc = firstUtc;
+                _step = step;
+            }
+
+            public int ReadCount { get; private set; }
+
+            public DateTime UtcNow
+            {
+                get
+                {
+                    var value = _firstUtc.AddTicks(_step.Ticks * ReadCount);
+                    ReadCount++;
+                    return value;
+                }
             }
         }
 

@@ -89,6 +89,7 @@ export interface AdoptionSegmentRow {
 
 /** Every threshold and weight the adoption maths used, echoed back so a figure can be traced to its rule. */
 export interface CopilotAdoptionOptions {
+  guidanceCatalogueVersion?: string;
   windowDays: number;
   historyDays: number;
   workingDaysPerWeek: number;
@@ -151,11 +152,23 @@ export interface CopilotAdoptionOptions {
   usageReportLagDays: number;
   topSegments: number;
   minSeatsPerSegment: number;
+  accountabilityDimension: string;
   maxLicensedUsersScored: number;
   maxOpportunityCandidates: number;
   maxAgents: number;
   maxUnlicensedUsersScored: number;
   maxCoworkUsersScored: number;
+}
+
+/** One Microsoft-published resource attached to an adoption action. */
+export interface AdoptionGuidanceLink {
+  actionCode: string;
+  title: string;
+  url: string;
+  expectedTitle: string;
+  audience: string;
+  publisher: string;
+  catalogueVersion: string;
 }
 
 /** One active-day habit bucket (Infrequent / Moderate / Frequent / Daily). */
@@ -183,6 +196,7 @@ export interface AdoptionActionSummary {
   description: string;
   users: number;
   sharePct: number;
+  guidanceLinks?: AdoptionGuidanceLink[];
 }
 
 /** What to do about an agent. Numeric values match the C# AgentHealth enum, worst first. */
@@ -273,6 +287,25 @@ export interface AdoptionCombinedSegmentRow {
   unlicensedAgentUserPct: number;
 }
 
+/** Adoption, reclaim and next-action counts for one accountable unit. */
+export interface AccountabilityRollupRow extends AdoptionSegmentRow {
+  reclaimableSeats: number;
+  reclaimCertainSeats: number;
+  reclaimProbableSeats: number;
+  reclaimReviewSeats: number;
+  reclaimExcludedUsers: number;
+  reclaimUsers: number;
+  reengageUsers: number;
+  coachUsers: number;
+  broadenUsers: number;
+  growUsers: number;
+  sustainUsers: number;
+  advocateUsers: number;
+  reviewUsers: number;
+  excludedUsers: number;
+  opportunityUsers: number;
+}
+
 /** The executive view. */
 export interface CopilotAdoptionSummary {
   generatedUtc: string;
@@ -352,8 +385,14 @@ export interface CopilotAdoptionSummary {
   habitBuckets: AdoptionHabitBucket[];
   intensityByDepartment: AdoptionIntensityPoint[];
   actionPlan: AdoptionActionSummary[];
+  guidanceCatalogueVersion?: string;
+  guidanceLinks?: AdoptionGuidanceLink[];
   adoptionByDepartment: AdoptionSegmentRow[];
+  habitByDepartment: AdoptionSegmentRow[];
   adoptionByCountry: AdoptionSegmentRow[];
+  accountabilityDimension: string | null;
+  accountabilityDimensionLabel: string | null;
+  accountabilityRollup: AccountabilityRollupRow[];
   usageByApp: ReportCategory[];
   opportunityByDepartment: ReportCategory[];
   weeklyTrend: ReportSeries[];
@@ -409,6 +448,10 @@ export interface LicensedUserAdoptionRow {
 
   interactions: number;
   activeDays: number;
+  auditInteractions: number;
+  auditActiveDays: number;
+  auditAppsUsed: number;
+  sourceComparisonAvailable: boolean;
   expectedActiveDays: number;
   appsUsed: number;
   agentsUsed: number;
