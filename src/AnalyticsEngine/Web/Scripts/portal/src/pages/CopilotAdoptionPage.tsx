@@ -1053,7 +1053,7 @@ function OverviewTab({
                   what: 'Distinct licensed users with at least one Copilot interaction in each calendar week.',
                   how: 'Weeks start on a Monday and are counted in UTC. The current partial week is excluded. A user active on three days of a week counts once for that week. Missing weeks are drawn as zero only when Audit.General coverage is verified; otherwise they are null and the chart draws a gap.',
                   source:
-                    'Six months of completed history regardless of the period selected above, because a trend is the one thing the period drop-down cannot show. Needs the Copilot audit import. Interim limitation: the licensed population comes from today\u2019s licence assignments, not an as-of-then seat snapshot; #542 will replace this with closed-period facts and a true historical rate.',
+                    'Six months of completed history regardless of the period selected above, because a trend is the one thing the period drop-down cannot show. Needs the Copilot audit import. Interim limitation: the licensed population comes from today\u2019s licence assignments, not an as-of-then seat snapshot; closed-period seat snapshots will replace this with a true historical rate.',
                 }}
               />
               {sql?.weeklyTrend && <SqlPopover sql={sql.weeklyTrend} title="SQL behind this chart" />}
@@ -1083,7 +1083,7 @@ function OverviewTab({
                 what: 'Total Copilot interactions each week, split by whether the person holds a Copilot licence.',
                 how: 'Counts interactions, not people. The current partial week is excluded, and unverifiable Audit.General weeks are drawn as gaps rather than zero. Drawn separately from the active-user chart on purpose: a few hundred users and tens of thousands of interactions share no sensible axis, and plotting them together flattens the user line onto zero.',
                 source:
-                  'Both series come from one pass over the Copilot audit log. The unlicensed line is the volume Microsoft\u2019s own reporting cannot see. Interim limitation: licensed versus unlicensed uses today\u2019s licence assignments until #542 supplies as-of-then seat state.',
+                  'Both series come from one pass over the Copilot audit log. The unlicensed line is the volume Microsoft\u2019s own reporting cannot see. Interim limitation: licensed versus unlicensed uses today\u2019s licence assignments until closed-period seat snapshots land.',
               }}
             />
           </div>

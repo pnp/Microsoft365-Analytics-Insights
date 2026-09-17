@@ -193,17 +193,28 @@ namespace Common.Entities.CopilotAdoption
         /// source that supplies Copilot interactions, but does not require a Copilot row to exist: if the
         /// feed produced some General workload event that week and the Copilot trend has no row, the safest
         /// interim interpretation is a real zero. If the feed has no evidence at all, the chart leaves a
-        /// gap until #542 can use persisted closed-period facts with as-of seat state.
+        /// gap until persisted closed-period facts can use as-of seat state.
         /// </remarks>
         public static readonly string WeeklyCopilotAuditCoverageSql =
-            "SELECT " + WeekBucket("ae.time_stamp") + " AS WeekStart\r\n" +
-            "FROM dbo.audit_events AS ae\r\n" +
-            "WHERE ae.time_stamp >= @trendFrom\r\n" +
-            "  AND ae.time_stamp < @trendTo\r\n" +
-            "  AND EXISTS (SELECT 1 FROM dbo.event_meta_general AS g WHERE g.event_id = ae.id)\r\n" +
-            "GROUP BY " + WeekBucket("ae.time_stamp") + "\r\n" +
+            "WITH WeekSpine AS (\r\n" +
+            "    SELECT CAST(" + WeekBucket("CAST(@trendFrom AS date)") + " AS date) AS WeekStart\r\n" +
+            "    UNION ALL\r\n" +
+            "    SELECT CAST(DATEADD(DAY, 7, WeekStart) AS date)\r\n" +
+            "    FROM WeekSpine\r\n" +
+            "    WHERE WeekStart < DATEADD(DAY, -7, CAST(" + WeekBucket("CAST(@trendTo AS date)") + " AS date))\r\n" +
+            ")\r\n" +
+            "SELECT w.WeekStart\r\n" +
+            "FROM WeekSpine AS w\r\n" +
+            "CROSS APPLY (\r\n" +
+            "    SELECT TOP (1) 1 AS Covered\r\n" +
+            "    FROM dbo.audit_events AS ae\r\n" +
+            "    WHERE ae.time_stamp >= w.WeekStart\r\n" +
+            "      AND ae.time_stamp < DATEADD(DAY, 7, w.WeekStart)\r\n" +
+            "      AND ae.time_stamp < @trendTo\r\n" +
+            "      AND EXISTS (SELECT 1 FROM dbo.event_meta_general AS g WHERE g.event_id = ae.id)\r\n" +
+            ") AS c\r\n" +
             "ORDER BY WeekStart\r\n" +
-            "OPTION (RECOMPILE);";
+            "OPTION (MAXRECURSION 100, RECOMPILE);";
 
         #region Copilot app host
 

@@ -474,7 +474,7 @@ namespace Common.Entities.CopilotAdoption
                 "Six months of history regardless of the reporting period, because a trend is the one thing the "
                 + "period cannot show. Weeks start on a Monday, in UTC, and the current partial week is excluded. "
                 + "Missing weeks are written as zero only when Audit.General coverage is verified; otherwise the "
-                + "cell is blank. Licence membership is evaluated as of today until #542 supplies as-of-then seat state."));
+                + "cell is blank. Licence membership is evaluated as of today until closed-period seat snapshots land."));
             sheet.AddBlankRow();
 
             var headers = new List<string> { "Week starting" };
@@ -502,8 +502,9 @@ namespace Common.Entities.CopilotAdoption
             AddTrendChart(sheet, summary.WeeklyTrend, allSeries, first, last, headerRow,
                 "Weekly active users", "N3", XlsxChartType.Line);
 
+            var volumeHasGaps = summary.WeeklyVolumeTrend.Any(s => s.Points.Any(p => !p.Value.HasValue));
             AddTrendChart(sheet, summary.WeeklyVolumeTrend, allSeries, first, last, headerRow,
-                "Weekly Copilot volume", "N22", XlsxChartType.StackedArea);
+                "Weekly Copilot volume", "N22", volumeHasGaps ? XlsxChartType.Line : XlsxChartType.StackedArea);
 
             sheet.FreezeTopRows(4);
         }

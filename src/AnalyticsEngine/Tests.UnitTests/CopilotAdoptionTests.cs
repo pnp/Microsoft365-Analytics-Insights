@@ -1180,8 +1180,48 @@ namespace Tests.UnitTests
             StringAssert.Contains(sql, "dbo.event_meta_general",
                 "Coverage comes from the Audit.General feed, not from Copilot activity rows.");
             StringAssert.Contains(sql, "ae.time_stamp < @trendTo");
+            StringAssert.Contains(sql, "CROSS APPLY",
+                "Coverage must be driven from the small week spine, not from a full-window row aggregate.");
+            StringAssert.Contains(sql, "TOP (1)",
+                "Each weekly seek should stop as soon as coverage is proven.");
+            Assert.IsFalse(sql.Contains("GROUP BY"),
+                "Grouping every matching audit row is unbounded over the largest fact table.");
             Assert.IsFalse(sql.Contains("dbo.copilot_chats"),
                 "Using copilot_chats for coverage would make a genuine zero indistinguishable from an import gap.");
+        }
+
+        [TestMethod]
+        public void WeeklyTrend_ClipsLeadingWeeksBeforeAuditEvidence()
+        {
+            var firstWeek = new DateTime(2026, 8, 3, 0, 0, 0, DateTimeKind.Utc);
+            var weekSpine = CopilotAdoptionService.WeekSpine(firstWeek, firstWeek.AddDays(28));
+
+            var clipped = CopilotAdoptionService.ClipLeadingUnverifiedWeeks(
+                weekSpine,
+                new[] { firstWeek.AddDays(14) },
+                new List<CopilotAdoptionService.NamedWeekRow>());
+
+            CollectionAssert.AreEqual(
+                new[] { firstWeek.AddDays(14), firstWeek.AddDays(21), firstWeek.AddDays(28) },
+                clipped,
+                "Weeks before the tenant's first audit evidence should not create permanent trend gaps.");
+        }
+
+        [TestMethod]
+        public void WeeklyTrend_KeepsInteriorUnverifiedWeeksAfterAuditEvidence()
+        {
+            var firstWeek = new DateTime(2026, 8, 3, 0, 0, 0, DateTimeKind.Utc);
+            var weekSpine = CopilotAdoptionService.WeekSpine(firstWeek, firstWeek.AddDays(28));
+
+            var clipped = CopilotAdoptionService.ClipLeadingUnverifiedWeeks(
+                weekSpine,
+                new[] { firstWeek.AddDays(7), firstWeek.AddDays(28) },
+                new List<CopilotAdoptionService.NamedWeekRow>());
+
+            CollectionAssert.AreEqual(
+                new[] { firstWeek.AddDays(7), firstWeek.AddDays(14), firstWeek.AddDays(21), firstWeek.AddDays(28) },
+                clipped,
+                "Interior unverifiable weeks after audit evidence begins must remain in the spine so charts show a gap.");
         }
 
         [TestMethod]

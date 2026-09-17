@@ -962,7 +962,10 @@ namespace Common.Entities.CopilotAdoption
                 coverageRows = new List<WeekCoverageRow>();
             }
 
-            var weekSpine = CompletedWeekSpine(trendStart, trendEndExclusive);
+            var weekSpine = ClipLeadingUnverifiedWeeks(
+                CompletedWeekSpine(trendStart, trendEndExclusive),
+                coverageRows.Select(r => r.WeekStart.Date),
+                rows);
             var coveredWeeks = coverageRows.Select(r => r.WeekStart.Date);
 
             var series = rows
@@ -2437,6 +2440,29 @@ namespace Common.Entities.CopilotAdoption
                         : coveredWeeks.Contains(week) ? 0 : (double?)null,
                 })
                 .ToList();
+        }
+
+        /// <summary>
+        /// Leading unknown weeks predate the tenant's imported audit history and are not informative;
+        /// keep unknown weeks after the first evidence week so true interior coverage holes remain gaps.
+        /// </summary>
+        internal static List<DateTime> ClipLeadingUnverifiedWeeks(
+            List<DateTime> weekSpine,
+            IEnumerable<DateTime> verifiedCoverageWeeks,
+            IEnumerable<NamedWeekRow> rows)
+        {
+            if (weekSpine == null || weekSpine.Count == 0) return weekSpine ?? new List<DateTime>();
+
+            var evidenceWeeks = (verifiedCoverageWeeks ?? Enumerable.Empty<DateTime>())
+                .Select(w => w.Date)
+                .Concat((rows ?? Enumerable.Empty<NamedWeekRow>()).Select(r => r.WeekStart.Date))
+                .Where(w => weekSpine.Contains(w))
+                .ToList();
+
+            if (evidenceWeeks.Count == 0) return weekSpine;
+
+            var firstEvidenceWeek = evidenceWeeks.Min();
+            return weekSpine.Where(w => w >= firstEvidenceWeek).ToList();
         }
 
         #endregion
