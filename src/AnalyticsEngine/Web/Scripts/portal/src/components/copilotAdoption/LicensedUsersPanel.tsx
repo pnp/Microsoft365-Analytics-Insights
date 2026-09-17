@@ -28,8 +28,8 @@ import type {
 } from '../../types/copilotAdoption';
 import Spinner from '../Spinner';
 import { BandBadge, ScoreBar, scoreColour, SortableTh, useAdoptionTableStyles } from './adoptionShared';
-import { formatCount, formatDate, formatPct, weightSharePct } from './KpiGrid';
-import InfoTip from './InfoTip';
+import { formatCount, formatDate, formatPct, weightSharePct } from '../shared/KpiGrid';
+import InfoTip from '../shared/InfoTip';
 import ActionPlan, { ActionBadge } from './ActionPlan';
 
 const PAGE_SIZE = 50;

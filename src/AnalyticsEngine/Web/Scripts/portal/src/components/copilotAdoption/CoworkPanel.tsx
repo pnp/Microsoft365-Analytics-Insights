@@ -26,14 +26,14 @@ import type {
 } from '../../types/copilotAdoption';
 import Spinner from '../Spinner';
 import { ScoreBar, useAdoptionTableStyles } from './adoptionShared';
-import { formatCount, formatDate } from './KpiGrid';
+import { formatCount, formatDate } from '../shared/KpiGrid';
 // Credits are fractional and a per-user total over a short window is routinely below 1.
 // formatCount is documented as a WHOLE-number formatter, so it renders a real 0.4 as "0" -
 // the same "we do not know" / "it is nothing" conflation the null path here is careful to
 // avoid, and the reason formatCredits exists (agentCostShared.test.ts pins
 // formatCredits(0.000125) !== '0'). Every credit figure on this tab uses it.
 import { formatCredits } from '../agentCosts/agentCostShared';
-import InfoTip from './InfoTip';
+import InfoTip from '../shared/InfoTip';
 import CoworkQuadrant from './CoworkQuadrant';
 
 const PAGE_SIZE = 50;

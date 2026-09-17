@@ -1,7 +1,7 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { AdoptionHabitBucket } from '../../types/copilotAdoption';
 import DonutChart from '../charts/DonutChart';
-import { formatCount, formatPct } from './KpiGrid';
+import { formatCount, formatPct } from '../shared/KpiGrid';
 
 /**
  * Cold-to-warm with frequency, and deliberately grey for "Infrequent" - on most tenants that tile

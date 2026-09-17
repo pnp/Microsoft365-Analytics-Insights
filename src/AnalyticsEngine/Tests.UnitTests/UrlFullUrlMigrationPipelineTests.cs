@@ -61,6 +61,12 @@ namespace Tests.UnitTests
         // CopilotPromptSafetyFields then adds the two Copilot prompt-safety flag columns
         // (copilot_event_messages.jailbreak_detected, copilot_event_accessed_resources.xpia_detected).
         // It DOES change the entity model, so unlike its predecessor its snapshot is freshly scaffolded.
+        // IndexTeamsExplorerQueries then adds date indexes for the Teams Explorer report and widens
+        // IX_date on teams_user_device_usage_log. Raw-SQL, additive, and reuses the
+        // CopilotPromptSafetyFields model snapshot verbatim.
+        // CoworkUsageReportTables then adds the first-party Cowork usage-report tables. Raw-SQL,
+        // purely additive, and reuses the preceding model snapshot verbatim - the new activity-log
+        // type is not exposed as a DbSet, so the entity model is unchanged.
         private const string LatestId = "202609170940001_CoworkUsageReportTables";
         private const string IndexName = "IX_urls_full_url";
 
