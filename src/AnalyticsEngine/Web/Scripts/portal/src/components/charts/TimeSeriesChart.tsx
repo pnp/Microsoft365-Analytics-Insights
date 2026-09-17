@@ -40,6 +40,10 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: '6px',
   },
+  legendNote: {
+    color: tokens.colorNeutralForeground3,
+    flexBasis: '100%',
+  },
   swatch: {
     width: '12px',
     height: '12px',
@@ -82,6 +86,8 @@ type TimeSeriesChartProps = {
   /** Unit shown in the tooltip, e.g. "Interactions". */
   valueLabel: string;
   height?: number;
+  /** Optional legend caveat shown when null points should be explained in-place. */
+  gapNote?: string;
 };
 
 /** True when this point begins a new line segment (it is the first point, or follows a gap). */
@@ -101,7 +107,7 @@ function isIsolatedPoint(points: ReportTimePoint[], i: number): boolean {
  * its container, with a "nice" y-axis, thinned week labels, and an interactive hover tooltip that
  * reads out every series' value for the hovered week.
  */
-export default function TimeSeriesChart({ series, valueLabel, height = 300 }: TimeSeriesChartProps) {
+export default function TimeSeriesChart({ series, valueLabel, height = 300, gapNote }: TimeSeriesChartProps) {
   const styles = useStyles();
   const rootRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<{ index: number; xPx: number } | null>(null);
@@ -154,7 +160,8 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300 }: Ti
 
   const clearHover = (): void => setHover(null);
 
-  const showLegend = series.length > 1;
+  const hasGaps = series.some((s) => s.points.some((p) => p.value === null));
+  const showLegend = series.length > 1 || (hasGaps && !!gapNote);
   const tooltipLeft = hover ? Math.max(70, Math.min((rootRef.current?.clientWidth ?? W) - 70, hover.xPx)) : 0;
 
   return (
@@ -289,6 +296,11 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300 }: Ti
               <Text size={200}>{s.name}</Text>
             </span>
           ))}
+          {hasGaps && gapNote && (
+            <Text size={200} className={styles.legendNote}>
+              {gapNote}
+            </Text>
+          )}
         </div>
       )}
     </div>

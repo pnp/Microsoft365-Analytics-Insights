@@ -66,6 +66,13 @@ const WINDOW_OPTIONS = [
 
 type AdoptionTab = 'overview' | 'licensed' | 'cowork' | 'unlicensed' | 'agents' | 'opportunities' | 'method';
 
+const TREND_GAP_NOTE =
+  'Gap = Audit.General import coverage could not be verified for that completed week; it is not treated as zero usage.';
+
+function hasTrendGaps(series: { points: { value: number | null }[] }[]): boolean {
+  return series.some((s) => s.points.some((p) => p.value === null));
+}
+
 const useStyles = makeStyles({
   header: {
     display: 'flex',
@@ -966,14 +973,23 @@ function OverviewTab({
               title="Who is doing the Copilot work"
               content={{
                 what: 'Weekly Copilot interactions stacked, so the total and its make-up are readable at once.',
-                how: 'Drawn from the same series as the volume chart above. Weeks with no data for a band are treated as zero rather than interpolated - inventing activity that did not happen is worse than a visible dip.',
+                how: 'Drawn from the same series as the volume chart above, but hidden when any completed week has unverifiable import coverage. The line chart below can draw gaps; a stacked area would turn them into a false collapse.',
                 source:
                   'Worth stating the trade-off: only the bottom band sits on a flat baseline, so only it can be read precisely. That is acceptable when the message is the mix, which is why the plain line chart above is kept rather than replaced. A rising unlicensed band against a flat licensed one is the clearest possible case for reallocating licences.',
               }}
             />
           </div>
           <div className={styles.cardBody}>
-            <StackedAreaChart series={summary.weeklyVolumeTrend} valueLabel="Interactions" />
+            {hasTrendGaps(summary.weeklyVolumeTrend) ? (
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  Composition is hidden because at least one completed week has unverifiable import coverage.
+                  Use the line chart below: it draws those weeks as gaps instead of treating them as zero.
+                </MessageBarBody>
+              </MessageBar>
+            ) : (
+              <StackedAreaChart series={summary.weeklyVolumeTrend} valueLabel="Interactions" />
+            )}
           </div>
         </Card>
       )}
@@ -1027,6 +1043,7 @@ function OverviewTab({
               </Text>
               <Text size={200} block className={styles.muted}>
                 A single adoption rate cannot show whether an enablement programme is working. This can.
+                {' '}Licence membership is evaluated as of today until closed-period seat snapshots land.
                 {summary.coworkDetected && ' The second line tracks Microsoft 365 Copilot Cowork adoption.'}
               </Text>
             </div>
@@ -1035,16 +1052,16 @@ function OverviewTab({
                 title="Weekly active licensed users"
                 content={{
                   what: 'Distinct licensed users with at least one Copilot interaction in each calendar week.',
-                  how: 'Weeks start on a Monday and are counted in UTC. A user active on three days of a week counts once for that week. Weeks with no data are drawn as zero rather than skipped, so a gap in the import is visible instead of being smoothed over by the line.',
+                  how: 'Weeks start on a Monday and are counted in UTC. The current partial week is excluded. A user active on three days of a week counts once for that week. Missing weeks are drawn as zero only when Audit.General coverage is verified; otherwise they are null and the chart draws a gap.',
                   source:
-                    'Six months of history regardless of the period selected above, because a trend is the one thing the period drop-down cannot show. Needs the Copilot audit import.',
+                    'Six months of completed history regardless of the period selected above, because a trend is the one thing the period drop-down cannot show. Needs the Copilot audit import. Interim limitation: the licensed population comes from today\u2019s licence assignments, not an as-of-then seat snapshot; closed-period seat snapshots will replace this with a true historical rate.',
                 }}
               />
               {sql?.weeklyTrend && <SqlPopover sql={sql.weeklyTrend} title="SQL behind this chart" />}
             </div>
           </div>
           <div className={styles.cardBody}>
-            <TimeSeriesChart series={summary.weeklyTrend} valueLabel="Users" />
+            <TimeSeriesChart series={summary.weeklyTrend} valueLabel="Users" gapNote={TREND_GAP_NOTE} />
           </div>
         </Card>
       )}
@@ -1058,21 +1075,21 @@ function OverviewTab({
               </Text>
               <Text size={200} block className={styles.muted}>
                 Interactions rather than people, licensed against unlicensed. Headcount can flatten while
-                volume keeps climbing, and that is a different story.
+                volume keeps climbing, and that is a different story. Licence membership is as of today.
               </Text>
             </div>
             <InfoTip
               title="Weekly Copilot volume"
               content={{
                 what: 'Total Copilot interactions each week, split by whether the person holds a Copilot licence.',
-                how: 'Counts interactions, not people. Drawn separately from the active-user chart on purpose: a few hundred users and tens of thousands of interactions share no sensible axis, and plotting them together flattens the user line onto zero.',
+                how: 'Counts interactions, not people. The current partial week is excluded, and unverifiable Audit.General weeks are drawn as gaps rather than zero. Drawn separately from the active-user chart on purpose: a few hundred users and tens of thousands of interactions share no sensible axis, and plotting them together flattens the user line onto zero.',
                 source:
-                  'Both series come from one pass over the Copilot audit log. The unlicensed line is the volume Microsoft\u2019s own reporting cannot see.',
+                  'Both series come from one pass over the Copilot audit log. The unlicensed line is the volume Microsoft\u2019s own reporting cannot see. Interim limitation: licensed versus unlicensed uses today\u2019s licence assignments until closed-period seat snapshots land.',
               }}
             />
           </div>
           <div className={styles.cardBody}>
-            <TimeSeriesChart series={summary.weeklyVolumeTrend} valueLabel="Interactions" />
+            <TimeSeriesChart series={summary.weeklyVolumeTrend} valueLabel="Interactions" gapNote={TREND_GAP_NOTE} />
           </div>
         </Card>
       )}

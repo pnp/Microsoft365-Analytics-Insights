@@ -1154,6 +1154,127 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void WeeklyTrend_FiltersOutTheCurrentPartialWeek()
+        {
+            var now = new DateTime(2026, 9, 16, 12, 0, 0, DateTimeKind.Utc);
+            var currentMonday = CopilotAdoptionService.MondayOf(now.Date);
+            var firstMonday = currentMonday.AddDays(-14);
+
+            var weeks = CopilotAdoptionService.CompletedWeekSpine(firstMonday, currentMonday);
+
+            CollectionAssert.AreEqual(
+                new[] { firstMonday, firstMonday.AddDays(7) },
+                weeks,
+                "A mid-week report must plot only completed weeks; the Monday that began the current week is partial.");
+
+            var sql = CopilotAdoptionSql.WeeklyAdoptionTrendSql(new[] { 1 }, new int[0]);
+            StringAssert.Contains(sql, "c.time_stamp < @trendTo",
+                "The query must not fetch the partial current week and rely on the renderer to hide it.");
+        }
+
+        [TestMethod]
+        public void WeeklyTrendCoverage_UsesAuditGeneralEvidenceRatherThanCopilotRows()
+        {
+            var sql = CopilotAdoptionSql.WeeklyCopilotAuditCoverageSql;
+
+            StringAssert.Contains(sql, "dbo.event_meta_general",
+                "Coverage comes from the Audit.General feed, not from Copilot activity rows.");
+            StringAssert.Contains(sql, "ae.time_stamp < @trendTo");
+            StringAssert.Contains(sql, "CROSS APPLY",
+                "Coverage must be driven from the small week spine, not from a full-window row aggregate.");
+            StringAssert.Contains(sql, "TOP (1)",
+                "Each weekly seek should stop as soon as coverage is proven.");
+            Assert.IsFalse(sql.Contains("GROUP BY"),
+                "Grouping every matching audit row is unbounded over the largest fact table.");
+            Assert.IsFalse(sql.Contains("dbo.copilot_chats"),
+                "Using copilot_chats for coverage would make a genuine zero indistinguishable from an import gap.");
+        }
+
+        [TestMethod]
+        public void WeeklyTrend_ClipsLeadingWeeksBeforeAuditEvidence()
+        {
+            var firstWeek = new DateTime(2026, 8, 3, 0, 0, 0, DateTimeKind.Utc);
+            var weekSpine = CopilotAdoptionService.WeekSpine(firstWeek, firstWeek.AddDays(28));
+
+            var clipped = CopilotAdoptionService.ClipLeadingUnverifiedWeeks(
+                weekSpine,
+                new[] { firstWeek.AddDays(14) },
+                new List<CopilotAdoptionService.NamedWeekRow>());
+
+            CollectionAssert.AreEqual(
+                new[] { firstWeek.AddDays(14), firstWeek.AddDays(21), firstWeek.AddDays(28) },
+                clipped,
+                "Weeks before the tenant's first audit evidence should not create permanent trend gaps.");
+        }
+
+        [TestMethod]
+        public void WeeklyTrend_KeepsInteriorUnverifiedWeeksAfterAuditEvidence()
+        {
+            var firstWeek = new DateTime(2026, 8, 3, 0, 0, 0, DateTimeKind.Utc);
+            var weekSpine = CopilotAdoptionService.WeekSpine(firstWeek, firstWeek.AddDays(28));
+
+            var clipped = CopilotAdoptionService.ClipLeadingUnverifiedWeeks(
+                weekSpine,
+                new[] { firstWeek.AddDays(7), firstWeek.AddDays(28) },
+                new List<CopilotAdoptionService.NamedWeekRow>());
+
+            CollectionAssert.AreEqual(
+                new[] { firstWeek.AddDays(7), firstWeek.AddDays(14), firstWeek.AddDays(21), firstWeek.AddDays(28) },
+                clipped,
+                "Interior unverifiable weeks after audit evidence begins must remain in the spine so charts show a gap.");
+        }
+
+        [TestMethod]
+        public void FillWeeks_UsesNullForUnverifiableCoverage()
+        {
+            var week = new DateTime(2026, 9, 7, 0, 0, 0, DateTimeKind.Utc);
+
+            var points = CopilotAdoptionService.FillWeeks(
+                new List<DateTime> { week },
+                new List<CopilotAdoptionService.NamedWeekRow>(),
+                new DateTime[0]);
+
+            Assert.IsNull(points.Single().Value,
+                "No trend row and no Audit.General coverage evidence is an unknown import window, not zero adoption.");
+        }
+
+        [TestMethod]
+        public void FillWeeks_KeepsZeroForVerifiedNoActivityWeeks()
+        {
+            var week = new DateTime(2026, 9, 7, 0, 0, 0, DateTimeKind.Utc);
+
+            var points = CopilotAdoptionService.FillWeeks(
+                new List<DateTime> { week },
+                new List<CopilotAdoptionService.NamedWeekRow>(),
+                new[] { week });
+
+            Assert.AreEqual(0, points.Single().Value,
+                "A covered Audit.General week with no Copilot trend row is a genuine zero.");
+        }
+
+        [TestMethod]
+        public void FillWeeks_KeepsExplicitZeroRowsEvenWhenCoverageIsNotVerifiedSeparately()
+        {
+            var week = new DateTime(2026, 9, 7, 0, 0, 0, DateTimeKind.Utc);
+
+            var points = CopilotAdoptionService.FillWeeks(
+                new List<DateTime> { week },
+                new List<CopilotAdoptionService.NamedWeekRow>
+                {
+                    new CopilotAdoptionService.NamedWeekRow
+                    {
+                        SeriesName = "Cowork users",
+                        WeekStart = week,
+                        Value = 0,
+                    },
+                },
+                new DateTime[0]);
+
+            Assert.AreEqual(0, points.Single().Value,
+                "If SQL emitted an explicit zero, keep it; null is only for gaps whose coverage cannot be verified.");
+        }
+
+        [TestMethod]
         public void AgentEstate_DoesNotExcludeGuests()
         {
             // The agent inventory is deliberately tenant-wide - an agent's value does not depend on the
