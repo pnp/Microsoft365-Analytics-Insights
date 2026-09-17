@@ -29,6 +29,7 @@ import {
   workbookExportUrl,
 } from '../api/copilotAdoptionApi';
 import type {
+  AccountabilityRollupRow,
   AdoptionFilterOptions,
   CopilotAdoptionAvailability,
   CopilotAdoptionSummary,
@@ -782,8 +783,11 @@ function ExecutiveTab({
 
 function ExecutiveDepartmentTable({ summary }: { summary: CopilotAdoptionSummary }) {
   const styles = useStyles();
-  const candidatesByDepartment = new Map(summary.opportunityByDepartment.map((r) => [r.label, r.value]));
-  const rows = [...summary.habitByDepartment]
+  // Both collections are absent when the analysis returned early (a failed licence-types query
+  // marks the summary incomplete without populating the segment breakdowns), so neither can be
+  // spread or mapped unguarded.
+  const candidatesByDepartment = new Map((summary.opportunityByDepartment ?? []).map((r) => [r.label, r.value]));
+  const rows = [...(summary.habitByDepartment ?? [])]
     .map((row) => {
       const habitRatePct = row.licensedUsers > 0 ? (row.habitualUsers / row.licensedUsers) * 100 : 0;
       const idleSeats = row.neverUsedUsers;
@@ -848,6 +852,8 @@ function AnalystTab({
   const styles = useStyles();
   const kpis = buildKpis(summary);
   const o = summary.options;
+  const accountabilityDimensionLabel = summary.accountabilityDimensionLabel ?? 'Direct manager';
+  const accountabilityDimensionDescription = accountabilityDimensionLabel.toLowerCase();
 
   // The band slices and the action plan are built from the users actually scored, which is capped by
   // MaxLicensedUsersScored. That cap is far above any real Copilot deployment and raises an explicit
@@ -1008,6 +1014,35 @@ function AnalystTab({
         </div>
         <div className={styles.cardBody}>
           <ActionPlan actions={summary.actionPlan} onSelect={onDrillToAction} />
+        </div>
+      </Card>
+
+      <Card>
+        <div className={styles.cardHead}>
+          <div>
+            <Text weight="semibold" size={400}>
+              Accountability roll-up
+            </Text>
+            <Text size={200} block className={styles.muted}>
+              Aggregate-only view by {accountabilityDimensionDescription}. Sorted by the largest
+              absolute opportunity first; groups below {o.minSeatsPerSegment} licences are suppressed.
+            </Text>
+          </div>
+          <InfoTip
+            title="Accountability roll-up"
+            content={{
+              what: `A leader-safe aggregate view by ${accountabilityDimensionDescription}: seats, adoption, habit, reclaim tiers and action counts.`,
+              how: `The dimension defaults to direct manager. Users without a manager are grouped explicitly as "(no manager)" rather than dropped. The same ${o.minSeatsPerSegment}-seat suppression used for department segments is applied here.`,
+              source:
+                'This deliberately does not add a named per-user leader view; drill-through remains limited to the existing licensed-user table behaviour.',
+            }}
+          />
+        </div>
+        <div className={styles.cardBody}>
+          <AccountabilityRollupTable
+            rows={summary.accountabilityRollup}
+            segmentLabel={accountabilityDimensionLabel}
+          />
         </div>
       </Card>
 
@@ -1451,6 +1486,63 @@ function AnalystTab({
         </Card>
       )}
     </>
+  );
+}
+
+function AccountabilityRollupTable({
+  rows,
+  segmentLabel,
+}: {
+  rows: AccountabilityRollupRow[] | null | undefined;
+  segmentLabel: string;
+}) {
+  const styles = useStyles();
+
+  // The roll-up is absent whenever the analysis returned early - a failed licence-types query
+  // leaves the summary marked incomplete with none of the accountability fields populated - so
+  // this cannot assume the server supplied an array.
+  if (!rows || rows.length === 0) {
+    return <Text className={styles.muted}>Not enough licensed users in any accountable group to break down reliably.</Text>;
+  }
+
+  return (
+    <table className={styles.skuTable}>
+      <thead>
+        <tr>
+          <th className={styles.skuCell}>{segmentLabel}</th>
+          <th className={styles.skuCell}>Seats</th>
+          <th className={styles.skuCell}>Adoption</th>
+          <th className={styles.skuCell}>Habit</th>
+          <th className={styles.skuCell}>Reclaim by tier</th>
+          <th className={styles.skuCell}>Action counts</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.segment}>
+            <td className={styles.skuCell}>{row.segment}</td>
+            <td className={styles.skuCell}>{formatCount(row.licensedUsers)}</td>
+            <td className={styles.skuCell}>
+              {formatPct(row.adoptionRatePct)} ({formatCount(row.activeUsers)} active)
+            </td>
+            <td className={styles.skuCell}>
+              {formatPct(row.licensedUsers === 0 ? 0 : (row.habitualUsers / row.licensedUsers) * 100)} (
+              {formatCount(row.habitualUsers)} habitual)
+            </td>
+            <td className={styles.skuCell}>
+              {formatCount(row.reclaimableSeats)} reclaimable: {formatCount(row.reclaimCertainSeats)} certain,{' '}
+              {formatCount(row.reclaimProbableSeats)} probable, {formatCount(row.reclaimReviewSeats)} review
+            </td>
+            <td className={styles.skuCell}>
+              {formatCount(row.opportunityUsers)} need action: {formatCount(row.reclaimUsers)} reclaim,{' '}
+              {formatCount(row.reengageUsers)} win back, {formatCount(row.coachUsers)} coach,{' '}
+              {formatCount(row.broadenUsers)} broaden, {formatCount(row.growUsers)} deepen,{' '}
+              {formatCount(row.reviewUsers)} review
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
