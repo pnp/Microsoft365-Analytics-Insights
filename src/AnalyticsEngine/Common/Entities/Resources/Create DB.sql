@@ -1,4 +1,4 @@
-﻿
+
 -- --------------------------------------------------
 -- Entity Designer DDL Script for SQL Server 2005, 2008, 2012 and Azure
 -- --------------------------------------------------
@@ -349,6 +349,37 @@ CREATE TABLE [dbo].[copilot_adoption_intervention] (
     CONSTRAINT [CK_copilot_adoption_intervention_type] CHECK ([intervention_type] IN (N'briefing', N'scenario workshop', N'champion session', N'comms', N'one-to-one', N'licence reassignment'))
 );
 
+-- Creating table 'copilot_adoption_digest_run'
+CREATE TABLE [dbo].[copilot_adoption_digest_run] (
+    [id] int IDENTITY(1,1) NOT NULL,
+    [period_end] date NULL,
+    [period_days] int NULL,
+    [recipients_hash] nvarchar(64) NULL,
+    [subject] nvarchar(256) NULL,
+    [portal_url] nvarchar(2048) NULL,
+    [status] nvarchar(32) NOT NULL,
+    [phase] nvarchar(32) NULL,
+    [claimed_utc] datetime2(7) NULL,
+    [sent_utc] datetime2(7) NULL,
+    [completed_utc] datetime2(7) NULL,
+    [error] nvarchar(max) NULL,
+    [created_utc] datetime2(7) NOT NULL CONSTRAINT [DF_copilot_adoption_digest_run_created_utc] DEFAULT SYSUTCDATETIME(),
+    [updated_utc] datetime2(7) NOT NULL CONSTRAINT [DF_copilot_adoption_digest_run_updated_utc] DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT [PK_copilot_adoption_digest_run] PRIMARY KEY CLUSTERED ([id] ASC),
+    CONSTRAINT [CK_copilot_adoption_digest_run_status] CHECK ([status] IN (N'Sending', N'Sent', N'Failed')),
+    CONSTRAINT [CK_copilot_adoption_digest_run_period_days] CHECK ([period_days] IS NULL OR [period_days] > 0),
+    CONSTRAINT [CK_copilot_adoption_digest_run_hash] CHECK ([recipients_hash] IS NULL OR LEN([recipients_hash]) = 64)
+);
+
+SET QUOTED_IDENTIFIER ON;
+
+CREATE UNIQUE NONCLUSTERED INDEX [UX_copilot_adoption_digest_run_period_recipients]
+    ON [dbo].[copilot_adoption_digest_run] ([period_end] ASC, [period_days] ASC, [recipients_hash] ASC)
+    WHERE [period_end] IS NOT NULL AND [period_days] IS NOT NULL AND [recipients_hash] IS NOT NULL;
+
+CREATE NONCLUSTERED INDEX [IX_copilot_adoption_digest_run_updated]
+    ON [dbo].[copilot_adoption_digest_run] ([updated_utc] DESC, [status] ASC)
+    INCLUDE ([period_end], [period_days], [completed_utc]);
 
 
 -- --------------------------------------------------

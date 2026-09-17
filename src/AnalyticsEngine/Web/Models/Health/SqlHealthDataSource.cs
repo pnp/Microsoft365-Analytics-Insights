@@ -108,6 +108,8 @@ namespace Web.AnalyticsWeb.Models.Health
                             Error = i.Error,
                         })
                         .ToList();
+
+                    result.CopilotAdoptionDigest = await LoadLatestCopilotAdoptionDigest(db);
                 }
             }
             catch (Exception ex)
@@ -116,6 +118,15 @@ namespace Web.AnalyticsWeb.Models.Health
             }
 
             return result;
+        }
+
+        private static async Task<CopilotAdoptionDigestHealthRow> LoadLatestCopilotAdoptionDigest(AnalyticsEntitiesContext db)
+        {
+            const string sql =
+                "IF OBJECT_ID(N'dbo.copilot_adoption_digest_run', N'U') IS NULL " +
+                "BEGIN SELECT TOP 0 CAST(NULL AS date) AS PeriodEnd, CAST(NULL AS int) AS PeriodDays, CAST(NULL AS nvarchar(32)) AS Status, CAST(NULL AS nvarchar(32)) AS Phase, CAST(NULL AS datetime2) AS CompletedUtc, CAST(SYSUTCDATETIME() AS datetime2) AS UpdatedUtc, CAST(NULL AS nvarchar(max)) AS Error; END " +
+                "ELSE BEGIN EXEC sp_executesql N'SELECT TOP 1 period_end AS PeriodEnd, period_days AS PeriodDays, status AS Status, phase AS Phase, completed_utc AS CompletedUtc, updated_utc AS UpdatedUtc, error AS Error FROM dbo.copilot_adoption_digest_run ORDER BY updated_utc DESC, id DESC'; END";
+            return (await db.Database.SqlQuery<CopilotAdoptionDigestHealthRow>(sql).ToListAsync()).FirstOrDefault();
         }
 
         public async Task<RecentVolumeResult> GetRecentVolumeAsync(string table, string timestampColumn)

@@ -99,6 +99,7 @@
     <Compile Include="CopilotAdoption\CopilotAdoptionConcentrationModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionCoworkModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionDiagnostics.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionDigestRenderer.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionExports.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionGuidanceCatalogue.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionOptions.cs" />
@@ -467,6 +468,10 @@
     <Compile Include="Migrations\202609171020002_CopilotAdoptionInterventions.Designer.cs">
       <DependentUpon>202609171020002_CopilotAdoptionInterventions.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202609171030001_CopilotAdoptionDigest.cs" />
+    <Compile Include="Migrations\202609171030001_CopilotAdoptionDigest.Designer.cs">
+      <DependentUpon>202609171030001_CopilotAdoptionDigest.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609151440027_CopilotPromptSafetyFields.Designer.cs">
       <DependentUpon>202609151440027_CopilotPromptSafetyFields.cs</DependentUpon>
     </Compile>
@@ -730,6 +735,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609171020002_CopilotAdoptionInterventions.resx">
       <DependentUpon>202609171020002_CopilotAdoptionInterventions.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609171030001_CopilotAdoptionDigest.resx">
+      <DependentUpon>202609171030001_CopilotAdoptionDigest.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.resx">
       <DependentUpon>202609101100001_UniqueUrlsFullUrlIndex.cs</DependentUpon>
