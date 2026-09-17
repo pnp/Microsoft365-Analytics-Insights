@@ -45,6 +45,11 @@ namespace Web.AnalyticsWeb.Models.Health
                 {
                     ApplyCopilotImports(section, counts.CopilotUsageReportImports);
                 }
+
+                if (counts.CopilotAdoptionDigest != null)
+                {
+                    ApplyCopilotAdoptionDigest(section, counts.CopilotAdoptionDigest);
+                }
             }
 
             // Recent volume + freshness on the two biggest fact tables. Their timestamp columns are NOT
@@ -73,6 +78,14 @@ namespace Web.AnalyticsWeb.Models.Health
 
             ComputeDataStatus(section);
             return section;
+        }
+
+        private static void ApplyCopilotAdoptionDigest(DataOverviewSection section, CopilotAdoptionDigestHealthRow digest)
+        {
+            section.CopilotAdoptionDigestStatus = digest.Status;
+            section.CopilotAdoptionDigestPeriodEnd = digest.PeriodEnd;
+            section.CopilotAdoptionDigestLastUpdatedUtc = digest.UpdatedUtc;
+            section.CopilotAdoptionDigestError = digest.Error;
         }
 
         /// <summary>
@@ -124,6 +137,12 @@ namespace Web.AnalyticsWeb.Models.Health
             foreach (var copilotError in s.CopilotUsageReportErrors)
             {
                 reasons.Add("Graph Copilot usage report import failed - " + copilotError);
+            }
+            if (string.Equals(s.CopilotAdoptionDigestStatus, "Failed", StringComparison.OrdinalIgnoreCase))
+            {
+                reasons.Add("Scheduled Copilot Adoption digest failed"
+                    + (s.CopilotAdoptionDigestPeriodEnd.HasValue ? $" for period ending {s.CopilotAdoptionDigestPeriodEnd.Value:yyyy-MM-dd}" : string.Empty)
+                    + (string.IsNullOrWhiteSpace(s.CopilotAdoptionDigestError) ? "." : ": " + s.CopilotAdoptionDigestError));
             }
 
             if (reasons.Count > 0)
