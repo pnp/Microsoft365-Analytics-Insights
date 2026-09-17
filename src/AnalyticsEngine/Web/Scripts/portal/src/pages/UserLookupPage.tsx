@@ -84,7 +84,7 @@ export default function UserLookupPage() {
           className={styles.input}
           placeholder="user@contoso.com"
           value={upnInput}
-          onChange={(_e, data) => setUpnInput(data.value)}
+          onChange={(_e: any, data: any) => setUpnInput(data.value)}
           aria-label="User principal name"
         />
         <Button type="submit" appearance="primary" icon={<SearchRegular />} disabled={loading || !upnInput.trim()}>

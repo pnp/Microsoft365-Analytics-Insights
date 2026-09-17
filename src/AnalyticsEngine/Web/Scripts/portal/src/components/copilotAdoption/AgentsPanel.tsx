@@ -342,12 +342,12 @@ export default function AgentsPanel({
                   />
                 ) : undefined
               }
-              onChange={(_e, d) => setSearch(d.value)}
+              onChange={(_e: any, d: any) => setSearch(d.value)}
             />
             <Select
               value={health}
               aria-label="Filter agents by health"
-              onChange={(_e, d) => setHealth(d.value)}
+              onChange={(_e: any, d: any) => setHealth(d.value)}
             >
               <option value="">All verdicts</option>
               {HEALTH_ORDER.map((h) => (
@@ -363,7 +363,7 @@ export default function AgentsPanel({
               <Checkbox
                 label="Custom agents only"
                 checked={customOnly}
-                onChange={(_e, d) => setCustomOnly(!!d.checked)}
+                onChange={(_e: any, d: any) => setCustomOnly(!!d.checked)}
               />
             </Tooltip>
             <div className={styles.spacer} />

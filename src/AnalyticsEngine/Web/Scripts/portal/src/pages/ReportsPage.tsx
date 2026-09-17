@@ -159,7 +159,7 @@ export default function ReportsPage() {
             </Text>
             <Select
               value={String(months)}
-              onChange={(_e, data) => setMonths(Number(data.value))}
+              onChange={(_e: unknown, data: { value: string }) => setMonths(Number(data.value))}
               aria-label="Reporting period"
             >
               {MONTH_OPTIONS.map((o) => (
@@ -213,7 +213,7 @@ export default function ReportsPage() {
               </Text>
               <Select
                 value={String(topAgents)}
-                onChange={(_e, data) => setTopAgents(Number(data.value))}
+                onChange={(_e: unknown, data: { value: string }) => setTopAgents(Number(data.value))}
                 aria-label="Number of top Copilot agents"
               >
                 {[5, 8, 10, 15, 20].map((count) => (
@@ -224,8 +224,8 @@ export default function ReportsPage() {
               </Select>
               <Input
                 value={agentNameDraft}
-                onChange={(_e, data) => setAgentNameDraft(data.value)}
-                onKeyDown={(event) => {
+                onChange={(_e: unknown, data: { value: string }) => setAgentNameDraft(data.value)}
+                onKeyDown={(event: { key: string }) => {
                   if (event.key === 'Enter') setAgentNameFilter(agentNameDraft.trim());
                 }}
                 placeholder="Filter by agent name"

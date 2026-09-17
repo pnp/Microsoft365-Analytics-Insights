@@ -84,7 +84,7 @@ export default function InstallLogPage() {
   useEffect(() => {
     let cancelled = false;
     fetchInstallLog()
-      .then((e) => {
+      .then((e: any) => {
         if (!cancelled) setEntries(e);
       })
       .catch((err) => {

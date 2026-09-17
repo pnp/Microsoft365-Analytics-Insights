@@ -136,7 +136,7 @@ export default class TeamList extends React.Component<TeamListProps, TeamListSta
               <TableHeaderCell style={{ width: 420 }}>
                 <Checkbox
                   disabled={this.state.isBusy}
-                  onChange={(_e, data) => this.toggleAllTeams(data.checked === true)}
+                  onChange={(_e: any, data: any) => this.toggleAllTeams(data.checked === true)}
                   label="Team Name"
                 />
               </TableHeaderCell>

@@ -452,9 +452,20 @@
       <DependentUpon>202609170900001_CopilotAdoptionPeriodFacts.cs</DependentUpon>
     </Compile>
     <Compile Include="Migrations\202609170920001_CopilotSubscribedSkuCapacity.cs" />
+    <Compile Include="Migrations\202609170920001_CopilotSubscribedSkuCapacity.Designer.cs">
+      <DependentUpon>202609170920001_CopilotSubscribedSkuCapacity.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609171000001_CopilotAdoptionTargets.cs" />
     <Compile Include="Migrations\202609171000001_CopilotAdoptionTargets.Designer.cs">
       <DependentUpon>202609171000001_CopilotAdoptionTargets.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202609171020001_CopilotAdoptionCohorts.cs" />
+    <Compile Include="Migrations\202609171020001_CopilotAdoptionCohorts.Designer.cs">
+      <DependentUpon>202609171020001_CopilotAdoptionCohorts.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202609171020002_CopilotAdoptionInterventions.cs" />
+    <Compile Include="Migrations\202609171020002_CopilotAdoptionInterventions.Designer.cs">
+      <DependentUpon>202609171020002_CopilotAdoptionInterventions.cs</DependentUpon>
     </Compile>
     <Compile Include="Migrations\202609151440027_CopilotPromptSafetyFields.Designer.cs">
       <DependentUpon>202609151440027_CopilotPromptSafetyFields.cs</DependentUpon>
@@ -462,9 +473,6 @@
     <Compile Include="Migrations\202609170910001_GraphCopilotUsageApiV2.cs" />
     <Compile Include="Migrations\202609170910001_GraphCopilotUsageApiV2.Designer.cs">
       <DependentUpon>202609170910001_GraphCopilotUsageApiV2.cs</DependentUpon>
-    </Compile>
-    <Compile Include="Migrations\202609170920001_CopilotSubscribedSkuCapacity.Designer.cs">
-      <DependentUpon>202609170920001_CopilotSubscribedSkuCapacity.cs</DependentUpon>
     </Compile>
     <Compile Include="Migrations\202609170940001_CoworkUsageReportTables.cs" />
     <Compile Include="Migrations\202609170940001_CoworkUsageReportTables.Designer.cs">
@@ -716,6 +724,12 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609171000001_CopilotAdoptionTargets.resx">
       <DependentUpon>202609171000001_CopilotAdoptionTargets.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609171020001_CopilotAdoptionCohorts.resx">
+      <DependentUpon>202609171020001_CopilotAdoptionCohorts.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609171020002_CopilotAdoptionInterventions.resx">
+      <DependentUpon>202609171020002_CopilotAdoptionInterventions.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.resx">
       <DependentUpon>202609101100001_UniqueUrlsFullUrlIndex.cs</DependentUpon>
