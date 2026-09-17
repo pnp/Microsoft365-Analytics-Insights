@@ -699,6 +699,7 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609170910001_GraphCopilotUsageApiV2.resx">
       <DependentUpon>202609170910001_GraphCopilotUsageApiV2.cs</DependentUpon>
+    </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609171000001_CopilotAdoptionTargets.resx">
       <DependentUpon>202609171000001_CopilotAdoptionTargets.cs</DependentUpon>
     </EmbeddedResource>
