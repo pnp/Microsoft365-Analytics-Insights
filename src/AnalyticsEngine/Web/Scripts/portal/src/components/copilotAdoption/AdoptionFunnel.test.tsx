@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { renderWithProvider } from '../../test/renderWithProvider';
-import AdoptionFunnel, { funnelLabelFillForStage } from './AdoptionFunnel';
+import AdoptionFunnel, { funnelLabelFillForStage, STAGE_COLOURS } from './AdoptionFunnel';
 import type { CopilotAdoptionOptions } from '../../types/copilotAdoption';
 import type { ReportCategory } from '../../types/reports';
 
@@ -67,14 +67,40 @@ function tooltipFor(container: HTMLElement, label: string): string | undefined {
   return stageTooltips(container).find(text => text.startsWith(label));
 }
 
+function srgbToLinear(value: number): number {
+  const c = value / 255;
+  return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+}
+
+function relativeLuminance(hexColour: string): number {
+  const match = /^#(?<r>[0-9a-f]{2})(?<g>[0-9a-f]{2})(?<b>[0-9a-f]{2})$/i.exec(hexColour);
+  expect(match?.groups).toBeTruthy();
+
+  const r = srgbToLinear(parseInt(match?.groups?.r ?? '00', 16));
+  const g = srgbToLinear(parseInt(match?.groups?.g ?? '00', 16));
+  const b = srgbToLinear(parseInt(match?.groups?.b ?? '00', 16));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrastRatio(foreground: string, background: string): number {
+  const a = relativeLuminance(foreground);
+  const b = relativeLuminance(background);
+  const light = Math.max(a, b);
+  const dark = Math.min(a, b);
+  return (light + 0.05) / (dark + 0.05);
+}
+
 describe('AdoptionFunnel stage tooltips', () => {
   it('chooses an in-shape label colour that contrasts with the stage fill', () => {
-    const darkFill = '#242424';
+    const darkFill = '#111111';
 
     expect(funnelLabelFillForStage('#8ec3ea', darkFill)).toBe(darkFill);
-    expect(funnelLabelFillForStage('#5aa6dd', darkFill)).toBe(darkFill);
-    expect(funnelLabelFillForStage('#2f86cc', darkFill)).toBe(darkFill);
     expect(funnelLabelFillForStage('#0a4a80', darkFill)).toBe('#ffffff');
+
+    for (const stageColour of STAGE_COLOURS) {
+      const chosen = funnelLabelFillForStage(stageColour, darkFill);
+      expect(contrastRatio(chosen, stageColour)).toBeGreaterThanOrEqual(4.5);
+    }
   });
 
   it('explains how every stage is counted, using the live thresholds', () => {

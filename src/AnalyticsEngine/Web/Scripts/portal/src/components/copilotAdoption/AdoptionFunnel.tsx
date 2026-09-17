@@ -45,12 +45,11 @@ const OUTSIDE_LABEL_W = 120;
  * Progressively deeper blues down the funnel, so the shape reads as one narrowing pipeline rather
  * than as five unrelated shapes.
  */
-const STAGE_COLOURS = ['#8ec3ea', '#5aa6dd', '#2f86cc', '#1466ad', '#0a4a80'];
+export const STAGE_COLOURS = ['#8ec3ea', '#5aa6dd', '#2f86cc', '#1466ad', '#0a4a80'];
 
-const EDGE_ALPHA = 0.8;
 const WHITE_LUMINANCE = 1;
-// Fluent exposes tokens as CSS variables at runtime; this is light-theme colorNeutralForeground1 (#242424).
-const FLUENT_LIGHT_NEUTRAL_FOREGROUND1_LUMINANCE = 0.017641954488384078;
+// Fluent exposes tokens as CSS variables at runtime; this is the dark label colour used for contrast fallback.
+const DARK_LABEL_LUMINANCE = 0.005605391624202723;
 
 function srgbToLinear(value: number): number {
   const c = value / 255;
@@ -73,28 +72,13 @@ function contrastRatio(a: number, b: number): number {
   return (light + 0.05) / (dark + 0.05);
 }
 
-function compositeHexOverWhite(hexColour: string, alpha: number): string {
-  const match = /^#(?<r>[0-9a-f]{2})(?<g>[0-9a-f]{2})(?<b>[0-9a-f]{2})$/i.exec(hexColour);
-  if (!match?.groups) return hexColour;
-  const groups = match.groups;
-
-  const channel = (name: 'r' | 'g' | 'b') => {
-    const value = parseInt(groups[name], 16);
-    return Math.round(value * alpha + 255 * (1 - alpha));
-  };
-
-  return `#${[channel('r'), channel('g'), channel('b')]
-    .map((value) => value.toString(16).padStart(2, '0'))
-    .join('')}`;
-}
-
 export function funnelLabelFillForStage(stageColour: string, darkFill: string = tokens.colorNeutralForeground1): string {
-  const paintedLuminance = relativeLuminance(compositeHexOverWhite(stageColour, EDGE_ALPHA));
-  if (paintedLuminance === null) return darkFill;
+  const stageLuminance = relativeLuminance(stageColour);
+  if (stageLuminance === null) return darkFill;
 
-  const darkFillLuminance = relativeLuminance(darkFill) ?? FLUENT_LIGHT_NEUTRAL_FOREGROUND1_LUMINANCE;
-  const whiteContrast = contrastRatio(WHITE_LUMINANCE, paintedLuminance);
-  const darkContrast = contrastRatio(darkFillLuminance, paintedLuminance);
+  const darkFillLuminance = relativeLuminance(darkFill) ?? DARK_LABEL_LUMINANCE;
+  const whiteContrast = contrastRatio(WHITE_LUMINANCE, stageLuminance);
+  const darkContrast = contrastRatio(darkFillLuminance, stageLuminance);
 
   return whiteContrast >= darkContrast ? '#ffffff' : darkFill;
 }
