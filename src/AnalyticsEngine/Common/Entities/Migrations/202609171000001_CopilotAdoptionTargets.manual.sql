@@ -6,7 +6,7 @@
    page treat it as applied.
 
    PREREQUISITE
-     202609170910001_GraphCopilotUsageApiV2 must already be stamped. This branch is stacked on
+     202609170940001_CoworkUsageReportTables must already be stamped. This branch is stacked on
      PR #579; run that release's manual script before this one.
 
    WHAT IT DOES
@@ -30,10 +30,10 @@ BEGIN
     SET NOEXEC ON;
 END
 
-IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609170910001_GraphCopilotUsageApiV2')
+IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609170940001_CoworkUsageReportTables')
    AND NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609171000001_CopilotAdoptionTargets')
 BEGIN
-    RAISERROR('CopilotAdoptionTargets: prerequisite migration 202609170910001_GraphCopilotUsageApiV2 is not stamped in __MigrationHistory. Nothing has been changed.', 16, 1) WITH NOWAIT;
+    RAISERROR('CopilotAdoptionTargets: prerequisite migration 202609170940001_CoworkUsageReportTables is not stamped in __MigrationHistory. Nothing has been changed.', 16, 1) WITH NOWAIT;
     SET NOEXEC ON;
 END
 
@@ -129,7 +129,7 @@ BEGIN
         INSERT INTO dbo.__MigrationHistory (MigrationId, ContextKey, Model, ProductVersion)
         SELECT N'202609171000001_CopilotAdoptionTargets', ContextKey, Model, ProductVersion
         FROM dbo.__MigrationHistory
-        WHERE MigrationId = N'202609170910001_GraphCopilotUsageApiV2';
+        WHERE MigrationId = N'202609170940001_CoworkUsageReportTables';
         RAISERROR('CopilotAdoptionTargets: stamped __MigrationHistory.', 0, 1) WITH NOWAIT;
     END
     ELSE

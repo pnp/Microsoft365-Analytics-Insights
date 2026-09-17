@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.CopilotAdoption;
 using DataUtils;
@@ -185,7 +185,7 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         private async Task<CopilotAdoptionAnalysis> TryGetEnrichedAnalysisAsync(
-            int windowDays, string seatLicenceTypeIds, string seatCosts, string comparisonMode, TimeSpan budget, CancellationToken cancellationToken)
+            int windowDays, string seatLicenceTypeIds, string comparisonMode, string seatCosts, TimeSpan budget, CancellationToken cancellationToken)
         {
             var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, seatCosts, budget, cancellationToken);
             if (analysis == null) return null;
@@ -274,11 +274,11 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<IHttpActionResult> Summary(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
-            string seatCosts = null,
             string comparisonMode = CopilotAdoptionComparisonModes.PreviousPeriod,
+            string seatCosts = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetEnrichedAnalysisAsync(windowDays, seatLicenceTypeIds, seatCosts, comparisonMode, FirstResponseBudget, cancellationToken);
+            var analysis = await TryGetEnrichedAnalysisAsync(windowDays, seatLicenceTypeIds, comparisonMode, seatCosts, FirstResponseBudget, cancellationToken);
             if (analysis == null) return StillBuilding();
             return Ok(analysis.Summary);
         }
@@ -290,7 +290,7 @@ namespace Web.AnalyticsWeb.Controllers
             string comparisonMode = CopilotAdoptionComparisonModes.PreviousPeriod,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetEnrichedAnalysisAsync(windowDays, null, null, comparisonMode, FirstResponseBudget, cancellationToken);
+            var analysis = await TryGetEnrichedAnalysisAsync(windowDays, null, comparisonMode, null, FirstResponseBudget, cancellationToken);
             if (analysis == null) return StillBuilding();
             return Ok(analysis.Summary.Targets);
         }
@@ -905,8 +905,8 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<HttpResponseMessage> ExportWorkbook(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
-            string seatCosts = null,
             string comparisonMode = CopilotAdoptionComparisonModes.PreviousPeriod,
+            string seatCosts = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
             // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
@@ -914,7 +914,7 @@ namespace Web.AnalyticsWeb.Controllers
             // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
             // download instead of an answer.
             var analysis = await TryGetEnrichedAnalysisAsync(
-                windowDays, seatLicenceTypeIds, seatCosts, comparisonMode, ExportWaitBudget, cancellationToken);
+                windowDays, seatLicenceTypeIds, comparisonMode, seatCosts, ExportWaitBudget, cancellationToken);
             if (analysis == null) return ExportNotReadyResponse();
 
             byte[] bytes;

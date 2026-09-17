@@ -25,9 +25,9 @@ namespace Tests.UnitTests
         // GraphCopilotUsageApiV2 landed between this migration and the period-fact tables, so the
         // targets script now chains from it: that is the row whose Model blob carries report_version,
         // and stamping anything older would leave EF seeing the schema as behind the build.
-        private const string TargetsPredecessorId = "202609170910001_GraphCopilotUsageApiV2";
         private const string DigestId = "202609171030001_CopilotAdoptionDigest";
         private const string DigestPredecessorId = "202609171020002_CopilotAdoptionInterventions";
+        private const string TargetsPredecessorId = "202609170940001_CoworkUsageReportTables";
 
         [TestMethod]
         public void ReclaimInputsManualScript_ReplaysTheMigrationVerbatim()
@@ -133,6 +133,7 @@ namespace Tests.UnitTests
                     + "objects only - a data-state guard has already broken a customer upgrade here.");
             }
         }
+
 
         [TestMethod]
         public void TargetsManualScript_ReplaysTheMigrationVerbatimAndCopiesPredecessorSnapshot()

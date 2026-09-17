@@ -419,6 +419,7 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("warnings")]
         public List<string> Warnings { get; set; } = new List<string>();
     }
+
     public class CopilotAdoptionCreateCohortRequest
     {
         [JsonProperty("name")] public string Name { get; set; }
@@ -542,5 +543,4 @@ namespace Common.Entities.CopilotAdoption
         public long EmailsRead { get; set; }
         public long FilesViewedOrEdited { get; set; }
     }
-
 }

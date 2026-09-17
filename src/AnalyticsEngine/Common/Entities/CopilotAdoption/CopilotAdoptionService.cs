@@ -269,80 +269,6 @@ namespace Common.Entities.CopilotAdoption
             };
         }
 
-        public async Task<CopilotAdoptionCohortComparison> ComparePublishedPeriodCohortsAsync(
-            DateTime leftPeriodEndUtc,
-            DateTime rightPeriodEndUtc,
-            int periodDays,
-            CancellationToken cancellationToken = default(CancellationToken))
-        {
-            var leftEnd = leftPeriodEndUtc.Date;
-            var rightEnd = rightPeriodEndUtc.Date;
-            var days = Math.Max(1, periodDays);
-            var gate = await ComparePublishedPeriodsAsync(leftEnd, rightEnd, days, cancellationToken);
-            var result = new CopilotAdoptionCohortComparison { Gate = gate };
-
-            if (!gate.OptionsComparable)
-            {
-                result.Summary.Warnings.Add(gate.Message);
-                return result;
-            }
-
-            var activationWindowDays = Math.Max(1, _options.ActivationWindowDays <= 0
-                ? _options.ReclaimGraceDays
-                : _options.ActivationWindowDays);
-            var historyDays = Math.Max(days, _options.HistoryDays);
-
-            var rows = await QueryAsync<CopilotAdoptionCohortUserRow>(
-                CopilotAdoptionSql.PublishedPeriodCohortRowsSql,
-                cancellationToken,
-                new SqlParameter("@leftPeriodEnd", leftEnd),
-                new SqlParameter("@rightPeriodEnd", rightEnd),
-                new SqlParameter("@periodDays", days),
-                new SqlParameter("@leftFrom", leftEnd.AddDays(-(days - 1))),
-                new SqlParameter("@rightFrom", rightEnd.AddDays(-(days - 1))),
-                new SqlParameter("@rightHistoryFrom", rightEnd.AddDays(-(historyDays - 1))),
-                new SqlParameter("@activationWindowDays", activationWindowDays));
-
-            foreach (var row in rows)
-            {
-                row.TransitionLabel = TransitionLabel(row.Transition);
-            }
-
-            result.Rows = rows;
-            FinaliseCohortComparison(result, activationWindowDays);
-            return result;
-        }
-
-        public async Task<CopilotAdoptionCohortUserPage> ReadPublishedPeriodCohortUsersAsync(
-            DateTime leftPeriodEndUtc,
-            DateTime rightPeriodEndUtc,
-            int periodDays,
-            string transition = null,
-            string fromBand = null,
-            string toBand = null,
-            string department = null,
-            string activationState = null,
-            int skip = 0,
-            int take = 50,
-            CancellationToken cancellationToken = default(CancellationToken))
-        {
-            var comparison = await ComparePublishedPeriodCohortsAsync(
-                leftPeriodEndUtc, rightPeriodEndUtc, periodDays, cancellationToken);
-            var matched = ApplyCohortUserFilters(
-                comparison.Rows, transition, fromBand, toBand, department, activationState);
-            var pageSize = Math.Min(Math.Max(1, take), 500);
-            var offset = Math.Max(0, skip);
-
-            return new CopilotAdoptionCohortUserPage
-            {
-                Total = matched.Count,
-                Skip = offset,
-                Take = pageSize,
-                Rows = matched.Skip(offset).Take(pageSize).ToList(),
-                Warnings = comparison.Summary.Warnings,
-            };
-        }
-
 
         /// <summary>
         /// Adds closed-period movement and customer targets to an already-built analysis. The live
@@ -671,6 +597,80 @@ namespace Common.Entities.CopilotAdoption
                 case CopilotAdoptionTargetMetricCodes.RecommendedForLicence: return summary.RecommendedForLicence;
                 default: return null;
             }
+        }
+
+        public async Task<CopilotAdoptionCohortComparison> ComparePublishedPeriodCohortsAsync(
+            DateTime leftPeriodEndUtc,
+            DateTime rightPeriodEndUtc,
+            int periodDays,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var leftEnd = leftPeriodEndUtc.Date;
+            var rightEnd = rightPeriodEndUtc.Date;
+            var days = Math.Max(1, periodDays);
+            var gate = await ComparePublishedPeriodsAsync(leftEnd, rightEnd, days, cancellationToken);
+            var result = new CopilotAdoptionCohortComparison { Gate = gate };
+
+            if (!gate.OptionsComparable)
+            {
+                result.Summary.Warnings.Add(gate.Message);
+                return result;
+            }
+
+            var activationWindowDays = Math.Max(1, _options.ActivationWindowDays <= 0
+                ? _options.ReclaimGraceDays
+                : _options.ActivationWindowDays);
+            var historyDays = Math.Max(days, _options.HistoryDays);
+
+            var rows = await QueryAsync<CopilotAdoptionCohortUserRow>(
+                CopilotAdoptionSql.PublishedPeriodCohortRowsSql,
+                cancellationToken,
+                new SqlParameter("@leftPeriodEnd", leftEnd),
+                new SqlParameter("@rightPeriodEnd", rightEnd),
+                new SqlParameter("@periodDays", days),
+                new SqlParameter("@leftFrom", leftEnd.AddDays(-(days - 1))),
+                new SqlParameter("@rightFrom", rightEnd.AddDays(-(days - 1))),
+                new SqlParameter("@rightHistoryFrom", rightEnd.AddDays(-(historyDays - 1))),
+                new SqlParameter("@activationWindowDays", activationWindowDays));
+
+            foreach (var row in rows)
+            {
+                row.TransitionLabel = TransitionLabel(row.Transition);
+            }
+
+            result.Rows = rows;
+            FinaliseCohortComparison(result, activationWindowDays);
+            return result;
+        }
+
+        public async Task<CopilotAdoptionCohortUserPage> ReadPublishedPeriodCohortUsersAsync(
+            DateTime leftPeriodEndUtc,
+            DateTime rightPeriodEndUtc,
+            int periodDays,
+            string transition = null,
+            string fromBand = null,
+            string toBand = null,
+            string department = null,
+            string activationState = null,
+            int skip = 0,
+            int take = 50,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var comparison = await ComparePublishedPeriodCohortsAsync(
+                leftPeriodEndUtc, rightPeriodEndUtc, periodDays, cancellationToken);
+            var matched = ApplyCohortUserFilters(
+                comparison.Rows, transition, fromBand, toBand, department, activationState);
+            var pageSize = Math.Min(Math.Max(1, take), 500);
+            var offset = Math.Max(0, skip);
+
+            return new CopilotAdoptionCohortUserPage
+            {
+                Total = matched.Count,
+                Skip = offset,
+                Take = pageSize,
+                Rows = matched.Skip(offset).Take(pageSize).ToList(),
+                Warnings = comparison.Summary.Warnings,
+            };
         }
 
         public static string OptionsHash(CopilotAdoptionOptions options)

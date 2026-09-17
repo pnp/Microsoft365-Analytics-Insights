@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   makeStyles,
   tokens,
@@ -292,7 +292,7 @@ export default function CopilotAdoptionPage() {
       // changed or the page unmounted.
       controller.abort();
     };
-  }, [availability, windowDays, appliedSeatCosts, comparisonMode]);
+  }, [availability, windowDays, comparisonMode, appliedSeatCosts]);
 
   const onTabSelect: SelectTabEventHandler = (_e: unknown, data: { value: unknown }) => {
     setDrillAction(undefined);
@@ -377,7 +377,7 @@ export default function CopilotAdoptionPage() {
               </Text>
               <Select
                 value={comparisonMode}
-                onChange={(_e, d) => setComparisonMode(d.value)}
+                onChange={(_e: unknown, d: { value: string }) => setComparisonMode(d.value)}
                 aria-label="Comparison period"
               >
                 {COMPARISON_OPTIONS.map((o) => (
@@ -1017,11 +1017,41 @@ function AnalystTab({
     established: o.establishedScore,
     developing: o.developingScore,
   };
-  const targets = summary.targets ?? [];
 
   return (
     <>
       <KpiGrid items={kpis} />
+
+      {(summary.targets?.length ?? 0) > 0 && (
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                Internal adoption targets
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                Customer-defined goals only. Baselines are frozen when the target is created; no external
+                benchmark is built in.
+              </Text>
+            </div>
+          </div>
+          <div className={styles.cardBody}>
+            <ul style={{ margin: 0, paddingInlineStart: '20px', lineHeight: 1.7 }}>
+              {(summary.targets ?? []).map((target) => (
+                <li key={target.id}>
+                  <strong>{target.label ?? target.metric}</strong> ({target.owner}) - baseline {formatMetricValue(
+                    target.baselineValue,
+                    target.metric,
+                  )}, current {target.currentValue == null ? 'not comparable' : formatMetricValue(target.currentValue, target.metric)},
+                  target {formatMetricValue(target.targetValue, target.metric)} by {formatDate(target.targetDate)}
+                  {target.progressPct != null ? ` (${Math.round(target.progressPct)}% of the movement)` : ''}.
+                  {target.message ? ` ${target.message}` : ''}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </Card>
+      )}
 
       {summary.idleLicenceSpend && (
         <Card>
@@ -1039,37 +1069,6 @@ function AnalystTab({
               Exposure {formatCosts(summary.idleLicenceSpend.spendExposure, summary.idleLicenceSpend.unassignedSpendUnknown)}; reassignable {formatCosts(summary.idleLicenceSpend.reassignable)}; reducible at renewal {formatCosts(summary.idleLicenceSpend.reducibleAtRenewal, summary.idleLicenceSpend.unassignedSpendUnknown)}.
             </p>
             <p className={styles.muted}>Reassignable means assigned idle seats that can be given to someone else. Reducible means purchased but unassigned seats that can be reduced at renewal. The Certain tier can be quoted alone: {formatTierCosts(summary.idleLicenceSpend.tiers, 'Certain')}.</p>
-          </div>
-        </Card>
-      )}
-
-      {targets.length > 0 && (
-        <Card>
-          <div className={styles.cardHead}>
-            <div>
-              <Text weight="semibold" size={400}>
-                Internal adoption targets
-              </Text>
-              <Text size={200} block className={styles.muted}>
-                Customer-defined goals only. Baselines are frozen when the target is created; no external
-                benchmark is built in.
-              </Text>
-            </div>
-          </div>
-          <div className={styles.cardBody}>
-            <ul style={{ margin: 0, paddingInlineStart: '20px', lineHeight: 1.7 }}>
-              {targets.map((target) => (
-                <li key={target.id}>
-                  <strong>{target.label ?? target.metric}</strong> ({target.owner}) - baseline {formatMetricValue(
-                    target.baselineValue,
-                    target.metric,
-                  )}, current {target.currentValue == null ? 'not comparable' : formatMetricValue(target.currentValue, target.metric)},
-                  target {formatMetricValue(target.targetValue, target.metric)} by {formatDate(target.targetDate)}
-                  {target.progressPct != null ? ` (${Math.round(target.progressPct)}% of the movement)` : ''}.
-                  {target.message ? ` ${target.message}` : ''}
-                </li>
-              ))}
-            </ul>
           </div>
         </Card>
       )}
