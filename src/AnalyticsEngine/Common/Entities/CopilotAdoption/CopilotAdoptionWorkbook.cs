@@ -37,6 +37,8 @@ namespace Common.Entities.CopilotAdoption
 
                 WriteReportSheet(workbook, summary);
                 WriteHeadlineSheet(workbook, summary);
+                WriteMovementSheet(workbook, summary);
+                WriteTargetsSheet(workbook, summary);
                 WriteFunnelSheet(workbook, summary);
                 WriteEngagementSheet(workbook, summary);
                 WriteTrendSheet(workbook, summary);
@@ -316,6 +318,63 @@ namespace Common.Entities.CopilotAdoption
             }
 
             sheet.FreezeTopRows(1);
+        }
+
+
+        private static void WriteMovementSheet(XlsxWriter workbook, CopilotAdoptionSummary summary)
+        {
+            var sheet = workbook.AddSheet("Period movement");
+            sheet.SetColumnWidths(30, 18, 18, 18, 18, 18, 70);
+            sheet.AddTitle("Closed-period movement");
+            sheet.AddBlankRow();
+            var movement = summary.PeriodMovement;
+            if (movement == null || !movement.Available || !movement.Comparable)
+            {
+                sheet.AddHeaderRow("Status", "Message");
+                sheet.AddRow(movement == null ? "Not available" : "Not comparable", XlsxCell.Wrapped(movement?.Message ?? "No movement was calculated."));
+                return;
+            }
+
+            sheet.AddHeaderRow("Measure", "Current", "Prior", "Change", "Current seats", "Seat change", "Comparison");
+            foreach (var delta in movement.Deltas)
+            {
+                sheet.AddRow(
+                    delta.Label,
+                    delta.CurrentValue,
+                    delta.PriorValue,
+                    delta.Change,
+                    delta.DenominatorCurrent.HasValue ? (object)delta.DenominatorCurrent.Value : string.Empty,
+                    delta.DenominatorChange.HasValue ? (object)delta.DenominatorChange.Value : string.Empty,
+                    XlsxCell.Wrapped(movement.Message));
+            }
+            sheet.FreezeTopRows(3);
+        }
+
+        private static void WriteTargetsSheet(XlsxWriter workbook, CopilotAdoptionSummary summary)
+        {
+            var sheet = workbook.AddSheet("Targets");
+            sheet.SetColumnWidths(28, 16, 28, 18, 18, 18, 18, 24, 70);
+            sheet.AddTitle("Customer-defined adoption targets");
+            sheet.AddBlankRow();
+            sheet.AddHeaderRow("Metric", "Scope", "Owner", "Baseline", "Current", "Target", "Progress %", "Target date", "Status");
+            foreach (var target in summary.Targets ?? new List<CopilotAdoptionTarget>())
+            {
+                sheet.AddRow(
+                    target.Label ?? target.Metric,
+                    target.ScopeType == "tenant" ? "Tenant" : $"{target.ScopeType}: {target.ScopeValue}",
+                    target.Owner,
+                    target.BaselineValue,
+                    target.CurrentValue.HasValue ? (object)target.CurrentValue.Value : string.Empty,
+                    target.TargetValue,
+                    target.ProgressPct.HasValue ? (object)target.ProgressPct.Value : string.Empty,
+                    target.TargetDate,
+                    XlsxCell.Wrapped(target.Message));
+            }
+            if ((summary.Targets ?? new List<CopilotAdoptionTarget>()).Count == 0)
+            {
+                sheet.AddRow("No targets", string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, "Create internal targets in the portal; no external benchmark is built in.");
+            }
+            sheet.FreezeTopRows(3);
         }
 
         private static void AddMeta(XlsxSheet sheet, string name, object value, string notes)
