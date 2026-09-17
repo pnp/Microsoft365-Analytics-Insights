@@ -154,6 +154,14 @@ namespace Common.Entities.CopilotAdoption
         public int ReclaimGraceDays { get; set; } = 30;
 
         /// <summary>
+        /// Days from first observed Copilot seat assignment in which a new seat should reach first use.
+        /// Defaults to the same 30-day grace concept as reclaim scoring, so a newly assigned seat is never
+        /// both "too new to judge" and "failed to activate" on the same day.
+        /// </summary>
+        [JsonProperty("activationWindowDays")]
+        public int ActivationWindowDays { get; set; } = 30;
+
+        /// <summary>
         /// Distinct users an agent needs before its usage is treated as adoption rather than as its
         /// author testing it. Matches the "minimum 3 users" convention used in Microsoft's own agent
         /// reporting.

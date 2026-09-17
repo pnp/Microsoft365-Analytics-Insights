@@ -110,6 +110,7 @@ export interface CopilotAdoptionOptions {
   agentRetireInactiveDays: number;
   agentNewDays: number;
   reclaimGraceDays: number;
+  activationWindowDays: number;
   agentMinUsers: number;
   agentHistoryDays: number;
 
@@ -166,6 +167,122 @@ export interface AdoptionGuidanceLink {
   audience: string;
   publisher: string;
   catalogueVersion: string;
+}
+
+export interface CopilotAdoptionPeriodRun {
+  periodEnd: string;
+  periodDays: number;
+  optionsHash: string;
+  auditAvailable: boolean;
+  reportObfuscated: boolean;
+  reportPeriodDays: number;
+  licensedUsers: number;
+  scoredUsers: number;
+  publishedUtc: string;
+  dataCutoffUtc: string;
+  coverageStatus: string;
+}
+
+export interface CopilotAdoptionPeriodComparisonGate {
+  left: CopilotAdoptionPeriodRun | null;
+  right: CopilotAdoptionPeriodRun | null;
+  optionsComparable: boolean;
+  message: string;
+}
+
+export interface CopilotAdoptionCohortSummary {
+  earlierPopulation: number;
+  currentPopulation: number;
+  newlyAssigned: number;
+  earlierPopulationTransitionTotal: number;
+  transitionsSumToEarlierPopulation: boolean;
+  reclaimCaveat: string;
+  warnings: string[];
+}
+
+export interface CopilotAdoptionCohortTransitionSummary {
+  code: string;
+  label: string;
+  description: string;
+  users: number;
+  shareOfEarlierPopulationPct: number;
+}
+
+export interface CopilotAdoptionCohortFlowSummary {
+  fromBand: string;
+  toBand: string;
+  transition: string;
+  users: number;
+}
+
+export interface CopilotAdoptionActivationDistributionBucket {
+  label: string;
+  users: number;
+  sharePct: number;
+}
+
+export interface CopilotAdoptionActivationSegment {
+  segment: string;
+  newSeatsAssignedInPeriod: number;
+  activatedWithinWindow: number;
+  activationRatePct: number;
+  neverActivatedUsers: number;
+  seatDateUnknownUsers: number;
+}
+
+export interface CopilotAdoptionActivationSummary {
+  activationWindowDays: number;
+  knownSeatStartUsers: number;
+  seatDateUnknownUsers: number;
+  assignedBeforeHistoryUsers: number;
+  newSeatsAssignedInPeriod: number;
+  activatedWithinWindow: number;
+  activationRatePct: number;
+  neverActivatedUsers: number;
+  tooNewToJudgeUsers: number;
+  medianDaysToFirstUse: number | null;
+  distribution: CopilotAdoptionActivationDistributionBucket[];
+  byDepartment: CopilotAdoptionActivationSegment[];
+  caveat: string;
+}
+
+export interface CopilotAdoptionCohortComparison {
+  gate: CopilotAdoptionPeriodComparisonGate;
+  summary: CopilotAdoptionCohortSummary;
+  transitions: CopilotAdoptionCohortTransitionSummary[];
+  flows: CopilotAdoptionCohortFlowSummary[];
+  activation: CopilotAdoptionActivationSummary;
+}
+
+export interface CopilotAdoptionCohortUserRow {
+  userId: number;
+  userPrincipalName: string;
+  mail: string | null;
+  department: string | null;
+  jobTitle: string | null;
+  manager: string | null;
+  accountEnabled: boolean | null;
+  existedInEarlierPeriod: boolean;
+  existsInCurrentPeriod: boolean;
+  activeInEarlierPeriod: boolean;
+  activeInCurrentPeriod: boolean;
+  fromBand: string;
+  toBand: string;
+  transition: string;
+  transitionLabel: string;
+  reclaimInterpretation: string | null;
+  seatFirstObservedUtc: string | null;
+  firstInteractionUtc: string | null;
+  daysToFirstUse: number | null;
+  activationState: string | null;
+}
+
+export interface CopilotAdoptionCohortUserPage {
+  total: number;
+  skip: number;
+  take: number;
+  rows: CopilotAdoptionCohortUserRow[];
+  warnings: string[];
 }
 
 /** One active-day habit bucket (Infrequent / Moderate / Frequent / Daily). */
