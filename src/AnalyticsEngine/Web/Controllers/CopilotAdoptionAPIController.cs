@@ -184,6 +184,17 @@ namespace Web.AnalyticsWeb.Controllers
             return await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, seatCosts, FirstResponseBudget, cancellationToken);
         }
 
+        private async Task<CopilotAdoptionAnalysis> TryGetEnrichedAnalysisAsync(
+            int windowDays, string seatLicenceTypeIds, string seatCosts, string comparisonMode, TimeSpan budget, CancellationToken cancellationToken)
+        {
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, seatCosts, budget, cancellationToken);
+            if (analysis == null) return null;
+
+            await new CopilotAdoptionService(analysis.Summary.Options)
+                .EnrichProgressAsync(analysis, comparisonMode, cancellationToken);
+            return analysis;
+        }
+
         /// <summary>
         /// As above, but with an explicit wait budget. Exports use a much longer one - see
         /// <see cref="ExportWaitBudget"/>.
@@ -264,11 +275,46 @@ namespace Web.AnalyticsWeb.Controllers
             int windowDays = 28,
             string seatLicenceTypeIds = null,
             string seatCosts = null,
+            string comparisonMode = CopilotAdoptionComparisonModes.PreviousPeriod,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, seatCosts, cancellationToken);
+            var analysis = await TryGetEnrichedAnalysisAsync(windowDays, seatLicenceTypeIds, seatCosts, comparisonMode, FirstResponseBudget, cancellationToken);
             if (analysis == null) return StillBuilding();
             return Ok(analysis.Summary);
+        }
+
+        [HttpGet]
+        [Route("targets")]
+        public async Task<IHttpActionResult> Targets(
+            int windowDays = 28,
+            string comparisonMode = CopilotAdoptionComparisonModes.PreviousPeriod,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var analysis = await TryGetEnrichedAnalysisAsync(windowDays, null, null, comparisonMode, FirstResponseBudget, cancellationToken);
+            if (analysis == null) return StillBuilding();
+            return Ok(analysis.Summary.Targets);
+        }
+
+        [HttpPost]
+        [Route("targets")]
+        public async Task<IHttpActionResult> CreateTarget(CopilotAdoptionCreateTargetRequest request, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            if (request == null) return BadRequest("Target details are required.");
+            try
+            {
+                request.CreatedBy = request.CreatedBy ?? User?.Identity?.Name;
+                var target = await new CopilotAdoptionService(CopilotAdoptionOptions.Default)
+                    .CreateTargetAsync(request, cancellationToken);
+                return Ok(target);
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(ex.Message);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(ex.Message);
+            }
         }
 
         /// <summary>
@@ -750,14 +796,15 @@ namespace Web.AnalyticsWeb.Controllers
             int windowDays = 28,
             string seatLicenceTypeIds = null,
             string seatCosts = null,
+            string comparisonMode = CopilotAdoptionComparisonModes.PreviousPeriod,
             CancellationToken cancellationToken = default(CancellationToken))
         {
             // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
             // would just render the JSON body as the "file". So an export WAITS - but only up to
             // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
             // download instead of an answer.
-            var analysis = await TryGetAnalysisAsync(
-                windowDays, seatLicenceTypeIds, seatCosts, ExportWaitBudget, cancellationToken);
+            var analysis = await TryGetEnrichedAnalysisAsync(
+                windowDays, seatLicenceTypeIds, seatCosts, comparisonMode, ExportWaitBudget, cancellationToken);
             if (analysis == null) return ExportNotReadyResponse();
 
             byte[] bytes;

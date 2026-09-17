@@ -342,6 +342,336 @@ namespace Common.Entities.CopilotAdoption
             };
         }
 
+
+        /// <summary>
+        /// Adds closed-period movement and customer targets to an already-built analysis. The live
+        /// analysis may cover the current partial day; movement deliberately uses only the latest stored
+        /// closed period and its selected stored comparator.
+        /// </summary>
+        public async Task EnrichProgressAsync(
+            CopilotAdoptionAnalysis analysis,
+            string comparisonMode = CopilotAdoptionComparisonModes.PreviousPeriod,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            if (analysis == null) throw new ArgumentNullException(nameof(analysis));
+            var summary = analysis.Summary;
+            var periodDays = Math.Max(1, summary.WindowDays > 0 ? summary.WindowDays : _options.WindowDays);
+            var mode = NormaliseComparisonMode(comparisonMode);
+
+            var latestRun = await GetLatestPublishedPeriodRunAsync(periodDays, cancellationToken).ConfigureAwait(false);
+            if (latestRun == null)
+            {
+                summary.PeriodMovement = new CopilotAdoptionPeriodMovement
+                {
+                    Mode = mode,
+                    PeriodDays = periodDays,
+                    Available = false,
+                    Comparable = false,
+                    Message = "No closed Copilot Adoption period has been published yet, so period movement is not shown."
+                };
+                summary.Targets = await ListTargetsAsync(null, null, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            var comparisonEnd = ComparisonPeriodEnd(latestRun.PeriodEnd, periodDays, mode);
+            var current = await ReadPublishedPeriodAsync(latestRun.PeriodEnd, periodDays, cancellationToken).ConfigureAwait(false);
+            var prior = await ReadPublishedPeriodAsync(comparisonEnd, periodDays, cancellationToken).ConfigureAwait(false);
+            summary.PeriodMovement = BuildMovement(current, prior, mode);
+            summary.Targets = await ListTargetsAsync(current, latestRun, cancellationToken).ConfigureAwait(false);
+        }
+
+        public async Task<CopilotAdoptionTarget> CreateTargetAsync(
+            CopilotAdoptionCreateTargetRequest request,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            if (request == null) throw new ArgumentNullException(nameof(request));
+            var metric = NormaliseMetric(request.Metric);
+            var scopeType = NormaliseScopeType(request.ScopeType);
+            var scopeValue = string.IsNullOrWhiteSpace(request.ScopeValue) ? null : request.ScopeValue.Trim();
+            var periodDays = Math.Max(1, request.BaselinePeriodDays ?? _options.WindowDays);
+            var run = request.BaselinePeriodEnd.HasValue
+                ? await GetPublishedPeriodRunAsync(request.BaselinePeriodEnd.Value.Date, periodDays, cancellationToken).ConfigureAwait(false)
+                : await GetLatestPublishedPeriodRunAsync(periodDays, cancellationToken).ConfigureAwait(false);
+            if (run == null) throw new InvalidOperationException("A target needs a published closed baseline period before it can be created.");
+
+            var baseline = await ReadPublishedPeriodAsync(run.PeriodEnd, run.PeriodDays, cancellationToken).ConfigureAwait(false);
+            var baselineValue = MetricValue(baseline.Analysis.Summary, metric, scopeType, scopeValue);
+            if (!baselineValue.HasValue) throw new InvalidOperationException("The selected metric and scope are not available in the baseline period.");
+
+            var targetDate = request.TargetDate.Date;
+            if (targetDate <= run.PeriodEnd.Date) throw new InvalidOperationException("The target date must be after the frozen baseline period.");
+
+            var owner = string.IsNullOrWhiteSpace(request.Owner) ? "Unassigned" : request.Owner.Trim();
+            var createdBy = string.IsNullOrWhiteSpace(request.CreatedBy) ? owner : request.CreatedBy.Trim();
+            var id = await ScalarAsync(
+                CopilotAdoptionSql.InsertAdoptionTargetSql,
+                cancellationToken,
+                new SqlParameter("@metric", metric),
+                new SqlParameter("@scopeType", scopeType),
+                new SqlParameter("@scopeValue", (object)scopeValue ?? DBNull.Value),
+                new SqlParameter("@targetValue", request.TargetValue),
+                new SqlParameter("@owner", owner),
+                new SqlParameter("@baselinePeriodEnd", run.PeriodEnd.Date),
+                new SqlParameter("@baselinePeriodDays", run.PeriodDays),
+                new SqlParameter("@baselineValue", baselineValue.Value),
+                new SqlParameter("@baselineOptionsHash", run.OptionsHash),
+                new SqlParameter("@baselineScoringOptionsHash", ScoringOptionsHash(_options)),
+                new SqlParameter("@targetDate", targetDate),
+                new SqlParameter("@createdBy", createdBy)).ConfigureAwait(false);
+
+            var targets = await ListTargetsAsync(baseline, run, cancellationToken).ConfigureAwait(false);
+            return targets.FirstOrDefault(t => t.Id == id);
+        }
+
+        private async Task<CopilotAdoptionPeriodRun> GetLatestPublishedPeriodRunAsync(int periodDays, CancellationToken cancellationToken)
+        {
+            var rows = await QueryAsync<CopilotAdoptionPeriodRun>(
+                CopilotAdoptionSql.LatestPublishedPeriodRunSql,
+                cancellationToken,
+                new SqlParameter("@periodDays", periodDays)).ConfigureAwait(false);
+            return rows.FirstOrDefault();
+        }
+
+        private static string NormaliseComparisonMode(string mode)
+        {
+            return string.Equals(mode, CopilotAdoptionComparisonModes.SamePeriodLastQuarter, StringComparison.OrdinalIgnoreCase)
+                ? CopilotAdoptionComparisonModes.SamePeriodLastQuarter
+                : CopilotAdoptionComparisonModes.PreviousPeriod;
+        }
+
+        private static DateTime ComparisonPeriodEnd(DateTime currentEnd, int periodDays, string mode)
+        {
+            return string.Equals(mode, CopilotAdoptionComparisonModes.SamePeriodLastQuarter, StringComparison.Ordinal)
+                ? currentEnd.Date.AddMonths(-3)
+                : currentEnd.Date.AddDays(-Math.Max(1, periodDays));
+        }
+
+        public static CopilotAdoptionPeriodMovement BuildMovement(
+            CopilotAdoptionPublishedPeriod current,
+            CopilotAdoptionPublishedPeriod prior,
+            string mode)
+        {
+            var normalisedMode = NormaliseComparisonMode(mode);
+            var result = new CopilotAdoptionPeriodMovement
+            {
+                Mode = normalisedMode,
+                CurrentPeriodEnd = current?.Run?.PeriodEnd,
+                PriorPeriodEnd = prior?.Run?.PeriodEnd,
+                PeriodDays = current?.Run?.PeriodDays ?? prior?.Run?.PeriodDays ?? 0,
+                ComparisonLabel = normalisedMode == CopilotAdoptionComparisonModes.SamePeriodLastQuarter
+                    ? "same period last quarter"
+                    : "previous closed period",
+            };
+
+            if (current == null || prior == null)
+            {
+                result.Available = false;
+                result.Comparable = false;
+                result.Message = "The selected comparison period has not been published yet, so movement is not shown.";
+                return result;
+            }
+
+            result.Available = true;
+            if (!string.Equals(current.Run.OptionsHash, prior.Run.OptionsHash, StringComparison.OrdinalIgnoreCase))
+            {
+                result.Comparable = false;
+                result.Message = "Movement is not shown because the two stored periods were published with different options hashes. Showing a delta would confuse a period change with a threshold or fact-shaping change.";
+                return result;
+            }
+
+            result.Comparable = true;
+            result.Message = $"Comparing the closed period ending {current.Run.PeriodEnd:yyyy-MM-dd} with the {result.ComparisonLabel} ending {prior.Run.PeriodEnd:yyyy-MM-dd}. The current partial period is not compared.";
+            result.Deltas = BuildMetricDeltas(current.Analysis.Summary, prior.Analysis.Summary);
+            return result;
+        }
+
+        private async Task<List<CopilotAdoptionTarget>> ListTargetsAsync(
+            CopilotAdoptionPublishedPeriod current,
+            CopilotAdoptionPeriodRun currentRun,
+            CancellationToken cancellationToken)
+        {
+            List<CopilotAdoptionTarget> targets;
+            try
+            {
+                targets = await QueryAsync<CopilotAdoptionTarget>(CopilotAdoptionSql.AdoptionTargetsSql, cancellationToken).ConfigureAwait(false);
+            }
+            catch (SqlException ex) when (ex.Number == 208)
+            {
+                return new List<CopilotAdoptionTarget>();
+            }
+
+            var currentHash = ScoringOptionsHash(_options);
+            foreach (var target in targets)
+            {
+                target.Label = MetricLabel(target.Metric);
+                if (current == null || currentRun == null)
+                {
+                    target.Comparable = false;
+                    target.Message = "No closed current period has been published yet.";
+                    continue;
+                }
+
+                if (!string.Equals(target.BaselineOptionsHash, currentRun.OptionsHash, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(target.BaselineScoringOptionsHash, currentHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    target.Comparable = false;
+                    target.Message = "This target is not comparable under the current Copilot Adoption options; its frozen baseline is preserved rather than silently moved.";
+                    continue;
+                }
+
+                var value = MetricValue(current.Analysis.Summary, target.Metric, target.ScopeType, target.ScopeValue);
+                target.CurrentValue = value;
+                target.Comparable = value.HasValue;
+                target.Message = value.HasValue
+                    ? $"Owned by {target.Owner}. Baseline is frozen at {target.BaselineValue:N1} for {target.BaselinePeriodEnd:yyyy-MM-dd}."
+                    : "The target scope is not present in the current closed period.";
+                target.ProgressPct = value.HasValue ? ProgressPct(target.BaselineValue, target.TargetValue, value.Value) : (double?)null;
+            }
+
+            return targets;
+        }
+
+        private static double ProgressPct(double baseline, double target, double current)
+        {
+            var distance = target - baseline;
+            if (Math.Abs(distance) < 0.0001d) return current >= target ? 100d : 0d;
+            return Math.Round((current - baseline) / distance * 100d, 1, MidpointRounding.AwayFromZero);
+        }
+
+        public static string ScoringOptionsHash(CopilotAdoptionOptions options)
+        {
+            var json = JsonConvert.SerializeObject(options ?? CopilotAdoptionOptions.Default, Formatting.None);
+            using (var sha = SHA256.Create())
+            {
+                return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(json))).Replace("-", string.Empty).ToLowerInvariant();
+            }
+        }
+
+        private static List<CopilotAdoptionMetricDelta> BuildMetricDeltas(CopilotAdoptionSummary current, CopilotAdoptionSummary prior)
+        {
+            var deltas = new List<CopilotAdoptionMetricDelta>();
+            foreach (var metric in HeadlineMetrics())
+            {
+                var now = MetricValue(current, metric, "tenant", null);
+                var before = MetricValue(prior, metric, "tenant", null);
+                if (!now.HasValue || !before.HasValue) continue;
+                deltas.Add(new CopilotAdoptionMetricDelta
+                {
+                    Metric = metric,
+                    Label = MetricLabel(metric),
+                    CurrentValue = now.Value,
+                    PriorValue = before.Value,
+                    Change = Math.Round(now.Value - before.Value, 1, MidpointRounding.AwayFromZero),
+                    Unit = MetricUnit(metric),
+                    DenominatorCurrent = IsRateMetric(metric) ? current.ScoredUsers : (double?)null,
+                    DenominatorPrior = IsRateMetric(metric) ? prior.ScoredUsers : (double?)null,
+                    DenominatorChange = IsRateMetric(metric) ? current.ScoredUsers - prior.ScoredUsers : (double?)null,
+                });
+            }
+            return deltas;
+        }
+
+        private static IEnumerable<string> HeadlineMetrics()
+        {
+            return new[]
+            {
+                CopilotAdoptionTargetMetricCodes.AdoptionRatePct,
+                CopilotAdoptionTargetMetricCodes.HabitRatePct,
+                CopilotAdoptionTargetMetricCodes.ReclaimableSeats,
+                CopilotAdoptionTargetMetricCodes.ReclaimCertainSeats,
+                CopilotAdoptionTargetMetricCodes.ReclaimProbableSeats,
+                CopilotAdoptionTargetMetricCodes.ReclaimReviewSeats,
+                CopilotAdoptionTargetMetricCodes.NeverUsedUsers,
+                CopilotAdoptionTargetMetricCodes.DormantUsers,
+                CopilotAdoptionTargetMetricCodes.AverageAdoptionScore,
+                CopilotAdoptionTargetMetricCodes.MedianAdoptionScore,
+                CopilotAdoptionTargetMetricCodes.UnlicensedActiveUsers,
+                CopilotAdoptionTargetMetricCodes.RecommendedForLicence,
+            };
+        }
+
+        private static string NormaliseMetric(string metric)
+        {
+            var match = HeadlineMetrics().FirstOrDefault(m => string.Equals(m, metric, StringComparison.OrdinalIgnoreCase));
+            if (match == null) throw new ArgumentException("Unsupported Copilot Adoption target metric.", nameof(metric));
+            return match;
+        }
+
+        private static string NormaliseScopeType(string scopeType)
+        {
+            if (string.Equals(scopeType, "department", StringComparison.OrdinalIgnoreCase)) return "department";
+            if (string.Equals(scopeType, "cohort", StringComparison.OrdinalIgnoreCase)) return "cohort";
+            return "tenant";
+        }
+
+        private static bool IsRateMetric(string metric)
+        {
+            return string.Equals(metric, CopilotAdoptionTargetMetricCodes.AdoptionRatePct, StringComparison.Ordinal)
+                || string.Equals(metric, CopilotAdoptionTargetMetricCodes.HabitRatePct, StringComparison.Ordinal);
+        }
+
+        private static string MetricUnit(string metric)
+        {
+            return metric != null && metric.EndsWith("Pct", StringComparison.Ordinal) ? "percent" : "count";
+        }
+
+        private static string MetricLabel(string metric)
+        {
+            switch (metric)
+            {
+                case CopilotAdoptionTargetMetricCodes.AdoptionRatePct: return "Adoption rate";
+                case CopilotAdoptionTargetMetricCodes.HabitRatePct: return "Habit rate";
+                case CopilotAdoptionTargetMetricCodes.ReclaimableSeats: return "Reclaimable licences";
+                case CopilotAdoptionTargetMetricCodes.ReclaimCertainSeats: return "Reclaim - certain";
+                case CopilotAdoptionTargetMetricCodes.ReclaimProbableSeats: return "Reclaim - probable";
+                case CopilotAdoptionTargetMetricCodes.ReclaimReviewSeats: return "Reclaim - review";
+                case CopilotAdoptionTargetMetricCodes.NeverUsedUsers: return "Never used";
+                case CopilotAdoptionTargetMetricCodes.DormantUsers: return "Dormant";
+                case CopilotAdoptionTargetMetricCodes.AverageAdoptionScore: return "Average engagement";
+                case CopilotAdoptionTargetMetricCodes.MedianAdoptionScore: return "Median engagement";
+                case CopilotAdoptionTargetMetricCodes.UnlicensedActiveUsers: return "Using Copilot unlicensed";
+                case CopilotAdoptionTargetMetricCodes.RecommendedForLicence: return "Recommended for a licence";
+                default: return metric;
+            }
+        }
+
+        private static double? MetricValue(CopilotAdoptionSummary summary, string metric, string scopeType, string scopeValue)
+        {
+            if (summary == null) return null;
+            if (string.Equals(scopeType, "department", StringComparison.OrdinalIgnoreCase))
+            {
+                var segment = (summary.AdoptionByDepartment ?? new List<AdoptionSegmentRow>())
+                    .FirstOrDefault(r => string.Equals(r.Segment, scopeValue, StringComparison.OrdinalIgnoreCase));
+                if (segment == null) return null;
+                switch (metric)
+                {
+                    case CopilotAdoptionTargetMetricCodes.AdoptionRatePct: return segment.AdoptionRatePct;
+                    case CopilotAdoptionTargetMetricCodes.HabitRatePct: return CopilotAdoptionScoring.Percentage(segment.HabitualUsers, segment.LicensedUsers);
+                    case CopilotAdoptionTargetMetricCodes.NeverUsedUsers: return segment.NeverUsedUsers;
+                    case CopilotAdoptionTargetMetricCodes.AverageAdoptionScore: return segment.AverageAdoptionScore;
+                    default: return null;
+                }
+            }
+            if (string.Equals(scopeType, "cohort", StringComparison.OrdinalIgnoreCase)) return null;
+
+            switch (metric)
+            {
+                case CopilotAdoptionTargetMetricCodes.AdoptionRatePct: return summary.AdoptionRatePct;
+                case CopilotAdoptionTargetMetricCodes.HabitRatePct: return summary.HabitRatePct;
+                case CopilotAdoptionTargetMetricCodes.ReclaimableSeats: return summary.ReclaimableSeats;
+                case CopilotAdoptionTargetMetricCodes.ReclaimCertainSeats: return summary.ReclaimCertainSeats;
+                case CopilotAdoptionTargetMetricCodes.ReclaimProbableSeats: return summary.ReclaimProbableSeats;
+                case CopilotAdoptionTargetMetricCodes.ReclaimReviewSeats: return summary.ReclaimReviewSeats;
+                case CopilotAdoptionTargetMetricCodes.NeverUsedUsers: return summary.NeverUsedUsers;
+                case CopilotAdoptionTargetMetricCodes.DormantUsers: return summary.DormantUsers;
+                case CopilotAdoptionTargetMetricCodes.AverageAdoptionScore: return summary.AverageAdoptionScore;
+                case CopilotAdoptionTargetMetricCodes.MedianAdoptionScore: return summary.MedianAdoptionScore;
+                case CopilotAdoptionTargetMetricCodes.UnlicensedActiveUsers: return summary.UnlicensedActiveUsers;
+                case CopilotAdoptionTargetMetricCodes.RecommendedForLicence: return summary.RecommendedForLicence;
+                default: return null;
+            }
+        }
+
         public static string OptionsHash(CopilotAdoptionOptions options)
         {
             var o = options ?? CopilotAdoptionOptions.Default;

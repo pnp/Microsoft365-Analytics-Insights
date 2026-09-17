@@ -810,6 +810,14 @@ namespace Common.Entities.CopilotAdoption
 
         #endregion
 
+        /// <summary>Closed-period movement for the headline figures. Never compares the current partial period.</summary>
+        [JsonProperty("periodMovement")]
+        public CopilotAdoptionPeriodMovement PeriodMovement { get; set; } = new CopilotAdoptionPeriodMovement();
+
+        /// <summary>Customer-defined internal goals evaluated against their frozen baseline.</summary>
+        [JsonProperty("targets")]
+        public List<CopilotAdoptionTarget> Targets { get; set; } = new List<CopilotAdoptionTarget>();
+
         /// <summary>The tuning actually used, echoed back so every figure can be traced to its rule.</summary>
         [JsonProperty("options")]
         public CopilotAdoptionOptions Options { get; set; }

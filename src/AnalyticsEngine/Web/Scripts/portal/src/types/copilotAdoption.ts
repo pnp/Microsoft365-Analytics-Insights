@@ -464,6 +464,52 @@ export interface AccountabilityRollupRow extends AdoptionSegmentRow {
   opportunityUsers: number;
 }
 
+export interface CopilotAdoptionMetricDelta {
+  metric: string;
+  label: string;
+  currentValue: number;
+  priorValue: number;
+  change: number;
+  unit: 'count' | 'percent' | string;
+  denominatorCurrent: number | null;
+  denominatorPrior: number | null;
+  denominatorChange: number | null;
+}
+
+export interface CopilotAdoptionPeriodMovement {
+  mode: 'previousPeriod' | 'samePeriodLastQuarter' | string;
+  available: boolean;
+  comparable: boolean;
+  currentPeriodEnd: string | null;
+  priorPeriodEnd: string | null;
+  periodDays: number;
+  comparisonLabel: string | null;
+  message: string | null;
+  deltas: CopilotAdoptionMetricDelta[];
+}
+
+export interface CopilotAdoptionTarget {
+  id: number;
+  metric: string;
+  label: string | null;
+  scopeType: string;
+  scopeValue: string | null;
+  targetValue: number;
+  owner: string;
+  baselinePeriodEnd: string;
+  baselinePeriodDays: number;
+  baselineValue: number;
+  baselineOptionsHash: string;
+  baselineScoringOptionsHash: string;
+  targetDate: string;
+  createdUtc: string;
+  createdBy: string | null;
+  currentValue: number | null;
+  progressPct: number | null;
+  comparable: boolean;
+  message: string | null;
+}
+
 /** The executive view. */
 export interface CopilotAdoptionSummary {
   generatedUtc: string;
@@ -565,6 +611,8 @@ export interface CopilotAdoptionSummary {
   topResourceTypes: AdoptionResourceTypeRow[];
   agents: AgentEstateSummary;
   unlicensed: UnlicensedPopulationSummary;
+  periodMovement: CopilotAdoptionPeriodMovement;
+  targets: CopilotAdoptionTarget[];
 
   options: CopilotAdoptionOptions;
   warnings: string[];
