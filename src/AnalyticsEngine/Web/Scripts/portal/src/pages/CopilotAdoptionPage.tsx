@@ -905,7 +905,7 @@ function AnalystTab({
     <>
       <KpiGrid items={kpis} />
 
-      {summary.targets.length > 0 && (
+      {(summary.targets?.length ?? 0) > 0 && (
         <Card>
           <div className={styles.cardHead}>
             <div>
