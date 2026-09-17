@@ -69,10 +69,13 @@ export interface AdoptionResourceTypeRow {
 export interface AdoptionDataSources {
   auditAvailable: boolean;
   copilotUsageReportAvailable: boolean;
+  coworkUsageReportAvailable: boolean;
   m365UsageReportsAvailable: boolean;
   userMetadataAvailable: boolean;
   copilotUsageReportDate: string | null;
   copilotUsageReportPeriodDays: number;
+  coworkUsageReportDate: string | null;
+  coworkUsageReportPeriodDays: number;
   m365UsageReportDate: string | null;
   copilotUsageReportObfuscated: boolean;
 }
@@ -385,8 +388,19 @@ export interface CopilotAdoptionSummary {
   totalInteractions: number;
 
   coworkUsers: number;
-  coworkAdoptionPct: number;
+  coworkAdoptionPct: number | null;
+  coworkEligibilityKnown: boolean;
+  coworkEligibleUsers: number | null;
+  coworkAuditUsers: number;
   coworkInteractions: number;
+  coworkReportUsers: number;
+  coworkReportTotalTasks: number;
+  coworkReportScheduledTasks: number;
+  coworkReportUserInitiatedTasks: number;
+  coworkAutomationRatioPct: number | null;
+  coworkTasksPerActiveUser: number | null;
+  coworkReportRetainedUsers: number | null;
+  coworkReportRetentionPct: number | null;
   coworkDetected: boolean;
 
   /**
@@ -487,6 +501,14 @@ export interface LicensedUserAdoptionRow {
   appsUsed: number;
   agentsUsed: number;
   coworkInteractions: number;
+  coworkReportTotalTasks: number | null;
+  coworkReportScheduledTasks: number | null;
+  coworkReportUserInitiatedTasks: number | null;
+  coworkReportActiveDays: number | null;
+  coworkReportLastActivityDate: string | null;
+  coworkReportRetainedUser: boolean | null;
+  coworkAutomationRatioPct: number | null;
+  coworkCreditsPerTask: number | null;
   usedCowork: boolean;
 
   firstInteractionUtc: string | null;
@@ -635,6 +657,11 @@ export interface CoworkSegmentRow {
   primeCandidates: number;
   primeCandidateRatePct: number;
   regularCoworkUsers: number;
+  coworkReportTotalTasks: number;
+  coworkReportScheduledTasks: number;
+  coworkAutomationRatioPct: number | null;
+  coworkReportRetainedUsers: number | null;
+  coworkReportRetentionPct: number | null;
   coworkAdoptionPct: number;
   averageCoordinationLoad: number;
   averageFluency: number;
@@ -696,6 +723,14 @@ export interface CoworkReadinessRow {
   coworkInteractions: number;
   coworkActiveDays: number;
   lastCoworkInteractionUtc: string | null;
+  coworkReportTotalTasks: number | null;
+  coworkReportScheduledTasks: number | null;
+  coworkReportUserInitiatedTasks: number | null;
+  coworkReportActiveDays: number | null;
+  coworkReportLastActivityDate: string | null;
+  coworkReportRetainedUser: boolean | null;
+  coworkAutomationRatioPct: number | null;
+  coworkCreditsPerTask: number | null;
   usedCowork: boolean;
   regularCoworkUser: boolean;
 

@@ -281,8 +281,10 @@ namespace Common.Entities.CopilotAdoption
 
             if (summary.CoworkDetected)
             {
-                AddMeta(sheet, "Cowork users", summary.CoworkUsers, "Licensed users who used Microsoft 365 Copilot Cowork.");
-                AddMeta(sheet, "Cowork adoption %", summary.CoworkAdoptionPct, "Cowork users as a share of licensed users.");
+                AddMeta(sheet, "Cowork users", summary.CoworkUsers, "Users who used Microsoft 365 Copilot Cowork, preferring Microsoft's Cowork usage-report task source when present.");
+                AddMeta(sheet, "Cowork adoption %", summary.CoworkAdoptionPct, "Null when spending-policy eligibility is unknown; never divided by all licensed users.");
+                AddMeta(sheet, "Cowork tasks", summary.CoworkReportTotalTasks, "Microsoft's Cowork usage-report task count. Not comparable with audit interactions.");
+                AddMeta(sheet, "Cowork audit interactions", summary.CoworkInteractions, "Audit-derived Cowork interactions retained only for reconciliation, not as task counts.");
             }
 
             if (summary.CoworkReadinessAvailable)
@@ -1138,7 +1140,7 @@ namespace Common.Entities.CopilotAdoption
                     + "everyone qualifies is a 100% rate and not where a rollout should start."));
                 sheet.AddHeaderRow(
                     "Department", "Copilot seats", "Prime candidates", "Prime candidate %",
-                    "Regular Cowork users", "Cowork adoption %", "Avg coordination load", "Avg fluency");
+                    "Regular Cowork users", "Avg coordination load", "Avg fluency");
 
                 foreach (var segment in summary.CoworkByDepartment)
                 {
@@ -1148,7 +1150,6 @@ namespace Common.Entities.CopilotAdoption
                         segment.PrimeCandidates,
                         segment.PrimeCandidateRatePct,
                         segment.RegularCoworkUsers,
-                        segment.CoworkAdoptionPct,
                         segment.AverageCoordinationLoad,
                         segment.AverageFluency);
                 }
@@ -1172,8 +1173,8 @@ namespace Common.Entities.CopilotAdoption
 
             sheet.AddHeaderRow(
                 "User", "Department", "Job title", "Manager", "Cowork tier", "Verdict based on",
-                "Coordination load", "Copilot fluency", "Cowork interactions", "Cowork active days",
-                "Justification");
+                "Coordination load", "Copilot fluency", "Cowork report tasks", "Cowork automation %",
+                "Cowork audit interactions", "Justification");
 
             var headerRow = sheet.CurrentRow;
 
@@ -1201,8 +1202,9 @@ namespace Common.Entities.CopilotAdoption
                     row.Basis,
                     row.CoordinationLoadScore,
                     row.FluencyScore,
+                    row.CoworkReportTotalTasks,
+                    row.CoworkAutomationRatioPct,
                     row.CoworkInteractions,
-                    row.CoworkActiveDays,
                     XlsxCell.Wrapped(row.Rationale));
             }
 

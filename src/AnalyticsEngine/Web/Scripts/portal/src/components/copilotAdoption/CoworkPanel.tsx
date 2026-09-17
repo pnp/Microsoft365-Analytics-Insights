@@ -472,7 +472,7 @@ export default function CoworkPanel({
                     <td className={`${table.td} ${table.tdNumeric}`}>
                       {formatCount(row.regularCoworkUsers)}
                       <Text size={100} block className={table.tdSub}>
-                        {Math.round(row.coworkAdoptionPct)}%
+                        {row.coworkAutomationRatioPct === null ? '—' : `${Math.round(row.coworkAutomationRatioPct)}% automated`}
                       </Text>
                     </td>
                     <td className={`${table.td} ${table.tdNumeric}`}>
@@ -855,7 +855,7 @@ export default function CoworkPanel({
                     <td className={table.td}>
                       {row.usedCowork ? (
                         <Badge className={styles.evidence} size="small">
-                          {formatCount(row.coworkInteractions)} in {row.coworkActiveDays}d
+                          {row.coworkReportTotalTasks !== null ? `${formatCount(row.coworkReportTotalTasks)} tasks in ${row.coworkReportActiveDays ?? 0}d` : `${formatCount(row.coworkInteractions)} audit interactions in ${row.coworkActiveDays}d`}
                         </Badge>
                       ) : (
                         <Text size={200} className={styles.muted}>

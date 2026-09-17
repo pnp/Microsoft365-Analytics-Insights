@@ -1178,10 +1178,9 @@ namespace Tests.UnitTests
 
                 var coworkAgents = Query<CopilotAdoptionService.IntValueRow>(db, CopilotAdoptionSql.CoworkAgentIdsSql);
                 CollectionAssert.AreEqual(new[] { 1 }, coworkAgents.Select(a => a.Value).ToArray(),
-                    "Only the first-party Cowork agent id should match. A SharePoint agent must not - and "
-                    + "neither must a customer's own agent whose NAME contains 'Cowork', because observed "
-                    + "Cowork use outranks every inferred tier, so a name match would hand a tenant the "
-                    + "ability to fabricate evidence by typing it.");
+                    "Cowork audit reconciliation must use the documented first-party prefix only. The ids flow "
+                    + "into the observed-use path, so a customer's own agent whose name contains 'Cowork' must "
+                    + "not promote its users into evidence tiers or remove them from the candidate list.");
 
                 var seats = Query<CopilotAdoptionService.SeatAssignmentRow>(db, CopilotAdoptionSql.SeatAssignmentsSql(new[] { 1 }));
                 Assert.AreEqual(1, seats.Count);
