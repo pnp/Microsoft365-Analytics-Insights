@@ -155,6 +155,46 @@ namespace Tests.UnitTests
                 CopilotAdoptionScoring.CoworkTierFor(row, Options()),
                 "A present report value is the documented source and must win over the audit heuristic.");
         }
+
+        /// <summary>
+        /// Tiering on report active days while UsedCowork ignored them produced a row that was
+        /// simultaneously "Established" and "has not used Cowork" - contradicting the tier, the
+        /// "Used Cowork" CSV column and the workbook. Report active days are evidence of use.
+        /// </summary>
+        [TestMethod]
+        public void ReportActiveDaysAlone_CountAsHavingUsedCowork()
+        {
+            var scored = CopilotAdoptionScoring.ScoreCoworkReadiness(
+                new CoworkReadinessSignalRow
+                {
+                    UserId = 1,
+                    CoworkActiveDays = 0,
+                    CoworkInteractions = 0,
+                    CoworkReportActiveDays = 12,
+                    CoworkReportTotalTasks = null,
+                },
+                Options());
+
+            Assert.AreEqual(CopilotAdoptionScoring.CoworkTiers.Established, scored.Tier);
+            Assert.IsTrue(scored.UsedCowork,
+                "A user the first-party report shows as active on 12 days has used Cowork, whatever the "
+                + "task cell says - otherwise the tier and the Used Cowork column contradict each other.");
+            Assert.IsTrue(scored.RegularCoworkUser);
+        }
+
+        /// <summary>
+        /// The other direction: a user with no Cowork signal at all must still read as not having used it.
+        /// </summary>
+        [TestMethod]
+        public void NoCoworkSignal_IsStillNotAUser()
+        {
+            var scored = CopilotAdoptionScoring.ScoreCoworkReadiness(
+                new CoworkReadinessSignalRow { UserId = 2, CoworkActiveDays = 0, CoworkInteractions = 0 },
+                Options());
+
+            Assert.IsFalse(scored.UsedCowork);
+            Assert.AreNotEqual(CopilotAdoptionScoring.CoworkTiers.Established, scored.Tier);
+        }
     }
 
     /// <summary>
@@ -218,6 +258,35 @@ namespace Tests.UnitTests
             Assert.AreEqual(2, activation.NewSeatsAssignedInPeriod);
             Assert.AreEqual(50d, activation.ActivationRatePct);
         }
+
+        /// <summary>
+        /// Departments whose rate is unknown must not be ranked as though they were worse than a measured
+        /// 0%. LINQ orders nulls first by default, which would have put the unmeasurable department at the
+        /// top of a list an admin reads top-down looking for problems.
+        /// </summary>
+        [TestMethod]
+        public void DepartmentsWithAnUnknownRate_SortAfterMeasuredOnes()
+        {
+            var rows = new List<CopilotAdoptionCohortUserRow>
+            {
+                // Measured department: one new seat with a known date, never activated -> 0%.
+                Row(CopilotAdoptionCohortTransitions.NewlyAssigned, "neverActivated", "Measured"),
+                // Unknown department: same NeverActivatedUsers count, but no known seat date.
+                Row(CopilotAdoptionCohortTransitions.NewlyAssigned, "seatDateUnknown", "Unknown"),
+                Row("existing", "neverActivated", "Unknown"),
+            };
+
+            var activation = CopilotAdoptionService.BuildActivationSummary(rows, 30);
+
+            var measured = activation.ByDepartment.Single(s => s.Segment == "Measured");
+            var unknown = activation.ByDepartment.Single(s => s.Segment == "Unknown");
+
+            Assert.AreEqual(0d, measured.ActivationRatePct);
+            Assert.IsNull(unknown.ActivationRatePct);
+            Assert.IsTrue(
+                activation.ByDepartment.IndexOf(measured) < activation.ByDepartment.IndexOf(unknown),
+                "A measured 0% is a worse result than an unmeasurable one and must rank first.");
+        }
     }
 
     /// <summary>
@@ -279,10 +348,16 @@ namespace Tests.UnitTests
                 var expectedPredecessor = migrationIds[i - 1];
                 var script = File.ReadAllText(manualPath);
 
+                // Strip SQL comments first. The predecessor must be named in EXECUTABLE SQL - a script
+                // whose guard points at the wrong migration while a comment happens to mention the right
+                // one is exactly the defect this test exists to catch.
+                var executable = Regex.Replace(script, @"/\*.*?\*/", " ", RegexOptions.Singleline);
+                executable = Regex.Replace(executable, @"--[^\r\n]*", " ");
+
                 // Scripts name their predecessor in different but equivalent ways - inline in the stamp's
                 // WHERE clause, or bound to a @predecessor/@prev variable first. So assert on the set of
-                // migration ids the script quotes as SQL literals rather than on one exact phrasing.
-                var quotedIds = Regex.Matches(script, @"N?'(\d{15}_\w+)'")
+                // migration ids quoted as SQL literals rather than on one exact phrasing.
+                var quotedIds = Regex.Matches(executable, @"N?'(\d{15}_\w+)'")
                     .Cast<Match>()
                     .Select(m => m.Groups[1].Value)
                     .Where(v => v != id)
@@ -291,7 +366,7 @@ namespace Tests.UnitTests
 
                 if (!quotedIds.Contains(expectedPredecessor))
                 {
-                    failures.Add($"{id}: expected predecessor '{expectedPredecessor}', script references "
+                    failures.Add($"{id}: expected predecessor '{expectedPredecessor}', executable SQL references "
                                  + (quotedIds.Count == 0 ? "(none)" : string.Join(", ", quotedIds)));
                 }
 

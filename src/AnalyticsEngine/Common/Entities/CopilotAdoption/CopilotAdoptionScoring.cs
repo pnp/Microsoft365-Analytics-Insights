@@ -252,7 +252,12 @@ namespace Common.Entities.CopilotAdoption
                 CoworkAutomationRatioPct = row.CoworkReportTotalTasks.GetValueOrDefault() > 0 && row.CoworkReportScheduledTasks.HasValue
                     ? (double?)Percentage(row.CoworkReportScheduledTasks.Value, row.CoworkReportTotalTasks.Value)
                     : null,
-                UsedCowork = row.CoworkReportTotalTasks.GetValueOrDefault() > 0 || row.CoworkInteractions > 0,
+                // Report active days count as evidence too. Without them a user Microsoft reports as
+                // active on N days but whose task count is blank would be tiered Established while
+                // UsedCowork said "no" - contradicting the tier, the CSV column and the workbook.
+                UsedCowork = row.CoworkReportTotalTasks.GetValueOrDefault() > 0
+                    || row.CoworkReportActiveDays.GetValueOrDefault() > 0
+                    || row.CoworkInteractions > 0,
                 FirstInteractionUtc = row.FirstInteractionUtc,
                 LastInteractionUtc = lastUse,
                 DaysSinceLastUse = lastUse.HasValue
@@ -1267,7 +1272,12 @@ namespace Common.Entities.CopilotAdoption
                 CoworkAutomationRatioPct = row.CoworkReportTotalTasks.GetValueOrDefault() > 0 && row.CoworkReportScheduledTasks.HasValue
                     ? (double?)Percentage(row.CoworkReportScheduledTasks.Value, row.CoworkReportTotalTasks.Value)
                     : null,
-                UsedCowork = row.CoworkReportTotalTasks.GetValueOrDefault() > 0 || row.CoworkInteractions > 0,
+                // Report active days count as evidence too. Without them a user Microsoft reports as
+                // active on N days but whose task count is blank would be tiered Established while
+                // UsedCowork said "no" - contradicting the tier, the CSV column and the workbook.
+                UsedCowork = row.CoworkReportTotalTasks.GetValueOrDefault() > 0
+                    || row.CoworkReportActiveDays.GetValueOrDefault() > 0
+                    || row.CoworkInteractions > 0,
 
                 TeamsMessages = row.TeamsMessages,
                 TeamsMeetings = row.TeamsMeetings,

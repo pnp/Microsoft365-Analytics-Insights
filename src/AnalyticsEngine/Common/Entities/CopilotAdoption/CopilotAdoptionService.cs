@@ -1166,7 +1166,9 @@ namespace Common.Entities.CopilotAdoption
                 })
                 .Where(s => s.NewSeatsAssignedInPeriod > 0 || s.NeverActivatedUsers > 0 || s.SeatDateUnknownUsers > 0)
                 .OrderByDescending(s => s.NeverActivatedUsers)
-                .ThenBy(s => s.ActivationRatePct)
+                // Nulls last: an unmeasurable department must not be ranked as though it were worse
+                // than a measured 0%, which is what LINQ's default null-first ordering would do.
+                .ThenBy(s => s.ActivationRatePct ?? double.MaxValue)
                 .ThenBy(s => s.Segment)
                 .ToList();
 
