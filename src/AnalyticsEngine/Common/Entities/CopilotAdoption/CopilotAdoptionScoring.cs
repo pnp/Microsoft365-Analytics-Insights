@@ -249,7 +249,6 @@ namespace Common.Entities.CopilotAdoption
                 AuditActiveDays = row.ActiveDays,
                 AuditAppsUsed = row.AppsUsed,
                 SourceComparisonAvailable = auditAvailable && reportCoversUser,
-                MeasurementCoverageMissing = !auditAvailable && !reportCoversUser,
                 ExpectedActiveDays = Round(targetActiveDays, 1),
                 AppsUsed = appsUsed,
                 AgentsUsed = row.AgentsUsed,
@@ -326,16 +325,6 @@ namespace Common.Entities.CopilotAdoption
                 {
                     row.ReclaimEligibility = ReclaimEligibilityTiers.Review;
                     row.ReclaimEligibilityReason = $"Too new to judge: {row.TenureBasis} is below the {o.ReclaimGraceDays}-day grace period.";
-                }
-                else if (row.MeasurementCoverageMissing)
-                {
-                    // Zero counters because nothing measured this user is not the same as zero counters
-                    // because they did not use Copilot. Recommending removal on the strength of an import
-                    // gap is the one mistake this report must never make, so it asks for a human instead.
-                    row.ReclaimEligibility = ReclaimEligibilityTiers.Review;
-                    row.ReclaimEligibilityReason = "No Copilot measurement covered this user: the audit import was "
-                        + "unavailable and Microsoft's usage report carried no figures for them. Confirm coverage "
-                        + "before treating this seat as unused.";
                 }
                 else if (row.AccountEnabled == true && row.DaysSinceTenureStart.HasValue)
                 {

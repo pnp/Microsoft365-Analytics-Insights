@@ -1,4 +1,4 @@
-﻿using Newtonsoft.Json;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 
@@ -214,14 +214,6 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("sourceComparisonAvailable")]
         public bool SourceComparisonAvailable { get; set; }
 
-        /// <summary>
-        /// True when NEITHER source measured this user: the audit import was unavailable and Microsoft's
-        /// report carried no row, no counters and no activity date for them. Their counters are then zero
-        /// because nothing looked, not because nothing happened - which is the difference between an unused
-        /// seat and an unmeasured one. Defaults to false so a hand-built row keeps the measured semantics.
-        /// </summary>
-        [JsonProperty("measurementCoverageMissing")]
-        public bool MeasurementCoverageMissing { get; set; }
 
         [JsonProperty("expectedActiveDays")]
         public double ExpectedActiveDays { get; set; }

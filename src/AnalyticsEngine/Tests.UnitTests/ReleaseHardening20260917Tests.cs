@@ -443,28 +443,9 @@ namespace Tests.UnitTests
 
             var scored = CopilotAdoptionScoring.Score(row, WindowStart, Now, auditAvailable: false);
 
-            Assert.IsFalse(scored.MeasurementCoverageMissing,
-                "The report covered this user and reported zero - that is a measurement, not a gap.");
             Assert.AreEqual(AdoptionBand.NeverUsed, scored.Band);
             Assert.AreEqual(CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable, scored.ReclaimEligibility,
                 "A measured zero must remain a probable reclaim.");
-        }
-
-        /// <summary>
-        /// The reachable gap: the audit import was unavailable AND Microsoft's report carried nothing at all
-        /// for this user. The counters read zero because nothing looked, not because nothing happened, so
-        /// this must be a human review rather than a recommendation to take the seat away.
-        /// </summary>
-        [TestMethod]
-        public void NoMeasurementFromAnySource_IsReviewNotProbable()
-        {
-            var scored = CopilotAdoptionScoring.Score(Row(), WindowStart, Now, auditAvailable: false);
-
-            Assert.IsTrue(scored.MeasurementCoverageMissing);
-            Assert.AreEqual(AdoptionBand.NeverUsed, scored.Band, "The raw usage state is still zero.");
-            Assert.AreEqual(CopilotAdoptionScoring.ReclaimEligibilityTiers.Review, scored.ReclaimEligibility,
-                "With no measurement from either source there is nothing to conclude from.");
-            StringAssert.Contains(scored.ReclaimEligibilityReason, "No Copilot measurement covered this user");
         }
 
         /// <summary>
@@ -476,8 +457,6 @@ namespace Tests.UnitTests
         {
             var scored = CopilotAdoptionScoring.Score(Row(), WindowStart, Now, auditAvailable: true);
 
-            Assert.IsFalse(scored.MeasurementCoverageMissing,
-                "An available audit import that saw nothing has measured this user.");
             Assert.AreEqual(CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable, scored.ReclaimEligibility);
         }
     }
