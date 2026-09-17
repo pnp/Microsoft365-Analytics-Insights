@@ -22,7 +22,10 @@ namespace Tests.UnitTests
         private const string ReclaimInputsId = "202609131940001_CopilotReclaimEligibilityInputs";
         private const string PredecessorId = "202609101200001_RetireImportDbHacks";
         private const string TargetsId = "202609171000001_CopilotAdoptionTargets";
-        private const string TargetsPredecessorId = "202609170900001_CopilotAdoptionPeriodFacts";
+        // GraphCopilotUsageApiV2 landed between this migration and the period-fact tables, so the
+        // targets script now chains from it: that is the row whose Model blob carries report_version,
+        // and stamping anything older would leave EF seeing the schema as behind the build.
+        private const string TargetsPredecessorId = "202609170910001_GraphCopilotUsageApiV2";
         private const string DigestId = "202609171030001_CopilotAdoptionDigest";
         private const string DigestPredecessorId = "202609171020002_CopilotAdoptionInterventions";
 
