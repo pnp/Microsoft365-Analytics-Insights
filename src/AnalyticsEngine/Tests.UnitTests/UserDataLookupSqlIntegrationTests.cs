@@ -245,7 +245,8 @@ namespace Tests.UnitTests
             {
                 try
                 {
-                    var user = new User { UserPrincipalName = upn, AzureAdId = Guid.NewGuid().ToString() };
+                    var lastUpdated = new DateTime(2030, 3, 4, 5, 6, 7, DateTimeKind.Unspecified);
+                    var user = new User { UserPrincipalName = upn, AzureAdId = Guid.NewGuid().ToString(), LastUpdated = lastUpdated };
                     db.users.Add(user);
                     await db.SaveChangesAsync();
 
@@ -255,6 +256,11 @@ namespace Tests.UnitTests
 
                     Assert.IsNotNull(profile);
                     Assert.AreEqual(upn, profile.UserPrincipalName);
+                    Assert.AreEqual(DateTime.SpecifyKind(lastUpdated, DateTimeKind.Utc), profile.LastUpdatedUtc);
+                    Assert.AreEqual(DateTimeKind.Utc, profile.LastUpdatedUtc.Value.Kind,
+                        "The API field name and JSON contract state UTC; EF returns datetime columns as unspecified, so the query adapter must mark them explicitly.");
+                    Assert.AreEqual(profile.LastUpdatedUtc, profile.LastUpdated,
+                        "lastUpdated stays as a backward-compatible alias for existing admin clients.");
                     Assert.AreEqual(user.ID, profile.UserId, "the summary counts are run against the id this profile carries");
                     Assert.AreEqual(user.ID, await query.GetUserIdAsync(upn));
                 }
