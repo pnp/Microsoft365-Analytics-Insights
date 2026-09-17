@@ -2,6 +2,7 @@
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Common.Entities.CopilotAdoption
 {
@@ -72,6 +73,35 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("sharePct")]
         public double SharePct { get; set; }
+
+        /// <summary>Microsoft-published resources for the person who executes this action.</summary>
+        [JsonProperty("guidanceLinks")]
+        public List<AdoptionGuidanceLink> GuidanceLinks { get; set; } = new List<AdoptionGuidanceLink>();
+    }
+
+    /// <summary>One Microsoft-published resource in the versioned adoption-guidance catalogue.</summary>
+    public class AdoptionGuidanceLink
+    {
+        [JsonProperty("actionCode")]
+        public string ActionCode { get; set; }
+
+        [JsonProperty("title")]
+        public string Title { get; set; }
+
+        [JsonProperty("url")]
+        public string Url { get; set; }
+
+        [JsonProperty("expectedTitle")]
+        public string ExpectedTitle { get; set; }
+
+        [JsonProperty("audience")]
+        public string Audience { get; set; }
+
+        [JsonProperty("publisher")]
+        public string Publisher { get; set; }
+
+        [JsonProperty("catalogueVersion")]
+        public string CatalogueVersion { get; set; }
     }
 
     /// <summary>
@@ -279,6 +309,12 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("dataSources")]
         public AdoptionDataSources DataSources { get; set; } = new AdoptionDataSources();
+
+        [JsonProperty("guidanceCatalogueVersion")]
+        public string GuidanceCatalogueVersion { get; set; } = CopilotAdoptionGuidanceCatalogue.Version;
+
+        [JsonProperty("guidanceLinks")]
+        public List<AdoptionGuidanceLink> GuidanceLinks { get; set; } = CopilotAdoptionGuidanceCatalogue.All.ToList();
 
         /// <summary>Which licence types were counted as Copilot seats, so the population is auditable.</summary>
         [JsonProperty("seatLicenceTypes")]
@@ -580,6 +616,10 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Adoption by department, worst first - i.e. where enablement effort should go.</summary>
         [JsonProperty("adoptionByDepartment")]
         public List<AdoptionSegmentRow> AdoptionByDepartment { get; set; } = new List<AdoptionSegmentRow>();
+
+        /// <summary>Departments with the weakest habit formation, for the executive league table.</summary>
+        [JsonProperty("habitByDepartment")]
+        public List<AdoptionSegmentRow> HabitByDepartment { get; set; } = new List<AdoptionSegmentRow>();
 
         /// <summary>Adoption by country, for organisations that run enablement regionally.</summary>
         [JsonProperty("adoptionByCountry")]

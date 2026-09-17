@@ -343,6 +343,8 @@ namespace Common.Entities.CopilotAdoption
 
                 new CsvColumn<LicensedUserAdoptionRow>("Recommended action", r => r.RecommendedActionLabel),
                 new CsvColumn<LicensedUserAdoptionRow>("Recommended action detail", r => r.RecommendedAction),
+                new CsvColumn<LicensedUserAdoptionRow>("Microsoft guidance resources", r => CopilotAdoptionGuidanceCatalogue.TitlesForAction(r.RecommendedActionCode)),
+                new CsvColumn<LicensedUserAdoptionRow>("Microsoft guidance URLs", r => CopilotAdoptionGuidanceCatalogue.UrlsForAction(r.RecommendedActionCode)),
             };
         }
 
@@ -486,6 +488,8 @@ namespace Common.Entities.CopilotAdoption
                 new CsvColumn<LicenceOpportunityRow>("Document score", r => r.DocumentScore),
 
                 new CsvColumn<LicenceOpportunityRow>("Justification", r => r.Rationale),
+                new CsvColumn<LicenceOpportunityRow>("Microsoft guidance resources", r => CopilotAdoptionGuidanceCatalogue.TitlesForAction(CopilotAdoptionGuidanceCatalogue.UnlicensedActionCode)),
+                new CsvColumn<LicenceOpportunityRow>("Microsoft guidance URLs", r => CopilotAdoptionGuidanceCatalogue.UrlsForAction(CopilotAdoptionGuidanceCatalogue.UnlicensedActionCode)),
             };
         }
 

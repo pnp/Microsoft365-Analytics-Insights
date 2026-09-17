@@ -165,6 +165,21 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public void Workbook_UsesLineChartForVolumeTrendWhenCoverageHasGaps()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.WeeklyVolumeTrend.Single().Points[3].Value = null;
+
+            var volumeChart = ChartXmls(CopilotAdoptionWorkbook.Build(analysis))
+                .Single(xml => xml.Contains("Weekly Copilot volume"));
+
+            StringAssert.Contains(volumeChart, "<c:lineChart>",
+                "A stacked area collapses blank cells to the baseline; the workbook must use a line chart when gaps exist.");
+            Assert.IsFalse(volumeChart.Contains("<c:areaChart>"),
+                "The gapped volume trend must not be emitted as any area chart.");
+        }
+
         #endregion
 
         #region Content
@@ -182,6 +197,10 @@ namespace Tests.UnitTests
             StringAssert.Contains(text, "Generated");
             StringAssert.Contains(text, "Licence recommendation at");
             StringAssert.Contains(text, "Agent retire after");
+            StringAssert.Contains(text, "Microsoft guidance catalogue");
+            StringAssert.Contains(text, CopilotAdoptionGuidanceCatalogue.Version);
+            StringAssert.Contains(text, "https://aka.ms/ScenarioLibrary");
+            StringAssert.Contains(text, "https://aka.ms/Copilot/ImplementationSummaryGuide");
         }
 
         [TestMethod]
@@ -468,6 +487,25 @@ namespace Tests.UnitTests
                         .Select(s => (string)s.Attribute("name"))
                         .ToList();
                 }
+            }
+        }
+
+        private static List<string> ChartXmls(byte[] bytes)
+        {
+            using (var stream = new MemoryStream(bytes))
+            using (var zip = new ZipArchive(stream, ZipArchiveMode.Read))
+            {
+                return zip.Entries
+                    .Where(e => e.FullName.StartsWith("xl/charts/chart", StringComparison.Ordinal)
+                             && e.FullName.EndsWith(".xml", StringComparison.Ordinal))
+                    .Select(e =>
+                    {
+                        using (var reader = new StreamReader(e.Open(), Encoding.UTF8))
+                        {
+                            return reader.ReadToEnd();
+                        }
+                    })
+                    .ToList();
             }
         }
 

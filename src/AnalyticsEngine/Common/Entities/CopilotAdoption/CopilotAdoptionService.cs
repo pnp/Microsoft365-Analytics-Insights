@@ -107,6 +107,7 @@ namespace Common.Entities.CopilotAdoption
                 nowUtc, Math.Max(_options.WindowDays, _options.HistoryDays));
             var settled = nowUtc.Date.AddDays(-Math.Max(0, _options.UsageReportLagDays));
             var trendStart = MondayOf(nowUtc.Date.AddMonths(-TrendMonths));
+            var trendEndExclusive = MondayOf(nowUtc.Date);
 
             var analysis = new CopilotAdoptionAnalysis();
             var summary = analysis.Summary;
@@ -330,7 +331,7 @@ namespace Common.Entities.CopilotAdoption
                 steps.Add(new AnalysisStep(CopilotAdoptionSteps.UsageByApp,
                     output => BuildUsageByAppAsync(analysis, output, seatIds, windowStart, cancellationToken)));
                 steps.Add(new AnalysisStep(CopilotAdoptionSteps.WeeklyTrend,
-                    output => BuildWeeklyTrendAsync(analysis, output, seatIds, trendStart, cancellationToken)));
+                    output => BuildWeeklyTrendAsync(analysis, output, seatIds, trendStart, trendEndExclusive, cancellationToken)));
 
                 // Cowork readiness only means something for people who hold a Copilot seat: Cowork requires
                 // a Copilot licence as a prerequisite, so assessing an unlicensed user for it would produce
@@ -914,6 +915,7 @@ namespace Common.Entities.CopilotAdoption
             StepOutput output,
             List<int> seatIds,
             DateTime trendStart,
+            DateTime trendEndExclusive,
             CancellationToken cancellationToken)
         {
             if (!analysis.Summary.DataSources.AuditAvailable)
@@ -929,7 +931,11 @@ namespace Common.Entities.CopilotAdoption
                 "Cowork agent lookup", cancellationToken) ?? new List<IntValueRow>();
 
             var sql = CopilotAdoptionSql.WeeklyAdoptionTrendSql(seatIds, coworkAgentIds.Select(r => r.Value));
-            var parameters = new Dictionary<string, object> { { "@trendFrom", trendStart } };
+            var parameters = new Dictionary<string, object>
+            {
+                { "@trendFrom", trendStart },
+                { "@trendTo", trendEndExclusive },
+            };
             output.Sql["weeklyTrend"] = CopilotAdoptionSql.ForDisplay(sql, parameters);
 
             var rows = await SafeAsync(
@@ -941,7 +947,26 @@ namespace Common.Entities.CopilotAdoption
 
             if (rows == null) return;
 
-            var weekSpine = WeekSpine(trendStart, MondayOf(DateTime.UtcNow.Date));
+            var coverageSql = CopilotAdoptionSql.WeeklyCopilotAuditCoverageSql;
+            output.Sql["weeklyTrendCoverage"] = CopilotAdoptionSql.ForDisplay(coverageSql, parameters);
+            var coverageRows = await SafeAsync(
+                () => QueryAsync<WeekCoverageRow>(coverageSql, cancellationToken, ToSqlParameters(parameters)),
+                CopilotAdoptionSteps.WeeklyTrend,
+                CopilotAdoptionQueries.WeeklyTrendCoverage,
+                output,
+                "weekly Copilot audit coverage", cancellationToken);
+
+            if (coverageRows == null)
+            {
+                output.MarkIncomplete("weekly Copilot audit coverage");
+                coverageRows = new List<WeekCoverageRow>();
+            }
+
+            var weekSpine = ClipLeadingUnverifiedWeeks(
+                CompletedWeekSpine(trendStart, trendEndExclusive),
+                coverageRows.Select(r => r.WeekStart.Date),
+                rows);
+            var coveredWeeks = coverageRows.Select(r => r.WeekStart.Date);
 
             var series = rows
                 .GroupBy(r => r.SeriesName)
@@ -949,7 +974,7 @@ namespace Common.Entities.CopilotAdoption
                 .Select(g => new AdoptionSeries
                 {
                     Name = g.Key,
-                    Points = FillWeeks(weekSpine, g.ToList()),
+                    Points = FillWeeks(weekSpine, g.ToList(), coveredWeeks),
                 })
                 .ToList();
 
@@ -1283,6 +1308,8 @@ namespace Common.Entities.CopilotAdoption
 
             var summary = analysis.Summary;
             var users = analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>();
+            summary.GuidanceCatalogueVersion = CopilotAdoptionGuidanceCatalogue.Version;
+            summary.GuidanceLinks = CopilotAdoptionGuidanceCatalogue.All.ToList();
 
             if (summary.LicensedUsers == 0)
             {
@@ -1424,8 +1451,9 @@ namespace Common.Entities.CopilotAdoption
             summary.Concentration = CopilotAdoptionScoring.Concentration(
                 auditInteractionUsers.Where(CopilotAdoptionScoring.IsActive).Select(u => u.Interactions));
             summary.ScoreProfiles = BuildScoreProfiles(auditInteractionUsers);
-            summary.AdoptionByDepartment = BuildSegments(users, u => u.Department, "(no department)");
-            summary.AdoptionByCountry = BuildSegments(users, u => u.Country, "(no country)");
+            summary.AdoptionByDepartment = BuildSegments(users, u => u.Department, "(no department)", s => s.AdoptionRatePct);
+            summary.HabitByDepartment = BuildSegments(users, u => u.Department, "(no department)", HabitRatePct);
+            summary.AdoptionByCountry = BuildSegments(users, u => u.Country, "(no country)", s => s.AdoptionRatePct);
             summary.IntensityByDepartment = BuildIntensity(auditInteractionUsers, u => u.Department, "(no department)");
 
             FinaliseAgents(analysis);
@@ -1437,7 +1465,7 @@ namespace Common.Entities.CopilotAdoption
             summary.RecommendedForLicence = opportunities.Count(o => o.Recommended);
             summary.OpportunityByDepartment = opportunities
                 .Where(o => o.Recommended)
-                .GroupBy(o => string.IsNullOrWhiteSpace(o.Department) ? "(no department)" : o.Department)
+                .GroupBy(o => string.IsNullOrWhiteSpace(o.Department) ? "(no department)" : o.Department.Trim())
                 .Select(g => new AdoptionCategory { Label = g.Key, Value = g.Count() })
                 .OrderByDescending(c => c.Value)
                 .Take(_options.TopSegments)
@@ -2027,6 +2055,7 @@ namespace Common.Entities.CopilotAdoption
                         // Passed the real options, not the defaults: the descriptions quote thresholds,
                         // and a tuned deployment must not be shown the shipped numbers.
                         Description = CopilotAdoptionScoring.ActionDescription(code, _options),
+                        GuidanceLinks = CopilotAdoptionGuidanceCatalogue.ForAction(code).ToList(),
                         Users = count,
                         SharePct = CopilotAdoptionScoring.Percentage(count, users.Count),
                     };
@@ -2096,16 +2125,24 @@ namespace Common.Entities.CopilotAdoption
         private List<AdoptionSegmentRow> BuildSegments(
             IEnumerable<LicensedUserAdoptionRow> users,
             Func<LicensedUserAdoptionRow, string> selector,
-            string emptyLabel)
+            string emptyLabel,
+            Func<AdoptionSegmentRow, double> primarySort)
         {
             return users
                 .GroupBy(u => string.IsNullOrWhiteSpace(selector(u)) ? emptyLabel : selector(u).Trim())
                 .Where(g => g.Count() >= _options.MinSeatsPerSegment)
                 .Select(g => CopilotAdoptionScoring.Summarise(g.Key, g.ToList()))
-                .OrderBy(s => s.AdoptionRatePct)
+                .OrderBy(primarySort)
                 .ThenByDescending(s => s.LicensedUsers)
                 .Take(_options.TopSegments)
                 .ToList();
+        }
+
+        private static double HabitRatePct(AdoptionSegmentRow segment)
+        {
+            return segment.LicensedUsers > 0
+                ? segment.HabitualUsers * 100d / segment.LicensedUsers
+                : 0d;
         }
 
         #endregion
@@ -2375,11 +2412,23 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
-        /// Projects query rows onto the full week spine, filling missing weeks with zero. Zero (rather
-        /// than a gap) is right here: these series count audit events, and no events genuinely does
-        /// mean nobody used Copilot that week.
+        /// Every completed week from first to the week before the exclusive end. The current partial
+        /// week is deliberately absent: plotting it always creates an artificial drop.
         /// </summary>
-        internal static List<AdoptionTimePoint> FillWeeks(List<DateTime> weekSpine, List<NamedWeekRow> rows)
+        internal static List<DateTime> CompletedWeekSpine(DateTime firstMonday, DateTime exclusiveMonday)
+        {
+            return WeekSpine(firstMonday, exclusiveMonday.AddDays(-7));
+        }
+
+        /// <summary>
+        /// Projects query rows onto the full completed-week spine. Missing weeks are zero only when the
+        /// Audit.General import has evidence in that week; otherwise they remain null so the chart draws
+        /// a gap instead of pretending an import outage was zero Copilot use.
+        /// </summary>
+        internal static List<AdoptionTimePoint> FillWeeks(
+            List<DateTime> weekSpine,
+            List<NamedWeekRow> rows,
+            IEnumerable<DateTime> verifiedCoverageWeeks)
         {
             var byWeek = new Dictionary<DateTime, double>();
             foreach (var row in rows)
@@ -2387,13 +2436,45 @@ namespace Common.Entities.CopilotAdoption
                 byWeek[row.WeekStart.Date] = row.Value;
             }
 
+            var coveredWeeks = new HashSet<DateTime>(
+                (verifiedCoverageWeeks ?? Enumerable.Empty<DateTime>()).Select(w => w.Date));
+            foreach (var week in byWeek.Keys)
+            {
+                coveredWeeks.Add(week);
+            }
+
             return weekSpine
                 .Select(week => new AdoptionTimePoint
                 {
                     WeekStart = week,
-                    Value = byWeek.TryGetValue(week, out var value) ? value : 0,
+                    Value = byWeek.TryGetValue(week, out var value)
+                        ? value
+                        : coveredWeeks.Contains(week) ? 0 : (double?)null,
                 })
                 .ToList();
+        }
+
+        /// <summary>
+        /// Leading unknown weeks predate the tenant's imported audit history and are not informative;
+        /// keep unknown weeks after the first evidence week so true interior coverage holes remain gaps.
+        /// </summary>
+        internal static List<DateTime> ClipLeadingUnverifiedWeeks(
+            List<DateTime> weekSpine,
+            IEnumerable<DateTime> verifiedCoverageWeeks,
+            IEnumerable<NamedWeekRow> rows)
+        {
+            if (weekSpine == null || weekSpine.Count == 0) return weekSpine ?? new List<DateTime>();
+
+            var evidenceWeeks = (verifiedCoverageWeeks ?? Enumerable.Empty<DateTime>())
+                .Select(w => w.Date)
+                .Concat((rows ?? Enumerable.Empty<NamedWeekRow>()).Select(r => r.WeekStart.Date))
+                .Where(w => weekSpine.Contains(w))
+                .ToList();
+
+            if (evidenceWeeks.Count == 0) return weekSpine;
+
+            var firstEvidenceWeek = evidenceWeeks.Min();
+            return weekSpine.Where(w => w >= firstEvidenceWeek).ToList();
         }
 
         #endregion
@@ -2463,6 +2544,12 @@ namespace Common.Entities.CopilotAdoption
             public DateTime WeekStart { get; set; }
 
             public double Value { get; set; }
+        }
+
+        /// <summary>A completed week where Audit.General has at least one imported event.</summary>
+        public class WeekCoverageRow
+        {
+            public DateTime WeekStart { get; set; }
         }
 
         #endregion

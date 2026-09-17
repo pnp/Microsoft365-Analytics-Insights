@@ -825,8 +825,8 @@ namespace Tests.UnitTests
                                  -- customer promote their own users into the observed-use evidence tiers.
                                  (3, N'Contoso Cowork Helper', N'SPO_9999');");
 
-                SeedCopilotInteraction(db, userId: 1, daysAgo: 2, appHost: "Teams");
-                SeedCopilotInteraction(db, userId: 1, daysAgo: 2, appHost: "cowork", agentId: 1);
+                SeedCopilotInteraction(db, userId: 1, daysAgo: 7, appHost: "Teams");
+                SeedCopilotInteraction(db, userId: 1, daysAgo: 7, appHost: "cowork", agentId: 1);
 
                 var from = DateTime.UtcNow.Date.AddDays(-28);
                 var settled = DateTime.UtcNow.Date.AddDays(-3);
@@ -855,7 +855,8 @@ namespace Tests.UnitTests
 
                 var trend = Query<CopilotAdoptionService.NamedWeekRow>(db,
                     CopilotAdoptionSql.WeeklyAdoptionTrendSql(new[] { 1 }, new[] { 1 }),
-                    new SqlParameter("@trendFrom", DateTime.UtcNow.Date.AddMonths(-6)));
+                    new SqlParameter("@trendFrom", DateTime.UtcNow.Date.AddMonths(-6)),
+                    new SqlParameter("@trendTo", CopilotAdoptionService.MondayOf(DateTime.UtcNow.Date)));
                 Assert.IsTrue(trend.Any(t => t.SeriesName == "Active licensed users"));
                 Assert.IsTrue(trend.Any(t => t.SeriesName == "Cowork users"),
                     "The Cowork series must be produced when Cowork interactions exist.");
@@ -877,6 +878,13 @@ namespace Tests.UnitTests
                     "The Cowork conditional count must select the same user.");
                 Assert.AreEqual(activeWeeks[0].WeekStart, coworkWeeks[0].WeekStart,
                     "Both series are bucketed from the same rows, so the week must match.");
+
+                var trendCoverage = Query<CopilotAdoptionService.WeekCoverageRow>(db,
+                    CopilotAdoptionSql.WeeklyCopilotAuditCoverageSql,
+                    new SqlParameter("@trendFrom", DateTime.UtcNow.Date.AddMonths(-6)),
+                    new SqlParameter("@trendTo", CopilotAdoptionService.MondayOf(DateTime.UtcNow.Date)));
+                Assert.IsTrue(trendCoverage.Any(c => c.WeekStart == activeWeeks[0].WeekStart),
+                    "A week with imported Audit.General events must be marked as covered even before #542 period facts exist.");
 
                 var unlicensed = Query<int?>(db,
                     CopilotAdoptionSql.UnlicensedActiveUsersSql(new[] { 1 }),
@@ -1163,7 +1171,12 @@ namespace Tests.UnitTests
                       user_id int NULL,
                       event_data nvarchar(max) NULL);
 
-                  CREATE TABLE dbo.copilot_chats (
+                CREATE TABLE dbo.event_meta_general (
+                    event_id uniqueidentifier NOT NULL PRIMARY KEY,
+                    json nvarchar(max) NULL,
+                    workload nvarchar(max) NULL);
+
+                CREATE TABLE dbo.copilot_chats (
                       event_id uniqueidentifier NOT NULL PRIMARY KEY,
                       app_host nvarchar(max) NULL,
                       agent_id int NULL,
@@ -1334,6 +1347,8 @@ namespace Tests.UnitTests
             db.Execute(
                 $@"INSERT INTO dbo.audit_events (id, time_stamp, user_id)
                        VALUES ('{id}', '{when:yyyy-MM-dd HH:mm:ss}', {userId});
+                   INSERT INTO dbo.event_meta_general (event_id, workload)
+                       VALUES ('{id}', N'Copilot');
                    -- user_id / time_stamp are denormalised onto the chat row by the real importer merge
                    -- (common_upsert_copilot_agents.sql), which sources them from the audit event it has
                    -- just inserted. Seeded the same way here so these tests exercise the real read path.

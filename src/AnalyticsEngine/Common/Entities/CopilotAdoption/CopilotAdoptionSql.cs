@@ -184,6 +184,38 @@ namespace Common.Entities.CopilotAdoption
             "      AND EXISTS (SELECT 1 FROM dbo.audit_events AS ae WHERE ae.id = c.event_id)\r\n" +
             ") THEN 1 ELSE 0 END AS Value;";
 
+        /// <summary>
+        /// Completed weeks where the Audit.General feed has any imported event, used to distinguish a
+        /// genuine zero-Copilot week from a week whose import coverage cannot be verified.
+        /// </summary>
+        /// <remarks>
+        /// This is intentionally a coverage probe, not an activity count. It reads the same Audit.General
+        /// source that supplies Copilot interactions, but does not require a Copilot row to exist: if the
+        /// feed produced some General workload event that week and the Copilot trend has no row, the safest
+        /// interim interpretation is a real zero. If the feed has no evidence at all, the chart leaves a
+        /// gap until persisted closed-period facts can use as-of seat state.
+        /// </remarks>
+        public static readonly string WeeklyCopilotAuditCoverageSql =
+            "WITH WeekSpine AS (\r\n" +
+            "    SELECT CAST(" + WeekBucket("CAST(@trendFrom AS date)") + " AS date) AS WeekStart\r\n" +
+            "    UNION ALL\r\n" +
+            "    SELECT CAST(DATEADD(DAY, 7, WeekStart) AS date)\r\n" +
+            "    FROM WeekSpine\r\n" +
+            "    WHERE WeekStart < DATEADD(DAY, -7, CAST(" + WeekBucket("CAST(@trendTo AS date)") + " AS date))\r\n" +
+            ")\r\n" +
+            "SELECT w.WeekStart\r\n" +
+            "FROM WeekSpine AS w\r\n" +
+            "CROSS APPLY (\r\n" +
+            "    SELECT TOP (1) 1 AS Covered\r\n" +
+            "    FROM dbo.audit_events AS ae\r\n" +
+            "    WHERE ae.time_stamp >= w.WeekStart\r\n" +
+            "      AND ae.time_stamp < DATEADD(DAY, 7, w.WeekStart)\r\n" +
+            "      AND ae.time_stamp < @trendTo\r\n" +
+            "      AND EXISTS (SELECT 1 FROM dbo.event_meta_general AS g WHERE g.event_id = ae.id)\r\n" +
+            ") AS c\r\n" +
+            "ORDER BY WeekStart\r\n" +
+            "OPTION (MAXRECURSION 100, RECOMPILE);";
+
         #region Copilot app host
 
         /// <summary>
@@ -1574,6 +1606,7 @@ namespace Common.Entities.CopilotAdoption
                 "           COUNT_BIG(*) AS Interactions\r\n" +
                 "    FROM dbo.copilot_chats AS c\r\n" +
                 "    WHERE c.time_stamp >= @trendFrom\r\n" +
+                "      AND c.time_stamp < @trendTo\r\n" +
                 "      AND c.user_id IS NOT NULL\r\n" +
                 $"    GROUP BY {week}, c.user_id\r\n" +
                 "),\r\n" +
