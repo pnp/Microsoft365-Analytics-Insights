@@ -284,8 +284,12 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("activatedWithinWindow")]
         public int ActivatedWithinWindow { get; set; }
 
+        /// <summary>
+        /// Null when no new seat in the period has a known assignment date - the rate is not measurable,
+        /// which is not the same as 0%. <see cref="SeatDateUnknownUsers"/> carries how many were unknown.
+        /// </summary>
         [JsonProperty("activationRatePct")]
-        public double ActivationRatePct { get; set; }
+        public double? ActivationRatePct { get; set; }
 
         [JsonProperty("neverActivatedUsers")]
         public int NeverActivatedUsers { get; set; }
@@ -329,8 +333,9 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("activatedWithinWindow")]
         public int ActivatedWithinWindow { get; set; }
 
+        /// <summary>Null when this segment has no new seat with a known assignment date. See the summary property.</summary>
         [JsonProperty("activationRatePct")]
-        public double ActivationRatePct { get; set; }
+        public double? ActivationRatePct { get; set; }
 
         [JsonProperty("neverActivatedUsers")]
         public int NeverActivatedUsers { get; set; }

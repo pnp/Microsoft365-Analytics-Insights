@@ -88,7 +88,9 @@ namespace Common.Entities.CopilotAdoption
             "       lt.name AS Name,\r\n" +
             "       lt.sku_id AS SkuPartNumber,\r\n" +
             "       COUNT(ul.user_id) AS AssignedUsers,\r\n" +
-            "       CASE WHEN lt.subscribed_sku_refreshed_utc IS NULL THEN NULL ELSE ISNULL(lt.prepaid_enabled_units, 0) + ISNULL(lt.prepaid_warning_units, 0) + ISNULL(lt.prepaid_suspended_units, 0) END AS PurchasedUnits,\r\n" +
+            "       CASE WHEN lt.subscribed_sku_refreshed_utc IS NULL\r\n" +
+            "                 OR (lt.prepaid_enabled_units IS NULL AND lt.prepaid_warning_units IS NULL AND lt.prepaid_suspended_units IS NULL)\r\n" +
+            "            THEN NULL ELSE ISNULL(lt.prepaid_enabled_units, 0) + ISNULL(lt.prepaid_warning_units, 0) + ISNULL(lt.prepaid_suspended_units, 0) END AS PurchasedUnits,\r\n" +
             "       lt.subscribed_sku_refreshed_utc AS PurchasedUnitsRefreshedUtc\r\n" +
             "FROM dbo.license_types AS lt\r\n" +
             "LEFT JOIN dbo.user_license_type_lookups AS ul ON ul.license_type_id = lt.id\r\n" +

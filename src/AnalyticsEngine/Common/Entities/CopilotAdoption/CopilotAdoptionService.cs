@@ -1095,7 +1095,11 @@ namespace Common.Entities.CopilotAdoption
             result.Activation = BuildActivationSummary(current, activationWindowDays);
         }
 
-        private static CopilotAdoptionActivationSummary BuildActivationSummary(
+        /// <summary>
+        /// Internal rather than private so the activation-rate suppression rule (null, not 0%, when no
+        /// seat has a known assignment date) can be tested directly without a database.
+        /// </summary>
+        internal static CopilotAdoptionActivationSummary BuildActivationSummary(
             List<CopilotAdoptionCohortUserRow> currentRows,
             int activationWindowDays)
         {
@@ -1129,7 +1133,13 @@ namespace Common.Entities.CopilotAdoption
                 && !string.Equals(r.ActivationState, "assignedBeforeHistory", StringComparison.OrdinalIgnoreCase));
             var activatedNewSeats = currentRows.Count(r => string.Equals(r.Transition, CopilotAdoptionCohortTransitions.NewlyAssigned, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(r.ActivationState, "activatedWithinWindow", StringComparison.OrdinalIgnoreCase));
-            activation.ActivationRatePct = CopilotAdoptionScoring.Percentage(activatedNewSeats, denominator);
+            // Null, not 0, when no seat has a known assignment date. Seat dates come from #277 and are
+            // NULL for every row until that lands, so a non-nullable rate published a confident "0%
+            // activated" - reading as a failed onboarding programme - for a figure that was simply not
+            // measurable. SeatDateUnknownUsers already carries the reason.
+            activation.ActivationRatePct = denominator > 0
+                ? (double?)CopilotAdoptionScoring.Percentage(activatedNewSeats, denominator)
+                : null;
 
             activation.Distribution = BuildActivationDistribution(knownActivations);
             activation.ByDepartment = currentRows
@@ -1147,7 +1157,9 @@ namespace Common.Entities.CopilotAdoption
                         Segment = g.Key,
                         NewSeatsAssignedInPeriod = newKnown,
                         ActivatedWithinWindow = activated,
-                        ActivationRatePct = CopilotAdoptionScoring.Percentage(activated, newKnown),
+                        ActivationRatePct = newKnown > 0
+                            ? (double?)CopilotAdoptionScoring.Percentage(activated, newKnown)
+                            : null,
                         NeverActivatedUsers = groupRows.Count(r => string.Equals(r.ActivationState, "neverActivated", StringComparison.OrdinalIgnoreCase)),
                         SeatDateUnknownUsers = groupRows.Count(r => string.Equals(r.ActivationState, "seatDateUnknown", StringComparison.OrdinalIgnoreCase)),
                     };

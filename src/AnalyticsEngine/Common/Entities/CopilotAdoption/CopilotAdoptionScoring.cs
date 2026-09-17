@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -1385,7 +1385,14 @@ namespace Common.Entities.CopilotAdoption
             if (row == null) throw new ArgumentNullException(nameof(row));
             var o = options ?? CopilotAdoptionOptions.Default;
 
-            if (row.CoworkActiveDays >= Math.Max(1, o.CoworkRegularMinActiveDays))
+            // Microsoft's first-party Cowork report is the documented basis for this tab (#558); the audit
+            // signal is only the fallback when the report has nothing for this user. Reading the audit
+            // count alone here contradicted both RegularCoworkUser and the rationale text, which already
+            // prefer the report - a report-only user with 10 active days was tiered "Trialling" and then
+            // told "on 10 active days ... short of the 3 needed to count as regular use".
+            var coworkActiveDays = row.CoworkReportActiveDays ?? row.CoworkActiveDays;
+
+            if (coworkActiveDays >= Math.Max(1, o.CoworkRegularMinActiveDays))
             {
                 return CoworkTiers.Established;
             }
