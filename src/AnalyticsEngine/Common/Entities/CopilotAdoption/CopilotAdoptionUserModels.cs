@@ -1,5 +1,6 @@
 ﻿using Newtonsoft.Json;
 using System;
+using System.Collections.Generic;
 
 namespace Common.Entities.CopilotAdoption
 {
@@ -52,6 +53,8 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Copilot seat SKUs held, comma separated (a user can hold more than one).</summary>
         public string SeatLicences { get; set; }
 
+        public List<int> SeatLicenceTypeIds { get; set; } = new List<int>();
+
         #region Audit-log derived (all users, including Copilot Chat with no seat)
 
         /// <summary>Copilot interactions inside the reporting window.</summary>
@@ -63,8 +66,15 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Distinct Copilot surfaces (app hosts) used inside the window.</summary>
         public int AppsUsed { get; set; }
 
-        /// <summary>Interactions inside the window attributed to Microsoft 365 Copilot Cowork.</summary>
+        /// <summary>Interactions inside the window attributed to Microsoft 365 Copilot Cowork by the audit log.</summary>
         public long CoworkInteractions { get; set; }
+
+        public int? CoworkReportTotalTasks { get; set; }
+        public int? CoworkReportScheduledTasks { get; set; }
+        public int? CoworkReportUserInitiatedTasks { get; set; }
+        public int? CoworkReportActiveDays { get; set; }
+        public DateTime? CoworkReportLastActivityDate { get; set; }
+        public bool? CoworkReportRetainedUser { get; set; }
 
         /// <summary>Distinct Copilot agents used inside the window.</summary>
         public int AgentsUsed { get; set; }
@@ -179,6 +189,9 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("seatLicences")]
         public string SeatLicences { get; set; }
 
+        [JsonIgnore]
+        public List<int> SeatLicenceTypeIds { get; set; } = new List<int>();
+
         [JsonProperty("interactions")]
         public long Interactions { get; set; }
 
@@ -212,6 +225,30 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("coworkInteractions")]
         public long CoworkInteractions { get; set; }
+
+        [JsonProperty("coworkReportTotalTasks")]
+        public int? CoworkReportTotalTasks { get; set; }
+
+        [JsonProperty("coworkReportScheduledTasks")]
+        public int? CoworkReportScheduledTasks { get; set; }
+
+        [JsonProperty("coworkReportUserInitiatedTasks")]
+        public int? CoworkReportUserInitiatedTasks { get; set; }
+
+        [JsonProperty("coworkReportActiveDays")]
+        public int? CoworkReportActiveDays { get; set; }
+
+        [JsonProperty("coworkReportLastActivityDate")]
+        public DateTime? CoworkReportLastActivityDate { get; set; }
+
+        [JsonProperty("coworkReportRetainedUser")]
+        public bool? CoworkReportRetainedUser { get; set; }
+
+        [JsonProperty("coworkAutomationRatioPct")]
+        public double? CoworkAutomationRatioPct { get; set; }
+
+        [JsonProperty("coworkCreditsPerTask")]
+        public decimal? CoworkCreditsPerTask { get; set; }
 
         [JsonProperty("usedCowork")]
         public bool UsedCowork { get; set; }

@@ -1,4 +1,4 @@
-using Newtonsoft.Json;
+﻿using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 
@@ -48,6 +48,13 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>Most recent Cowork interaction inside the window.</summary>
         public DateTime? LastCoworkInteractionUtc { get; set; }
+
+        public int? CoworkReportTotalTasks { get; set; }
+        public int? CoworkReportScheduledTasks { get; set; }
+        public int? CoworkReportUserInitiatedTasks { get; set; }
+        public int? CoworkReportActiveDays { get; set; }
+        public DateTime? CoworkReportLastActivityDate { get; set; }
+        public bool? CoworkReportRetainedUser { get; set; }
 
         #endregion
 
@@ -146,6 +153,30 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("lastCoworkInteractionUtc")]
         public DateTime? LastCoworkInteractionUtc { get; set; }
+
+        [JsonProperty("coworkReportTotalTasks")]
+        public int? CoworkReportTotalTasks { get; set; }
+
+        [JsonProperty("coworkReportScheduledTasks")]
+        public int? CoworkReportScheduledTasks { get; set; }
+
+        [JsonProperty("coworkReportUserInitiatedTasks")]
+        public int? CoworkReportUserInitiatedTasks { get; set; }
+
+        [JsonProperty("coworkReportActiveDays")]
+        public int? CoworkReportActiveDays { get; set; }
+
+        [JsonProperty("coworkReportLastActivityDate")]
+        public DateTime? CoworkReportLastActivityDate { get; set; }
+
+        [JsonProperty("coworkReportRetainedUser")]
+        public bool? CoworkReportRetainedUser { get; set; }
+
+        [JsonProperty("coworkAutomationRatioPct")]
+        public double? CoworkAutomationRatioPct { get; set; }
+
+        [JsonProperty("coworkCreditsPerTask")]
+        public decimal? CoworkCreditsPerTask { get; set; }
 
         [JsonProperty("usedCowork")]
         public bool UsedCowork { get; set; }
@@ -308,6 +339,21 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("regularCoworkUsers")]
         public int RegularCoworkUsers { get; set; }
+
+        [JsonProperty("coworkReportTotalTasks")]
+        public int CoworkReportTotalTasks { get; set; }
+
+        [JsonProperty("coworkReportScheduledTasks")]
+        public int CoworkReportScheduledTasks { get; set; }
+
+        [JsonProperty("coworkAutomationRatioPct")]
+        public double? CoworkAutomationRatioPct { get; set; }
+
+        [JsonProperty("coworkReportRetainedUsers")]
+        public int? CoworkReportRetainedUsers { get; set; }
+
+        [JsonProperty("coworkReportRetentionPct")]
+        public double? CoworkReportRetentionPct { get; set; }
 
         [JsonProperty("coworkAdoptionPct")]
         public double CoworkAdoptionPct { get; set; }

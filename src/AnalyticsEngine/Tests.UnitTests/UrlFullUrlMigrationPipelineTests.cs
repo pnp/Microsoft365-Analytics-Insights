@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Migrations;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -71,7 +71,12 @@ namespace Tests.UnitTests
         // GraphCopilotUsageApiV2 then adds the report_version column carrying the Graph usage-report
         // schema version each snapshot came from. It DOES change the entity model, so its snapshot is
         // freshly scaffolded rather than reused.
-        private const string LatestId = "202609170910001_GraphCopilotUsageApiV2";
+        // CopilotSubscribedSkuCapacity adds nullable subscribed SKU capacity columns to
+        // license_types. Raw-SQL, additive, and reuses the predecessor snapshot verbatim.
+        // CoworkUsageReportTables then adds the first-party Cowork usage-report tables. Raw-SQL,
+        // purely additive, and reuses the preceding model snapshot verbatim - the new activity-log
+        // type is not exposed as a DbSet, so the entity model is unchanged.
+        private const string LatestId = "202609170940001_CoworkUsageReportTables";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

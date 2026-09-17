@@ -546,7 +546,7 @@ export default function LicensedUsersPanel({
                   </td>
                   <td className={`${table.td} ${table.tdNumeric}`}>{row.appsUsed}</td>
                   <td className={table.td}>
-                    {row.usedCowork ? `Yes (${formatCount(row.coworkInteractions)})` : 'No'}
+                    {row.usedCowork ? (row.coworkReportTotalTasks !== null ? `Yes (${formatCount(row.coworkReportTotalTasks)} tasks)` : `Yes (${formatCount(row.coworkInteractions)} audit interactions)`) : 'No'}
                   </td>
                   <td className={table.td}>
                     {formatDate(row.lastInteractionUtc)}

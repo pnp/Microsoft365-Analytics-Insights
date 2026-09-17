@@ -10,6 +10,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
+using Newtonsoft.Json;
 using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models.CopilotAdoption;
@@ -178,9 +179,9 @@ namespace Web.AnalyticsWeb.Controllers
         /// <see cref="CopilotAdoptionAnalysisCoordinator"/>.
         /// </remarks>
         private async Task<CopilotAdoptionAnalysis> TryGetAnalysisAsync(
-            int windowDays, string seatLicenceTypeIds, CancellationToken cancellationToken)
+            int windowDays, string seatLicenceTypeIds, string seatCosts, CancellationToken cancellationToken)
         {
-            return await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, FirstResponseBudget, cancellationToken);
+            return await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, seatCosts, FirstResponseBudget, cancellationToken);
         }
 
         /// <summary>
@@ -188,11 +189,12 @@ namespace Web.AnalyticsWeb.Controllers
         /// <see cref="ExportWaitBudget"/>.
         /// </summary>
         private async Task<CopilotAdoptionAnalysis> TryGetAnalysisAsync(
-            int windowDays, string seatLicenceTypeIds, TimeSpan budget, CancellationToken cancellationToken)
+            int windowDays, string seatLicenceTypeIds, string seatCosts, TimeSpan budget, CancellationToken cancellationToken)
         {
             return await Coordinator.TryGetAsync(
                 NormaliseWindowDays(windowDays),
                 ParseIds(seatLicenceTypeIds),
+                ParseSeatCosts(seatCosts),
                 budget,
                 cancellationToken);
         }
@@ -261,9 +263,10 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<IHttpActionResult> Summary(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
+            string seatCosts = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, seatCosts, cancellationToken);
             if (analysis == null) return StillBuilding();
             return Ok(analysis.Summary);
         }
@@ -281,9 +284,10 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<IHttpActionResult> LicenceTypes(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
+            string seatCosts = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, seatCosts, cancellationToken);
             if (analysis == null) return StillBuilding();
             return Ok(analysis.Summary.SeatLicenceTypes);
         }
@@ -295,9 +299,10 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<IHttpActionResult> Sql(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
+            string seatCosts = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, seatCosts, cancellationToken);
             if (analysis == null) return StillBuilding();
             return Ok(analysis.Sql);
         }
@@ -312,9 +317,10 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<IHttpActionResult> Filters(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
+            string seatCosts = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, seatCosts, cancellationToken);
             if (analysis == null) return StillBuilding();
 
             return Ok(new
@@ -358,6 +364,7 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<IHttpActionResult> LicensedUsers(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
+            string seatCosts = null,
             string search = null,
             string bands = null,
             string actions = null,
@@ -374,7 +381,7 @@ namespace Web.AnalyticsWeb.Controllers
             int take = DefaultTake,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, seatCosts, cancellationToken);
             if (analysis == null) return StillBuilding();
 
             var query = BuildLicensedUserQuery(
@@ -402,6 +409,7 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<HttpResponseMessage> ExportLicensedUsers(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
+            string seatCosts = null,
             string search = null,
             string bands = null,
             string actions = null,
@@ -421,7 +429,7 @@ namespace Web.AnalyticsWeb.Controllers
             // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
             // download instead of an answer.
             var analysis = await TryGetAnalysisAsync(
-                windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+                windowDays, seatLicenceTypeIds, seatCosts, ExportWaitBudget, cancellationToken);
             if (analysis == null) return ExportNotReadyResponse();
 
             var query = BuildLicensedUserQuery(
@@ -562,6 +570,7 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<IHttpActionResult> Opportunities(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
+            string seatCosts = null,
             string search = null,
             string department = null,
             string country = null,
@@ -574,7 +583,7 @@ namespace Web.AnalyticsWeb.Controllers
             int take = DefaultTake,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, seatCosts, cancellationToken);
             if (analysis == null) return StillBuilding();
 
             var query = BuildOpportunityQuery(
@@ -598,6 +607,7 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<HttpResponseMessage> ExportOpportunities(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
+            string seatCosts = null,
             string search = null,
             string department = null,
             string country = null,
@@ -613,7 +623,7 @@ namespace Web.AnalyticsWeb.Controllers
             // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
             // download instead of an answer.
             var analysis = await TryGetAnalysisAsync(
-                windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+                windowDays, seatLicenceTypeIds, seatCosts, ExportWaitBudget, cancellationToken);
             if (analysis == null) return ExportNotReadyResponse();
 
             var query = BuildOpportunityQuery(
@@ -644,6 +654,7 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<IHttpActionResult> Cowork(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
+            string seatCosts = null,
             string search = null,
             string tiers = null,
             string department = null,
@@ -658,7 +669,7 @@ namespace Web.AnalyticsWeb.Controllers
             int take = DefaultTake,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, seatCosts, cancellationToken);
             if (analysis == null) return StillBuilding();
 
             var query = BuildCoworkQuery(
@@ -688,6 +699,7 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<HttpResponseMessage> ExportCowork(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
+            string seatCosts = null,
             string search = null,
             string tiers = null,
             string department = null,
@@ -702,7 +714,7 @@ namespace Web.AnalyticsWeb.Controllers
         {
             // Exports are <a href> downloads, not fetch() calls - see ExportOpportunities.
             var analysis = await TryGetAnalysisAsync(
-                windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+                windowDays, seatLicenceTypeIds, seatCosts, ExportWaitBudget, cancellationToken);
             if (analysis == null) return ExportNotReadyResponse();
 
             var query = BuildCoworkQuery(
@@ -737,6 +749,7 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<HttpResponseMessage> ExportWorkbook(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
+            string seatCosts = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
             // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
@@ -744,7 +757,7 @@ namespace Web.AnalyticsWeb.Controllers
             // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
             // download instead of an answer.
             var analysis = await TryGetAnalysisAsync(
-                windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+                windowDays, seatLicenceTypeIds, seatCosts, ExportWaitBudget, cancellationToken);
             if (analysis == null) return ExportNotReadyResponse();
 
             byte[] bytes;
@@ -805,6 +818,27 @@ namespace Web.AnalyticsWeb.Controllers
         /// Snaps a requested window to one of the supported values. A free-form window would let a
         /// hand-edited URL ask for an arbitrarily long scan of the audit history.
         /// </summary>
+
+        internal static List<CopilotSeatCostInput> ParseSeatCosts(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return new List<CopilotSeatCostInput>();
+            try
+            {
+                return (JsonConvert.DeserializeObject<List<CopilotSeatCostInput>>(value) ?? new List<CopilotSeatCostInput>())
+                    .Where(c => c != null
+                                && !string.IsNullOrWhiteSpace(c.SkuPartNumber)
+                                && !string.IsNullOrWhiteSpace(c.Currency)
+                                && c.Cost > 0
+                                && (string.Equals(c.Period, "monthly", StringComparison.OrdinalIgnoreCase)
+                                    || string.Equals(c.Period, "annual", StringComparison.OrdinalIgnoreCase)))
+                    .ToList();
+            }
+            catch (JsonException)
+            {
+                return new List<CopilotSeatCostInput>();
+            }
+        }
+
         internal static int NormaliseWindowDays(int windowDays)
         {
             if (AllowedWindowDays.Contains(windowDays))

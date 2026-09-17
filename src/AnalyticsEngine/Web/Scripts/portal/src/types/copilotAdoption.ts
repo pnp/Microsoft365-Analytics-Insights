@@ -1,4 +1,4 @@
-// Mirrors Common/Entities/CopilotAdoption/CopilotAdoptionModels.cs (returned by api/CopilotAdoption).
+﻿// Mirrors Common/Entities/CopilotAdoption/CopilotAdoptionModels.cs (returned by api/CopilotAdoption).
 //
 // The chart shapes (AdoptionSeries / AdoptionCategory) are deliberately identical to the Reports
 // area's ReportSeries / ReportCategory so the existing TimeSeriesChart and CategoryBarChart
@@ -22,6 +22,10 @@ export interface LicenceTypeClassification {
   name: string;
   skuPartNumber: string;
   assignedUsers: number;
+  purchasedUnits: number | null;
+  unassignedUnits: number | null;
+  assignedIdleUsers: number;
+  purchasedUnitsRefreshedUtc: string | null;
   isCopilotSeat: boolean;
 }
 
@@ -65,10 +69,13 @@ export interface AdoptionResourceTypeRow {
 export interface AdoptionDataSources {
   auditAvailable: boolean;
   copilotUsageReportAvailable: boolean;
+  coworkUsageReportAvailable: boolean;
   m365UsageReportsAvailable: boolean;
   userMetadataAvailable: boolean;
   copilotUsageReportDate: string | null;
   copilotUsageReportPeriodDays: number;
+  coworkUsageReportDate: string | null;
+  coworkUsageReportPeriodDays: number;
   m365UsageReportDate: string | null;
   copilotUsageReportObfuscated: boolean;
 }
@@ -85,6 +92,42 @@ export interface AdoptionSegmentRow {
 }
 
 /** Every threshold and weight the adoption maths used, echoed back so a figure can be traced to its rule. */
+export interface AzureCostByCurrency {
+  currency: string;
+  cost: number;
+  includesEstimates?: boolean;
+}
+
+export interface CopilotSeatCostInput {
+  skuPartNumber: string;
+  currency: string;
+  cost: number;
+  period: 'monthly' | 'annual';
+  effectiveDateUtc: string | null;
+}
+
+export interface IdleLicenceSpendTier {
+  tier: string;
+  seats: number;
+  costs: AzureCostByCurrency[];
+}
+
+export interface IdleLicenceSpendCategory {
+  category: string;
+  seats: number;
+  costs: AzureCostByCurrency[];
+}
+
+export interface IdleLicenceSpendSummary {
+  configuredCosts: CopilotSeatCostInput[];
+  spendExposure: AzureCostByCurrency[];
+  reassignable: AzureCostByCurrency[];
+  reducibleAtRenewal: AzureCostByCurrency[];
+  unassignedSpendUnknown?: boolean;
+  tiers: IdleLicenceSpendTier[];
+  categories: IdleLicenceSpendCategory[];
+}
+
 export interface CopilotAdoptionOptions {
   guidanceCatalogueVersion?: string;
   windowDays: number;
@@ -156,6 +199,7 @@ export interface CopilotAdoptionOptions {
   maxAgents: number;
   maxUnlicensedUsersScored: number;
   maxCoworkUsersScored: number;
+  seatCosts: CopilotSeatCostInput[];
 }
 
 /** One Microsoft-published resource attached to an adoption action. */
@@ -439,6 +483,10 @@ export interface CopilotAdoptionSummary {
   habitRatePct: number;
   reclaimableSeats: number;
   disabledLicensedUsers: number;
+  purchasedCopilotSeats: number | null;
+  unassignedCopilotSeats: number | null;
+  subscribedSkusAvailable: boolean;
+  idleLicenceSpend: IdleLicenceSpendSummary | null;
   reclaimCertainSeats: number;
   reclaimProbableSeats: number;
   reclaimReviewSeats: number;
@@ -457,8 +505,19 @@ export interface CopilotAdoptionSummary {
   totalInteractions: number;
 
   coworkUsers: number;
-  coworkAdoptionPct: number;
+  coworkAdoptionPct: number | null;
+  coworkEligibilityKnown: boolean;
+  coworkEligibleUsers: number | null;
+  coworkAuditUsers: number;
   coworkInteractions: number;
+  coworkReportUsers: number;
+  coworkReportTotalTasks: number;
+  coworkReportScheduledTasks: number;
+  coworkReportUserInitiatedTasks: number;
+  coworkAutomationRatioPct: number | null;
+  coworkTasksPerActiveUser: number | null;
+  coworkReportRetainedUsers: number | null;
+  coworkReportRetentionPct: number | null;
   coworkDetected: boolean;
 
   /**
@@ -559,6 +618,14 @@ export interface LicensedUserAdoptionRow {
   appsUsed: number;
   agentsUsed: number;
   coworkInteractions: number;
+  coworkReportTotalTasks: number | null;
+  coworkReportScheduledTasks: number | null;
+  coworkReportUserInitiatedTasks: number | null;
+  coworkReportActiveDays: number | null;
+  coworkReportLastActivityDate: string | null;
+  coworkReportRetainedUser: boolean | null;
+  coworkAutomationRatioPct: number | null;
+  coworkCreditsPerTask: number | null;
   usedCowork: boolean;
 
   firstInteractionUtc: string | null;
@@ -707,6 +774,11 @@ export interface CoworkSegmentRow {
   primeCandidates: number;
   primeCandidateRatePct: number;
   regularCoworkUsers: number;
+  coworkReportTotalTasks: number;
+  coworkReportScheduledTasks: number;
+  coworkAutomationRatioPct: number | null;
+  coworkReportRetainedUsers: number | null;
+  coworkReportRetentionPct: number | null;
   coworkAdoptionPct: number;
   averageCoordinationLoad: number;
   averageFluency: number;
@@ -768,6 +840,14 @@ export interface CoworkReadinessRow {
   coworkInteractions: number;
   coworkActiveDays: number;
   lastCoworkInteractionUtc: string | null;
+  coworkReportTotalTasks: number | null;
+  coworkReportScheduledTasks: number | null;
+  coworkReportUserInitiatedTasks: number | null;
+  coworkReportActiveDays: number | null;
+  coworkReportLastActivityDate: string | null;
+  coworkReportRetainedUser: boolean | null;
+  coworkAutomationRatioPct: number | null;
+  coworkCreditsPerTask: number | null;
   usedCowork: boolean;
   regularCoworkUser: boolean;
 

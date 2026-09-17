@@ -1,4 +1,6 @@
 ﻿using Newtonsoft.Json;
+using System;
+using System.Collections.Generic;
 
 namespace Common.Entities.CopilotAdoption
 {
@@ -542,6 +544,18 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("minSeatsPerSegment")]
         public int MinSeatsPerSegment { get; set; } = 5;
 
+        #region Licence cost inputs
+
+        /// <summary>
+        /// Optional admin-supplied Microsoft 365 Copilot seat prices, keyed by SKU part number. No
+        /// default is provided: a currency figure is only defensible when the admin supplies the price
+        /// and effective date that were used for this report.
+        /// </summary>
+        [JsonProperty("seatCosts")]
+        public List<CopilotSeatCostInput> SeatCosts { get; set; } = new List<CopilotSeatCostInput>();
+
+        #endregion
+
         /// <summary>
         /// Organisational field used for the accountability roll-up. Defaults to the direct manager:
         /// that is the narrow governance-safe first cut for issue #556, while still allowing tenants
@@ -552,6 +566,25 @@ namespace Common.Entities.CopilotAdoption
         public string AccountabilityDimension { get; set; } = CopilotAdoptionAccountabilityDimensions.DirectManager;
 
         public static CopilotAdoptionOptions Default => new CopilotAdoptionOptions();
+    }
+
+    public class CopilotSeatCostInput
+    {
+        [JsonProperty("skuPartNumber")]
+        public string SkuPartNumber { get; set; }
+
+        [JsonProperty("currency")]
+        public string Currency { get; set; }
+
+        [JsonProperty("cost")]
+        public decimal Cost { get; set; }
+
+        /// <summary>monthly or annual. Annual values are divided by twelve for monthly exposure.</summary>
+        [JsonProperty("period")]
+        public string Period { get; set; } = "monthly";
+
+        [JsonProperty("effectiveDateUtc")]
+        public DateTime? EffectiveDateUtc { get; set; }
     }
 
     /// <summary>Allowed accountability dimensions. Used as an allow-list before anything reaches SQL.</summary>
