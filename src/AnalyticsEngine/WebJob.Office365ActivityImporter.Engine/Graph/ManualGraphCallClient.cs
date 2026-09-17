@@ -2,6 +2,7 @@ using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -51,6 +52,41 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
 
                 return callResponseBody;
+            }
+        }
+
+        public async Task<T> GetStreamAsyncWithThrottleRetries<T>(string url, Func<Stream, Task<T>> streamReader)
+        {
+            if (streamReader == null) throw new ArgumentNullException(nameof(streamReader));
+
+            using (var callResponse = await this.GetAsyncWithThrottleRetries(url, HttpCompletionOption.ResponseHeadersRead, base._logger))
+            {
+                if (!callResponse.IsSuccessStatusCode)
+                {
+                    var callResponseBody = await callResponse.Content.ReadAsStringAsync();
+
+                    try
+                    {
+                        callResponse.EnsureSuccessStatusCode();
+                    }
+                    catch (HttpRequestException ex)
+                    {
+                        if (callResponse.StatusCode == HttpStatusCode.NotFound)
+                        {
+                            var notFound = new GraphResourceNotFoundException(url, callResponseBody, ex);
+                            _logger.LogDebug($"Got HTTP 404 calling {url} (Graph error code '{notFound.GraphErrorCode ?? "unknown"}'). Response body: {callResponseBody}");
+                            throw notFound;
+                        }
+
+                        _logger.LogError(ex, $"Got HTTP exception calling {url}: {ex.Message}. Response body: {callResponseBody}");
+                        throw new GraphHttpException(callResponse.StatusCode, url, callResponseBody, ex);
+                    }
+                }
+
+                using (var stream = await callResponse.Content.ReadAsStreamAsync())
+                {
+                    return await streamReader(stream);
+                }
             }
         }
 

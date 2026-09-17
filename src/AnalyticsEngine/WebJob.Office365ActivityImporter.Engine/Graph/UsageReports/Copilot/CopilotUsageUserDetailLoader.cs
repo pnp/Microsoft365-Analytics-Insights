@@ -335,7 +335,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                 changed |= Set(log.PromptsChatWork, row.PromptsChatWork, v => log.PromptsChatWork = v);
                 changed |= Set(log.PromptsChatWeb, row.PromptsChatWeb, v => log.PromptsChatWeb = v);
                 changed |= Set(log.ActiveUsageDays, row.ActiveUsageDays, v => log.ActiveUsageDays = v);
-                changed |= Set(log.AppsUsed, row.AppsUsed, v => log.AppsUsed = v);
                 changed |= Set(log.ChatWorkLastActivityDate, row.ChatWorkLastActivityDate, v => log.ChatWorkLastActivityDate = v);
                 changed |= Set(log.ChatWebLastActivityDate, row.ChatWebLastActivityDate, v => log.ChatWebLastActivityDate = v);
                 changed |= Set(log.Microsoft365CopilotLastActivityDate, row.Microsoft365CopilotLastActivityDate, v => log.Microsoft365CopilotLastActivityDate = v);

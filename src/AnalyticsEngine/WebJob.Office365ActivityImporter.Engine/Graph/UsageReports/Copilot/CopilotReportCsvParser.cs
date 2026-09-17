@@ -1,6 +1,7 @@
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 
@@ -15,11 +16,29 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
     {
         public static List<JObject> Parse(string reportName, string csv)
         {
-            var records = ReadRecords(csv);
-            if (records.Count < 2) return new List<JObject>();
+            using (var reader = new StringReader(csv ?? string.Empty))
+            {
+                return Parse(reportName, reader);
+            }
+        }
 
-            var headers = records[0];
-            var rows = records.Skip(1).Where(r => r.Any(c => !string.IsNullOrWhiteSpace(c))).ToList();
+        public static List<JObject> Parse(string reportName, Stream csv)
+        {
+            if (csv == null) throw new ArgumentNullException(nameof(csv));
+            using (var reader = new StreamReader(csv, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 4096, leaveOpen: true))
+            {
+                return Parse(reportName, reader);
+            }
+        }
+
+        public static List<JObject> Parse(string reportName, TextReader reader)
+        {
+            if (reader == null) throw new ArgumentNullException(nameof(reader));
+
+            var headers = ReadRecord(reader);
+            if (headers == null) return new List<JObject>();
+
+            var rows = ReadRecords(reader).Where(r => r.Any(c => !string.IsNullOrWhiteSpace(c)));
 
             if (reportName == CopilotReportNames.UsageUserDetail) return ParseUserDetail(headers, rows);
             if (reportName == CopilotReportNames.UserCountSummary) return ParseSummary(headers, rows);
@@ -108,8 +127,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                 || property == "promptsSubmitted"
                 || property == "promptsSubmittedForCopilotChatWork"
                 || property == "promptsSubmittedForCopilotChatWeb"
-                || property == "activeUsageDays"
-                || property == "appsUsed";
+                || property == "activeUsageDays";
         }
 
         private static string UserDetailProperty(string header)
@@ -146,6 +164,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                 case "microsoft365copilotlastactivitydate":
                 case "lastactivitydateofmicrosoft365copilotutc":
                 case "lastactivitydateofmicrosoft365apputc": return "microsoft365CopilotLastActivityDate";
+                case "edgelastactivitydate":
                 case "edgecopilotlastactivitydate":
                 case "microsoftedgelastactivitydate":
                 case "lastactivitydateofmicrosoftedgeutc": return "edgeLastActivityDate";
@@ -161,9 +180,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                 case "activedays":
                 case "activeusagedays":
                 case "activeusagedaysforallapps": return "activeUsageDays";
-                case "appsused":
-                case "reportappsused":
-                case "activeapps": return "appsUsed";
                 default: return null;
             }
         }
@@ -182,9 +198,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             }
 
             if (key.EndsWith("enabledusers", StringComparison.Ordinal))
-                return ToCamelProperty(header.Substring(0, header.LastIndexOf("Enabled Users", StringComparison.OrdinalIgnoreCase))) + "EnabledUsers";
+            {
+                var idx = header.LastIndexOf("Enabled", StringComparison.OrdinalIgnoreCase);
+                var prefix = idx >= 0 ? header.Substring(0, idx) : key.Substring(0, key.Length - "enabledusers".Length);
+                if (prefix.Length == 0) return null;
+                return ToCamelProperty(prefix) + "EnabledUsers";
+            }
+
             if (key.EndsWith("activeusers", StringComparison.Ordinal))
-                return ToCamelProperty(header.Substring(0, header.LastIndexOf("Active Users", StringComparison.OrdinalIgnoreCase))) + "ActiveUsers";
+            {
+                var idx = header.LastIndexOf("Active", StringComparison.OrdinalIgnoreCase);
+                var prefix = idx >= 0 ? header.Substring(0, idx) : key.Substring(0, key.Length - "activeusers".Length);
+                if (prefix.Length == 0) return null;
+                return ToCamelProperty(prefix) + "ActiveUsers";
+            }
 
             return null;
         }
@@ -234,22 +261,43 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
         internal static List<List<string>> ReadRecords(string csv)
         {
-            var rows = new List<List<string>>();
+            using (var reader = new StringReader(csv ?? string.Empty))
+            {
+                return ReadRecords(reader).ToList();
+            }
+        }
+
+        private static IEnumerable<List<string>> ReadRecords(TextReader reader)
+        {
+            List<string> row;
+            while ((row = ReadRecord(reader)) != null)
+            {
+                yield return row;
+            }
+        }
+
+        private static List<string> ReadRecord(TextReader reader)
+        {
             var row = new List<string>();
             var field = new StringBuilder();
             var inQuotes = false;
+            var sawAnyCharacter = false;
 
-            for (var i = 0; i < (csv ?? string.Empty).Length; i++)
+            while (true)
             {
-                var c = csv[i];
+                var read = reader.Read();
+                if (read < 0) break;
+
+                sawAnyCharacter = true;
+                var c = (char)read;
                 if (inQuotes)
                 {
                     if (c == '"')
                     {
-                        if (i + 1 < csv.Length && csv[i + 1] == '"')
+                        if (reader.Peek() == '"')
                         {
                             field.Append('"');
-                            i++;
+                            reader.Read();
                         }
                         else
                         {
@@ -271,23 +319,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                     }
                     else if (c == '\r' || c == '\n')
                     {
-                        if (c == '\r' && i + 1 < csv.Length && csv[i + 1] == '\n') i++;
+                        if (c == '\r' && reader.Peek() == '\n') reader.Read();
                         row.Add(field.ToString());
-                        field.Clear();
-                        rows.Add(row);
-                        row = new List<string>();
+                        return row;
                     }
                     else field.Append(c);
                 }
             }
 
-            if (field.Length > 0 || row.Count > 0)
+            if (field.Length > 0 || row.Count > 0 || sawAnyCharacter)
             {
                 row.Add(field.ToString());
-                rows.Add(row);
+                return row;
             }
 
-            return rows;
+            return null;
         }
     }
 }

@@ -106,7 +106,7 @@ namespace Tests.UnitTests
             'copilotAgentLastActivityDate': '2026-07-01',
             'copilotActivityUserDetailsByPeriod': [
                 { 'reportPeriod': 28, 'promptsSubmitted': 142, 'activeUsageDays': 19,
-                  'promptsSubmittedForCopilotChatWork': 90, 'promptsSubmittedForCopilotChatWeb': 52, 'appsUsed': 5 }
+                  'promptsSubmittedForCopilotChatWork': 90, 'promptsSubmittedForCopilotChatWeb': 52 }
             ]
         }";
 
@@ -163,6 +163,9 @@ namespace Tests.UnitTests
             StringAssert.Contains(request.Url, "$format=text/csv");
             StringAssert.StartsWith(request.Url, "https://graph.microsoft.com/v1.0/copilot/reports/");
             StringAssert.Contains(request.V1FallbackUrl, "period='D30'");
+            StringAssert.StartsWith(request.BetaV2JsonFallbackUrl, "https://graph.microsoft.com/beta/copilot/reports/");
+            StringAssert.Contains(request.BetaV2JsonFallbackUrl, "version='v2'");
+            StringAssert.Contains(request.BetaV2JsonFallbackUrl, "$format=application/json");
             StringAssert.StartsWith(request.LegacyJsonFallbackUrl, "https://graph.microsoft.com/beta/reports/");
         }
 
@@ -285,8 +288,8 @@ namespace Tests.UnitTests
         [TestMethod]
         public void CsvParser_ReadsGaV10UserDetailVersion2Fields()
         {
-            var csv = "Report Refresh Date,Report Period,User Principal Name,Display Name,Prompts submitted (any app),Copilot Chat (work) prompts submitted,Copilot Chat (web) prompts submitted,Active Days,Apps used,Last activity date of Teams Copilot (UTC),Last activity date of Copilot Chat (work) (UTC),Last activity date of Copilot Chat (web) (UTC),Last activity date of Microsoft 365 App (UTC),Last activity date of Microsoft Edge (UTC),Last activity date of any agent (UTC)\r\n"
-                + "2026-07-03,28,ada@contoso.onmicrosoft.com,Ada Lovelace,142,90,52,19,5,2026-07-01,2026-07-02,2026-06-28,2026-07-02,2026-06-30,2026-07-01\r\n";
+            var csv = "Report Refresh Date,User Principal Name,Display Name,Last Activity Date,Copilot Chat Last Activity Date,Microsoft Teams Copilot Last Activity Date,Word Copilot Last Activity Date,Excel Copilot Last Activity Date,PowerPoint Copilot Last Activity Date,Outlook Copilot Last Activity Date,OneNote Copilot Last Activity Date,Loop Copilot Last Activity Date,Report Period,Prompts submitted for all apps,Prompts submitted for Copilot Chat (work),Prompts submitted for Copilot Chat (web),Active Usage Days for all apps,Copilot Chat (work) Last Activity Date,Copilot Chat (web) Last Activity Date,Microsoft 365 Copilot Last Activity Date,Edge Last Activity Date,Copilot Agent Last Activity Date\r\n"
+                + "2026-07-03,ada@contoso.onmicrosoft.com,Ada Lovelace,2026-07-02,2026-07-02,2026-07-01,,,,,,,28,142,90,52,19,2026-07-02,2026-06-28,2026-07-02,2026-06-30,2026-07-01\r\n";
 
             var row = CopilotUsageUserDetailParser.Parse(CopilotReportCsvParser.Parse(CopilotReportNames.UsageUserDetail, csv)).Single();
 
@@ -294,17 +297,69 @@ namespace Tests.UnitTests
             Assert.AreEqual(90, row.PromptsChatWork);
             Assert.AreEqual(52, row.PromptsChatWeb);
             Assert.AreEqual(19, row.ActiveUsageDays);
-            Assert.AreEqual(5, row.AppsUsed);
             Assert.AreEqual(new DateTime(2026, 7, 2), row.ChatWorkLastActivityDate);
             Assert.AreEqual(new DateTime(2026, 6, 30), row.EdgeLastActivityDate);
             Assert.AreEqual(new DateTime(2026, 7, 1), row.AgentLastActivityDate);
         }
 
         [TestMethod]
-        public async Task GraphSource_FallsBackToV1WhenV2IsUnavailable()
+        public void CsvParser_ParsesRenamedAggregateHeadersFromTheNormalisedKey()
+        {
+            var csv = "Report Refresh Date,Report Period,MicrosoftTeamsEnabledUsers\r\n"
+                + "2026-07-03,28,250\r\n";
+
+            var rows = CopilotReportCsvParser.Parse(CopilotReportNames.UserCountSummary, csv);
+
+            Assert.AreEqual(1, rows.Count);
+            Assert.AreEqual(250, rows[0]["adoptionByProduct"][0]["microsoftTeamsEnabledUsers"].Value<int>(),
+                "A renamed aggregate header should be derived from the normalised key rather than throwing from Substring(0, -1).");
+        }
+
+        [TestMethod]
+        public async Task GraphSource_RestoresBetaV2JsonFallbackBeforeDowngradingToV1()
         {
             var handler = new SequencedGraphHandler(
                 new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent("{ 'error': { 'code': 'BadRequest' } }") },
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(@"{ 'value': [
+                        {
+                            'reportRefreshDate': '2026-07-03',
+                            'userPrincipalName': 'ada@contoso.onmicrosoft.com',
+                            'displayName': 'Ada Lovelace',
+                            'lastActivityDate': '2026-07-02',
+                            'edgeLastActivityDate': '2026-06-30',
+                            'copilotActivityUserDetailsByPeriod': [
+                                { 'reportPeriod': 28, 'promptsSubmitted': 142, 'activeUsageDays': 19 }
+                            ]
+                        } ] }")
+                });
+
+            using (var client = new WebJob.Office365ActivityImporter.Engine.Graph.ManualGraphCallClient(handler, AnalyticsLogger.ConsoleOnlyTracer()))
+            {
+                var source = new GraphCopilotReportSource(client, AnalyticsLogger.ConsoleOnlyTracer());
+                var rows = await source.LoadReportAsync(new CopilotReportRequest(CopilotReportNames.UsageUserDetail, "D28"));
+
+                Assert.AreEqual(2, handler.Requests.Count);
+                StringAssert.Contains(handler.Requests[0].ToString(), "v1.0/copilot/reports");
+                StringAssert.Contains(handler.Requests[0].ToString(), "version='v2'");
+                StringAssert.Contains(handler.Requests[1].ToString(), "beta/copilot/reports");
+                StringAssert.Contains(handler.Requests[1].ToString(), "version='v2'");
+                Assert.AreEqual(CopilotReportVersions.V2, source.LastSuccessfulVersion);
+                Assert.AreEqual("D28", source.LastSuccessfulPeriod);
+
+                var row = CopilotUsageUserDetailParser.Parse(rows).Single();
+                Assert.AreEqual(142, row.PromptsAllApps);
+                Assert.AreEqual(new DateTime(2026, 6, 30), row.EdgeLastActivityDate);
+            }
+        }
+
+        [TestMethod]
+        public async Task GraphSource_FallsBackToV1OnlyAfterGaAndBetaV2AreUnavailable()
+        {
+            var handler = new SequencedGraphHandler(
+                new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent("{ 'error': { 'code': 'BadRequest' } }") },
+                new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("{ 'error': { 'code': 'itemNotFound' } }") },
                 new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = new StringContent("Report Refresh Date,Report Period,User Principal Name,Display Name,Last Activity Date\r\n2026-07-03,30,ada@contoso.onmicrosoft.com,Ada Lovelace,2026-07-02\r\n")
@@ -315,10 +370,12 @@ namespace Tests.UnitTests
                 var source = new GraphCopilotReportSource(client, AnalyticsLogger.ConsoleOnlyTracer());
                 var rows = await source.LoadReportAsync(new CopilotReportRequest(CopilotReportNames.UsageUserDetail, "D28"));
 
-                Assert.AreEqual(2, handler.Requests.Count);
+                Assert.AreEqual(3, handler.Requests.Count);
                 StringAssert.Contains(handler.Requests[0].ToString(), "version='v2'");
-                StringAssert.Contains(handler.Requests[1].ToString(), "version='v1'");
-                StringAssert.Contains(handler.Requests[1].ToString(), "period='D30'");
+                StringAssert.Contains(handler.Requests[1].ToString(), "beta/copilot/reports");
+                StringAssert.Contains(handler.Requests[1].ToString(), "version='v2'");
+                StringAssert.Contains(handler.Requests[2].ToString(), "version='v1'");
+                StringAssert.Contains(handler.Requests[2].ToString(), "period='D30'");
                 Assert.AreEqual(CopilotReportVersions.V1, source.LastSuccessfulVersion);
                 Assert.AreEqual("D30", source.LastSuccessfulPeriod);
                 Assert.AreEqual(1, CopilotUsageUserDetailParser.Parse(rows).Count);
@@ -334,7 +391,6 @@ namespace Tests.UnitTests
             Assert.AreEqual(90, row.PromptsChatWork);
             Assert.AreEqual(52, row.PromptsChatWeb);
             Assert.AreEqual(19, row.ActiveUsageDays);
-            Assert.AreEqual(5, row.AppsUsed);
             Assert.AreEqual(28, row.ReportPeriodDays);
             Assert.AreEqual(new DateTime(2026, 6, 30), row.EdgeLastActivityDate);
             Assert.AreEqual(new DateTime(2026, 7, 2), row.Microsoft365CopilotLastActivityDate);

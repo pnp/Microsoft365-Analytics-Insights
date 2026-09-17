@@ -58,10 +58,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         /// <summary>The GA Microsoft 365 Copilot usage-report endpoint Microsoft now recommends.</summary>
         public const string GraphV10CopilotBaseUrl = "https://graph.microsoft.com/v1.0/copilot/reports";
 
-        /// <summary>
-        /// Mid-rollout fallback for tenants that have not enabled the GA /copilot path yet. This keeps the
-        /// pre-#541 behaviour available, but only after the v1.0 /copilot request has been tried.
-        /// </summary>
+        /// <summary>Preview Microsoft 365 Copilot usage-report endpoint used before the GA v1.0 CSV stream.</summary>
+        public const string GraphBetaCopilotBaseUrl = "https://graph.microsoft.com/beta/copilot/reports";
+
+        /// <summary>Superseded root-level beta reports endpoint, kept only as the final v1 fallback.</summary>
         public const string GraphBetaLegacyReportsBaseUrl = "https://graph.microsoft.com/beta/reports";
 
         /// <summary>Periods Graph accepts for report version 1. Note D30.</summary>
@@ -137,6 +137,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
         /// <summary>GA /copilot fallback URL for version 1 when a tenant has not rolled out version 2 yet.</summary>
         public string V1FallbackUrl => BuildUrl(GraphV10CopilotBaseUrl, V1PeriodFor(Period), CopilotReportVersions.V1, "text/csv");
+
+        /// <summary>
+        /// Preview /copilot JSON fallback for tenants that have v2 data but have not rolled out the GA CSV
+        /// stream yet. This is the endpoint the importer used before #541.
+        /// </summary>
+        public string BetaV2JsonFallbackUrl => BuildUrl(GraphBetaCopilotBaseUrl, Period, CopilotReportVersions.V2, "application/json");
 
         /// <summary>Legacy beta /reports JSON URL, kept as the last mid-rollout fallback.</summary>
         public string LegacyJsonFallbackUrl => $"{GraphBetaLegacyReportsBaseUrl}/{ReportName}(period='{V1PeriodFor(Period)}')?$format=application/json";

@@ -23,7 +23,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         public int? PromptsChatWork { get; set; }
         public int? PromptsChatWeb { get; set; }
         public int? ActiveUsageDays { get; set; }
-        public int? AppsUsed { get; set; }
         public string ReportVersion { get; set; }
 
         public DateTime? ChatLastActivityDate { get; set; }
@@ -43,7 +42,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         /// <summary>True when this row carried any report-version 2 value.</summary>
         public bool HasVersion2Data =>
             PromptsAllApps.HasValue || PromptsChatWork.HasValue || PromptsChatWeb.HasValue
-            || ActiveUsageDays.HasValue || AppsUsed.HasValue || ChatWorkLastActivityDate.HasValue || ChatWebLastActivityDate.HasValue
+            || ActiveUsageDays.HasValue || ChatWorkLastActivityDate.HasValue || ChatWebLastActivityDate.HasValue
             || Microsoft365CopilotLastActivityDate.HasValue || EdgeLastActivityDate.HasValue
             || AgentLastActivityDate.HasValue;
 
@@ -139,7 +138,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         private static readonly string[] PromptsChatWorkProperties = { "promptsSubmittedForCopilotChatWork", "copilotChatWorkPromptsSubmitted" };
         private static readonly string[] PromptsChatWebProperties = { "promptsSubmittedForCopilotChatWeb", "copilotChatWebPromptsSubmitted" };
         private static readonly string[] ActiveUsageDaysProperties = { "activeUsageDays", "activeUsageDaysForAllApps", "activeDays" };
-        private static readonly string[] AppsUsedProperties = { "appsUsed", "reportAppsUsed", "activeApps" };
 
         /// <summary>True when any row in the response carried report-version 2 data.</summary>
         public static bool HasVersion2Data(IEnumerable<CopilotUsageUserDetailRow> rows)
@@ -203,7 +201,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                 PromptsChatWork = GetIntAny(period, PromptsChatWorkProperties),
                 PromptsChatWeb = GetIntAny(period, PromptsChatWebProperties),
                 ActiveUsageDays = GetIntAny(period, ActiveUsageDaysProperties),
-                AppsUsed = GetIntAny(period, AppsUsedProperties),
 
                 ChatLastActivityDate = CopilotUserCountReportParser.GetDate(user, ChatLastActivityProperty),
                 TeamsLastActivityDate = CopilotUserCountReportParser.GetDate(user, TeamsLastActivityProperty),

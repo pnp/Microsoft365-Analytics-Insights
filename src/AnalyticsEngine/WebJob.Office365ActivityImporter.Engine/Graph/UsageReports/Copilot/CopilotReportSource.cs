@@ -28,9 +28,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
     /// <summary>
     /// Loads a Copilot usage report from the GA v1.0 /copilot path, with explicit mid-rollout fallbacks. The
     /// v1.0 endpoint returns a CSV stream, which is converted back to the JSON-shaped objects the existing
-    /// parsers consume. If a tenant rejects v2, the source retries v1 on /copilot; if /copilot itself has not
-    /// rolled out to that tenant, it retries the legacy beta /reports JSON endpoint to preserve existing
-    /// behaviour.
+    /// parsers consume. If a tenant rejects the GA stream, the source retries the previous beta /copilot JSON
+    /// v2 endpoint before downgrading to v1. The superseded beta /reports JSON endpoint is kept only as the
+    /// final v1 fallback.
     /// </summary>
     public class GraphCopilotReportSource : ICopilotReportSource, ICopilotReportLoadProvenance
     {
@@ -64,8 +64,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                     }
                     else
                     {
-                        var csv = await _client.GetStringAsyncWithThrottleRetries(attempt.Url);
-                        rows = CopilotReportCsvParser.Parse(request.ReportName, csv);
+                        rows = await _client.GetStreamAsyncWithThrottleRetries(
+                            attempt.Url,
+                            stream => Task.FromResult(CopilotReportCsvParser.Parse(request.ReportName, stream)));
                     }
 
                     LastSuccessfulVersion = attempt.Version;
@@ -103,6 +104,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
             if (request.Version == CopilotReportVersions.V2)
             {
+                attempts.Add(new ReportAttempt(request.BetaV2JsonFallbackUrl, true, "beta /copilot v2 JSON", CopilotReportVersions.V2, request.Period));
                 attempts.Add(new ReportAttempt(request.V1FallbackUrl, false, "v1.0 /copilot v1", CopilotReportVersions.V1, CopilotReportRequest.V1PeriodFor(request.Period)));
             }
 
