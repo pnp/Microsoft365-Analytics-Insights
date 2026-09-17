@@ -63,7 +63,7 @@ function SelectedLicenceBar({ licences, selectedLicenceTypeId, onSelect }: Selec
         className={styles.select}
         value={selectedLicenceTypeId == null ? '' : String(selectedLicenceTypeId)}
         aria-label="Selected licence"
-        onChange={(_e, d) => {
+        onChange={(_e: any, d: any) => {
           if (d.value !== '') onSelect(Number(d.value));
         }}
       >

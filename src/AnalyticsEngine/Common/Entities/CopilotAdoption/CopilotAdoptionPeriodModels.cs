@@ -1,4 +1,4 @@
-﻿using Newtonsoft.Json;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 
@@ -418,5 +418,129 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("warnings")]
         public List<string> Warnings { get; set; } = new List<string>();
+    }
+
+    public class CopilotAdoptionCreateCohortRequest
+    {
+        [JsonProperty("name")] public string Name { get; set; }
+        [JsonProperty("actionCode")] public string ActionCode { get; set; }
+        [JsonProperty("createdBy")] public string CreatedBy { get; set; }
+        [JsonProperty("holdoutPercentage")] public int HoldoutPercentage { get; set; }
+    }
+
+    public class CopilotAdoptionCreateInterventionRequest : CopilotAdoptionCreateCohortRequest
+    {
+        [JsonProperty("owner")] public string Owner { get; set; }
+        [JsonProperty("interventionType")] public string InterventionType { get; set; }
+        [JsonProperty("guidanceResource")] public string GuidanceResource { get; set; }
+        [JsonProperty("startedUtc")] public DateTime? StartedUtc { get; set; }
+        [JsonProperty("dueUtc")] public DateTime? DueUtc { get; set; }
+        [JsonProperty("completedUtc")] public DateTime? CompletedUtc { get; set; }
+        [JsonProperty("status")] public string Status { get; set; }
+        [JsonProperty("intendedOutcome")] public string IntendedOutcome { get; set; }
+        [JsonProperty("notes")] public string Notes { get; set; }
+        [JsonProperty("intendedReinvestmentType")] public string IntendedReinvestmentType { get; set; }
+        [JsonProperty("intendedReinvestmentDescription")] public string IntendedReinvestmentDescription { get; set; }
+    }
+
+    public class CopilotAdoptionCohort
+    {
+        [JsonProperty("cohortId")] public int CohortId { get; set; }
+        [JsonProperty("name")] public string Name { get; set; }
+        [JsonProperty("actionCode")] public string ActionCode { get; set; }
+        [JsonProperty("createdUtc")] public DateTime CreatedUtc { get; set; }
+        [JsonProperty("createdBy")] public string CreatedBy { get; set; }
+        [JsonProperty("baselinePeriodEnd")] public DateTime BaselinePeriodEnd { get; set; }
+        [JsonProperty("baselinePeriodDays")] public int BaselinePeriodDays { get; set; }
+        [JsonProperty("baselineOptionsHash")] public string BaselineOptionsHash { get; set; }
+        [JsonProperty("closedUtc")] public DateTime? ClosedUtc { get; set; }
+        [JsonProperty("closedBy")] public string ClosedBy { get; set; }
+        [JsonProperty("memberCount")] public int MemberCount { get; set; }
+        [JsonProperty("holdoutCount")] public int HoldoutCount { get; set; }
+    }
+
+    public class CopilotAdoptionCohortMember
+    {
+        [JsonProperty("cohortId")] public int CohortId { get; set; }
+        [JsonProperty("userId")] public int UserId { get; set; }
+        [JsonProperty("userPrincipalName")] public string UserPrincipalName { get; set; }
+        [JsonProperty("mail")] public string Mail { get; set; }
+        [JsonProperty("department")] public string Department { get; set; }
+        [JsonProperty("baselineBand")] public AdoptionBand BaselineBand { get; set; }
+        [JsonProperty("baselineBandName")] public string BaselineBandName { get; set; }
+        [JsonProperty("baselineScore")] public double BaselineScore { get; set; }
+        [JsonProperty("baselineActiveDays")] public int BaselineActiveDays { get; set; }
+        [JsonProperty("holdoutControl")] public bool HoldoutControl { get; set; }
+    }
+
+    public class CopilotAdoptionIntervention
+    {
+        [JsonProperty("interventionId")] public int InterventionId { get; set; }
+        [JsonProperty("cohortId")] public int CohortId { get; set; }
+        [JsonProperty("cohortName")] public string CohortName { get; set; }
+        [JsonProperty("actionCode")] public string ActionCode { get; set; }
+        [JsonProperty("owner")] public string Owner { get; set; }
+        [JsonProperty("interventionType")] public string InterventionType { get; set; }
+        [JsonProperty("guidanceResource")] public string GuidanceResource { get; set; }
+        [JsonProperty("startedUtc")] public DateTime? StartedUtc { get; set; }
+        [JsonProperty("dueUtc")] public DateTime? DueUtc { get; set; }
+        [JsonProperty("completedUtc")] public DateTime? CompletedUtc { get; set; }
+        [JsonProperty("status")] public string Status { get; set; }
+        [JsonProperty("intendedOutcome")] public string IntendedOutcome { get; set; }
+        [JsonProperty("notes")] public string Notes { get; set; }
+        [JsonProperty("intendedReinvestmentType")] public string IntendedReinvestmentType { get; set; }
+        [JsonProperty("intendedReinvestmentDescription")] public string IntendedReinvestmentDescription { get; set; }
+        [JsonProperty("createdUtc")] public DateTime CreatedUtc { get; set; }
+        [JsonProperty("memberCount")] public int MemberCount { get; set; }
+        [JsonProperty("isOverdue")] public bool IsOverdue { get; set; }
+        [JsonProperty("isUnstarted")] public bool IsUnstarted { get; set; }
+    }
+
+    public class CopilotAdoptionInterventionOutcome
+    {
+        [JsonProperty("intervention")] public CopilotAdoptionIntervention Intervention { get; set; }
+        [JsonProperty("cohort")] public CopilotAdoptionCohort Cohort { get; set; }
+        [JsonProperty("followupPeriodEnd")] public DateTime FollowupPeriodEnd { get; set; }
+        [JsonProperty("methodLabel")] public string MethodLabel { get; set; }
+        [JsonProperty("observational")] public bool Observational { get; set; }
+        [JsonProperty("refused")] public bool Refused { get; set; }
+        [JsonProperty("refusalReason")] public string RefusalReason { get; set; }
+        [JsonProperty("matchingCriteria")] public string MatchingCriteria { get; set; }
+        [JsonProperty("treatedN")] public int TreatedN { get; set; }
+        [JsonProperty("controlN")] public int ControlN { get; set; }
+        [JsonProperty("treatedChange")] public double TreatedChange { get; set; }
+        [JsonProperty("controlChange")] public double ControlChange { get; set; }
+        [JsonProperty("differenceInDifferences")] public double DifferenceInDifferences { get; set; }
+        [JsonProperty("effectSizeLabel")] public string EffectSizeLabel { get; set; }
+        [JsonProperty("controlComposition")] public List<CopilotAdoptionControlCompositionRow> ControlComposition { get; set; } = new List<CopilotAdoptionControlCompositionRow>();
+        [JsonProperty("leadingIndicators")] public List<CopilotAdoptionLeadingIndicatorOutcome> LeadingIndicators { get; set; } = new List<CopilotAdoptionLeadingIndicatorOutcome>();
+    }
+
+    public class CopilotAdoptionControlCompositionRow
+    {
+        [JsonProperty("department")] public string Department { get; set; }
+        [JsonProperty("band")] public string Band { get; set; }
+        [JsonProperty("scoreBucket")] public string ScoreBucket { get; set; }
+        [JsonProperty("users")] public int Users { get; set; }
+    }
+
+    public class CopilotAdoptionLeadingIndicatorOutcome
+    {
+        [JsonProperty("code")] public string Code { get; set; }
+        [JsonProperty("label")] public string Label { get; set; }
+        [JsonProperty("treatedChange")] public double TreatedChange { get; set; }
+        [JsonProperty("controlChange")] public double ControlChange { get; set; }
+        [JsonProperty("differenceInDifferences")] public double DifferenceInDifferences { get; set; }
+        [JsonProperty("movementLabel")] public string MovementLabel { get; set; }
+    }
+
+    public class CopilotAdoptionWorkloadSnapshotRow
+    {
+        public int UserId { get; set; }
+        public long TeamsMessages { get; set; }
+        public long TeamsMeetings { get; set; }
+        public long EmailsSent { get; set; }
+        public long EmailsRead { get; set; }
+        public long FilesViewedOrEdited { get; set; }
     }
 }

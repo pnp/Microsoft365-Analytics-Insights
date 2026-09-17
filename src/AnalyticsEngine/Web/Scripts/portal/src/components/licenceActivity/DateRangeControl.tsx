@@ -156,7 +156,7 @@ export default function DateRangeControl({
                 max={draft.to || latestEnd}
                 disabled={disabled}
                 aria-label="Start date"
-                onChange={(_e, d) => setDraft((prev) => ({ ...prev, from: d.value }))}
+                onChange={(_e: any, d: any) => setDraft((prev) => ({ ...prev, from: d.value }))}
               />
             </label>
             <label className={styles.field}>
@@ -170,7 +170,7 @@ export default function DateRangeControl({
                 max={latestEnd}
                 disabled={disabled}
                 aria-label="End date"
-                onChange={(_e, d) => setDraft((prev) => ({ ...prev, to: d.value }))}
+                onChange={(_e: any, d: any) => setDraft((prev) => ({ ...prev, to: d.value }))}
               />
             </label>
             <Button appearance="primary" size="small" disabled={disabled} onClick={applyCustom}>
