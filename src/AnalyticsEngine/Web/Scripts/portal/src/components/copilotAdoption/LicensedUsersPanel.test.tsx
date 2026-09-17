@@ -157,6 +157,7 @@ describe('LicensedUsersPanel source reconciliation', () => {
           userId: 3,
           userPrincipalName: 'report-only@contoso.com',
           signalSource: 'usageReport',
+          sourceComparisonAvailable: true,
           interactions: 18,
           activeDays: 5,
           auditInteractions: 0,
@@ -164,6 +165,7 @@ describe('LicensedUsersPanel source reconciliation', () => {
           auditAppsUsed: 0,
           reportPrompts: 18,
           reportActiveDays: 5,
+          reportLastActivityUtc: '2026-08-20T00:00:00Z',
         }),
       ],
     };
@@ -197,6 +199,11 @@ describe('LicensedUsersPanel source reconciliation', () => {
     }).length).toBeGreaterThan(0);
     expect(screen.getAllByText('Audit log')).toHaveLength(2);
     expect(screen.getByText('Microsoft usage report')).toBeInTheDocument();
-    expect(screen.queryByText(/Audit D28: 0 interactions/)).not.toBeInTheDocument();
+    expect(screen.getAllByText((_content, element) => {
+      const text = element?.textContent ?? '';
+      return text.includes('Audit D28: 0 interactions, 0 days.')
+        && text.includes('Microsoft report D28')
+        && text.includes('18 prompts, 5 days.');
+    }).length).toBeGreaterThan(0);
   });
 });

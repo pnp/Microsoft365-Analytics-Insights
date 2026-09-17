@@ -266,6 +266,8 @@ namespace Tests.UnitTests
 
             StringAssert.Contains(text, "Why our figures differ from Microsoft's");
             StringAssert.Contains(text, "unlicensed Copilot Chat usage is not available through Microsoft Graph reports APIs");
+            StringAssert.Contains(text, "https://learn.microsoft.com/en-us/microsoft-365/admin/activity-reports/microsoft-365-copilot-usage");
+            StringAssert.Contains(text, "https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/api/admin-settings/reports/copilotreportroot-getmicrosoft365copilotusageuserdetail");
             StringAssert.Contains(text, "Do not average or silently reconcile them into one number");
             StringAssert.Contains(text, "Audit log (selected D28): 12 interactions, 4 active days, 2 apps");
             StringAssert.Contains(text, "Microsoft Copilot usage report (D28, snapshot 2026-08-20): 18 prompts, 5 active days");

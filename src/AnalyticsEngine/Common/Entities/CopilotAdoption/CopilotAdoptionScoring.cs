@@ -237,7 +237,7 @@ namespace Common.Entities.CopilotAdoption
                 AuditInteractions = row.Interactions,
                 AuditActiveDays = row.ActiveDays,
                 AuditAppsUsed = row.AppsUsed,
-                SourceComparisonAvailable = auditHasSignal && reportCoversUser,
+                SourceComparisonAvailable = auditAvailable && reportCoversUser,
                 ExpectedActiveDays = Round(targetActiveDays, 1),
                 AppsUsed = appsUsed,
                 AgentsUsed = row.AgentsUsed,

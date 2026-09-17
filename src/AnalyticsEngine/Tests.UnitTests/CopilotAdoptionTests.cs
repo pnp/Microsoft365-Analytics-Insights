@@ -288,8 +288,10 @@ namespace Tests.UnitTests
             reportOnly.ReportActiveDays = 5;
             var reportScored = CopilotAdoptionScoring.Score(reportOnly, WindowStart, Now, auditAvailable: true);
 
-            Assert.IsFalse(reportScored.SourceComparisonAvailable,
-                "A report fallback row has no audit figure to reconcile, so it must not display a fake comparison.");
+            Assert.IsTrue(reportScored.SourceComparisonAvailable,
+                "A report fallback row is exactly where the audit zero and Microsoft activity must be reconciled.");
+            Assert.AreEqual(0, reportScored.AuditInteractions);
+            Assert.AreEqual(0, reportScored.AuditActiveDays);
 
             var auditOnly = UsageRow(interactions: 12, activeDays: 4, appsUsed: 2, lastUse: Now.AddDays(-1));
             var auditScored = CopilotAdoptionScoring.Score(auditOnly, WindowStart, Now, auditAvailable: true);

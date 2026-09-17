@@ -13,6 +13,7 @@ import {
   Tooltip,
   MessageBar,
   MessageBarBody,
+  Link,
   Accordion,
   AccordionHeader,
   AccordionItem,
@@ -65,6 +66,11 @@ const WINDOW_OPTIONS = [
 ];
 
 type AdoptionTab = 'overview' | 'licensed' | 'cowork' | 'unlicensed' | 'agents' | 'opportunities' | 'method';
+
+const MICROSOFT_COPILOT_USAGE_REPORT_FAQ_URL =
+  'https://learn.microsoft.com/en-us/microsoft-365/admin/activity-reports/microsoft-365-copilot-usage?view=o365-worldwide#whats-the-difference-between-the-user-activity-table-and-audit-log';
+const MICROSOFT_COPILOT_USAGE_REPORT_API_URL =
+  'https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/api/admin-settings/reports/copilotreportroot-getmicrosoft365copilotusageuserdetail';
 
 const useStyles = makeStyles({
   header: {
@@ -1534,16 +1540,22 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
               </Text>
               <Text>
                 <strong>Why this differs from Microsoft's report:</strong> Microsoft says audit-log
-                aggregates are not intended to match the official Copilot usage report. That is expected, not a
-                defect: the audit log answers what happened in this tenant, for everyone, during the selected D
+                aggregates are not intended to match the official Copilot usage report (
+                <Link href={MICROSOFT_COPILOT_USAGE_REPORT_FAQ_URL} target="_blank" rel="noreferrer">
+                  Copilot usage report FAQ
+                </Link>
+                ). That is expected, not a defect: the audit log answers what happened in this tenant, for everyone, during the selected D
                 {o.windowDays} window; Microsoft's report answers what Microsoft recorded for licensed users in
                 Microsoft's settled report window. Neither source corrects the other. Where both cover the same
                 licensed user, the Licensed users tab shows both figures with their source and window.
               </Text>
               <Text>
                 <strong>Why the audit log is still the right source here:</strong> Microsoft also states that
-                unlicensed Copilot Chat usage is not available through Microsoft Graph reports APIs, and points to
-                Purview audit data, Search-UnifiedAuditLog or the Office 365 Management Activity API instead.
+                unlicensed Copilot Chat usage is not available through Microsoft Graph reports APIs (
+                <Link href={MICROSOFT_COPILOT_USAGE_REPORT_API_URL} target="_blank" rel="noreferrer">
+                  Copilot usage report API
+                </Link>
+                ), and points to Purview audit data, Search-UnifiedAuditLog or the Office 365 Management Activity API instead.
                 Unlicensed demand is the signal this tool uses to decide who should receive a reclaimed licence,
                 so it must come from the audit log rather than being inferred from licensed-user reports.
               </Text>

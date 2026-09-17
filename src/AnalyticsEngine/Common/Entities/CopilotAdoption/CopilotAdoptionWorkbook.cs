@@ -1375,8 +1375,10 @@ namespace Common.Entities.CopilotAdoption
                 + $"and are counted over the selected D{o.WindowDays} window. Microsoft's report covers licensed "
                 + "users only and uses Microsoft's own settled report window, so the two will legitimately differ. "
                 + "Microsoft states that audit-log aggregates are not intended to match the official usage report, "
+                + "(https://learn.microsoft.com/en-us/microsoft-365/admin/activity-reports/microsoft-365-copilot-usage?view=o365-worldwide#whats-the-difference-between-the-user-activity-table-and-audit-log), "
                 + "but also states that unlicensed Copilot Chat usage is not available through Microsoft Graph reports APIs; "
-                + "audit data via Purview or the Office 365 Management Activity API is the programmatic route for that signal. "
+                + "(https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/api/admin-settings/reports/copilotreportroot-getmicrosoft365copilotusageuserdetail). "
+                + "Audit data via Purview or the Office 365 Management Activity API is the programmatic route for that signal. "
                 + "Where both sources cover the same licensed user, the Licensed users sheet shows both figures side by side "
                 + "with their source and window. Do not average or silently reconcile them into one number.");
 
