@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Migrations;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -71,7 +71,9 @@ namespace Tests.UnitTests
         // GraphCopilotUsageApiV2 then adds the report_version column carrying the Graph usage-report
         // schema version each snapshot came from. It DOES change the entity model, so its snapshot is
         // freshly scaffolded rather than reused.
-        private const string LatestId = "202609170910001_GraphCopilotUsageApiV2";
+        // CopilotAdoptionTargets then adds the customer-defined adoption target tables. Raw-SQL,
+        // purely additive, and reuses the GraphCopilotUsageApiV2 model snapshot verbatim.
+        private const string LatestId = "202609171000001_CopilotAdoptionTargets";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

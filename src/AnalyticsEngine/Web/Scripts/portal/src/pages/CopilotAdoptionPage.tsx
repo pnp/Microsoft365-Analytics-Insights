@@ -68,6 +68,11 @@ const WINDOW_OPTIONS = [
 
 type AdoptionTab = 'executive' | 'analyst' | 'licensed' | 'cowork' | 'unlicensed' | 'agents' | 'opportunities' | 'method';
 
+const COMPARISON_OPTIONS = [
+  { value: 'previousPeriod', label: 'Previous closed period' },
+  { value: 'samePeriodLastQuarter', label: 'Same period last quarter' },
+];
+
 const TREND_GAP_NOTE =
   'Gap = Audit.General import coverage could not be verified for that completed week; it is not treated as zero usage.';
 
@@ -199,6 +204,7 @@ export default function CopilotAdoptionPage() {
   const [availability, setAvailability] = useState<CopilotAdoptionAvailability | null>(null);
   const [availabilityError, setAvailabilityError] = useState<string | null>(null);
   const [windowDays, setWindowDays] = useState(28);
+  const [comparisonMode, setComparisonMode] = useState('previousPeriod');
   const [tab, setTab] = useState<AdoptionTab>('executive');
   // Set when the user drills through from the enablement plan, so the licensed-user list they land
   // on is pre-filtered to exactly the group the plan counted. Cleared when they choose a tab
@@ -242,7 +248,7 @@ export default function CopilotAdoptionPage() {
     setSummaryLoading(true);
     setSummaryError(null);
 
-    fetchAdoptionSummary(windowDays, undefined, controller.signal)
+    fetchAdoptionSummary(windowDays, undefined, controller.signal, comparisonMode)
       .then((s) => {
         if (!cancelled) setSummary(s);
       })
@@ -275,7 +281,7 @@ export default function CopilotAdoptionPage() {
       // changed or the page unmounted.
       controller.abort();
     };
-  }, [availability, windowDays]);
+  }, [availability, windowDays, comparisonMode]);
 
   const onTabSelect: SelectTabEventHandler = (_e: unknown, data: { value: unknown }) => {
     setDrillAction(undefined);
@@ -324,6 +330,24 @@ export default function CopilotAdoptionPage() {
             ))}
           </Select>
           {availability?.available && (
+            <>
+              <Text size={200} className={styles.muted}>
+                Compare
+              </Text>
+              <Select
+                value={comparisonMode}
+                onChange={(_e, d) => setComparisonMode(d.value)}
+                aria-label="Comparison period"
+              >
+                {COMPARISON_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </Select>
+            </>
+          )}
+          {availability?.available && (
             <Tooltip
               relationship="description"
               content={
@@ -339,7 +363,7 @@ export default function CopilotAdoptionPage() {
                 appearance="primary"
                 icon={<ArrowDownload16Regular />}
                 as="a"
-                href={summary ? workbookExportUrl(windowDays) : undefined}
+                href={summary ? workbookExportUrl(windowDays, undefined, comparisonMode) : undefined}
                 disabled={!summary}
               >
                 Excel report
@@ -434,6 +458,12 @@ export default function CopilotAdoptionPage() {
                       ))}
                     </ul>
                   </MessageBarBody>
+                </MessageBar>
+              )}
+
+              {summary.periodMovement && !summary.periodMovement.comparable && (
+                <MessageBar intent="info">
+                  <MessageBarBody>{summary.periodMovement.message}</MessageBarBody>
                 </MessageBar>
               )}
 
@@ -874,6 +904,37 @@ function AnalystTab({
   return (
     <>
       <KpiGrid items={kpis} />
+
+      {summary.targets.length > 0 && (
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                Internal adoption targets
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                Customer-defined goals only. Baselines are frozen when the target is created; no external
+                benchmark is built in.
+              </Text>
+            </div>
+          </div>
+          <div className={styles.cardBody}>
+            <ul style={{ margin: 0, paddingInlineStart: '20px', lineHeight: 1.7 }}>
+              {summary.targets.map((target) => (
+                <li key={target.id}>
+                  <strong>{target.label ?? target.metric}</strong> ({target.owner}) - baseline {formatMetricValue(
+                    target.baselineValue,
+                    target.metric,
+                  )}, current {target.currentValue == null ? 'not comparable' : formatMetricValue(target.currentValue, target.metric)},
+                  target {formatMetricValue(target.targetValue, target.metric)} by {formatDate(target.targetDate)}
+                  {target.progressPct != null ? ` (${Math.round(target.progressPct)}% of the movement)` : ''}.
+                  {target.message ? ` ${target.message}` : ''}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </Card>
+      )}
 
       <div className={styles.sectionHead}>
         <Text weight="semibold" size={500}>
@@ -2046,6 +2107,30 @@ function buildExecutiveKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
   return buildKpis(summary).filter((item) => executiveKeys.has(item.key));
 }
 
+function deltaFor(summary: CopilotAdoptionSummary, metric: string) {
+  return summary.periodMovement?.comparable
+    ? summary.periodMovement.deltas.find((d) => d.metric === metric)
+    : undefined;
+}
+
+function formatMetricValue(value: number, metric: string): string {
+  return metric.endsWith('Pct') ? formatPct(value) : formatCount(value);
+}
+
+function movementHint(summary: CopilotAdoptionSummary, metric: string, fallback: string): string {
+  const delta = deltaFor(summary, metric);
+  if (!delta) return fallback;
+  const sign = delta.change > 0 ? '+' : '';
+  const value = `${formatMetricValue(delta.priorValue, metric)} -> ${formatMetricValue(delta.currentValue, metric)} (${sign}${formatMetricValue(delta.change, metric)})`;
+  const denominator =
+    delta.denominatorChange == null
+      ? ''
+      : `; seats ${formatCount(delta.denominatorPrior ?? 0)} -> ${formatCount(delta.denominatorCurrent ?? 0)} (${
+          delta.denominatorChange >= 0 ? '+' : ''
+        }${formatCount(delta.denominatorChange)})`;
+  return `${value} vs ${summary.periodMovement.comparisonLabel}${denominator}`;
+}
+
 /**
  * The headline figures used by the Analyst view. The Executive view filters this list down to the
  * board-pack subset so the two views cannot drift apart.
@@ -2083,7 +2168,7 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
       key: 'adoption',
       label: 'Adoption rate',
       value: formatPct(summary.adoptionRatePct),
-      hint: `${formatCount(summary.activeUsers)} of ${formatCount(summary.scoredUsers)} used Copilot in this period`,
+      hint: movementHint(summary, 'adoptionRatePct', `${formatCount(summary.activeUsers)} of ${formatCount(summary.scoredUsers)} used Copilot in this period`),
       tone: bandTone(summary.adoptionRatePct),
       info: {
         what: 'The share of licensed users who used Copilot at least once in the selected period.',
@@ -2098,7 +2183,7 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
       key: 'habit',
       label: 'Habitual users',
       value: formatPct(summary.habitRatePct),
-      hint: `${formatCount(summary.habitualUsers)} have made Copilot part of the working week`,
+      hint: movementHint(summary, 'habitRatePct', `${formatCount(summary.habitualUsers)} have made Copilot part of the working week`),
       tone: summary.habitRatePct >= 50 ? 'good' : summary.habitRatePct >= 25 ? 'warning' : 'critical',
       info: {
         what: 'Licensed users for whom Copilot is a routine part of the working week, rather than something they have merely touched.',
@@ -2113,9 +2198,9 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
       key: 'reclaim',
       label: 'Reclaimable licences',
       value: formatCount(summary.reclaimableSeats),
-      hint: `${formatCount(summary.reclaimCertainSeats)} certain, ${formatCount(
+      hint: movementHint(summary, 'reclaimableSeats', `${formatCount(summary.reclaimCertainSeats)} certain, ${formatCount(
         summary.reclaimProbableSeats,
-      )} probable, ${formatCount(summary.reclaimReviewSeats)} review, ${formatCount(summary.reclaimExcludedUsers)} excluded`,
+      )} probable, ${formatCount(summary.reclaimReviewSeats)} review, ${formatCount(summary.reclaimExcludedUsers)} excluded`),
       tone: summary.reclaimableSeats > 0 ? 'critical' : 'good',
       info: {
         what: 'Licences safe enough to include in the actionable reclaim total. Disabled accounts are certain. Enabled, long-tenured never-used accounts are probable. Dormant, too-new and unknown-tenure accounts are review-only.',
@@ -2171,7 +2256,7 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
       key: 'score',
       label: 'Average engagement',
       value: Math.round(summary.averageAdoptionScore),
-      hint: `Median ${Math.round(summary.medianAdoptionScore)} of 100`,
+      hint: movementHint(summary, 'averageAdoptionScore', `Median ${Math.round(summary.medianAdoptionScore)} of 100`),
       info: {
         what: 'The mean engagement score across all licensed users, including everyone scoring zero.',
         how: `Each user's score out of 100 combines frequency (${formatPct(
@@ -2213,7 +2298,7 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
       key: 'unlicensed',
       label: 'Using Copilot unlicensed',
       value: formatCount(summary.unlicensedActiveUsers),
-      hint: 'Proven demand - already using Copilot Chat with no licence',
+      hint: movementHint(summary, 'unlicensedActiveUsers', 'Proven demand - already using Copilot Chat with no licence'),
       tone: 'opportunity',
       info: {
         what: 'People with no Microsoft 365 Copilot licence who nevertheless used Copilot in the period - in practice, Copilot Chat, which is available without a licence.',
@@ -2228,7 +2313,7 @@ function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
     key: 'candidates',
     label: 'Recommended for a licence',
     value: formatCount(summary.recommendedForLicence),
-    hint: 'Heavy Microsoft 365 users with a strong business case',
+    hint: movementHint(summary, 'recommendedForLicence', 'Heavy Microsoft 365 users with a strong business case'),
     tone: 'opportunity',
     info: {
       what: `Unlicensed users recommended for a licence - either because they already use Copilot on at least ${o.opportunityProvenDemandMinActiveDays} distinct days without one (proven demand), or because their business-case score reached ${o.opportunityRecommendScore} out of 100 (workload inferred).`,

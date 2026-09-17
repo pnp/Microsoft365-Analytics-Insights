@@ -1,5 +1,6 @@
 ﻿using Newtonsoft.Json;
 using System;
+using System.Collections.Generic;
 
 namespace Common.Entities.CopilotAdoption
 {
@@ -76,6 +77,91 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("right")] public CopilotAdoptionPeriodRun Right { get; set; }
         [JsonProperty("optionsComparable")] public bool OptionsComparable { get; set; }
         [JsonProperty("message")] public string Message { get; set; }
+    }
+
+
+    public static class CopilotAdoptionComparisonModes
+    {
+        public const string PreviousPeriod = "previousPeriod";
+        public const string SamePeriodLastQuarter = "samePeriodLastQuarter";
+    }
+
+    public static class CopilotAdoptionTargetMetricCodes
+    {
+        public const string AdoptionRatePct = "adoptionRatePct";
+        public const string HabitRatePct = "habitRatePct";
+        public const string ReclaimableSeats = "reclaimableSeats";
+        public const string ReclaimCertainSeats = "reclaimCertainSeats";
+        public const string ReclaimProbableSeats = "reclaimProbableSeats";
+        public const string ReclaimReviewSeats = "reclaimReviewSeats";
+        public const string NeverUsedUsers = "neverUsedUsers";
+        public const string DormantUsers = "dormantUsers";
+        public const string AverageAdoptionScore = "averageAdoptionScore";
+        public const string MedianAdoptionScore = "medianAdoptionScore";
+        public const string UnlicensedActiveUsers = "unlicensedActiveUsers";
+        public const string RecommendedForLicence = "recommendedForLicence";
+    }
+
+    public class CopilotAdoptionMetricDelta
+    {
+        [JsonProperty("metric")] public string Metric { get; set; }
+        [JsonProperty("label")] public string Label { get; set; }
+        [JsonProperty("currentValue")] public double CurrentValue { get; set; }
+        [JsonProperty("priorValue")] public double PriorValue { get; set; }
+        [JsonProperty("change")] public double Change { get; set; }
+        [JsonProperty("unit")] public string Unit { get; set; }
+        [JsonProperty("denominatorCurrent")] public double? DenominatorCurrent { get; set; }
+        [JsonProperty("denominatorPrior")] public double? DenominatorPrior { get; set; }
+        [JsonProperty("denominatorChange")] public double? DenominatorChange { get; set; }
+    }
+
+    public class CopilotAdoptionPeriodMovement
+    {
+        [JsonProperty("mode")] public string Mode { get; set; }
+        [JsonProperty("available")] public bool Available { get; set; }
+        [JsonProperty("comparable")] public bool Comparable { get; set; }
+        [JsonProperty("currentPeriodEnd")] public DateTime? CurrentPeriodEnd { get; set; }
+        [JsonProperty("priorPeriodEnd")] public DateTime? PriorPeriodEnd { get; set; }
+        [JsonProperty("periodDays")] public int PeriodDays { get; set; }
+        [JsonProperty("comparisonLabel")] public string ComparisonLabel { get; set; }
+        [JsonProperty("message")] public string Message { get; set; }
+        [JsonProperty("deltas")] public List<CopilotAdoptionMetricDelta> Deltas { get; set; } = new List<CopilotAdoptionMetricDelta>();
+    }
+
+    public class CopilotAdoptionTarget
+    {
+        [JsonProperty("id")] public int Id { get; set; }
+        [JsonProperty("metric")] public string Metric { get; set; }
+        [JsonProperty("label")] public string Label { get; set; }
+        [JsonProperty("scopeType")] public string ScopeType { get; set; }
+        [JsonProperty("scopeValue")] public string ScopeValue { get; set; }
+        [JsonProperty("targetValue")] public double TargetValue { get; set; }
+        [JsonProperty("owner")] public string Owner { get; set; }
+        [JsonProperty("baselinePeriodEnd")] public DateTime BaselinePeriodEnd { get; set; }
+        [JsonProperty("baselinePeriodDays")] public int BaselinePeriodDays { get; set; }
+        [JsonProperty("baselineValue")] public double BaselineValue { get; set; }
+        [JsonProperty("baselineOptionsHash")] public string BaselineOptionsHash { get; set; }
+        [JsonProperty("baselineScoringOptionsHash")] public string BaselineScoringOptionsHash { get; set; }
+        [JsonProperty("targetDate")] public DateTime TargetDate { get; set; }
+        [JsonProperty("createdUtc")] public DateTime CreatedUtc { get; set; }
+        [JsonProperty("createdBy")] public string CreatedBy { get; set; }
+        [JsonProperty("currentValue")] public double? CurrentValue { get; set; }
+        [JsonProperty("progressPct")] public double? ProgressPct { get; set; }
+        [JsonProperty("comparable")] public bool Comparable { get; set; }
+        [JsonProperty("message")] public string Message { get; set; }
+    }
+
+    public class CopilotAdoptionCreateTargetRequest
+    {
+        [JsonProperty("metric")] public string Metric { get; set; }
+        [JsonProperty("scopeType")] public string ScopeType { get; set; }
+        [JsonProperty("scopeValue")] public string ScopeValue { get; set; }
+        [JsonProperty("targetValue")] public double TargetValue { get; set; }
+        [JsonProperty("owner")] public string Owner { get; set; }
+        [JsonProperty("baselinePeriodEnd")] public DateTime? BaselinePeriodEnd { get; set; }
+        [JsonProperty("baselinePeriodDays")] public int? BaselinePeriodDays { get; set; }
+        [JsonProperty("targetDate")] public DateTime TargetDate { get; set; }
+        [JsonProperty("createdBy")] public string CreatedBy { get; set; }
     }
 
     public class CopilotAdoptionStoredPeriodFactRow : LicensedUserUsageRow

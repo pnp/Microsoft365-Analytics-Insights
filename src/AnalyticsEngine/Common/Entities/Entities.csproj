@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
@@ -451,6 +451,10 @@
     <Compile Include="Migrations\202609170900001_CopilotAdoptionPeriodFacts.Designer.cs">
       <DependentUpon>202609170900001_CopilotAdoptionPeriodFacts.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202609171000001_CopilotAdoptionTargets.cs" />
+    <Compile Include="Migrations\202609171000001_CopilotAdoptionTargets.Designer.cs">
+      <DependentUpon>202609171000001_CopilotAdoptionTargets.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609151440027_CopilotPromptSafetyFields.Designer.cs">
       <DependentUpon>202609151440027_CopilotPromptSafetyFields.cs</DependentUpon>
     </Compile>
@@ -695,6 +699,8 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609170910001_GraphCopilotUsageApiV2.resx">
       <DependentUpon>202609170910001_GraphCopilotUsageApiV2.cs</DependentUpon>
+    <EmbeddedResource Include="Migrations\202609171000001_CopilotAdoptionTargets.resx">
+      <DependentUpon>202609171000001_CopilotAdoptionTargets.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.resx">
       <DependentUpon>202609101100001_UniqueUrlsFullUrlIndex.cs</DependentUpon>

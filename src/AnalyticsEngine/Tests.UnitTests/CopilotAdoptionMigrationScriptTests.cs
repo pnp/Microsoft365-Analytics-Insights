@@ -1,4 +1,4 @@
-using Common.Entities.Migrations;
+﻿using Common.Entities.Migrations;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.IO;
@@ -21,6 +21,8 @@ namespace Tests.UnitTests
     {
         private const string ReclaimInputsId = "202609131940001_CopilotReclaimEligibilityInputs";
         private const string PredecessorId = "202609101200001_RetireImportDbHacks";
+        private const string TargetsId = "202609171000001_CopilotAdoptionTargets";
+        private const string TargetsPredecessorId = "202609170900001_CopilotAdoptionPeriodFacts";
 
         [TestMethod]
         public void ReclaimInputsManualScript_ReplaysTheMigrationVerbatim()
@@ -124,6 +126,48 @@ namespace Tests.UnitTests
                     || trimmed.IndexOf("__MigrationHistory", StringComparison.OrdinalIgnoreCase) >= 0,
                     $"'{trimmed}' counts rows outside a system catalogue view. Stamp guards must check schema "
                     + "objects only - a data-state guard has already broken a customer upgrade here.");
+            }
+        }
+
+
+        [TestMethod]
+        public void TargetsManualScript_ReplaysTheMigrationVerbatimAndCopiesPredecessorSnapshot()
+        {
+            var manual = ReadManualScript(TargetsId);
+
+            StringAssert.Contains(manual, CopilotAdoptionTargets.Up_Sql);
+            StringAssert.Contains(manual, $"IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'{TargetsPredecessorId}')");
+            StringAssert.Contains(manual, $"SELECT N'{TargetsId}', ContextKey, Model, ProductVersion");
+            StringAssert.Contains(manual, $"WHERE MigrationId = N'{TargetsPredecessorId}';");
+        }
+
+        [TestMethod]
+        public void TargetsManualScript_VerifiesSchemaOnlyBeforeStamping()
+        {
+            var manual = ReadManualScript(TargetsId);
+            var stampAt = manual.IndexOf("INSERT INTO dbo.__MigrationHistory", StringComparison.Ordinal);
+            Assert.IsTrue(stampAt > 0, "No __MigrationHistory stamp found.");
+            var preStamp = Normalise(manual.Substring(0, stampAt));
+
+            foreach (var required in new[]
+            {
+                "name = N'baseline_value'",
+                "name = N'baseline_scoring_options_hash'",
+                "N'IX_copilot_adoption_targets_active_scope'",
+            })
+            {
+                StringAssert.Contains(preStamp, required);
+            }
+
+            foreach (var line in manual.Split('\n'))
+            {
+                var trimmed = line.Trim();
+                if (trimmed.StartsWith("--", StringComparison.Ordinal)) continue;
+                var looksLikeRowProbe = trimmed.IndexOf("COUNT(", StringComparison.OrdinalIgnoreCase) >= 0
+                    || trimmed.IndexOf("COUNT_BIG(", StringComparison.OrdinalIgnoreCase) >= 0;
+                Assert.IsFalse(looksLikeRowProbe && trimmed.IndexOf("sys.", StringComparison.OrdinalIgnoreCase) < 0
+                    && trimmed.IndexOf("__MigrationHistory", StringComparison.OrdinalIgnoreCase) < 0,
+                    $"'{trimmed}' counts data rows. Target stamp guards must check schema only.");
             }
         }
 

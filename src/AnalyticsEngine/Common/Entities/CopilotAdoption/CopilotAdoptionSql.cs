@@ -1683,6 +1683,38 @@ namespace Common.Entities.CopilotAdoption
         public const string PeriodCoverageUsageReportOnly = "usage-report-only";
         public const string PeriodCoverageUnverifiable = "unverifiable";
 
+        public const string LatestPublishedPeriodRunSql =
+            "SELECT TOP (1) period_end AS PeriodEnd,\r\n" +
+            "       period_days AS PeriodDays,\r\n" +
+            "       options_hash AS OptionsHash,\r\n" +
+            "       CAST(audit_available AS bit) AS AuditAvailable,\r\n" +
+            "       CAST(report_obfuscated AS bit) AS ReportObfuscated,\r\n" +
+            "       report_period_days AS ReportPeriodDays,\r\n" +
+            "       licensed_users AS LicensedUsers,\r\n" +
+            "       scored_users AS ScoredUsers,\r\n" +
+            "       published_utc AS PublishedUtc,\r\n" +
+            "       data_cutoff_utc AS DataCutoffUtc,\r\n" +
+            "       coverage_status AS CoverageStatus\r\n" +
+            "FROM dbo.copilot_adoption_period_run\r\n" +
+            "WHERE period_days = @periodDays AND period_end < CAST(SYSUTCDATETIME() AS date)\r\n" +
+            "ORDER BY period_end DESC;";
+
+        public const string AdoptionTargetsSql =
+            "SELECT id AS Id, metric AS Metric, scope_type AS ScopeType, scope_value AS ScopeValue,\r\n" +
+            "       CONVERT(float, target_value) AS TargetValue, owner AS Owner, baseline_period_end AS BaselinePeriodEnd,\r\n" +
+            "       baseline_period_days AS BaselinePeriodDays, CONVERT(float, baseline_value) AS BaselineValue,\r\n" +
+            "       baseline_options_hash AS BaselineOptionsHash, baseline_scoring_options_hash AS BaselineScoringOptionsHash,\r\n" +
+            "       target_date AS TargetDate, created_utc AS CreatedUtc, created_by AS CreatedBy\r\n" +
+            "FROM dbo.copilot_adoption_targets\r\n" +
+            "WHERE is_active = 1\r\n" +
+            "ORDER BY target_date, metric, scope_type, scope_value;";
+
+        public const string InsertAdoptionTargetSql =
+            "INSERT INTO dbo.copilot_adoption_targets\r\n" +
+            "    (metric, scope_type, scope_value, target_value, owner, baseline_period_end, baseline_period_days, baseline_value, baseline_options_hash, baseline_scoring_options_hash, target_date, created_utc, created_by, is_active)\r\n" +
+            "OUTPUT INSERTED.id AS Value\r\n" +
+            "VALUES (@metric, @scopeType, @scopeValue, @targetValue, @owner, @baselinePeriodEnd, @baselinePeriodDays, @baselineValue, @baselineOptionsHash, @baselineScoringOptionsHash, @targetDate, SYSUTCDATETIME(), @createdBy, 1);";
+
         public const string PublishedPeriodRunSql =
             "SELECT TOP (1) period_end AS PeriodEnd,\r\n" +
             "       period_days AS PeriodDays,\r\n" +
