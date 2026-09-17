@@ -1071,7 +1071,7 @@ namespace Common.Entities.CopilotAdoption
                     + "everyone qualifies is a 100% rate and not where a rollout should start."));
                 sheet.AddHeaderRow(
                     "Department", "Copilot seats", "Prime candidates", "Prime candidate %",
-                    "Regular Cowork users", "Cowork adoption %", "Avg coordination load", "Avg fluency");
+                    "Regular Cowork users", "Avg coordination load", "Avg fluency");
 
                 foreach (var segment in summary.CoworkByDepartment)
                 {
@@ -1081,7 +1081,6 @@ namespace Common.Entities.CopilotAdoption
                         segment.PrimeCandidates,
                         segment.PrimeCandidateRatePct,
                         segment.RegularCoworkUsers,
-                        segment.CoworkAdoptionPct,
                         segment.AverageCoordinationLoad,
                         segment.AverageFluency);
                 }

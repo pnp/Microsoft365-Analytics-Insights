@@ -77,8 +77,7 @@ namespace Common.Entities.CopilotAdoption
         public const string CoworkAgentIdsSql =
             "SELECT ag.id AS Value\r\n" +
             "FROM dbo.copilot_agents AS ag\r\n" +
-            "WHERE ag.agent_id LIKE 'Copilot.M365Copilot.Cowork%'\r\n" +
-            "   OR ag.name LIKE '%Cowork%';";
+            "WHERE ag.agent_id LIKE 'Copilot.M365Copilot.Cowork%';";
 
         /// <summary>
         /// Every licence type with how many users hold it, so the tool can classify them and show the

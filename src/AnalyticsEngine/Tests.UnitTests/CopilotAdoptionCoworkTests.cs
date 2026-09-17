@@ -419,6 +419,9 @@ namespace Tests.UnitTests
             var sql = CopilotAdoptionSql.CoworkAgentIdsSql;
 
             StringAssert.Contains(sql, "Copilot.M365Copilot.Cowork");
+            Assert.IsFalse(sql.IndexOf("name LIKE", StringComparison.OrdinalIgnoreCase) >= 0,
+                "Agent display names are customer-controlled. This lookup feeds observed Cowork usage, so a "
+                + "tenant-owned agent name must not outrank inferred Cowork tiers.");
             Assert.IsFalse(sql.IndexOf("spending", StringComparison.OrdinalIgnoreCase) >= 0,
                 "This query may only reconcile audit interactions; Cowork eligibility comes from spending policies, not the deprecated agent entry.");
         }
