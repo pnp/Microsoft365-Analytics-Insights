@@ -97,6 +97,12 @@ function Get-UrlContent([string]$url) {
 
 $catalogueFullPath = Join-Path (Get-Location) $CataloguePath
 $source = Get-Content -LiteralPath $catalogueFullPath -Raw
+$countMatch = [regex]::Match($source, 'public\s+const\s+int\s+ExpectedLinkCount\s*=\s*(?<count>\d+)\s*;')
+if (-not $countMatch.Success) {
+    throw "ExpectedLinkCount was not found in $CataloguePath."
+}
+$expectedLinkCount = [int]$countMatch.Groups["count"].Value
+
 $linkPattern = 'Link\(\s*(?<code>[^,]+),\s*"(?<title>[^"]+)",\s*"(?<url>https?://[^"]+)",\s*"(?<expectedTitle>[^"]+)",\s*"(?<audience>[^"]+)"\s*\)'
 $links = [regex]::Matches($source, $linkPattern) | ForEach-Object {
     [pscustomobject]@{
@@ -110,6 +116,10 @@ $links = [regex]::Matches($source, $linkPattern) | ForEach-Object {
 
 if ($links.Count -eq 0) {
     throw "No adoption guidance links were found in $CataloguePath."
+}
+
+if ($links.Count -ne $expectedLinkCount) {
+    throw "Parsed $($links.Count) adoption guidance link(s) from $CataloguePath, but ExpectedLinkCount is $expectedLinkCount. Update the parser or the expected count so catalogue entries cannot be skipped silently."
 }
 
 if ($OverrideFirstExpectedTitle) {

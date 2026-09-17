@@ -13,6 +13,8 @@ namespace Common.Entities.CopilotAdoption
 
         public const string UnlicensedActionCode = "unlicensed";
 
+        public const int ExpectedLinkCount = 14;
+
         private static readonly IReadOnlyList<AdoptionGuidanceLink> Links = new[]
         {
             Link(CopilotAdoptionScoring.AdoptionActionCodes.Reclaim, "License allocation guidance", "https://aka.ms/Copilot/LicenseAllocationGuide", "Microsoft 365 Copilot license allocation guidance for rapid value", "admin"),

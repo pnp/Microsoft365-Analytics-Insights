@@ -2357,6 +2357,9 @@ namespace Tests.UnitTests
                 "https://aka.ms/" + "CopilotAdoptionPlaybook",
             };
 
+            Assert.AreEqual(CopilotAdoptionGuidanceCatalogue.ExpectedLinkCount, CopilotAdoptionGuidanceCatalogue.All.Count,
+                "The scheduled link checker relies on this count so a parser miss fails loudly instead of skipping a link.");
+
             foreach (var code in CopilotAdoptionScoring.AllActionCodes
                 .Where(c => c != CopilotAdoptionScoring.AdoptionActionCodes.Sustain))
             {
