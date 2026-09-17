@@ -47,6 +47,58 @@ const OUTSIDE_LABEL_W = 120;
  */
 const STAGE_COLOURS = ['#8ec3ea', '#5aa6dd', '#2f86cc', '#1466ad', '#0a4a80'];
 
+const EDGE_ALPHA = 0.8;
+const WHITE_LUMINANCE = 1;
+// Fluent exposes tokens as CSS variables at runtime; this is light-theme colorNeutralForeground1 (#242424).
+const FLUENT_LIGHT_NEUTRAL_FOREGROUND1_LUMINANCE = 0.017641954488384078;
+
+function srgbToLinear(value: number): number {
+  const c = value / 255;
+  return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+}
+
+function relativeLuminance(hexColour: string): number | null {
+  const match = /^#(?<r>[0-9a-f]{2})(?<g>[0-9a-f]{2})(?<b>[0-9a-f]{2})$/i.exec(hexColour);
+  if (!match?.groups) return null;
+
+  const r = srgbToLinear(parseInt(match.groups.r, 16));
+  const g = srgbToLinear(parseInt(match.groups.g, 16));
+  const b = srgbToLinear(parseInt(match.groups.b, 16));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrastRatio(a: number, b: number): number {
+  const light = Math.max(a, b);
+  const dark = Math.min(a, b);
+  return (light + 0.05) / (dark + 0.05);
+}
+
+function compositeHexOverWhite(hexColour: string, alpha: number): string {
+  const match = /^#(?<r>[0-9a-f]{2})(?<g>[0-9a-f]{2})(?<b>[0-9a-f]{2})$/i.exec(hexColour);
+  if (!match?.groups) return hexColour;
+  const groups = match.groups;
+
+  const channel = (name: 'r' | 'g' | 'b') => {
+    const value = parseInt(groups[name], 16);
+    return Math.round(value * alpha + 255 * (1 - alpha));
+  };
+
+  return `#${[channel('r'), channel('g'), channel('b')]
+    .map((value) => value.toString(16).padStart(2, '0'))
+    .join('')}`;
+}
+
+export function funnelLabelFillForStage(stageColour: string, darkFill: string = tokens.colorNeutralForeground1): string {
+  const paintedLuminance = relativeLuminance(compositeHexOverWhite(stageColour, EDGE_ALPHA));
+  if (paintedLuminance === null) return darkFill;
+
+  const darkFillLuminance = relativeLuminance(darkFill) ?? FLUENT_LIGHT_NEUTRAL_FOREGROUND1_LUMINANCE;
+  const whiteContrast = contrastRatio(WHITE_LUMINANCE, paintedLuminance);
+  const darkContrast = contrastRatio(darkFillLuminance, paintedLuminance);
+
+  return whiteContrast >= darkContrast ? '#ffffff' : darkFill;
+}
+
 /**
  * What each stage name actually means, with the live thresholds substituted in.
  *
@@ -158,6 +210,7 @@ export default function AdoptionFunnel({
           const y = index * (STAGE_H + GAP);
           const next = stages[index + 1];
           const previous = index === 0 ? null : stages[index - 1].value;
+          const stageColour = STAGE_COLOURS[index % STAGE_COLOURS.length];
 
           const halfTop = halfWidthAt(stage.value);
           // Taper towards the next stage so the profile is continuous. The final stage keeps a
@@ -207,6 +260,8 @@ export default function AdoptionFunnel({
           const narrowest = Math.min(halfTop, halfBottom) * 2;
           const labelsFitInside = narrowest >= 150;
           const labelX = labelsFitInside ? centre : centre + halfTop + 12;
+          const inShapeLabelFill = funnelLabelFillForStage(stageColour);
+          const inShapeCaptionOpacity = inShapeLabelFill === '#ffffff' ? 0.85 : 1;
 
           return (
             <g key={stage.label}>
@@ -254,7 +309,7 @@ export default function AdoptionFunnel({
                 textAnchor={labelsFitInside ? 'middle' : 'start'}
                 fontSize={20}
                 fontWeight={600}
-                fill={labelsFitInside ? '#ffffff' : tokens.colorNeutralForeground1}
+                fill={labelsFitInside ? inShapeLabelFill : tokens.colorNeutralForeground1}
                 style={{ pointerEvents: 'none' }}
               >
                 {formatCount(stage.value)}
@@ -264,8 +319,8 @@ export default function AdoptionFunnel({
                 y={y + STAGE_H / 2 + 18}
                 textAnchor={labelsFitInside ? 'middle' : 'start'}
                 fontSize={12}
-                fill={labelsFitInside ? '#ffffff' : tokens.colorNeutralForeground3}
-                fillOpacity={labelsFitInside ? 0.85 : 1}
+                fill={labelsFitInside ? inShapeLabelFill : tokens.colorNeutralForeground3}
+                fillOpacity={labelsFitInside ? inShapeCaptionOpacity : 1}
                 style={{ pointerEvents: 'none' }}
               >
                 {formatPct(sharePct)} of licensed

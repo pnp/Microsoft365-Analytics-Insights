@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { renderWithProvider } from '../../test/renderWithProvider';
-import AdoptionFunnel from './AdoptionFunnel';
+import AdoptionFunnel, { funnelLabelFillForStage } from './AdoptionFunnel';
 import type { CopilotAdoptionOptions } from '../../types/copilotAdoption';
 import type { ReportCategory } from '../../types/reports';
 
@@ -68,6 +68,15 @@ function tooltipFor(container: HTMLElement, label: string): string | undefined {
 }
 
 describe('AdoptionFunnel stage tooltips', () => {
+  it('chooses an in-shape label colour that contrasts with the stage fill', () => {
+    const darkFill = '#242424';
+
+    expect(funnelLabelFillForStage('#8ec3ea', darkFill)).toBe(darkFill);
+    expect(funnelLabelFillForStage('#5aa6dd', darkFill)).toBe(darkFill);
+    expect(funnelLabelFillForStage('#2f86cc', darkFill)).toBe(darkFill);
+    expect(funnelLabelFillForStage('#0a4a80', darkFill)).toBe('#ffffff');
+  });
+
   it('explains how every stage is counted, using the live thresholds', () => {
     const { container } = renderWithProvider(<AdoptionFunnel stages={STAGES} options={OPTIONS} />);
 
