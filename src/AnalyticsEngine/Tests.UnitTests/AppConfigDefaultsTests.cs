@@ -37,7 +37,6 @@ namespace Tests.UnitTests
         private const string CopilotAdoptionDigestRecipients = "CopilotAdoptionDigestRecipients";
         private const string CopilotAdoptionDigestSenderUserId = "CopilotAdoptionDigestSenderUserId";
         private const string CopilotAdoptionDigestIntervalHours = "CopilotAdoptionDigestIntervalHours";
-        private const string TenantGUID = "TenantGUID";
 
         private static readonly string[] _trackedKeys =
         {
@@ -58,7 +57,6 @@ namespace Tests.UnitTests
             CopilotAdoptionDigestRecipients,
             CopilotAdoptionDigestSenderUserId,
             CopilotAdoptionDigestIntervalHours,
-            TenantGUID,
         };
 
         private Dictionary<string, string> _originalAppSettings;
@@ -71,8 +69,6 @@ namespace Tests.UnitTests
             {
                 _originalAppSettings[key] = ConfigurationManager.AppSettings[key];
             }
-
-            ConfigurationManager.AppSettings.Set(TenantGUID, "00000000-0000-0000-0000-000000000000");
         }
 
         [TestCleanup]
