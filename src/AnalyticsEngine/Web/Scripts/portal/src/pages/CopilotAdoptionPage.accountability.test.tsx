@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, fireEvent } from '@testing-library/react';
 import { renderWithProvider } from '../test/renderWithProvider';
 import type {
   CopilotAdoptionAvailability,
@@ -241,10 +241,16 @@ describe('CopilotAdoptionPage accountability roll-up', () => {
   it('renders incomplete figures without accountability metadata', async () => {
     renderWithProvider(<CopilotAdoptionPage />);
 
+    // The roll-up is analyst detail, so it lives in the Analyst view after the executive/analyst
+    // split. The regression this guards is that the page renders at all when the licence-types
+    // query failed and the accountability metadata is therefore absent.
+    fireEvent.click(await screen.findByRole('tab', { name: 'Analyst view' }));
+
     await waitFor(() => expect(screen.getByText('Accountability roll-up')).toBeInTheDocument());
 
     expect(screen.getAllByText(/figures are incomplete/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/Aggregate-only view by direct manager/i)).toBeInTheDocument();
   });
 });
+
 

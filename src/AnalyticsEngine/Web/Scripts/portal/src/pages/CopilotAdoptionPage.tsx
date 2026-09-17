@@ -776,8 +776,11 @@ function ExecutiveTab({
 
 function ExecutiveDepartmentTable({ summary }: { summary: CopilotAdoptionSummary }) {
   const styles = useStyles();
-  const candidatesByDepartment = new Map(summary.opportunityByDepartment.map((r) => [r.label, r.value]));
-  const rows = [...summary.habitByDepartment]
+  // Both collections are absent when the analysis returned early (a failed licence-types query
+  // marks the summary incomplete without populating the segment breakdowns), so neither can be
+  // spread or mapped unguarded.
+  const candidatesByDepartment = new Map((summary.opportunityByDepartment ?? []).map((r) => [r.label, r.value]));
+  const rows = [...(summary.habitByDepartment ?? [])]
     .map((row) => {
       const habitRatePct = row.licensedUsers > 0 ? (row.habitualUsers / row.licensedUsers) * 100 : 0;
       const idleSeats = row.neverUsedUsers;
@@ -1483,12 +1486,15 @@ function AccountabilityRollupTable({
   rows,
   segmentLabel,
 }: {
-  rows: AccountabilityRollupRow[];
+  rows: AccountabilityRollupRow[] | null | undefined;
   segmentLabel: string;
 }) {
   const styles = useStyles();
 
-  if (rows.length === 0) {
+  // The roll-up is absent whenever the analysis returned early - a failed licence-types query
+  // leaves the summary marked incomplete with none of the accountability fields populated - so
+  // this cannot assume the server supplied an array.
+  if (!rows || rows.length === 0) {
     return <Text className={styles.muted}>Not enough licensed users in any accountable group to break down reliably.</Text>;
   }
 
