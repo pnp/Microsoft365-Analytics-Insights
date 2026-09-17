@@ -197,7 +197,17 @@ namespace Common.Entities.CopilotAdoption
                 : (frequency * o.FrequencyWeight + depth * o.DepthWeight + breadth * o.BreadthWeight)
                   / weightSum * 100d;
 
-            var usedInWindow = interactions > 0 || activeDays > 0;
+            // An in-window last-activity date IS use in the window, even when the counters are missing.
+            // A v1-shaped or partial response carries lastActivityDate but no prompts/active-days, so
+            // ReportPrompts and ReportActiveDays are NULL - and reportHasSignal coalesces those to 0, so
+            // useReport stays false and both counters read 0. Without this clause the user banded
+            // NeverUsed, and ApplyReclaimEligibility turns an enabled NeverUsed account past the grace
+            // period into "Probable" - naming for licence removal someone Microsoft's own report says was
+            // active days ago. lastUse already falls back to ReportLastActivityUtc, and the line below
+            // uses the same value to decide "used before the window"; it just never asked the in-window
+            // question.
+            var usedInWindow = interactions > 0 || activeDays > 0
+                || (lastUse.HasValue && lastUse.Value >= windowStartUtc);
             // "Ever" means "inside the history window we actually queried" - see
             // CopilotAdoptionOptions.HistoryDays. Prior audit interactions are the primary signal; a
             // report last-activity date before the window covers the report-only case.

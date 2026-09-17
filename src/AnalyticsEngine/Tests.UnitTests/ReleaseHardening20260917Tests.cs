@@ -360,6 +360,77 @@ namespace Tests.UnitTests
     }
 
     /// <summary>
+    /// A v1-shaped or partial Graph response carries lastActivityDate but no prompt or active-day
+    /// counters. Scoring coalesced those NULLs to zero when testing for a report signal, so a user
+    /// Microsoft reported as active days ago was banded NeverUsed and then named for licence removal.
+    /// </summary>
+    [TestClass]
+    public class ReportLastActivityIsUsageTests
+    {
+        private static readonly DateTime Now = new DateTime(2026, 9, 17, 0, 0, 0, DateTimeKind.Utc);
+        private static readonly DateTime WindowStart = Now.AddDays(-28);
+
+        private static LicensedUserUsageRow Row()
+        {
+            return new LicensedUserUsageRow
+            {
+                UserId = 1,
+                UserPrincipalName = "adele.vance@contoso.onmicrosoft.com",
+                AccountEnabled = true,
+                // Well past the 30-day reclaim grace period, so tenure cannot be what saves this row.
+                AccountCreatedUtc = Now.AddDays(-400),
+            };
+        }
+
+        [TestMethod]
+        public void ReportLastActivityInsideWindow_WithNoCounters_IsNotNeverUsedAndNotProbableReclaim()
+        {
+            var row = Row();
+            row.ReportPrompts = null;
+            row.ReportActiveDays = null;
+            row.ReportLastActivityUtc = Now.AddDays(-2);
+
+            var scored = CopilotAdoptionScoring.Score(row, WindowStart, Now, auditAvailable: true);
+
+            Assert.AreNotEqual(AdoptionBand.NeverUsed, scored.Band,
+                "Microsoft's report says this user was active two days ago; they have not 'never used' Copilot.");
+            Assert.AreNotEqual(CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable, scored.ReclaimEligibility,
+                "Naming an actively-using person for licence removal is the worst outcome this report can produce.");
+        }
+
+        /// <summary>
+        /// The other direction, and the one that matters most: the fix must not suppress genuine reclaim
+        /// candidates. No signal from any source is still NeverUsed, and still Probable.
+        /// </summary>
+        [TestMethod]
+        public void NoSignalAnywhere_IsStillNeverUsedAndProbableReclaim()
+        {
+            var scored = CopilotAdoptionScoring.Score(Row(), WindowStart, Now, auditAvailable: true);
+
+            Assert.AreEqual(AdoptionBand.NeverUsed, scored.Band);
+            Assert.AreEqual(CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable, scored.ReclaimEligibility,
+                "A seat with no observed use from any source, past the grace period, is still reclaimable.");
+        }
+
+        /// <summary>
+        /// A report last-activity date BEFORE the window is lapsed use, not current use: Dormant, and
+        /// review rather than probable. This is the boundary the in-window clause must respect.
+        /// </summary>
+        [TestMethod]
+        public void ReportLastActivityBeforeWindow_IsDormantNotNeverUsed()
+        {
+            var row = Row();
+            row.ReportLastActivityUtc = WindowStart.AddDays(-10);
+
+            var scored = CopilotAdoptionScoring.Score(row, WindowStart, Now, auditAvailable: true);
+
+            Assert.AreEqual(AdoptionBand.Dormant, scored.Band,
+                "Use that stopped before the window is dormancy, not current activity.");
+            Assert.AreEqual(CopilotAdoptionScoring.ReclaimEligibilityTiers.Review, scored.ReclaimEligibility);
+        }
+    }
+
+    /// <summary>
     /// The manual DBA scripts form a strict prerequisite chain: each hard-fails if its predecessor is not
     /// stamped. One script named a migration two steps back, so a DBA who skipped the intervening
     /// migration would still have been allowed to stamp - leaving a hole in __MigrationHistory.
