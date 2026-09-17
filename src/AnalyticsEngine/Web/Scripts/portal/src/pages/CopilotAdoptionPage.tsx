@@ -64,7 +64,7 @@ const WINDOW_OPTIONS = [
   { value: 180, label: 'Last 180 days' },
 ];
 
-type AdoptionTab = 'overview' | 'licensed' | 'cowork' | 'unlicensed' | 'agents' | 'opportunities' | 'method';
+type AdoptionTab = 'executive' | 'analyst' | 'licensed' | 'cowork' | 'unlicensed' | 'agents' | 'opportunities' | 'method';
 
 const TREND_GAP_NOTE =
   'Gap = Audit.General import coverage could not be verified for that completed week; it is not treated as zero usage.';
@@ -192,7 +192,7 @@ export default function CopilotAdoptionPage() {
   const [availability, setAvailability] = useState<CopilotAdoptionAvailability | null>(null);
   const [availabilityError, setAvailabilityError] = useState<string | null>(null);
   const [windowDays, setWindowDays] = useState(28);
-  const [tab, setTab] = useState<AdoptionTab>('overview');
+  const [tab, setTab] = useState<AdoptionTab>('executive');
   // Set when the user drills through from the enablement plan, so the licensed-user list they land
   // on is pre-filtered to exactly the group the plan counted. Cleared when they choose a tab
   // themselves - otherwise a filter they never asked for reappears every time they come back.
@@ -278,6 +278,16 @@ export default function CopilotAdoptionPage() {
   const drillToAction = (code: string) => {
     setDrillAction(code);
     setTab('licensed');
+  };
+
+  const showLicensedDetails = () => {
+    setDrillAction(undefined);
+    setTab('licensed');
+  };
+
+  const showOpportunityDetails = () => {
+    setDrillAction(undefined);
+    setTab('opportunities');
   };
 
   return (
@@ -367,7 +377,8 @@ export default function CopilotAdoptionPage() {
 
           <div className={styles.subTabs}>
             <TabList selectedValue={tab} onTabSelect={onTabSelect}>
-              <Tab value="overview">Overview</Tab>
+              <Tab value="executive">Executive view</Tab>
+              <Tab value="analyst">Analyst view</Tab>
               <Tab value="licensed">Licensed users</Tab>
               <Tab value="cowork">Cowork</Tab>
               <Tab value="unlicensed">Unlicensed usage</Tab>
@@ -419,15 +430,22 @@ export default function CopilotAdoptionPage() {
                 </MessageBar>
               )}
 
-              {tab === 'overview' &&
+              {tab === 'executive' &&
                 (summary.licensedUsers === 0 && !summary.figuresIncomplete ? (
                   // Only a GENUINE zero means "nothing set up yet". When the licence queries timed out the
                   // count also degrades to zero, and showing the first-run screen then tells a tenant with
                   // thousands of seats that it has none at all.
                   <FirstRunState summary={summary} />
                 ) : (
-                  <OverviewTab summary={summary} sql={sql} onDrillToAction={drillToAction} />
+                  <ExecutiveTab
+                    summary={summary}
+                    onDrillToAction={drillToAction}
+                    onShowLicensedDetails={showLicensedDetails}
+                    onShowOpportunityDetails={showOpportunityDetails}
+                  />
                 ))}
+
+              {tab === 'analyst' && <AnalystTab summary={summary} sql={sql} onDrillToAction={drillToAction} />}
 
               {tab === 'licensed' && (
                 <LicensedUsersPanel
@@ -545,8 +563,273 @@ function FirstRunState({ summary }: { summary: CopilotAdoptionSummary }) {
   );
 }
 
-/** The executive view: headline figures, the funnel, and where the gaps are. */
-function OverviewTab({
+
+/** The executive view: a board-pack summary in three acts, with detail one click away. */
+function ExecutiveTab({
+  summary,
+  onDrillToAction,
+  onShowLicensedDetails,
+  onShowOpportunityDetails,
+}: {
+  summary: CopilotAdoptionSummary;
+  onDrillToAction?: (code: string) => void;
+  onShowLicensedDetails: () => void;
+  onShowOpportunityDetails: () => void;
+}) {
+  const styles = useStyles();
+  const o = summary.options;
+  const kpis = buildExecutiveKpis(summary);
+  return (
+    <>
+      <KpiGrid items={kpis} />
+
+      <div className={styles.sectionHead}>
+        <Text weight="semibold" size={500}>
+          <span className={styles.sectionIndex}>1.</span> Where we stand
+        </Text>
+        <Text size={200} className={styles.muted}>
+          Seats, adoption, habit, reclaim confidence and reassignment opportunity without the diagnostics.
+        </Text>
+      </div>
+
+      <div className={styles.twoUp}>
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                Licence position
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                The board-pack view: how many seats are in use, how many have become habit, and what can be
+                reclaimed or reassigned.
+              </Text>
+            </div>
+            <InfoTip
+              title="Licence position"
+              content={{
+                what: 'The headline licence position: assigned seats, adoption, habit, reclaim confidence and unlicensed demand.',
+                how: `Adoption means at least one Copilot interaction in ${o.windowDays} days. Habit means an engagement score of ${o.establishedScore} or more. Reclaimable seats are the Certain and Probable confidence tiers only; Review and Excluded remain in the licensed denominator. Recommended candidates are unlicensed users with proven Copilot demand or a strong Microsoft 365 workload score.`,
+                source:
+                  'Use the Analyst view for the SQL and the Licensed users / Licence opportunities tabs for the exact people behind each headline.',
+              }}
+            />
+          </div>
+          <div className={`${styles.cardBody} ${styles.gauges}`}>
+            <GaugeRing
+              value={summary.adoptionRatePct}
+              label="Adoption rate"
+              sublabel={`${formatCount(summary.activeUsers)} of ${formatCount(summary.scoredUsers)} licensed users`}
+            />
+            <GaugeRing
+              value={summary.habitRatePct}
+              label="Habit rate"
+              sublabel={`${formatCount(summary.habitualUsers)} established or champion users`}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}>
+            <Button appearance="secondary" onClick={onShowLicensedDetails}>
+              Review licensed users
+            </Button>
+            {summary.recommendedForLicence > 0 && (
+              <Button appearance="secondary" onClick={onShowOpportunityDetails}>
+                Review licence candidates
+              </Button>
+            )}
+          </div>
+        </Card>
+
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                Reclaim confidence split
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                Actionable reclaim is deliberately narrower than all idle seats: disabled accounts and long-tenured
+                never-used seats are separated from rows needing human review.
+              </Text>
+            </div>
+            <InfoTip
+              title="Reclaim confidence split"
+              content={{
+                what: 'Idle and disabled Copilot seats split by how safely they can be reclaimed.',
+                how: `Certain = disabled accounts. Probable = enabled, long-tenured never-used accounts. Review = dormant, too-new or incomplete evidence. Excluded = administrator exclusions. The headline reclaim total is Certain + Probable; ${formatCount(summary.reclaimReviewSeats)} review and ${formatCount(summary.reclaimExcludedUsers)} excluded seats stay out of it.`,
+                source:
+                  'The same reclaim tiers are available on the Licensed users tab, where administrators can inspect the user-level reason before acting.',
+              }}
+            />
+          </div>
+          <div className={styles.cardBody}>
+            <CategoryBarChart
+              valueLabel="Seats"
+              categories={[
+                { label: 'Certain', value: summary.reclaimCertainSeats },
+                { label: 'Probable', value: summary.reclaimProbableSeats },
+                { label: 'Review', value: summary.reclaimReviewSeats },
+                { label: 'Excluded', value: summary.reclaimExcludedUsers },
+              ].filter((c) => c.value > 0)}
+            />
+            {summary.reclaimableSeats === 0 && (
+              <Text className={styles.muted}>No seats currently meet the Certain or Probable reclaim rules.</Text>
+            )}
+          </div>
+        </Card>
+      </div>
+
+      <div className={styles.sectionHead}>
+        <Text weight="semibold" size={500}>
+          <span className={styles.sectionIndex}>2.</span> Where it is working and failing
+        </Text>
+        <Text size={200} className={styles.muted}>
+          The departments to start with, and the funnel stage where value drops out.
+        </Text>
+      </div>
+
+      <div className={styles.twoUp}>
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                Department league table
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                Lowest habit-rate departments, capped to the top {o.topSegments} departments above the seat threshold,
+                with unused seats and recommended candidates shown as numbers rather than colour alone.
+              </Text>
+            </div>
+            <InfoTip
+              title="Department league table"
+              content={{
+                what: 'Departments ranked by the share of licensed users who have formed a Copilot habit.',
+                how: `Habitual users are Established or Champion. Departments below ${o.minSeatsPerSegment} licences are omitted, and the executive table keeps the ${o.topSegments} lowest habit-rate departments before showing the first 8 rows. The candidate column comes from the licence-opportunity analysis, so a department can show both unused seats and people with a business case for reassignment.`,
+                source:
+                  'The Analyst view keeps the full adoption and opportunity breakdowns, and the detail tabs contain the users behind each count.',
+              }}
+            />
+          </div>
+          <div className={styles.cardBody}>
+            <ExecutiveDepartmentTable summary={summary} />
+          </div>
+        </Card>
+
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                Adoption funnel
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                Every stage is a subset of the one above it. The largest drop is the executive diagnosis.
+              </Text>
+            </div>
+            <InfoTip
+              title="Adoption funnel"
+              content={{
+                what: 'The licensed population narrowed one stage at a time, so the single biggest loss of value is visible rather than averaged away.',
+                how: `Licensed = Copilot seat holders. Ever used includes active and dormant users. Active means at least one interaction in ${o.windowDays} days. Habitual means ${o.establishedScore}+; Champion means ${o.championScore}+.`,
+                source: 'The same funnel appears in the Analyst view with the SQL used to reproduce it.',
+              }}
+            />
+          </div>
+          <div className={styles.cardBody}>
+            <AdoptionFunnel stages={summary.funnel} options={o} />
+          </div>
+        </Card>
+      </div>
+
+      <div className={styles.sectionHead}>
+        <Text weight="semibold" size={500}>
+          <span className={styles.sectionIndex}>3.</span> What we are doing about it
+        </Text>
+        <Text size={200} className={styles.muted}>
+          The enablement workload, with each row drilling through to the exact users counted.
+        </Text>
+      </div>
+
+      <Card>
+        <div className={styles.cardHead}>
+          <div>
+            <Text weight="semibold" size={400}>
+              Enablement plan
+            </Text>
+            <Text size={200} block className={styles.muted}>
+              Every licensed user needs exactly one next step. Click a row to open the matching user list.
+            </Text>
+          </div>
+          <InfoTip
+            title="Enablement plan"
+            content={{
+              what: 'The per-user recommended actions, aggregated into the work programme to run next.',
+              how: 'Derived from the engagement band and, for middle bands, breadth of Copilot use. The click-through filters by action code, the same key the aggregate was grouped by.',
+              source: `Counts sum to the ${formatCount(summary.scoredUsers)} licensed users this analysis scored. Owner and outcome fields can be added here when #549 and #544 land, without changing the drill-through shape.`,
+            }}
+          />
+        </div>
+        <div className={styles.cardBody}>
+          <ActionPlan actions={summary.actionPlan} onSelect={onDrillToAction} />
+        </div>
+      </Card>
+    </>
+  );
+}
+
+function ExecutiveDepartmentTable({ summary }: { summary: CopilotAdoptionSummary }) {
+  const styles = useStyles();
+  const candidatesByDepartment = new Map(summary.opportunityByDepartment.map((r) => [r.label, r.value]));
+  const rows = [...summary.habitByDepartment]
+    .map((row) => {
+      const habitRatePct = row.licensedUsers > 0 ? (row.habitualUsers / row.licensedUsers) * 100 : 0;
+      const idleSeats = row.neverUsedUsers;
+      const candidates = candidatesByDepartment.get(row.segment) ?? 0;
+      return { ...row, habitRatePct, idleSeats, candidates, netOpportunity: candidates - idleSeats };
+    })
+    .sort((a, b) => a.habitRatePct - b.habitRatePct || b.licensedUsers - a.licensedUsers)
+    .slice(0, 8);
+
+  if (rows.length === 0) {
+    return (
+      <Text className={styles.muted}>
+        No department has enough Copilot licences to produce a meaningful executive league table yet.
+      </Text>
+    );
+  }
+
+  return (
+    <table className={styles.skuTable} aria-label="Department league table">
+      <thead>
+        <tr>
+          <th className={styles.skuCell}>Department</th>
+          <th className={styles.skuCell}>Habit rate</th>
+          <th className={styles.skuCell}>Licences</th>
+          <th className={styles.skuCell}>Never used</th>
+          <th className={styles.skuCell}>Candidates</th>
+          <th className={styles.skuCell}>Reassignment signal</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.segment}>
+            <td className={styles.skuCell}>{row.segment}</td>
+            <td className={styles.skuCell}>{formatPct(row.habitRatePct)}</td>
+            <td className={styles.skuCell}>{formatCount(row.licensedUsers)}</td>
+            <td className={styles.skuCell}>{formatCount(row.idleSeats)}</td>
+            <td className={styles.skuCell}>{formatCount(row.candidates)}</td>
+            <td className={styles.skuCell}>
+              {row.netOpportunity > 0
+                ? `${formatCount(row.netOpportunity)} more candidates than never-used seats`
+                : row.netOpportunity < 0
+                  ? `${formatCount(Math.abs(row.netOpportunity))} more never-used seats than candidates`
+                  : 'Balanced'}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+/** The analyst view: every diagnostic chart and the SQL popovers admins use to verify them. */
+function AnalystTab({
   summary,
   sql,
   onDrillToAction,
@@ -668,6 +951,31 @@ function OverviewTab({
           The work this creates, how big each job is, and which departments to start with.
         </Text>
       </div>
+
+      <Card>
+        <div className={styles.cardHead}>
+          <div>
+            <Text weight="semibold" size={400}>
+              Department league table
+            </Text>
+            <Text size={200} block className={styles.muted}>
+              The executive department summary repeated here so its habit rate, unused-seat and candidate
+              counts can be checked next to the detailed diagnostics.
+            </Text>
+          </div>
+          <InfoTip
+            title="Department league table"
+            content={{
+              what: 'Departments ranked by habit rate, with the reassignment signal shown as counts rather than colour alone.',
+              how: `Habit rate is habitual users divided by licensed users. Never-used seats and recommended candidates are already present in the detailed department and opportunity breakdowns below; the signal just places them side by side.`,
+              source: 'This repeats the Executive view figure so no executive-only number has to be reconstructed by hand.',
+            }}
+          />
+        </div>
+        <div className={styles.cardBody}>
+          <ExecutiveDepartmentTable summary={summary} />
+        </div>
+      </Card>
 
       <Card>
         <div className={styles.cardHead}>
@@ -1612,9 +1920,15 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
   );
 }
 
+/** The Executive view keeps only the board-pack headlines; the Analyst view keeps the full KPI set. */
+function buildExecutiveKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
+  const executiveKeys = new Set(['licensed', 'adoption', 'habit', 'reclaim', 'unlicensed', 'candidates']);
+  return buildKpis(summary).filter((item) => executiveKeys.has(item.key));
+}
+
 /**
- * The headline figures, in the order an executive reads them: how many seats, how many are working,
- * how many are wasted, and what the unmet demand is.
+ * The headline figures used by the Analyst view. The Executive view filters this list down to the
+ * board-pack subset so the two views cannot drift apart.
  */
 function buildKpis(summary: CopilotAdoptionSummary): KpiDefinition[] {
   const o = summary.options;
