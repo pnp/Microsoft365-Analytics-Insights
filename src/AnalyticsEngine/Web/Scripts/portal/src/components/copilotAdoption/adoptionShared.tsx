@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { AdoptionBand } from '../../types/copilotAdoption';
 import type { AdoptionSegmentRow } from '../../types/copilotAdoption';
 import { ADOPTION_BANDS } from '../charts/GaugeRing';
-import { formatCount, formatPct } from './KpiGrid';
+import { formatCount, formatPct } from '../shared/KpiGrid';
 
 /**
  * Band colours run cold-to-warm with maturity, and the two zero-usage bands are deliberately the

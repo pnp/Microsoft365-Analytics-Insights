@@ -52,10 +52,10 @@ import AgentsPanel from '../components/copilotAdoption/AgentsPanel';
 import UnlicensedPanel from '../components/copilotAdoption/UnlicensedPanel';
 import ResourceTypesPanel from '../components/copilotAdoption/ResourceTypesPanel';
 import { ConcentrationBar, CombinedSegmentTable } from '../components/copilotAdoption/CombinedViews';
-import InfoTip from '../components/copilotAdoption/InfoTip';
+import InfoTip from '../components/shared/InfoTip';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
-import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/copilotAdoption/KpiGrid';
-import type { KpiDefinition } from '../components/copilotAdoption/KpiGrid';
+import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
+import type { KpiDefinition } from '../components/shared/KpiGrid';
 
 const WINDOW_OPTIONS = [
   { value: 7, label: 'Last 7 days' },

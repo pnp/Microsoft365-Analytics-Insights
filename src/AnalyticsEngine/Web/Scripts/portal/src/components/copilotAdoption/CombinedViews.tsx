@@ -3,7 +3,7 @@ import type {
   AdoptionCombinedSegmentRow,
   AdoptionConcentrationBand,
 } from '../../types/copilotAdoption';
-import { formatCount, formatPct } from './KpiGrid';
+import { formatCount, formatPct } from '../shared/KpiGrid';
 import { useAdoptionTableStyles } from './adoptionShared';
 
 /** Heaviest cohort darkest, so the shape of the power law reads left to right. */

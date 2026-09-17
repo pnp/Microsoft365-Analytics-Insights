@@ -7,6 +7,7 @@ import {
   DocumentBulletList20Regular,
   Home20Regular,
   Money20Regular,
+  PeopleCommunity20Regular,
   PeopleTeam20Regular,
   Pulse20Regular,
   Settings20Regular,
@@ -21,6 +22,7 @@ import { lazyWithReload } from './lazyWithReload';
 const InsightsOverviewPage = lazyWithReload(() => import('./pages/InsightsOverviewPage'));
 const ReportsPage = lazyWithReload(() => import('./pages/ReportsPage'));
 const CopilotAdoptionPage = lazyWithReload(() => import('./pages/CopilotAdoptionPage'));
+const TeamsExplorerPage = lazyWithReload(() => import('./pages/TeamsExplorerPage'));
 const AgentCostsPage = lazyWithReload(() => import('./pages/AgentCostsPage'));
 const LicenceActivityPage = lazyWithReload(() => import('./pages/LicenceActivityPage'));
 const DlpPage = lazyWithReload(() => import('./pages/DlpPage'));
@@ -87,6 +89,16 @@ export const ROUTES: PortalRoute[] = [
     label: 'Reports',
     icon: <ChartMultiple20Regular />,
     element: <ReportsPage />,
+  },
+  {
+    area: 'insights',
+    path: '/insights/teams',
+    label: 'Teams Explorer',
+    // Deliberately NOT PeopleTeam20Regular: that icon already marks the admin "Teams permissions"
+    // page, and two different pages sharing an icon in the same nav is a reliable way to send
+    // someone to the wrong one.
+    icon: <PeopleCommunity20Regular />,
+    element: <TeamsExplorerPage />,
   },
   {
     area: 'insights',
