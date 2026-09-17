@@ -165,7 +165,7 @@ export default function LicensedUsersPanel({
       .then((result) => {
         if (!cancelled) setData(result);
       })
-      .catch((e) => {
+      .catch((e: any) => {
         if (cancelled || controller.signal.aborted) return;
         setError(e instanceof Error ? e.message : 'Failed to load licensed users.');
       })
@@ -219,8 +219,8 @@ export default function LicensedUsersPanel({
           value={searchDraft}
           placeholder="Search name, email, department, job title or manager"
           aria-label="Search licensed Copilot users"
-          onChange={(_e, d) => setSearchDraft(d.value)}
-          onKeyDown={(e) => {
+          onChange={(_e: any, d: any) => setSearchDraft(d.value)}
+          onKeyDown={(e: any) => {
             if (e.key === 'Enter') setFilters((f) => ({ ...f, search: searchDraft }));
           }}
         />
@@ -231,7 +231,7 @@ export default function LicensedUsersPanel({
         <Select
           value={filters.bands.length === 1 ? String(filters.bands[0]) : ''}
           aria-label="Filter by engagement band"
-          onChange={(_e, d) =>
+          onChange={(_e: any, d: any) =>
             setFilters((f) => ({ ...f, bands: d.value === '' ? [] : [Number(d.value) as AdoptionBand] }))
           }
         >
@@ -246,7 +246,7 @@ export default function LicensedUsersPanel({
         <Select
           value={filters.actions.length === 1 ? filters.actions[0] : ''}
           aria-label="Filter by recommended action"
-          onChange={(_e, d) => setFilters((f) => ({ ...f, actions: d.value === '' ? [] : [d.value] }))}
+          onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, actions: d.value === '' ? [] : [d.value] }))}
         >
           <option value="">All recommended actions</option>
           {actionPlan.map((a) => (
@@ -259,7 +259,7 @@ export default function LicensedUsersPanel({
         <Select
           value={filters.reclaimEligibility}
           aria-label="Filter by reclaim eligibility"
-          onChange={(_e, d) => setFilters((f) => ({ ...f, reclaimEligibility: d.value }))}
+          onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, reclaimEligibility: d.value }))}
         >
           <option value="">All reclaim tiers</option>
           <option value="certain">Certain reclaim</option>
@@ -271,7 +271,7 @@ export default function LicensedUsersPanel({
         <Select
           value={filters.department}
           aria-label="Filter by department"
-          onChange={(_e, d) => setFilters((f) => ({ ...f, department: d.value }))}
+          onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, department: d.value }))}
         >
           <option value="">All departments</option>
           {(filterOptions?.departments ?? []).map((dept) => (
@@ -284,7 +284,7 @@ export default function LicensedUsersPanel({
         <Checkbox
           label="Cowork users only"
           checked={filters.coworkOnly}
-          onChange={(_e, d) => setFilters((f) => ({ ...f, coworkOnly: !!d.checked }))}
+          onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, coworkOnly: !!d.checked }))}
         />
         <Tooltip
           content="Disabled accounts still holding a Copilot licence - the clearest licences to reclaim."
@@ -293,7 +293,7 @@ export default function LicensedUsersPanel({
           <Checkbox
             label="Disabled accounts only"
             checked={filters.disabledOnly}
-            onChange={(_e, d) => setFilters((f) => ({ ...f, disabledOnly: !!d.checked }))}
+            onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, disabledOnly: !!d.checked }))}
           />
         </Tooltip>
 

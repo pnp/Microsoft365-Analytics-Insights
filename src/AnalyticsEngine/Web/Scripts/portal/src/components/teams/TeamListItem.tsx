@@ -24,7 +24,7 @@ export default class TeamListItem extends React.Component<TeamSelectionProps> {
             <Checkbox
               checked={checked}
               disabled={this.props.isBusy}
-              onChange={(_e, data) =>
+              onChange={(_e: any, data: any) =>
                 this.props.teamToggleCallback(data.checked === true, this.props.team.id ?? undefined)
               }
               label={this.props.team.displayName ?? '(unnamed team)'}

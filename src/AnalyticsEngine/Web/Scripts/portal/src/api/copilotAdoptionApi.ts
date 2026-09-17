@@ -12,6 +12,8 @@ import type {
   LicensedUserFilters,
   LicensedUserPage,
   OpportunityFilters,
+  CopilotAdoptionCreateInterventionRequest,
+  CopilotAdoptionIntervention,
 } from '../types/copilotAdoption';
 
 const baseUrl = (): string =>
@@ -93,6 +95,16 @@ async function getJson<T>(path: string, what: string, signal?: AbortSignal): Pro
 }
 
 /** Common query parameters: every endpoint is scoped by the window and the seat-licence selection. */
+async function postJson<T>(path: string, body: unknown, what: string): Promise<T> {
+  const response = await apiFetch(`${baseUrl()}${path}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(`Couldn't save ${what} (${response.status}).`);
+  return response.json() as Promise<T>;
+}
+
 function scopeParams(windowDays: number, seatLicenceTypeIds?: number[], seatCosts?: CopilotSeatCostInput[]): URLSearchParams {
   const params = new URLSearchParams({ windowDays: String(windowDays) });
   if (seatLicenceTypeIds && seatLicenceTypeIds.length > 0) {
@@ -355,4 +367,21 @@ export function coworkExportUrl(
  */
 export function workbookExportUrl(windowDays: number, seatLicenceTypeIds?: number[], seatCosts?: CopilotSeatCostInput[]): string {
   return `${baseUrl()}/export/workbook?${scopeParams(windowDays, seatLicenceTypeIds, seatCosts)}`;
+}
+
+
+export function fetchInterventions(signal?: AbortSignal): Promise<CopilotAdoptionIntervention[]> {
+  return getJson<CopilotAdoptionIntervention[]>('/interventions', 'Copilot adoption interventions', signal);
+}
+
+export function createInterventionFromAction(
+  windowDays: number,
+  request: CopilotAdoptionCreateInterventionRequest,
+  seatLicenceTypeIds?: number[],
+): Promise<CopilotAdoptionIntervention> {
+  return postJson<CopilotAdoptionIntervention>(
+    `/interventions/from-action?${scopeParams(windowDays, seatLicenceTypeIds)}`,
+    request,
+    'the Copilot adoption intervention',
+  );
 }

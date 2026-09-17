@@ -899,3 +899,81 @@ export interface CoworkFilters {
   sortBy: string;
   sortDesc: boolean;
 }
+
+
+export interface CopilotAdoptionCreateInterventionRequest {
+  actionCode: string;
+  name?: string;
+  owner?: string;
+  interventionType?: string;
+  status?: string;
+  guidanceResource?: string;
+  dueUtc?: string | null;
+  intendedOutcome?: string;
+  notes?: string;
+  intendedReinvestmentType?: string;
+  intendedReinvestmentDescription?: string;
+}
+
+export interface CopilotAdoptionCohort {
+  cohortId: number;
+  name: string;
+  actionCode: string;
+  createdUtc: string;
+  createdBy: string;
+  baselinePeriodEnd: string;
+  baselinePeriodDays: number;
+  baselineOptionsHash: string;
+  closedUtc: string | null;
+  memberCount: number;
+  holdoutCount: number;
+}
+
+export interface CopilotAdoptionIntervention {
+  interventionId: number;
+  cohortId: number;
+  cohortName: string;
+  actionCode: string;
+  owner: string | null;
+  interventionType: string;
+  guidanceResource: string | null;
+  startedUtc: string | null;
+  dueUtc: string | null;
+  completedUtc: string | null;
+  status: string;
+  intendedOutcome: string | null;
+  notes: string | null;
+  intendedReinvestmentType: string;
+  intendedReinvestmentDescription: string | null;
+  createdUtc: string;
+  memberCount: number;
+  isOverdue: boolean;
+  isUnstarted: boolean;
+}
+
+export interface CopilotAdoptionLeadingIndicatorOutcome {
+  code: string;
+  label: string;
+  treatedChange: number;
+  controlChange: number;
+  differenceInDifferences: number;
+  movementLabel: string;
+}
+
+export interface CopilotAdoptionInterventionOutcome {
+  intervention: CopilotAdoptionIntervention;
+  cohort: CopilotAdoptionCohort;
+  followupPeriodEnd: string;
+  methodLabel: string;
+  observational: boolean;
+  refused: boolean;
+  refusalReason: string | null;
+  matchingCriteria: string;
+  treatedN: number;
+  controlN: number;
+  treatedChange: number;
+  controlChange: number;
+  differenceInDifferences: number;
+  effectSizeLabel: string | null;
+  leadingIndicators: CopilotAdoptionLeadingIndicatorOutcome[];
+}

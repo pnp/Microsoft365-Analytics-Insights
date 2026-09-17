@@ -43,7 +43,7 @@ export default function ExceptionsPanel({ active }: { active: boolean }) {
       description="A cheap catch-all: every web-job logs errors into Application Insights, so a rising count is an early warning of failures no specific check anticipates."
       state={state}
     >
-      {(data) => {
+      {(data: any) => {
         if (!data.appInsightsConfigured) {
           return (
             <MessageBar intent="info">
@@ -116,7 +116,7 @@ export default function ExceptionsPanel({ active }: { active: boolean }) {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {data.topExceptionTypes.map((t, i) => (
+                  {data.topExceptionTypes.map((t: any, i: number) => (
                     <TableRow key={(t.type ?? '') + (t.problemId ?? '') + i}>
                       <TableCell className={shared.breakAnywhere}>
                         <Text font="monospace" size={200}>

@@ -246,7 +246,7 @@ export default function DlpPage() {
           setSummary(null);
         }
       })
-      .catch((e) => {
+      .catch((e: any) => {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load DLP data.');
       })
       .finally(() => {
@@ -265,7 +265,7 @@ export default function DlpPage() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
         <Title3>DLP impact on Copilot</Title3>
         <div className={styles.toolbar}>
-          <Select value={String(days)} onChange={(_e, data) => setDays(Number(data.value))} aria-label="Reporting period">
+          <Select value={String(days)} onChange={(_e: any, data: any) => setDays(Number(data.value))} aria-label="Reporting period">
             {WINDOWS.map((w) => (
               <option key={w.days} value={w.days}>
                 {w.label}

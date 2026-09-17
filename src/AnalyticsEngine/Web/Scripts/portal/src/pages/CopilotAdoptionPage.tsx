@@ -26,6 +26,7 @@ import {
   fetchAdoptionFilters,
   fetchAdoptionSql,
   fetchAdoptionSummary,
+  createInterventionFromAction,
   workbookExportUrl,
 } from '../api/copilotAdoptionApi';
 import type {
@@ -214,6 +215,7 @@ export default function CopilotAdoptionPage() {
   const [seatCostDrafts, setSeatCostDrafts] = useState<Record<string, { cost: string; currency: string; period: 'monthly' | 'annual'; effectiveDate: string }>>({});
   const [appliedSeatCosts, setAppliedSeatCosts] = useState<CopilotSeatCostInput[]>([]);
   const lastSummaryWindow = useRef<number | null>(null);
+  const [interventionMessage, setInterventionMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -221,7 +223,7 @@ export default function CopilotAdoptionPage() {
       .then((a) => {
         if (!cancelled) setAvailability(a);
       })
-      .catch((e) => {
+      .catch((e: unknown) => {
         if (!cancelled) {
           setAvailabilityError(e instanceof Error ? e.message : 'Failed to check Copilot adoption availability.');
         }
@@ -255,7 +257,7 @@ export default function CopilotAdoptionPage() {
           setSummary(s);
         }
       })
-      .catch((e) => {
+      .catch((e: unknown) => {
         if (cancelled || controller.signal.aborted) return;
         setSummaryError(e instanceof Error ? e.message : 'Failed to load the adoption summary.');
       })
@@ -304,6 +306,27 @@ export default function CopilotAdoptionPage() {
   const showOpportunityDetails = () => {
     setDrillAction(undefined);
     setTab('opportunities');
+  };
+
+  const startIntervention = (code: string) => {
+    setInterventionMessage(null);
+    createInterventionFromAction(windowDays, {
+      actionCode: code,
+      interventionType: 'briefing',
+      status: 'planned',
+      owner: 'Unassigned',
+      intendedOutcome: 'Record the intended outcome before running this enablement action.',
+      intendedReinvestmentType: 'other',
+      intendedReinvestmentDescription: 'State where this cohort should reinvest saved capacity.',
+    })
+      .then((intervention) => {
+        setInterventionMessage(
+          `Intervention ${intervention.interventionId} created with frozen cohort ${intervention.cohortId} (${formatCount(
+            intervention.memberCount,
+          )} users). Edit owner, dates and notes through the interventions API until the full management UI lands.`,
+        );
+      })
+      .catch((e: unknown) => setInterventionMessage(e instanceof Error ? e.message : 'Failed to create the intervention.'));
   };
 
   return (
@@ -467,6 +490,8 @@ export default function CopilotAdoptionPage() {
                     onDrillToAction={drillToAction}
                     onShowLicensedDetails={showLicensedDetails}
                     onShowOpportunityDetails={showOpportunityDetails}
+                    onCreateIntervention={startIntervention}
+                    interventionMessage={interventionMessage}
                   />
                 ))}
 
@@ -655,11 +680,15 @@ function ExecutiveTab({
   onDrillToAction,
   onShowLicensedDetails,
   onShowOpportunityDetails,
+  onCreateIntervention,
+  interventionMessage,
 }: {
   summary: CopilotAdoptionSummary;
   onDrillToAction?: (code: string) => void;
   onShowLicensedDetails: () => void;
   onShowOpportunityDetails: () => void;
+  onCreateIntervention?: (code: string) => void;
+  interventionMessage?: string | null;
 }) {
   const styles = useStyles();
   const o = summary.options;
@@ -851,7 +880,14 @@ function ExecutiveTab({
           />
         </div>
         <div className={styles.cardBody}>
-          <ActionPlan actions={summary.actionPlan} onSelect={onDrillToAction} />
+          <>
+            {interventionMessage && (
+              <MessageBar intent={interventionMessage.startsWith("Couldn't") ? 'error' : 'success'} style={{ marginBottom: '10px' }}>
+                <MessageBarBody>{interventionMessage}</MessageBarBody>
+              </MessageBar>
+            )}
+            <ActionPlan actions={summary.actionPlan} onSelect={onDrillToAction} onCreateIntervention={onCreateIntervention} />
+          </>
         </div>
       </Card>
     </>
@@ -921,10 +957,14 @@ function AnalystTab({
   summary,
   sql,
   onDrillToAction,
+  onCreateIntervention,
+  interventionMessage,
 }: {
   summary: CopilotAdoptionSummary;
   sql: Record<string, string> | null;
   onDrillToAction?: (code: string) => void;
+  onCreateIntervention?: (code: string) => void;
+  interventionMessage?: string | null;
 }) {
   const styles = useStyles();
   const kpis = buildKpis(summary);
@@ -1110,7 +1150,14 @@ function AnalystTab({
           />
         </div>
         <div className={styles.cardBody}>
-          <ActionPlan actions={summary.actionPlan} onSelect={onDrillToAction} />
+          <>
+            {interventionMessage && (
+              <MessageBar intent={interventionMessage.startsWith("Couldn't") ? 'error' : 'success'} style={{ marginBottom: '10px' }}>
+                <MessageBarBody>{interventionMessage}</MessageBarBody>
+              </MessageBar>
+            )}
+            <ActionPlan actions={summary.actionPlan} onSelect={onDrillToAction} onCreateIntervention={onCreateIntervention} />
+          </>
         </div>
       </Card>
 

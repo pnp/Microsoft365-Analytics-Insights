@@ -229,7 +229,7 @@ export default function AdoptionPanel({
               </Text>
               <Select
                 value={groupBy}
-                onChange={(_, d) => onGroupByChange(d.value as TeamsGrouping)}
+                onChange={(_: any, d: any) => onGroupByChange(d.value as TeamsGrouping)}
                 aria-label="Group the adoption breakdown by"
               >
                 {GROUPINGS.map((option) => (
