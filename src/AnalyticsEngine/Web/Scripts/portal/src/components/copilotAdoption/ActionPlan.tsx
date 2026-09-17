@@ -1,6 +1,6 @@
 import { makeStyles, tokens, Text, Badge } from '@fluentui/react-components';
 import type { AdoptionActionSummary } from '../../types/copilotAdoption';
-import { formatCount, formatPct } from './KpiGrid';
+import { formatCount, formatPct } from '../shared/KpiGrid';
 
 /**
  * Action colours run from "this licence is costing money" through to "this licence is paying for itself",
@@ -50,6 +50,16 @@ const useStyles = makeStyles({
   },
   description: {
     color: tokens.colorNeutralForeground2,
+  },
+  guidance: {
+    marginTop: '4px',
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px',
+    color: tokens.colorNeutralForeground3,
+  },
+  guidanceLink: {
+    color: tokens.colorBrandForegroundLink,
   },
   empty: {
     color: tokens.colorNeutralForeground3,
@@ -156,6 +166,24 @@ export default function ActionPlan({
             )}
             <Text size={200} className={styles.description}>
               {a.description}
+              {(a.guidanceLinks?.length ?? 0) > 0 && (
+                <span className={styles.guidance}>
+                  <Text size={100}>Microsoft&apos;s guidance for this kind of user:</Text>
+                  {a.guidanceLinks?.map((link) => (
+                    <a
+                      key={`${a.code}-${link.url}`}
+                      className={styles.guidanceLink}
+                      href={link.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => e.stopPropagation()}
+                    >
+                      {link.title}
+                    </a>
+                  ))}
+                </span>
+              )}
               {onSelect && (
                 <>
                   {' '}

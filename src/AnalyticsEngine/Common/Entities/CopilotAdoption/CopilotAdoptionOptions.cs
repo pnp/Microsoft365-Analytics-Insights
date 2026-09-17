@@ -12,6 +12,10 @@ namespace Common.Entities.CopilotAdoption
     /// </summary>
     public class CopilotAdoptionOptions
     {
+        /// <summary>Version of the Microsoft guidance catalogue attached to recommended actions.</summary>
+        [JsonProperty("guidanceCatalogueVersion")]
+        public string GuidanceCatalogueVersion { get; set; } = CopilotAdoptionGuidanceCatalogue.Version;
+
         /// <summary>Length of the reporting window in days. 28 matches Microsoft's own D28 usage reports.</summary>
         [JsonProperty("windowDays")]
         public int WindowDays { get; set; } = 28;

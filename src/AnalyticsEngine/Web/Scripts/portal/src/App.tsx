@@ -126,7 +126,7 @@ export default function App() {
     [navigate, location.pathname],
   );
 
-  const onAreaSelect: SelectTabEventHandler = (_event, data) => {
+  const onAreaSelect: SelectTabEventHandler = (_event: unknown, data: { value: unknown }) => {
     const area = AREAS.find((a) => a.id === data.value);
     // TabList fires for the already-selected tab too, and re-navigating would bounce the user off
     // the page they are reading back to the area's home page. Compare against where history

@@ -136,7 +136,7 @@ export default function ReportsPage() {
     });
   }, [areas, areasError, enabledAreas]);
 
-  const onTabSelect: SelectTabEventHandler = (_e, data) => {
+  const onTabSelect: SelectTabEventHandler = (_e: unknown, data: { value: unknown }) => {
     const area = enabledAreas.find((a) => a.key === data.value);
     if (area) setSelectedTab(area.key);
   };
@@ -350,6 +350,16 @@ function ReportAreaView({
           Refresh
         </Button>
       </div>
+
+      {area === 'calls' && (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            This is the headline call volume only. For meeting size and length, time-of-day patterns,
+            modalities, organiser concentration and call quality, see{' '}
+            <Link href="#/insights/teams">Teams Explorer</Link>.
+          </MessageBarBody>
+        </MessageBar>
+      )}
 
       {area === 'copilot' && data.cognitiveConfigured === false && (
         <MessageBar intent="info">

@@ -120,7 +120,12 @@ namespace Tests.FakeDataGen.Demo
             for (int department = 0; department < _members.Length; department++)
             {
                 int team = department + 1;
-                _sink.Write(DemoTables.TeamDefinitions, team, _options.Start, false, null,
+                // Authorised for deep analytics, because this generator writes their channel
+                // messages, keywords and sentiment. In a real tenant that content only exists for a
+                // team with a delegated token, so leaving the flag false would produce a database
+                // that cannot happen - and would make the portal report every team as "not
+                // measured" while showing its messages.
+                _sink.Write(DemoTables.TeamDefinitions, team, _options.Start, true, _options.ReportEnd,
                     DemoRandom.Id(_options.Seed, 1000, team).ToString(),
                     "Contoso " + SeedDataCatalogue.Departments[department]);
                 for (int channel = 0; channel < 2; channel++)
@@ -137,6 +142,39 @@ namespace Tests.FakeDataGen.Demo
                     _sink.Write(DemoTables.TeamTabLogs, id, _options.ReportEnd, id);
                 }
             }
+
+            WriteGovernanceTeams();
+        }
+
+        /// <summary>
+        /// Two extra teams that exist to make the portal's governance findings demonstrable, because
+        /// the department teams are all healthy by construction.
+        /// </summary>
+        /// <remarks>
+        /// They carry the distinction the Teams Explorer is careful about and which is easy to get
+        /// wrong when reading a report: an <b>authorised</b> team with no messages is genuinely
+        /// dormant and a candidate for archiving, while an <b>unauthorised</b> team is simply
+        /// unmeasured - archiving it on the strength of a zero would be a mistake. Neither has an
+        /// owner, so the ownerless-teams finding has something to show too.
+        ///
+        /// Deliberately given no members and no channel activity: they must not perturb any per-user
+        /// figure elsewhere in the demo database.
+        /// </remarks>
+        private void WriteGovernanceTeams()
+        {
+            int dormantTeam = _members.Length + 1;
+            int unauthorisedTeam = _members.Length + 2;
+            int nextChannel = _members.Length * 2 + 1;
+
+            _sink.Write(DemoTables.TeamDefinitions, dormantTeam, _options.Start, true, _options.ReportEnd,
+                DemoRandom.Id(_options.Seed, 1000, dormantTeam).ToString(), "Contoso Archived Programme");
+            _sink.Write(DemoTables.TeamChannels, nextChannel,
+                DemoRandom.Id(_options.Seed, 1001, nextChannel).ToString(), "Contoso General", dormantTeam);
+
+            _sink.Write(DemoTables.TeamDefinitions, unauthorisedTeam, _options.Start, false, null,
+                DemoRandom.Id(_options.Seed, 1000, unauthorisedTeam).ToString(), "Contoso Partner Collaboration");
+            _sink.Write(DemoTables.TeamChannels, nextChannel + 1,
+                DemoRandom.Id(_options.Seed, 1001, nextChannel + 1).ToString(), "Contoso General", unauthorisedTeam);
         }
 
         private void WritePageDimensions()

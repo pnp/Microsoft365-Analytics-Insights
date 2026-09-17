@@ -17,14 +17,15 @@ import { ArrowDownload16Regular, ArrowClockwise16Regular } from '@fluentui/react
 import { fetchOpportunities, opportunitiesExportUrl } from '../../api/copilotAdoptionApi';
 import type {
   AdoptionFilterOptions,
+  AdoptionGuidanceLink,
   CopilotAdoptionOptions,
   LicenceOpportunityPage,
   OpportunityFilters,
 } from '../../types/copilotAdoption';
 import Spinner from '../Spinner';
 import { ScoreBar, SortableTh, useAdoptionTableStyles } from './adoptionShared';
-import { formatCount, formatDate } from './KpiGrid';
-import InfoTip from './InfoTip';
+import { formatCount, formatDate } from '../shared/KpiGrid';
+import InfoTip from '../shared/InfoTip';
 
 const PAGE_SIZE = 50;
 
@@ -88,6 +89,16 @@ const useStyles = makeStyles({
     gap: '8px',
     marginBottom: '12px',
   },
+  guidance: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px',
+    marginBottom: '12px',
+    color: tokens.colorNeutralForeground3,
+  },
+  guidanceLink: {
+    color: tokens.colorBrandForegroundLink,
+  },
   emptyState: {
     display: 'flex',
     flexDirection: 'column',
@@ -128,12 +139,14 @@ export default function OpportunitiesPanel({
   windowDays,
   filterOptions,
   options,
+  guidanceLinks,
   seatLicenceTypeIds,
 }: {
   windowDays: number;
   filterOptions: AdoptionFilterOptions | null;
   /** The weights and targets actually used, so the score explanation quotes them rather than guessing. */
   options: CopilotAdoptionOptions;
+  guidanceLinks?: AdoptionGuidanceLink[];
   seatLicenceTypeIds?: number[];
 }) {
   const styles = useStyles();
@@ -217,6 +230,7 @@ export default function OpportunitiesPanel({
   const relevantWarnings = (data?.warnings ?? []).filter(
     (w) => w.toLowerCase().includes('licence opportunit') || w.toLowerCase().includes('usage report'),
   );
+  const unlicensedGuidance = (guidanceLinks ?? []).filter((l) => l.actionCode === 'unlicensed');
 
   return (
     <Card>
@@ -291,6 +305,17 @@ export default function OpportunitiesPanel({
             <MessageBar key={warning} intent="warning">
               <MessageBarBody>{warning}</MessageBarBody>
             </MessageBar>
+          ))}
+        </div>
+      )}
+
+      {unlicensedGuidance.length > 0 && (
+        <div className={styles.guidance}>
+          <Text size={100}>Microsoft&apos;s guidance for this kind of user:</Text>
+          {unlicensedGuidance.map((link) => (
+            <a key={link.url} className={styles.guidanceLink} href={link.url} target="_blank" rel="noreferrer">
+              {link.title}
+            </a>
           ))}
         </div>
       )}
