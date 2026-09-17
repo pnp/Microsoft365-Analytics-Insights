@@ -354,6 +354,7 @@ export interface CopilotAdoptionSummary {
   guidanceCatalogueVersion?: string;
   guidanceLinks?: AdoptionGuidanceLink[];
   adoptionByDepartment: AdoptionSegmentRow[];
+  habitByDepartment: AdoptionSegmentRow[];
   adoptionByCountry: AdoptionSegmentRow[];
   usageByApp: ReportCategory[];
   opportunityByDepartment: ReportCategory[];
