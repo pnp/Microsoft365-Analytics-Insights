@@ -1,4 +1,4 @@
-extern alias AnalyticsWeb;
+﻿extern alias AnalyticsWeb;
 
 using Common.Entities.CopilotAdoption;
 using DataUtils;
@@ -1009,7 +1009,7 @@ namespace Tests.UnitTests
             public Task<CopilotAdoptionAnalysis> RunAsync(
                 int windowDays,
                 List<int> seatLicenceTypeIds,
-                ICopilotAdoptionRunTelemetry telemetry)
+                    ICopilotAdoptionRunTelemetry telemetry)
             {
                 Interlocked.Increment(ref _callCount);
                 return _completion.Task;
@@ -1036,7 +1036,7 @@ namespace Tests.UnitTests
             public Task<CopilotAdoptionAnalysis> RunAsync(
                 int windowDays,
                 List<int> seatLicenceTypeIds,
-                ICopilotAdoptionRunTelemetry telemetry)
+                    ICopilotAdoptionRunTelemetry telemetry)
             {
                 Interlocked.Increment(ref _callCount);
                 if (!_responses.TryDequeue(out var response))

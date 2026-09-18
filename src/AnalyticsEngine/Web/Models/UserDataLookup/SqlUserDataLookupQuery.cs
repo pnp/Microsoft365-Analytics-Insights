@@ -132,6 +132,11 @@ namespace Web.AnalyticsWeb.Models.UserDataLookup
             }
         }
 
+        private static DateTime? AsUtc(DateTime? value)
+        {
+            return value.HasValue ? DateTime.SpecifyKind(value.Value, DateTimeKind.Utc) : (DateTime?)null;
+        }
+
         private static UserProfileModel BuildProfile(User user)
         {
             return new UserProfileModel
@@ -141,7 +146,7 @@ namespace Web.AnalyticsWeb.Models.UserDataLookup
                 Mail = user.Mail,
                 AzureAdId = user.AzureAdId,
                 AccountEnabled = user.AccountEnabled,
-                LastUpdated = user.LastUpdated,
+                LastUpdatedUtc = AsUtc(user.LastUpdated),
                 Department = user.Department?.Name,
                 JobTitle = user.JobTitle?.Name,
                 CompanyName = user.CompanyName?.Name,

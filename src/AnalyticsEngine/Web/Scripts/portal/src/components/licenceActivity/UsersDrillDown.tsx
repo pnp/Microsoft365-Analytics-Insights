@@ -146,9 +146,9 @@ function TopCountInput({ value, onCommit, disabled }: { value: number; onCommit:
       value={text}
       disabled={disabled}
       aria-label="Number of people in each list"
-      onChange={(_e, d) => setText(d.value)}
+      onChange={(_e: any, d: any) => setText(d.value)}
       onBlur={commit}
-      onKeyDown={(e) => {
+      onKeyDown={(e: any) => {
         if (e.key === 'Enter') {
           e.preventDefault();
           commit();
@@ -310,7 +310,7 @@ export default function UsersDrillDown({
             <Text size={200} className={styles.muted}>
               Service
             </Text>
-            <Select value={workload} aria-label="Service" onChange={(_e, d) => setWorkload(d.value as WorkloadKey)}>
+            <Select value={workload} aria-label="Service" onChange={(_e: any, d: any) => setWorkload(d.value as WorkloadKey)}>
               {WORKLOADS.map((w) => (
                 <option key={w.key} value={w.key}>
                   {w.label}
@@ -452,8 +452,8 @@ export default function UsersDrillDown({
                 maxLength={MAX_SEARCH}
                 placeholder="Search by sign-in address"
                 aria-label="Search users"
-                onChange={(_e, d) => setSearchDraft(sanitiseDraft(d.value))}
-                onKeyDown={(e) => {
+                onChange={(_e: any, d: any) => setSearchDraft(sanitiseDraft(d.value))}
+                onKeyDown={(e: any) => {
                   if (e.key === 'Enter') commitSearch(searchDraft);
                 }}
               />
@@ -463,7 +463,7 @@ export default function UsersDrillDown({
               <Select
                 value={`${sort}:${direction}`}
                 aria-label="Sort users"
-                onChange={(_e, d) => {
+                onChange={(_e: any, d: any) => {
                   const [nextSort, nextDir] = d.value.split(':');
                   setSort(nextSort as UsersSortKey);
                   setDirection(nextDir as SortDirection);

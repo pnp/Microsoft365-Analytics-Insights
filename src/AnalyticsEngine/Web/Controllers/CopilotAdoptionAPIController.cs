@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.CopilotAdoption;
 using DataUtils;
@@ -10,6 +10,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
+using Newtonsoft.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -184,6 +185,17 @@ namespace Web.AnalyticsWeb.Controllers
             return await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, FirstResponseBudget, cancellationToken);
         }
 
+        private async Task<CopilotAdoptionAnalysis> TryGetEnrichedAnalysisAsync(
+            int windowDays, string seatLicenceTypeIds, string comparisonMode, TimeSpan budget, CancellationToken cancellationToken)
+        {
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, budget, cancellationToken);
+            if (analysis == null) return null;
+
+            await new CopilotAdoptionService(analysis.Summary.Options)
+                .EnrichProgressAsync(analysis, comparisonMode, cancellationToken);
+            return analysis;
+        }
+
         /// <summary>
         /// As above, but with an explicit wait budget. Exports use a much longer one - see
         /// <see cref="ExportWaitBudget"/>.
@@ -257,11 +269,46 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<IActionResult> Summary(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
+            string comparisonMode = CopilotAdoptionComparisonModes.PreviousPeriod,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            var analysis = await TryGetEnrichedAnalysisAsync(windowDays, seatLicenceTypeIds, comparisonMode, FirstResponseBudget, cancellationToken);
             if (analysis == null) return StillBuilding();
             return Ok(analysis.Summary);
+        }
+
+        [HttpGet]
+        [Route("targets")]
+        public async Task<IActionResult> Targets(
+            int windowDays = 28,
+            string comparisonMode = CopilotAdoptionComparisonModes.PreviousPeriod,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var analysis = await TryGetEnrichedAnalysisAsync(windowDays, null, comparisonMode, FirstResponseBudget, cancellationToken);
+            if (analysis == null) return StillBuilding();
+            return Ok(analysis.Summary.Targets);
+        }
+
+        [HttpPost]
+        [Route("targets")]
+        public async Task<IActionResult> CreateTarget(CopilotAdoptionCreateTargetRequest request, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            if (request == null) return BadRequest("Target details are required.");
+            try
+            {
+                request.CreatedBy = request.CreatedBy ?? User?.Identity?.Name;
+                var target = await new CopilotAdoptionService(CopilotAdoptionOptions.Default)
+                    .CreateTargetAsync(request, cancellationToken);
+                return Ok(target);
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(ex.Message);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(ex.Message);
+            }
         }
 
         /// <summary>
@@ -338,6 +385,116 @@ namespace Web.AnalyticsWeb.Controllers
                     })
                     .ToList(),
             });
+        }
+
+        #endregion
+
+
+        #region Cohorts and interventions
+
+        [HttpGet]
+        [Route("cohorts")]
+        public async Task<IActionResult> Cohorts(CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var service = new CopilotAdoptionService();
+            return Ok(await service.GetCohortsAsync(cancellationToken));
+        }
+
+        [HttpPost]
+        [Route("cohorts/from-action")]
+        public async Task<IActionResult> CreateCohortFromAction(
+            [FromBody] CopilotAdoptionCreateCohortRequest request,
+            int windowDays = 28,
+            string seatLicenceTypeIds = null,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+            if (analysis == null) return StatusCode((int)HttpStatusCode.ServiceUnavailable);
+            request = request ?? new CopilotAdoptionCreateCohortRequest();
+            request.CreatedBy = CurrentUserName();
+            var service = new CopilotAdoptionService(analysis.Summary.Options);
+            return Ok(await service.CreateCohortFromActionAsync(analysis, request, cancellationToken));
+        }
+
+        [HttpPost]
+        [Route("interventions/from-action")]
+        public async Task<IActionResult> CreateInterventionFromAction(
+            [FromBody] CopilotAdoptionCreateInterventionRequest request,
+            int windowDays = 28,
+            string seatLicenceTypeIds = null,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+            if (analysis == null) return StatusCode((int)HttpStatusCode.ServiceUnavailable);
+            request = request ?? new CopilotAdoptionCreateInterventionRequest();
+            request.CreatedBy = CurrentUserName();
+            var service = new CopilotAdoptionService(analysis.Summary.Options);
+            return Ok(await service.CreateInterventionFromActionAsync(analysis, request, cancellationToken));
+        }
+
+        [HttpGet]
+        [Route("cohorts/{cohortId:int}/members")]
+        public async Task<IActionResult> CohortMembers(int cohortId, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var service = new CopilotAdoptionService();
+            return Ok(await service.GetCohortMembersAsync(cohortId, cancellationToken));
+        }
+
+        [HttpGet]
+        [Route("cohorts/{cohortId:int}/members/export")]
+        public async Task<IActionResult> ExportCohortMembers(int cohortId, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var service = new CopilotAdoptionService();
+            var members = await service.GetCohortMembersAsync(cohortId, cancellationToken);
+            return CsvResponse(
+                CsvSerialiser.ToBytes(
+                    members,
+                    new[]
+                    {
+                        new CsvColumn<CopilotAdoptionCohortMember>("User principal name", r => r.UserPrincipalName),
+                        new CsvColumn<CopilotAdoptionCohortMember>("Email", r => r.Mail),
+                        new CsvColumn<CopilotAdoptionCohortMember>("Department", r => r.Department),
+                        new CsvColumn<CopilotAdoptionCohortMember>("Baseline band", r => r.BaselineBandName),
+                        new CsvColumn<CopilotAdoptionCohortMember>("Baseline score", r => r.BaselineScore),
+                        new CsvColumn<CopilotAdoptionCohortMember>("Baseline active days", r => r.BaselineActiveDays),
+                        new CsvColumn<CopilotAdoptionCohortMember>("Hold-out control", r => r.HoldoutControl),
+                    }),
+                CsvSerialiser.FileName("copilot-adoption-cohort-" + cohortId, DateTime.UtcNow));
+        }
+
+        [HttpPost]
+        [Route("cohorts/{cohortId:int}/close")]
+        public async Task<IActionResult> CloseCohort(int cohortId, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var service = new CopilotAdoptionService();
+            await service.CloseCohortAsync(cohortId, CurrentUserName(), cancellationToken);
+            return Ok(await service.GetCohortAsync(cohortId, cancellationToken));
+        }
+
+        [HttpGet]
+        [Route("interventions")]
+        public async Task<IActionResult> Interventions(CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var service = new CopilotAdoptionService();
+            return Ok(await service.GetInterventionsAsync(cancellationToken));
+        }
+
+        [HttpGet]
+        [Route("interventions/{interventionId:int}/outcome")]
+        public async Task<IActionResult> InterventionOutcome(
+            int interventionId,
+            DateTime? followupPeriodEnd = null,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var service = new CopilotAdoptionService();
+            var outcome = await service.MeasureInterventionAsync(interventionId, followupPeriodEnd, cancellationToken);
+            if (outcome == null) return NotFound();
+            return Ok(outcome);
+        }
+
+        private string CurrentUserName()
+        {
+            return User?.Identity?.Name ?? "unknown";
         }
 
         #endregion
@@ -454,6 +611,93 @@ namespace Web.AnalyticsWeb.Controllers
 
             warnings.AddRange(summary.Warnings ?? new List<string>());
             return warnings.Count == 0 ? null : string.Join(" | ", warnings);
+        }
+
+        #endregion
+
+        #region Published period cohorts
+
+        // GET: api/CopilotAdoption/period-cohorts?leftPeriodEnd=2026-06-30&rightPeriodEnd=2026-09-30&periodDays=28
+        [HttpGet]
+        [Route("period-cohorts")]
+        public async Task<IActionResult> PeriodCohorts(
+            DateTime leftPeriodEnd,
+            DateTime rightPeriodEnd,
+            int periodDays = 28,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var service = new CopilotAdoptionService(
+                CopilotAdoptionOptions.Default,
+                DefaultAnalyticsDbContextFactory.Instance,
+                maxConcurrentSteps: 1);
+            var comparison = await service.ComparePublishedPeriodCohortsAsync(
+                leftPeriodEnd,
+                rightPeriodEnd,
+                NormaliseWindowDays(periodDays),
+                cancellationToken);
+            return Ok(comparison);
+        }
+
+        // GET: api/CopilotAdoption/period-cohorts/users?leftPeriodEnd=...&rightPeriodEnd=...&transition=reactivated
+        [HttpGet]
+        [Route("period-cohorts/users")]
+        public async Task<IActionResult> PeriodCohortUsers(
+            DateTime leftPeriodEnd,
+            DateTime rightPeriodEnd,
+            int periodDays = 28,
+            string transition = null,
+            string fromBand = null,
+            string toBand = null,
+            string department = null,
+            string activationState = null,
+            int skip = 0,
+            int take = DefaultTake,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var service = new CopilotAdoptionService(
+                CopilotAdoptionOptions.Default,
+                DefaultAnalyticsDbContextFactory.Instance,
+                maxConcurrentSteps: 1);
+            var page = await service.ReadPublishedPeriodCohortUsersAsync(
+                leftPeriodEnd,
+                rightPeriodEnd,
+                NormaliseWindowDays(periodDays),
+                transition,
+                fromBand,
+                toBand,
+                department,
+                activationState,
+                skip,
+                take,
+                cancellationToken);
+            return Ok(page);
+        }
+
+        // GET: api/CopilotAdoption/period-cohorts/export/workbook?leftPeriodEnd=...&rightPeriodEnd=...
+        [HttpGet]
+        [Route("period-cohorts/export/workbook")]
+        public async Task<IActionResult> ExportPeriodCohortWorkbook(
+            DateTime leftPeriodEnd,
+            DateTime rightPeriodEnd,
+            int periodDays = 28,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var service = new CopilotAdoptionService(
+                CopilotAdoptionOptions.Default,
+                DefaultAnalyticsDbContextFactory.Instance,
+                maxConcurrentSteps: 1);
+            var comparison = await service.ComparePublishedPeriodCohortsAsync(
+                leftPeriodEnd,
+                rightPeriodEnd,
+                NormaliseWindowDays(periodDays),
+                cancellationToken);
+
+            return new FileContentResult(
+                CopilotAdoptionWorkbook.Build(comparison),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            {
+                FileDownloadName = CopilotAdoptionWorkbook.CohortFileName(comparison.Gate),
+            };
         }
 
         #endregion
@@ -644,14 +888,15 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<IActionResult> ExportWorkbook(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
+            string comparisonMode = CopilotAdoptionComparisonModes.PreviousPeriod,
             CancellationToken cancellationToken = default(CancellationToken))
         {
             // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
             // would just render the JSON body as the "file". So an export WAITS - but only up to
             // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
             // download instead of an answer.
-            var analysis = await TryGetAnalysisAsync(
-                windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+            var analysis = await TryGetEnrichedAnalysisAsync(
+                windowDays, seatLicenceTypeIds, comparisonMode, ExportWaitBudget, cancellationToken);
             if (analysis == null) return ExportNotReadyResponse();
 
             byte[] bytes;

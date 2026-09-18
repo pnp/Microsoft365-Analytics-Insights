@@ -165,6 +165,21 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public void Workbook_UsesLineChartForVolumeTrendWhenCoverageHasGaps()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.WeeklyVolumeTrend.Single().Points[3].Value = null;
+
+            var volumeChart = ChartXmls(CopilotAdoptionWorkbook.Build(analysis))
+                .Single(xml => xml.Contains("Weekly Copilot volume"));
+
+            StringAssert.Contains(volumeChart, "<c:lineChart>",
+                "A stacked area collapses blank cells to the baseline; the workbook must use a line chart when gaps exist.");
+            Assert.IsFalse(volumeChart.Contains("<c:areaChart>"),
+                "The gapped volume trend must not be emitted as any area chart.");
+        }
+
         #endregion
 
         #region Content
@@ -182,6 +197,10 @@ namespace Tests.UnitTests
             StringAssert.Contains(text, "Generated");
             StringAssert.Contains(text, "Licence recommendation at");
             StringAssert.Contains(text, "Agent retire after");
+            StringAssert.Contains(text, "Microsoft guidance catalogue");
+            StringAssert.Contains(text, CopilotAdoptionGuidanceCatalogue.Version);
+            StringAssert.Contains(text, "https://aka.ms/ScenarioLibrary");
+            StringAssert.Contains(text, "https://aka.ms/Copilot/ImplementationSummaryGuide");
         }
 
         [TestMethod]
@@ -203,6 +222,19 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void CohortWorkbook_CarriesTransitionsActivationAndDrillRows()
+        {
+            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticCohortComparison()));
+
+            StringAssert.Contains(text, "Cohort transitions");
+            StringAssert.Contains(text, "Reactivated");
+            StringAssert.Contains(text, "Time to first use and activation");
+            StringAssert.Contains(text, "Seat date unknown");
+            StringAssert.Contains(text, "new.active@contoso.com");
+            StringAssert.Contains(text, "Account age is not substituted");
+        }
+
+        [TestMethod]
         public void Workbook_SurvivesGreekAndAmpersandsInTenantText()
         {
             // Department names, user names and file titles come from the customer's tenant. Greek is
@@ -214,6 +246,16 @@ namespace Tests.UnitTests
                 "Non-Latin department names must survive the export verbatim.");
             StringAssert.Contains(text, AmpersandDepartment,
                 "An ampersand and angle brackets must be escaped on write and decode back to the original.");
+        }
+
+        [TestMethod]
+        public void Workbook_IncludesTheAccountabilityRollup()
+        {
+            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
+
+            StringAssert.Contains(text, "Accountability roll-up");
+            StringAssert.Contains(text, "Action opportunity");
+            StringAssert.Contains(text, "manager@contoso.com");
         }
 
         [TestMethod]
@@ -246,6 +288,32 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// The workbook, like the page, reports seats and people rather than money.
+        /// </summary>
+        /// <remarks>
+        /// It used to carry an "Idle spend exposure" row and the seat prices behind it, derived from
+        /// prices typed into the page header. Those were withdrawn: a typed-in price is not a source of
+        /// truth about what a tenant pays, and a workbook cell is exactly where such a figure gets
+        /// re-used as though it were. The Cowork time saving - in hours - is the only value estimate
+        /// this report makes.
+        /// </remarks>
+        [TestMethod]
+        public void Workbook_QuotesNoMoney()
+        {
+            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
+
+            foreach (var banned in new[] { "Idle spend", "Seat price used", "reducible at renewal", "Currency" })
+            {
+                Assert.IsFalse(
+                    text.IndexOf(banned, StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"The Copilot Adoption workbook must not contain '{banned}'.");
+            }
+
+            // The seat inventory itself is still reported - those are counts, not prices.
+            StringAssert.Contains(text, "Purchased Copilot seats");
+        }
+
+        /// <summary>
         /// Asserts that a cell holding <paramref name="value"/> is immediately followed by one holding
         /// <paramref name="expectedNext"/>. Cells come back in document order, so this pins the value
         /// to its own row rather than merely finding both somewhere in the workbook.
@@ -257,6 +325,20 @@ namespace Tests.UnitTests
             Assert.IsTrue(index + 1 < cells.Count, $"'{value}' is the last cell in the workbook.");
             Assert.AreEqual(expectedNext, cells[index + 1],
                 $"'{value}' should be followed by '{expectedNext}', not '{cells[index + 1]}'.");
+        }
+
+        [TestMethod]
+        public void Workbook_CarriesMethodologyPositionAndDualSourceComparison()
+        {
+            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
+
+            StringAssert.Contains(text, "Why our figures differ from Microsoft's");
+            StringAssert.Contains(text, "unlicensed Copilot Chat usage is not available through Microsoft Graph reports APIs");
+            StringAssert.Contains(text, "https://learn.microsoft.com/en-us/microsoft-365/admin/activity-reports/microsoft-365-copilot-usage");
+            StringAssert.Contains(text, "https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/api/admin-settings/reports/copilotreportroot-getmicrosoft365copilotusageuserdetail");
+            StringAssert.Contains(text, "Do not average or silently reconcile them into one number");
+            StringAssert.Contains(text, "Audit log (selected D28): 12 interactions, 4 active days, 2 apps");
+            StringAssert.Contains(text, "Microsoft Copilot usage report (D28, snapshot 2026-08-20): 18 prompts, 5 active days");
         }
 
         [TestMethod]
@@ -457,6 +539,25 @@ namespace Tests.UnitTests
             }
         }
 
+        private static List<string> ChartXmls(byte[] bytes)
+        {
+            using (var stream = new MemoryStream(bytes))
+            using (var zip = new ZipArchive(stream, ZipArchiveMode.Read))
+            {
+                return zip.Entries
+                    .Where(e => e.FullName.StartsWith("xl/charts/chart", StringComparison.Ordinal)
+                             && e.FullName.EndsWith(".xml", StringComparison.Ordinal))
+                    .Select(e =>
+                    {
+                        using (var reader = new StreamReader(e.Open(), Encoding.UTF8))
+                        {
+                            return reader.ReadToEnd();
+                        }
+                    })
+                    .ToList();
+            }
+        }
+
         /// <summary>All worksheet XML concatenated and XML-decoded, for asserting on visible content.</summary>
         private static string SheetText(byte[] bytes)
         {
@@ -499,6 +600,9 @@ namespace Tests.UnitTests
             summary.ToUtc = Now;
             summary.Options = options;
             summary.DataSources.AuditAvailable = true;
+            summary.DataSources.CopilotUsageReportAvailable = true;
+            summary.DataSources.CopilotUsageReportDate = new DateTime(2026, 8, 20, 0, 0, 0, DateTimeKind.Utc);
+            summary.DataSources.CopilotUsageReportPeriodDays = 28;
             summary.DataSources.UserMetadataAvailable = true;
             summary.Warnings.Add("Synthetic warning containing an ampersand & an <element>.");
 
@@ -537,6 +641,17 @@ namespace Tests.UnitTests
                     Now,
                     true,
                     options);
+
+                if (i == 1)
+                {
+                    row.ReportPrompts = 18;
+                    row.ReportActiveDays = 5;
+                    row.ReportLastActivityUtc = Now.AddDays(-3);
+                    row.AuditInteractions = 12;
+                    row.AuditActiveDays = 4;
+                    row.AuditAppsUsed = 2;
+                    row.SourceComparisonAvailable = true;
+                }
 
                 analysis.LicensedUsers.Add(row);
             }
@@ -622,6 +737,75 @@ namespace Tests.UnitTests
 
             new CopilotAdoptionService().FinaliseSummary(analysis);
             return analysis;
+        }
+
+        private static CopilotAdoptionCohortComparison SyntheticCohortComparison()
+        {
+            return new CopilotAdoptionCohortComparison
+            {
+                Gate = new CopilotAdoptionPeriodComparisonGate
+                {
+                    Left = new CopilotAdoptionPeriodRun { PeriodEnd = Now.AddDays(-28), PeriodDays = 28 },
+                    Right = new CopilotAdoptionPeriodRun { PeriodEnd = Now, PeriodDays = 28 },
+                    OptionsComparable = true,
+                    Message = "Comparable synthetic periods.",
+                },
+                Summary = new CopilotAdoptionCohortSummary
+                {
+                    EarlierPopulation = 3,
+                    CurrentPopulation = 3,
+                    NewlyAssigned = 1,
+                    EarlierPopulationTransitionTotal = 3,
+                    TransitionsSumToEarlierPopulation = true,
+                    ReclaimCaveat = "Synthetic reclaim caveat.",
+                },
+                Transitions = new List<CopilotAdoptionCohortTransitionSummary>
+                {
+                    new CopilotAdoptionCohortTransitionSummary { Code = CopilotAdoptionCohortTransitions.Retained, Label = "Retained", Users = 1, ShareOfEarlierPopulationPct = 33.3, Description = "Active in both." },
+                    new CopilotAdoptionCohortTransitionSummary { Code = CopilotAdoptionCohortTransitions.Reactivated, Label = "Reactivated", Users = 1, ShareOfEarlierPopulationPct = 33.3, Description = "Inactive then active." },
+                    new CopilotAdoptionCohortTransitionSummary { Code = CopilotAdoptionCohortTransitions.Reclaimed, Label = "Reclaimed / reassigned", Users = 1, ShareOfEarlierPopulationPct = 33.3, Description = "Seat removed." },
+                },
+                Flows = new List<CopilotAdoptionCohortFlowSummary>
+                {
+                    new CopilotAdoptionCohortFlowSummary { FromBand = "Never used", ToBand = "Active", Transition = CopilotAdoptionCohortTransitions.Reactivated, Users = 1 },
+                },
+                Activation = new CopilotAdoptionActivationSummary
+                {
+                    ActivationWindowDays = 30,
+                    KnownSeatStartUsers = 2,
+                    SeatDateUnknownUsers = 1,
+                    AssignedBeforeHistoryUsers = 1,
+                    NewSeatsAssignedInPeriod = 1,
+                    ActivatedWithinWindow = 1,
+                    ActivationRatePct = 100,
+                    MedianDaysToFirstUse = 5,
+                    Caveat = "Time-to-first-use uses seat_first_observed_utc only. Rows with unknown seat dates are counted separately and excluded; Account age is not substituted for seat assignment.",
+                    Distribution = new List<CopilotAdoptionActivationDistributionBucket>
+                    {
+                        new CopilotAdoptionActivationDistributionBucket { Label = "0-7 days", Users = 1, SharePct = 100 },
+                    },
+                    ByDepartment = new List<CopilotAdoptionActivationSegment>
+                    {
+                        new CopilotAdoptionActivationSegment { Segment = GreekDepartment, NewSeatsAssignedInPeriod = 1, ActivatedWithinWindow = 1, ActivationRatePct = 100, SeatDateUnknownUsers = 1 },
+                    },
+                },
+                Rows = new List<CopilotAdoptionCohortUserRow>
+                {
+                    new CopilotAdoptionCohortUserRow
+                    {
+                        UserPrincipalName = "new.active@contoso.com",
+                        Department = GreekDepartment,
+                        Transition = CopilotAdoptionCohortTransitions.NewlyAssigned,
+                        TransitionLabel = "Newly assigned",
+                        FromBand = "No seat",
+                        ToBand = "Active",
+                        SeatFirstObservedUtc = Now.AddDays(-5),
+                        FirstInteractionUtc = Now,
+                        DaysToFirstUse = 5,
+                        ActivationState = "activatedWithinWindow",
+                    },
+                },
+            };
         }
 
         #endregion

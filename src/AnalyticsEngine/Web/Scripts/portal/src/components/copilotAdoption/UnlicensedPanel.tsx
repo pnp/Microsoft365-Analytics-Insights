@@ -3,10 +3,10 @@ import type { CopilotAdoptionOptions, UnlicensedPopulationSummary } from '../../
 import TreemapChart from '../charts/TreemapChart';
 import CategoryBarChart from '../charts/CategoryBarChart';
 import SqlPopover from '../SqlPopover';
-import InfoTip from './InfoTip';
+import InfoTip from '../shared/InfoTip';
 import HabitStrip from './HabitStrip';
-import { KpiGrid, formatCount } from './KpiGrid';
-import type { KpiDefinition } from './KpiGrid';
+import { KpiGrid, formatCount } from '../shared/KpiGrid';
+import type { KpiDefinition } from '../shared/KpiGrid';
 
 const useStyles = makeStyles({
   stack: {

@@ -1,4 +1,4 @@
-extern alias AnalyticsWeb;
+﻿extern alias AnalyticsWeb;
 
 using Common.Entities.CopilotAdoption;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -278,7 +278,7 @@ namespace Tests.UnitTests
             public async Task<CopilotAdoptionAnalysis> RunAsync(
                 int windowDays,
                 List<int> seatLicenceTypeIds,
-                ICopilotAdoptionRunTelemetry telemetry)
+                    ICopilotAdoptionRunTelemetry telemetry)
             {
                 Interlocked.Increment(ref _callCount);
                 ObservedContext = SynchronizationContext.Current;

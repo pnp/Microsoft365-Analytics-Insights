@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -167,6 +167,9 @@ namespace Common.Entities.CopilotAdoption
             // Microsoft's own rather than the one that was requested here.
             var auditHasSignal = row.Interactions > 0 || row.ActiveDays > 0;
             var reportHasSignal = (row.ReportActiveDays ?? 0) > 0 || (row.ReportPrompts ?? 0) > 0;
+            var reportCoversUser = row.ReportActiveDays.HasValue
+                || row.ReportPrompts.HasValue
+                || row.ReportLastActivityUtc.HasValue;
             var useReport = (!auditAvailable || !auditHasSignal) && reportHasSignal;
 
             var activeDays = useReport ? (row.ReportActiveDays ?? 0) : row.ActiveDays;
@@ -194,7 +197,17 @@ namespace Common.Entities.CopilotAdoption
                 : (frequency * o.FrequencyWeight + depth * o.DepthWeight + breadth * o.BreadthWeight)
                   / weightSum * 100d;
 
-            var usedInWindow = interactions > 0 || activeDays > 0;
+            // An in-window last-activity date IS use in the window, even when the counters are missing.
+            // A v1-shaped or partial response carries lastActivityDate but no prompts/active-days, so
+            // ReportPrompts and ReportActiveDays are NULL - and reportHasSignal coalesces those to 0, so
+            // useReport stays false and both counters read 0. Without this clause the user banded
+            // NeverUsed, and ApplyReclaimEligibility turns an enabled NeverUsed account past the grace
+            // period into "Probable" - naming for licence removal someone Microsoft's own report says was
+            // active days ago. lastUse already falls back to ReportLastActivityUtc, and the line below
+            // uses the same value to decide "used before the window"; it just never asked the in-window
+            // question.
+            var usedInWindow = interactions > 0 || activeDays > 0
+                || (lastUse.HasValue && lastUse.Value >= windowStartUtc);
             // "Ever" means "inside the history window we actually queried" - see
             // CopilotAdoptionOptions.HistoryDays. Prior audit interactions are the primary signal; a
             // report last-activity date before the window covers the report-only case.
@@ -228,14 +241,33 @@ namespace Common.Entities.CopilotAdoption
                 ReclaimExclusionReviewAfterUtc = row.ReclaimExclusionReviewAfterUtc,
                 ReclaimExclusionExpired = row.ReclaimExclusionExpired,
                 SeatLicences = row.SeatLicences,
+                SeatLicenceTypeIds = row.SeatLicenceTypeIds,
 
                 Interactions = interactions,
                 ActiveDays = activeDays,
+                AuditInteractions = row.Interactions,
+                AuditActiveDays = row.ActiveDays,
+                AuditAppsUsed = row.AppsUsed,
+                SourceComparisonAvailable = auditAvailable && reportCoversUser,
                 ExpectedActiveDays = Round(targetActiveDays, 1),
                 AppsUsed = appsUsed,
                 AgentsUsed = row.AgentsUsed,
                 CoworkInteractions = row.CoworkInteractions,
-                UsedCowork = row.CoworkInteractions > 0,
+                CoworkReportTotalTasks = row.CoworkReportTotalTasks,
+                CoworkReportScheduledTasks = row.CoworkReportScheduledTasks,
+                CoworkReportUserInitiatedTasks = row.CoworkReportUserInitiatedTasks,
+                CoworkReportActiveDays = row.CoworkReportActiveDays,
+                CoworkReportLastActivityDate = row.CoworkReportLastActivityDate,
+                CoworkReportRetainedUser = row.CoworkReportRetainedUser,
+                CoworkAutomationRatioPct = row.CoworkReportTotalTasks.GetValueOrDefault() > 0 && row.CoworkReportScheduledTasks.HasValue
+                    ? (double?)Percentage(row.CoworkReportScheduledTasks.Value, row.CoworkReportTotalTasks.Value)
+                    : null,
+                // Report active days count as evidence too. Without them a user Microsoft reports as
+                // active on N days but whose task count is blank would be tiered Established while
+                // UsedCowork said "no" - contradicting the tier, the CSV column and the workbook.
+                UsedCowork = row.CoworkReportTotalTasks.GetValueOrDefault() > 0
+                    || row.CoworkReportActiveDays.GetValueOrDefault() > 0
+                    || row.CoworkInteractions > 0,
                 FirstInteractionUtc = row.FirstInteractionUtc,
                 LastInteractionUtc = lastUse,
                 DaysSinceLastUse = lastUse.HasValue
@@ -1241,7 +1273,21 @@ namespace Common.Entities.CopilotAdoption
                 CoworkInteractions = row.CoworkInteractions,
                 CoworkActiveDays = row.CoworkActiveDays,
                 LastCoworkInteractionUtc = row.LastCoworkInteractionUtc,
-                UsedCowork = row.CoworkInteractions > 0,
+                CoworkReportTotalTasks = row.CoworkReportTotalTasks,
+                CoworkReportScheduledTasks = row.CoworkReportScheduledTasks,
+                CoworkReportUserInitiatedTasks = row.CoworkReportUserInitiatedTasks,
+                CoworkReportActiveDays = row.CoworkReportActiveDays,
+                CoworkReportLastActivityDate = row.CoworkReportLastActivityDate,
+                CoworkReportRetainedUser = row.CoworkReportRetainedUser,
+                CoworkAutomationRatioPct = row.CoworkReportTotalTasks.GetValueOrDefault() > 0 && row.CoworkReportScheduledTasks.HasValue
+                    ? (double?)Percentage(row.CoworkReportScheduledTasks.Value, row.CoworkReportTotalTasks.Value)
+                    : null,
+                // Report active days count as evidence too. Without them a user Microsoft reports as
+                // active on N days but whose task count is blank would be tiered Established while
+                // UsedCowork said "no" - contradicting the tier, the CSV column and the workbook.
+                UsedCowork = row.CoworkReportTotalTasks.GetValueOrDefault() > 0
+                    || row.CoworkReportActiveDays.GetValueOrDefault() > 0
+                    || row.CoworkInteractions > 0,
 
                 TeamsMessages = row.TeamsMessages,
                 TeamsMeetings = row.TeamsMeetings,
@@ -1263,8 +1309,13 @@ namespace Common.Entities.CopilotAdoption
                 TotalCopilotCredits = row.TotalCopilotCredits,
             };
 
+            if (scored.CoworkReportTotalTasks.GetValueOrDefault() > 0 && scored.TotalCopilotCredits.HasValue)
+            {
+                scored.CoworkCreditsPerTask = Math.Round(scored.TotalCopilotCredits.Value / scored.CoworkReportTotalTasks.Value, 4, MidpointRounding.AwayFromZero);
+            }
+
             scored.RegularCoworkUser =
-                row.CoworkActiveDays >= Math.Max(1, o.CoworkRegularMinActiveDays);
+                (row.CoworkReportActiveDays ?? row.CoworkActiveDays) >= Math.Max(1, o.CoworkRegularMinActiveDays);
 
             scored.Tier = CoworkTierFor(scored, o);
             scored.TierLabel = CoworkTierLabel(scored.Tier);
@@ -1354,12 +1405,19 @@ namespace Common.Entities.CopilotAdoption
             if (row == null) throw new ArgumentNullException(nameof(row));
             var o = options ?? CopilotAdoptionOptions.Default;
 
-            if (row.CoworkActiveDays >= Math.Max(1, o.CoworkRegularMinActiveDays))
+            // Microsoft's first-party Cowork report is the documented basis for this tab (#558); the audit
+            // signal is only the fallback when the report has nothing for this user. Reading the audit
+            // count alone here contradicted both RegularCoworkUser and the rationale text, which already
+            // prefer the report - a report-only user with 10 active days was tiered "Trialling" and then
+            // told "on 10 active days ... short of the 3 needed to count as regular use".
+            var coworkActiveDays = row.CoworkReportActiveDays ?? row.CoworkActiveDays;
+
+            if (coworkActiveDays >= Math.Max(1, o.CoworkRegularMinActiveDays))
             {
                 return CoworkTiers.Established;
             }
 
-            if (row.CoworkInteractions > 0)
+            if (row.UsedCowork)
             {
                 return CoworkTiers.Trialling;
             }
@@ -1399,6 +1457,34 @@ namespace Common.Entities.CopilotAdoption
                 default:
                     return CoworkBasis.Inference;
             }
+        }
+
+        /// <summary>
+        /// True when Microsoft's first-party Cowork report carries any usage signal for this row. Task
+        /// count and active days are independently nullable, so presence must not be inferred from the
+        /// task cell alone - that proxy broke as soon as tiering started honouring active days.
+        /// </summary>
+        private static bool CoworkReportHasSignal(CoworkReadinessRow row)
+        {
+            return row.CoworkReportTotalTasks.GetValueOrDefault() > 0
+                || row.CoworkReportActiveDays.GetValueOrDefault() > 0;
+        }
+
+        /// <summary>
+        /// The evidence clause of a report-sourced rationale. When the report gave active days but no task
+        /// count, the task clause is dropped entirely rather than printing a fabricated "0 Cowork tasks" -
+        /// and the sentence still reads grammatically instead of "Already established: across 12 days".
+        /// </summary>
+        private static string ReportEvidencePhrase(CoworkReadinessRow row)
+        {
+            var days = row.CoworkReportActiveDays ?? 0;
+            if (row.CoworkReportTotalTasks.HasValue)
+            {
+                return $"{row.CoworkReportTotalTasks.Value:N0} Cowork task"
+                     + $"{Plural(row.CoworkReportTotalTasks.Value)} across {days:N0} active day{Plural(days)}";
+            }
+
+            return $"active on {days:N0} day{Plural(days)}";
         }
 
         /// <summary>What a Cowork tier means and what to do about it. Stated once per group.</summary>
@@ -1486,12 +1572,23 @@ namespace Common.Entities.CopilotAdoption
             switch (row.Tier)
             {
                 case CoworkTiers.Established:
-                    return $"Already established: {row.CoworkInteractions:N0} Cowork interaction"
+                    if (CoworkReportHasSignal(row))
+                    {
+                        return $"Already established: {ReportEvidencePhrase(row)} in Microsoft's Cowork "
+                             + "usage report. Keep in scope.";
+                    }
+                    return $"Already established by audit reconciliation: {row.CoworkInteractions:N0} Cowork interaction"
                          + $"{Plural(row.CoworkInteractions)} across {row.CoworkActiveDays:N0} day"
                          + $"{Plural(row.CoworkActiveDays)}. Keep in scope.";
 
                 case CoworkTiers.Trialling:
-                    return $"Trialling: {row.CoworkInteractions:N0} Cowork interaction"
+                    if (CoworkReportHasSignal(row))
+                    {
+                        return $"Trialling: {ReportEvidencePhrase(row)} in Microsoft's Cowork usage report, "
+                             + $"short of the {Math.Max(1, o.CoworkRegularMinActiveDays)} "
+                             + "needed to count as regular use. Keep in scope and follow up.";
+                    }
+                    return $"Trialling by audit reconciliation: {row.CoworkInteractions:N0} Cowork interaction"
                          + $"{Plural(row.CoworkInteractions)} on {row.CoworkActiveDays:N0} day"
                          + $"{Plural(row.CoworkActiveDays)}, short of the {Math.Max(1, o.CoworkRegularMinActiveDays)} "
                          + "needed to count as regular use. Keep in scope and follow up.";
@@ -1545,16 +1642,16 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
-        /// Builds the modelled hours/cost estimate for a cohort.
+        /// Builds the modelled hours estimate for a cohort.
         ///
         /// <b>Every output is an assumption applied to observed volume.</b> The volumes are real - they
         /// come from Microsoft's usage reports - but the conversion to time saved is a model, and this
         /// method returns the assumptions that produced it so no caller can render a number without them.
-        /// A currency figure is produced only when a loaded hourly cost has been explicitly configured;
-        /// there is no defensible default and the tool must not invent one.
+        /// It deliberately stops at hours: see the note on <see cref="CoworkValueEstimate"/> for why a
+        /// monetary figure is not produced.
         /// </summary>
         /// <param name="cohort">The users the estimate covers - normally the recommended rollout cohort.</param>
-        /// <param name="options">Tuning, including the assumptions and the optional loaded cost.</param>
+        /// <param name="options">Tuning, including the minutes-saved assumptions.</param>
         public static CoworkValueEstimate EstimateCoworkValue(
             IReadOnlyCollection<CoworkReadinessRow> cohort,
             CopilotAdoptionOptions options = null)
@@ -1598,14 +1695,6 @@ namespace Common.Entities.CopilotAdoption
             estimate.HoursPerMonthHigh = Round(minutesHigh / 60d, 0);
             estimate.HoursPerMonthLow = Round(minutesHigh * lowerRatio / 60d, 0);
 
-            if (o.CoworkLoadedCostPerHour.HasValue && o.CoworkLoadedCostPerHour.Value > 0)
-            {
-                var rate = o.CoworkLoadedCostPerHour.Value;
-                estimate.CurrencyPerMonthLow = Round(estimate.HoursPerMonthLow * rate, 0);
-                estimate.CurrencyPerMonthHigh = Round(estimate.HoursPerMonthHigh * rate, 0);
-                estimate.CurrencyCode = o.CoworkCurrencyCode;
-            }
-
             estimate.Assumptions.Add(
                 $"Assumes Cowork saves {Num(o.CoworkMinutesSavedPerMeeting)} minutes per meeting, "
                 + $"{Num(o.CoworkMinutesSavedPerMailThread)} per email and "
@@ -1624,11 +1713,10 @@ namespace Common.Entities.CopilotAdoption
                 "Time saved is NOT measured by this product and cannot be. These figures are a model for "
                 + "sizing a rollout, not a result.");
 
-            if (!estimate.CurrencyPerMonthHigh.HasValue)
-            {
-                estimate.Assumptions.Add(
-                    "No monetary value is shown because no fully-loaded hourly cost has been configured.");
-            }
+            estimate.Assumptions.Add(
+                "No monetary value is shown. Pricing a modelled saving would state a figure this product "
+                + "cannot evidence, and it has no defensible fully-loaded hourly rate to price it with. "
+                + "This report reports seats, people and hours - never money.");
 
             return estimate;
         }

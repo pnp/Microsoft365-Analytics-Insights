@@ -1,4 +1,4 @@
-/*======================================================================
+﻿/*======================================================================
   Procedure:   [dbo].[CleanDataByUser]
   Purpose:     Safely clean/delete user-scoped data across related tables,
                with transactional safety.
@@ -190,6 +190,9 @@ BEGIN
     -- app and date with no user dimension, so there is nothing user-identifying in it to remove.
     IF OBJECT_ID('dbo.copilot_usage_user_activity_log', 'U') IS NOT NULL
         DELETE FROM copilot_usage_user_activity_log WHERE user_id = @UserId;
+
+    IF OBJECT_ID('dbo.cowork_usage_user_activity_log', 'U') IS NOT NULL
+        DELETE FROM cowork_usage_user_activity_log WHERE user_id = @UserId;
 
     -- An extracted key phrase can amount to a whole short prompt, so purging a user must not leave their
     -- phrases behind. Only phrases now referenced by nothing are removed - the keywords table is shared

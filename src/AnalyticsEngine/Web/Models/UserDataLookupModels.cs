@@ -36,8 +36,17 @@ namespace Web.AnalyticsWeb.Models
         [JsonProperty("accountEnabled")]
         public bool? AccountEnabled { get; set; }
 
+        /// <summary>UTC timestamp for the last user metadata import write. Historical pre-#426 rows may contain the old host-local value.</summary>
+        [JsonProperty("lastUpdatedUtc")]
+        public DateTime? LastUpdatedUtc { get; set; }
+
+        /// <summary>Backward-compatible alias for <see cref="LastUpdatedUtc"/>.</summary>
         [JsonProperty("lastUpdated")]
-        public DateTime? LastUpdated { get; set; }
+        public DateTime? LastUpdated
+        {
+            get { return LastUpdatedUtc; }
+            set { LastUpdatedUtc = value; }
+        }
 
         [JsonProperty("department")]
         public string Department { get; set; }

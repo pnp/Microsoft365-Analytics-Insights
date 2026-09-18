@@ -37,6 +37,14 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         private static readonly string[] MeterNameColumns = { "MeterName", "Meter" };
         private static readonly string[] QuantityColumns = { "UsageQuantity", "Quantity" };
 
+        // A tag grouping ({"type":"TagKey","name":"serviceName"}) comes back as TWO fixed columns - TagKey
+        // holding the tag's name and TagValue holding this row's value for it - rather than as a column named
+        // after the tag. Only those fixed names are accepted: aliasing the tag's own name would collide with
+        // the identically-named dimension columns (the column index is case-insensitive, so a "serviceName"
+        // tag and the "ServiceName" dimension are the same key) and would silently read one as the other.
+        private static readonly string[] TagKeyColumns = { "TagKey" };
+        private static readonly string[] TagValueColumns = { "TagValue" };
+
         /// <summary>
         /// Parses one page. Returns an empty list for a response with no rows - which is a legitimate answer
         /// (a filter that matched nothing) and not an error.
@@ -83,6 +91,8 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                     MeterSubCategory = ReadString(cells, index, MeterSubCategoryColumns),
                     MeterName = ReadString(cells, index, MeterNameColumns),
                     Quantity = ReadDecimal(cells, index, QuantityColumns),
+                    TagKey = ReadString(cells, index, TagKeyColumns),
+                    TagValue = ReadString(cells, index, TagValueColumns),
                 });
             }
 
@@ -172,6 +182,22 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             if (cell.Type == JTokenType.Integer)
             {
                 return FromYyyyMmDd(cell.Value<long>());
+            }
+
+            // Newtonsoft recognises an ISO-8601 string and hands it back as a DATE token, not a string. It
+            // must be read as a date here: falling through to ToString() renders it in the HOST'S CULTURE
+            // ("15/02/2026 00:00:00" on en-GB), which the InvariantCulture parse below then rejects, and the
+            // row is dropped for having no usable date. On a non-US-culture host that silently turned a whole
+            // ISO-dated response into "no spend at this scope".
+            if (cell.Type == JTokenType.Date)
+            {
+                var asDate = cell.Value<DateTime>();
+
+                // A value carrying an offset comes back as Local, so normalise before taking the day or the
+                // date shifts for hosts west of UTC. One without an offset is Unspecified and is treated as
+                // UTC - the same assumption AssumeUniversal makes on the string path below.
+                if (asDate.Kind == DateTimeKind.Local) asDate = asDate.ToUniversalTime();
+                return DateTime.SpecifyKind(asDate.Date, DateTimeKind.Utc);
             }
 
             var text = cell.Type == JTokenType.String ? cell.Value<string>() : cell.ToString();

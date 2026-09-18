@@ -43,10 +43,6 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         /// <summary>Distinct user COUNT. The API never returns user identities - see the entity docs.</summary>
         public int? Users { get; set; }
 
-        public string ChannelId { get; set; }
-        public string KnowledgeSources { get; set; }
-        public string ToolInvoked { get; set; }
-        public string LlmModel { get; set; }
         public string FeatureName { get; set; }
 
         /// <summary>The usage day the row belongs to, when the API reported one.</summary>
@@ -205,6 +201,14 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         public decimal Cost { get; set; }
         public string Currency { get; set; }
         public decimal? Quantity { get; set; }
+
+        /// <summary>The tag name grouped by, when a tag grouping was requested. See <see cref="TagValue"/>.</summary>
+        public string TagKey { get; set; }
+
+        /// <summary>
+        /// The row's value for <see cref="TagKey"/>. Null when untagged or when no tag grouping was requested.
+        /// </summary>
+        public string TagValue { get; set; }
     }
 
     /// <summary>

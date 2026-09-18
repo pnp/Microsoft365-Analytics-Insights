@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities.UsageReports;
 using DataUtils;
@@ -265,6 +265,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
 
             allSucceeded &= await RunCopilotReport("Copilot per-user usage detail", db =>
                 new CopilotUsageUserDetailLoader(reportSource, _logger, userGroupsCache, userGroupsFilterModel)
+                    .LoadAndSaveAsync(db, CopilotReportRequest.DefaultRefreshPeriod));
+
+            allSucceeded &= await RunCopilotReport("Cowork per-user usage detail", db =>
+                new CoworkUsageUserDetailLoader(reportSource, _logger, userGroupsCache, userGroupsFilterModel)
                     .LoadAndSaveAsync(db, CopilotReportRequest.DefaultRefreshPeriod));
 
             return allSucceeded;

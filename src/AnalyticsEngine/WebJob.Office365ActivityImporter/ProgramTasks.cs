@@ -203,6 +203,32 @@ namespace WebJob.Office365ActivityImporter
         }
 
         /// <summary>
+        /// Optional monthly aggregate Copilot Adoption digest. Unconfigured deployments send nothing.
+        /// Failures are persisted for the Health page by the phase, then swallowed so a digest problem
+        /// never aborts the import cycle.
+        /// </summary>
+        internal async Task SendCopilotAdoptionDigest()
+        {
+            if (!_settings.CopilotAdoptionDigestConfigured)
+            {
+                _logger.LogInformation("Skipping Copilot Adoption digest; no digest recipients/sender are configured.");
+                return;
+            }
+
+            try
+            {
+                await InitAuth();
+                var phase = new Engine.CopilotAdoption.CopilotAdoptionDigestPhase(_settings, _manualGraphCallClient, _logger);
+                await phase.RunAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.TrackException(ex);
+                _logger.LogError(ex, $"Copilot Adoption digest failed to run: {ex.Message}. It will be visible in Health and the import cycle will continue.");
+            }
+        }
+
+        /// <summary>
         /// Activity API
         /// </summary>
         internal async Task DownloadActivityData()

@@ -35,4 +35,19 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
     {
         Task UploadToServer(AnonUsageStatsModel stats);
     }
+
+    /// <summary>
+    /// Supplies the anonymised adoption block for a telemetry payload, or null when there is nothing
+    /// new to report.
+    /// </summary>
+    /// <remarks>
+    /// Null is a normal, expected answer, not a failure: the analysis is expensive so it runs weekly
+    /// while the payload uploads daily, the deployment may not import what the analysis needs, and a
+    /// failed or timed-out analysis must never stop the rest of the report being uploaded. The caller
+    /// falls back to the last block it stored.
+    /// </remarks>
+    public interface IAnonAdoptionStatsProvider
+    {
+        Task<AnonAdoptionStats> GetAdoptionStats(BaseSolutionInstallConfig lastSettings);
+    }
 }
