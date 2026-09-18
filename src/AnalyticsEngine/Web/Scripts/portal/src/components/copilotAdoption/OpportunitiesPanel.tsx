@@ -98,12 +98,17 @@ const useStyles = makeStyles({
   guidance: {
     display: 'flex',
     flexWrap: 'wrap',
+    alignItems: 'baseline',
     gap: '6px',
     marginBottom: '12px',
     color: tokens.colorNeutralForeground3,
   },
+  // A bare <a> does not inherit Fluent's Text sizing, so without an explicit size it rendered at the
+  // browser default and towered over the label next to it.
   guidanceLink: {
     color: tokens.colorBrandForegroundLink,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
   },
   emptyState: {
     display: 'flex',
@@ -322,7 +327,7 @@ export default function OpportunitiesPanel({
 
       {unlicensedGuidance.length > 0 && (
         <div className={styles.guidance}>
-          <Text size={100}>Microsoft&apos;s guidance for this kind of user:</Text>
+          <Text size={200}>Microsoft&apos;s guidance for this kind of user:</Text>
           {unlicensedGuidance.map((link) => (
             <a key={link.url} className={styles.guidanceLink} href={link.url} target="_blank" rel="noreferrer">
               {link.title}

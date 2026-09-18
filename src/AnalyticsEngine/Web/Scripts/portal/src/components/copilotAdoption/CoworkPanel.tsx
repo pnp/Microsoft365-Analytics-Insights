@@ -346,8 +346,9 @@ export default function CoworkPanel({
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
   const estimate = summary.coworkValueEstimate;
   const credits = summary.coworkCreditPosition;
-  // The detail row spans every column the header renders, so it has to track the optional one.
-  const detailColSpan = credits?.perUserCreditsAvailable ? 9 : 8;
+  // The detail row spans every column the header renders. The credit figures live inside the detail
+  // panel rather than in a column, so this is now fixed.
+  const detailColSpan = 8;
 
   const toggleTier = (tier: CoworkTier) =>
     setFilters((f) => ({
@@ -816,22 +817,6 @@ export default function CoworkPanel({
                   <th className={table.th}>Cowork use</th>
                   <th className={`${table.th} ${table.thNumeric}`}>Meetings (per day)</th>
                   <th className={`${table.th} ${table.thNumeric}`}>Email (per day)</th>
-                  {credits?.perUserCreditsAvailable && (
-                    <th className={`${table.th} ${table.thNumeric}`}>
-                      <span className={styles.thWithInfo}>
-                        All Copilot Credits
-                        <InfoTip
-                          title="All Copilot Credits"
-                          content={{
-                            what: 'Every Copilot Credit billed to this person in the period, across all credit-billed Copilot workloads. NOT Cowork\u2019s share.',
-                            how: 'Microsoft meters Cowork against the shared Copilot Credits pool and exposes no per-row workload discriminator, so a Cowork-only per-user figure does not exist and is not invented here.',
-                            source:
-                              'The Copilot Studio per-user credit import. A dash means the credits could not be attributed to this person - not that they cost nothing.',
-                          }}
-                        />
-                      </span>
-                    </th>
-                  )}
                 </tr>
               </thead>
               <tbody>
@@ -897,22 +882,6 @@ export default function CoworkPanel({
                         <td className={`${table.td} ${table.tdNumeric}`}>
                           {formatCount(row.emailsSent + row.emailsRead)}
                         </td>
-                        {credits?.perUserCreditsAvailable && (
-                          <td className={`${table.td} ${table.tdNumeric}`}>
-                            {row.totalCopilotCredits === null ? (
-                              <Tooltip
-                                relationship="description"
-                                content="Not attributable - no per-user credit rows for this person. This is not zero."
-                              >
-                                <Text size={200} className={styles.muted}>
-                                  &#8212;
-                                </Text>
-                              </Tooltip>
-                            ) : (
-                              formatCredits(row.totalCopilotCredits)
-                            )}
-                          </td>
-                        )}
                       </tr>
                       {open && (
                         <DetailRow colSpan={detailColSpan}>
@@ -1016,19 +985,47 @@ export default function CoworkPanel({
                                     sub="scheduled share of tasks"
                                   />
                                 )}
-                                {row.coworkCreditsPerTask !== null && (
-                                  <DetailStat
-                                    label="Credits per task"
-                                    value={formatCredits(row.coworkCreditsPerTask)}
-                                    sub={'all Copilot Credits, not Cowork\u2019s share'}
-                                  />
-                                )}
                                 <DetailStat
                                   label="Last M365 activity"
                                   value={formatDate(row.lastM365ActivityUtc)}
                                 />
                               </DetailStats>
                             </DetailSection>
+
+                            {credits?.perUserCreditsAvailable && (
+                              <DetailSection
+                                title="Copilot Credits"
+                                info={{
+                                  what: 'Every Copilot Credit billed to this person in the period, across all credit-billed Copilot workloads. NOT Cowork\u2019s share.',
+                                  how: 'Microsoft meters Cowork against the shared Copilot Credits pool and exposes no per-row workload discriminator, so a Cowork-only per-user figure does not exist and is not invented here.',
+                                  source:
+                                    'The Copilot Studio per-user credit import, which is optional and off unless it has been configured in Power Platform - which is why this sits in the detail panel rather than taking a column from every tenant. A dash means the credits could not be attributed to this person - not that they cost nothing.',
+                                }}
+                              >
+                                <DetailStats>
+                                  <DetailStat
+                                    label="All Copilot Credits"
+                                    value={
+                                      row.totalCopilotCredits === null
+                                        ? '\u2014'
+                                        : formatCredits(row.totalCopilotCredits)
+                                    }
+                                    sub={
+                                      row.totalCopilotCredits === null
+                                        ? 'not attributable to this person - not zero'
+                                        : 'all credit-billed Copilot workloads, not Cowork\u2019s share'
+                                    }
+                                  />
+                                  {row.coworkCreditsPerTask !== null && (
+                                    <DetailStat
+                                      label="Credits per task"
+                                      value={formatCredits(row.coworkCreditsPerTask)}
+                                      sub={'all Copilot Credits, not Cowork\u2019s share'}
+                                    />
+                                  )}
+                                </DetailStats>
+                              </DetailSection>
+                            )}
                           </DetailSections>
 
                           <DetailSection
