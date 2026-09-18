@@ -215,9 +215,14 @@ namespace Common.Entities.SpoWebActivity
             var searchTask = RunAsync<SearchKpiRow>("overview-search", WebActivitySql.SearchKpis, query);
             var histogramTask = RunAsync<LoadBucketRow>("overview-load", WebActivitySql.LoadHistogram, query);
 
+            // Unwindowed, and deliberately so: it is what tells a quiet reporting period apart from a
+            // tracker that has never collected anything. Cheap - a backward seek on
+            // IX_hits_hit_timestamp for a single row.
+            var everTask = RunAsync<LatestHitRow>("overview-ever-collected", WebActivitySql.LatestHit, query);
+
             await Task.WhenAll(
                 kpiTask, halvesTask, trendTask, segmentTask, depthTask, heatTask, siteTask,
-                deviceTask, distributionTask, searchTask, histogramTask).ConfigureAwait(false);
+                deviceTask, distributionTask, searchTask, histogramTask, everTask).ConfigureAwait(false);
 
             var model = new WebActivityOverview { Window = window };
             model.Queries.AddRange(new[]
@@ -250,7 +255,7 @@ namespace Common.Entities.SpoWebActivity
 
                 UniquePages = kpi.UniquePages,
                 Sites = kpi.Sites,
-                PagesPerVisit = kpi.Visits > 0 ? (double)kpi.PageViews / kpi.Visits : 0,
+                PagesPerVisit = kpi.Visits > 0 ? (double)kpi.VisitPageViews / kpi.Visits : 0,
                 BouncePct = WebActivityScoring.Percentage(kpi.Bounces, kpi.Visits),
                 AverageSecondsOnPage = kpi.AverageSecondsOnPage,
                 AverageLoadSeconds = kpi.AverageLoadSeconds,
@@ -259,7 +264,7 @@ namespace Common.Entities.SpoWebActivity
                 MobilePageViewPct = mobilePct,
             };
 
-            model.Trend = BuildTrend(trendTask.Result.Rows);
+            model.Trend = BuildTrend(trendTask.Result.Rows, query);
             model.VisitorSegments = BuildVisitorSegments(segmentTask.Result.Rows, query.Days);
             model.VisitDepth = BuildDepthBuckets(depthTask.Result.Rows);
             model.Heatmap = heatTask.Result.Rows
@@ -284,6 +289,12 @@ namespace Common.Entities.SpoWebActivity
                 SearchAvailable = search.Searches > 0,
                 ConfigurationReadable = sources.Readable,
                 DirectoryImported = sources.UserMetadata,
+
+                // A failed KPI query yields the same all-zero row as a genuinely empty window, so
+                // say which it was rather than letting the scoring guess from the zeros.
+                KpisUnavailable = kpiTask.Result.Info.Error != null,
+                HasEverCollected = everTask.Result.Rows.FirstOrDefault()?.LastHitUtc != null,
+
                 PageViews = kpi.PageViews,
                 Visits = kpi.Visits,
                 Visitors = kpi.Visitors,
@@ -348,7 +359,7 @@ namespace Common.Entities.SpoWebActivity
                 OutOfHoursPct = WebActivityScoring.Percentage(kpi.OutOfHoursVisits, kpi.Visits),
             };
 
-            model.Trend = BuildTrend(trendTask.Result.Rows);
+            model.Trend = BuildTrend(trendTask.Result.Rows, query);
 
             // Shares are of the window's TOTAL visits, not of the rows that happened to make the
             // top N. A share recomputed over a truncated leaderboard always sums to 100% and quietly
@@ -371,9 +382,7 @@ namespace Common.Entities.SpoWebActivity
             model.ByHour = BuildHourBuckets(cells);
             model.ByPeriodOfDay = BuildPeriodBuckets(cells);
 
-            model.SiteOverTime = siteTimeTask.Result.Rows
-                .Select(r => new WebActivityStackPoint { WeekStart = AsUtc(r.WeekStart), Name = r.Name, Count = r.Count })
-                .ToList();
+            model.SiteOverTime = OnSpine(siteTimeTask.Result.Rows, query);
 
             return model;
         }
@@ -413,7 +422,7 @@ namespace Common.Entities.SpoWebActivity
                 PageViews = kpi.PageViews,
                 UniquePageViews = kpi.UniquePageViews,
                 UniqueSharePct = WebActivityScoring.Percentage(kpi.UniquePageViews, kpi.PageViews),
-                PagesPerVisit = kpi.Visits > 0 ? (double)kpi.PageViews / kpi.Visits : 0,
+                PagesPerVisit = kpi.Visits > 0 ? (double)kpi.VisitPageViews / kpi.Visits : 0,
                 AverageSecondsOnPage = kpi.AverageSecondsOnPage,
                 AverageLoadSeconds = kpi.AverageLoadSeconds,
                 UniquePages = kpi.UniquePages,
@@ -569,9 +578,7 @@ namespace Common.Entities.SpoWebActivity
             model.Cities = ToPlaces(cityTask.Result.Rows, kpi.CityPageViews);
             model.Provinces = ToPlaces(provinceTask.Result.Rows, kpi.ProvincePageViews);
 
-            model.CountryOverTime = trendTask.Result.Rows
-                .Select(r => new WebActivityStackPoint { WeekStart = AsUtc(r.WeekStart), Name = r.Name, Count = r.Count })
-                .ToList();
+            model.CountryOverTime = OnSpine(trendTask.Result.Rows, query);
 
             return model;
         }
@@ -623,7 +630,7 @@ namespace Common.Entities.SpoWebActivity
 
             model.TopTerms = termTask.Result.Rows.Select(ToTermModel).ToList();
             model.DeadEndTerms = deadEndTask.Result.Rows.Select(ToTermModel).ToList();
-            model.Trend = BuildTrend(trendTask.Result.Rows);
+            model.Trend = BuildTrend(trendTask.Result.Rows, query);
 
             var cells = dayHourTask.Result.Rows
                 .Select(r => new HeatCellRow { Day = r.Day, Hour = r.Hour, PageViews = r.Count, Visits = r.Count })
@@ -695,9 +702,7 @@ namespace Common.Entities.SpoWebActivity
             model.OperatingSystems = ToPlatforms(osTask.Result.Rows, kpi.PageViews);
             model.Devices = ToPlatforms(deviceTask.Result.Rows, kpi.PageViews);
 
-            model.DeviceOverTime = deviceTimeTask.Result.Rows
-                .Select(r => new WebActivityStackPoint { WeekStart = AsUtc(r.WeekStart), Name = r.Name, Count = r.Count })
-                .ToList();
+            model.DeviceOverTime = OnSpine(deviceTimeTask.Result.Rows, query);
 
             model.Detail = detailTask.Result.Rows
                 .Select(r => new WebActivityTechnologyDetailRow
@@ -911,18 +916,90 @@ namespace Common.Entities.SpoWebActivity
                     .Select(r => new KeyValuePair<long, long>(r.Views, r.Pages)));
         }
 
-        private static List<WebActivityTrendPoint> BuildTrend(IEnumerable<TrendRow> rows)
+        /// <summary>
+        /// Every Monday-aligned week start in the window, so a week with no traffic is a zero rather
+        /// than a missing point.
+        /// </summary>
+        /// <remarks>
+        /// The charts space points evenly and join neighbours with a line, so a dropped week is not
+        /// drawn as a gap - it is drawn as if it never existed, putting the weeks either side of a
+        /// collection outage next to each other and hiding the outage completely. Gap-filling here
+        /// rather than in each statement keeps one spine for every series on the page.
+        /// </remarks>
+        private static List<DateTime> WeekSpine(WebActivityQuery query)
         {
-            return (rows ?? Enumerable.Empty<TrendRow>())
-                .OrderBy(r => r.WeekStart)
-                .Select(r => new WebActivityTrendPoint
+            var spine = new List<DateTime>();
+
+            // Match the SQL's DATEADD(DAY, -(DATEDIFF(DAY, 0, d) % 7), d): SQL Server's day zero
+            // (1900-01-01) is a Monday, so this is the Monday on or before the date.
+            var epoch = new DateTime(1900, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var from = query.FromUtc.Date;
+            var start = from.AddDays(-(int)(((from - epoch).Days % 7 + 7) % 7));
+
+            for (var week = start; week < query.ToExclusiveUtc; week = week.AddDays(7))
+            {
+                spine.Add(DateTime.SpecifyKind(week, DateTimeKind.Utc));
+            }
+
+            return spine;
+        }
+
+        /// <summary>Fills a stacked series onto the week spine, so every series covers every week.</summary>
+        private static List<WebActivityStackPoint> OnSpine(
+            IEnumerable<StackRow> rows,
+            WebActivityQuery query)
+        {
+            var points = (rows ?? Enumerable.Empty<StackRow>())
+                .Select(r => new WebActivityStackPoint
                 {
                     WeekStart = AsUtc(r.WeekStart),
-                    PageViews = r.PageViews,
-                    Visits = r.Visits,
-                    Visitors = r.Visitors,
-                    Bounces = r.Bounces,
-                    Searches = r.Searches,
+                    Name = r.Name,
+                    Count = r.Count,
+                })
+                .ToList();
+
+            var names = points.Select(p => p.Name).Distinct(StringComparer.Ordinal).ToList();
+            if (names.Count == 0) return points;
+
+            var present = new HashSet<string>(
+                points.Select(p => p.Name + "|" + p.WeekStart.Ticks), StringComparer.Ordinal);
+
+            foreach (var week in WeekSpine(query))
+            {
+                foreach (var name in names)
+                {
+                    if (present.Contains(name + "|" + week.Ticks)) continue;
+                    points.Add(new WebActivityStackPoint { WeekStart = week, Name = name, Count = 0 });
+                }
+            }
+
+            return points.OrderBy(p => p.WeekStart).ThenBy(p => p.Name, StringComparer.Ordinal).ToList();
+        }
+
+        private static List<WebActivityTrendPoint> BuildTrend(IEnumerable<TrendRow> rows, WebActivityQuery query)
+        {
+            var byWeek = (rows ?? Enumerable.Empty<TrendRow>())
+                .GroupBy(r => AsUtc(r.WeekStart))
+                .ToDictionary(g => g.Key, g => g.First());
+
+            return WeekSpine(query)
+                .Select(week =>
+                {
+                    TrendRow r;
+                    if (!byWeek.TryGetValue(week, out r))
+                    {
+                        return new WebActivityTrendPoint { WeekStart = week };
+                    }
+
+                    return new WebActivityTrendPoint
+                    {
+                        WeekStart = week,
+                        PageViews = r.PageViews,
+                        Visits = r.Visits,
+                        Visitors = r.Visitors,
+                        Bounces = r.Bounces,
+                        Searches = r.Searches,
+                    };
                 })
                 .ToList();
         }

@@ -561,6 +561,73 @@ namespace Tests.UnitTests
                 "Nothing may report healthy engagement from zero visits.");
         }
 
+        [TestMethod]
+        public void FailedKpis_AreNotDiagnosedAsABrokenTracker()
+        {
+            // A failed KPI query leaves every figure at its zero default, which is indistinguishable
+            // from a genuinely empty window. Diagnosing a tracker from it sends an admin to redeploy
+            // working software because an aggregate timed out.
+            var failed = Healthy();
+            failed.KpisUnavailable = true;
+            failed.PageViews = 0;
+
+            var judgements = WebActivityScoring.Judgements(failed);
+
+            Assert.AreEqual("kpis-unavailable", judgements[0].Key);
+            Assert.AreEqual(1, judgements.Count, "Nothing else can be judged from figures that did not load.");
+            Assert.IsFalse(
+                judgements.Any(j => j.Detail.Contains("tracker is not deployed")),
+                "A timeout must never be reported as a missing tracker.");
+        }
+
+        [TestMethod]
+        public void AQuietWindow_IsNotDiagnosedAsABrokenTracker()
+        {
+            // Page views exist outside this window often enough that "nothing in the last 28 days"
+            // usually means a quiet period. Telling an admin to redeploy on that evidence is how a
+            // working tracker gets pulled apart.
+            var quiet = Healthy();
+            quiet.PageViews = 0;
+            quiet.HasEverCollected = true;
+
+            var quietJudgement = WebActivityScoring.Judgements(quiet).Single();
+            Assert.AreEqual("no-traffic", quietJudgement.Key);
+            Assert.IsFalse(quietJudgement.Detail.Contains("not deployed"));
+            StringAssert.Contains(quietJudgement.Detail, "quiet period");
+
+            // Never collected anything, though, and the tracker really is the first thing to check.
+            var never = Healthy();
+            never.PageViews = 0;
+            never.HasEverCollected = false;
+
+            var neverJudgement = WebActivityScoring.Judgements(never).Single();
+            Assert.AreEqual("no-traffic", neverJudgement.Key);
+            StringAssert.Contains(neverJudgement.Detail, "not deployed");
+        }
+
+        [TestMethod]
+        public void AnEmptyDirectory_IsNotReportedAsTheImportBeingOff()
+        {
+            // The availability badge can say the user directory import is ON while this judgement
+            // tells the admin to enable it, which hides the real problem: it ran and found nobody.
+            var emptyDirectory = Healthy();
+            emptyDirectory.DirectoryImported = true;
+            emptyDirectory.KnownUsers = 0;
+
+            var reach = WebActivityScoring.Judgements(emptyDirectory).Single(j => j.Key == "reach");
+
+            Assert.IsFalse(reach.Detail.Contains("import is off"),
+                "The toggle is on; saying it is off sends the admin to a setting that is already correct.");
+            StringAssert.Contains(reach.Detail, "has not completed successfully");
+
+            var importOff = Healthy();
+            importOff.DirectoryImported = false;
+            importOff.KnownUsers = 0;
+
+            var offReach = WebActivityScoring.Judgements(importOff).Single(j => j.Key == "reach");
+            StringAssert.Contains(offReach.Detail, "import is off");
+        }
+
         #endregion
     }
 }

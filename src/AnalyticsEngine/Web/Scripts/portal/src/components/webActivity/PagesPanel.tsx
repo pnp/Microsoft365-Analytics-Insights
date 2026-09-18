@@ -281,7 +281,7 @@ export default function PagesPanel({
               ? 'No pages were viewed in this period.'
               : `A busiest-tenth figure needs at least ${data.window.minimumPagesForDecile} pages `
                 + 'with views to mean anything. Below that a single page is already more than a '
-                + 'tenth of the site, so the figure would not be a tenth at all.'
+                + 'tenth of the pages viewed in this period, so the figure would not be a tenth at all.'
           }
         >
           <CategoryBarChart

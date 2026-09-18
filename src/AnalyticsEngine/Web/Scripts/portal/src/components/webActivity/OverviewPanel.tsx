@@ -54,8 +54,9 @@ export default function OverviewPanel({
         what: 'Browsing sessions on the SharePoint sites the tracker is deployed to.',
         how:
           'One visit is one Application Insights session that had at least one page view in the '
-          + 'window. A session that started before the window began is counted from its first page '
-          + 'view inside the window, so two adjacent periods never double-count the same visit.',
+          + 'window, measured from its first page view inside that window. Visits are therefore '
+          + 'window-local: a session straddling the boundary is counted in both periods, so visit '
+          + 'totals from adjacent periods are not additive.',
       },
     },
     {
@@ -91,9 +92,9 @@ export default function OverviewPanel({
     {
       key: 'bounce',
       label: 'Single-page visits',
-      value: formatPct(kpis.bouncePct),
-      hint: 'people who saw one page and left',
-      tone: bounceTone(kpis.bouncePct),
+      value: kpis.visits > 0 ? formatPct(kpis.bouncePct) : '-',
+      hint: kpis.visits > 0 ? 'people who saw one page and left' : 'no visits recorded in this period',
+      tone: kpis.visits > 0 ? bounceTone(kpis.bouncePct) : 'neutral',
       info: {
         what: 'The share of visits that saw exactly one page.',
         how:

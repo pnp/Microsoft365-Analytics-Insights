@@ -91,9 +91,10 @@ export default function SearchPanel({
       info: {
         what: 'How many searches a visit runs once it has started searching.',
         how:
-          'Repeated searching in one visit is someone rephrasing because the first attempt failed. '
-          + 'The count of visits with three or more searches is the clearest "people cannot find '
-          + 'things" signal on this page.',
+          'Repeated searching in one visit is often someone rephrasing because the first attempt '
+          + 'failed, though several unrelated searches look identical here - the count compares '
+          + 'nothing about the terms. Treat visits with three or more searches as a "people may not '
+          + 'be finding things" signal to investigate, not as proof of it.',
       },
     },
     {

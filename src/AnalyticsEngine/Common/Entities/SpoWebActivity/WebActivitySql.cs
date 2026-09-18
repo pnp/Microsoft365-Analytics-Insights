@@ -48,6 +48,23 @@ namespace Common.Entities.SpoWebActivity
     /// looking plausible.
     /// </para>
     /// <para>
+    /// <b>A page_load_time of ZERO means "not measured", not "instant".</b> The App Insights import's
+    /// <c>PageLoadInSeconds</c> returns <c>0</c> - not <c>NULL</c> - whenever the page-load custom
+    /// property is absent or itself "0", so the column cannot distinguish the two by nullability.
+    /// Every average, floor and histogram here therefore qualifies on <c>page_load_time &gt; 0</c>
+    /// rather than <c>IS NOT NULL</c>. Counting the zeros drags every average toward zero, piles
+    /// unmeasured views into the fastest histogram bucket, and produces a confident "comfortably
+    /// fast" verdict from views that were never timed.
+    /// </para>
+    /// <para>
+    /// Note a separate, PRE-EXISTING caveat this report inherits and does not fix: that same importer
+    /// property derives the value as <c>DurationMS / (1000 * 10)</c>, which is a tenth of the
+    /// milliseconds-to-seconds conversion, and it carries a standing TODO asking for a domain owner's
+    /// decision before it changes. Load times here are therefore internally consistent and good for
+    /// RANKING pages against each other, but their absolute scale is only as trustworthy as that
+    /// import. Do not quote them as service-level figures until it is resolved.
+    /// </para>
+    /// <para>
     /// <b>OPTION (RECOMPILE) everywhere.</b> The window is the main cost lever, and a plan cached for
     /// 7 days is a bad plan for 365. Recompiling costs a millisecond or two on statements that are
     /// already reading tens of thousands of rows.
@@ -233,6 +250,7 @@ WITH" + HitWindowCte + @",
 " + VisitCte + @"
 SELECT
     (SELECT COUNT_BIG(*) FROM H)                                              AS PageViews,
+    (SELECT CAST(ISNULL(SUM(v.PageViews), 0) AS bigint) FROM V AS v)          AS VisitPageViews,
     (SELECT COUNT_BIG(*) FROM (SELECT DISTINCT h.session_id, h.url_id FROM H AS h
                                WHERE h.session_id IS NOT NULL) AS upv)        AS UniquePageViews,
     (SELECT COUNT_BIG(*) FROM V)                                              AS Visits,
@@ -248,7 +266,7 @@ SELECT
     (SELECT COUNT(DISTINCT h.web_id) FROM H AS h WHERE h.web_id IS NOT NULL)  AS Sites,
     (SELECT CAST(ISNULL(SUM(CASE WHEN v.PageViews = 1 THEN 1 ELSE 0 END), 0) AS bigint) FROM V AS v) AS Bounces,
     (SELECT AVG(h.seconds_on_page) FROM H AS h WHERE h.seconds_on_page IS NOT NULL)  AS AverageSecondsOnPage,
-    (SELECT AVG(h.page_load_time) FROM H AS h WHERE h.page_load_time IS NOT NULL)    AS AverageLoadSeconds
+    (SELECT AVG(h.page_load_time) FROM H AS h WHERE h.page_load_time > 0)           AS AverageLoadSeconds
 OPTION (RECOMPILE);";
 
         /// <summary>
@@ -571,7 +589,7 @@ Grouped AS (
     SELECT h." + keyColumn + @" AS LookupId,
            COUNT_BIG(*)                  AS PageViews,
            COUNT(DISTINCT h.session_id)  AS Visits,
-           AVG(h.page_load_time)         AS AverageLoadSeconds,
+           AVG(CASE WHEN h.page_load_time > 0 THEN h.page_load_time END) AS AverageLoadSeconds,
            AVG(h.seconds_on_page)        AS AverageSecondsOnPage
     FROM H AS h
     WHERE h." + keyColumn + @" IS NOT NULL
@@ -644,7 +662,7 @@ FROM (
            COUNT_BIG(*)                                                          AS PageViews,
            CAST(COUNT(DISTINCT o.session_id) AS bigint)                           AS UniquePageViews,
            AVG(o.seconds_on_page)                                                AS AverageSecondsOnPage,
-           AVG(o.page_load_time)                                                 AS AverageLoadSeconds,
+           AVG(CASE WHEN o.page_load_time > 0 THEN o.page_load_time END)        AS AverageLoadSeconds,
            CAST(SUM(CASE WHEN o.FirstSeq = 1 THEN 1 ELSE 0 END) AS bigint)       AS Entries,
            CAST(SUM(CASE WHEN o.LastSeq  = 1 THEN 1 ELSE 0 END) AS bigint)       AS Exits,
            CAST(SUM(CASE WHEN o.FirstSeq = 1 AND o.VisitPages = 1 THEN 1 ELSE 0 END) AS bigint) AS Bounces
@@ -671,10 +689,10 @@ Grouped AS (
            " + LatestTitleId + @" AS TitleId,
            MAX(h.web_id)          AS WebId,
            COUNT_BIG(*)           AS PageViews,
-           COUNT(h.page_load_time) AS MeasuredPageViews,
+           SUM(CASE WHEN h.page_load_time > 0 THEN 1 ELSE 0 END) AS MeasuredPageViews,
            COUNT(DISTINCT h.session_id) AS UniquePageViews,
            AVG(h.seconds_on_page) AS AverageSecondsOnPage,
-           AVG(h.page_load_time)  AS AverageLoadSeconds
+           AVG(CASE WHEN h.page_load_time > 0 THEN h.page_load_time END) AS AverageLoadSeconds
     FROM H AS h
     GROUP BY h.url_id
 )
@@ -712,7 +730,7 @@ Grouped AS (
            COUNT_BIG(*)           AS PageViews,
            COUNT(DISTINCT h.session_id) AS UniquePageViews,
            AVG(h.seconds_on_page) AS AverageSecondsOnPage,
-           AVG(h.page_load_time)  AS AverageLoadSeconds
+           AVG(CASE WHEN h.page_load_time > 0 THEN h.page_load_time END) AS AverageLoadSeconds
     FROM H AS h
     GROUP BY h.url_id
 )
@@ -1270,7 +1288,7 @@ SELECT
     (SELECT COUNT(DISTINCT h.device_id) FROM H AS h WHERE h.device_id IS NOT NULL) AS Devices,
     (SELECT COUNT_BIG(*) FROM H AS h WHERE h.agent_id IS NULL)                     AS UnknownBrowserPageViews,
     (SELECT COUNT_BIG(*) FROM H AS h)                                              AS PageViews,
-    (SELECT AVG(h.page_load_time) FROM H AS h WHERE h.page_load_time IS NOT NULL)  AS AverageLoadSeconds
+    (SELECT AVG(h.page_load_time) FROM H AS h WHERE h.page_load_time > 0)         AS AverageLoadSeconds
 OPTION (RECOMPILE);";
 
         /// <summary>
@@ -1287,7 +1305,7 @@ SELECT CASE WHEN h.page_load_time >= @loadCeiling THEN @loadOverflowBucket
             ELSE CAST(FLOOR(h.page_load_time / @loadBucket) AS int) END AS Bucket,
        COUNT_BIG(*) AS Count
 FROM H AS h
-WHERE h.page_load_time IS NOT NULL AND h.page_load_time >= 0
+WHERE h.page_load_time > 0
 GROUP BY CASE WHEN h.page_load_time >= @loadCeiling THEN @loadOverflowBucket
               ELSE CAST(FLOOR(h.page_load_time / @loadBucket) AS int) END
 ORDER BY Bucket
@@ -1341,7 +1359,7 @@ Grouped AS (
            COUNT_BIG(*)                 AS PageViews,
            COUNT(DISTINCT h.session_id) AS Visits,
            AVG(h.seconds_on_page)       AS AverageSecondsOnPage,
-           AVG(h.page_load_time)        AS AverageLoadSeconds
+           AVG(CASE WHEN h.page_load_time > 0 THEN h.page_load_time END) AS AverageLoadSeconds
     FROM H AS h
     GROUP BY h.agent_id, h.device_id, h.os_id, h.city_id
 ),

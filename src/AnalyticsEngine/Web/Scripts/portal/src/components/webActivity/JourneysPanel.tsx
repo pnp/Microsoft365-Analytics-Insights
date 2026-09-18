@@ -58,9 +58,11 @@ export default function JourneysPanel({
     {
       key: 'bounce',
       label: 'Bounce rate (single-page visits)',
-      value: formatPct(kpis.bouncePct),
-      hint: `${formatCount(kpis.bounces)} of ${formatCount(kpis.visits)} visits`,
-      tone: bounceTone(kpis.bouncePct),
+      value: kpis.visits > 0 ? formatPct(kpis.bouncePct) : '-',
+      hint: kpis.visits > 0
+        ? `${formatCount(kpis.bounces)} of ${formatCount(kpis.visits)} visits`
+        : 'no visits recorded in this period',
+      tone: kpis.visits > 0 ? bounceTone(kpis.bouncePct) : 'neutral',
       info: {
         what: 'Visits that saw exactly one page and then ended.',
         how:
@@ -98,7 +100,7 @@ export default function JourneysPanel({
       key: 'clicks',
       label: 'Element clicks',
       value: formatCount(kpis.clicks),
-      hint: clickTrackingAvailable ? 'recorded in this period' : 'click capture is off',
+      hint: clickTrackingAvailable ? 'recorded in this period' : 'no clicks recorded yet',
       info: {
         what: 'Clicks on tracked page elements - links, buttons, web parts.',
         how:
@@ -152,9 +154,10 @@ export default function JourneysPanel({
           title="Landing pages people leave from"
           description={`Entry pages with at least ${data.window.minimumViews} entries, ranked by how often the visit ended there.`}
           note={
-            'These are the pages costing you the most traffic. Each one is either a page that '
-            + 'answered the question completely - which is fine - or a dead end that should be '
-            + 'offering a next step.'
+            'These are the landing pages with the highest bounce RATES, not the largest number of '
+            + 'bounces - a page losing 5 of 5 visits ranks above one losing 500 of 1,000. Each one is '
+            + 'either a page that answered the question completely - which is fine - or a dead end '
+            + 'that should be offering a next step.'
           }
           query={queryFor(data.queries, 'journeys-bounce')}
           isEmpty={data.bouncePages.length === 0}
@@ -278,7 +281,7 @@ export default function JourneysPanel({
           emptyMessage={
             clickTrackingAvailable
               ? 'No element clicks were recorded in this period.'
-              : 'Element-click capture is not switched on in the SharePoint tracker, so there is nothing to show here. Only this panel depends on it.'
+              : 'No element click has ever been recorded. That usually means element-click capture is not switched on in the SharePoint tracker, but it can also mean it is on and nothing tracked has been clicked yet - this is inferred from the data, not read from the tracker\u2019s configuration. Only this panel depends on it.'
           }
         >
           <CategoryBarChart categories={toCategories(data.clickedElements)} valueLabel="Clicks" />
@@ -287,8 +290,8 @@ export default function JourneysPanel({
 
       <Text size={200} className={styles.muted} style={{ marginTop: '16px', display: 'block' }}>
         Journeys are reconstructed from the order of page views inside a visit. A visit that started
-        before this period began is measured from its first page view inside it, so two adjacent
-        periods never double-count the same visit.
+        before this period began is measured from its first page view inside it, so a visit
+        straddling the boundary appears in both adjacent periods.
       </Text>
     </div>
   );

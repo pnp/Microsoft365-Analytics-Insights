@@ -23,6 +23,13 @@ namespace Common.Entities.SpoWebActivity
         public class OverviewKpiRow
         {
             public long PageViews { get; set; }
+
+            /// <summary>
+            /// Page views belonging to a visit. Smaller than <see cref="PageViews"/> wherever hits
+            /// arrived without a session id, and the only correct numerator for a per-visit ratio.
+            /// </summary>
+            public long VisitPageViews { get; set; }
+
             public long UniquePageViews { get; set; }
             public long Visits { get; set; }
             public int Visitors { get; set; }

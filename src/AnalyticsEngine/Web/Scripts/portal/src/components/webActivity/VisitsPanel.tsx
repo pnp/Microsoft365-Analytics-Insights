@@ -144,7 +144,7 @@ export default function VisitsPanel({ data }: { data: WebActivityVisits }) {
 
         <SectionCard
           title="Visits by page"
-          description="The pages that pulled visits in, rather than the pages with the most views."
+          description="The pages seen in the most visits, rather than the pages with the most views."
           query={queryFor(data.queries, 'visits-pages')}
           isEmpty={data.byPage.length === 0}
         >

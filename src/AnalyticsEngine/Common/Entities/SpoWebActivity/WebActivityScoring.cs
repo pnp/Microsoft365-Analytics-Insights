@@ -464,6 +464,24 @@ namespace Common.Entities.SpoWebActivity
                 if (!hasData) return judgements;
             }
 
+            if (inputs.KpisUnavailable)
+            {
+                // A failed KPI query leaves every figure at its zero default, which is
+                // indistinguishable from a genuinely empty window. Diagnosing a tracker from it
+                // sends an admin to redeploy working software because an aggregate timed out.
+                judgements.Add(new WebActivityJudgement
+                {
+                    Key = "kpis-unavailable",
+                    Tone = "warning",
+                    Headline = "The headline figures could not be calculated",
+                    Detail = "The query behind them did not complete, so nothing on this tab can be judged. "
+                        + "This is usually a timeout on a large window - try a shorter reporting period. The "
+                        + "failing query and its error are on the section below.",
+                });
+
+                return judgements;
+            }
+
             if (inputs.PageViews == 0)
             {
                 judgements.Add(new WebActivityJudgement
@@ -471,9 +489,17 @@ namespace Common.Entities.SpoWebActivity
                     Key = "no-traffic",
                     Tone = "warning",
                     Headline = "No page views were recorded in this window",
-                    Detail = "The import is switched on but no hits arrived. Either the tracker is not deployed "
-                        + "to any site, or the Application Insights resource it writes to is not the one this "
-                        + "deployment reads. Check the Service health page.",
+
+                    // Deliberately does NOT diagnose the tracker. Page views exist outside this
+                    // window often enough that "nothing in the last 28 days" usually means a quiet
+                    // period, not a broken deployment, and telling an admin to redeploy on that
+                    // evidence is how a working tracker gets pulled apart.
+                    Detail = inputs.HasEverCollected
+                        ? "Page views have been collected before, so this is a quiet period rather than a "
+                            + "broken tracker. Widen the reporting period to see the traffic that does exist."
+                        : "No page view has ever been recorded, so the tracker is probably not deployed to any "
+                            + "site, or the Application Insights resource it writes to is not the one this "
+                            + "deployment reads. Check the Service health page.",
                 });
 
                 return judgements;
@@ -507,9 +533,18 @@ namespace Common.Entities.SpoWebActivity
                     Key = "reach",
                     Tone = "neutral",
                     Headline = string.Format("{0:N0} people visited the intranet", inputs.Visitors),
-                    Detail = "There is no population to express that as a share of: the Graph user metadata "
-                        + "import is off, so the only users on record are the ones an importer has already "
-                        + "seen. Enable it to get a denominator.",
+
+                    // The two causes need different advice. Telling an admin whose import is ON to
+                    // switch it on sends them to a toggle that is already correct and hides the real
+                    // problem, which is that the import ran and produced nothing.
+                    Detail = inputs.DirectoryImported
+                        ? "There is no population to express that as a share of: the Graph user metadata "
+                            + "import is switched on but no users are on record, so it has not completed "
+                            + "successfully yet. Check the user metadata import on the Service health page "
+                            + "rather than the installer."
+                        : "There is no population to express that as a share of: the Graph user metadata "
+                            + "import is off, so the only users on record are the ones an importer has already "
+                            + "seen. Enable it to get a denominator.",
                 };
             }
 
@@ -559,7 +594,10 @@ namespace Common.Entities.SpoWebActivity
                     : inputs.BouncePct > HealthyBouncePct
                         ? "A meaningful share of visits stop at the first page. Look at which pages on the "
                             + "Journeys tab before drawing a conclusion - the answer differs by page."
-                        : "Most visits go beyond the first page.",
+                        : "Most visits record more than one page view. That is not quite the same as "
+                            + "navigating: a refresh or a tracker firing twice counts as a second view, so "
+                            + "check the Journeys tab for real page-to-page steps, which exclude "
+                            + "same-page moves.",
             };
         }
 
@@ -697,6 +735,18 @@ namespace Common.Entities.SpoWebActivity
     {
         public bool WebTrafficAvailable { get; set; }
         public bool SearchAvailable { get; set; }
+
+        /// <summary>
+        /// True when the headline figures could not be calculated, so every number below is a zero
+        /// default rather than a measurement.
+        /// </summary>
+        public bool KpisUnavailable { get; set; }
+
+        /// <summary>
+        /// True when page views exist somewhere in the database, whatever this window holds. Tells an
+        /// empty window apart from a tracker that has never collected anything.
+        /// </summary>
+        public bool HasEverCollected { get; set; }
 
         /// <summary>
         /// False when configuration could not be read, so every toggle reads as off by default.

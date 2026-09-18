@@ -822,6 +822,53 @@ INSERT INTO @t VALUES
                 "A tie against an untitled hit must not erase the title.");
         }
 
+        [TestMethod]
+        public async Task WeeklySeries_CoverEveryWeekIncludingOnesWithNoTraffic()
+        {
+            // The charts space points evenly and join neighbours with a line, so a week the query
+            // returned no rows for is not drawn as a gap - it is drawn as if it never existed,
+            // putting the weeks either side of a collection outage next to each other. The fixture's
+            // traffic sits in a few days, so most weeks of a 28-day window are empty.
+            var query = WebActivityQuery.Create(28, DateTime.UtcNow);
+            var store = NewStore();
+
+            var overview = await store.GetOverviewAsync(
+                query,
+                new WebActivitySources { Readable = true, WebTraffic = true, AppInsightsConfigured = true });
+
+            var weeks = overview.Trend.Select(p => p.WeekStart).ToList();
+            Assert.IsTrue(weeks.Count >= 4, "A 28-day window spans at least four Monday-aligned weeks.");
+            CollectionAssert.AllItemsAreUnique(weeks);
+
+            for (var i = 1; i < weeks.Count; i++)
+            {
+                Assert.AreEqual(
+                    7,
+                    (weeks[i] - weeks[i - 1]).TotalDays,
+                    "Consecutive points must be exactly one week apart, or a gap has been dropped.");
+            }
+
+            Assert.IsTrue(weeks.All(w => w.Kind == DateTimeKind.Utc));
+            Assert.IsTrue(
+                overview.Trend.Any(p => p.PageViews == 0),
+                "The fixture's traffic does not fill the window, so at least one week must be a zero.");
+
+            // Stacked series share the spine, and every series must cover every week or the bands
+            // slide against each other.
+            var technology = await store.GetTechnologyAsync(query);
+            if (technology.DeviceOverTime.Count > 0)
+            {
+                var perName = technology.DeviceOverTime
+                    .GroupBy(p => p.Name, StringComparer.Ordinal)
+                    .Select(g => g.Count())
+                    .Distinct()
+                    .ToList();
+
+                Assert.AreEqual(1, perName.Count, "Every stacked series must have the same number of weeks.");
+                Assert.AreEqual(weeks.Count, perName[0], "Stacked series must use the same spine as the trend.");
+            }
+        }
+
         #endregion
     }
 }
