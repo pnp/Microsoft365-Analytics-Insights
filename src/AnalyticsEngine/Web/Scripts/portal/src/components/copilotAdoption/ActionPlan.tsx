@@ -56,11 +56,16 @@ const useStyles = makeStyles({
     marginTop: '4px',
     display: 'flex',
     flexWrap: 'wrap',
+    alignItems: 'baseline',
     gap: '6px',
     color: tokens.colorNeutralForeground3,
   },
+  // A bare <a> does not inherit Fluent's Text sizing, so without an explicit size it rendered at the
+  // browser default and towered over the label next to it.
   guidanceLink: {
     color: tokens.colorBrandForegroundLink,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
   },
   empty: {
     color: tokens.colorNeutralForeground3,
@@ -174,7 +179,7 @@ export default function ActionPlan({
               {a.description}
               {(a.guidanceLinks?.length ?? 0) > 0 && (
                 <span className={styles.guidance}>
-                  <Text size={100}>Microsoft&apos;s guidance for this kind of user:</Text>
+                  <Text size={200}>Microsoft&apos;s guidance for this kind of user:</Text>
                   {a.guidanceLinks?.map((link) => (
                     <a
                       key={`${a.code}-${link.url}`}

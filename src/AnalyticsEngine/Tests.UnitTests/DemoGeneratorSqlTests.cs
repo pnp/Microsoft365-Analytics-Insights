@@ -65,7 +65,7 @@ JOIN dbo.users u ON u.id = c.user_id WHERE u.azure_ad_id <> c.entra_object_id;")
 FROM dbo.copilot_studio_credit_user_daily WHERE user_id IS NULL;"),
                         "Exactly one synthetic person has left the directory and must still report their spend.");
                     Assert.IsTrue(Scalar(connection, @"SELECT COUNT_BIG(*) FROM dbo.copilot_studio_credit_daily
-WHERE knowledge_sources LIKE N'%Καλημέρα%';") > 0, "nvarchar knowledge sources must survive the round trip.");
+WHERE agent_name LIKE N'%Καλημέρα%';") > 0, "nvarchar agent names must survive the round trip.");
                 }
                 using (var raw = new RawContext(SqlDemoDatabase.LocalConnection(name)))
                 {

@@ -119,6 +119,10 @@ namespace Tests.UnitTests
         public void CreditParser_FlatEnvelope_IsParsed()
         {
             // The shape Microsoft's REST reference documents.
+            //
+            // LLMModel is left in the fixture deliberately even though the parser no longer reads it: it is
+            // a metadata key Microsoft has never actually been observed sending, and keeping it here proves
+            // an unrecognised key is ignored rather than breaking the parse.
             var json = JObject.Parse(@"{
                 ""value"": [
                     {
@@ -150,7 +154,6 @@ namespace Tests.UnitTests
             Assert.AreEqual(1.25m, row.NonBillableQuantity);
             Assert.AreEqual(7, row.Users);
             Assert.AreEqual("Generative answer", row.FeatureName);
-            Assert.AreEqual("gpt-4o", row.LlmModel);
         }
 
         [TestMethod]
@@ -384,12 +387,13 @@ namespace Tests.UnitTests
             var mapped = CopilotStudioCreditImporter.MapAndAggregate(
                 new[]
                 {
-                    new CopilotStudioCreditRow { ResourceId = "a", FeatureName = "Generative answer", LlmModel = "gpt-4o", Consumed = 1m },
-                    new CopilotStudioCreditRow { ResourceId = "a", FeatureName = "Generative answer", LlmModel = "gpt-4o-mini", Consumed = 1m },
+                    new CopilotStudioCreditRow { ResourceId = "a", FeatureName = "Generative answer", Consumed = 1m },
+                    new CopilotStudioCreditRow { ResourceId = "a", FeatureName = "Tenant graph grounding", Consumed = 1m },
                 },
                 new DateTime(2026, 9, 1), new DateTime(2026, 9, 7), null, DateTime.UtcNow);
 
-            Assert.AreEqual(2, mapped.Count, "The model is part of the billing tuple, so these are different slices.");
+            Assert.AreEqual(2, mapped.Count,
+                "The billing feature is part of the upsert key, so these are different slices.");
         }
 
         #endregion
@@ -630,6 +634,175 @@ namespace Tests.UnitTests
 
             Assert.IsNull(AzureCostImporter.SubscriptionIdFromResourceId(null));
             Assert.IsNull(AzureCostImporter.ResourceGroupFromResourceId("not-a-resource-id"));
+        }
+
+        [TestMethod]
+        public void AzureQuery_TagGrouping_IsSentAsATagKeyClauseNotADimension()
+        {
+            // "TagKey:<name>" is the only way the query API returns tags at all. Sent as a Dimension it would
+            // be rejected as an unknown dimension, and the tag columns would never come back.
+            var settings = new AzureCostImportSettings
+            {
+                Scopes = new[] { "/subscriptions/00000000-0000-0000-0000-000000000000" },
+                GroupBy = new[] { "ResourceId", "TagKey:serviceName" },
+            };
+
+            var source = new AzureCostManagementSource(
+                new DataUtils.Http.AutoThrottleHttpClient(false, Logger), settings, Logger);
+
+            var body = JObject.Parse(source.BuildRequestBody(new DateTime(2026, 9, 1), new DateTime(2026, 9, 7)));
+            var grouping = (JArray)body["dataset"]["grouping"];
+
+            Assert.AreEqual(2, grouping.Count, "A tag grouping is one clause, not two - it returns two COLUMNS.");
+            Assert.AreEqual("Dimension", (string)grouping[0]["type"]);
+            Assert.AreEqual("ResourceId", (string)grouping[0]["name"]);
+            Assert.AreEqual("TagKey", (string)grouping[1]["type"],
+                "A TagKey: entry must become a TagKey clause; as a Dimension the API rejects it.");
+            Assert.AreEqual("serviceName", (string)grouping[1]["name"],
+                "The prefix must be stripped, leaving the bare tag name.");
+
+            // A plain dimension must be untouched by the prefix handling.
+            Assert.AreEqual("Dimension", (string)AzureCostManagementSource.GroupByClause("Meter")["type"]);
+
+            // "TagKey:" with nothing after it is a misconfiguration; treating it as a tag would ask Azure to
+            // group by a nameless tag. Falling back to a dimension surfaces it as a clear API error instead.
+            Assert.AreEqual("Dimension", (string)AzureCostManagementSource.GroupByClause("TagKey:")["type"]);
+        }
+
+        [TestMethod]
+        public void AzureParser_TagColumns_AreReadFromTagKeyAndTagValue()
+        {
+            // Grouping by a tag returns the fixed columns TagKey and TagValue - NOT a column named after the
+            // tag. Reading a column named after the tag instead would collide with the identically-named
+            // dimension (the column index is case-insensitive, so "serviceName" and "ServiceName" are one key).
+            var json = JObject.Parse(@"{ ""properties"": {
+                ""columns"": [ { ""name"": ""UsageDate"" }, { ""name"": ""TagKey"" }, { ""name"": ""TagValue"" },
+                               { ""name"": ""ServiceName"" }, { ""name"": ""PreTaxCost"" } ],
+                ""rows"": [ [ 20260916, ""serviceName"", ""Cowork"", ""Microsoft Copilot Studio"", 100 ] ] } }");
+
+            var row = AzureCostQueryParser.ParsePage(json).Single();
+
+            Assert.AreEqual("serviceName", row.TagKey);
+            Assert.AreEqual("Cowork", row.TagValue);
+            Assert.AreEqual("Microsoft Copilot Studio", row.ServiceName,
+                "The tag must not be read into the service name, nor the service name into the tag.");
+        }
+
+        [TestMethod]
+        public void AzureParser_UntaggedRowInATagGroupedQuery_LeavesTheTagValueNull()
+        {
+            // Cost Management returns everything untagged as a row with an empty tag value. That is a real
+            // answer ("this spend is not Cowork"), so the row must survive rather than be dropped.
+            var json = JObject.Parse(@"{ ""properties"": {
+                ""columns"": [ { ""name"": ""UsageDate"" }, { ""name"": ""TagKey"" }, { ""name"": ""TagValue"" },
+                               { ""name"": ""PreTaxCost"" } ],
+                ""rows"": [ [ 20260916, """", """", 7 ] ] } }");
+
+            var row = AzureCostQueryParser.ParsePage(json).Single();
+
+            Assert.IsNull(row.TagValue);
+            Assert.AreEqual(7m, row.Cost, "An untagged row still carries real spend and must not be discarded.");
+        }
+
+        [TestMethod]
+        public void AzureImporter_RowsDifferingOnlyByTag_AreKeptApartNotSummed()
+        {
+            // This is the whole point of the feature. Microsoft bills Cowork, Work IQ API and Copilot Studio
+            // through ONE meter on ONE resource, so with a tag grouping the ONLY difference between these two
+            // rows is the tag. If the upsert key ignored it they would collapse into a single 30-credit row
+            // and the split the tag grouping was configured to get would be destroyed.
+            var rows = new[]
+            {
+                NewTaggedRow("Cowork", 10m),
+                NewTaggedRow("WorkIQAPI", 20m),
+            };
+
+            var importer = NewAzureImporter(new AzureCostImportSettings { Scopes = new[] { "/subscriptions/x" } });
+
+            var mapped = importer.MapAndAggregate(
+                rows, "/subscriptions/00000000-0000-0000-0000-000000000000",
+                new DateTime(2026, 9, 16), DateTime.UtcNow);
+
+            Assert.AreEqual(2, mapped.Count, "Two tag values must produce two rows, not one summed row.");
+            Assert.AreEqual(2, mapped.Select(r => r.RowHash).Distinct().Count(),
+                "The upsert key must include the tag, or the second row silently replaces the first.");
+
+            var cowork = mapped.Single(r => r.TagValue == "Cowork");
+            Assert.AreEqual(10m, cowork.Cost);
+            Assert.AreEqual("serviceName", cowork.TagKey);
+            Assert.AreEqual(20m, mapped.Single(r => r.TagValue == "WorkIQAPI").Cost);
+        }
+
+        private static AzureCostRow NewTaggedRow(string tagValue, decimal cost)
+        {
+            return new AzureCostRow
+            {
+                UsageDate = new DateTime(2026, 9, 16),
+                ResourceId = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg"
+                    + "/providers/Microsoft.PowerPlatform/accounts/Contoso All Users Policy",
+                ServiceName = "Microsoft Copilot Studio",
+                MeterName = "Pay As You Go Copilot Credit",
+                Currency = "USD",
+                Cost = cost,
+                TagKey = "serviceName",
+                TagValue = tagValue,
+            };
+        }
+
+        [TestMethod]
+        public void CreditParser_DocumentedMetadataNames_AreAcceptedAsWellAsObservedOnes()
+        {
+            // The REST reference documents metadata as "Feature, ProductName and nonBillableConsumed"; the
+            // names this parser was originally written against are FeatureName, ResourceName and
+            // NonBillableQuantity. Those are DIFFERENT names, not different casings, so a parser that reads
+            // only one set returns null for ever against the other - taking the agent name, the billing
+            // feature and (because the harness is classified FROM the feature name) the harness with it.
+            //
+            // Neither source can be treated as authoritative: the same reference also documents a flat
+            // envelope that live tenants do not return. So both spellings must work.
+            var documented = JObject.Parse(@"{
+                ""value"": [
+                    {
+                        ""resourceId"": ""00000000-0000-0000-0000-000000000001"",
+                        ""environmentId"": ""00000000-0000-0000-0000-0000000000e1"",
+                        ""consumed"": 10,
+                        ""metadata"": {
+                            ""ProductName"": ""Contoso Helpdesk"",
+                            ""Feature"": ""Generative answer"",
+                            ""nonBillableConsumed"": 2.5
+                        }
+                    }
+                ]
+            }");
+
+            var row = CopilotStudioCreditParser.ParseConsumptionPage(documented).Rows.Single();
+
+            Assert.AreEqual("Contoso Helpdesk", row.ResourceName,
+                "The documented ProductName must populate the agent name, or the agent pivot is empty.");
+            Assert.AreEqual("Generative answer", row.FeatureName,
+                "The documented Feature must populate the billing feature - the harness is classified from it.");
+            Assert.AreEqual(2.5m, row.NonBillableQuantity,
+                "The documented nonBillableConsumed must populate the 'credits not charged' figure.");
+
+            // And the originally-observed spellings must still work.
+            var observed = JObject.Parse(@"{
+                ""value"": [
+                    {
+                        ""resourceId"": ""00000000-0000-0000-0000-000000000001"",
+                        ""consumed"": 10,
+                        ""metadata"": {
+                            ""ResourceName"": ""Contoso Helpdesk"",
+                            ""FeatureName"": ""Generative answer"",
+                            ""NonBillableQuantity"": 2.5
+                        }
+                    }
+                ]
+            }");
+
+            var observedRow = CopilotStudioCreditParser.ParseConsumptionPage(observed).Rows.Single();
+            Assert.AreEqual("Contoso Helpdesk", observedRow.ResourceName);
+            Assert.AreEqual("Generative answer", observedRow.FeatureName);
+            Assert.AreEqual(2.5m, observedRow.NonBillableQuantity);
         }
 
         [TestMethod]

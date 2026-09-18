@@ -535,7 +535,7 @@ namespace Tests.UnitTests
             Assert.IsTrue(harnesses.Contains(CopilotStudioHarness.StandardOrCopilotChat));
 
             // Every filter the page offers must have something behind it somewhere in the window.
-            foreach (var column in new[] { "environment_id", "channel_id", "llm_model", "tool_invoked", "knowledge_sources" })
+            foreach (var column in new[] { "environment_id", "feature_name" })
             {
                 Assert.IsTrue(credits.Any(r => r[Col(DemoTables.StudioCredits, column)] != null),
                     "No value was generated for the filter dimension " + column);
@@ -735,8 +735,8 @@ namespace Tests.UnitTests
             Assert.IsTrue(sink.For(DemoTables.Urls).Any(r => ((string)r[1]).Contains("Καλημέρα")));
             Assert.IsTrue(sink.For(DemoTables.States).Any(r => (string)r[1] == "Αττική"));
             Assert.IsTrue(sink.For(DemoTables.StudioCredits)
-                .Any(r => ((string)r[Col(DemoTables.StudioCredits, "knowledge_sources")] ?? string.Empty).Contains("Καλημέρα")),
-                "A knowledge source is customer-named text, so the demo must prove that column carries Unicode.");
+                .Any(r => ((string)r[Col(DemoTables.StudioCredits, "agent_name")] ?? string.Empty).Contains("Καλημέρα")),
+                "An agent name is customer-named text, so the demo must prove that column carries Unicode.");
             Assert.ThrowsException<InvalidOperationException>(() => DemoTables.WebCities.ValidateValues(new object[] { 1, "Αθήνα" }));
             DemoTables.States.ValidateValues(new object[] { 1, "Αττική" });
         }

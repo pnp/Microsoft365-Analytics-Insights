@@ -1,4 +1,6 @@
-import { makeStyles, tokens, Text, Badge } from '@fluentui/react-components';
+import { makeStyles, tokens, Text, Badge, Button } from '@fluentui/react-components';
+import { ChevronDown16Regular, ChevronRight16Regular } from '@fluentui/react-icons';
+import { useCallback, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AdoptionBand } from '../../types/copilotAdoption';
 import type { AdoptionSegmentRow } from '../../types/copilotAdoption';
@@ -62,25 +64,6 @@ const useStyles = makeStyles({
   table: {
     width: '100%',
     borderCollapse: 'collapse',
-  },
-  /**
-   * A cell holding a full sentence rather than a value.
-   *
-   * Clamped to two lines, with the whole text on hover. Unclamped, these columns decided the height
-   * of every row in the table: squeezed into whatever width the numeric columns left over, a
-   * three-line justification became a fifteen-line column and three users filled the screen. The
-   * text is not dropped - it is on the cell's title, and in full in the CSV export, which is where a
-   * sentence that long actually gets read.
-   */
-  rationale: {
-    display: '-webkit-box',
-    WebkitBoxOrient: 'vertical',
-    WebkitLineClamp: 2,
-    overflow: 'hidden',
-    color: tokens.colorNeutralForeground2,
-    minWidth: '200px',
-    maxWidth: '320px',
-    cursor: 'help',
   },
   th: {
     textAlign: 'left',
@@ -244,6 +227,98 @@ const useStyles = makeStyles({
     padding: '20px 0',
     textAlign: 'center',
   },
+  /** The identity cell, with its expand chevron sitting to the left of the name stack. */
+  expandableUser: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: '2px',
+  },
+  /** Name over job title, so the identity cell stays one column wide however long the UPN is. */
+  upnStack: {
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: '0',
+  },
+  userSecondary: {
+    color: tokens.colorNeutralForeground3,
+  },
+  expandToggle: {
+    minWidth: '20px',
+    width: '20px',
+    height: '20px',
+    padding: 0,
+    marginTop: '1px',
+    color: tokens.colorNeutralForeground3,
+  },
+  detailRow: {
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  detailCell: {
+    padding: '0',
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: tokens.colorNeutralStroke2,
+  },
+  /**
+   * Pins the detail panel to the left edge of the scroll container.
+   *
+   * The cell it sits in spans every column, so it is as wide as the whole table - which on these
+   * tables is wider than the screen. Left as a normal block it would scroll away with the columns,
+   * which is the exact problem the expander exists to solve, so it is given a bounded width and made
+   * sticky: wherever the table is scrolled to, the detail is on screen.
+   *
+   * The width is measured against the table's own scrollport (`tableWrap` declares
+   * `container-type: inline-size`), NOT the viewport. A viewport-based bound over-measures by the
+   * width of the left navigation and the page padding, which left part of the panel clipped on a
+   * normal laptop - sticky pins the left edge, it does not shrink an over-wide element.
+   */
+  detailInner: {
+    position: 'sticky',
+    left: '0',
+    width: 'min(1040px, 100cqw)',
+    boxSizing: 'border-box',
+    padding: '12px 14px 14px 34px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+  },
+  detailSections: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+    gap: '12px 20px',
+  },
+  detailSectionTitle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '2px',
+    color: tokens.colorNeutralForeground3,
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+    marginBottom: '4px',
+  },
+  detailStats: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(104px, 1fr))',
+    gap: '8px 12px',
+  },
+  detailStat: {
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  detailStatLabel: {
+    color: tokens.colorNeutralForeground3,
+  },
+  detailStatValue: {
+    fontVariantNumeric: 'tabular-nums',
+  },
+  detailStatSub: {
+    color: tokens.colorNeutralForeground3,
+  },
+  /** The justification, in full. Nothing is clamped here - that is the point of the expander. */
+  detailProse: {
+    color: tokens.colorNeutralForeground2,
+    maxWidth: '900px',
+  },
 });
 
 /** The engagement band as a coloured pill. */
@@ -398,23 +473,172 @@ export function useAdoptionTableStyles() {
 }
 
 /**
- * A per-row explanation, shown compactly.
+ * Per-row expansion state for the seat-holder tables.
  *
- * These columns carry a full sentence written for one specific user, so they cannot be replaced by a
- * legend the way the recommended-action column was. Rendered whole they decide the height of every
- * row - a justification wrapping to fifteen lines in a squeezed column put three users on a screen -
- * so it is clamped to two lines, with the full text on hover and in full in the CSV export.
+ * Keyed by user id rather than by row index, so a re-sort does not leave a different person's
+ * detail open. `collapseAll` exists because paging or re-filtering replaces the rows underneath an
+ * open detail, and an expander left open over an unrelated person is worse than one that closed.
  */
-export function RationaleCell({ text }: { text: string }) {
+export function useRowExpansion() {
+  const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set<number>());
+
+  const toggle = useCallback((id: number) => {
+    setExpanded((previous) => {
+      const next = new Set(previous);
+      if (!next.delete(id)) {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const collapseAll = useCallback(() => setExpanded(new Set<number>()), []);
+
+  return { isExpanded: (id: number) => expanded.has(id), toggle, collapseAll };
+}
+
+/**
+ * The identity cell, carrying the row's expand control.
+ *
+ * The chevron lives in this cell rather than in a column of its own because this is the column that
+ * is pinned to the left edge. A separate leading column would either have to be pinned too - which
+ * means hard-coding its width into the pinned offset of this one - or would scroll out of reach on
+ * exactly the wide tables the expander is there to rescue.
+ */
+export function ExpandableUserCell({
+  open,
+  onToggle,
+  userPrincipalName,
+  secondary,
+  className,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  userPrincipalName: string;
+  secondary?: string | null;
+  className?: string;
+}) {
   const styles = useStyles();
-
-  if (!text) {
-    return <span>{'\u2014'}</span>;
-  }
-
   return (
-    <Text size={200} className={styles.rationale} title={text}>
-      {text}
+    <td className={`${styles.td} ${className ?? ''}`}>
+      <div className={styles.expandableUser}>
+        <Button
+          appearance="subtle"
+          size="small"
+          className={styles.expandToggle}
+          icon={open ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
+          aria-expanded={open}
+          aria-label={`${open ? 'Hide' : 'Show'} the full assessment for ${userPrincipalName}`}
+          onClick={onToggle}
+        />
+        <span className={styles.upnStack}>
+          <Text size={200} weight="semibold">
+            {userPrincipalName}
+          </Text>
+          <Text size={100} className={styles.userSecondary}>
+            {secondary || ''}
+          </Text>
+        </span>
+      </div>
+    </td>
+  );
+}
+
+/**
+ * The expanded detail, as a full-width row beneath its summary row.
+ *
+ * A second `tr` rather than an overlay or a dialog: the detail stays attached to the row it explains
+ * and to the table's own scrolling, and several can be open at once for comparison - which is what
+ * this list is for.
+ */
+export function DetailRow({ colSpan, children }: { colSpan: number; children: ReactNode }) {
+  const styles = useStyles();
+  return (
+    <tr className={styles.detailRow}>
+      <td className={styles.detailCell} colSpan={colSpan}>
+        <div className={styles.detailInner}>{children}</div>
+      </td>
+    </tr>
+  );
+}
+
+/** The grid an expanded row's sections sit in. */
+export function DetailSections({ children }: { children: ReactNode }) {
+  const styles = useStyles();
+  return <div className={styles.detailSections}>{children}</div>;
+}
+
+/** A labelled group of figures inside an expanded row. */
+export function DetailSection({
+  title,
+  info,
+  infoTitle,
+  children,
+}: {
+  title: string;
+  info?: InfoTipContent;
+  infoTitle?: string;
+  children: ReactNode;
+}) {
+  const styles = useStyles();
+  return (
+    <div>
+      <div className={styles.detailSectionTitle}>
+        <Text size={100} weight="semibold">
+          {title}
+        </Text>
+        {info && <InfoTip title={infoTitle ?? title} content={info} />}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** The grid a `DetailSection`'s figures sit in. */
+export function DetailStats({ children }: { children: ReactNode }) {
+  const styles = useStyles();
+  return <div className={styles.detailStats}>{children}</div>;
+}
+
+/**
+ * One figure in an expanded row.
+ *
+ * `sub` carries the qualifier that makes the number honest - the component score behind a raw
+ * count, or the target it was measured against - because these numbers exist to show the working,
+ * and a bare "57" shows none of it.
+ */
+export function DetailStat({ label, value, sub }: { label: string; value: ReactNode; sub?: ReactNode }) {
+  const styles = useStyles();
+  return (
+    <div className={styles.detailStat}>
+      <Text size={100} className={styles.detailStatLabel}>
+        {label}
+      </Text>
+      <Text size={300} weight="semibold" className={styles.detailStatValue}>
+        {value}
+      </Text>
+      {sub && (
+        <Text size={100} className={styles.detailStatSub}>
+          {sub}
+        </Text>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The per-user justification, in full.
+ *
+ * This used to be a column, clamped to two lines with the rest on hover. In a table already wider
+ * than the screen it was both unreadable and, on the widest tables, scrolled off the right edge
+ * entirely - so the sentence written specifically to be read was the one thing you could not read.
+ * Here it has the width to be a sentence.
+ */
+export function DetailRationale({ text }: { text: string }) {
+  const styles = useStyles();
+  return (
+    <Text size={200} className={styles.detailProse}>
+      {text || '\u2014'}
     </Text>
   );
 }

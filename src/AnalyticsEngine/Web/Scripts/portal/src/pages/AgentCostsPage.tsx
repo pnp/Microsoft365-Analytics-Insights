@@ -167,10 +167,6 @@ export default function AgentCostsPage() {
   const [environmentId, setEnvironmentId] = useState('');
   const [harness, setHarness] = useState('');
   const [feature, setFeature] = useState('');
-  const [model, setModel] = useState('');
-  const [tool, setTool] = useState('');
-  const [knowledge, setKnowledge] = useState('');
-  const [channel, setChannel] = useState('');
   const [search, setSearch] = useState('');
 
   const [page, setPage] = useState(1);
@@ -200,13 +196,9 @@ export default function AgentCostsPage() {
       environmentId: orUndefined(environmentId),
       harness: orUndefined(harness),
       feature: orUndefined(feature),
-      model: orUndefined(model),
-      tool: orUndefined(tool),
-      knowledge: orUndefined(knowledge),
-      channel: orUndefined(channel),
       search: debouncedSearch.trim() || undefined,
     };
-  }, [days, agentId, environmentId, harness, feature, model, tool, knowledge, channel, debouncedSearch]);
+  }, [days, agentId, environmentId, harness, feature, debouncedSearch]);
 
   // The effects below key off this string rather than the `filters` object. A `useMemo` object is a new
   // reference whenever any input changes, and putting it in a dependency array alongside its own derived
@@ -381,6 +373,16 @@ export default function AgentCostsPage() {
     return AZURE_DIMENSIONS.filter((d) => withData.includes(d.key));
   }, [availability]);
 
+  /**
+   * The same guard for the credit pivots. Microsoft fills the per-agent metadata sparsely, so offering a
+   * pivot it never populates reads as "this tenant did none of that" rather than "this was never reported".
+   */
+  const availableCreditDimensions = useMemo(() => {
+    const withData = availability?.creditDimensionsWithData;
+    if (!withData || withData.length === 0) return CREDIT_DIMENSIONS;
+    return CREDIT_DIMENSIONS.filter((d) => withData.includes(d.key));
+  }, [availability]);
+
   // Keep the selection valid: if the chosen dimension is not one of the populated ones, move to the first
   // that is, rather than showing an empty table for a pivot the data cannot answer.
   useEffect(() => {
@@ -428,8 +430,8 @@ export default function AgentCostsPage() {
           <Title3 block>Agent costs</Title3>
           <Body1 block className={styles.intro}>
             What Microsoft charged for your Copilot Studio agents, broken down as far as the billing data allows -
-            by agent, environment, harness, billing feature, AI model, tool, knowledge source and, where Microsoft
-            reports it, by person.
+            by agent, environment, harness and billing feature, plus Azure spend for the subscriptions you import.
+            Breakdowns only appear once Microsoft actually reports the dimension behind them.
           </Body1>
         </div>
         <div className={styles.controls}>
@@ -572,6 +574,11 @@ export default function AgentCostsPage() {
                   <div className={styles.kpi} key={c.currency ?? 'unknown'}>
                     <span className={styles.kpiValue}>{formatMoney(c.cost, c.currency)}</span>
                     <span className={styles.kpiLabel}>Azure spend</span>
+                    {c.quantity !== null && c.quantity !== undefined && (
+                      <span className={styles.kpiHint}>
+                        {formatCredits(c.quantity)} metered units billed
+                      </span>
+                    )}
                     {c.includesEstimates && <span className={styles.kpiHint}>Includes estimates that can still change</span>}
                   </div>
                 ))}
@@ -654,50 +661,6 @@ export default function AgentCostsPage() {
                 </Select>
               </label>
               <label className={styles.filterField}>
-                <span className={styles.filterLabel}>AI model</span>
-                <Select value={model} onChange={(_: unknown, d: { value: string }) => setModel(d.value)} disabled={loading}>
-                  <option value="">All models</option>
-                  {options?.models.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-              <label className={styles.filterField}>
-                <span className={styles.filterLabel}>Tool invoked</span>
-                <Select value={tool} onChange={(_: unknown, d: { value: string }) => setTool(d.value)} disabled={loading}>
-                  <option value="">All tools</option>
-                  {options?.tools.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-              <label className={styles.filterField}>
-                <span className={styles.filterLabel}>Knowledge source</span>
-                <Select value={knowledge} onChange={(_: unknown, d: { value: string }) => setKnowledge(d.value)} disabled={loading}>
-                  <option value="">All knowledge sources</option>
-                  {options?.knowledgeSources.map((k) => (
-                    <option key={k} value={k}>
-                      {k}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-              <label className={styles.filterField}>
-                <span className={styles.filterLabel}>Channel</span>
-                <Select value={channel} onChange={(_: unknown, d: { value: string }) => setChannel(d.value)} disabled={loading}>
-                  <option value="">All channels</option>
-                  {options?.channels.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-              <label className={styles.filterField}>
                 <span className={styles.filterLabel}>Search agent name</span>
                 <Input value={search} onChange={(_: unknown, d: { value: string }) => setSearch(d.value)} placeholder="Agent name or ID" />
               </label>
@@ -722,7 +685,7 @@ export default function AgentCostsPage() {
               selectedValue={dimension}
               onTabSelect={((_: unknown, d: { value: unknown }) => setDimension(d.value as CreditDimension)) as SelectTabEventHandler}
             >
-              {CREDIT_DIMENSIONS.map((d) => (
+              {availableCreditDimensions.map((d) => (
                 <Tab key={d.key} value={d.key}>
                   {d.label}
                 </Tab>
@@ -822,10 +785,6 @@ export default function AgentCostsPage() {
                         <th className={`${styles.th} ${styles.thSortable}`} onClick={() => toggleSort('feature')}>
                           Billing feature{sort === 'feature' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
                         </th>
-                        <th className={styles.th}>AI model</th>
-                        <th className={styles.th}>Tool</th>
-                        <th className={styles.th}>Knowledge source</th>
-                        <th className={styles.th}>Channel</th>
                         <th
                           className={`${styles.th} ${styles.thNumeric} ${styles.thSortable}`}
                           onClick={() => toggleSort('credits')}
@@ -849,12 +808,6 @@ export default function AgentCostsPage() {
                           <td className={styles.td}>{r.environmentName || r.environmentId || DASH}</td>
                           <td className={styles.td}>{r.harness ? harnessLabel(r.harness) : DASH}</td>
                           <td className={styles.td}>{r.featureName || DASH}</td>
-                          <td className={`${styles.td} ${r.llmModel ? '' : styles.tdMuted}`}>{r.llmModel || DASH}</td>
-                          <td className={`${styles.td} ${r.toolInvoked ? '' : styles.tdMuted}`}>{r.toolInvoked || DASH}</td>
-                          <td className={`${styles.td} ${r.knowledgeSources ? '' : styles.tdMuted}`}>
-                            {r.knowledgeSources || DASH}
-                          </td>
-                          <td className={`${styles.td} ${r.channelId ? '' : styles.tdMuted}`}>{r.channelId || DASH}</td>
                           <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCredits(r.billedCredits)}</td>
                           <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCredits(r.nonBilledCredits)}</td>
                           <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCount(r.distinctUsers)}</td>

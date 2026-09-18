@@ -68,7 +68,7 @@ namespace Tests.UnitTests
                 "copilotStudioCreditsLastError", "azureCostsLastError",
                 "perUserCreditsLastImportUtc", "perUserCreditsLastError", "capacityLastError",
                 "earliestUsageDate", "latestUsageDate",
-                "azureDimensionsWithData", "messages");
+                "azureDimensionsWithData", "creditDimensionsWithData", "messages");
         }
 
         [TestMethod]
@@ -83,7 +83,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void AzureCostByCurrency_SerialisesTheFieldNamesThePortalReads()
         {
-            AssertKeys(new AzureCostByCurrency(), "currency", "cost", "includesEstimates");
+            AssertKeys(new AzureCostByCurrency(), "currency", "cost", "quantity", "includesEstimates");
         }
 
         [TestMethod]
@@ -110,10 +110,12 @@ namespace Tests.UnitTests
         [TestMethod]
         public void DetailRow_SerialisesTheFieldNamesThePortalReads()
         {
+            // No llmModel / toolInvoked / knowledgeSources / channelId: a live capture of Microsoft's
+            // per-agent credit response carried only ResourceName, NonBillableQuantity and Users in its
+            // metadata, so those four columns were removed rather than rendered as a dash on every row.
             AssertKeys(new AgentCostDetailRow(),
                 "usageDate", "environmentId", "environmentName", "agentId", "agentName", "harness",
-                "featureName", "channelId", "llmModel", "toolInvoked", "knowledgeSources",
-                "billedCredits", "nonBilledCredits", "distinctUsers");
+                "featureName", "billedCredits", "nonBilledCredits", "distinctUsers");
         }
 
         [TestMethod]
@@ -140,8 +142,7 @@ namespace Tests.UnitTests
         public void FilterOptions_SerialisesTheFieldNamesThePortalReads()
         {
             AssertKeys(new AgentCostFilterOptions(),
-                "agents", "environments", "harnesses", "features", "models", "tools",
-                "knowledgeSources", "channels");
+                "agents", "environments", "harnesses", "features");
         }
 
         [TestMethod]
