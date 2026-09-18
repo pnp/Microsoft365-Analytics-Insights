@@ -22,14 +22,15 @@ import { AdoptionBand } from '../../types/copilotAdoption';
 import type {
   AdoptionActionSummary,
   AdoptionFilterOptions,
+  AdoptionDataSources,
   CopilotAdoptionOptions,
+  LicensedUserAdoptionRow,
   LicensedUserFilters,
   LicensedUserPage,
 } from '../../types/copilotAdoption';
 import Spinner from '../Spinner';
 import { BandBadge, ScoreBar, scoreColour, SortableTh, useAdoptionTableStyles } from './adoptionShared';
-import { formatCount, formatDate, formatPct, weightSharePct } from './KpiGrid';
-import InfoTip from './InfoTip';
+import { formatCount, formatDate, formatPct, weightSharePct } from '../shared/KpiGrid';
 import ActionPlan, { ActionBadge } from './ActionPlan';
 
 const PAGE_SIZE = 50;
@@ -70,10 +71,17 @@ const useStyles = makeStyles({
     marginTop: '12px',
     flexWrap: 'wrap',
   },
-  thWithInfo: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: '2px',
+  /**
+   * The "both sources" marker under a signal-source label.
+   *
+   * A hover affordance rather than plain text: the reconciliation figures behind it are only wanted
+   * when a number is being challenged, and printed inline they were the single biggest contributor
+   * to this table's row height.
+   */
+  comparison: {
+    cursor: 'help',
+    textDecorationLine: 'underline',
+    textDecorationStyle: 'dotted',
   },
   legend: {
     marginBottom: '8px',
@@ -112,6 +120,7 @@ export default function LicensedUsersPanel({
   filterOptions,
   actionPlan,
   options,
+  dataSources,
   seatLicenceTypeIds,
   initialBands,
   initialAction,
@@ -122,6 +131,8 @@ export default function LicensedUsersPanel({
   actionPlan: AdoptionActionSummary[];
   /** The thresholds actually used, so the column explanations quote real numbers rather than prose. */
   options: CopilotAdoptionOptions;
+  /** Source dates and periods used to label dual-source comparisons. */
+  dataSources?: AdoptionDataSources;
   seatLicenceTypeIds?: number[];
   initialBands?: AdoptionBand[];
   /**
@@ -160,7 +171,7 @@ export default function LicensedUsersPanel({
       .then((result) => {
         if (!cancelled) setData(result);
       })
-      .catch((e) => {
+      .catch((e: any) => {
         if (cancelled || controller.signal.aborted) return;
         setError(e instanceof Error ? e.message : 'Failed to load licensed users.');
       })
@@ -214,8 +225,8 @@ export default function LicensedUsersPanel({
           value={searchDraft}
           placeholder="Search name, email, department, job title or manager"
           aria-label="Search licensed Copilot users"
-          onChange={(_e, d) => setSearchDraft(d.value)}
-          onKeyDown={(e) => {
+          onChange={(_e: any, d: any) => setSearchDraft(d.value)}
+          onKeyDown={(e: any) => {
             if (e.key === 'Enter') setFilters((f) => ({ ...f, search: searchDraft }));
           }}
         />
@@ -226,7 +237,7 @@ export default function LicensedUsersPanel({
         <Select
           value={filters.bands.length === 1 ? String(filters.bands[0]) : ''}
           aria-label="Filter by engagement band"
-          onChange={(_e, d) =>
+          onChange={(_e: any, d: any) =>
             setFilters((f) => ({ ...f, bands: d.value === '' ? [] : [Number(d.value) as AdoptionBand] }))
           }
         >
@@ -241,7 +252,7 @@ export default function LicensedUsersPanel({
         <Select
           value={filters.actions.length === 1 ? filters.actions[0] : ''}
           aria-label="Filter by recommended action"
-          onChange={(_e, d) => setFilters((f) => ({ ...f, actions: d.value === '' ? [] : [d.value] }))}
+          onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, actions: d.value === '' ? [] : [d.value] }))}
         >
           <option value="">All recommended actions</option>
           {actionPlan.map((a) => (
@@ -254,7 +265,7 @@ export default function LicensedUsersPanel({
         <Select
           value={filters.reclaimEligibility}
           aria-label="Filter by reclaim eligibility"
-          onChange={(_e, d) => setFilters((f) => ({ ...f, reclaimEligibility: d.value }))}
+          onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, reclaimEligibility: d.value }))}
         >
           <option value="">All reclaim tiers</option>
           <option value="certain">Certain reclaim</option>
@@ -266,7 +277,7 @@ export default function LicensedUsersPanel({
         <Select
           value={filters.department}
           aria-label="Filter by department"
-          onChange={(_e, d) => setFilters((f) => ({ ...f, department: d.value }))}
+          onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, department: d.value }))}
         >
           <option value="">All departments</option>
           {(filterOptions?.departments ?? []).map((dept) => (
@@ -279,7 +290,7 @@ export default function LicensedUsersPanel({
         <Checkbox
           label="Cowork users only"
           checked={filters.coworkOnly}
-          onChange={(_e, d) => setFilters((f) => ({ ...f, coworkOnly: !!d.checked }))}
+          onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, coworkOnly: !!d.checked }))}
         />
         <Tooltip
           content="Disabled accounts still holding a Copilot licence - the clearest licences to reclaim."
@@ -288,7 +299,7 @@ export default function LicensedUsersPanel({
           <Checkbox
             label="Disabled accounts only"
             checked={filters.disabledOnly}
-            onChange={(_e, d) => setFilters((f) => ({ ...f, disabledOnly: !!d.checked }))}
+            onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, disabledOnly: !!d.checked }))}
           />
         </Tooltip>
 
@@ -340,7 +351,7 @@ export default function LicensedUsersPanel({
           <table className={table.table}>
             <thead>
               <tr>
-                <SortableTh label="user" sortKey="upn" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
+                <SortableTh label="user" sortKey="upn" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} className={table.stickyLeft}>
                   User
                 </SortableTh>
                 <SortableTh label="department" sortKey="department" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
@@ -352,33 +363,68 @@ export default function LicensedUsersPanel({
                   activeKey={filters.sortBy}
                   descending={filters.sortDesc}
                   onSort={applySort}
+                  infoTitle="Engagement score"
+                  info={{
+                    what: 'How much a part of this person\u2019s working week Copilot has become, scored 0 to 100. Deliberately not "did they use it": two people who each tried it once look identical on that, and that never tells you what to do next.',
+                    how: (
+                      <>
+                        <p>
+                          Three things, each measured against a target and each capped there, so
+                          going past a target buys no extra credit:
+                        </p>
+                        <ul>
+                          <li>
+                            <strong>
+                              How often - frequency (
+                              {formatPct(weightSharePct(options.frequencyWeight, scoreWeights))})
+                            </strong>
+                            : days they used Copilot, against{' '}
+                            {formatPct(options.frequencyTargetRatio * 100)} of their available
+                            working days.
+                          </li>
+                          <li>
+                            <strong>
+                              How much - depth (
+                              {formatPct(weightSharePct(options.depthWeight, scoreWeights))})
+                            </strong>
+                            : interactions on each day they did use it, against a target of{' '}
+                            {options.depthTargetInteractionsPerActiveDay}.
+                          </li>
+                          <li>
+                            <strong>
+                              How widely - breadth (
+                              {formatPct(weightSharePct(options.breadthWeight, scoreWeights))})
+                            </strong>
+                            : how many different Copilot apps they use, against a target of{' '}
+                            {options.breadthTargetApps}.
+                          </li>
+                        </ul>
+                        <p>
+                          <strong>Confidence</strong> keeps depth honest. Depth is a per-day
+                          average, so somebody active on a single day can hit the target in one
+                          sitting and read as a power user. Depth therefore only counts in full once
+                          Copilot has been used on {options.depthMinActiveDays} separate days; below
+                          that it counts in proportion, so half as many days counts for half.
+                        </p>
+                        <p>
+                          Accounts newer than the reporting period get a smaller frequency target,
+                          so nobody is marked down for days before they joined.
+                        </p>
+                      </>
+                    ),
+                    formula:
+                      'frequency  = min(1, activeDays / expectedActiveDays)\n' +
+                      `confidence = min(1, activeDays / ${options.depthMinActiveDays})\n` +
+                      `depth      = min(1, interactions / activeDays / ${options.depthTargetInteractionsPerActiveDay}) x confidence\n` +
+                      `breadth    = min(1, appsUsed / ${options.breadthTargetApps})\n` +
+                      `score      = (frequency x ${options.frequencyWeight} + depth x ${options.depthWeight} + breadth x ${options.breadthWeight})` +
+                      (Math.abs(weightSum - 1) < 1e-9
+                        ? ' x 100'
+                        : `\n             / ${weightSum} x 100`),
+                    source: 'Hover the bar on any row for that user\u2019s three component scores.',
+                  }}
                 >
-                  <span className={styles.thWithInfo}>
-                    Engagement
-                    <InfoTip
-                      title="Engagement score"
-                      content={{
-                        what: 'How embedded Copilot is in this person\u2019s working week, from 0 to 100. Not "did they use it" - two people who each used it once score the same on that, and need the same response, which is rarely useful.',
-                        how: `Three components: frequency (${formatPct(
-                          weightSharePct(options.frequencyWeight, scoreWeights),
-                        )}) against a target of ${formatPct(
-                          options.frequencyTargetRatio * 100,
-                        )} of available working days, depth (${formatPct(
-                          weightSharePct(options.depthWeight, scoreWeights),
-                        )}) against ${options.depthTargetInteractionsPerActiveDay} interactions per active day, and breadth (${formatPct(
-                          weightSharePct(options.breadthWeight, scoreWeights),
-                        )}) against ${options.breadthTargetApps} Copilot surfaces. Each component is capped at 100% before weighting, so nothing above target buys extra credit. Depth is additionally scaled down below ${options.depthMinActiveDays} active days, because it divides by a number the user controls - a few prompts in one afternoon would otherwise score full marks. Expected active days is prorated for accounts younger than the reporting period.`,
-                        formula:
-                          'freq       = min(1, activeDays / expectedActiveDays)\n' +
-                          `confidence = min(1, activeDays / ${options.depthMinActiveDays})\n` +
-                          'depth      = min(1, interactions / activeDays / depthTarget) x confidence\n' +
-                          'breadth    = min(1, appsUsed / breadthTarget)\n' +
-                          `score = (freq*${options.frequencyWeight} + depth*${options.depthWeight} + breadth*${options.breadthWeight})\n` +
-                          `        / ${weightSum} x 100`,
-                        source: 'Hover the bar on any row for that user\u2019s three component scores.',
-                      }}
-                    />
-                  </span>
+                  Engagement
                 </SortableTh>
                 <SortableTh
                   label="band"
@@ -386,22 +432,30 @@ export default function LicensedUsersPanel({
                   activeKey={filters.sortBy}
                   descending={filters.sortDesc}
                   onSort={applySort}
+                  infoTitle="Engagement band"
+                  info={{
+                    what: 'The engagement score turned into a label, so a list of numbers becomes a list of decisions.',
+                    how: `Champion at ${options.championScore}+, Established at ${options.establishedScore}+, Developing at ${options.developingScore}+, Trialling below that. Users with no activity in this period are not scored at all: they are split into Dormant (used Copilot at some point in the last ${options.historyDays} days) and Never used. Sorting by this column follows the adoption ladder, not the alphabet.`,
+                    source:
+                      'Established and above is what the "habitual users" headline counts. Dormant plus Never used is the idle-seat population, which is NOT the same as "reclaimable licences" - that figure is the certain and probable reclaim tiers only, after review, exclusion and window-mismatch hold-backs.',
+                  }}
                 >
-                  <span className={styles.thWithInfo}>
-                    Band
-                    <InfoTip
-                      title="Engagement band"
-                      content={{
-                        what: 'The engagement score turned into a label, so a list of numbers becomes a list of decisions.',
-                        how: `Champion at ${options.championScore}+, Established at ${options.establishedScore}+, Developing at ${options.developingScore}+, Trialling below that. Users with no activity in this period are not scored at all: they are split into Dormant (used Copilot at some point in the last ${options.historyDays} days) and Never used. Sorting by this column follows the adoption ladder, not the alphabet.`,
-                        source:
-                          'Established and above is what the "habitual users" headline counts. Dormant plus Never used is the idle-seat population, which is NOT the same as "reclaimable licences" - that figure is the certain and probable reclaim tiers only, after review, exclusion and window-mismatch hold-backs.',
-                      }}
-                    />
-                  </span>
+                  Band
                 </SortableTh>
-                <SortableTh label="signal source" sortKey="signalSource" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
-                  Signal source
+                <SortableTh
+                  label="signal source"
+                  sortKey="signalSource"
+                  activeKey={filters.sortBy}
+                  descending={filters.sortDesc}
+                  onSort={applySort}
+                  infoTitle="Signal source and reconciliation"
+                  info={{
+                    what: "Which source produced this row's engagement score, and whether both source figures are available for comparison.",
+                    how: `Audit rows use this product's Copilot audit-log import over the selected D${windowDays} window. usageReport rows use Microsoft's per-user Copilot usage report when the audit import has no signal for that user. Where both sources have signal, the cell is marked "both sources" - hover it for the two figures side by side, rather than pretending one corrects the other.`,
+                    source: "Microsoft's report uses Microsoft's settled report period and covers licensed users only; the audit log covers the selected period and includes unlicensed Copilot Chat.",
+                  }}
+                >
+                  Signal
                 </SortableTh>
                 <SortableTh
                   label="interactions"
@@ -422,18 +476,14 @@ export default function LicensedUsersPanel({
                   onSort={applySort}
                   numeric
                   defaultDescending
+                  infoTitle="Active days"
+                  info={{
+                    what: 'Distinct days this person had at least one Copilot interaction, against the number needed to score full marks for frequency.',
+                    how: `The target is ${formatPct(options.frequencyTargetRatio * 100)} of the working days in the period, assuming ${options.workingDaysPerWeek} working days a week. Working days rather than calendar days - against calendar days even a genuinely daily user would cap out around 71% and look like a partial adopter.`,
+                    formula: `expectedActiveDays = ${options.windowDays} days x (${options.workingDaysPerWeek}/7) x ${options.frequencyTargetRatio}`,
+                  }}
                 >
-                  <span className={styles.thWithInfo}>
-                    Active days
-                    <InfoTip
-                      title="Active days"
-                      content={{
-                        what: 'Distinct days this person had at least one Copilot interaction, against the number needed to score full marks for frequency.',
-                        how: `The target is ${formatPct(options.frequencyTargetRatio * 100)} of the working days in the period, assuming ${options.workingDaysPerWeek} working days a week. Working days rather than calendar days - against calendar days even a genuinely daily user would cap out around 71% and look like a partial adopter.`,
-                        formula: `expectedActiveDays = ${options.windowDays} days x (${options.workingDaysPerWeek}/7) x ${options.frequencyTargetRatio}`,
-                      }}
-                    />
-                  </span>
+                  Active days
                 </SortableTh>
                 <SortableTh label="apps used" sortKey="apps" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} numeric defaultDescending>
                   Apps
@@ -450,18 +500,14 @@ export default function LicensedUsersPanel({
                   activeKey={filters.sortBy}
                   descending={filters.sortDesc}
                   onSort={applySort}
+                  infoTitle="Reclaim eligibility"
+                  info={{
+                    what: 'Whether this seat is safe to put in the reclaim total. Certain means a disabled account still holds a seat; probable means no observed use beyond the grace period; review means a human must check first; excluded means an admin already reviewed it.',
+                    how: `Uses the same row-level key as the headline reclaim counts. A new user inside the ${options.reclaimGraceDays}-day grace period is review-only, and active new users have their expected active days prorated. Sorting by this column runs most-actionable first, not alphabetically.`,
+                    source: 'Leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from Microsoft 365 usage data, so they must be handled through review or an exclusion.',
+                  }}
                 >
-                  <span className={styles.thWithInfo}>
-                    Reclaim tier
-                    <InfoTip
-                      title="Reclaim eligibility"
-                      content={{
-                        what: 'Whether this seat is safe to put in the reclaim total. Certain means a disabled account still holds a seat; probable means no observed use beyond the grace period; review means a human must check first; excluded means an admin already reviewed it.',
-                        how: `Uses the same row-level key as the headline reclaim counts. A new user inside the ${options.reclaimGraceDays}-day grace period is review-only, and active new users have their expected active days prorated. Sorting by this column runs most-actionable first, not alphabetically.`,
-                        source: 'Leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from Microsoft 365 usage data, so they must be handled through review or an exclusion.',
-                      }}
-                    />
-                  </span>
+                  Reclaim tier
                 </SortableTh>
                 <SortableTh
                   label="recommended action"
@@ -470,26 +516,22 @@ export default function LicensedUsersPanel({
                   descending={filters.sortDesc}
                   onSort={applySort}
                   className={table.stickyRight}
+                  infoTitle="Recommended action"
+                  info={{
+                    what: 'The single next step for this person, as a tag. What each tag means is stated once under "What these actions mean" above the table - it is the same sentence for everyone who carries the tag, so repeating it on every row would be noise.',
+                    how: 'Derived from the band, and for the middle bands from the breadth score as well: someone with a real habit confined to one Copilot surface needs broadening rather than more coaching.',
+                    source:
+                      'The CSV export carries both the tag and the full sentence on every row, because a spreadsheet gets sorted and filtered and cannot rely on a legend.',
+                  }}
                 >
-                  <span className={styles.thWithInfo}>
-                    Action
-                    <InfoTip
-                      title="Recommended action"
-                      content={{
-                        what: 'The single next step for this person, as a tag. What each tag means is stated once under "What these actions mean" above the table - it is the same sentence for everyone who carries the tag, so repeating it on every row would be noise.',
-                        how: 'Derived from the band, and for the middle bands from the breadth score as well: someone with a real habit confined to one Copilot surface needs broadening rather than more coaching.',
-                        source:
-                          'The CSV export carries both the tag and the full sentence on every row, because a spreadsheet gets sorted and filtered and cannot rely on a legend.',
-                      }}
-                    />
-                  </span>
+                  Action
                 </SortableTh>
               </tr>
             </thead>
             <tbody>
               {data.rows.map((row) => (
                 <tr key={row.userId}>
-                  <td className={table.td}>
+                  <td className={`${table.td} ${table.stickyLeft}`}>
                     <span className={styles.upn}>
                       <Text size={200} weight="semibold">
                         {row.userPrincipalName}
@@ -514,19 +556,33 @@ export default function LicensedUsersPanel({
                       </div>
                     </Tooltip>
                   </td>
-                  <td className={table.td}>
+                  <td className={`${table.td} ${table.tdNoWrap}`}>
                     <BandBadge band={row.band} name={row.bandName} />
                   </td>
-                  <td className={table.td}>{row.signalSource}</td>
+                  <td className={`${table.td} ${table.tdNoWrap}`}>
+                    <Text size={200}>{sourceLabel(row.signalSource)}</Text>
+                    {row.sourceComparisonAvailable && (
+                      // The two source figures used to be printed under the label. Squeezed into this
+                      // column they wrapped to five lines and set the height of every row in the
+                      // table, for a reconciliation detail that is only read when a figure is being
+                      // questioned. Same information, on hover - and still in the CSV export.
+                      <Text
+                        size={100}
+                        block
+                        className={`${table.tdSub} ${styles.comparison}`}
+                        title={sourceComparisonText(row, windowDays, dataSources)}
+                      >
+                        both sources
+                      </Text>
+                    )}
+                  </td>
                   <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.interactions)}</td>
-                  <td className={`${table.td} ${table.tdNumeric}`}>
+                  <td className={`${table.td} ${table.tdNumeric} ${table.tdNoWrap}`}>
                     {row.activeDays} <span className={styles.muted}>/ {Math.round(row.expectedActiveDays)}</span>
                   </td>
                   <td className={`${table.td} ${table.tdNumeric}`}>{row.appsUsed}</td>
-                  <td className={table.td}>
-                    {row.usedCowork ? `Yes (${formatCount(row.coworkInteractions)})` : 'No'}
-                  </td>
-                  <td className={table.td}>
+                  <td className={`${table.td} ${table.tdNoWrap}`}>{coworkCell(row)}</td>
+                  <td className={`${table.td} ${table.tdNoWrap}`}>
                     {formatDate(row.lastInteractionUtc)}
                     {row.daysSinceLastUse !== null && row.daysSinceLastUse > 0 && (
                       <Text size={100} block className={table.tdSub}>
@@ -534,7 +590,7 @@ export default function LicensedUsersPanel({
                       </Text>
                     )}
                   </td>
-                  <td className={table.td}>
+                  <td className={`${table.td} ${table.tdNoWrap}`}>
                     <Tooltip relationship="description" content={row.reclaimEligibilityReason || 'This active seat is not in a reclaim tier.'}>
                       <Text size={200}>{row.reclaimEligibility || '—'}</Text>
                     </Tooltip>
@@ -544,7 +600,7 @@ export default function LicensedUsersPanel({
                       </Text>
                     )}
                   </td>
-                  <td className={`${table.td} ${table.stickyRight}`}>
+                  <td className={`${table.td} ${table.tdNoWrap} ${table.stickyRight}`}>
                     <Tooltip relationship="description" content={row.recommendedAction}>
                       <div>
                         <ActionBadge code={row.recommendedActionCode} label={row.recommendedActionLabel} />
@@ -584,4 +640,39 @@ export default function LicensedUsersPanel({
       )}
     </Card>
   );
+}
+
+
+function sourceLabel(source: string): string {
+  return source === 'usageReport' ? 'Microsoft usage report' : source === 'audit' ? 'Audit log' : source;
+}
+
+/**
+ * Cowork use as a short value rather than a sentence.
+ *
+ * The evidence is still distinguished - reported tasks, reported active days and audit interactions
+ * are three different measurements and must not be conflated - but the qualifier is abbreviated so
+ * the column stays one line wide. "Yes (312 audit interactions)" was wide enough on its own to push
+ * the pinned Action column over the top of it.
+ */
+function coworkCell(row: LicensedUserAdoptionRow): string {
+  if (!row.usedCowork) return 'No';
+  if (row.coworkReportTotalTasks !== null) return `Yes \u00b7 ${formatCount(row.coworkReportTotalTasks)} tasks`;
+  if (row.coworkReportActiveDays !== null && row.coworkReportActiveDays > 0) {
+    return `Yes \u00b7 ${formatCount(row.coworkReportActiveDays)} days`;
+  }
+  return `Yes \u00b7 ${formatCount(row.coworkInteractions)} audited`;
+}
+
+function sourceComparisonText(row: LicensedUserAdoptionRow, windowDays: number, dataSources?: AdoptionDataSources): string {
+  const reportPeriod = dataSources?.copilotUsageReportPeriodDays
+    ? `D${dataSources.copilotUsageReportPeriodDays}`
+    : 'Microsoft window';
+  const snapshot = dataSources?.copilotUsageReportDate ? `, ${formatDate(dataSources.copilotUsageReportDate)}` : '';
+
+  return `Audit D${windowDays}: ${formatCount(row.auditInteractions)} interactions, ${formatCount(
+    row.auditActiveDays,
+  )} days. Microsoft report ${reportPeriod}${snapshot}: ${
+    row.reportPrompts === null ? '—' : formatCount(row.reportPrompts)
+  } prompts, ${row.reportActiveDays === null ? '—' : formatCount(row.reportActiveDays)} days.`;
 }

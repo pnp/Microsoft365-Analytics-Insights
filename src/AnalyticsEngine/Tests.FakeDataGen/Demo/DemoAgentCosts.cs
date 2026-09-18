@@ -17,10 +17,6 @@ namespace Tests.FakeDataGen.Demo
     internal sealed class DemoBilledSlice
     {
         public string FeatureName { get; set; }
-        public string ChannelId { get; set; }
-        public string LlmModel { get; set; }
-        public string ToolInvoked { get; set; }
-        public string KnowledgeSources { get; set; }
 
         /// <summary>Share of the agent's daily turns that bill under this slice.</summary>
         public decimal TurnShare { get; set; }
@@ -71,6 +67,19 @@ namespace Tests.FakeDataGen.Demo
         public string MeterCategory { get; set; }
         public string MeterSubCategory { get; set; }
         public string MeterName { get; set; }
+
+        /// <summary>
+        /// The tag name a tag grouping would report for this meter, or null for an untagged one. See
+        /// <see cref="TagValue"/>.
+        /// </summary>
+        public string TagKey { get; set; }
+
+        /// <summary>
+        /// The tag's value. Copilot Credits meters carry Microsoft's own <c>serviceName</c> tag, which is the
+        /// only thing separating Cowork from the other experiences billed through the identical meter - so two
+        /// meters here deliberately share a meter name and differ only by this.
+        /// </summary>
+        public string TagValue { get; set; }
 
         /// <summary>Cost the resource incurs simply by existing, per day.</summary>
         public decimal CostPerDay { get; set; }
@@ -147,28 +156,30 @@ namespace Tests.FakeDataGen.Demo
             new DemoBilledAgent
             {
                 AgentId = "00000000-0000-0000-0000-0000000000a1",
-                AgentName = "Contoso Knowledge Assistant",
+                // Greek on a genuinely Unicode column: an agent name is customer-named text stored in
+                // agent_name nvarchar(255), and a demo that only ever wrote ASCII here would never prove
+                // the column round-trips. (It used to live on the knowledge-source column, which was
+                // removed when that dimension turned out not to exist in Microsoft's billing data.)
+                AgentName = "Contoso Knowledge Assistant – Καλημέρα κόσμε",
                 EnvironmentId = "00000000-0000-0000-0000-0000000000e1",
                 EnvironmentName = "Contoso (default)",
                 Slices = new[]
                 {
                     new DemoBilledSlice
                     {
-                        FeatureName = "Generative answer", ChannelId = "msteams", LlmModel = "gpt-4o",
+                        FeatureName = "Generative answer",
                         // Greek on a genuinely Unicode column: a knowledge source is customer-named text, and
                         // a demo that only ever wrote ASCII here would never prove the column round-trips.
-                        KnowledgeSources = "Contoso intranet – Καλημέρα κόσμε",
                         TurnShare = 0.60m, CreditsPerTurn = 2m, UserShare = 0.90m, NonBilledShare = 0.10m,
                     },
                     new DemoBilledSlice
                     {
-                        FeatureName = "Tenant graph grounding", ChannelId = "msteams", LlmModel = "gpt-4o",
-                        KnowledgeSources = "Microsoft Graph (tenant)",
+                        FeatureName = "Tenant graph grounding",
                         TurnShare = 0.30m, CreditsPerTurn = 10m, UserShare = 0.50m,
                     },
                     new DemoBilledSlice
                     {
-                        FeatureName = "Classic answer", ChannelId = "webchat",
+                        FeatureName = "Classic answer",
                         TurnShare = 0.10m, CreditsPerTurn = 1m, UserShare = 0.30m,
                     },
                 },
@@ -183,20 +194,17 @@ namespace Tests.FakeDataGen.Demo
                 {
                     new DemoBilledSlice
                     {
-                        FeatureName = "Generative answer", ChannelId = "msteams", LlmModel = "gpt-4o-mini",
-                        KnowledgeSources = "Contoso product catalogue",
+                        FeatureName = "Generative answer",
                         TurnShare = 0.50m, CreditsPerTurn = 2m, UserShare = 0.85m, NonBilledShare = 0.05m,
                     },
                     new DemoBilledSlice
                     {
-                        FeatureName = "Agent action", ChannelId = "msteams", LlmModel = "gpt-4o",
-                        ToolInvoked = "Contoso CRM: find account", KnowledgeSources = "Contoso product catalogue",
+                        FeatureName = "Agent action",
                         TurnShare = 0.30m, CreditsPerTurn = 5m, UserShare = 0.60m,
                     },
                     new DemoBilledSlice
                     {
-                        FeatureName = "Agent flow actions", ChannelId = "directline",
-                        ToolInvoked = "Create follow-up task",
+                        FeatureName = "Agent flow actions",
                         TurnShare = 0.20m, CreditsPerTurn = 1.3m, UserShare = 0.40m,
                     },
                 },
@@ -211,14 +219,12 @@ namespace Tests.FakeDataGen.Demo
                 {
                     new DemoBilledSlice
                     {
-                        FeatureName = "Classic answer", ChannelId = "webchat",
-                        KnowledgeSources = "Contoso expenses policy",
+                        FeatureName = "Classic answer",
                         TurnShare = 0.55m, CreditsPerTurn = 1m, UserShare = 0.95m,
                     },
                     new DemoBilledSlice
                     {
-                        FeatureName = "Agent flow actions", ChannelId = "webchat",
-                        ToolInvoked = "Submit expense claim",
+                        FeatureName = "Agent flow actions",
                         TurnShare = 0.45m, CreditsPerTurn = 1.3m, UserShare = 0.50m, NonBilledShare = 0.20m,
                     },
                 },
@@ -233,22 +239,20 @@ namespace Tests.FakeDataGen.Demo
                 {
                     new DemoBilledSlice
                     {
-                        FeatureName = "Generative answer", ChannelId = "msteams", LlmModel = "gpt-4.1",
-                        KnowledgeSources = "Contoso onboarding handbook",
+                        FeatureName = "Generative answer",
                         TurnShare = 0.50m, CreditsPerTurn = 2m, UserShare = 0.90m,
                     },
                     new DemoBilledSlice
                     {
                         // Classifies as the GitHub Copilot harness, so the harness pivot has more than one value.
                         FeatureName = CopilotStudioHarnessClassifier.GitHubCopilotHarnessFeatureName,
-                        ChannelId = "msteams", LlmModel = "gpt-4.1", ToolInvoked = "Provision starter kit",
                         TurnShare = 0.35m, CreditsPerTurn = 15m, UserShare = 0.40m,
                     },
                     new DemoBilledSlice
                     {
                         // Deliberately a feature name the classifier does not know, so the report's
                         // "unclassified harness" figure is exercised instead of being permanently zero.
-                        FeatureName = "Autonomous task (preview)", ChannelId = "msteams", LlmModel = "gpt-4.1",
+                        FeatureName = "Autonomous task (preview)",
                         TurnShare = 0.15m, CreditsPerTurn = 3m, UserShare = 0.30m,
                     },
                 },
@@ -316,6 +320,30 @@ namespace Tests.FakeDataGen.Demo
                 ServiceName = "Azure Monitor", MeterCategory = "Azure Monitor",
                 MeterSubCategory = "Log Analytics", MeterName = "Data Ingestion",
                 CostPerDay = 0.65m, CostPerTurn = 0.0002m, QuantityPerDay = 0.3m, QuantityPerTurn = 0.0001m,
+            },
+
+            // The two Copilot Credits meters. They are deliberately IDENTICAL except for the tag, because that
+            // is exactly how Microsoft bills them: Cowork, Work IQ API and Copilot Studio all land on one
+            // "Pay As You Go Copilot Credit" meter under the "Microsoft Copilot Studio" service, and the
+            // serviceName tag is the only discriminator. Having both here keeps the tag pivot honest - it has
+            // more than one value, and the meter pivot genuinely cannot separate them.
+            new DemoAzureMeter
+            {
+                ResourceGroup = "rg-contoso-demo-copilot-credits",
+                ResourcePath = "Microsoft.PowerPlatform/accounts/Contoso All Users Policy",
+                ServiceName = "Microsoft Copilot Studio", MeterCategory = "Microsoft Copilot Studio",
+                MeterSubCategory = "Microsoft Copilot Studio", MeterName = "Pay As You Go Copilot Credit",
+                TagKey = "serviceName", TagValue = "Cowork",
+                CostPerDay = 1.80m, CostPerTurn = 0.01m, QuantityPerDay = 180m, QuantityPerTurn = 1m,
+            },
+            new DemoAzureMeter
+            {
+                ResourceGroup = "rg-contoso-demo-copilot-credits",
+                ResourcePath = "Microsoft.PowerPlatform/accounts/Contoso All Users Policy",
+                ServiceName = "Microsoft Copilot Studio", MeterCategory = "Microsoft Copilot Studio",
+                MeterSubCategory = "Microsoft Copilot Studio", MeterName = "Pay As You Go Copilot Credit",
+                TagKey = "serviceName", TagValue = "WorkIQAPI",
+                CostPerDay = 0.40m, CostPerTurn = 0.002m, QuantityPerDay = 40m, QuantityPerTurn = 0.2m,
             },
         };
 
@@ -412,10 +440,10 @@ namespace Tests.FakeDataGen.Demo
 
                         _sink.Write(DemoTables.StudioCredits, date, billed.EnvironmentId, billed.EnvironmentName,
                             billed.AgentId, billed.AgentName, CopilotStudioHarnessClassifier.Classify(slice.FeatureName),
-                            slice.FeatureName, slice.ChannelId, slice.LlmModel, slice.ToolInvoked, slice.KnowledgeSources,
+                            slice.FeatureName,
                             credits, nonBilled, SliceUsers(users, slice.UserShare), LastRefreshed(date),
                             AgentCostRowHasher.Hash(HashDate(date), billed.EnvironmentId, billed.AgentId,
-                                slice.FeatureName, slice.ChannelId, slice.LlmModel, slice.ToolInvoked, slice.KnowledgeSources),
+                                slice.FeatureName),
                             _importedUtc);
 
                         _creditsByDay[d] += credits;
@@ -521,9 +549,10 @@ namespace Tests.FakeDataGen.Demo
                     var resourceId = Scope + "/resourceGroups/" + billed.ResourceGroup + "/providers/" + billed.ResourcePath;
                     _sink.Write(DemoTables.AzureCosts, date, Scope, SubscriptionId, resourceId, billed.ResourceGroup,
                         billed.ServiceName, billed.MeterCategory, billed.MeterSubCategory, billed.MeterName,
-                        cost, Currency, quantity, estimated,
+                        cost, Currency, quantity, estimated, billed.TagKey, billed.TagValue,
                         AgentCostRowHasher.Hash(HashDate(date), Scope, SubscriptionId, resourceId, billed.ServiceName,
-                            billed.MeterCategory, billed.MeterSubCategory, billed.MeterName, Currency),
+                            billed.MeterCategory, billed.MeterSubCategory, billed.MeterName, Currency,
+                            billed.TagKey, billed.TagValue),
                         _importedUtc);
                 }
             }

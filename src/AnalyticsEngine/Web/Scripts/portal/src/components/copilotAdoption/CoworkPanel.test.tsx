@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import type {
   CopilotAdoptionOptions,
@@ -124,9 +125,6 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
       addressableDocuments: 0,
       hoursPerMonthLow: 0,
       hoursPerMonthHigh: 0,
-      currencyPerMonthLow: null,
-      currencyPerMonthHigh: null,
-      currencyCode: null,
       assumptions: [],
     },
     ...overrides,
@@ -213,14 +211,110 @@ describe('CoworkPanel', () => {
     expect(screen.getByText(/shared Copilot Credits pool, not Cowork-only spend/)).toBeTruthy();
   });
 
-  it('omits the per-user credit column when no per-user rows exist', async () => {
+  it('never gives the optional per-user credit import a column, even when it has rows', async () => {
+    // The Power Platform per-user credit import is optional and, on most tenants, not configured.
+    // A column would cost every tenant horizontal space for a figure most of them cannot populate,
+    // in a table already wider than the screen - so it lives in the expander instead.
+    const user = userEvent.setup();
+    fetchCowork.mockResolvedValue(page([row({ totalCopilotCredits: 197.8 })]));
+
+    render(
+      summary({
+        coworkCreditPosition: {
+          available: true,
+          snapshotUtc: null,
+          entitled: null,
+          consumed: null,
+          available_credits: null,
+          payAsYouGoConsumed: null,
+          status: null,
+          perUserCreditsAvailable: true,
+        },
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText('aisha.rahman@contoso.com')).toBeTruthy());
+
+    const header = within(screen.getByRole('table')).getAllByRole('columnheader');
+    expect(header.map((h) => h.textContent)).not.toContain('All Copilot Credits');
+
+    await user.click(screen.getByRole('button', { name: /Show the full assessment/ }));
+
+    expect(await screen.findByText('All Copilot Credits')).toBeTruthy();
+  });
+
+  it('omits the per-user credit figures entirely when no per-user rows exist', async () => {
+    const user = userEvent.setup();
     render(summary());
     await waitFor(() => expect(screen.getByText('aisha.rahman@contoso.com')).toBeTruthy());
 
     expect(screen.queryByText('All Copilot Credits')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: /Show the full assessment/ }));
+
+    // The expander opened - so the absence below is a real absence, not an unopened panel.
+    expect(await screen.findByText('Justification')).toBeTruthy();
+    expect(screen.queryByText('Copilot Credits')).toBeNull();
+    expect(screen.queryByText('All Copilot Credits')).toBeNull();
+  });
+
+  /**
+   * The defect this guards.
+   *
+   * The justification was a column, clamped to two lines AND off the right-hand edge of a table
+   * wider than the screen, so the one sentence written per user to be read could not be read. It
+   * now lives in the expander, in full.
+   */
+  it('keeps the justification out of the row and shows it in full when expanded', async () => {
+    const user = userEvent.setup();
+    const LONG =
+      'Prime candidate - high coordination load (80) with enough Copilot fluency (70) to delegate; '
+      + '6 meetings and 80 emails per active day, across 40 Teams messages.';
+    fetchCowork.mockResolvedValue(page([row({ rationale: LONG })]));
+
+    render(summary());
+    await waitFor(() => expect(screen.getByText('aisha.rahman@contoso.com')).toBeTruthy());
+
+    expect(screen.queryByText(LONG)).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: /Show the full assessment/ }));
+
+    const rationale = await screen.findByText(LONG);
+    expect(rationale).toBeTruthy();
+    // Not clamped and not hidden on hover - that combination is what made it unreadable before.
+    expect(rationale.getAttribute('title')).toBeNull();
+  });
+
+  /**
+   * Microsoft reports the scheduled and user-initiated task counts independently, and either can be
+   * absent. A blank one means "not reported", not "none" - the same distinction the per-user credit
+   * column protects. Rendering it as "0 scheduled" would state a measurement nobody made.
+   */
+  it('never turns an unreported task split into zeroes', async () => {
+    const user = userEvent.setup();
+    fetchCowork.mockResolvedValue(
+      page([
+        row({
+          usedCowork: true,
+          coworkReportTotalTasks: 40,
+          coworkReportScheduledTasks: null,
+          coworkReportUserInitiatedTasks: null,
+        }),
+      ]),
+    );
+
+    render(summary());
+    await waitFor(() => expect(screen.getByText('aisha.rahman@contoso.com')).toBeTruthy());
+
+    await user.click(screen.getByRole('button', { name: /Show the full assessment/ }));
+
+    expect(await screen.findByText('split not reported')).toBeTruthy();
+    expect(screen.queryByText(/0 scheduled/)).toBeNull();
+    expect(screen.queryByText(/0 user-initiated/)).toBeNull();
   });
 
   it('shows an unattributable credit as a dash, never as zero', async () => {
+    const user = userEvent.setup();
     fetchCowork.mockResolvedValue(page([row({ totalCopilotCredits: null })]));
 
     render(
@@ -240,9 +334,15 @@ describe('CoworkPanel', () => {
 
     await waitFor(() => expect(screen.getByText('aisha.rahman@contoso.com')).toBeTruthy());
 
+    await user.click(screen.getByRole('button', { name: /Show the full assessment/ }));
+
     // A zero here would read as "this person costs nothing", which is a different claim entirely.
-    const table = screen.getByRole('table');
-    expect(within(table).getByText('\u2014')).toBeTruthy();
+    const creditStat = (await screen.findByText('All Copilot Credits')).closest('div');
+    expect(creditStat).not.toBeNull();
+    expect(within(creditStat as HTMLElement).getByText('\u2014')).toBeTruthy();
+    expect(
+      within(creditStat as HTMLElement).getByText('not attributable to this person - not zero'),
+    ).toBeTruthy();
   });
 
   it('never renders the estimate without its assumptions', async () => {
@@ -256,9 +356,6 @@ describe('CoworkPanel', () => {
           addressableDocuments: 9600,
           hoursPerMonthLow: 300,
           hoursPerMonthHigh: 600,
-          currencyPerMonthLow: null,
-          currencyPerMonthHigh: null,
-          currencyCode: null,
           assumptions: ['Assumes 5 minutes per meeting.', 'Time saved is NOT measured by this product.'],
         },
       }),
@@ -280,9 +377,6 @@ describe('CoworkPanel', () => {
           addressableDocuments: 9600,
           hoursPerMonthLow: 300,
           hoursPerMonthHigh: 600,
-          currencyPerMonthLow: null,
-          currencyPerMonthHigh: null,
-          currencyCode: null,
           assumptions: ['Assumes 5 minutes per meeting.'],
         },
       }),
@@ -291,7 +385,7 @@ describe('CoworkPanel', () => {
     expect(screen.getByText(/300-600 hours/)).toBeTruthy();
   });
 
-  it('shows no monetary figure when no loaded hourly cost is configured', async () => {
+  it('never converts the modelled hours into money', async () => {
     render(
       summary({
         coworkValueEstimate: {
@@ -302,15 +396,16 @@ describe('CoworkPanel', () => {
           addressableDocuments: 9600,
           hoursPerMonthLow: 300,
           hoursPerMonthHigh: 600,
-          currencyPerMonthLow: null,
-          currencyPerMonthHigh: null,
-          currencyCode: null,
-          assumptions: ['No monetary value is shown because no fully-loaded hourly cost has been configured.'],
+          assumptions: ['No monetary value is shown. This product has no defensible fully-loaded hourly rate, so it does not invent one.'],
         },
       }),
     );
 
+    // Hours are the whole output. A currency figure derived from a modelled number is how a model
+    // ends up quoted as a saving, which is exactly what this estimate must not become.
+    expect(screen.getByText(/300-600 hours/)).toBeTruthy();
     expect(screen.queryByText(/at the configured loaded hourly cost/)).toBeNull();
+    expect(document.body.textContent).not.toMatch(/[£$€]\s?\d/);
   });
 
   it('hides the estimate entirely for an empty cohort', async () => {

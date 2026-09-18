@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Migrations;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Common.Entities.Config;
@@ -59,7 +59,36 @@ namespace Tests.UnitTests
         // CopilotPromptSafetyFields then adds the two Copilot prompt-safety flag columns
         // (copilot_event_messages.jailbreak_detected, copilot_event_accessed_resources.xpia_detected).
         // It DOES change the entity model, so unlike its predecessor its snapshot is freshly scaffolded.
-        private const string LatestId = "202609151440027_CopilotPromptSafetyFields";
+        // IndexTeamsExplorerQueries then adds date indexes for the Teams Explorer report and widens
+        // IX_date on teams_user_device_usage_log. Raw-SQL, additive, and reuses the
+        // CopilotPromptSafetyFields model snapshot verbatim.
+        // CopilotAdoptionPeriodFacts then adds the raw period-fact history tables
+        // (copilot_adoption_user_period, copilot_adoption_period_run). Raw-SQL, purely additive, and
+        // reuses the preceding model snapshot verbatim - the new tables are not exposed as DbSets, so
+        // the entity model is unchanged.
+        // GraphCopilotUsageApiV2 then adds the report_version column carrying the Graph usage-report
+        // schema version each snapshot came from. It DOES change the entity model, so its snapshot is
+        // freshly scaffolded rather than reused.
+        // CopilotSubscribedSkuCapacity adds nullable subscribed SKU capacity columns to
+        // license_types. Raw-SQL, additive, and reuses the predecessor snapshot verbatim.
+        // CoworkUsageReportTables then adds the first-party Cowork usage-report tables. Raw-SQL,
+        // purely additive, and reuses the preceding model snapshot verbatim - the new activity-log
+        // type is not exposed as a DbSet, so the entity model is unchanged.
+        // CopilotAdoptionTargets then adds the customer-defined adoption target tables. Raw-SQL,
+        // purely additive, and reuses the GraphCopilotUsageApiV2 model snapshot verbatim.
+        // CopilotAdoptionCohorts and CopilotAdoptionInterventions then add the adoption cohort and
+        // intervention tables. They are raw-SQL, additive, and reuse the GraphCopilotUsageApiV2
+        // model snapshot verbatim because the new tables are not exposed as DbSets.
+        // CopilotAdoptionDigest then adds the scheduled digest send-state table. It is raw-SQL,
+        // additive, and reuses the GraphCopilotUsageApiV2 model snapshot verbatim.
+        // AzureCostTagColumns then adds azure_cost_daily.tag_key / .tag_value so the Azure cost import can
+        // record the tag it grouped by - the only discriminator between Copilot Cowork, Work IQ API and
+        // Copilot Studio spend, which Microsoft bills through one shared meter. It changes the entity
+        // model, so its snapshot is freshly scaffolded.
+        // DropUnreportedCopilotStudioCreditColumns then removes the four credit columns Microsoft's API
+        // never populates (channel_id, llm_model, tool_invoked, knowledge_sources). It is a model change,
+        // and as the chain head its snapshot is the one EF compares the live entity model against.
+        private const string LatestId = "202609171125117_DropUnreportedCopilotStudioCreditColumns";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

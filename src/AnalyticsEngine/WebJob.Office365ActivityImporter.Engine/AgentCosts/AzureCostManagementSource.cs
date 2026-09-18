@@ -121,7 +121,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             var grouping = new JArray();
             foreach (var dimension in _settings.ResolvedGroupBy)
             {
-                grouping.Add(Dimension(dimension));
+                grouping.Add(GroupByClause(dimension));
             }
 
             var request = new JObject
@@ -186,6 +186,33 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         private static JObject Dimension(string name)
         {
             return new JObject { ["type"] = "Dimension", ["name"] = name };
+        }
+
+        /// <summary>
+        /// One group-by clause. A configured entry of the form <c>TagKey:serviceName</c> becomes a tag
+        /// grouping; anything else is a plain dimension.
+        /// </summary>
+        /// <remarks>
+        /// A tag grouping is how the Cost Management <c>query</c> API returns tags at all - they are not
+        /// included in the response otherwise - and it is what makes Copilot Cowork separable from the other
+        /// experiences Microsoft bills through the same meter. It costs one of the two permitted grouping
+        /// slots, which is why it is opt-in through configuration rather than always sent.
+        /// </remarks>
+        internal static JObject GroupByClause(string configured)
+        {
+            var value = (configured ?? string.Empty).Trim();
+
+            const string tagPrefix = "TagKey:";
+            if (value.StartsWith(tagPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                var tagName = value.Substring(tagPrefix.Length).Trim();
+                if (tagName.Length > 0)
+                {
+                    return new JObject { ["type"] = "TagKey", ["name"] = tagName };
+                }
+            }
+
+            return Dimension(value);
         }
 
         private async Task<JObject> PostJsonAsync(string url, string body, string scope)

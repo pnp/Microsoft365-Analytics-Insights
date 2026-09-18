@@ -1,9 +1,13 @@
-import { makeStyles, tokens, Text, Badge } from '@fluentui/react-components';
+import { makeStyles, tokens, Text, Badge, Button } from '@fluentui/react-components';
+import { ChevronDown16Regular, ChevronRight16Regular } from '@fluentui/react-icons';
+import { useCallback, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AdoptionBand } from '../../types/copilotAdoption';
 import type { AdoptionSegmentRow } from '../../types/copilotAdoption';
 import { ADOPTION_BANDS } from '../charts/GaugeRing';
-import { formatCount, formatPct } from './KpiGrid';
+import { formatCount, formatPct } from '../shared/KpiGrid';
+import InfoTip from '../shared/InfoTip';
+import type { InfoTipContent } from '../shared/InfoTip';
 
 /**
  * Band colours run cold-to-warm with maturity, and the two zero-usage bands are deliberately the
@@ -119,6 +123,20 @@ const useStyles = makeStyles({
     fontSize: '9px',
     lineHeight: '1',
   },
+  /**
+   * Wraps the sort button and the column's "i" as SIBLINGS.
+   *
+   * They used to be nested - the `InfoTip` was passed in as `children` of the sort button - which is
+   * invalid HTML (a button inside a button) and meant the info icon could not be clicked at all: the
+   * click bubbled to the sort handler and re-sorted the table instead of opening the definition. On
+   * a page whose whole premise is "every figure carries its definition", an unreachable definition is
+   * a real defect, not a nicety.
+   */
+  thContent: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '2px',
+  },
   sortArrowActive: {
     color: tokens.colorBrandForeground1,
   },
@@ -146,6 +164,40 @@ const useStyles = makeStyles({
     borderLeftWidth: '1px',
     borderLeftStyle: 'solid',
     borderLeftColor: tokens.colorNeutralStroke2,
+    // The shadow matters as much as the hairline: without it the column it floats over looks
+    // truncated rather than scrolled-under, which reads as a rendering bug.
+    boxShadow: `-6px 0 6px -6px ${tokens.colorNeutralShadowAmbient}`,
+  },
+  /**
+   * Pins a column to the LEFT-hand edge of a horizontally scrolling table.
+   *
+   * These tables are wider than a laptop screen, so reading a column on the right means scrolling the
+   * user's own name off the left - at which point the row being read is anonymous. Pinning the
+   * identity column keeps "who is this about?" answerable at every scroll position, which is the one
+   * thing a reader needs at all times.
+   *
+   * Needs an opaque background for the same reason as `stickyRight`: the cells it overlaps scroll
+   * underneath it.
+   */
+  stickyLeft: {
+    position: 'sticky',
+    left: '0',
+    zIndex: 1,
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRightWidth: '1px',
+    borderRightStyle: 'solid',
+    borderRightColor: tokens.colorNeutralStroke2,
+    boxShadow: `6px 0 6px -6px ${tokens.colorNeutralShadowAmbient}`,
+  },
+  /**
+   * Keeps a value cell on one line.
+   *
+   * Applied per column rather than to every `td`, because the same table also carries prose columns
+   * that genuinely have to wrap. A date, a badge or a count that wraps sets the height of the whole
+   * row for no benefit.
+   */
+  tdNoWrap: {
+    whiteSpace: 'nowrap',
   },
   td: {
     padding: '6px 10px',
@@ -174,6 +226,98 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     padding: '20px 0',
     textAlign: 'center',
+  },
+  /** The identity cell, with its expand chevron sitting to the left of the name stack. */
+  expandableUser: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: '2px',
+  },
+  /** Name over job title, so the identity cell stays one column wide however long the UPN is. */
+  upnStack: {
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: '0',
+  },
+  userSecondary: {
+    color: tokens.colorNeutralForeground3,
+  },
+  expandToggle: {
+    minWidth: '20px',
+    width: '20px',
+    height: '20px',
+    padding: 0,
+    marginTop: '1px',
+    color: tokens.colorNeutralForeground3,
+  },
+  detailRow: {
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  detailCell: {
+    padding: '0',
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: tokens.colorNeutralStroke2,
+  },
+  /**
+   * Pins the detail panel to the left edge of the scroll container.
+   *
+   * The cell it sits in spans every column, so it is as wide as the whole table - which on these
+   * tables is wider than the screen. Left as a normal block it would scroll away with the columns,
+   * which is the exact problem the expander exists to solve, so it is given a bounded width and made
+   * sticky: wherever the table is scrolled to, the detail is on screen.
+   *
+   * The width is measured against the table's own scrollport (`tableWrap` declares
+   * `container-type: inline-size`), NOT the viewport. A viewport-based bound over-measures by the
+   * width of the left navigation and the page padding, which left part of the panel clipped on a
+   * normal laptop - sticky pins the left edge, it does not shrink an over-wide element.
+   */
+  detailInner: {
+    position: 'sticky',
+    left: '0',
+    width: 'min(1040px, 100cqw)',
+    boxSizing: 'border-box',
+    padding: '12px 14px 14px 34px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+  },
+  detailSections: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+    gap: '12px 20px',
+  },
+  detailSectionTitle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '2px',
+    color: tokens.colorNeutralForeground3,
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+    marginBottom: '4px',
+  },
+  detailStats: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(104px, 1fr))',
+    gap: '8px 12px',
+  },
+  detailStat: {
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  detailStatLabel: {
+    color: tokens.colorNeutralForeground3,
+  },
+  detailStatValue: {
+    fontVariantNumeric: 'tabular-nums',
+  },
+  detailStatSub: {
+    color: tokens.colorNeutralForeground3,
+  },
+  /** The justification, in full. Nothing is clamped here - that is the point of the expander. */
+  detailProse: {
+    color: tokens.colorNeutralForeground2,
+    maxWidth: '900px',
   },
 });
 
@@ -329,7 +473,178 @@ export function useAdoptionTableStyles() {
 }
 
 /**
- * A sortable column header.
+ * Per-row expansion state for the seat-holder tables.
+ *
+ * Keyed by user id rather than by row index, so a re-sort does not leave a different person's
+ * detail open. `collapseAll` exists because paging or re-filtering replaces the rows underneath an
+ * open detail, and an expander left open over an unrelated person is worse than one that closed.
+ */
+export function useRowExpansion() {
+  const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set<number>());
+
+  const toggle = useCallback((id: number) => {
+    setExpanded((previous) => {
+      const next = new Set(previous);
+      if (!next.delete(id)) {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const collapseAll = useCallback(() => setExpanded(new Set<number>()), []);
+
+  return { isExpanded: (id: number) => expanded.has(id), toggle, collapseAll };
+}
+
+/**
+ * The identity cell, carrying the row's expand control.
+ *
+ * The chevron lives in this cell rather than in a column of its own because this is the column that
+ * is pinned to the left edge. A separate leading column would either have to be pinned too - which
+ * means hard-coding its width into the pinned offset of this one - or would scroll out of reach on
+ * exactly the wide tables the expander is there to rescue.
+ */
+export function ExpandableUserCell({
+  open,
+  onToggle,
+  userPrincipalName,
+  secondary,
+  className,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  userPrincipalName: string;
+  secondary?: string | null;
+  className?: string;
+}) {
+  const styles = useStyles();
+  return (
+    <td className={`${styles.td} ${className ?? ''}`}>
+      <div className={styles.expandableUser}>
+        <Button
+          appearance="subtle"
+          size="small"
+          className={styles.expandToggle}
+          icon={open ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
+          aria-expanded={open}
+          aria-label={`${open ? 'Hide' : 'Show'} the full assessment for ${userPrincipalName}`}
+          onClick={onToggle}
+        />
+        <span className={styles.upnStack}>
+          <Text size={200} weight="semibold">
+            {userPrincipalName}
+          </Text>
+          <Text size={100} className={styles.userSecondary}>
+            {secondary || ''}
+          </Text>
+        </span>
+      </div>
+    </td>
+  );
+}
+
+/**
+ * The expanded detail, as a full-width row beneath its summary row.
+ *
+ * A second `tr` rather than an overlay or a dialog: the detail stays attached to the row it explains
+ * and to the table's own scrolling, and several can be open at once for comparison - which is what
+ * this list is for.
+ */
+export function DetailRow({ colSpan, children }: { colSpan: number; children: ReactNode }) {
+  const styles = useStyles();
+  return (
+    <tr className={styles.detailRow}>
+      <td className={styles.detailCell} colSpan={colSpan}>
+        <div className={styles.detailInner}>{children}</div>
+      </td>
+    </tr>
+  );
+}
+
+/** The grid an expanded row's sections sit in. */
+export function DetailSections({ children }: { children: ReactNode }) {
+  const styles = useStyles();
+  return <div className={styles.detailSections}>{children}</div>;
+}
+
+/** A labelled group of figures inside an expanded row. */
+export function DetailSection({
+  title,
+  info,
+  infoTitle,
+  children,
+}: {
+  title: string;
+  info?: InfoTipContent;
+  infoTitle?: string;
+  children: ReactNode;
+}) {
+  const styles = useStyles();
+  return (
+    <div>
+      <div className={styles.detailSectionTitle}>
+        <Text size={100} weight="semibold">
+          {title}
+        </Text>
+        {info && <InfoTip title={infoTitle ?? title} content={info} />}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** The grid a `DetailSection`'s figures sit in. */
+export function DetailStats({ children }: { children: ReactNode }) {
+  const styles = useStyles();
+  return <div className={styles.detailStats}>{children}</div>;
+}
+
+/**
+ * One figure in an expanded row.
+ *
+ * `sub` carries the qualifier that makes the number honest - the component score behind a raw
+ * count, or the target it was measured against - because these numbers exist to show the working,
+ * and a bare "57" shows none of it.
+ */
+export function DetailStat({ label, value, sub }: { label: string; value: ReactNode; sub?: ReactNode }) {
+  const styles = useStyles();
+  return (
+    <div className={styles.detailStat}>
+      <Text size={100} className={styles.detailStatLabel}>
+        {label}
+      </Text>
+      <Text size={300} weight="semibold" className={styles.detailStatValue}>
+        {value}
+      </Text>
+      {sub && (
+        <Text size={100} className={styles.detailStatSub}>
+          {sub}
+        </Text>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The per-user justification, in full.
+ *
+ * This used to be a column, clamped to two lines with the rest on hover. In a table already wider
+ * than the screen it was both unreadable and, on the widest tables, scrolled off the right edge
+ * entirely - so the sentence written specifically to be read was the one thing you could not read.
+ * Here it has the width to be a sentence.
+ */
+export function DetailRationale({ text }: { text: string }) {
+  const styles = useStyles();
+  return (
+    <Text size={200} className={styles.detailProse}>
+      {text || '\u2014'}
+    </Text>
+  );
+}
+
+/**
+ * A sortable column header, optionally carrying the column's definition.
  *
  * Clicking selects the column; clicking the column that is already selected reverses it. The first
  * click uses `defaultDescending`, because the useful first answer differs per column: "most
@@ -338,6 +653,12 @@ export function useAdoptionTableStyles() {
  *
  * `aria-sort` lives on the `th` (that is where assistive technology looks for it) while the control
  * itself is a real `button`, so the header is reachable and operable from the keyboard.
+ *
+ * The definition is passed as `info` rather than rendered into `children` ON PURPOSE. An `InfoTip`
+ * is itself a button, so putting one inside the sort button produced nested buttons: the browser
+ * hoisted the inner one out of the header, and every attempt to open the definition landed on the
+ * sort handler and re-sorted the table instead. Kept as siblings, both are clickable and both are
+ * separate tab stops.
  */
 export function SortableTh({
   label,
@@ -348,6 +669,8 @@ export function SortableTh({
   numeric = false,
   defaultDescending = false,
   className,
+  info,
+  infoTitle,
   children,
 }: {
   /** Accessible name for the sort control. Use `children` to render something richer. */
@@ -360,6 +683,10 @@ export function SortableTh({
   /** Direction applied when this column is selected from cold. */
   defaultDescending?: boolean;
   className?: string;
+  /** The column's definition, shown by an "i" that sits OUTSIDE the sort button. */
+  info?: InfoTipContent;
+  /** Heading for the definition popover. Defaults to the column's own label. */
+  infoTitle?: string;
   children?: ReactNode;
 }) {
   const styles = useStyles();
@@ -375,20 +702,23 @@ export function SortableTh({
       className={`${styles.th}${numeric ? ` ${styles.thNumeric}` : ''}${className ? ` ${className}` : ''}`}
       aria-sort={ariaSort}
     >
-      <button
-        type="button"
-        className={styles.sortButton}
-        onClick={() => onSort(sortKey, active ? !descending : defaultDescending)}
-        title={`Sort by ${label}`}
-      >
-        {children ?? label}
-        <span
-          className={`${styles.sortArrow} ${active ? styles.sortArrowActive : styles.sortArrowIdle}`}
-          aria-hidden="true"
+      <span className={styles.thContent}>
+        <button
+          type="button"
+          className={styles.sortButton}
+          onClick={() => onSort(sortKey, active ? !descending : defaultDescending)}
+          title={`Sort by ${label}`}
         >
-          {active ? (descending ? '\u25BC' : '\u25B2') : '\u25B2'}
-        </span>
-      </button>
+          {children ?? label}
+          <span
+            className={`${styles.sortArrow} ${active ? styles.sortArrowActive : styles.sortArrowIdle}`}
+            aria-hidden="true"
+          >
+            {active ? (descending ? '\u25BC' : '\u25B2') : '\u25B2'}
+          </span>
+        </button>
+        {info && <InfoTip title={infoTitle ?? label} content={info} />}
+      </span>
     </th>
   );
 }

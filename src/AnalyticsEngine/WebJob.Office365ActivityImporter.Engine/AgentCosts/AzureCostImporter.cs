@@ -201,7 +201,12 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                     row.MeterCategory,
                     row.MeterSubCategory,
                     row.MeterName,
-                    row.Currency);
+                    row.Currency,
+                    // Part of the key, not payload: with a tag grouping the same resource and meter comes back
+                    // once per tag value, so leaving it out would collapse those rows together and sum them -
+                    // destroying the very split the tag grouping was configured to get.
+                    row.TagKey,
+                    row.TagValue);
 
                 if (byHash.TryGetValue(hash, out var existing))
                 {
@@ -227,6 +232,8 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                     MeterCategory = row.MeterCategory,
                     MeterSubCategory = row.MeterSubCategory,
                     MeterName = row.MeterName,
+                    TagKey = Truncate(row.TagKey, 256),
+                    TagValue = Truncate(row.TagValue, 512),
                     Cost = row.Cost,
                     Currency = row.Currency,
                     Quantity = row.Quantity,

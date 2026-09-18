@@ -249,7 +249,7 @@ export default function ServiceConfigurationPage() {
       .then((s) => {
         if (!cancelled) setStatus(s);
       })
-      .catch((e) => {
+      .catch((e: any) => {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load the service configuration.');
       })
       .finally(() => {

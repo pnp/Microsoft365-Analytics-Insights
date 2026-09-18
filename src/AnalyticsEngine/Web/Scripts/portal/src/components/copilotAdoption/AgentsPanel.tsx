@@ -18,9 +18,9 @@ import CategoryBarChart from '../charts/CategoryBarChart';
 import TreemapChart from '../charts/TreemapChart';
 import DonutChart from '../charts/DonutChart';
 import SqlPopover from '../SqlPopover';
-import InfoTip from './InfoTip';
-import { KpiGrid, formatCount, formatDate } from './KpiGrid';
-import type { KpiDefinition } from './KpiGrid';
+import InfoTip from '../shared/InfoTip';
+import { KpiGrid, formatCount, formatDate } from '../shared/KpiGrid';
+import type { KpiDefinition } from '../shared/KpiGrid';
 import { useAdoptionTableStyles } from './adoptionShared';
 
 /**
@@ -342,12 +342,12 @@ export default function AgentsPanel({
                   />
                 ) : undefined
               }
-              onChange={(_e, d) => setSearch(d.value)}
+              onChange={(_e: any, d: any) => setSearch(d.value)}
             />
             <Select
               value={health}
               aria-label="Filter agents by health"
-              onChange={(_e, d) => setHealth(d.value)}
+              onChange={(_e: any, d: any) => setHealth(d.value)}
             >
               <option value="">All verdicts</option>
               {HEALTH_ORDER.map((h) => (
@@ -363,7 +363,7 @@ export default function AgentsPanel({
               <Checkbox
                 label="Custom agents only"
                 checked={customOnly}
-                onChange={(_e, d) => setCustomOnly(!!d.checked)}
+                onChange={(_e: any, d: any) => setCustomOnly(!!d.checked)}
               />
             </Tooltip>
             <div className={styles.spacer} />
