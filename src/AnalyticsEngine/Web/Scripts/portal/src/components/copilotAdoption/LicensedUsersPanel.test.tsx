@@ -62,8 +62,6 @@ const OPTIONS: CopilotAdoptionOptions = {
   coworkMinutesSavedPerMailThread: 3,
   coworkMinutesSavedPerDocument: 2,
   coworkEstimateLowerBoundRatio: 0.5,
-  coworkLoadedCostPerHour: null,
-  coworkCurrencyCode: null,
   usageReportLagDays: 3,
   topSegments: 10,
   minSeatsPerSegment: 5,

@@ -1,4 +1,4 @@
-﻿extern alias AnalyticsWeb;
+extern alias AnalyticsWeb;
 
 using Common.Entities.CopilotAdoption;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -554,34 +554,40 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void Estimate_ProducesNoCurrency_WhenNoLoadedCostIsConfigured()
+        public void Estimate_NeverProducesAMonetaryFigure()
         {
-            var options = Options();
-            Assert.IsFalse(options.CoworkLoadedCostPerHour.HasValue,
-                "There is no defensible default hourly cost, so the shipped default must be unset.");
+            // Epic #559 rejects an ROI / "hours saved" calculator, and #553 confines currency to idle
+            // licence spend - a measured price for a seat we can prove is unused. This estimate is
+            // modelled from assumed minutes per meeting/mail/document, so pricing it would put a
+            // fabricated number in a board pack beside measured ones. The hours range survives because
+            // it is labelled a rollout-sizing model; the money does not.
+            var estimate = CopilotAdoptionScoring.EstimateCoworkValue(Cohort(5), Options());
 
-            var estimate = CopilotAdoptionScoring.EstimateCoworkValue(Cohort(5), options);
+            // Assert on the serialised FIELD NAMES, not the whole payload: the assumption prose
+            // deliberately explains why no money is shown, so a substring search over the entire JSON
+            // would match its own disclaimer and fail for the wrong reason.
+            var fields = JObject.FromObject(estimate).Properties().Select(p => p.Name).ToList();
+            Assert.IsFalse(fields.Any(n => n.IndexOf("currency", StringComparison.OrdinalIgnoreCase) >= 0),
+                "No monetary field may be serialised to any caller - UI, workbook or API. Found: "
+                + string.Join(", ", fields));
 
-            Assert.IsNull(estimate.CurrencyPerMonthLow, "The tool must not invent money.");
-            Assert.IsNull(estimate.CurrencyPerMonthHigh);
-            Assert.IsNull(estimate.CurrencyCode);
+            Assert.IsTrue(estimate.HoursPerMonthHigh > 0,
+                "The modelled hours range is deliberately retained; only the monetary conversion is removed.");
             Assert.IsTrue(
-                estimate.Assumptions.Any(a => a.IndexOf("no fully-loaded hourly cost", StringComparison.OrdinalIgnoreCase) >= 0),
+                estimate.Assumptions.Any(a => a.IndexOf("No monetary value is shown", StringComparison.OrdinalIgnoreCase) >= 0),
                 "The absence of a monetary figure must be explained rather than silently omitted.");
         }
 
         [TestMethod]
-        public void Estimate_ProducesCurrency_WhenALoadedCostIsConfigured()
+        public void Options_CarryNoLoadedCostOrCurrencyKnob()
         {
-            var options = Options();
-            options.CoworkLoadedCostPerHour = 60;
-            options.CoworkCurrencyCode = "GBP";
+            // A configuration surface for an hourly rate is how a monetary figure would creep back in.
+            var fields = JObject.FromObject(Options()).Properties().Select(p => p.Name).ToList();
 
-            var estimate = CopilotAdoptionScoring.EstimateCoworkValue(Cohort(5), options);
-
-            Assert.IsTrue(estimate.CurrencyPerMonthHigh > 0);
-            Assert.AreEqual("GBP", estimate.CurrencyCode);
-            Assert.IsTrue(estimate.CurrencyPerMonthLow < estimate.CurrencyPerMonthHigh);
+            Assert.IsFalse(fields.Any(n => n.IndexOf("LoadedCost", StringComparison.OrdinalIgnoreCase) >= 0),
+                "No loaded-hourly-cost option may exist on the Cowork estimate.");
+            Assert.IsFalse(fields.Any(n => n.IndexOf("coworkCurrency", StringComparison.OrdinalIgnoreCase) >= 0),
+                "No Cowork currency option may exist.");
         }
 
         [TestMethod]

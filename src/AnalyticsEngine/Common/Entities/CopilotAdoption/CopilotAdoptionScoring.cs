@@ -1642,16 +1642,16 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
-        /// Builds the modelled hours/cost estimate for a cohort.
+        /// Builds the modelled hours estimate for a cohort.
         ///
         /// <b>Every output is an assumption applied to observed volume.</b> The volumes are real - they
         /// come from Microsoft's usage reports - but the conversion to time saved is a model, and this
         /// method returns the assumptions that produced it so no caller can render a number without them.
-        /// A currency figure is produced only when a loaded hourly cost has been explicitly configured;
-        /// there is no defensible default and the tool must not invent one.
+        /// It deliberately stops at hours: see the note on <see cref="CoworkValueEstimate"/> for why a
+        /// monetary figure is not produced.
         /// </summary>
         /// <param name="cohort">The users the estimate covers - normally the recommended rollout cohort.</param>
-        /// <param name="options">Tuning, including the assumptions and the optional loaded cost.</param>
+        /// <param name="options">Tuning, including the minutes-saved assumptions.</param>
         public static CoworkValueEstimate EstimateCoworkValue(
             IReadOnlyCollection<CoworkReadinessRow> cohort,
             CopilotAdoptionOptions options = null)
@@ -1695,14 +1695,6 @@ namespace Common.Entities.CopilotAdoption
             estimate.HoursPerMonthHigh = Round(minutesHigh / 60d, 0);
             estimate.HoursPerMonthLow = Round(minutesHigh * lowerRatio / 60d, 0);
 
-            if (o.CoworkLoadedCostPerHour.HasValue && o.CoworkLoadedCostPerHour.Value > 0)
-            {
-                var rate = o.CoworkLoadedCostPerHour.Value;
-                estimate.CurrencyPerMonthLow = Round(estimate.HoursPerMonthLow * rate, 0);
-                estimate.CurrencyPerMonthHigh = Round(estimate.HoursPerMonthHigh * rate, 0);
-                estimate.CurrencyCode = o.CoworkCurrencyCode;
-            }
-
             estimate.Assumptions.Add(
                 $"Assumes Cowork saves {Num(o.CoworkMinutesSavedPerMeeting)} minutes per meeting, "
                 + $"{Num(o.CoworkMinutesSavedPerMailThread)} per email and "
@@ -1721,11 +1713,9 @@ namespace Common.Entities.CopilotAdoption
                 "Time saved is NOT measured by this product and cannot be. These figures are a model for "
                 + "sizing a rollout, not a result.");
 
-            if (!estimate.CurrencyPerMonthHigh.HasValue)
-            {
-                estimate.Assumptions.Add(
-                    "No monetary value is shown because no fully-loaded hourly cost has been configured.");
-            }
+            estimate.Assumptions.Add(
+                "No monetary value is shown. Pricing a modelled saving would state a figure this product "
+                + "cannot evidence; currency is reported only against idle licence spend, which is measured.");
 
             return estimate;
         }

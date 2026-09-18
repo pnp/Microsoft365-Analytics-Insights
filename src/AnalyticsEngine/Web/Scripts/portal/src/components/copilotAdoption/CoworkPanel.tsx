@@ -574,12 +574,6 @@ export default function CoworkPanel({
               {' '}
               a month across {formatCount(estimate.cohortUsers)} recommended users
             </Text>
-            {estimate.currencyPerMonthHigh !== null && estimate.currencyPerMonthLow !== null && (
-              <Text size={300} block style={{ marginTop: '4px' }}>
-                {formatCount(estimate.currencyPerMonthLow)}-{formatCount(estimate.currencyPerMonthHigh)}{' '}
-                {estimate.currencyCode ?? ''} a month at the configured loaded hourly cost
-              </Text>
-            )}
           </div>
 
           <Text size={200} block style={{ marginTop: '10px' }}>
