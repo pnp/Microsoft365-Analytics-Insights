@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import type {
   CopilotAdoptionOptions,
@@ -215,6 +216,61 @@ describe('CoworkPanel', () => {
     await waitFor(() => expect(screen.getByText('aisha.rahman@contoso.com')).toBeTruthy());
 
     expect(screen.queryByText('All Copilot Credits')).toBeNull();
+  });
+
+  /**
+   * The defect this guards.
+   *
+   * The justification was a column, clamped to two lines AND off the right-hand edge of a table
+   * wider than the screen, so the one sentence written per user to be read could not be read. It
+   * now lives in the expander, in full.
+   */
+  it('keeps the justification out of the row and shows it in full when expanded', async () => {
+    const user = userEvent.setup();
+    const LONG =
+      'Prime candidate - high coordination load (80) with enough Copilot fluency (70) to delegate; '
+      + '6 meetings and 80 emails per active day, across 40 Teams messages.';
+    fetchCowork.mockResolvedValue(page([row({ rationale: LONG })]));
+
+    render(summary());
+    await waitFor(() => expect(screen.getByText('aisha.rahman@contoso.com')).toBeTruthy());
+
+    expect(screen.queryByText(LONG)).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: /Show the full assessment/ }));
+
+    const rationale = await screen.findByText(LONG);
+    expect(rationale).toBeTruthy();
+    // Not clamped and not hidden on hover - that combination is what made it unreadable before.
+    expect(rationale.getAttribute('title')).toBeNull();
+  });
+
+  /**
+   * Microsoft reports the scheduled and user-initiated task counts independently, and either can be
+   * absent. A blank one means "not reported", not "none" - the same distinction the per-user credit
+   * column protects. Rendering it as "0 scheduled" would state a measurement nobody made.
+   */
+  it('never turns an unreported task split into zeroes', async () => {
+    const user = userEvent.setup();
+    fetchCowork.mockResolvedValue(
+      page([
+        row({
+          usedCowork: true,
+          coworkReportTotalTasks: 40,
+          coworkReportScheduledTasks: null,
+          coworkReportUserInitiatedTasks: null,
+        }),
+      ]),
+    );
+
+    render(summary());
+    await waitFor(() => expect(screen.getByText('aisha.rahman@contoso.com')).toBeTruthy());
+
+    await user.click(screen.getByRole('button', { name: /Show the full assessment/ }));
+
+    expect(await screen.findByText('split not reported')).toBeTruthy();
+    expect(screen.queryByText(/0 scheduled/)).toBeNull();
+    expect(screen.queryByText(/0 user-initiated/)).toBeNull();
   });
 
   it('shows an unattributable credit as a dash, never as zero', async () => {

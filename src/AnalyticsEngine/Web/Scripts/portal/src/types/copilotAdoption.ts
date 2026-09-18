@@ -685,6 +685,15 @@ export interface LicenceOpportunityRow {
   emailScore: number;
   documentScore: number;
   recommended: boolean;
+
+  /**
+   * Which route qualified this person - proven demand, workload inferred, or neither - decided by
+   * the scorer and sent down as a label. Never re-derive it in the client: the scorer floors the
+   * proven-demand threshold with `Math.Max(1, ...)`, so a client-side comparison against the raw
+   * configured option disagrees with the server whenever that option is set to zero or less.
+   */
+  qualificationTier: string | null;
+  qualificationTierLabel: string | null;
   rationale: string;
 }
 
