@@ -120,6 +120,7 @@ namespace Tests.FakeDataGen.Demo
         public static readonly DemoTable OperatingSystems = T("operating_systems", true, I("id"), A("os_name", 200));
         public static readonly DemoTable WebCountries = T("countries", true, I("id"), A("country_name", 250));
         public static readonly DemoTable WebCities = T("cities", true, I("id"), A("city_name", 250));
+        public static readonly DemoTable WebProvinces = T("provinces", true, I("id"), N("province_name", 250));
         public static readonly DemoTable ResourceNames = T("copilot_event_accessed_resource_names", true, I("id"), N("name", 850));
         public static readonly DemoTable ResourceSites = T("copilot_event_accessed_resource_site_urls", true, I("id"), N("site_url", 850));
         public static readonly DemoTable ResourceTypes = Named("copilot_event_accessed_resource_types");
@@ -157,7 +158,8 @@ namespace Tests.FakeDataGen.Demo
             I("file_extension_id"), I("file_name_id"), I("related_web_id"), I("item_type_id"));
         public static readonly DemoTable Hits = T("hits", true, I("url_id"), D("hit_timestamp"), I("session_id"),
             I("page_title_id"), I("web_id"), I("agent_id"), I("device_id"), I("os_id"),
-            F("seconds_on_page"), F("page_load_time"), G("page_request_id"), I("country_id"), I("city_id"), I("id"));
+            F("seconds_on_page"), F("page_load_time"), G("page_request_id"), I("country_id"), I("city_id"),
+            I("location_province_id"), I("id"));
         public static readonly DemoTable Interactions = T("copilot_interactions", false,
             N("graph_interaction_id", 200), I("session_id"), I("user_id"), N("request_id", 200),
             I("interaction_type_id"), I("app_class_id"), I("conversation_type_id"), D("created_utc"),

@@ -366,16 +366,25 @@ namespace Tests.UnitTests
         {
             var sink = Generate(Options(), t => t == DemoTables.Titles || t == DemoTables.Hits || t == DemoTables.Urls);
             var titles = sink.For(DemoTables.Titles);
-            Assert.AreEqual(3, titles.Count);
+            Assert.AreEqual(DemoWebCatalogue.UrlCount, titles.Count);
             Assert.AreEqual(titles.Count, titles.Select(r => (string)r[1]).Distinct(StringComparer.OrdinalIgnoreCase).Count());
-            Assert.AreEqual(SeedDataCatalogue.Departments.Length * 3, sink.For(DemoTables.Urls).Count);
+
+            // Every URL must be distinct too. IX_urls_full_url is UNIQUE WITH IGNORE_DUP_KEY = ON, so
+            // a duplicate is silently DISCARDED at insert rather than rejected - and the first symptom
+            // is a foreign-key failure several tables later, in a completely unrelated area.
+            var urls = sink.For(DemoTables.Urls);
+            Assert.AreEqual(DemoWebCatalogue.UrlCount, urls.Count);
+            Assert.AreEqual(urls.Count, urls.Select(r => (string)r[1]).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                "Duplicate URLs are dropped by IGNORE_DUP_KEY, leaving dangling references.");
+
             var keys = new HashSet<int>(titles.Select(r => (int)r[0]));
             var hits = sink.For(DemoTables.Hits);
-            Assert.IsTrue(hits.Any(r => (int)r[0] > 3), "Exercise other sites, not only the first three URLs.");
+            Assert.IsTrue(hits.Select(r => (int)r[0]).Distinct().Count() > DemoWebCatalogue.PagesPerSite,
+                "Exercise more than one site's pages.");
             foreach (var hit in hits)
             {
                 Assert.IsTrue(keys.Contains((int)hit[3]));
-                Assert.AreEqual(((int)hit[0] - 1) % 3 + 1, hit[3]);
+                Assert.AreEqual(hit[0], hit[3], "Each page has exactly one title, so the ids match.");
             }
         }
 

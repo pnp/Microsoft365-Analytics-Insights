@@ -1,0 +1,139 @@
+using Common.Entities.SpoWebActivity;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+using System;
+using System.Linq;
+
+namespace Tests.UnitTests
+{
+    /// <summary>
+    /// What the web activity page tells an admin when there is nothing to show.
+    /// </summary>
+    /// <remarks>
+    /// This is the part of the page that has to work when the rest of it cannot. An empty report is
+    /// ambiguous - not deployed, not configured, broken, or simply a quiet intranet - and an admin
+    /// who cannot tell those apart will go and debug the wrong one.
+    /// </remarks>
+    [TestClass]
+    [TestCategory("WebActivity")]
+    public class WebActivityAvailabilityTests
+    {
+        private static WebActivitySources AllOn() => new WebActivitySources
+        {
+            WebTraffic = true,
+            UserMetadata = true,
+            AppInsightsConfigured = true,
+        };
+
+        private static DateTime Now => new DateTime(2026, 3, 18, 12, 0, 0, DateTimeKind.Utc);
+
+        [TestMethod]
+        public void HealthyDeployment_ReportsNothingMissing()
+        {
+            var model = WebActivityAvailability.Build(AllOn(), Now.AddHours(-2), true, true, Now);
+
+            Assert.IsTrue(model.Available);
+            Assert.AreEqual(0, model.Reasons.Count, string.Join(" | ", model.Reasons));
+        }
+
+        [TestMethod]
+        public void ImportOff_IsReportedBeforeAnythingDownstreamOfIt()
+        {
+            var sources = AllOn();
+            sources.WebTraffic = false;
+
+            var model = WebActivityAvailability.Build(sources, null, false, false, Now);
+
+            Assert.IsFalse(model.Available);
+            StringAssert.Contains(model.Reasons[0], "web traffic import is switched off");
+
+            // The tracker-not-deployed message must NOT also appear: telling an admin to redeploy a
+            // tracker when the import that reads it is switched off sends them to the wrong place.
+            Assert.IsFalse(model.Reasons.Any(r => r.Contains("AI Tracker")));
+        }
+
+        [TestMethod]
+        public void ConfiguredButNoHitsEver_PointsAtTheTrackerNotTheImporter()
+        {
+            var model = WebActivityAvailability.Build(AllOn(), null, null, null, Now);
+
+            Assert.IsFalse(model.Available);
+            Assert.IsTrue(model.Reasons.Any(r => r.Contains("AI Tracker")));
+        }
+
+        [TestMethod]
+        public void MissingConnectionString_IsReportedInsteadOfTheTrackerAdvice()
+        {
+            var sources = AllOn();
+            sources.AppInsightsConfigured = false;
+
+            var model = WebActivityAvailability.Build(sources, null, null, null, Now);
+
+            Assert.IsTrue(model.Reasons.Any(r => r.Contains("Application Insights connection string")));
+            Assert.IsFalse(model.Reasons.Any(r => r.Contains("AI Tracker")));
+        }
+
+        [TestMethod]
+        public void StaleCollection_IsFlaggedButDoesNotHideTheData()
+        {
+            var lastHit = Now.AddDays(-9);
+            var model = WebActivityAvailability.Build(AllOn(), lastHit, true, true, Now);
+
+            Assert.IsTrue(model.Available, "Nine-day-old data is still data; it just needs explaining.");
+            Assert.IsTrue(model.Reasons.Any(r => r.Contains("days old")));
+        }
+
+        [TestMethod]
+        public void RecentQuietWeekend_IsNotReportedAsAFailure()
+        {
+            // Two days is inside the threshold. A one-day threshold would cry wolf every weekend on
+            // any intranet quiet enough to have no Saturday traffic.
+            var model = WebActivityAvailability.Build(AllOn(), Now.AddDays(-2), true, true, Now);
+
+            Assert.IsFalse(model.Reasons.Any(r => r.Contains("days old")), string.Join(" | ", model.Reasons));
+        }
+
+        [TestMethod]
+        public void UnknownOptionalFeatures_AreAssumedPresentRatherThanReportedMissing()
+        {
+            // Null means "the query that would have told us failed". Reporting that as "click capture
+            // is off" would send an admin to enable something that may already be on.
+            var model = WebActivityAvailability.Build(AllOn(), Now.AddHours(-1), null, null, Now);
+
+            Assert.IsTrue(model.SearchAvailable);
+            Assert.IsTrue(model.ClickTrackingAvailable);
+            Assert.IsFalse(model.Reasons.Any(r => r.Contains("element clicks")));
+        }
+
+        [TestMethod]
+        public void NoSearchesOrClicks_ExplainsExactlyWhichPanelIsAffected()
+        {
+            var model = WebActivityAvailability.Build(AllOn(), Now.AddHours(-1), false, false, Now);
+
+            Assert.IsTrue(model.Available, "Search and click capture are optional extras, not the page.");
+            Assert.IsTrue(model.Reasons.Any(r => r.Contains("Web searches tab")));
+            Assert.IsTrue(model.Reasons.Any(r => r.Contains("Journeys tab")));
+        }
+
+        [TestMethod]
+        public void NoDirectory_SaysVisitorCountsAreStillAccurate()
+        {
+            var sources = AllOn();
+            sources.UserMetadata = false;
+
+            var model = WebActivityAvailability.Build(sources, Now.AddHours(-1), true, true, Now);
+
+            Assert.IsTrue(model.Available);
+            var reason = model.Reasons.Single(r => r.Contains("user metadata"));
+            StringAssert.Contains(reason, "Visitor counts are still accurate");
+        }
+
+        [TestMethod]
+        public void NullSources_DoNotThrow()
+        {
+            var model = WebActivityAvailability.Build(null);
+
+            Assert.IsFalse(model.Available);
+            Assert.IsTrue(model.Reasons.Count > 0);
+        }
+    }
+}

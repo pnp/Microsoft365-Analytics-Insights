@@ -58,6 +58,7 @@ namespace Tests.FakeDataGen.Demo
         private IDemoSink _sink;
         private DemoSummary _summary;
         private DemoCollaborationGenerator _collaboration;
+        private DemoWebActivityGenerator _web;
         private DemoPowerPlatformGenerator _powerPlatform;
         private DemoAgentCosts _agentCosts;
 
@@ -77,6 +78,7 @@ namespace Tests.FakeDataGen.Demo
         {
             _summary = summary;
             _sink = destination;
+            _web = new DemoWebActivityGenerator(_options, _calendar, destination);
             _agentCosts = new DemoAgentCosts(_options, destination);
             progress?.Invoke("Writing synthetic dimensions, users and current licence assignments...");
             WriteDimensions();
@@ -160,34 +162,16 @@ namespace Tests.FakeDataGen.Demo
             _sink.Write(DemoTables.Agents, 3, "Contoso Expenses Bot", "Copilot.Studio.ContosoDemo.Expenses", true);
             _sink.Write(DemoTables.Agents, 4, "Contoso Onboarding Guide", "Copilot.Studio.ContosoDemo.Onboarding", true);
             _sink.Write(DemoTables.Agents, 5, "Microsoft 365 Copilot Cowork", "Copilot.M365Copilot.CoworkAgent", false);
-            Dimension(DemoTables.Titles, new[] { "Welcome", "Working together", "Καλημέρα κόσμε" });
-            for (int site = 1; site <= SeedDataCatalogue.Departments.Length; site++)
-            {
-                string siteUrl = $"https://contoso.sharepoint.com/sites/demo-{site:D2}";
-                _sink.Write(DemoTables.Sites, site, siteUrl, DemoRandom.Id(_options.Seed, 2, site).ToString());
-                _sink.Write(DemoTables.Webs, site, siteUrl, "Contoso " + SeedDataCatalogue.Departments[site - 1], site);
-                for (int page = 0; page < 3; page++)
-                {
-                    int key = (site - 1) * 3 + page + 1;
-                    _sink.Write(DemoTables.Urls, key, siteUrl + "/SitePages/" + (page == 2 ? "Καλημέρα-κόσμε/" : "")
-                        + $"Contoso-demo-page-{page + 1}.aspx");
-                }
-            }
+            // Page URLs and their titles are written together by the web generator: each page has
+            // exactly one title, so a separate title dimension would immediately drift from the pages
+            // it is supposed to name.
+            _web.WriteSharedDimensions();
             _sink.Write(DemoTables.Extensions, 1, "aspx");
             for (int page = 1; page <= 3; page++)
                 _sink.Write(DemoTables.FileNames, page, $"Contoso-demo-page-{page}.aspx");
             _sink.Write(DemoTables.ItemTypes, 1, "File");
-            _sink.Write(DemoTables.Browsers, 1, "Edge");
-            _sink.Write(DemoTables.Browsers, 2, "Chrome");
-            _sink.Write(DemoTables.Browsers, 3, "Safari");
-            _sink.Write(DemoTables.Devices, 1, "Desktop");
-            _sink.Write(DemoTables.Devices, 2, "Mobile");
-            _sink.Write(DemoTables.OperatingSystems, 1, "Windows");
-            _sink.Write(DemoTables.OperatingSystems, 2, "macOS");
-            _sink.Write(DemoTables.OperatingSystems, 3, "iOS");
-            _sink.Write(DemoTables.OperatingSystems, 4, "Android");
-            Dimension(DemoTables.WebCountries, SeedDataCatalogue.Countries);
-            Dimension(DemoTables.WebCities, SeedDataCatalogue.Locales.Select(l => WebCity(l.City)));
+            _web.WriteClientDimensions();
+            if (_options.Includes(DemoArea.Web)) _web.WriteSearchAndClickDimensions();
             _sink.Write(DemoTables.ResourceNames, 1, "Contoso knowledge – Καλημέρα κόσμε");
             _sink.Write(DemoTables.ResourceSites, 1, "https://contoso.sharepoint.com/sites/demo-01");
             _sink.Write(DemoTables.ResourceTypes, 1, "SharePoint");
@@ -437,7 +421,8 @@ namespace Tests.FakeDataGen.Demo
                     if (slot == 0 && agent > 0 && user.Id % 2 == 0)
                         _sink.Write(DemoTables.CopilotEventPlugins, id, 1 + user.Id / 2 % 2);
                     if (slot == 0 && host == 0 && user.Id % 2 != 0)
-                        _sink.Write(DemoTables.CopilotFileContexts, id, 1, 1, user.Department * 3 + 1, user.Department + 1);
+                        _sink.Write(DemoTables.CopilotFileContexts, id, 1, 1,
+                            DemoWebCatalogue.SiteUrlId(user.Department + 1, DemoPageKind.DeptHome), user.Department + 1);
                     if (slot == 0 && host == 1)
                         _sink.Write(DemoTables.CopilotMeetingContexts, id, user.Department + 1);
                     if (_options.Includes(DemoArea.Dlp))
@@ -492,28 +477,26 @@ namespace Tests.FakeDataGen.Demo
 
         private void WriteWebEvents(DemoUser user, int day, DemoDay activity)
         {
-            int session = (user.Id - 1) * _options.Days + day + 1, site = user.Department + 1;
-            if (_options.Includes(DemoArea.Web))
-                _sink.Write(DemoTables.Sessions, session, DemoRandom.Id(_options.Seed, 5, user.Id, day).ToString("N"), user.Id);
+            int site = user.Department + 1;
             var start = _calendar.Timestamp(user.Zone, day, DemoRandom.Value(_options.Seed, user.Id, day, 90));
-            // A small representative navigation path, not a second copy of every Graph file count.
-            for (int page = 0; page < Math.Min(3, activity.SharePointFiles); page++)
+
+            // The SharePoint management-audit view of the same working day. Deliberately NOT the same
+            // rows as the page-hit stream: the audit log records file activity, the tracker records
+            // page views, and pretending they are one event stream is how the two reports end up
+            // disagreeing about the same day.
+            if (_options.Includes(DemoArea.SharePoint))
             {
-                int url = (site - 1) * 3 + page + 1;
-                var stamp = start.AddSeconds(page * 12);
-                var eventId = DemoRandom.Id(_options.Seed, 6, user.Id, day, page);
-                if (_options.Includes(DemoArea.SharePoint))
+                for (int page = 0; page < Math.Min(3, activity.SharePointFiles); page++)
                 {
+                    int url = DemoWebCatalogue.SiteUrlId(site, DemoWebCatalogue.SiteKinds[page]);
+                    var stamp = start.AddSeconds(page * 12);
+                    var eventId = DemoRandom.Id(_options.Seed, 6, user.Id, day, page);
                     _sink.Write(DemoTables.Audit, eventId, user.Id, page == 2 ? 3 : 2, stamp);
                     _sink.Write(DemoTables.SharePointAudit, eventId, url, 1, page + 1, site, 1);
                 }
-                bool mac = user.Id % 5 == 0, mobile = user.Id % 3 == 0;
-                if (_options.Includes(DemoArea.Web)) _sink.Write(DemoTables.Hits, url, stamp, session, page + 1, site, mac ? 3 : 1 + user.Id % 2,
-                    mobile ? 2 : 1, mobile ? (mac ? 3 : 4) : mac ? 2 : 1, 10.0 + page, 350.0 + user.Id % 500,
-                    DemoRandom.Id(_options.Seed, 7, user.Id, day, page),
-                    Lookup(DemoTables.WebCountries, user.Profile.Country), Lookup(DemoTables.WebCities, WebCity(user.Profile.City)),
-                    checked((session - 1) * 3 + page + 1));
             }
+
+            if (_options.Includes(DemoArea.Web)) _web.WriteDay(user, day, activity.SharePointFiles);
         }
 
         private void WriteCopilotCounts()
