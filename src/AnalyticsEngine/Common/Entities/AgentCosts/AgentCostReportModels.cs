@@ -11,20 +11,31 @@ namespace Common.Entities.AgentCosts
     /// is used to choose a grouping expression - accepting arbitrary text there is how a reporting filter
     /// turns into an injection point.
     /// </summary>
+    /// <remarks>
+    /// <para><b>Deliberately smaller than the columns the database can hold.</b> A live capture of the
+    /// Power Platform per-agent credit response showed its <c>metadata</c> carrying exactly
+    /// <c>ResourceName</c>, <c>NonBillableQuantity</c> and <c>Users</c> - nothing else. The LLM model, the
+    /// tool invoked, the knowledge sources and the channel appear in no Microsoft reference and in no
+    /// observed payload, so a pivot on any of them could only ever answer "Not reported". They were removed
+    /// rather than left on the page: a picker that cannot produce an answer is worse than an absent one,
+    /// because it reads as "this tenant did none of that".</para>
+    ///
+    /// <para><c>Feature</c> and <c>Harness</c> are kept because Microsoft's REST reference does document a
+    /// <c>Feature</c> key (harness is classified from it), even though the captured response omitted it on a
+    /// zero-consumption agent. They are gated at runtime by
+    /// <see cref="AgentCostAvailability.CreditDimensionsWithData"/> instead, so they disappear when there is
+    /// nothing behind them and reappear if Microsoft ever sends them.</para>
+    /// </remarks>
     public static class AgentCostDimensions
     {
         public const string Agent = "agent";
         public const string Environment = "environment";
         public const string Harness = "harness";
         public const string Feature = "feature";
-        public const string Model = "model";
-        public const string Tool = "tool";
-        public const string KnowledgeSource = "knowledge";
-        public const string Channel = "channel";
 
         public static readonly IReadOnlyList<string> All = new List<string>
         {
-            Agent, Environment, Harness, Feature, Model, Tool, KnowledgeSource, Channel
+            Agent, Environment, Harness, Feature
         };
 
         public static bool IsValid(string dimension)
@@ -48,9 +59,16 @@ namespace Common.Entities.AgentCosts
         public const string ResourceGroup = "resourcegroup";
         public const string Subscription = "subscription";
 
+        /// <summary>
+        /// The value of the tag the query was grouped by. Only populated when a <c>TagKey:</c> grouping is
+        /// configured, and - like every other dimension here - only offered by the UI once there is data
+        /// behind it.
+        /// </summary>
+        public const string Tag = "tag";
+
         public static readonly IReadOnlyList<string> All = new List<string>
         {
-            Meter, Service, MeterCategory, Resource, ResourceGroup, Subscription
+            Meter, Service, MeterCategory, Resource, ResourceGroup, Subscription, Tag
         };
 
         public static bool IsValid(string dimension)
@@ -74,16 +92,6 @@ namespace Common.Entities.AgentCosts
         public string EnvironmentId { get; set; }
         public string Harness { get; set; }
         public string FeatureName { get; set; }
-        public string LlmModel { get; set; }
-
-        /// <summary>
-        /// The remaining billing dimensions. Present so every dimension the report can PIVOT by can also be
-        /// FILTERED by - spotting that one tool or channel is driving the spend is only half an answer if you
-        /// then cannot narrow the page to it.
-        /// </summary>
-        public string ToolInvoked { get; set; }
-        public string KnowledgeSources { get; set; }
-        public string ChannelId { get; set; }
 
         /// <summary>Free-text match against the agent name. Null or empty means no name filter.</summary>
         public string Search { get; set; }
@@ -173,6 +181,20 @@ namespace Common.Entities.AgentCosts
         [JsonProperty("azureDimensionsWithData")]
         public List<string> AzureDimensionsWithData { get; set; } = new List<string>();
 
+        /// <summary>
+        /// The <see cref="AgentCostDimensions"/> values that actually have data, so the UI never offers a
+        /// credit pivot that can only answer "Not reported".
+        /// </summary>
+        /// <remarks>
+        /// The exact counterpart of <see cref="AzureDimensionsWithData"/>, and needed for the same reason.
+        /// Microsoft populates the per-agent credit <c>metadata</c> sparsely - a live capture carried only
+        /// the agent name, a non-billable quantity and a user count - and which keys arrive is not something
+        /// this product controls or can predict. Reading it from the stored data is the only honest answer,
+        /// and it means a dimension reappears by itself if Microsoft starts sending it.
+        /// </remarks>
+        [JsonProperty("creditDimensionsWithData")]
+        public List<string> CreditDimensionsWithData { get; set; } = new List<string>();
+
         /// <summary>Plain-English notes for the admin reading the page.</summary>
         [JsonProperty("messages")]
         public List<string> Messages { get; set; } = new List<string>();
@@ -223,6 +245,26 @@ namespace Common.Entities.AgentCosts
 
         [JsonProperty("cost")]
         public decimal Cost { get; set; }
+
+        /// <summary>
+        /// Metered quantity behind <see cref="Cost"/>, or null when it would be meaningless.
+        /// </summary>
+        /// <remarks>
+        /// Populated ONLY when a single meter/tag combination contributes, because quantities of different
+        /// meters are different units - credits, GB, hours, operations - and adding them gives a number that
+        /// means nothing. Measured on a real subscription the naive sum came to "5,342,761 metered units",
+        /// which is worse than showing nothing at all.
+        ///
+        /// When it IS populated - an import narrowed to the Copilot Credits meter - it is the credit count,
+        /// and that matters: the headline credit figures on this page come from the Copilot Studio credit
+        /// import (the <c>MCSMessages</c> entitlement), and Copilot Cowork does not draw on that entitlement
+        /// at all. A Cowork tenant therefore has real Azure spend while those figures are legitimately zero.
+        ///
+        /// For an unfiltered subscription the per-tag or per-meter breakdown is where the credit count lives,
+        /// scoped to one key and therefore to one unit.
+        /// </remarks>
+        [JsonProperty("quantity")]
+        public decimal? Quantity { get; set; }
 
         /// <summary>True when any contributing row was still a provisional (pre-invoice) estimate.</summary>
         [JsonProperty("includesEstimates")]
@@ -300,6 +342,12 @@ namespace Common.Entities.AgentCosts
     }
 
     /// <summary>One fully-granular credit row - the deepest view the source data supports.</summary>
+    /// <remarks>
+    /// The LLM model, tool invoked, knowledge sources and channel are deliberately absent. A live capture of
+    /// the per-agent credit response carried only <c>ResourceName</c>, <c>NonBillableQuantity</c> and
+    /// <c>Users</c> in its metadata; those four fields appear in no Microsoft reference and in no observed
+    /// payload, so every row would have shown them blank.
+    /// </remarks>
     public class AgentCostDetailRow
     {
         [JsonProperty("usageDate")]
@@ -322,18 +370,6 @@ namespace Common.Entities.AgentCosts
 
         [JsonProperty("featureName")]
         public string FeatureName { get; set; }
-
-        [JsonProperty("channelId")]
-        public string ChannelId { get; set; }
-
-        [JsonProperty("llmModel")]
-        public string LlmModel { get; set; }
-
-        [JsonProperty("toolInvoked")]
-        public string ToolInvoked { get; set; }
-
-        [JsonProperty("knowledgeSources")]
-        public string KnowledgeSources { get; set; }
 
         [JsonProperty("billedCredits")]
         public decimal BilledCredits { get; set; }
@@ -431,18 +467,6 @@ namespace Common.Entities.AgentCosts
 
         [JsonProperty("features")]
         public List<string> Features { get; set; } = new List<string>();
-
-        [JsonProperty("models")]
-        public List<string> Models { get; set; } = new List<string>();
-
-        [JsonProperty("tools")]
-        public List<string> Tools { get; set; } = new List<string>();
-
-        [JsonProperty("knowledgeSources")]
-        public List<string> KnowledgeSources { get; set; } = new List<string>();
-
-        [JsonProperty("channels")]
-        public List<string> Channels { get; set; } = new List<string>();
     }
 
     public class AgentCostFilterOption
