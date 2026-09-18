@@ -434,8 +434,13 @@ namespace Tests.UnitTests
             Assert.IsTrue(kpis.AverageLoadSeconds > 0);
             Assert.IsTrue(kpis.AverageSecondsOnPage > 0);
 
-            // One of the eleven page views came from a phone.
-            Assert.AreEqual(100.0 / 11, kpis.MobileVisitPct, 0.01);
+            // One of the eleven page views came from a phone, and every page view has a device.
+            Assert.AreEqual(100.0 / 11, kpis.MobilePageViewPct.Value, 0.01);
+
+            // Reach is the ENABLED directory visitors over the enabled directory, so it can never
+            // exceed 100% even when someone who visited has since been disabled.
+            Assert.AreEqual(75.0, kpis.ReachPct.Value, 0.01);
+            Assert.IsTrue(kpis.DirectoryImported);
 
             Assert.IsTrue(overview.Judgements.Count > 0);
             Assert.IsTrue(overview.Heatmap.Sum(c => c.Visits) == 6,
@@ -534,13 +539,16 @@ namespace Tests.UnitTests
             Assert.AreEqual(2, technology.Kpis.Browsers);
             Assert.AreEqual(2, technology.Kpis.OperatingSystems);
             Assert.AreEqual(2, technology.Kpis.Devices);
-            Assert.AreEqual(100.0 / 11, technology.Kpis.MobilePct, 0.01);
+            Assert.AreEqual(100.0 / 11, technology.Kpis.MobilePct.Value, 0.01);
+            Assert.AreEqual(11, technology.Kpis.KnownDevicePageViews);
+            Assert.AreEqual(11, technology.Kpis.PageViews);
 
             // One page view took 6.5 seconds, so the 95th percentile must land on the slow tail
             // rather than near the mean.
             Assert.IsTrue(technology.Kpis.P95LoadSeconds >= 6.5,
                 "The percentile estimate must never understate the slow tail: got "
                 + technology.Kpis.P95LoadSeconds);
+            Assert.IsFalse(technology.Kpis.P95AtCeiling, "6.5s is well inside the histogram.");
             Assert.IsTrue(technology.Kpis.AverageLoadSeconds < 2.0);
 
             Assert.IsTrue(technology.Detail.Count > 0);
@@ -556,6 +564,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, geography.Kpis.Countries);
             Assert.AreEqual(1, geography.Kpis.Cities);
             Assert.AreEqual(1, geography.Kpis.Provinces);
+            Assert.AreEqual(11, geography.Kpis.LocatedPageViews);
             Assert.AreEqual(0, geography.Kpis.UnknownLocationPageViews);
             Assert.AreEqual(6, geography.Kpis.Visits);
 
@@ -601,7 +610,9 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, overview.Kpis.Visits);
             Assert.AreEqual(0, overview.Kpis.BouncePct, 1e-9);
             Assert.AreEqual(0, overview.Kpis.PagesPerVisit, 1e-9);
-            Assert.AreEqual(0, overview.Kpis.AverageLoadSeconds, 1e-9);
+            Assert.IsNull(overview.Kpis.AverageLoadSeconds, "No data is not a zero-second page load.");
+            Assert.IsNull(overview.Kpis.AverageSecondsOnPage);
+            Assert.IsNull(overview.Kpis.MobilePageViewPct);
             Assert.AreEqual(0, overview.Queries.Count(q => q.Error != null));
 
             // The directory is not windowed, so reach still has a denominator.

@@ -16,9 +16,11 @@ import {
   loadTone,
   queryFor,
   reachTone,
+  reachToneOrNeutral,
   searchRelianceTone,
   shortenUrl,
   toStackedSeries,
+  withRemainder,
 } from './webActivityShared';
 import type { WebActivityQueryInfo, WebActivityStackPoint } from '../../types/webActivity';
 
@@ -42,13 +44,20 @@ describe('webActivityShared thresholds', () => {
     expect(reachTone(45)).toBe('warning');
     expect(reachTone(80)).toBe('good');
 
+    // An unmeasurable reach is neutral, not critical - no denominator is not a bad result.
+    expect(reachToneOrNeutral(null)).toBe('neutral');
+    expect(reachToneOrNeutral(10)).toBe('critical');
+
     // Bounce: lower is better, and the boundary value belongs to the healthier band.
     expect(bounceTone(70)).toBe('critical');
     expect(bounceTone(HIGH_BOUNCE_PCT)).toBe('critical');
     expect(bounceTone(50)).toBe('warning');
     expect(bounceTone(HEALTHY_BOUNCE_PCT)).toBe('good');
 
-    // Load: lower is better, and "no data" is not "instant".
+    // Load: lower is better, and unmeasured is NOT instant. A missing load time rendered as a good
+    // green card would tell an admin their slowest pages are fine.
+    expect(loadTone(null)).toBe('neutral');
+    expect(loadTone(undefined)).toBe('neutral');
     expect(loadTone(0)).toBe('neutral');
     expect(loadTone(0.9)).toBe('good');
     expect(loadTone(2)).toBe('warning');
@@ -148,5 +157,33 @@ describe('queryFor', () => {
 
     expect(queryFor(queries, 'overview-kpis')?.sql).toBe('SELECT 1');
     expect(queryFor(queries, 'nope')).toBeUndefined();
+  });
+});
+
+describe('withRemainder', () => {
+  it('adds the traffic a truncated list does not account for', () => {
+    // Every ranked list is capped at the top N. A donut built from only those rows normalises to
+    // them and always totals 100%, so a tenant with 40 countries would see 15 of them silently
+    // inflated to cover everything.
+    const listed = [
+      { label: 'United Kingdom', value: 600 },
+      { label: 'Ireland', value: 200 },
+    ];
+
+    const withOther = withRemainder(listed, 1000, 'Other countries');
+    expect(withOther).toHaveLength(3);
+    expect(withOther[2]).toEqual({ label: 'Other countries', value: 200 });
+  });
+
+  it('adds nothing when the list already accounts for the whole total', () => {
+    const listed = [{ label: 'United Kingdom', value: 1000 }];
+    expect(withRemainder(listed, 1000, 'Other')).toHaveLength(1);
+  });
+
+  it('adds nothing when the total does not belong to the list', () => {
+    // A negative remainder means the caller passed a denominator from a different population.
+    // Drawing it would produce a nonsensical slice, so the list has to be returned untouched.
+    const listed = [{ label: 'United Kingdom', value: 1000 }];
+    expect(withRemainder(listed, 400, 'Other')).toHaveLength(1);
   });
 });

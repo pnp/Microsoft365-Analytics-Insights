@@ -39,6 +39,7 @@ const window28: WebActivityWindow = {
   workingDays: 20,
   top: 15,
   minimumViews: 5,
+  segmentsFullyReachable: true,
 };
 
 const availability = (over: Partial<WebActivityAvailability> = {}): WebActivityAvailability => ({
@@ -64,6 +65,7 @@ const overview = (over: Partial<WebActivityOverview> = {}): WebActivityOverview 
     visitors: 1500,
     knownUsers: 2000,
     reachPct: 75,
+    directoryImported: true,
     uniquePages: 900,
     sites: 14,
     pagesPerVisit: 4,
@@ -72,7 +74,7 @@ const overview = (over: Partial<WebActivityOverview> = {}): WebActivityOverview 
     averageLoadSeconds: 1.1,
     newVisitors: 120,
     returningVisitors: 1380,
-    mobileVisitPct: 11,
+    mobilePageViewPct: 11,
   },
   trend: [],
   visitorSegments: [{ key: 'Daily', label: 'Daily', count: 400, sharePct: 27 }],
@@ -191,6 +193,23 @@ describe('WebActivityPage', () => {
     expect(mockOverview).toHaveBeenLastCalledWith(90, expect.anything());
   });
 
+  it('still renders after going back to a period it has already shown', async () => {
+    // Regression: the tab's data was cleared on every period change but the "already loaded" marker
+    // was not, so 28 -> 90 -> 28 left the marker set with no data behind it and the tab stayed
+    // permanently blank until the user hit Refresh.
+    renderWithProvider(<WebActivityPage />);
+    await screen.findByText('Visits go several pages deep');
+
+    const period = screen.getByLabelText('Reporting period');
+    fireEvent.change(period, { target: { value: '90' } });
+    await waitFor(() => expect(mockOverview).toHaveBeenLastCalledWith(90, expect.anything()));
+
+    fireEvent.change(period, { target: { value: '28' } });
+
+    await waitFor(() => expect(mockOverview).toHaveBeenLastCalledWith(28, expect.anything()));
+    await screen.findByText('Visits go several pages deep');
+  });
+
   it('shows the headline figures and the page\u2019s own verdict on them', async () => {
     renderWithProvider(<WebActivityPage />);
 
@@ -224,6 +243,27 @@ describe('WebActivityPage', () => {
     // "No data for this period" and "the query timed out" must never look the same on a page that
     // exists to support a content decision.
     await screen.findByText(/could not be loaded: Execution Timeout Expired/);
+
+    // And the headline figures above it must warn that they may be incomplete. A failed aggregate
+    // returns no rows, so its KPI renders as zero - which reads as a result, not as missing data.
+    await screen.findByText(/could not be loaded, so some figures below may read as zero/);
+  });
+
+  it('shows no reach percentage when there is no directory to measure against', async () => {
+    mockAvailability.mockResolvedValue(availability({ userMetadataAvailable: false }));
+    mockOverview.mockResolvedValue(
+      overview({
+        kpis: { ...overview().kpis, reachPct: null, directoryImported: false },
+      }),
+    );
+
+    renderWithProvider(<WebActivityPage />);
+
+    // dbo.users fills up from the page-view importer itself, so a percentage here would be the
+    // share of "people we have already seen" who visited - circular, and close to 100% by
+    // construction.
+    await screen.findByText('no directory to measure against');
+    expect(screen.queryByText(/of 2,000 enabled directory users/)).not.toBeInTheDocument();
   });
 
   it('surfaces a whole-tab failure and keeps the page usable', async () => {

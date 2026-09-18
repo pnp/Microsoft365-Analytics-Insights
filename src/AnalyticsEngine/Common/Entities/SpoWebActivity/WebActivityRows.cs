@@ -26,6 +26,17 @@ namespace Common.Entities.SpoWebActivity
             public long UniquePageViews { get; set; }
             public long Visits { get; set; }
             public int Visitors { get; set; }
+
+            /// <summary>
+            /// Visitors who are in the enabled directory population - the numerator of reach.
+            /// </summary>
+            /// <remarks>
+            /// Separate from <see cref="Visitors"/> so reach cannot exceed 100%. A user who visited
+            /// and was then disabled is a real visitor but is not in the denominator, so counting
+            /// them in both would produce "104% of the organisation visited".
+            /// </remarks>
+            public int EnabledVisitors { get; set; }
+
             public int KnownUsers { get; set; }
             public int UniquePages { get; set; }
             public int Sites { get; set; }
@@ -209,6 +220,7 @@ namespace Common.Entities.SpoWebActivity
             public int OperatingSystems { get; set; }
             public int Devices { get; set; }
             public long UnknownBrowserPageViews { get; set; }
+            public long PageViews { get; set; }
             public double? AverageLoadSeconds { get; set; }
         }
 

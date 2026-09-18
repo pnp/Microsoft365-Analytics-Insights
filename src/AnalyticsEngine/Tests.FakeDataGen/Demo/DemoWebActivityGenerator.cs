@@ -55,6 +55,30 @@ namespace Tests.FakeDataGen.Demo
         /// </remarks>
         private const int UnlocatedPercent = 7;
 
+        /// <summary>
+        /// First salt in this generator's private range.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <b>Salt ranges must not overlap between generators.</b> <see cref="DemoRandom.Value"/> is a
+        /// pure hash of (seed, user, day, salt), so two generators drawing the same salt for the same
+        /// user and day get the SAME number - which silently correlates two decisions that are
+        /// supposed to be independent.
+        /// </para>
+        /// <para>
+        /// This is not hypothetical: this generator originally used 2010-2081, and
+        /// <see cref="DemoPowerPlatformGenerator"/> uses 2010-2015 for the same (user, day). The
+        /// browser choice and the "did this user use Power Apps today?" draw were the same number, so
+        /// every user assigned Edge 129 generated Power Apps activity and every user on Safari or
+        /// Firefox never did. Both data sets still looked plausible on their own.
+        /// </para>
+        /// <para>
+        /// Allocated elsewhere: 1-6, 50-51, 60, 71, 90, 110, 130 (base generator, Copilot, DLP),
+        /// 1010-1060 (collaboration), 2010-2015 (Power Platform).
+        /// </para>
+        /// </remarks>
+        private const int SaltBase = 5000;
+
         private readonly DemoOptions _options;
         private readonly DemoCalendar _calendar;
         private readonly IDemoSink _sink;
@@ -190,7 +214,7 @@ namespace Tests.FakeDataGen.Demo
         {
             if (intensity <= 0) return;
 
-            int visits = Draw(user, day, 2000) % 100 < SecondVisitPercent ? 2 : 1;
+            int visits = Draw(user, day, SaltBase) % 100 < SecondVisitPercent ? 2 : 1;
 
             for (int visit = 0; visit < visits; visit++)
             {
@@ -206,31 +230,31 @@ namespace Tests.FakeDataGen.Demo
 
             // One client per visit. Someone does not change browser or device half-way through a
             // session, and a report that grouped by device would count such a visit twice.
-            string browser = DemoWebCatalogue.PickWeighted(DemoWebCatalogue.Browsers, Draw(user, day, 2010 + visit));
-            string device = DemoWebCatalogue.PickWeighted(DemoWebCatalogue.Devices, Draw(user, day, 2020 + visit));
+            string browser = DemoWebCatalogue.PickWeighted(DemoWebCatalogue.Browsers, Draw(user, day, SaltBase + 10 + visit));
+            string device = DemoWebCatalogue.PickWeighted(DemoWebCatalogue.Devices, Draw(user, day, SaltBase + 20 + visit));
             string operatingSystem = DemoWebCatalogue.OperatingSystemFor(device);
             bool mobile = DemoWebCatalogue.IsMobile(device);
 
-            bool located = Draw(user, day, 2030 + visit) % 100 >= UnlocatedPercent;
+            bool located = Draw(user, day, SaltBase + 30 + visit) % 100 >= UnlocatedPercent;
             int? country = located ? (int?)_countries[Ascii(user.Profile.Country)] : null;
             int? city = located ? (int?)_cities[Ascii(user.Profile.City)] : null;
             int? province = located ? (int?)_provinces[user.Profile.StateOrProvince] : null;
 
-            var start = _calendar.Timestamp(user.Zone, day, Draw(user, day, 2040 + visit), visit * 3);
+            var start = _calendar.Timestamp(user.Zone, day, Draw(user, day, SaltBase + 40 + visit), visit * 3);
 
             // The bounce floor is applied first so a single-page visit is a deliberate outcome rather
             // than an accident of the walk - the report's bounce rate is a headline figure and it has
             // to be stable enough to demonstrate.
-            bool bounce = Draw(user, day, 2050 + visit) % 100 < BouncePercent;
-            int budget = bounce ? 1 : Math.Min(MaxPagesPerVisit, 2 + (int)(Draw(user, day, 2060 + visit) % (uint)Math.Max(1, Math.Min(6, intensity + 2))));
+            bool bounce = Draw(user, day, SaltBase + 50 + visit) % 100 < BouncePercent;
+            int budget = bounce ? 1 : Math.Min(MaxPagesPerVisit, 2 + (int)(Draw(user, day, SaltBase + 60 + visit) % (uint)Math.Max(1, Math.Min(6, intensity + 2))));
 
-            var kind = DemoWebCatalogue.EntryKind(Draw(user, day, 2070 + visit));
-            int site = SiteFor(user, kind, Draw(user, day, 2080 + visit));
+            var kind = DemoWebCatalogue.EntryKind(Draw(user, day, SaltBase + 70 + visit));
+            int site = SiteFor(user, kind, Draw(user, day, SaltBase + 80 + visit));
             var stamp = start;
 
             for (int step = 0; step < budget; step++)
             {
-                int salt = 2100 + visit * 200 + step * 10;
+                int salt = SaltBase + 100 + visit * 200 + step * 10;
                 int urlId = DemoWebCatalogue.UrlId(kind, site);
                 double dwell = Jitter(DemoWebCatalogue.DwellSeconds(kind), Draw(user, day, salt + 1), 0.55);
                 double load = Jitter(
@@ -303,9 +327,9 @@ namespace Tests.FakeDataGen.Demo
         /// like a broken intranet rather than a normal one with a handful of content gaps, and the
         /// report's dead-end percentage would stop being a signal.
         /// </remarks>
-        private static string SearchTerm(DemoUser user, int day, int salt)
+        private string SearchTerm(DemoUser user, int day, int salt)
         {
-            uint draw = DemoRandom.Value(0, user.Id, day, salt);
+            uint draw = Draw(user, day, salt);
             var terms = DemoWebCatalogue.SearchTerms;
 
             if (draw % 5 == 0)

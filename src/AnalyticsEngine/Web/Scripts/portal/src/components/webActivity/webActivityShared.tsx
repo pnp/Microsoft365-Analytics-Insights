@@ -41,11 +41,22 @@ export function bounceTone(percent: number): KpiTone {
 }
 
 /** The KPI tone for an average page load in seconds (lower is better). */
-export function loadTone(seconds: number): KpiTone {
-  if (seconds <= 0) return 'neutral';
+export function loadTone(seconds: number | null | undefined): KpiTone {
+  if (seconds === null || seconds === undefined || seconds <= 0) return 'neutral';
   if (seconds >= SLOW_LOAD_SECONDS) return 'critical';
   return seconds > FAST_LOAD_SECONDS ? 'warning' : 'good';
 }
+
+/** The KPI tone for a reach-style percentage that may not be measurable at all. */
+export function reachToneOrNeutral(percent: number | null | undefined): KpiTone {
+  return percent === null || percent === undefined ? 'neutral' : reachTone(percent);
+}
+
+/** The dwell-time caveat, shown wherever an average time on page is. */
+export const DWELL_CAVEAT =
+  'Excludes the last page of each visit: the tracker measures dwell time against the NEXT page view, '
+  + 'so there is nothing to measure a visit\u2019s final page against. Exit pages are therefore '
+  + 'under-represented in any average time figure.';
 
 /**
  * The KPI tone for how much of the intranet relies on search.
@@ -155,6 +166,29 @@ function decodePath(path: string): string {
   } catch {
     return path;
   }
+}
+
+/**
+ * Appends an explicit remainder when the listed rows do not account for the whole population.
+ *
+ * Every ranked list on this page is truncated to the top N. A donut or a share chart built from
+ * only those rows normalises to them, so it always totals 100% however much traffic the tail held -
+ * a tenant with 40 countries would see 15 of them redistributed to cover everything. The remainder
+ * makes the omission visible instead.
+ */
+export function withRemainder(
+  categories: ReportCategory[],
+  total: number,
+  label: string,
+): ReportCategory[] {
+  const listed = categories.reduce((sum, c) => sum + c.value, 0);
+  const remainder = total - listed;
+
+  // A negative remainder means the caller passed a total that is not this list's population. Adding
+  // it would draw a nonsensical slice, so the list is returned untouched.
+  if (remainder <= 0) return categories;
+
+  return [...categories, { label, value: remainder }];
 }
 
 /** Named counts -> bar/treemap/word-cloud categories. */
@@ -393,5 +427,28 @@ export function JudgementList({ judgements }: { judgements: WebActivityJudgement
         </MessageBar>
       ))}
     </div>
+  );
+}
+
+/**
+ * A warning shown when any of a tab's queries failed.
+ *
+ * Headline figures have nowhere to put a per-query error: a failed aggregate returns no rows, the
+ * figure derived from it is zero, and "0.00s average load" reads as a perfect result rather than as
+ * missing data. The charts below say which section failed; this says the numbers above them may be
+ * incomplete, which is the part a reader would otherwise never learn.
+ */
+export function FailedQueryNote({ queries }: { queries: WebActivityQueryInfo[] }) {
+  const failed = queries.filter((q) => q.error);
+  if (failed.length === 0) return null;
+
+  return (
+    <MessageBar intent="warning" style={{ marginTop: '12px' }}>
+      <MessageBarBody>
+        {failed.length === 1 ? 'One query on this tab' : `${failed.length} queries on this tab`} could
+        not be loaded, so some figures below may read as zero when they are in fact unknown. The
+        affected sections show the error.
+      </MessageBarBody>
+    </MessageBar>
   );
 }

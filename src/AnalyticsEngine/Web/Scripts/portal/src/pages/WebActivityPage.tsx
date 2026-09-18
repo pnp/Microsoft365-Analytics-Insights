@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Title3,
   Body1,
@@ -55,6 +55,9 @@ const WINDOWS = [
   { days: 180, label: 'Last 180 days' },
   { days: 365, label: 'Last 365 days' },
 ];
+
+/** A tab's payload together with the (period, refresh) it was loaded for. */
+type Cached<T> = { key: string; data: T } | null;
 
 type TabKey = 'overview' | 'visits' | 'pages' | 'journeys' | 'geography' | 'search' | 'technology';
 
@@ -115,28 +118,38 @@ export default function WebActivityPage() {
   const [availability, setAvailability] = useState<WebActivityAvailability | null>(null);
   const [availabilityError, setAvailabilityError] = useState<string | null>(null);
 
-  const [overview, setOverview] = useState<WebActivityOverview | null>(null);
-  const [visits, setVisits] = useState<WebActivityVisits | null>(null);
-  const [pages, setPages] = useState<WebActivityPages | null>(null);
-  const [journeys, setJourneys] = useState<WebActivityJourneys | null>(null);
-  const [geography, setGeography] = useState<WebActivityGeography | null>(null);
-  const [search, setSearch] = useState<WebActivitySearch | null>(null);
-  const [technology, setTechnology] = useState<WebActivityTechnology | null>(null);
+  /**
+   * Each tab's payload, tagged with the query it was loaded for.
+   *
+   * Tagging replaces a "have I loaded this?" ref. That ref outlived the data it stood for: the
+   * period-change effect cleared every payload but not the markers, so going 28 -> 90 -> 28 days
+   * left the tab permanently blank, and under React StrictMode the development double-invoke
+   * aborted the first request while leaving its marker set, producing a spinner that never
+   * resolved. With the key on the payload there is nothing to keep in step - a payload loaded for
+   * a different window simply is not this window's payload.
+   */
+  const [overview, setOverview] = useState<Cached<WebActivityOverview>>(null);
+  const [visits, setVisits] = useState<Cached<WebActivityVisits>>(null);
+  const [pages, setPages] = useState<Cached<WebActivityPages>>(null);
+  const [journeys, setJourneys] = useState<Cached<WebActivityJourneys>>(null);
+  const [geography, setGeography] = useState<Cached<WebActivityGeography>>(null);
+  const [search, setSearch] = useState<Cached<WebActivitySearch>>(null);
+  const [technology, setTechnology] = useState<Cached<WebActivityTechnology>>(null);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Clear every tab's data when the window changes, so a stale payload can never be rendered
-  // under a period selector that no longer matches it.
-  useEffect(() => {
-    setOverview(null);
-    setVisits(null);
-    setPages(null);
-    setJourneys(null);
-    setGeography(null);
-    setSearch(null);
-    setTechnology(null);
-  }, [days, reloadToken]);
+  const dataKey = `${days}:${reloadToken}`;
+  const forKey = <T,>(cached: Cached<T>): T | null =>
+    cached && cached.key === dataKey ? cached.data : null;
+
+  const overviewData = forKey(overview);
+  const visitsData = forKey(visits);
+  const pagesData = forKey(pages);
+  const journeysData = forKey(journeys);
+  const geographyData = forKey(geography);
+  const searchData = forKey(search);
+  const technologyData = forKey(technology);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -154,25 +167,20 @@ export default function WebActivityPage() {
     return () => controller.abort();
   }, [reloadToken]);
 
-  // Loads whichever tab is showing, once. Keeping the "already loaded?" check inside the effect
-  // rather than in the click handler means a period change reloads the visible tab automatically.
-  const loadedRef = useRef<Record<string, boolean>>({});
-
+  // Loads whichever tab is showing, once per (tab, period, refresh). Because "already loaded" is
+  // derived from the payload's own key rather than from a separate marker, an aborted or failed
+  // request simply leaves nothing cached and the next render retries.
   useEffect(() => {
-    const key = `${selectedTab}:${days}:${reloadToken}`;
-    if (loadedRef.current[key]) return;
-
     const alreadyHave =
-      (selectedTab === 'overview' && overview) ||
-      (selectedTab === 'visits' && visits) ||
-      (selectedTab === 'pages' && pages) ||
-      (selectedTab === 'journeys' && journeys) ||
-      (selectedTab === 'geography' && geography) ||
-      (selectedTab === 'search' && search) ||
-      (selectedTab === 'technology' && technology);
+      (selectedTab === 'overview' && overviewData) ||
+      (selectedTab === 'visits' && visitsData) ||
+      (selectedTab === 'pages' && pagesData) ||
+      (selectedTab === 'journeys' && journeysData) ||
+      (selectedTab === 'geography' && geographyData) ||
+      (selectedTab === 'search' && searchData) ||
+      (selectedTab === 'technology' && technologyData);
     if (alreadyHave) return;
 
-    loadedRef.current[key] = true;
     const controller = new AbortController();
     setLoading(true);
     setError(null);
@@ -180,27 +188,39 @@ export default function WebActivityPage() {
     const request = (() => {
       switch (selectedTab) {
         case 'visits':
-          return fetchWebActivityVisits(days, controller.signal).then(setVisits);
+          return fetchWebActivityVisits(days, controller.signal).then((d) =>
+            setVisits({ key: dataKey, data: d }),
+          );
         case 'pages':
-          return fetchWebActivityPages(days, controller.signal).then(setPages);
+          return fetchWebActivityPages(days, controller.signal).then((d) =>
+            setPages({ key: dataKey, data: d }),
+          );
         case 'journeys':
-          return fetchWebActivityJourneys(days, controller.signal).then(setJourneys);
+          return fetchWebActivityJourneys(days, controller.signal).then((d) =>
+            setJourneys({ key: dataKey, data: d }),
+          );
         case 'geography':
-          return fetchWebActivityGeography(days, controller.signal).then(setGeography);
+          return fetchWebActivityGeography(days, controller.signal).then((d) =>
+            setGeography({ key: dataKey, data: d }),
+          );
         case 'search':
-          return fetchWebActivitySearch(days, controller.signal).then(setSearch);
+          return fetchWebActivitySearch(days, controller.signal).then((d) =>
+            setSearch({ key: dataKey, data: d }),
+          );
         case 'technology':
-          return fetchWebActivityTechnology(days, controller.signal).then(setTechnology);
+          return fetchWebActivityTechnology(days, controller.signal).then((d) =>
+            setTechnology({ key: dataKey, data: d }),
+          );
         default:
-          return fetchWebActivityOverview(days, controller.signal).then(setOverview);
+          return fetchWebActivityOverview(days, controller.signal).then((d) =>
+            setOverview({ key: dataKey, data: d }),
+          );
       }
     })();
 
     request
       .catch((e: unknown) => {
         if (controller.signal.aborted) return;
-        // A failed load must be retryable, so drop the "loaded" marker for this key.
-        delete loadedRef.current[key];
         setError(e instanceof Error ? e.message : 'Failed to load this section.');
       })
       .finally(() => {
@@ -208,7 +228,18 @@ export default function WebActivityPage() {
       });
 
     return () => controller.abort();
-  }, [selectedTab, days, reloadToken, overview, visits, pages, journeys, geography, search, technology]);
+  }, [
+    selectedTab,
+    days,
+    dataKey,
+    overviewData,
+    visitsData,
+    pagesData,
+    journeysData,
+    geographyData,
+    searchData,
+    technologyData,
+  ]);
 
   const onTabSelect: SelectTabEventHandler = (_: any, d: any) => setSelectedTab(d.value as TabKey);
 
@@ -228,13 +259,13 @@ export default function WebActivityPage() {
   );
 
   const hasData =
-    (selectedTab === 'overview' && overview) ||
-    (selectedTab === 'visits' && visits) ||
-    (selectedTab === 'pages' && pages) ||
-    (selectedTab === 'journeys' && journeys) ||
-    (selectedTab === 'geography' && geography) ||
-    (selectedTab === 'search' && search) ||
-    (selectedTab === 'technology' && technology);
+    (selectedTab === 'overview' && overviewData) ||
+    (selectedTab === 'visits' && visitsData) ||
+    (selectedTab === 'pages' && pagesData) ||
+    (selectedTab === 'journeys' && journeysData) ||
+    (selectedTab === 'geography' && geographyData) ||
+    (selectedTab === 'search' && searchData) ||
+    (selectedTab === 'technology' && technologyData);
 
   return (
     <div>
@@ -310,13 +341,18 @@ export default function WebActivityPage() {
 
         {loading && !hasData && <Spinner label="Loading web activity..." />}
 
-        {selectedTab === 'overview' && overview && <OverviewPanel data={overview} />}
+        {selectedTab === 'overview' && overviewData && (
+          <OverviewPanel
+            data={overviewData}
+            directoryImported={availability?.userMetadataAvailable ?? true}
+          />
+        )}
 
-        {selectedTab === 'visits' && visits && <VisitsPanel data={visits} />}
+        {selectedTab === 'visits' && visitsData && <VisitsPanel data={visitsData} />}
 
-        {selectedTab === 'pages' && pages && (
+        {selectedTab === 'pages' && pagesData && (
           <PagesPanel
-            data={pages}
+            data={pagesData}
             onExportPages={() => runExport('pages')}
             onExportQuiet={() => runExport('quiet-pages')}
             onExportSlow={() => runExport('slow-pages')}
@@ -324,9 +360,9 @@ export default function WebActivityPage() {
           />
         )}
 
-        {selectedTab === 'journeys' && journeys && (
+        {selectedTab === 'journeys' && journeysData && (
           <JourneysPanel
-            data={journeys}
+            data={journeysData}
             clickTrackingAvailable={availability?.clickTrackingAvailable ?? true}
             onExportEntry={() => runExport('entry-pages')}
             onExportExit={() => runExport('exit-pages')}
@@ -335,20 +371,20 @@ export default function WebActivityPage() {
           />
         )}
 
-        {selectedTab === 'geography' && geography && <GeographyPanel data={geography} />}
+        {selectedTab === 'geography' && geographyData && <GeographyPanel data={geographyData} />}
 
-        {selectedTab === 'search' && search && (
+        {selectedTab === 'search' && searchData && (
           <SearchPanel
-            data={search}
+            data={searchData}
             searchAvailable={availability?.searchAvailable ?? true}
             onExportTerms={() => runExport('search-terms')}
             exporting={exporting}
           />
         )}
 
-        {selectedTab === 'technology' && technology && (
+        {selectedTab === 'technology' && technologyData && (
           <TechnologyPanel
-            data={technology}
+            data={technologyData}
             onExportDetail={() => runExport('technology')}
             exporting={exporting}
           />

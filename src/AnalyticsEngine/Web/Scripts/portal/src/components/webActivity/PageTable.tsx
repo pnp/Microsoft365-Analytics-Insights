@@ -1,6 +1,7 @@
 import { Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow, Text } from '@fluentui/react-components';
 import type { WebActivityPageRow } from '../../types/webActivity';
 import {
+  DWELL_CAVEAT,
   formatCount,
   formatDuration,
   formatPct,
@@ -41,10 +42,13 @@ export default function PageTable({
   rows,
   columns,
   valueHeading = 'Page views',
+  dwellFootnote,
 }: {
   rows: WebActivityPageRow[];
   columns?: PageTableColumns;
   valueHeading?: string;
+  /** Shown under the table when it carries a dwell column that needs its caveat repeating. */
+  dwellFootnote?: boolean;
 }) {
   const styles = useWebActivityStyles();
   const show = {
@@ -125,6 +129,11 @@ export default function PageTable({
           ))}
         </TableBody>
       </Table>
+      {dwellFootnote && show.dwell && (
+        <Text size={100} className={styles.muted} style={{ display: 'block', marginTop: '6px' }}>
+          {DWELL_CAVEAT}
+        </Text>
+      )}
     </div>
   );
 }

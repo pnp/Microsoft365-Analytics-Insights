@@ -6,6 +6,7 @@ import { KpiGrid, type KpiDefinition } from '../shared/KpiGrid';
 import { seriesColor } from '../charts/chartCommon';
 import type { WebActivityVisits } from '../../types/webActivity';
 import {
+  FailedQueryNote,
   SectionCard,
   WindowNote,
   bucketsToCategories,
@@ -17,6 +18,7 @@ import {
   toCategories,
   toStackedSeries,
   useWebActivityStyles,
+  withRemainder,
 } from './webActivityShared';
 
 /**
@@ -30,6 +32,10 @@ import {
 export default function VisitsPanel({ data }: { data: WebActivityVisits }) {
   const styles = useWebActivityStyles();
   const kpis = data.kpis;
+
+  // Listed devices plus the visits they do not account for, so the ring cannot imply it covers
+  // every visit when the device list was truncated.
+  const deviceCategories = withRemainder(toCategories(data.byDevice), kpis.visits, 'Other / unknown');
 
   const items: KpiDefinition[] = [
     {
@@ -104,6 +110,8 @@ export default function VisitsPanel({ data }: { data: WebActivityVisits }) {
         <WindowNote window={data.window} />
       </div>
 
+      <FailedQueryNote queries={data.queries} />
+
       <div style={{ marginTop: '12px' }}>
         <KpiGrid items={items} />
       </div>
@@ -131,7 +139,7 @@ export default function VisitsPanel({ data }: { data: WebActivityVisits }) {
           query={queryFor(data.queries, 'visits-sites')}
           isEmpty={data.bySite.length === 0}
         >
-          <CategoryBarChart categories={toCategories(data.bySite)} valueLabel="Visits" showShare />
+          <CategoryBarChart categories={toCategories(data.bySite)} valueLabel="Visits" />
         </SectionCard>
 
         <SectionCard
@@ -150,9 +158,9 @@ export default function VisitsPanel({ data }: { data: WebActivityVisits }) {
           emptyMessage="No device was recorded for any visit. Device is derived from the browser's user agent by Application Insights and is not always populated."
         >
           <DonutChart
-            categories={toCategories(data.byDevice)}
-            colours={data.byDevice.map((_, i) => seriesColor(i))}
-            centreValue={formatCount(data.byDevice.reduce((sum, d) => sum + d.count, 0))}
+            categories={deviceCategories}
+            colours={deviceCategories.map((_, i) => seriesColor(i))}
+            centreValue={formatCount(kpis.visits)}
             centreLabel="visits"
           />
         </SectionCard>
@@ -162,7 +170,7 @@ export default function VisitsPanel({ data }: { data: WebActivityVisits }) {
           query={queryFor(data.queries, 'visits-browsers')}
           isEmpty={data.byBrowser.length === 0}
         >
-          <CategoryBarChart categories={toCategories(data.byBrowser)} valueLabel="Visits" showShare />
+          <CategoryBarChart categories={toCategories(data.byBrowser)} valueLabel="Visits" />
         </SectionCard>
 
         <SectionCard

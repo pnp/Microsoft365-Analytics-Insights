@@ -81,32 +81,58 @@ namespace Common.Entities.SpoWebActivity
         /// Visitor segments by how many distinct days they visited in the window.
         /// </summary>
         /// <remarks>
-        /// Expressed as a share of the working days in the window rather than as fixed day counts, so
-        /// the same boundaries mean the same thing over 7 days and over 365. A "daily" visitor on a
-        /// 7-day window who had to hit 60 days would be uncategorisable.
+        /// <para>
+        /// Expressed as a share of the window's CALENDAR days, not its working days. Active days are
+        /// counted over every date a visit happened on, weekends included, so a working-day
+        /// denominator would divide one day population by another - a weekend-only visitor could
+        /// exceed 100% of "working days".
+        /// </para>
+        /// <para>
+        /// <b>Short windows cannot reach every band</b>, and the UI says so. Over 7 days a visitor
+        /// can only have 1-7 active days, so "Occasional" (at least 8% of days) and "Rare" are
+        /// unreachable - there is no day count between "one-off" and 2/7 = 29%. That is a property of
+        /// the arithmetic rather than a bug, but a chart showing an empty band without explanation
+        /// reads as "nobody is occasional" rather than "this period is too short to tell".
+        /// </para>
         /// </remarks>
         public static double DailyVisitorShare => 0.6;
 
-        /// <summary>Lower bound of the "regular" segment, as a share of working days.</summary>
+        /// <summary>Lower bound of the "regular" segment, as a share of the window's days.</summary>
         public static double RegularVisitorShare => 0.25;
 
-        /// <summary>Lower bound of the "occasional" segment, as a share of working days.</summary>
+        /// <summary>Lower bound of the "occasional" segment, as a share of the window's days.</summary>
         public static double OccasionalVisitorShare => 0.08;
 
-        /// <summary>The segment a visitor with <paramref name="activeDays"/> visits falls in.</summary>
-        public static string VisitorSegment(int activeDays, int workingDays)
+        /// <summary>
+        /// The segment a visitor with <paramref name="activeDays"/> visits falls in.
+        /// </summary>
+        /// <param name="activeDays">Distinct calendar dates on which the visitor visited.</param>
+        /// <param name="windowDays">Calendar days in the reporting window - the same day population.</param>
+        public static string VisitorSegment(int activeDays, int windowDays)
         {
             if (activeDays <= 0) return "None";
             if (activeDays == 1) return "One-off";
 
-            var effectiveWorkingDays = Math.Max(1, workingDays);
-            var share = (double)activeDays / effectiveWorkingDays;
+            var effectiveDays = Math.Max(1, windowDays);
+            var share = (double)activeDays / effectiveDays;
 
             if (share >= DailyVisitorShare) return "Daily";
             if (share >= RegularVisitorShare) return "Regular";
             if (share >= OccasionalVisitorShare) return "Occasional";
             return "Rare";
         }
+
+        /// <summary>
+        /// True when <paramref name="windowDays"/> is long enough for every segment to be reachable.
+        /// </summary>
+        /// <remarks>
+        /// "Rare" needs a visitor with at least two active days to fall below
+        /// <see cref="OccasionalVisitorShare"/>, so the window must have at least 2 / 0.08 = 25 days.
+        /// Below that the mix genuinely cannot distinguish the lower bands, and the UI explains that
+        /// rather than presenting an unreachable empty band as a finding.
+        /// </remarks>
+        public static bool SegmentsFullyReachable(int windowDays) =>
+            windowDays >= (int)Math.Ceiling(2 / OccasionalVisitorShare);
 
         /// <summary>Segments in the order they should be displayed - most engaged first.</summary>
         public static readonly IReadOnlyList<string> VisitorSegments =
@@ -264,6 +290,36 @@ namespace Common.Entities.SpoWebActivity
         }
 
         /// <summary>
+        /// The histogram bucket a percentile falls in, or null when nothing was measured.
+        /// </summary>
+        /// <remarks>
+        /// Returns the bucket rather than a value so the caller can tell an ordinary result from one
+        /// that landed in the overflow bucket - beyond the ceiling the estimate stops being an upper
+        /// bound on the real load time, and reporting it as a number would flatter the slow tail
+        /// exactly where it matters most.
+        /// </remarks>
+        public static int? PercentileBucket(IEnumerable<KeyValuePair<int, long>> buckets, double percentile)
+        {
+            var ordered = buckets?.Where(b => b.Value > 0).OrderBy(b => b.Key).ToList()
+                ?? new List<KeyValuePair<int, long>>();
+            if (ordered.Count == 0) return null;
+
+            var total = ordered.Sum(b => b.Value);
+            if (total <= 0) return null;
+
+            var target = total * Math.Min(Math.Max(percentile, 0), 1);
+            long running = 0;
+
+            foreach (var bucket in ordered)
+            {
+                running += bucket.Value;
+                if (running >= target) return bucket.Key;
+            }
+
+            return ordered[ordered.Count - 1].Key;
+        }
+
+        /// <summary>
         /// A percentile of page load time, interpolated from the fixed-width histogram buckets.
         /// </summary>
         /// <remarks>
@@ -274,9 +330,10 @@ namespace Common.Entities.SpoWebActivity
         /// reliably time out on a large tenant.
         /// </para>
         /// <para>
-        /// The value returned is the UPPER edge of the bucket the percentile falls in, so it never
-        /// understates the slow tail. Rounding a p95 down is the failure mode that matters here: it
-        /// would tell an admin the site is faster than their users are experiencing.
+        /// The value returned is the UPPER edge of the bucket the percentile falls in, so within the
+        /// measured range it never understates the slow tail. Beyond the histogram's ceiling every
+        /// load is folded into one overflow bucket and this becomes a floor rather than an estimate -
+        /// use <see cref="PercentileBucket"/> to detect that and report it as "at least".
         /// </para>
         /// </remarks>
         public static double PercentileFromBuckets(
@@ -284,24 +341,10 @@ namespace Common.Entities.SpoWebActivity
             double percentile,
             double bucketWidthSeconds)
         {
-            if (buckets == null || bucketWidthSeconds <= 0) return 0;
+            if (bucketWidthSeconds <= 0) return 0;
 
-            var ordered = buckets.Where(b => b.Value > 0).OrderBy(b => b.Key).ToList();
-            if (ordered.Count == 0) return 0;
-
-            var total = ordered.Sum(b => b.Value);
-            if (total <= 0) return 0;
-
-            var target = total * Math.Min(Math.Max(percentile, 0), 1);
-            long running = 0;
-
-            foreach (var bucket in ordered)
-            {
-                running += bucket.Value;
-                if (running >= target) return (bucket.Key + 1) * bucketWidthSeconds;
-            }
-
-            return (ordered[ordered.Count - 1].Key + 1) * bucketWidthSeconds;
+            var bucket = PercentileBucket(buckets, percentile);
+            return bucket.HasValue ? (bucket.Value + 1) * bucketWidthSeconds : 0;
         }
 
         /// <summary>The display label for a load-time histogram bucket.</summary>
@@ -365,29 +408,33 @@ namespace Common.Entities.SpoWebActivity
             judgements.Add(ReachJudgement(inputs));
             judgements.Add(BounceJudgement(inputs));
 
-            if (inputs.AverageLoadSeconds > 0) judgements.Add(LoadJudgement(inputs));
+            if (inputs.AverageLoadSeconds.HasValue) judgements.Add(LoadJudgement(inputs));
             if (inputs.Visits > 0 && inputs.SearchAvailable) judgements.Add(SearchJudgement(inputs));
             if (inputs.UniquePages > 0) judgements.Add(ConcentrationJudgement(inputs));
-            if (inputs.Visits > 0) judgements.Add(MobileJudgement(inputs));
+            if (inputs.MobilePageViewPct.HasValue) judgements.Add(MobileJudgement(inputs));
 
             return judgements;
         }
 
         private static WebActivityJudgement ReachJudgement(WebActivityJudgementInputs inputs)
         {
-            if (inputs.KnownUsers <= 0)
+            // Reach needs a denominator that means "people who could have used this intranet". Without
+            // the directory import, dbo.users is just the people an importer has already seen, so the
+            // ratio would be close to 100% by construction.
+            if (!inputs.DirectoryImported || inputs.KnownUsers <= 0)
             {
                 return new WebActivityJudgement
                 {
                     Key = "reach",
                     Tone = "neutral",
                     Headline = string.Format("{0:N0} people visited the intranet", inputs.Visitors),
-                    Detail = "Reach cannot be expressed as a share of the organisation because no directory "
-                        + "users have been imported. Enable the Graph user metadata import to get a denominator.",
+                    Detail = "There is no population to express that as a share of: the Graph user metadata "
+                        + "import is off, so the only users on record are the ones an importer has already "
+                        + "seen. Enable it to get a denominator.",
                 };
             }
 
-            var reach = Percentage(inputs.Visitors, inputs.KnownUsers);
+            var reach = Percentage(inputs.EnabledVisitors, inputs.KnownUsers);
             var tone = reach < LowReachPct ? "critical" : reach < GoodReachPct ? "warning" : "good";
 
             return new WebActivityJudgement
@@ -395,17 +442,20 @@ namespace Common.Entities.SpoWebActivity
                 Key = "reach",
                 Tone = tone,
                 Headline = string.Format(
-                    "{0:N1}% of the organisation visited the intranet ({1:N0} of {2:N0})",
-                    reach, inputs.Visitors, inputs.KnownUsers),
+                    "{0:N1}% of enabled directory users had a tracked visit ({1:N0} of {2:N0})",
+                    reach, inputs.EnabledVisitors, inputs.KnownUsers),
                 Detail = reach < LowReachPct
-                    ? "Most people never arrive. Before tuning content, check the obvious plumbing: is the "
-                        + "intranet the browser home page and the Microsoft 365 app-bar home site, and is the "
-                        + "tracker deployed to every site you expect to see here?"
+                    ? "Check the measurement before the content. The denominator is every enabled directory "
+                        + "user - guests, shared mailboxes and service accounts included - and the numerator "
+                        + "only counts sites the tracker is deployed to, so both ends can be wrong. Once you "
+                        + "trust the figure, the usual levers are the browser home page and the Microsoft 365 "
+                        + "app-bar home site."
                     : reach < GoodReachPct
-                        ? "A substantial minority never arrive. Compare the entry pages with where you actually "
-                            + "promote the intranet - the gap is usually a link nobody clicks."
-                        : "Reach is healthy. The useful questions now are about depth and speed rather than "
-                            + "getting people through the door.",
+                        ? "A substantial minority have no tracked visit. Some of that is the denominator "
+                            + "(guests and service accounts) and some is sites the tracker is not on; the rest "
+                            + "is worth comparing against where you actually promote the intranet."
+                        : "Most of the directory shows up here, so the useful questions now are about depth "
+                            + "and speed rather than getting people through the door.",
             };
         }
 
@@ -423,36 +473,53 @@ namespace Common.Entities.SpoWebActivity
                     "{0:N1}% of visits were a single page, and the average visit saw {1:N1} pages",
                     inputs.BouncePct, inputs.PagesPerVisit),
                 Detail = inputs.BouncePct >= HighBouncePct
-                    ? "Most visits end where they start. That is usually one of two things: people arrive by "
-                        + "deep link for one document and leave, or the landing page does not lead anywhere. The "
-                        + "Journeys tab names the pages it is happening on."
+                    ? "Judge this per page rather than in aggregate. A deep link straight to one policy "
+                        + "document is a perfectly good one-page visit, and on an intranet those are common; "
+                        + "the same rate on the home page is not. The Journeys tab names the pages it is "
+                        + "happening on."
                     : inputs.BouncePct > HealthyBouncePct
-                        ? "A meaningful share of visits stop at the first page. Look at the entry pages on the "
-                            + "Journeys tab - a high bounce on a news article is normal, on the home page it is not."
-                        : "Visitors move through several pages per visit, which is what a working intranet looks "
-                            + "like.",
+                        ? "A meaningful share of visits stop at the first page. Look at which pages on the "
+                            + "Journeys tab before drawing a conclusion - the answer differs by page."
+                        : "Most visits go beyond the first page.",
             };
         }
 
         private static WebActivityJudgement LoadJudgement(WebActivityJudgementInputs inputs)
         {
-            var tone = inputs.AverageLoadSeconds >= SlowLoadSeconds
+            var average = inputs.AverageLoadSeconds ?? 0;
+            var tone = average >= SlowLoadSeconds
                 ? "critical"
-                : inputs.AverageLoadSeconds > FastLoadSeconds ? "warning" : "good";
+                : average > FastLoadSeconds ? "warning" : "good";
+
+            // A fast mean with a slow tail is the case this page exists to catch, so the tail can
+            // raise the tone on its own. "1.2s on average" next to a 12-second p95 is not a fast site;
+            // it is a fast site for most people and an unusable one for a minority.
+            var tail = inputs.P95LoadSeconds;
+            var tailIsBad = tail.HasValue && tail.Value >= SlowLoadSeconds * 2;
+            if (tailIsBad && tone == "good") tone = "warning";
+
+            var headline = tail.HasValue
+                ? string.Format(
+                    "Pages took {0:N2}s to load on average, and one view in twenty took {1:N2}s or more",
+                    average, tail.Value)
+                : string.Format("Pages took {0:N2}s to load on average", average);
 
             return new WebActivityJudgement
             {
                 Key = "performance",
                 Tone = tone,
-                Headline = string.Format("Pages took {0:N2}s to load on average", inputs.AverageLoadSeconds),
-                Detail = inputs.AverageLoadSeconds >= SlowLoadSeconds
-                    ? "That is slow enough for people to feel it and is a common reason an intranet stops being "
-                        + "used. The Technology tab ranks the slowest pages and shows whether it is specific to a "
-                        + "browser or device - web parts calling a slow API are the usual culprit."
-                    : inputs.AverageLoadSeconds > FastLoadSeconds
-                        ? "Acceptable, but there is headroom. Check the slowest pages on the Technology tab before "
-                            + "the list grows."
-                        : "Page load is comfortably fast.",
+                Headline = headline,
+                Detail = average >= SlowLoadSeconds
+                    ? "That is slow enough for people to feel it. The Technology tab ranks the slowest pages "
+                        + "and shows whether it is specific to a browser or device, which is the first thing "
+                        + "to rule out."
+                    : tailIsBad
+                        ? "The average is fine but the slow tail is not, and the tail is what a complaining "
+                            + "minority is describing. Start from the slowest pages on the Technology tab."
+                        : average > FastLoadSeconds
+                            ? "Acceptable, with headroom. Check the slowest pages on the Technology tab before "
+                                + "the list grows."
+                            : "Page load is comfortably fast, at the average and in the slow tail.",
             };
         }
 
@@ -467,17 +534,18 @@ namespace Common.Entities.SpoWebActivity
                 Tone = tone,
                 Headline = string.Format("{0:N1}% of visits used search", reliance),
                 Detail = reliance >= HighSearchReliancePct
-                    ? "Search is a fallback, so when most visits need it the navigation is not getting people "
-                        + "where they are going. The top search terms are effectively a list of the pages your "
-                        + "menu should already be offering."
-                    : "Search is being used as a supplement rather than as the primary way around, which is what "
-                        + "you want. The top terms are still worth reading as a demand signal.",
+                    ? "More than a third of visits reach for search. That can mean the navigation is not "
+                        + "getting people where they are going, or simply that the intranet is large and "
+                        + "people know what they want. Either way the top terms are a list of what the menu "
+                        + "could be offering."
+                    : "Search is being used as a supplement rather than as the primary way around. The top "
+                        + "terms are still worth reading as a demand signal.",
             };
         }
 
         private static WebActivityJudgement ConcentrationJudgement(WebActivityJudgementInputs inputs)
         {
-            var tone = inputs.TopDecilePagePct >= 90 ? "warning" : "neutral";
+            var tone = "neutral";
 
             return new WebActivityJudgement
             {
@@ -487,28 +555,33 @@ namespace Common.Entities.SpoWebActivity
                     "The busiest 10% of pages took {0:N1}% of all page views, across {1:N0} pages viewed at all",
                     inputs.TopDecilePagePct, inputs.UniquePages),
                 Detail = inputs.TopDecilePagePct >= 90
-                    ? "Almost all traffic lands on a handful of pages. The rest is either genuinely unwanted - in "
-                        + "which case the Pages tab's quiet-page list is your pruning backlog - or is good content "
-                        + "nobody can find, which is a navigation problem."
-                    : "Traffic is spread across a reasonable share of the site. The quiet-page list on the Pages "
-                        + "tab is still the cheapest content-cleanup backlog you will get.",
+                    ? "Traffic is heavily concentrated, which is normal for an intranet with a strong home "
+                        + "page and news feed - it is not on its own evidence that the rest should be "
+                        + "retired. The Pages tab's quiet-page list is where to look, one page at a time."
+                    : "Traffic is spread across a reasonable share of the site. The quiet-page list on the "
+                        + "Pages tab is still the cheapest place to start a content review.",
             };
         }
 
         private static WebActivityJudgement MobileJudgement(WebActivityJudgementInputs inputs)
         {
-            var tone = "neutral";
+            var share = inputs.MobilePageViewPct ?? 0;
 
             return new WebActivityJudgement
             {
                 Key = "mobile",
-                Tone = tone,
-                Headline = string.Format("{0:N1}% of visits came from a mobile device", inputs.MobileVisitPct),
-                Detail = inputs.MobileVisitPct >= 25
-                    ? "A quarter or more of visits are mobile, so test page layouts on a phone before publishing - "
-                        + "wide tables and image-heavy web parts are the usual casualties."
-                    : "Mobile is a minority of visits. That is normal for a desk-based workforce, but check it "
-                        + "against how many people you expect to be deskless before treating it as a finding.",
+                Tone = "neutral",
+                Headline = string.Format(
+                    "{0:N1}% of page views with a known device came from a phone or tablet", share),
+                Detail = share >= 25
+                    ? "A quarter or more of measured page views are mobile, so test page layouts on a phone "
+                        + "before publishing - wide tables and image-heavy web parts are the usual casualties. "
+                        + "Mobile visits are typically shorter than desktop ones, so the share of VISITS is "
+                        + "likely higher than this."
+                    : "Mobile is a minority of measured page views. That is normal for a desk-based "
+                        + "workforce; check it against how many people you expect to be deskless before "
+                        + "treating it as a finding. Mobile visits tend to be shorter, so the share of VISITS "
+                        + "is likely higher than this.",
             };
         }
 
@@ -537,16 +610,32 @@ namespace Common.Entities.SpoWebActivity
     {
         public bool WebTrafficAvailable { get; set; }
         public bool SearchAvailable { get; set; }
+
+        /// <summary>True when the directory is a real population rather than "users we have seen".</summary>
+        public bool DirectoryImported { get; set; }
+
         public long PageViews { get; set; }
         public long Visits { get; set; }
         public int Visitors { get; set; }
+
+        /// <summary>Visitors who are in the enabled directory - the numerator of reach.</summary>
+        public int EnabledVisitors { get; set; }
+
         public int KnownUsers { get; set; }
         public int UniquePages { get; set; }
         public double BouncePct { get; set; }
         public double PagesPerVisit { get; set; }
-        public double AverageLoadSeconds { get; set; }
+
+        /// <summary>Mean page load seconds, or null when none was reported.</summary>
+        public double? AverageLoadSeconds { get; set; }
+
+        /// <summary>95th-percentile page load seconds, or null when none was reported.</summary>
+        public double? P95LoadSeconds { get; set; }
+
         public long SessionsWithSearch { get; set; }
         public double TopDecilePagePct { get; set; }
-        public double MobileVisitPct { get; set; }
+
+        /// <summary>Mobile share of page views with a known device, or null when none had one.</summary>
+        public double? MobilePageViewPct { get; set; }
     }
 }

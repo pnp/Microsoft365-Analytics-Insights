@@ -14,6 +14,7 @@ import PageTable from './PageTable';
 import { KpiGrid, type KpiDefinition } from '../shared/KpiGrid';
 import type { WebActivityPages } from '../../types/webActivity';
 import {
+  FailedQueryNote,
   SectionCard,
   WindowNote,
   formatCount,
@@ -126,6 +127,8 @@ export default function PagesPanel({
         <WindowNote window={data.window} />
       </div>
 
+      <FailedQueryNote queries={data.queries} />
+
       <div style={{ marginTop: '12px' }}>
         <KpiGrid items={items} />
       </div>
@@ -151,6 +154,7 @@ export default function PagesPanel({
           <PageTable
             rows={data.topPages}
             columns={{ site: true, uniquePageViews: true, dwell: true, load: true, entries: true, bounce: true }}
+            dwellFootnote
           />
         </SectionCard>
 

@@ -231,6 +231,26 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void PercentileBucket_DistinguishesNoDataFromTheOverflowBucket()
+        {
+            Assert.IsNull(WebActivityScoring.PercentileBucket(null, 0.95));
+            Assert.IsNull(WebActivityScoring.PercentileBucket(new KeyValuePair<int, long>[0], 0.95));
+
+            // Everything slower than the ceiling shares one bucket, so beyond it the "upper edge" is
+            // a floor rather than an estimate - the real p95 could be minutes. The caller has to be
+            // able to tell, or the page reports a precise-looking number for an unbounded tail.
+            var overflowing = new[]
+            {
+                new KeyValuePair<int, long>(0, 90),
+                new KeyValuePair<int, long>(WebActivitySql.LoadOverflowBucket, 10),
+            };
+
+            Assert.AreEqual(WebActivitySql.LoadOverflowBucket,
+                WebActivityScoring.PercentileBucket(overflowing, 0.95));
+            Assert.AreEqual(0, WebActivityScoring.PercentileBucket(overflowing, 0.5));
+        }
+
+        [TestMethod]
         public void TopDecileShare_HandlesSmallSitesAndIsAShareOfTheWhole()
         {
             // Ten pages, one of which took half the traffic: the top decile is one page.
@@ -259,9 +279,11 @@ namespace Tests.UnitTests
         {
             WebTrafficAvailable = true,
             SearchAvailable = true,
+            DirectoryImported = true,
             PageViews = 50_000,
             Visits = 12_000,
             Visitors = 1_500,
+            EnabledVisitors = 1_500,
             KnownUsers = 2_000,
             UniquePages = 900,
             BouncePct = 30,
@@ -269,7 +291,7 @@ namespace Tests.UnitTests
             AverageLoadSeconds = 1.1,
             SessionsWithSearch = 1_200,
             TopDecilePagePct = 70,
-            MobileVisitPct = 12,
+            MobilePageViewPct = 12,
         };
 
         [TestMethod]
@@ -300,6 +322,7 @@ namespace Tests.UnitTests
 
             var struggling = Healthy();
             struggling.Visitors = 200;
+            struggling.EnabledVisitors = 200;
             struggling.BouncePct = 72;
             struggling.AverageLoadSeconds = 4.5;
             struggling.SessionsWithSearch = 9_000;
@@ -310,7 +333,11 @@ namespace Tests.UnitTests
             Assert.AreEqual("critical", bad["bounce"].Tone);
             Assert.AreEqual("critical", bad["performance"].Tone);
             Assert.AreEqual("warning", bad["search-reliance"].Tone);
-            Assert.AreEqual("warning", bad["concentration"].Tone);
+
+            // Concentration is never worse than neutral. Traffic concentrated on a home page and a
+            // news feed is what a normal intranet looks like, and colouring it as a fault next to
+            // genuinely broken figures invites someone to retire content on no evidence.
+            Assert.AreEqual("neutral", bad["concentration"].Tone);
 
             foreach (var judgement in bad.Values)
             {
@@ -320,15 +347,58 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Judgements_DoNotCallASiteFastWhenOnlyTheMeanIsFast()
+        {
+            // A 1.1s average next to a 12s 95th percentile is not a fast intranet: it is a fast one
+            // for most people and an unusable one for a minority, and the minority is who complains.
+            // Grading on the mean alone would answer that complaint with "performance is good".
+            var slowTail = Healthy();
+            slowTail.AverageLoadSeconds = 1.1;
+            slowTail.P95LoadSeconds = 12;
+
+            var judgement = WebActivityScoring.Judgements(slowTail).Single(j => j.Key == "performance");
+            Assert.AreEqual("warning", judgement.Tone);
+            StringAssert.Contains(judgement.Headline, "one view in twenty");
+
+            // With no tail reported the headline must not invent one.
+            var meanOnly = Healthy();
+            meanOnly.P95LoadSeconds = null;
+            var plain = WebActivityScoring.Judgements(meanOnly).Single(j => j.Key == "performance");
+            Assert.AreEqual("good", plain.Tone);
+            Assert.IsFalse(plain.Headline.Contains("one view in twenty"));
+        }
+
+        [TestMethod]
+        public void Judgements_OmitPerformanceAndMobileWhenNothingWasMeasured()
+        {
+            var unmeasured = Healthy();
+            unmeasured.AverageLoadSeconds = null;
+            unmeasured.MobilePageViewPct = null;
+
+            var keys = WebActivityScoring.Judgements(unmeasured).Select(j => j.Key).ToList();
+
+            // "0.00s average load" and "0.0% mobile" are both readable as findings. Absent telemetry
+            // must produce no judgement at all rather than a flattering one.
+            CollectionAssert.DoesNotContain(keys, "performance");
+            CollectionAssert.DoesNotContain(keys, "mobile");
+        }
+        [TestMethod]
         public void Judgements_SayWhenReachHasNoDenominatorRatherThanReportingZeroPercent()
         {
-            var noDirectory = Healthy();
-            noDirectory.KnownUsers = 0;
-
-            var reach = WebActivityScoring.Judgements(noDirectory).Single(j => j.Key == "reach");
-            Assert.AreEqual("neutral", reach.Tone, "An unknown denominator is not a bad reach figure.");
-            StringAssert.Contains(reach.Detail, "directory");
-            Assert.IsFalse(reach.Headline.Contains("0.0%"), "Never print a percentage that has no denominator.");
+            foreach (var noDirectory in new[] { Healthy(), Healthy() }.Select((i, n) =>
+            {
+                // Two ways to have no usable denominator: an empty directory, and a directory that
+                // is only the users an importer has already seen. The second is the dangerous one -
+                // KnownUsers is positive, so a naive check would happily print a circular ~100%.
+                if (n == 0) i.KnownUsers = 0; else i.DirectoryImported = false;
+                return i;
+            }))
+            {
+                var reach = WebActivityScoring.Judgements(noDirectory).Single(j => j.Key == "reach");
+                Assert.AreEqual("neutral", reach.Tone, "An unknown denominator is not a bad reach figure.");
+                StringAssert.Contains(reach.Detail, "user metadata");
+                Assert.IsFalse(reach.Headline.Contains("%"), "Never print a percentage with no denominator.");
+            }
         }
 
         [TestMethod]

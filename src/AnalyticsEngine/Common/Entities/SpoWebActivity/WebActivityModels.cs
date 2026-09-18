@@ -52,16 +52,32 @@ namespace Common.Entities.SpoWebActivity
         /// <summary>Page-view floor a row needs to enter a quality ranking.</summary>
         public int MinimumViews { get; set; }
 
+        /// <summary>
+        /// True when this window is long enough for every visitor-engagement band to be reachable.
+        /// </summary>
+        /// <remarks>
+        /// Over a short window there are too few possible active-day counts to fill the lower bands,
+        /// so an empty "Occasional" band means "this period cannot tell", not "nobody is occasional".
+        /// The UI says which when this is false.
+        /// </remarks>
+        public bool SegmentsFullyReachable { get; set; }
+
         public static WebActivityWindow From(WebActivityQuery query)
         {
             return new WebActivityWindow
             {
                 Days = query.Days,
-                FromUtc = query.FromUtc,
-                ToUtc = query.ToInclusiveUtc,
+
+                // Stamped UTC so the serialised ISO string carries a "Z". Without it JavaScript's
+                // Date parses the value as local time and the window caption shifts by a day.
+                FromUtc = DateTime.SpecifyKind(query.FromUtc, DateTimeKind.Utc),
+                ToUtc = DateTime.SpecifyKind(query.ToInclusiveUtc, DateTimeKind.Utc),
                 WorkingDays = WebActivityScoring.WorkingDaysBetween(query.FromUtc, query.ToExclusiveUtc),
                 Top = query.Top,
                 MinimumViews = query.MinimumViews,
+
+                // Whether the engagement mix can distinguish its lower bands at this window length.
+                SegmentsFullyReachable = WebActivityScoring.SegmentsFullyReachable(query.Days),
             };
         }
     }
@@ -168,7 +184,18 @@ namespace Common.Entities.SpoWebActivity
         /// <summary>Enabled directory users, the denominator of <see cref="ReachPct"/>.</summary>
         public int KnownUsers { get; set; }
 
-        public double ReachPct { get; set; }
+        /// <summary>Visitors in the enabled directory, as a share of it. Null when it cannot be measured.</summary>
+        public double? ReachPct { get; set; }
+
+        /// <summary>
+        /// True when the Graph user-metadata import is on, so the directory is a real denominator.
+        /// </summary>
+        /// <remarks>
+        /// Without it <c>dbo.users</c> still fills up - the page-view importer inserts a row for every
+        /// visitor it sees - so <see cref="KnownUsers"/> would be positive and reach would be a
+        /// circular ~100%: the share of people we have seen, who visited.
+        /// </remarks>
+        public bool DirectoryImported { get; set; }
 
         /// <summary>Distinct pages that were viewed at least once.</summary>
         public int UniquePages { get; set; }
@@ -181,22 +208,26 @@ namespace Common.Entities.SpoWebActivity
         /// <summary>Visits that saw exactly one page, as a percentage of all visits.</summary>
         public double BouncePct { get; set; }
 
-        public double AverageSecondsOnPage { get; set; }
+        /// <summary>Mean dwell seconds, or null when the tracker never reported one.</summary>
+        public double? AverageSecondsOnPage { get; set; }
 
-        public double AverageLoadSeconds { get; set; }
+        /// <summary>Mean page load seconds, or null when the browser never reported one.</summary>
+        public double? AverageLoadSeconds { get; set; }
 
-        /// <summary>Visitors seen only in the second half of the window - first-time arrivals, approximately.</summary>
+        /// <summary>Visitors seen only in the second half of THIS WINDOW, not first-ever visitors.</summary>
         public int NewVisitors { get; set; }
 
         /// <summary>Visitors seen in both halves of the window.</summary>
         public int ReturningVisitors { get; set; }
 
-        /// <summary>Share of all page views that came from a device classed as mobile.</summary>
-        public double MobileVisitPct { get; set; }
+        /// <summary>
+        /// Share of page views from a device classed as mobile, over the page views whose device is
+        /// KNOWN. Null when no page view carried a device.
+        /// </summary>
+        public double? MobilePageViewPct { get; set; }
     }
 
-    /// <summary>The Overview tab.</summary>
-    [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
+    /// <summary>The Overview tab.</summary>    [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public sealed class WebActivityOverview : WebActivitySection
     {
         public WebActivityOverviewKpis Kpis { get; set; } = new WebActivityOverviewKpis();
@@ -314,8 +345,13 @@ namespace Common.Entities.SpoWebActivity
         public double UniqueSharePct { get; set; }
 
         public double PagesPerVisit { get; set; }
-        public double AverageSecondsOnPage { get; set; }
-        public double AverageLoadSeconds { get; set; }
+
+        /// <summary>Mean dwell seconds, or null when the tracker never reported one.</summary>
+        public double? AverageSecondsOnPage { get; set; }
+
+        /// <summary>Mean page load seconds, or null when the browser never reported one.</summary>
+        public double? AverageLoadSeconds { get; set; }
+
         public int UniquePages { get; set; }
 
         /// <summary>Pages viewed no more than <c>QuietPageViewCeiling</c> times - the pruning backlog.</summary>
@@ -433,6 +469,16 @@ namespace Common.Entities.SpoWebActivity
         public long UnknownLocationPageViews { get; set; }
 
         public double UnknownLocationPct { get; set; }
+
+        /// <summary>
+        /// Page views that DID resolve to a place - the denominator every place share is against.
+        /// </summary>
+        /// <remarks>
+        /// Published so the UI can show an explicit remainder. The place lists are truncated to the
+        /// top N, and a chart that normalised over only those rows would always total 100% however
+        /// much traffic came from the countries it did not list.
+        /// </remarks>
+        public long LocatedPageViews { get; set; }
     }
 
     /// <summary>A place, with the traffic that came from it.</summary>
@@ -550,13 +596,38 @@ namespace Common.Entities.SpoWebActivity
         public int OperatingSystems { get; set; }
         public int Devices { get; set; }
 
-        /// <summary>Share of page views from a device classed as mobile.</summary>
-        public double MobilePct { get; set; }
+        /// <summary>
+        /// Share of page views from a device classed as mobile, over the page views whose device is
+        /// KNOWN. Null when no page view carried a device.
+        /// </summary>
+        public double? MobilePct { get; set; }
 
-        public double AverageLoadSeconds { get; set; }
+        /// <summary>Mean page load seconds, or null when the browser never reported one.</summary>
+        public double? AverageLoadSeconds { get; set; }
 
-        /// <summary>The 95th-percentile page load, which is what a slow minority actually experiences.</summary>
-        public double P95LoadSeconds { get; set; }
+        /// <summary>
+        /// The load time one page view in twenty is worse than, or null when none was reported.
+        /// </summary>
+        public double? P95LoadSeconds { get; set; }
+
+        /// <summary>
+        /// True when the 95th percentile fell in the histogram's overflow bucket.
+        /// </summary>
+        /// <remarks>
+        /// Loads slower than the ceiling are all folded into one bucket, so beyond it the estimate
+        /// stops being an upper bound on the real value - the true p95 could be far worse. The UI
+        /// renders it as "at least" rather than as a number when this is set.
+        /// </remarks>
+        public bool P95AtCeiling { get; set; }
+
+        /// <summary>The ceiling the histogram folds slower loads into, in seconds.</summary>
+        public double LoadCeilingSeconds { get; set; }
+
+        /// <summary>All page views in the window - the denominator of every platform share.</summary>
+        public long PageViews { get; set; }
+
+        /// <summary>Page views whose device is known - the denominator of the mobile share.</summary>
+        public long KnownDevicePageViews { get; set; }
 
         /// <summary>Page views whose browser the tracker could not identify.</summary>
         public long UnknownBrowserPageViews { get; set; }

@@ -99,7 +99,7 @@ namespace Common.Entities.SpoWebActivity
                         .ToListAsync()
                         .ConfigureAwait(false);
 
-                    return rows.FirstOrDefault()?.LastHitUtc;
+                    return AsUtc(rows.FirstOrDefault()?.LastHitUtc);
                 }
             }
             catch (Exception)
@@ -149,27 +149,27 @@ namespace Common.Entities.SpoWebActivity
             var depthTask = RunAsync<VisitDepthRow>("overview-depth", WebActivitySql.VisitDepth, query);
             var heatTask = RunAsync<HeatCellRow>("overview-heatmap", WebActivitySql.Heatmap, query);
             var siteTask = RunAsync<SiteRow>("overview-sites", WebActivitySql.BySite, query);
-            var deviceTask = RunAsync<PlatformRow>("overview-devices", DeviceSql, query);
+            var deviceTask = RunAsync<NamedCountRow>("overview-devices", WebActivitySql.DeviceTotals, query);
             var distributionTask = RunAsync<PageViewDistributionRow>(
                 "overview-distribution", WebActivitySql.PageViewDistribution, query);
             var searchTask = RunAsync<SearchKpiRow>("overview-search", WebActivitySql.SearchKpis, query);
+            var histogramTask = RunAsync<LoadBucketRow>("overview-load", WebActivitySql.LoadHistogram, query);
 
             await Task.WhenAll(
-                kpiTask, halvesTask, trendTask, segmentTask, depthTask,
-                heatTask, siteTask, deviceTask, distributionTask, searchTask).ConfigureAwait(false);
+                kpiTask, halvesTask, trendTask, segmentTask, depthTask, heatTask, siteTask,
+                deviceTask, distributionTask, searchTask, histogramTask).ConfigureAwait(false);
 
             var model = new WebActivityOverview { Window = window };
             model.Queries.AddRange(new[]
             {
                 kpiTask.Result.Info, halvesTask.Result.Info, trendTask.Result.Info, segmentTask.Result.Info,
                 depthTask.Result.Info, heatTask.Result.Info, siteTask.Result.Info, deviceTask.Result.Info,
-                distributionTask.Result.Info, searchTask.Result.Info,
+                distributionTask.Result.Info, searchTask.Result.Info, histogramTask.Result.Info,
             });
 
             var kpi = kpiTask.Result.Rows.FirstOrDefault() ?? new OverviewKpiRow();
             var halves = halvesTask.Result.Rows.FirstOrDefault() ?? new VisitorHalvesRow();
-            var devices = deviceTask.Result.Rows;
-            var mobilePct = MobileSharePct(devices);
+            var mobilePct = MobileSharePct(deviceTask.Result.Rows);
 
             model.Kpis = new WebActivityOverviewKpis
             {
@@ -178,20 +178,29 @@ namespace Common.Entities.SpoWebActivity
                 Visits = kpi.Visits,
                 Visitors = kpi.Visitors,
                 KnownUsers = kpi.KnownUsers,
-                ReachPct = WebActivityScoring.Percentage(kpi.Visitors, kpi.KnownUsers),
+                DirectoryImported = sources.UserMetadata,
+
+                // Reach is the enabled-directory visitors over the enabled directory. Using the raw
+                // visitor count as the numerator lets a user who visited and was later disabled push
+                // the figure past 100%, and without the directory import the denominator is just
+                // "people an importer has already seen", which makes the whole ratio circular.
+                ReachPct = sources.UserMetadata && kpi.KnownUsers > 0
+                    ? (double?)WebActivityScoring.Percentage(kpi.EnabledVisitors, kpi.KnownUsers)
+                    : null,
+
                 UniquePages = kpi.UniquePages,
                 Sites = kpi.Sites,
                 PagesPerVisit = kpi.Visits > 0 ? (double)kpi.PageViews / kpi.Visits : 0,
                 BouncePct = WebActivityScoring.Percentage(kpi.Bounces, kpi.Visits),
-                AverageSecondsOnPage = kpi.AverageSecondsOnPage ?? 0,
-                AverageLoadSeconds = kpi.AverageLoadSeconds ?? 0,
+                AverageSecondsOnPage = kpi.AverageSecondsOnPage,
+                AverageLoadSeconds = kpi.AverageLoadSeconds,
                 NewVisitors = halves.NewVisitors,
                 ReturningVisitors = halves.ReturningVisitors,
-                MobileVisitPct = mobilePct,
+                MobilePageViewPct = mobilePct,
             };
 
             model.Trend = BuildTrend(trendTask.Result.Rows);
-            model.VisitorSegments = BuildVisitorSegments(segmentTask.Result.Rows, window.WorkingDays);
+            model.VisitorSegments = BuildVisitorSegments(segmentTask.Result.Rows, query.Days);
             model.VisitDepth = BuildDepthBuckets(depthTask.Result.Rows);
             model.Heatmap = heatTask.Result.Rows
                 .Select(r => new WebActivityHeatCell
@@ -204,7 +213,8 @@ namespace Common.Entities.SpoWebActivity
                 .ToList();
 
             model.TopSites = WithShare(
-                siteTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.PageViews }));
+                siteTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.PageViews }),
+                kpi.PageViews);
 
             var search = searchTask.Result.Rows.FirstOrDefault() ?? new SearchKpiRow();
 
@@ -212,17 +222,25 @@ namespace Common.Entities.SpoWebActivity
             {
                 WebTrafficAvailable = sources.WebTraffic,
                 SearchAvailable = search.Searches > 0,
+                DirectoryImported = sources.UserMetadata,
                 PageViews = kpi.PageViews,
                 Visits = kpi.Visits,
                 Visitors = kpi.Visitors,
+                EnabledVisitors = kpi.EnabledVisitors,
                 KnownUsers = kpi.KnownUsers,
                 UniquePages = kpi.UniquePages,
                 BouncePct = model.Kpis.BouncePct,
                 PagesPerVisit = model.Kpis.PagesPerVisit,
-                AverageLoadSeconds = model.Kpis.AverageLoadSeconds,
+                AverageLoadSeconds = kpi.AverageLoadSeconds,
+
+                // The slow tail, not just the mean. A 1.2s average next to a 12s p95 is a fast site
+                // for most people and an unusable one for a minority, and only the second number
+                // matches what that minority reports.
+                P95LoadSeconds = PercentileSeconds(histogramTask.Result.Rows),
+
                 SessionsWithSearch = search.SessionsWithSearch,
                 TopDecilePagePct = TopDecilePageShare(distributionTask.Result.Rows),
-                MobileVisitPct = mobilePct,
+                MobilePageViewPct = mobilePct,
             });
 
             return model;
@@ -271,14 +289,21 @@ namespace Common.Entities.SpoWebActivity
 
             model.Trend = BuildTrend(trendTask.Result.Rows);
 
+            // Shares are of the window's TOTAL visits, not of the rows that happened to make the
+            // top N. A share recomputed over a truncated leaderboard always sums to 100% and quietly
+            // hides the tail, which is the same mistake in every ranked chart on the page.
             model.BySite = WithShare(
-                siteTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Visits }));
+                siteTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Visits }),
+                kpi.Visits);
             model.ByPage = WithShare(
-                pageTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Count }));
+                pageTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Count }),
+                kpi.Visits);
             model.ByDevice = WithShare(
-                deviceTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Visits }));
+                deviceTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Visits }),
+                kpi.Visits);
             model.ByBrowser = WithShare(
-                browserTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Visits }));
+                browserTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Visits }),
+                kpi.Visits);
 
             var cells = heatTask.Result.Rows;
             model.ByDay = BuildDayBuckets(cells);
@@ -286,7 +311,7 @@ namespace Common.Entities.SpoWebActivity
             model.ByPeriodOfDay = BuildPeriodBuckets(cells);
 
             model.SiteOverTime = siteTimeTask.Result.Rows
-                .Select(r => new WebActivityStackPoint { WeekStart = r.WeekStart, Name = r.Name, Count = r.Count })
+                .Select(r => new WebActivityStackPoint { WeekStart = AsUtc(r.WeekStart), Name = r.Name, Count = r.Count })
                 .ToList();
 
             return model;
@@ -328,8 +353,8 @@ namespace Common.Entities.SpoWebActivity
                 UniquePageViews = kpi.UniquePageViews,
                 UniqueSharePct = WebActivityScoring.Percentage(kpi.UniquePageViews, kpi.PageViews),
                 PagesPerVisit = kpi.Visits > 0 ? (double)kpi.PageViews / kpi.Visits : 0,
-                AverageSecondsOnPage = kpi.AverageSecondsOnPage ?? 0,
-                AverageLoadSeconds = kpi.AverageLoadSeconds ?? 0,
+                AverageSecondsOnPage = kpi.AverageSecondsOnPage,
+                AverageLoadSeconds = kpi.AverageLoadSeconds,
                 UniquePages = kpi.UniquePages,
                 QuietPages = (int)distribution
                     .Where(r => r.Views <= WebActivityScoring.QuietPageViewCeiling)
@@ -429,7 +454,8 @@ namespace Common.Entities.SpoWebActivity
             model.Depth = BuildDepthBuckets(depth);
 
             model.ClickedElements = WithShare(
-                clickTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Count }));
+                clickTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Count }),
+                model.Kpis.Clicks);
 
             return model;
         }
@@ -468,6 +494,7 @@ namespace Common.Entities.SpoWebActivity
                 Provinces = kpi.Provinces,
                 UnknownLocationPageViews = kpi.UnknownLocationPageViews,
                 UnknownLocationPct = WebActivityScoring.Percentage(kpi.UnknownLocationPageViews, kpi.PageViews),
+                LocatedPageViews = kpi.PageViews - kpi.UnknownLocationPageViews,
             };
 
             model.Countries = ToPlaces(countryTask.Result.Rows, kpi.PageViews);
@@ -475,7 +502,7 @@ namespace Common.Entities.SpoWebActivity
             model.Provinces = ToPlaces(provinceTask.Result.Rows, kpi.PageViews);
 
             model.CountryOverTime = trendTask.Result.Rows
-                .Select(r => new WebActivityStackPoint { WeekStart = r.WeekStart, Name = r.Name, Count = r.Count })
+                .Select(r => new WebActivityStackPoint { WeekStart = AsUtc(r.WeekStart), Name = r.Name, Count = r.Count })
                 .ToList();
 
             return model;
@@ -536,7 +563,8 @@ namespace Common.Entities.SpoWebActivity
             model.ByPeriodOfDay = BuildPeriodBuckets(cells);
 
             model.BySite = WithShare(
-                siteTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Count }));
+                siteTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Count }),
+                kpi.Searches);
 
             return model;
         }
@@ -553,43 +581,51 @@ namespace Common.Entities.SpoWebActivity
             var browserTask = RunAsync<PlatformRow>("tech-browsers", BrowserSql, query);
             var osTask = RunAsync<PlatformRow>("tech-os", OperatingSystemSql, query);
             var deviceTask = RunAsync<PlatformRow>("tech-devices", DeviceSql, query);
+            var deviceTotalsTask = RunAsync<NamedCountRow>("tech-device-totals", WebActivitySql.DeviceTotals, query);
             var histogramTask = RunAsync<LoadBucketRow>("tech-load-histogram", WebActivitySql.LoadHistogram, query);
             var deviceTimeTask = RunAsync<StackRow>("tech-device-over-time", WebActivitySql.DeviceOverTime, query);
             var detailTask = RunAsync<TechnologyDetailRow>("tech-detail", WebActivitySql.TechnologyDetail, query);
 
-            await Task.WhenAll(kpiTask, browserTask, osTask, deviceTask, histogramTask, deviceTimeTask, detailTask)
-                .ConfigureAwait(false);
+            await Task.WhenAll(kpiTask, browserTask, osTask, deviceTask, deviceTotalsTask, histogramTask,
+                deviceTimeTask, detailTask).ConfigureAwait(false);
 
             var model = new WebActivityTechnology { Window = window };
             model.Queries.AddRange(new[]
             {
                 kpiTask.Result.Info, browserTask.Result.Info, osTask.Result.Info, deviceTask.Result.Info,
-                histogramTask.Result.Info, deviceTimeTask.Result.Info, detailTask.Result.Info,
+                deviceTotalsTask.Result.Info, histogramTask.Result.Info, deviceTimeTask.Result.Info,
+                detailTask.Result.Info,
             });
 
             var kpi = kpiTask.Result.Rows.FirstOrDefault() ?? new TechnologyKpiRow();
-            var devices = deviceTask.Result.Rows;
+            var buckets = histogramTask.Result.Rows
+                .Select(r => new KeyValuePair<int, long>(r.Bucket, r.Count))
+                .ToList();
+            var p95Bucket = WebActivityScoring.PercentileBucket(buckets, 0.95);
 
             model.Kpis = new WebActivityTechnologyKpis
             {
                 Browsers = kpi.Browsers,
                 OperatingSystems = kpi.OperatingSystems,
                 Devices = kpi.Devices,
-                MobilePct = MobileSharePct(devices),
-                AverageLoadSeconds = kpi.AverageLoadSeconds ?? 0,
-                P95LoadSeconds = WebActivityScoring.PercentileFromBuckets(
-                    histogramTask.Result.Rows.Select(r => new KeyValuePair<int, long>(r.Bucket, r.Count)),
-                    0.95,
-                    WebActivitySql.LoadBucketSeconds),
+                MobilePct = MobileSharePct(deviceTotalsTask.Result.Rows),
+                AverageLoadSeconds = kpi.AverageLoadSeconds,
+                P95LoadSeconds = p95Bucket.HasValue
+                    ? (double?)((p95Bucket.Value + 1) * WebActivitySql.LoadBucketSeconds)
+                    : null,
+                P95AtCeiling = p95Bucket.HasValue && p95Bucket.Value >= WebActivitySql.LoadOverflowBucket,
+                LoadCeilingSeconds = WebActivitySql.LoadBucketCeilingSeconds,
                 UnknownBrowserPageViews = kpi.UnknownBrowserPageViews,
+                PageViews = kpi.PageViews,
+                KnownDevicePageViews = deviceTotalsTask.Result.Rows.Sum(r => r.Count),
             };
 
-            model.Browsers = ToPlatforms(browserTask.Result.Rows);
-            model.OperatingSystems = ToPlatforms(osTask.Result.Rows);
-            model.Devices = ToPlatforms(devices);
+            model.Browsers = ToPlatforms(browserTask.Result.Rows, kpi.PageViews);
+            model.OperatingSystems = ToPlatforms(osTask.Result.Rows, kpi.PageViews);
+            model.Devices = ToPlatforms(deviceTask.Result.Rows, kpi.PageViews);
 
             model.DeviceOverTime = deviceTimeTask.Result.Rows
-                .Select(r => new WebActivityStackPoint { WeekStart = r.WeekStart, Name = r.Name, Count = r.Count })
+                .Select(r => new WebActivityStackPoint { WeekStart = AsUtc(r.WeekStart), Name = r.Name, Count = r.Count })
                 .ToList();
 
             model.Detail = detailTask.Result.Rows
@@ -641,6 +677,34 @@ namespace Common.Entities.SpoWebActivity
         internal static readonly string ProvinceSql =
             WebActivitySql.ByPlace("location_province_id", "provinces", "province_name", true);
 
+        /// <summary>
+        /// The 95th-percentile load time from a histogram, or null when nothing was measured.
+        /// </summary>
+        private static double? PercentileSeconds(IEnumerable<LoadBucketRow> buckets)
+        {
+            var bucket = WebActivityScoring.PercentileBucket(
+                buckets.Select(r => new KeyValuePair<int, long>(r.Bucket, r.Count)), 0.95);
+
+            return bucket.HasValue ? (double?)((bucket.Value + 1) * WebActivitySql.LoadBucketSeconds) : null;
+        }
+
+        /// <summary>
+        /// Stamps a SQL-derived timestamp as UTC.
+        /// </summary>
+        /// <remarks>
+        /// EF materialises <c>datetime</c> and <c>date</c> columns with
+        /// <see cref="DateTimeKind.Unspecified"/>. Serialised, that produces an ISO string with NO
+        /// timezone suffix, which JavaScript's <c>Date</c> parses as LOCAL time - so a Monday week
+        /// bucket renders as the previous Sunday for every reader east of UTC, and every weekly chart
+        /// is silently off by a day. These values are UTC by construction (the columns store UTC), so
+        /// saying so is both correct and the only way the client can read them back unchanged.
+        /// </remarks>
+        private static DateTime AsUtc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);
+
+        /// <summary>Stamps a nullable SQL-derived timestamp as UTC.</summary>
+        private static DateTime? AsUtc(DateTime? value) =>
+            value.HasValue ? (DateTime?)AsUtc(value.Value) : null;
+
         private static WebActivityPageRow ToPageModel(PageRow row)
         {
             return new WebActivityPageRow
@@ -689,9 +753,16 @@ namespace Common.Entities.SpoWebActivity
                 .ToList();
         }
 
-        private static List<WebActivityPlatformRow> ToPlatforms(List<PlatformRow> rows)
+        /// <summary>
+        /// Platform rows with each one's share of ALL page views in the window.
+        /// </summary>
+        /// <remarks>
+        /// Against the window total rather than the sum of the returned rows, so a truncated
+        /// leaderboard cannot imply it accounts for every page view. The shares therefore do not sum
+        /// to 100% when there is a tail, which is the honest outcome.
+        /// </remarks>
+        private static List<WebActivityPlatformRow> ToPlatforms(List<PlatformRow> rows, long total)
         {
-            var total = rows.Sum(r => r.PageViews);
 
             return rows
                 .Select(r => new WebActivityPlatformRow
@@ -711,15 +782,26 @@ namespace Common.Entities.SpoWebActivity
         /// Mobile page views as a share of the page views whose device is known.
         /// </summary>
         /// <remarks>
+        /// <para>
+        /// Fed from the UNTRUNCATED device totals, never from the device leaderboard. Device names
+        /// are model-specific for phones and generic for desktops, so the long tail a top-N
+        /// leaderboard drops is disproportionately mobile and the share would be systematically
+        /// under-reported - worst on exactly the tenants with the most varied phone estate.
+        /// </para>
+        /// <para>
         /// The denominator is deliberately the KNOWN devices, not all page views. Hits with no device
         /// are unmeasured, and folding them into the denominator would report a falling mobile share
-        /// whenever device detection got worse - the opposite of what the figure is for.
+        /// whenever device detection got worse - the opposite of what the figure is for. Null when no
+        /// page view carried a device at all, because 0% would read as "nobody uses a phone".
+        /// </para>
         /// </remarks>
-        private static double MobileSharePct(IEnumerable<PlatformRow> devices)
+        private static double? MobileSharePct(IEnumerable<NamedCountRow> devices)
         {
-            var rows = devices?.ToList() ?? new List<PlatformRow>();
-            var known = rows.Sum(r => r.PageViews);
-            var mobile = rows.Where(r => WebActivityScoring.IsMobileDevice(r.Name)).Sum(r => r.PageViews);
+            var rows = devices?.ToList() ?? new List<NamedCountRow>();
+            var known = rows.Sum(r => r.Count);
+            if (known <= 0) return null;
+
+            var mobile = rows.Where(r => WebActivityScoring.IsMobileDevice(r.Name)).Sum(r => r.Count);
             return WebActivityScoring.Percentage(mobile, known);
         }
 
@@ -745,7 +827,7 @@ namespace Common.Entities.SpoWebActivity
                 .OrderBy(r => r.WeekStart)
                 .Select(r => new WebActivityTrendPoint
                 {
-                    WeekStart = r.WeekStart,
+                    WeekStart = AsUtc(r.WeekStart),
                     PageViews = r.PageViews,
                     Visits = r.Visits,
                     Visitors = r.Visitors,
@@ -757,14 +839,14 @@ namespace Common.Entities.SpoWebActivity
 
         private static List<WebActivityBucket> BuildVisitorSegments(
             IEnumerable<ActiveDaysRow> rows,
-            int workingDays)
+            int windowDays)
         {
             var counts = new Dictionary<string, long>(StringComparer.Ordinal);
             foreach (var segment in WebActivityScoring.VisitorSegments) counts[segment] = 0;
 
             foreach (var row in rows ?? Enumerable.Empty<ActiveDaysRow>())
             {
-                var segment = WebActivityScoring.VisitorSegment(row.ActiveDays, workingDays);
+                var segment = WebActivityScoring.VisitorSegment(row.ActiveDays, windowDays);
                 if (!counts.ContainsKey(segment)) continue;
                 counts[segment] += row.Visitors;
             }
@@ -891,7 +973,7 @@ namespace Common.Entities.SpoWebActivity
                 .ThenBy(kv => kv.Key.Item2, StringComparer.Ordinal)
                 .Select(kv => new WebActivityStackPoint
                 {
-                    WeekStart = kv.Key.Item1,
+                    WeekStart = AsUtc(kv.Key.Item1),
                     Name = kv.Key.Item2,
                     Count = kv.Value,
                 })
@@ -921,15 +1003,24 @@ namespace Common.Entities.SpoWebActivity
             return 0;
         }
 
-        /// <summary>Adds each row's share of the set's total.</summary>
-        private static List<WebActivityNamedCount> WithShare(IEnumerable<WebActivityNamedCount> rows)
+        /// <summary>
+        /// Adds each row's share of <paramref name="total"/>.
+        /// </summary>
+        /// <remarks>
+        /// The total is the window's real denominator, NOT the sum of the rows. These lists are
+        /// truncated to the top N, so a share computed over the returned rows would always sum to
+        /// exactly 100% however much traffic the tail held - which is how a ranked chart quietly
+        /// asserts it shows everything.
+        /// </remarks>
+        private static List<WebActivityNamedCount> WithShare(
+            IEnumerable<WebActivityNamedCount> rows,
+            long total)
         {
             var list = rows?.ToList() ?? new List<WebActivityNamedCount>();
-            var total = list.Sum(r => r.Count);
 
             foreach (var row in list)
             {
-                row.SharePct = WebActivityScoring.Percentage(row.Count, total);
+                row.SharePct = total > 0 ? (double?)WebActivityScoring.Percentage(row.Count, total) : null;
             }
 
             return list;

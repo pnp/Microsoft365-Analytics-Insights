@@ -101,13 +101,14 @@ namespace Common.Entities.SpoWebActivity
         /// page.
         /// </para>
         /// <para>
-        /// Ten seconds is a compromise with a stated cost: a visitor who clicks a result within ten
-        /// seconds is counted as a dead end. That direction is the safe one - over-reporting a
-        /// content gap sends someone to look at a page, while under-reporting it hides the gap
-        /// entirely.
+        /// Five seconds is a compromise with a stated cost, and the UI states it: a visitor who clicks
+        /// a result within five seconds is counted as a dead end, as is anyone whose last action of
+        /// the day was a search. The measure is therefore an upper bound on searches that did not
+        /// help, not a count of them - which is the direction that sends someone to LOOK at a page
+        /// rather than hiding a content gap entirely.
         /// </para>
         /// </remarks>
-        public const int SearchDeadEndGraceSeconds = 10;
+        public const int SearchDeadEndGraceSeconds = 5;
 
         #region Fragments
 
@@ -201,6 +202,11 @@ SELECT
     (SELECT COUNT_BIG(*) FROM V)                                              AS Visits,
     (SELECT COUNT(DISTINCT s.user_id)
        FROM V AS v INNER JOIN dbo.sessions AS s ON s.id = v.session_id)       AS Visitors,
+    (SELECT COUNT(DISTINCT s.user_id)
+       FROM V AS v
+       INNER JOIN dbo.sessions AS s ON s.id = v.session_id
+       INNER JOIN dbo.users AS u ON u.id = s.user_id
+      WHERE " + EnabledUsersPredicate + @")                                   AS EnabledVisitors,
     (SELECT COUNT(*) FROM dbo.users AS u WHERE " + EnabledUsersPredicate + @") AS KnownUsers,
     (SELECT COUNT(DISTINCT h.url_id) FROM H AS h)                             AS UniquePages,
     (SELECT COUNT(DISTINCT h.web_id) FROM H AS h WHERE h.web_id IS NOT NULL)  AS Sites,
@@ -1063,6 +1069,27 @@ OPTION (RECOMPILE);";
 
         #region Technology
 
+        /// <summary>
+        /// Page views per device across EVERY device, with no <c>TOP</c>.
+        /// </summary>
+        /// <remarks>
+        /// Separate from the device leaderboard on purpose. Mobile share has to be computed over the
+        /// whole known-device population: <c>devices.device_name</c> is Application Insights'
+        /// <c>client_Model</c>, which is model-specific for phones and generic for desktops, so the
+        /// long tail a <c>TOP (@top)</c> leaderboard drops is disproportionately mobile. Computing
+        /// the share from the leaderboard would systematically UNDER-report it - and under-report it
+        /// worse on exactly the tenants with the most varied phone estate.
+        /// </remarks>
+        public const string DeviceTotals = @"
+WITH" + HitWindowCte + @"
+SELECT CAST(d.device_name AS nvarchar(200)) AS Name,
+       COUNT_BIG(*)                         AS Count
+FROM H AS h
+INNER JOIN dbo.devices AS d ON d.id = h.device_id
+WHERE h.device_id IS NOT NULL
+GROUP BY CAST(d.device_name AS nvarchar(200))
+OPTION (RECOMPILE);";
+
         /// <summary>Distinct platform counts and the unattributed page views.</summary>
         public const string TechnologyKpis = @"
 WITH" + HitWindowCte + @"
@@ -1071,6 +1098,7 @@ SELECT
     (SELECT COUNT(DISTINCT h.os_id) FROM H AS h WHERE h.os_id IS NOT NULL)         AS OperatingSystems,
     (SELECT COUNT(DISTINCT h.device_id) FROM H AS h WHERE h.device_id IS NOT NULL) AS Devices,
     (SELECT COUNT_BIG(*) FROM H AS h WHERE h.agent_id IS NULL)                     AS UnknownBrowserPageViews,
+    (SELECT COUNT_BIG(*) FROM H AS h)                                              AS PageViews,
     (SELECT AVG(h.page_load_time) FROM H AS h WHERE h.page_load_time IS NOT NULL)  AS AverageLoadSeconds
 OPTION (RECOMPILE);";
 

@@ -6,6 +6,7 @@ import { KpiGrid, type KpiDefinition } from '../shared/KpiGrid';
 import { seriesColor } from '../charts/chartCommon';
 import type { WebActivityGeography, WebActivityPlaceRow } from '../../types/webActivity';
 import {
+  FailedQueryNote,
   SectionCard,
   WindowNote,
   formatCount,
@@ -13,6 +14,7 @@ import {
   queryFor,
   toStackedSeries,
   useWebActivityStyles,
+  withRemainder,
 } from './webActivityShared';
 
 /**
@@ -26,6 +28,14 @@ import {
 export default function GeographyPanel({ data }: { data: WebActivityGeography }) {
   const styles = useWebActivityStyles();
   const kpis = data.kpis;
+
+  // The listed countries plus an explicit remainder, so a tenant with more countries than the page
+  // shows does not see the visible ones inflated to cover all of the located traffic.
+  const countryCategories = withRemainder(
+    data.countries.map((c) => ({ label: c.name, value: c.pageViews })),
+    kpis.locatedPageViews,
+    'Other countries',
+  );
 
   const items: KpiDefinition[] = [
     {
@@ -95,6 +105,8 @@ export default function GeographyPanel({ data }: { data: WebActivityGeography })
         <WindowNote window={data.window} />
       </div>
 
+      <FailedQueryNote queries={data.queries} />
+
       <div style={{ marginTop: '12px' }}>
         <KpiGrid items={items} />
       </div>
@@ -107,8 +119,8 @@ export default function GeographyPanel({ data }: { data: WebActivityGeography })
           emptyMessage="No page view in this period had a resolved country."
         >
           <DonutChart
-            categories={data.countries.map((c) => ({ label: c.name, value: c.pageViews }))}
-            colours={data.countries.map((_, i) => seriesColor(i))}
+            categories={countryCategories}
+            colours={countryCategories.map((_, i) => seriesColor(i))}
             centreValue={formatCount(kpis.countries)}
             centreLabel="countries"
           />
@@ -137,11 +149,7 @@ export default function GeographyPanel({ data }: { data: WebActivityGeography })
           query={queryFor(data.queries, 'geo-countries')}
           isEmpty={data.countries.length === 0}
         >
-          <CategoryBarChart
-            categories={data.countries.map((c) => ({ label: c.name, value: c.pageViews }))}
-            valueLabel="Page views"
-            showShare
-          />
+          <CategoryBarChart categories={countryCategories} valueLabel="Page views" showShare />
         </SectionCard>
       </div>
 

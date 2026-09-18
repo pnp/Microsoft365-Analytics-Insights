@@ -15,6 +15,7 @@ import { KpiGrid, type KpiDefinition } from '../shared/KpiGrid';
 import { seriesColor } from '../charts/chartCommon';
 import type { WebActivityPlatformRow, WebActivityTechnology } from '../../types/webActivity';
 import {
+  FailedQueryNote,
   SectionCard,
   WindowNote,
   formatCount,
@@ -25,6 +26,7 @@ import {
   queryFor,
   toStackedSeries,
   useWebActivityStyles,
+  withRemainder,
 } from './webActivityShared';
 
 /**
@@ -47,6 +49,19 @@ export default function TechnologyPanel({
 }) {
   const styles = useWebActivityStyles();
   const kpis = data.kpis;
+
+  // Listed rows plus an explicit remainder, so a truncated leaderboard cannot imply it accounts
+  // for every page view.
+  const deviceCategories = withRemainder(
+    data.devices.map((d) => ({ label: d.name, value: d.pageViews })),
+    kpis.knownDevicePageViews,
+    'Other devices',
+  );
+  const osCategories = withRemainder(
+    data.operatingSystems.map((o) => ({ label: o.name, value: o.pageViews })),
+    kpis.pageViews,
+    'Other / unknown',
+  );
 
   const items: KpiDefinition[] = [
     {
@@ -106,15 +121,19 @@ export default function TechnologyPanel({
     {
       key: 'p95',
       label: '95th percentile load',
-      value: formatSeconds(kpis.p95LoadSeconds),
+      value: kpis.p95AtCeiling
+        ? `\u2265${formatSeconds(kpis.loadCeilingSeconds)}`
+        : formatSeconds(kpis.p95LoadSeconds),
       tone: loadTone(kpis.p95LoadSeconds),
       info: {
         what: 'The load time one page view in twenty is worse than.',
         how:
           'Estimated from a quarter-second histogram rather than an exact percentile, because an '
           + 'exact one has to sort every page view in the window and is the single query on this '
-          + 'page most likely to time out. The estimate is rounded UP to the bucket edge, so it '
-          + 'never flatters the slow tail.',
+          + 'page most likely to time out. The estimate is rounded UP to the bucket edge, so within '
+          + 'the measured range it never flatters the slow tail. Loads slower than the histogram '
+          + 'ceiling all share one bucket, so past it the figure is shown as "at least" - the real '
+          + 'value could be far worse.',
       },
     },
   ];
@@ -124,6 +143,8 @@ export default function TechnologyPanel({
       <div style={{ marginTop: '12px' }}>
         <WindowNote window={data.window} />
       </div>
+
+      <FailedQueryNote queries={data.queries} />
 
       <div style={{ marginTop: '12px' }}>
         <KpiGrid items={items} />
@@ -145,8 +166,8 @@ export default function TechnologyPanel({
           isEmpty={data.devices.length === 0}
         >
           <DonutChart
-            categories={data.devices.map((d) => ({ label: d.name, value: d.pageViews }))}
-            colours={data.devices.map((_, i) => seriesColor(i))}
+            categories={deviceCategories}
+            colours={deviceCategories.map((_, i) => seriesColor(i))}
             centreValue={formatPct(kpis.mobilePct)}
             centreLabel="mobile"
           />
@@ -157,11 +178,7 @@ export default function TechnologyPanel({
           query={queryFor(data.queries, 'tech-os')}
           isEmpty={data.operatingSystems.length === 0}
         >
-          <CategoryBarChart
-            categories={data.operatingSystems.map((o) => ({ label: o.name, value: o.pageViews }))}
-            valueLabel="Page views"
-            showShare
-          />
+          <CategoryBarChart categories={osCategories} valueLabel="Page views" showShare />
         </SectionCard>
 
         <SectionCard

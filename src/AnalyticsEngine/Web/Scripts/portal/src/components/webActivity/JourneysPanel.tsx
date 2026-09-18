@@ -14,6 +14,7 @@ import PageTable from './PageTable';
 import { KpiGrid, type KpiDefinition } from '../shared/KpiGrid';
 import type { WebActivityJourneys } from '../../types/webActivity';
 import {
+  FailedQueryNote,
   SectionCard,
   WindowNote,
   bounceTone,
@@ -114,6 +115,8 @@ export default function JourneysPanel({
         <WindowNote window={data.window} />
       </div>
 
+      <FailedQueryNote queries={data.queries} />
+
       <div style={{ marginTop: '12px' }}>
         <KpiGrid items={items} />
       </div>
@@ -140,6 +143,7 @@ export default function JourneysPanel({
             rows={data.entryPages}
             valueHeading="Entries"
             columns={{ site: true, uniquePageViews: false, dwell: true, bounce: true }}
+            dwellFootnote
           />
         </SectionCard>
 
@@ -165,6 +169,11 @@ export default function JourneysPanel({
         <SectionCard
           title="Where visits end"
           description="The last page of a visit."
+          note={
+            'No average time is shown here. The tracker measures dwell time against the NEXT page '
+            + 'view, and by definition these pages have none - so the figure would be an artefact, '
+            + 'not a measurement.'
+          }
           query={queryFor(data.queries, 'journeys-exit')}
           isEmpty={data.exitPages.length === 0}
           actions={
@@ -182,7 +191,7 @@ export default function JourneysPanel({
           <PageTable
             rows={data.exitPages}
             valueHeading="Exits"
-            columns={{ site: true, uniquePageViews: false, dwell: true }}
+            columns={{ site: true, uniquePageViews: false, dwell: false }}
           />
         </SectionCard>
 
@@ -267,7 +276,7 @@ export default function JourneysPanel({
               : 'Element-click capture is not switched on in the SharePoint tracker, so there is nothing to show here. Only this panel depends on it.'
           }
         >
-          <CategoryBarChart categories={toCategories(data.clickedElements)} valueLabel="Clicks" showShare />
+          <CategoryBarChart categories={toCategories(data.clickedElements)} valueLabel="Clicks" />
         </SectionCard>
       </div>
 

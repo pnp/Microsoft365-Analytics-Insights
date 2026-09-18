@@ -443,8 +443,9 @@ namespace Tests.FakeDataGen.Demo
         /// </remarks>
         public static readonly (string Name, int Weight)[] Devices =
         {
-            ("Workstation", 55),
-            ("Laptop", 26),
+            ("Workstation", 53),
+            ("Laptop", 25),
+            ("MacBook", 3),
             ("iPhone", 11),
             ("Android Phone", 5),
             ("iPad", 3),
@@ -458,6 +459,7 @@ namespace Tests.FakeDataGen.Demo
                 case "iPhone":
                 case "iPad": return "iOS 18";
                 case "Android Phone": return "Android 15";
+                case "MacBook": return "macOS 15";
                 case "Laptop": return "Windows 11";
                 default: return "Windows 10";
             }

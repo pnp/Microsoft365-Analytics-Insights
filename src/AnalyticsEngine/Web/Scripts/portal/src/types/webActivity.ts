@@ -21,6 +21,8 @@ export interface WebActivityWindow {
   workingDays: number;
   top: number;
   minimumViews: number;
+  /** False when the window is too short for every engagement band to be reachable. */
+  segmentsFullyReachable: boolean;
 }
 
 /** A verdict on one headline figure. */
@@ -96,16 +98,21 @@ export interface WebActivityOverviewKpis {
   visits: number;
   visitors: number;
   knownUsers: number;
-  reachPct: number;
+  /** Null when there is no directory to measure against, rather than 0%. */
+  reachPct: number | null;
+  directoryImported: boolean;
   uniquePages: number;
   sites: number;
   pagesPerVisit: number;
   bouncePct: number;
-  averageSecondsOnPage: number;
-  averageLoadSeconds: number;
+  /** Null when the tracker never reported a dwell time - not zero seconds. */
+  averageSecondsOnPage: number | null;
+  /** Null when the browser never reported a load time - not an instant page. */
+  averageLoadSeconds: number | null;
   newVisitors: number;
   returningVisitors: number;
-  mobileVisitPct: number;
+  /** Mobile share of page views with a KNOWN device; null when none had one. */
+  mobilePageViewPct: number | null;
 }
 
 export interface WebActivityOverview extends WebActivitySection {
@@ -172,8 +179,8 @@ export interface WebActivityPageKpis {
   uniquePageViews: number;
   uniqueSharePct: number;
   pagesPerVisit: number;
-  averageSecondsOnPage: number;
-  averageLoadSeconds: number;
+  averageSecondsOnPage: number | null;
+  averageLoadSeconds: number | null;
   uniquePages: number;
   quietPages: number;
   topDecilePagePct: number;
@@ -225,6 +232,8 @@ export interface WebActivityGeographyKpis {
   provinces: number;
   unknownLocationPageViews: number;
   unknownLocationPct: number;
+  /** Page views that DID resolve to a place - the denominator every place share is against. */
+  locatedPageViews: number;
 }
 
 export interface WebActivityPlaceRow {
@@ -278,10 +287,17 @@ export interface WebActivityTechnologyKpis {
   browsers: number;
   operatingSystems: number;
   devices: number;
-  mobilePct: number;
-  averageLoadSeconds: number;
-  p95LoadSeconds: number;
+  mobilePct: number | null;
+  averageLoadSeconds: number | null;
+  p95LoadSeconds: number | null;
+  /** True when the p95 fell in the histogram's overflow bucket, so it is a floor not an estimate. */
+  p95AtCeiling: boolean;
+  loadCeilingSeconds: number;
   unknownBrowserPageViews: number;
+  /** All page views in the window - the denominator of every platform share. */
+  pageViews: number;
+  /** Page views whose device is known - the denominator of the mobile share. */
+  knownDevicePageViews: number;
 }
 
 export interface WebActivityPlatformRow {

@@ -14,6 +14,7 @@ import WordCloud from '../charts/WordCloud';
 import { KpiGrid, type KpiDefinition } from '../shared/KpiGrid';
 import type { WebActivitySearch, WebActivitySearchTermRow } from '../../types/webActivity';
 import {
+  FailedQueryNote,
   SectionCard,
   WindowNote,
   bucketsToCategories,
@@ -120,6 +121,8 @@ export default function SearchPanel({
         <WindowNote window={data.window} />
       </div>
 
+      <FailedQueryNote queries={data.queries} />
+
       <div style={{ marginTop: '12px' }}>
         <KpiGrid items={items} />
       </div>
@@ -220,7 +223,7 @@ export default function SearchPanel({
           query={queryFor(data.queries, 'search-sites')}
           isEmpty={data.bySite.length === 0}
         >
-          <CategoryBarChart categories={toCategories(data.bySite)} valueLabel="Searches" showShare />
+          <CategoryBarChart categories={toCategories(data.bySite)} valueLabel="Searches" />
         </SectionCard>
       </div>
     </div>
