@@ -149,6 +149,18 @@ namespace Tests.UnitTests
         private static SqlWebActivityStore NewStore() =>
             new SqlWebActivityStore(new ConnectionStringAnalyticsDbContextFactory(_connectionString));
 
+        private static object Scalar(string sql)
+        {
+            using (var connection = new SqlConnection(_connectionString))
+            using (var command = connection.CreateCommand())
+            {
+                connection.Open();
+                command.CommandText = sql;
+                command.CommandTimeout = 0;
+                return command.ExecuteScalar();
+            }
+        }
+
         private static WebActivityQuery NewQuery(int days = 28) =>
             WebActivityQuery.Create(days, DateTime.UtcNow);
 
@@ -735,6 +747,54 @@ namespace Tests.UnitTests
                     page.Bounces <= page.Entries,
                     "A page's bounces and entries must come from the same rows, or the rate exceeds 100%.");
             }
+        }
+
+        [TestMethod]
+        public void LatestTitleId_PicksTheTitleFromTheMostRecentHitAndDependsOnTheColumnLayout()
+        {
+            // LatestTitleId slices a page_title_id back out of a concatenated binary at byte 9. That
+            // offset is only correct while hit_timestamp is an 8-byte datetime and page_title_id is a
+            // 4-byte int. Widening hit_timestamp to datetime2 would silently shift the offset and
+            // start returning garbage title ids, so assert the layout the expression depends on
+            // before trusting the expression itself.
+            Assert.AreEqual("datetime", Scalar(
+                "SELECT t.name FROM sys.columns c JOIN sys.types t ON t.user_type_id = c.user_type_id "
+                + "WHERE c.object_id = OBJECT_ID('dbo.hits') AND c.name = 'hit_timestamp'"),
+                "The byte offset in LatestTitleId assumes an 8-byte datetime.");
+            Assert.AreEqual("int", Scalar(
+                "SELECT t.name FROM sys.columns c JOIN sys.types t ON t.user_type_id = c.user_type_id "
+                + "WHERE c.object_id = OBJECT_ID('dbo.hits') AND c.name = 'page_title_id'"),
+                "The 4-byte slice in LatestTitleId assumes an int.");
+
+            // Now the behaviour, over a table declared with those same production types. The case
+            // that matters is a page renamed to a title ANOTHER page introduced earlier: the new
+            // title has a LOWER lookup id, so MAX(page_title_id) - the previous implementation -
+            // keeps returning the old name forever.
+            const string setup = @"
+DECLARE @t TABLE (url_id int, hit_timestamp datetime, page_title_id int);
+INSERT INTO @t VALUES
+ (1, CONVERT(datetime, '2026-01-01 09:00', 120), 100),
+ (1, CONVERT(datetime, '2026-06-01 09:00', 120), 1),
+ (2, CONVERT(datetime, '2026-01-01 09:00', 120), NULL),
+ (3, CONVERT(datetime, '2026-02-01 09:00', 120), 55),
+ (3, CONVERT(datetime, '2026-01-01 09:00', 120), 77);
+";
+            var expression = WebActivitySql.LatestTitleId.Replace("h.", string.Empty);
+
+            var renamed = Scalar(setup
+                + "SELECT " + expression + " FROM @t WHERE url_id = 1 GROUP BY url_id;");
+            Assert.AreEqual(1, renamed,
+                "The current title wins even though the old one has a higher lookup id.");
+
+            var untitled = Scalar(setup
+                + "SELECT " + expression + " FROM @t WHERE url_id = 2 GROUP BY url_id;");
+            Assert.AreEqual(DBNull.Value, untitled,
+                "A latest hit with no title must be NULL, not the -1 sentinel the expression uses.");
+
+            var outOfOrder = Scalar(setup
+                + "SELECT " + expression + " FROM @t WHERE url_id = 3 GROUP BY url_id;");
+            Assert.AreEqual(55, outOfOrder,
+                "Chronology decides, not row order and not the larger id.");
         }
 
         #endregion
