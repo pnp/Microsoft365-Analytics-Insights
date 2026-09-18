@@ -99,8 +99,11 @@
     <Compile Include="CopilotAdoption\CopilotAdoptionConcentrationModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionCoworkModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionDiagnostics.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionDigestRenderer.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionExports.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionGuidanceCatalogue.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionOptions.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionPeriodModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionScoring.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionService.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionSql.cs" />
@@ -112,6 +115,14 @@
     <Compile Include="CopilotAdoption\CopilotLicenceClassifier.cs" />
     <Compile Include="CopilotAdoption\CopilotLicenceModels.cs" />
     <Compile Include="CopilotAdoption\CsvSerialiser.cs" />
+    <Compile Include="TeamsExplorer\SqlTeamsExplorerStore.cs" />
+    <Compile Include="TeamsExplorer\TeamsExplorerAvailability.cs" />
+    <Compile Include="TeamsExplorer\TeamsExplorerExports.cs" />
+    <Compile Include="TeamsExplorer\TeamsExplorerModels.cs" />
+    <Compile Include="TeamsExplorer\TeamsExplorerQuery.cs" />
+    <Compile Include="TeamsExplorer\TeamsExplorerRows.cs" />
+    <Compile Include="TeamsExplorer\TeamsExplorerScoring.cs" />
+    <Compile Include="TeamsExplorer\TeamsExplorerSql.cs" />
     <Compile Include="Copilot\CopilotAccessedResourceTaxonomy.cs" />
     <Compile Include="Config\ImportConfig.cs" />
     <Compile Include="Config\UserGroupsFilterModel.cs" />
@@ -432,9 +443,53 @@
     <Compile Include="Migrations\202609101200001_RetireImportDbHacks.Designer.cs">
       <DependentUpon>202609101200001_RetireImportDbHacks.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202609161200001_IndexTeamsExplorerQueries.cs" />
+    <Compile Include="Migrations\202609161200001_IndexTeamsExplorerQueries.Designer.cs">
+      <DependentUpon>202609161200001_IndexTeamsExplorerQueries.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609151440027_CopilotPromptSafetyFields.cs" />
+    <Compile Include="Migrations\202609170900001_CopilotAdoptionPeriodFacts.cs" />
+    <Compile Include="Migrations\202609170900001_CopilotAdoptionPeriodFacts.Designer.cs">
+      <DependentUpon>202609170900001_CopilotAdoptionPeriodFacts.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202609170920001_CopilotSubscribedSkuCapacity.cs" />
+    <Compile Include="Migrations\202609170920001_CopilotSubscribedSkuCapacity.Designer.cs">
+      <DependentUpon>202609170920001_CopilotSubscribedSkuCapacity.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202609171000001_CopilotAdoptionTargets.cs" />
+    <Compile Include="Migrations\202609171000001_CopilotAdoptionTargets.Designer.cs">
+      <DependentUpon>202609171000001_CopilotAdoptionTargets.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202609171020001_CopilotAdoptionCohorts.cs" />
+    <Compile Include="Migrations\202609171020001_CopilotAdoptionCohorts.Designer.cs">
+      <DependentUpon>202609171020001_CopilotAdoptionCohorts.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202609171020002_CopilotAdoptionInterventions.cs" />
+    <Compile Include="Migrations\202609171020002_CopilotAdoptionInterventions.Designer.cs">
+      <DependentUpon>202609171020002_CopilotAdoptionInterventions.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202609171030001_CopilotAdoptionDigest.cs" />
+    <Compile Include="Migrations\202609171030001_CopilotAdoptionDigest.Designer.cs">
+      <DependentUpon>202609171030001_CopilotAdoptionDigest.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609151440027_CopilotPromptSafetyFields.Designer.cs">
       <DependentUpon>202609151440027_CopilotPromptSafetyFields.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202609170910001_GraphCopilotUsageApiV2.cs" />
+    <Compile Include="Migrations\202609170910001_GraphCopilotUsageApiV2.Designer.cs">
+      <DependentUpon>202609170910001_GraphCopilotUsageApiV2.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202609170940001_CoworkUsageReportTables.cs" />
+    <Compile Include="Migrations\202609170940001_CoworkUsageReportTables.Designer.cs">
+      <DependentUpon>202609170940001_CoworkUsageReportTables.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202609171120001_AzureCostTagColumns.cs" />
+    <Compile Include="Migrations\202609171120001_AzureCostTagColumns.Designer.cs">
+      <DependentUpon>202609171120001_AzureCostTagColumns.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202609171125117_DropUnreportedCopilotStudioCreditColumns.cs" />
+    <Compile Include="Migrations\202609171125117_DropUnreportedCopilotStudioCreditColumns.Designer.cs">
+      <DependentUpon>202609171125117_DropUnreportedCopilotStudioCreditColumns.cs</DependentUpon>
     </Compile>
     <Compile Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.cs" />
     <Compile Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.Designer.cs">
@@ -662,8 +717,41 @@
     <EmbeddedResource Include="Migrations\202609101200001_RetireImportDbHacks.resx">
       <DependentUpon>202609101200001_RetireImportDbHacks.cs</DependentUpon>
     </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609161200001_IndexTeamsExplorerQueries.resx">
+      <DependentUpon>202609161200001_IndexTeamsExplorerQueries.cs</DependentUpon>
+    </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609151440027_CopilotPromptSafetyFields.resx">
       <DependentUpon>202609151440027_CopilotPromptSafetyFields.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609170900001_CopilotAdoptionPeriodFacts.resx">
+      <DependentUpon>202609170900001_CopilotAdoptionPeriodFacts.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609170910001_GraphCopilotUsageApiV2.resx">
+      <DependentUpon>202609170910001_GraphCopilotUsageApiV2.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609170920001_CopilotSubscribedSkuCapacity.resx">
+      <DependentUpon>202609170920001_CopilotSubscribedSkuCapacity.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609170940001_CoworkUsageReportTables.resx">
+      <DependentUpon>202609170940001_CoworkUsageReportTables.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609171000001_CopilotAdoptionTargets.resx">
+      <DependentUpon>202609171000001_CopilotAdoptionTargets.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609171020001_CopilotAdoptionCohorts.resx">
+      <DependentUpon>202609171020001_CopilotAdoptionCohorts.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609171020002_CopilotAdoptionInterventions.resx">
+      <DependentUpon>202609171020002_CopilotAdoptionInterventions.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609171030001_CopilotAdoptionDigest.resx">
+      <DependentUpon>202609171030001_CopilotAdoptionDigest.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609171120001_AzureCostTagColumns.resx">
+      <DependentUpon>202609171120001_AzureCostTagColumns.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609171125117_DropUnreportedCopilotStudioCreditColumns.resx">
+      <DependentUpon>202609171125117_DropUnreportedCopilotStudioCreditColumns.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609101100001_UniqueUrlsFullUrlIndex.resx">
       <DependentUpon>202609101100001_UniqueUrlsFullUrlIndex.cs</DependentUpon>

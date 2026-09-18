@@ -169,7 +169,7 @@ export default function ProfilingStatusPage() {
       .then((s) => {
         if (!cancelled) setStatus(s);
       })
-      .catch((e) => {
+      .catch((e: any) => {
         if (!cancelled) setStatusError(e instanceof Error ? e.message : 'Failed to load profiling status.');
       })
       .finally(() => {
@@ -188,7 +188,7 @@ export default function ProfilingStatusPage() {
       .then((p) => {
         if (!cancelled) setTrace(p);
       })
-      .catch((e) => {
+      .catch((e: any) => {
         if (!cancelled) setTraceError(e instanceof Error ? e.message : 'Failed to load trace logs.');
       })
       .finally(() => {
@@ -284,7 +284,7 @@ export default function ProfilingStatusPage() {
             <Text size={200}>Rows per page</Text>
             <Select
               value={String(pageSize)}
-              onChange={(_e, data) => {
+              onChange={(_e: any, data: any) => {
                 setPageSize(Number(data.value));
                 setPage(0);
               }}

@@ -1,4 +1,4 @@
-declare @archiveDateMax datetime
+﻿declare @archiveDateMax datetime
 
 --Archive date: one month before "now". All records will use this value to delete from
 set @archiveDateMax = dateadd(month, -1, GETDATE())
@@ -183,6 +183,16 @@ begin
 	while @copilotDeleted = @copilotBatch
 	begin
 		delete top (@copilotBatch) from copilot_usage_user_activity_log where [date] < @archiveDateMax
+		set @copilotDeleted = @@ROWCOUNT
+	end
+end
+
+if OBJECT_ID('dbo.cowork_usage_user_activity_log', 'U') is not null
+begin
+	set @copilotDeleted = @copilotBatch
+	while @copilotDeleted = @copilotBatch
+	begin
+		delete top (@copilotBatch) from cowork_usage_user_activity_log where [date] < @archiveDateMax
 		set @copilotDeleted = @@ROWCOUNT
 	end
 end

@@ -59,6 +59,10 @@ public class TelemetryControllerTests
     private const string Secret = "unit-test-shared-secret";
 
     private static TelemetryController BuildController(FakeTelemetryStore store, string? overrideSecret = null)
+        => BuildController(store, new FakeClientAnnotationStore(), overrideSecret);
+
+    private static TelemetryController BuildController(
+        FakeTelemetryStore store, FakeClientAnnotationStore annotations, string? overrideSecret = null)
     {
         var config = BuildConfig(Secret);
         if (overrideSecret != null)
@@ -70,11 +74,13 @@ public class TelemetryControllerTests
         }
 
         var dashboard = new DashboardService(
-            store, NullLogger<DashboardService>.Instance, new MemoryCache(new MemoryCacheOptions()), 5000, TimeSpan.Zero);
+            store, NullLogger<DashboardService>.Instance, new MemoryCache(new MemoryCacheOptions()), 5000, TimeSpan.Zero,
+            annotations);
 
         return new TelemetryController(
             new StatsSaveService(store, NullLogger<StatsSaveService>.Instance),
             dashboard,
+            annotations,
             config,
             NullLogger<TelemetryController>.Instance);
     }

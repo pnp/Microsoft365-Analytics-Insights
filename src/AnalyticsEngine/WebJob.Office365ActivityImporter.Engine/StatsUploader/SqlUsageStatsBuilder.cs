@@ -17,9 +17,22 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
     public class SqlUsageStatsBuilder : BaseUsageStatsBuilder
     {
         private readonly AnalyticsEntitiesContext _db;
-        public SqlUsageStatsBuilder(AnalyticsEntitiesContext db, ILogger logger, Guid tenantId) : base(logger, tenantId)
+        private readonly IAnonAdoptionStatsProvider _adoptionStatsProvider;
+
+        public SqlUsageStatsBuilder(AnalyticsEntitiesContext db, ILogger logger, Guid tenantId)
+            : this(db, logger, tenantId, null)
+        {
+        }
+
+        /// <param name="adoptionStatsProvider">
+        /// Optional. Null keeps the payload to the deployment stats it has always carried.
+        /// </param>
+        public SqlUsageStatsBuilder(
+            AnalyticsEntitiesContext db, ILogger logger, Guid tenantId, IAnonAdoptionStatsProvider adoptionStatsProvider)
+            : base(logger, tenantId)
         {
             _db = db;
+            _adoptionStatsProvider = adoptionStatsProvider;
         }
 
         public override async Task<BaseSolutionInstallConfig> GetLastAppliedSolutionConfig()
@@ -44,11 +57,106 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
         /// </summary>
         public override async Task<AnonUsageStatsModel> LoadUsageStatsModel(BaseSolutionInstallConfig lastSettings)
         {
-            var stats = AnonUsageStatsModelLoader.Load(_tenantId, lastSettings);
+            // The previous report is the install's own memory: it carries the anonymous client id
+            // forward (so this install stays one client across reports), and the last adoption block
+            // (so the daily payload still describes adoption on the six days a week the analysis does
+            // not run).
+            var previous = await LoadPreviousReport();
+
+            var stats = AnonUsageStatsModelLoader.Load(_tenantId, lastSettings, previous?.AnonClientId);
+            LogClientIdentity(stats, previous);
+
             stats.TableStats = await GetStatsFromSql();
             stats.DataPointsFromAITotal = await _db.TeamChannelStats.Where(s => s.SentimentScore.HasValue).CountAsync();
             stats.BuildVersionLabel = Common.Entities.BuildConstants.BuildLabel;
+            stats.Adoption = await LoadAdoptionStats(lastSettings, previous);
             return stats;
+        }
+
+        /// <summary>
+        /// The freshly computed adoption block, or the last one we stored.
+        /// </summary>
+        /// <remarks>
+        /// Re-sending the stored block keeps every payload self-describing, which matters because the
+        /// server's merge would otherwise leave a reader unable to tell a genuinely unchanged figure
+        /// from one the client simply stopped sending. The block keeps its ORIGINAL
+        /// <see cref="AnonAdoptionStats.GeneratedUtc"/>, so a consumer can see it is up to a week old
+        /// and de-duplicate the history container on it.
+        /// </remarks>
+        private async Task<AnonAdoptionStats> LoadAdoptionStats(
+            BaseSolutionInstallConfig lastSettings, AnonUsageStatsModel previous)
+        {
+            if (_adoptionStatsProvider == null) return null;
+
+            var fresh = await _adoptionStatsProvider.GetAdoptionStats(lastSettings);
+            if (fresh != null) return fresh;
+
+            var cached = previous?.Adoption;
+            if (cached != null)
+            {
+                _logger?.LogInformation(
+                    $"{UsageStatsManager.LOG_PREFIX}re-sending the adoption metrics computed {cached.GeneratedUtc} "
+                    + "(they are recalculated weekly, not daily).");
+            }
+
+            return cached;
+        }
+
+        /// <summary>
+        /// Logs the anonymous client id so an operator can find it in their own Application Insights.
+        /// </summary>
+        /// <remarks>
+        /// This is the only way a customer who WANTS to be identified can tell us which anonymous
+        /// record is theirs - the id is random by design and we have no way to work it out. See
+        /// <see cref="AnonUsageStatsModelLoader.ResolveAnonClientId"/>.
+        /// </remarks>
+        private void LogClientIdentity(AnonUsageStatsModel stats, AnonUsageStatsModel previous)
+        {
+            if (_logger == null) return;
+
+            var previousId = previous?.AnonClientId;
+            var rotated = !string.IsNullOrEmpty(previousId)
+                          && !string.Equals(previousId, stats.AnonClientId, StringComparison.OrdinalIgnoreCase);
+
+            if (rotated)
+            {
+                // Worth calling out: from the service's point of view this install becomes a brand new
+                // client, which would otherwise look like a fault rather than a deliberate one-off.
+                _logger.LogInformation(
+                    $"{UsageStatsManager.LOG_PREFIX}this install's anonymous telemetry id has been replaced with a new "
+                    + "random one, because the previous id was derived from the tenant id and could be traced back to "
+                    + "this tenant. Reporting history before now belongs to the old id.");
+            }
+
+            _logger.LogInformation(
+                $"{UsageStatsManager.LOG_PREFIX}anonymous telemetry client id for this install is "
+                + $"'{stats.AnonClientId}'. It is random and contains nothing about this tenant. Quote it to the "
+                + "project team if you would like your reports associated with your organisation.");
+        }
+
+        /// <summary>The most recent report this install stored, or null if it has never uploaded one.</summary>
+        private async Task<AnonUsageStatsModel> LoadPreviousReport()
+        {
+            try
+            {
+                var latest = await _db.TelemetryReports
+                    .OrderByDescending(r => r.ReportSubmitted)
+                    .Take(1)
+                    .ToListAsync();
+
+                if (latest.Count != 1 || string.IsNullOrEmpty(latest[0].Report)) return null;
+
+                return JsonConvert.DeserializeObject<AnonUsageStatsModel>(latest[0].Report);
+            }
+            catch (JsonException ex)
+            {
+                // An unreadable stored report must not stop a new one being built. The consequence is
+                // a new client id, which is the same outcome as a first-ever report.
+                _logger?.LogWarning(
+                    $"{UsageStatsManager.LOG_PREFIX}could not read the last stored telemetry report ({ex.Message}); "
+                    + "continuing with a new anonymous client id.");
+                return null;
+            }
         }
 
         private async Task<List<AnonUsageStatsModel.TableStat>> GetStatsFromSql()

@@ -1,7 +1,9 @@
-import { apiFetch } from './http';
+﻿import { apiFetch } from './http';
 import type {
   AdoptionFilterOptions,
   CopilotAdoptionAvailability,
+  CopilotAdoptionCohortComparison,
+  CopilotAdoptionCohortUserPage,
   CopilotAdoptionSummary,
   CoworkFilters,
   CoworkReadinessPage,
@@ -9,6 +11,8 @@ import type {
   LicensedUserFilters,
   LicensedUserPage,
   OpportunityFilters,
+  CopilotAdoptionCreateInterventionRequest,
+  CopilotAdoptionIntervention,
 } from '../types/copilotAdoption';
 
 const baseUrl = (): string =>
@@ -90,6 +94,16 @@ async function getJson<T>(path: string, what: string, signal?: AbortSignal): Pro
 }
 
 /** Common query parameters: every endpoint is scoped by the window and the seat-licence selection. */
+async function postJson<T>(path: string, body: unknown, what: string): Promise<T> {
+  const response = await apiFetch(`${baseUrl()}${path}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(`Couldn't save ${what} (${response.status}).`);
+  return response.json() as Promise<T>;
+}
+
 function scopeParams(windowDays: number, seatLicenceTypeIds?: number[]): URLSearchParams {
   const params = new URLSearchParams({ windowDays: String(windowDays) });
   if (seatLicenceTypeIds && seatLicenceTypeIds.length > 0) {
@@ -146,9 +160,12 @@ export function fetchAdoptionSummary(
   windowDays: number,
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
+  comparisonMode = 'previousPeriod',
 ): Promise<CopilotAdoptionSummary> {
+  const params = scopeParams(windowDays, seatLicenceTypeIds);
+  params.set('comparisonMode', comparisonMode);
   return getJson<CopilotAdoptionSummary>(
-    `/summary?${scopeParams(windowDays, seatLicenceTypeIds)}`,
+    `/summary?${params}`,
     'the Copilot adoption summary',
     signal,
   );
@@ -223,6 +240,72 @@ export function fetchAdoptionSql(
   );
 }
 
+export function fetchPeriodCohorts(
+  leftPeriodEnd: string,
+  rightPeriodEnd: string,
+  periodDays: number,
+  signal?: AbortSignal,
+): Promise<CopilotAdoptionCohortComparison> {
+  const params = new URLSearchParams({
+    leftPeriodEnd,
+    rightPeriodEnd,
+    periodDays: String(periodDays),
+  });
+  return getJson<CopilotAdoptionCohortComparison>(
+    `/period-cohorts?${params}`,
+    'the Copilot adoption cohort comparison',
+    signal,
+  );
+}
+
+export function fetchPeriodCohortUsers(
+  leftPeriodEnd: string,
+  rightPeriodEnd: string,
+  periodDays: number,
+  filters: {
+    transition?: string;
+    fromBand?: string;
+    toBand?: string;
+    department?: string;
+    activationState?: string;
+  },
+  skip: number,
+  take: number,
+  signal?: AbortSignal,
+): Promise<CopilotAdoptionCohortUserPage> {
+  const params = new URLSearchParams({
+    leftPeriodEnd,
+    rightPeriodEnd,
+    periodDays: String(periodDays),
+    skip: String(skip),
+    take: String(take),
+  });
+  if (filters.transition) params.set('transition', filters.transition);
+  if (filters.fromBand) params.set('fromBand', filters.fromBand);
+  if (filters.toBand) params.set('toBand', filters.toBand);
+  if (filters.department) params.set('department', filters.department);
+  if (filters.activationState) params.set('activationState', filters.activationState);
+
+  return getJson<CopilotAdoptionCohortUserPage>(
+    `/period-cohorts/users?${params}`,
+    'the Copilot adoption cohort users',
+    signal,
+  );
+}
+
+export function periodCohortWorkbookExportUrl(
+  leftPeriodEnd: string,
+  rightPeriodEnd: string,
+  periodDays: number,
+): string {
+  const params = new URLSearchParams({
+    leftPeriodEnd,
+    rightPeriodEnd,
+    periodDays: String(periodDays),
+  });
+  return `${baseUrl()}/period-cohorts/export/workbook?${params}`;
+}
+
 /**
  * URL of the CSV export for the current filters.
  *
@@ -272,6 +355,29 @@ export function coworkExportUrl(
  * before an enablement programme starts and again afterwards, and the two files are directly
  * comparable in a way a screenshot never is.
  */
-export function workbookExportUrl(windowDays: number, seatLicenceTypeIds?: number[]): string {
-  return `${baseUrl()}/export/workbook?${scopeParams(windowDays, seatLicenceTypeIds)}`;
+export function workbookExportUrl(
+  windowDays: number,
+  seatLicenceTypeIds?: number[],
+  comparisonMode = 'previousPeriod',
+): string {
+  const params = scopeParams(windowDays, seatLicenceTypeIds);
+  params.set('comparisonMode', comparisonMode);
+  return `${baseUrl()}/export/workbook?${params}`;
+}
+
+
+export function fetchInterventions(signal?: AbortSignal): Promise<CopilotAdoptionIntervention[]> {
+  return getJson<CopilotAdoptionIntervention[]>('/interventions', 'Copilot adoption interventions', signal);
+}
+
+export function createInterventionFromAction(
+  windowDays: number,
+  request: CopilotAdoptionCreateInterventionRequest,
+  seatLicenceTypeIds?: number[],
+): Promise<CopilotAdoptionIntervention> {
+  return postJson<CopilotAdoptionIntervention>(
+    `/interventions/from-action?${scopeParams(windowDays, seatLicenceTypeIds)}`,
+    request,
+    'the Copilot adoption intervention',
+  );
 }

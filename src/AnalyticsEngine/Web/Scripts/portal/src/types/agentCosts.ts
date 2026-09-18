@@ -21,6 +21,8 @@ export interface AgentCostAvailability {
   perUserCreditsLastError: string | null;
   capacityLastError: string | null;
   azureDimensionsWithData: string[];
+  /** The credit pivots that have data behind them. Same purpose as `azureDimensionsWithData`. */
+  creditDimensionsWithData: string[];
   earliestUsageDate: string | null;
   latestUsageDate: string | null;
   messages: string[];
@@ -30,6 +32,16 @@ export interface AgentCostAvailability {
 export interface AzureCostByCurrency {
   currency: string | null;
   cost: number;
+  /**
+   * Metered quantity behind the cost, or null when it would be meaningless.
+   *
+   * Only populated when a single meter/tag combination contributes - quantities of different meters are
+   * different units (credits, GB, hours, operations) and summing them gives a nonsense figure. When it is
+   * populated it is the Copilot Credit count, which matters because Cowork does not consume the Copilot
+   * Studio entitlement the credit figures on this page come from. Otherwise use the per-tag or per-meter
+   * breakdown, where the quantity is scoped to one unit.
+   */
+  quantity: number | null;
   includesEstimates: boolean;
 }
 
@@ -74,7 +86,13 @@ export interface AgentCostBreakdownRow {
   peakDistinctUsers: number | null;
 }
 
-/** One fully-granular billing row - the deepest view the source data supports. */
+/**
+ * One fully-granular billing row - the deepest view the source data supports.
+ *
+ * The LLM model, tool invoked, knowledge sources and channel are deliberately absent: a live capture of
+ * Microsoft's per-agent credit response carried only the agent name, a non-billable quantity and a user
+ * count, so those columns could only ever have rendered as a dash on every row.
+ */
 export interface AgentCostDetailRow {
   usageDate: string;
   environmentId: string | null;
@@ -83,10 +101,6 @@ export interface AgentCostDetailRow {
   agentName: string | null;
   harness: string | null;
   featureName: string | null;
-  channelId: string | null;
-  llmModel: string | null;
-  toolInvoked: string | null;
-  knowledgeSources: string | null;
   billedCredits: number;
   nonBilledCredits: number | null;
   distinctUsers: number | null;
@@ -130,10 +144,6 @@ export interface AgentCostFilterOptions {
   environments: AgentCostFilterOption[];
   harnesses: string[];
   features: string[];
-  models: string[];
-  tools: string[];
-  knowledgeSources: string[];
-  channels: string[];
 }
 
 /** The billing dimensions credits can be pivoted by. Keep in step with `AgentCostDimensions`. */
@@ -141,14 +151,17 @@ export type CreditDimension =
   | 'agent'
   | 'environment'
   | 'harness'
-  | 'feature'
-  | 'model'
-  | 'tool'
-  | 'knowledge'
-  | 'channel';
+  | 'feature';
 
 /** Keep in step with `AzureCostDimensions`. */
-export type AzureDimension = 'meter' | 'service' | 'category' | 'resource' | 'resourcegroup' | 'subscription';
+export type AzureDimension =
+  | 'meter'
+  | 'service'
+  | 'category'
+  | 'resource'
+  | 'resourcegroup'
+  | 'subscription'
+  | 'tag';
 
 /** The filters applied to every credit query on the page. */
 export interface AgentCostFilters {
@@ -158,9 +171,5 @@ export interface AgentCostFilters {
   environmentId?: string;
   harness?: string;
   feature?: string;
-  model?: string;
-  tool?: string;
-  knowledge?: string;
-  channel?: string;
   search?: string;
 }

@@ -114,22 +114,6 @@ namespace Common.Entities.Entities.AgentCosts
         [MaxLength(200)]
         public string FeatureName { get; set; }
 
-        [Column("channel_id")]
-        [MaxLength(200)]
-        public string ChannelId { get; set; }
-
-        [Column("llm_model")]
-        [MaxLength(200)]
-        public string LlmModel { get; set; }
-
-        [Column("tool_invoked")]
-        [MaxLength(400)]
-        public string ToolInvoked { get; set; }
-
-        [Column("knowledge_sources")]
-        [MaxLength(400)]
-        public string KnowledgeSources { get; set; }
-
         /// <summary>Copilot Credits actually charged for this slice.</summary>
         [Column("billed_credits")]
         public decimal BilledCredits { get; set; }
@@ -370,6 +354,35 @@ namespace Common.Entities.Entities.AgentCosts
         [Column("meter_name")]
         [MaxLength(255)]
         public string MeterName { get; set; }
+
+        /// <summary>
+        /// The tag name the query was grouped by, e.g. <c>serviceName</c>. Null unless a tag grouping was
+        /// configured - see <c>AzureCostImportSettings.GroupBy</c>.
+        /// </summary>
+        /// <remarks>
+        /// Stored alongside the value rather than assumed, because the tag to group by is configurable. A
+        /// value on its own would be uninterpretable: "Cowork" means nothing without knowing it came from
+        /// <c>serviceName</c>.
+        /// </remarks>
+        [Column("tag_key")]
+        [MaxLength(256)]
+        public string TagKey { get; set; }
+
+        /// <summary>
+        /// The tag's value for this row, e.g. <c>Cowork</c>. Null both when no tag grouping is configured and
+        /// when the row's resource simply does not carry the tag - Cost Management returns a row with an empty
+        /// tag value for everything untagged, which is a real answer rather than a gap.
+        /// </summary>
+        /// <remarks>
+        /// This is the only thing that separates Copilot Cowork, Work IQ API and Copilot Studio spend from one
+        /// another: Microsoft bills all three through a single <c>Pay As You Go Copilot Credit</c> meter under
+        /// the <c>Microsoft Copilot Studio</c> service, and documents that there is no separate line item per
+        /// experience. Without the tag the meter is the finest grain available, and it cannot answer "how much
+        /// of this was Cowork?".
+        /// </remarks>
+        [Column("tag_value")]
+        [MaxLength(512)]
+        public string TagValue { get; set; }
 
         /// <summary>
         /// Cost in the billing currency named by <see cref="Currency"/> - the figure that appears on the

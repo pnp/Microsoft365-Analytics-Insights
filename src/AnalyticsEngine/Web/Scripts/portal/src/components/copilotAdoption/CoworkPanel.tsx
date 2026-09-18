@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, Fragment } from 'react';
 import {
   makeStyles,
   tokens,
@@ -22,21 +22,51 @@ import type {
   CoworkBasis,
   CoworkFilters,
   CoworkReadinessPage,
+  CoworkReadinessRow,
   CoworkTier,
 } from '../../types/copilotAdoption';
 import Spinner from '../Spinner';
-import { ScoreBar, useAdoptionTableStyles } from './adoptionShared';
-import { formatCount, formatDate } from './KpiGrid';
+import {
+  DetailRationale,
+  DetailRow,
+  DetailSection,
+  DetailSections,
+  DetailStat,
+  DetailStats,
+  ExpandableUserCell,
+  ScoreBar,
+  useAdoptionTableStyles,
+  useRowExpansion,
+} from './adoptionShared';
+import { formatCount, formatDate } from '../shared/KpiGrid';
 // Credits are fractional and a per-user total over a short window is routinely below 1.
 // formatCount is documented as a WHOLE-number formatter, so it renders a real 0.4 as "0" -
 // the same "we do not know" / "it is nothing" conflation the null path here is careful to
 // avoid, and the reason formatCredits exists (agentCostShared.test.ts pins
 // formatCredits(0.000125) !== '0'). Every credit figure on this tab uses it.
 import { formatCredits } from '../agentCosts/agentCostShared';
-import InfoTip from './InfoTip';
+import InfoTip from '../shared/InfoTip';
 import CoworkQuadrant from './CoworkQuadrant';
 
 const PAGE_SIZE = 50;
+
+/**
+ * The scheduled / user-initiated split, naming only the halves Microsoft actually reported.
+ *
+ * These two columns are independently nullable and a blank one means "not reported", not "none".
+ * Coercing either to 0 would state a measurement Microsoft never made - the same conflation the
+ * per-user credit column goes out of its way to avoid.
+ */
+function taskSplitLabel(row: CoworkReadinessRow): string {
+  const parts: string[] = [];
+  if (row.coworkReportScheduledTasks !== null) {
+    parts.push(`${formatCount(row.coworkReportScheduledTasks)} scheduled`);
+  }
+  if (row.coworkReportUserInitiatedTasks !== null) {
+    parts.push(`${formatCount(row.coworkReportUserInitiatedTasks)} user-initiated`);
+  }
+  return parts.length > 0 ? parts.join(', ') : 'split not reported';
+}
 
 const SORT_OPTIONS = [
   { value: 'load:desc', label: 'Most coordination load' },
@@ -80,6 +110,10 @@ const useStyles = makeStyles({
   },
   tableWrap: {
     overflowX: 'auto',
+    // Makes this scrollport the container an expanded row's detail panel is sized against. Sizing
+    // that panel from the viewport instead over-measures by whatever the left navigation and page
+    // padding take, so part of it stayed clipped on a normal laptop.
+    containerType: 'inline-size',
   },
   muted: {
     color: tokens.colorNeutralForeground3,
@@ -91,10 +125,6 @@ const useStyles = makeStyles({
     gap: '12px',
     marginTop: '12px',
     flexWrap: 'wrap',
-  },
-  rationale: {
-    maxWidth: '340px',
-    color: tokens.colorNeutralForeground2,
   },
   upn: {
     display: 'flex',
@@ -263,10 +293,15 @@ export default function CoworkPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const { isExpanded, toggle: toggleRow, collapseAll } = useRowExpansion();
 
   const available = summary.coworkReadinessAvailable;
 
   useEffect(() => setPage(0), [filters, windowDays]);
+
+  // Paging or re-filtering replaces the rows under an open detail, so the expander would end up
+  // describing whoever happens to land on that line next.
+  useEffect(() => collapseAll(), [filters, windowDays, page, collapseAll]);
 
   useEffect(() => {
     // Nothing to fetch when the analysis did not run: the rows cannot exist, and firing the request
@@ -287,7 +322,7 @@ export default function CoworkPanel({
       .then((result) => {
         if (!cancelled) setData(result);
       })
-      .catch((e) => {
+      .catch((e: any) => {
         if (cancelled || controller.signal.aborted) return;
         setError(e instanceof Error ? e.message : 'Failed to load the Cowork readiness list.');
       })
@@ -311,6 +346,9 @@ export default function CoworkPanel({
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
   const estimate = summary.coworkValueEstimate;
   const credits = summary.coworkCreditPosition;
+  // The detail row spans every column the header renders. The credit figures live inside the detail
+  // panel rather than in a column, so this is now fixed.
+  const detailColSpan = 8;
 
   const toggleTier = (tier: CoworkTier) =>
     setFilters((f) => ({
@@ -472,7 +510,7 @@ export default function CoworkPanel({
                     <td className={`${table.td} ${table.tdNumeric}`}>
                       {formatCount(row.regularCoworkUsers)}
                       <Text size={100} block className={table.tdSub}>
-                        {Math.round(row.coworkAdoptionPct)}%
+                        {row.coworkAutomationRatioPct === null ? '—' : `${Math.round(row.coworkAutomationRatioPct)}% automated`}
                       </Text>
                     </td>
                     <td className={`${table.td} ${table.tdNumeric}`}>
@@ -574,12 +612,6 @@ export default function CoworkPanel({
               {' '}
               a month across {formatCount(estimate.cohortUsers)} recommended users
             </Text>
-            {estimate.currencyPerMonthHigh !== null && estimate.currencyPerMonthLow !== null && (
-              <Text size={300} block style={{ marginTop: '4px' }}>
-                {formatCount(estimate.currencyPerMonthLow)}-{formatCount(estimate.currencyPerMonthHigh)}{' '}
-                {estimate.currencyCode ?? ''} a month at the configured loaded hourly cost
-              </Text>
-            )}
           </div>
 
           <Text size={200} block style={{ marginTop: '10px' }}>
@@ -606,8 +638,8 @@ export default function CoworkPanel({
             value={searchDraft}
             placeholder="Search name, email, department, job title or manager"
             aria-label="Search Cowork candidates"
-            onChange={(_e, d) => setSearchDraft(d.value)}
-            onKeyDown={(e) => {
+            onChange={(_e: any, d: any) => setSearchDraft(d.value)}
+            onKeyDown={(e: any) => {
               if (e.key === 'Enter') setFilters((f) => ({ ...f, search: searchDraft }));
             }}
           />
@@ -618,7 +650,7 @@ export default function CoworkPanel({
           <Select
             value={filters.department}
             aria-label="Filter Cowork candidates by department"
-            onChange={(_e, d) => setFilters((f) => ({ ...f, department: d.value }))}
+            onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, department: d.value }))}
           >
             <option value="">All departments</option>
             {(filterOptions?.departments ?? []).map((dept) => (
@@ -631,7 +663,7 @@ export default function CoworkPanel({
           <Select
             value={sortValue}
             aria-label="Sort Cowork candidates"
-            onChange={(_e, d) => {
+            onChange={(_e: any, d: any) => {
               const [sortBy, direction] = d.value.split(':');
               setFilters((f) => ({ ...f, sortBy, sortDesc: direction === 'desc' }));
             }}
@@ -650,7 +682,7 @@ export default function CoworkPanel({
             <Checkbox
               label="Policy list only"
               checked={filters.recommendedOnly}
-              onChange={(_e, d) =>
+              onChange={(_e: any, d: any) =>
                 setFilters((f) => ({ ...f, recommendedOnly: !!d.checked, tiers: [] }))
               }
             />
@@ -662,7 +694,7 @@ export default function CoworkPanel({
             <Checkbox
               label="Already using Cowork"
               checked={filters.coworkUsersOnly}
-              onChange={(_e, d) => setFilters((f) => ({ ...f, coworkUsersOnly: !!d.checked }))}
+              onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, coworkUsersOnly: !!d.checked }))}
             />
           </Tooltip>
 
@@ -732,7 +764,7 @@ export default function CoworkPanel({
             <table className={table.table}>
               <thead>
                 <tr>
-                  <th className={table.th}>User</th>
+                  <th className={`${table.th} ${table.stickyLeft}`}>User</th>
                   <th className={table.th}>Department</th>
                   <th className={table.th}>
                     <span className={styles.thWithInfo}>
@@ -785,111 +817,232 @@ export default function CoworkPanel({
                   <th className={table.th}>Cowork use</th>
                   <th className={`${table.th} ${table.thNumeric}`}>Meetings (per day)</th>
                   <th className={`${table.th} ${table.thNumeric}`}>Email (per day)</th>
-                  {credits?.perUserCreditsAvailable && (
-                    <th className={`${table.th} ${table.thNumeric}`}>
-                      <span className={styles.thWithInfo}>
-                        All Copilot Credits
-                        <InfoTip
-                          title="All Copilot Credits"
-                          content={{
-                            what: 'Every Copilot Credit billed to this person in the period, across all credit-billed Copilot workloads. NOT Cowork\u2019s share.',
-                            how: 'Microsoft meters Cowork against the shared Copilot Credits pool and exposes no per-row workload discriminator, so a Cowork-only per-user figure does not exist and is not invented here.',
-                            source:
-                              'The Copilot Studio per-user credit import. A dash means the credits could not be attributed to this person - not that they cost nothing.',
-                          }}
-                        />
-                      </span>
-                    </th>
-                  )}
-                  <th className={table.th}>Justification</th>
                 </tr>
               </thead>
               <tbody>
-                {data.rows.map((row) => (
-                  <tr key={row.userId}>
-                    <td className={table.td}>
-                      <span className={styles.upn}>
-                        <Text size={200} weight="semibold">
-                          {row.userPrincipalName}
-                        </Text>
-                        <Text size={100} className={styles.muted}>
-                          {row.jobTitle || row.mail || ''}
-                        </Text>
-                      </span>
-                    </td>
-                    <td className={table.td}>{row.department || '\u2014'}</td>
-                    <td className={table.td}>
-                      <span className={styles.upn}>
-                        <Text size={200}>{row.tierLabel}</Text>
-                        <span style={{ marginTop: '3px' }}>
-                          <BasisBadge basis={row.basis} />
-                        </span>
-                      </span>
-                    </td>
-                    <td className={table.td}>
-                      <Tooltip
-                        relationship="description"
-                        content={`Meetings ${Math.round(row.meetingScore)} / Email ${Math.round(
-                          row.emailScore,
-                        )} / Messages ${Math.round(row.collaborationScore)} / Documents ${Math.round(
-                          row.documentScore,
-                        )}`}
-                      >
-                        <div>
-                          <ScoreBar score={row.coordinationLoadScore} />
-                        </div>
-                      </Tooltip>
-                    </td>
-                    <td className={table.td}>
-                      <Tooltip
-                        relationship="description"
-                        content={`Engagement ${Math.round(row.adoptionScore)}${
-                          row.agentsUsed > 0 ? ` + agent familiarity (${row.agentsUsed} agent(s))` : ''
-                        }`}
-                      >
-                        <div>
-                          <ScoreBar score={row.fluencyScore} />
-                        </div>
-                      </Tooltip>
-                    </td>
-                    <td className={table.td}>
-                      {row.usedCowork ? (
-                        <Badge className={styles.evidence} size="small">
-                          {formatCount(row.coworkInteractions)} in {row.coworkActiveDays}d
-                        </Badge>
-                      ) : (
-                        <Text size={200} className={styles.muted}>
-                          Not yet
-                        </Text>
-                      )}
-                    </td>
-                    <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.teamsMeetings)}</td>
-                    <td className={`${table.td} ${table.tdNumeric}`}>
-                      {formatCount(row.emailsSent + row.emailsRead)}
-                    </td>
-                    {credits?.perUserCreditsAvailable && (
-                      <td className={`${table.td} ${table.tdNumeric}`}>
-                        {row.totalCopilotCredits === null ? (
+                {data.rows.map((row) => {
+                  const open = isExpanded(row.userId);
+                  return (
+                    <Fragment key={row.userId}>
+                      <tr>
+                        <ExpandableUserCell
+                          open={open}
+                          onToggle={() => toggleRow(row.userId)}
+                          userPrincipalName={row.userPrincipalName}
+                          secondary={row.jobTitle || row.mail}
+                          className={table.stickyLeft}
+                        />
+                        <td className={`${table.td} ${table.tdNoWrap}`}>{row.department || '\u2014'}</td>
+                        <td className={`${table.td} ${table.tdNoWrap}`}>
+                          <span className={styles.upn}>
+                            <Text size={200}>{row.tierLabel}</Text>
+                            <span style={{ marginTop: '3px' }}>
+                              <BasisBadge basis={row.basis} />
+                            </span>
+                          </span>
+                        </td>
+                        <td className={table.td}>
                           <Tooltip
                             relationship="description"
-                            content="Not attributable - no per-user credit rows for this person. This is not zero."
+                            content={`Meetings ${Math.round(row.meetingScore)} / Email ${Math.round(
+                              row.emailScore,
+                            )} / Messages ${Math.round(row.collaborationScore)} / Documents ${Math.round(
+                              row.documentScore,
+                            )}`}
                           >
-                            <Text size={200} className={styles.muted}>
-                              &#8212;
-                            </Text>
+                            <div>
+                              <ScoreBar score={row.coordinationLoadScore} />
+                            </div>
                           </Tooltip>
-                        ) : (
-                          formatCredits(row.totalCopilotCredits)
-                        )}
-                      </td>
-                    )}
-                    <td className={table.td}>
-                      <Text size={200} className={styles.rationale}>
-                        {row.rationale}
-                      </Text>
-                    </td>
-                  </tr>
-                ))}
+                        </td>
+                        <td className={table.td}>
+                          <Tooltip
+                            relationship="description"
+                            content={`Engagement ${Math.round(row.adoptionScore)}${
+                              row.agentsUsed > 0 ? ` + agent familiarity (${row.agentsUsed} agent(s))` : ''
+                            }`}
+                          >
+                            <div>
+                              <ScoreBar score={row.fluencyScore} />
+                            </div>
+                          </Tooltip>
+                        </td>
+                        <td className={table.td}>
+                          {row.usedCowork ? (
+                            <Badge className={styles.evidence} size="small">
+                              {row.coworkReportTotalTasks !== null ? `${formatCount(row.coworkReportTotalTasks)} tasks in ${row.coworkReportActiveDays ?? 0}d` : row.coworkReportActiveDays !== null && row.coworkReportActiveDays > 0 ? `${formatCount(row.coworkReportActiveDays)}d reported` : `${formatCount(row.coworkInteractions)} audit interactions in ${row.coworkActiveDays}d`}
+                            </Badge>
+                          ) : (
+                            <Text size={200} className={styles.muted}>
+                              Not yet
+                            </Text>
+                          )}
+                        </td>
+                        <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.teamsMeetings)}</td>
+                        <td className={`${table.td} ${table.tdNumeric}`}>
+                          {formatCount(row.emailsSent + row.emailsRead)}
+                        </td>
+                      </tr>
+                      {open && (
+                        <DetailRow colSpan={detailColSpan}>
+                          <DetailSections>
+                            <DetailSection title={`Coordination load - ${Math.round(row.coordinationLoadScore)}/100`}>
+                              <DetailStats>
+                                <DetailStat
+                                  label="Meetings"
+                                  value={formatCount(row.teamsMeetings)}
+                                  sub={`per day \u00b7 ${Math.round(row.meetingScore)}/100 vs target ${options.coworkMeetingTarget}`}
+                                />
+                                <DetailStat
+                                  label="Email"
+                                  value={formatCount(row.emailsSent + row.emailsRead)}
+                                  sub={`${Math.round(row.emailScore)}/100 \u00b7 ${formatCount(row.emailsSent)} sent, ${formatCount(row.emailsRead)} read`}
+                                />
+                                <DetailStat
+                                  label="Teams messages"
+                                  value={formatCount(row.teamsMessages)}
+                                  sub={`per day \u00b7 ${Math.round(row.collaborationScore)}/100 vs target ${options.coworkCollaborationTarget}`}
+                                />
+                                <DetailStat
+                                  label="Files"
+                                  value={formatCount(row.filesViewedOrEdited)}
+                                  sub={`per day \u00b7 ${Math.round(row.documentScore)}/100 vs target ${options.coworkDocumentTarget}`}
+                                />
+                              </DetailStats>
+                            </DetailSection>
+
+                            <DetailSection title={`Copilot fluency - ${Math.round(row.fluencyScore)}/100`}>
+                              <DetailStats>
+                                <DetailStat
+                                  label="Engagement score"
+                                  value={Math.round(row.adoptionScore)}
+                                  sub="from Licensed users"
+                                />
+                                <DetailStat
+                                  label="Agents used"
+                                  value={formatCount(row.agentsUsed)}
+                                  sub={
+                                    row.agentsUsed > 0
+                                      ? `up to +${options.coworkAgentFamiliarityUplift} familiarity`
+                                      : 'no familiarity uplift'
+                                  }
+                                />
+                                <DetailStat
+                                  label="Fluency bar"
+                                  value={options.coworkFluencyMinScore}
+                                  sub={
+                                    row.fluencyScore >= options.coworkFluencyMinScore ? 'cleared' : 'not cleared'
+                                  }
+                                />
+                                <DetailStat
+                                  label="Load bar"
+                                  value={options.coworkLoadMinScore}
+                                  sub={
+                                    row.coordinationLoadScore >= options.coworkLoadMinScore
+                                      ? 'cleared'
+                                      : 'not cleared'
+                                  }
+                                />
+                              </DetailStats>
+                            </DetailSection>
+
+                            <DetailSection title="Cowork use">
+                              <DetailStats>
+                                <DetailStat
+                                  label="Audit interactions"
+                                  value={formatCount(row.coworkInteractions)}
+                                  sub={`on ${formatCount(row.coworkActiveDays)} day(s) \u00b7 regular at ${options.coworkRegularMinActiveDays}`}
+                                />
+                                <DetailStat
+                                  label="Last audit interaction"
+                                  value={formatDate(row.lastCoworkInteractionUtc)}
+                                  sub={row.basis === 'evidence' ? 'observed' : 'predicted verdict'}
+                                />
+                                {row.coworkReportLastActivityDate !== null && (
+                                  <DetailStat
+                                    label="Reported last activity"
+                                    value={formatDate(row.coworkReportLastActivityDate)}
+                                    sub={'from Microsoft\u2019s usage report'}
+                                  />
+                                )}
+                                {row.coworkReportTotalTasks !== null && (
+                                  <DetailStat
+                                    label="Reported tasks"
+                                    value={formatCount(row.coworkReportTotalTasks)}
+                                    sub={taskSplitLabel(row)}
+                                  />
+                                )}
+                                {row.coworkReportActiveDays !== null && (
+                                  <DetailStat
+                                    label="Reported active days"
+                                    value={formatCount(row.coworkReportActiveDays)}
+                                  />
+                                )}
+                                {row.coworkAutomationRatioPct !== null && (
+                                  <DetailStat
+                                    label="Automated"
+                                    value={`${Math.round(row.coworkAutomationRatioPct)}%`}
+                                    sub="scheduled share of tasks"
+                                  />
+                                )}
+                                <DetailStat
+                                  label="Last M365 activity"
+                                  value={formatDate(row.lastM365ActivityUtc)}
+                                />
+                              </DetailStats>
+                            </DetailSection>
+
+                            {credits?.perUserCreditsAvailable && (
+                              <DetailSection
+                                title="Copilot Credits"
+                                info={{
+                                  what: 'Every Copilot Credit billed to this person in the period, across all credit-billed Copilot workloads. NOT Cowork\u2019s share.',
+                                  how: 'Microsoft meters Cowork against the shared Copilot Credits pool and exposes no per-row workload discriminator, so a Cowork-only per-user figure does not exist and is not invented here.',
+                                  source:
+                                    'The Copilot Studio per-user credit import, which is optional and off unless it has been configured in Power Platform - which is why this sits in the detail panel rather than taking a column from every tenant. A dash means the credits could not be attributed to this person - not that they cost nothing.',
+                                }}
+                              >
+                                <DetailStats>
+                                  <DetailStat
+                                    label="All Copilot Credits"
+                                    value={
+                                      row.totalCopilotCredits === null
+                                        ? '\u2014'
+                                        : formatCredits(row.totalCopilotCredits)
+                                    }
+                                    sub={
+                                      row.totalCopilotCredits === null
+                                        ? 'not attributable to this person - not zero'
+                                        : 'all credit-billed Copilot workloads, not Cowork\u2019s share'
+                                    }
+                                  />
+                                  {row.coworkCreditsPerTask !== null && (
+                                    <DetailStat
+                                      label="Credits per task"
+                                      value={formatCredits(row.coworkCreditsPerTask)}
+                                      sub={'all Copilot Credits, not Cowork\u2019s share'}
+                                    />
+                                  )}
+                                </DetailStats>
+                              </DetailSection>
+                            )}
+                          </DetailSections>
+
+                          <DetailSection
+                            title="Justification"
+                            info={{
+                              what: 'The verdict restated in plain English, naming the signals that produced it for this person.',
+                              how: 'Written per user rather than per tier, so it names the specific figures above that carried - or failed to carry - this person over the two bars.',
+                              source: 'Safe to paste into a rollout plan. It is also in the CSV export, in full.',
+                            }}
+                          >
+                            <DetailRationale text={row.rationale} />
+                          </DetailSection>
+                        </DetailRow>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>

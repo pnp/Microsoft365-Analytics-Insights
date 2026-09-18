@@ -92,6 +92,30 @@ namespace Tests.UnitTests
                 Assert.IsTrue(azureTotals.Cost > 0m);
                 Assert.IsTrue(azureTotals.IncludesEstimates, "The trailing days are an open billing period.");
 
+                // Quantities of different meters are different UNITS - credits, GB, hours, operations - so a
+                // summary quantity across a multi-meter subscription must stay null rather than add them up.
+                // Run against a real subscription the naive sum produced "5,342,761 metered units" next to the
+                // money, which reads as a real figure and is not one. The demo tenant bills several meters, so
+                // this is exactly that case. The per-meter/per-tag breakdown below is where a quantity is
+                // scoped to one unit and therefore meaningful.
+                Assert.IsNull(azureTotals.Quantity,
+                    "The summary quantity must be null when more than one meter contributes, or the page shows "
+                    + "a sum of unlike units as if it were a credit count.");
+
+                var azureByMeter = store.GetAzureBreakdownAsync(query, AzureCostDimensions.Meter, 50)
+                    .GetAwaiter().GetResult();
+                Assert.IsTrue(azureByMeter.Any(r => r.Quantity.HasValue && r.Quantity.Value > 0m),
+                    "A per-meter row is scoped to one unit, so it must still carry its quantity.");
+
+                // The tag pivot is the only thing that separates Cowork from the other experiences Microsoft
+                // bills through the identical meter, so it must resolve to more than one value.
+                var azureByTag = store.GetAzureBreakdownAsync(query, AzureCostDimensions.Tag, 50)
+                    .GetAwaiter().GetResult();
+                var tagValues = azureByTag.Select(r => r.Key).Where(k => !string.IsNullOrEmpty(k)).Distinct().ToList();
+                Assert.IsTrue(tagValues.Count >= 2,
+                    "The tag pivot must distinguish at least two services, or it cannot answer "
+                    + "'how much of this was Cowork?'. Got: " + string.Join(", ", tagValues));
+
                 var trend = store.GetDailyTrendAsync(query).GetAwaiter().GetResult();
                 Assert.IsTrue(trend.Count > 1, "The 'Credits per day' chart needs more than a single point.");
                 Assert.IsTrue(trend.All(p => p.Date >= options.Start && p.Date < options.AsOf && p.BilledCredits > 0m));
@@ -121,14 +145,11 @@ namespace Tests.UnitTests
                 Assert.IsTrue(filters.Environments.Count > 1);
                 Assert.IsTrue(filters.Harnesses.Count > 1);
                 Assert.IsTrue(filters.Features.Count > 1);
-                Assert.IsTrue(filters.Models.Count > 0);
-                Assert.IsTrue(filters.Tools.Count > 0);
-                Assert.IsTrue(filters.KnowledgeSources.Count > 0);
-                Assert.IsTrue(filters.Channels.Count > 0);
                 CollectionAssert.IsSubsetOf(filters.Agents.Select(a => a.Id).ToList(),
                     DemoAgentCosts.Agents.Select(a => a.AgentId).ToList());
-                Assert.IsTrue(filters.KnowledgeSources.Any(k => k.Contains("Καλημέρα")),
-                    "A knowledge source is customer-named text and must reach the picker with its Unicode intact.");
+                Assert.IsTrue(filters.Agents.Any(a => a.Label.Contains("Καλημέρα")),
+                    "An agent name is customer-named text in an nvarchar column and must reach the picker "
+                    + "with its Unicode intact.");
 
                 var users = store.GetTopUsersAsync(query, 20).GetAwaiter().GetResult();
                 Assert.IsTrue(users.Count > 1, "The per-user panel must rank more than one person.");

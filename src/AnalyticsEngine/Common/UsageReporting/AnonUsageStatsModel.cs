@@ -33,6 +33,15 @@ namespace UsageReporting
         public List<TableStat> TableStats { get; set; } = null;
         public string BuildVersionLabel { get; set; } = null;
 
+        /// <summary>
+        /// Anonymised Copilot- and licence-adoption aggregates, or null when the deployment does not
+        /// import what the analysis needs, the analysis failed, or the client predates this field.
+        ///
+        /// Carries its own <see cref="AnonAdoptionStats.GeneratedUtc"/> because it is computed weekly
+        /// while this payload uploads daily.
+        /// </summary>
+        public AnonAdoptionStats Adoption { get; set; } = null;
+
         public DateTime? Generated { get; set; } = null;
 
         [JsonIgnore] public bool IsValid => !string.IsNullOrEmpty(AnonClientId) && Generated != null && Generated.Value > DateTime.MinValue;
@@ -87,6 +96,15 @@ namespace UsageReporting
                     DataPointsFromAITotal = updateFromClientWithNewId.DataPointsFromAITotal;
                 }
 
+                // Same "only overwrite when the client actually sent one" rule as every field above.
+                // A client whose analysis is not due, not available, or failed sends null, and we keep
+                // the last block we were given rather than blanking the dashboard - its own
+                // GeneratedUtc is what tells a reader how old it is.
+                if (updateFromClientWithNewId.Adoption != null)
+                {
+                    Adoption = updateFromClientWithNewId.Adoption;
+                }
+
                 Generated = updateFromClientWithNewId.Generated;
             }
 
@@ -95,7 +113,7 @@ namespace UsageReporting
 
         public override string ToString()
         {
-            return $"AnonClientId: {AnonClientId}, Generated: {Generated}, DataPointsFromAITotal: {DataPointsFromAITotal}, ConfiguredSolutionsEnabledDescription: {ConfiguredSolutionsEnabledDescription}, ConfiguredImportsEnabledDescription: {ConfiguredImportsEnabledDescription}, TableStats: {TableStats}, BuildVersionLabel: {BuildVersionLabel}";
+            return $"AnonClientId: {AnonClientId}, Generated: {Generated}, DataPointsFromAITotal: {DataPointsFromAITotal}, ConfiguredSolutionsEnabledDescription: {ConfiguredSolutionsEnabledDescription}, ConfiguredImportsEnabledDescription: {ConfiguredImportsEnabledDescription}, TableStats: {TableStats}, BuildVersionLabel: {BuildVersionLabel}, Adoption: {Adoption}";
         }
 
         /// <summary>

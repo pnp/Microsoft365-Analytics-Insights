@@ -45,7 +45,7 @@ export function useUsersQuery(params: UsersParams | null): UsersQueryState {
         if (mySeq !== seqRef.current) return; // superseded
         setResult({ key, data: r, error: null });
       })
-      .catch((e) => {
+      .catch((e: any) => {
         if (mySeq !== seqRef.current || controller.signal.aborted) return;
         if (e instanceof DOMException && e.name === 'AbortError') return;
         setResult({ key, data: null, error: e });

@@ -123,6 +123,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             try
             {
                 var reports = await _reportSource.LoadReportAsync(request);
+                ApplyLoadProvenance(importLog);
                 parsed = CopilotUsageUserDetailParser.Parse(reports);
 
                 // The response nests the counters under copilotActivityUserDetailsByPeriod, so "no rows"
@@ -226,6 +227,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             return written;
         }
 
+        private void ApplyLoadProvenance(CopilotUsageReportImportLog importLog)
+        {
+            var provenance = _reportSource as ICopilotReportLoadProvenance;
+            if (provenance == null) return;
+            importLog.ReportVersion = provenance.LastSuccessfulVersion ?? importLog.ReportVersion;
+            importLog.ReportPeriod = provenance.LastSuccessfulPeriod ?? importLog.ReportPeriod;
+        }
+
+        private string ReportVersionForRows(CopilotReportRequest request)
+        {
+            var provenance = _reportSource as ICopilotReportLoadProvenance;
+            return provenance?.LastSuccessfulVersion ?? request.Version;
+        }
+
         /// <summary>
         /// Honours the configured Entra group filter, the same way the other per-user usage-report loaders do,
         /// so a customer scoping analytics to a pilot group doesn't silently get the whole tenant here.
@@ -294,6 +309,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
             if (rows.Count == 0) return 0;
 
+            foreach (var row in rows) row.ReportVersion = ReportVersionForRows(request);
+
             var upsert = await persistence.UpsertUserDetailAsync(rows, resolution.IdsByUpn, hasVersion2Data);
             return upsert.Written;
         }
@@ -323,6 +340,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                 changed |= Set(log.Microsoft365CopilotLastActivityDate, row.Microsoft365CopilotLastActivityDate, v => log.Microsoft365CopilotLastActivityDate = v);
                 changed |= Set(log.EdgeLastActivityDate, row.EdgeLastActivityDate, v => log.EdgeLastActivityDate = v);
                 changed |= Set(log.AgentLastActivityDate, row.AgentLastActivityDate, v => log.AgentLastActivityDate = v);
+            }
+
+            if (hasVersion2Data || log.ID == 0)
+            {
+                // Stamp the version actually OBSERVED, not the one requested. Without this a first import
+                // (log.ID == 0) recorded report_version = 2 for a payload that carried no v2 values at all,
+                // so the database asserted a schema version the response did not contain.
+                var observedVersion = hasVersion2Data ? row.ReportVersion : CopilotReportVersions.V1;
+                changed |= Set(log.ReportVersion, observedVersion, v => log.ReportVersion = v);
             }
 
             changed |= Set(log.ChatLastActivityDate, row.ChatLastActivityDate, v => log.ChatLastActivityDate = v);
