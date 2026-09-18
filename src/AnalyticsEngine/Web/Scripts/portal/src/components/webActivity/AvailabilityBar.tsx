@@ -72,6 +72,10 @@ export default function AvailabilityBar({ availability }: { availability: WebAct
     {
       label: 'Page views collected',
       on: availability.hasAnyHits,
+      // "Nothing collected" and "the check failed" need opposite advice, so the badge has to be
+      // able to say it does not know - otherwise it reads "off" beside a message saying the
+      // opposite, which is how an admin ends up redeploying a working tracker.
+      unknown: !availability.collectionStatusKnown,
       detail: availability.lastHitUtc ? `last ${formatDate(availability.lastHitUtc)}` : undefined,
     },
     { label: 'Search terms', on: availability.searchAvailable },

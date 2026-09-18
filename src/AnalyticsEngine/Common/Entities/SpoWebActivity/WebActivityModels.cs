@@ -296,7 +296,7 @@ namespace Common.Entities.SpoWebActivity
         /// <summary>Visits by hour of day (UTC), 0-23 - the "popular hours" list.</summary>
         public List<WebActivityBucket> ByHour { get; set; } = new List<WebActivityBucket>();
 
-        /// <summary>Weekly visits for each of the busiest sites, for the stacked site-over-time chart.</summary>
+        /// <summary>Weekly page views for each of the busiest sites, for the stacked site-over-time chart.</summary>
         public List<WebActivityStackPoint> SiteOverTime { get; set; } = new List<WebActivityStackPoint>();
     }
 
@@ -536,7 +536,7 @@ namespace Common.Entities.SpoWebActivity
 
         public List<WebActivityPlaceRow> Provinces { get; set; } = new List<WebActivityPlaceRow>();
 
-        /// <summary>Weekly visits for each of the busiest countries.</summary>
+        /// <summary>Weekly page views for each of the busiest countries.</summary>
         public List<WebActivityStackPoint> CountryOverTime { get; set; } = new List<WebActivityStackPoint>();
     }
 

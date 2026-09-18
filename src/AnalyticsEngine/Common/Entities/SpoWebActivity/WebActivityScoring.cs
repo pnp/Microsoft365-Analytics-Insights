@@ -614,9 +614,9 @@ namespace Common.Entities.SpoWebActivity
                 Detail = inputs.TopDecilePagePct >= 90
                     ? "Traffic is heavily concentrated, which is normal for an intranet with a strong home "
                         + "page and news feed - it is not on its own evidence that the rest should be "
-                        + "retired. The Pages tab's quiet-page list is where to look, one page at a time."
+                        + "retired. The Page views tab's quiet-page list is where to look, one page at a time."
                     : "Traffic is spread across a reasonable share of the site. The quiet-page list on the "
-                        + "Pages tab is still the cheapest place to start a content review.",
+                        + "Page views tab is still the cheapest place to start a content review.",
             };
         }
 

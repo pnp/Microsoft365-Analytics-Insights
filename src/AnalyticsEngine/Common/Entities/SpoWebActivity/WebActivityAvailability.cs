@@ -39,21 +39,31 @@ namespace Common.Entities.SpoWebActivity
         /// </remarks>
         public bool Readable { get; set; } = true;
 
-        /// <summary>Reads the toggles from application configuration.</summary>
+        /// <summary>
+        /// Reads the toggles from application configuration.
+        /// </summary>
+        /// <remarks>
+        /// A null <paramref name="config"/> is reported as UNREADABLE, not as a tenant with every
+        /// import switched off. The two are indistinguishable by the flags alone - they are all
+        /// false either way - and only one of them is a reason to go and change something in the
+        /// installer.
+        /// </remarks>
         public static WebActivitySources FromConfig(AppConfig config)
         {
-            var settings = config?.ImportJobSettings ?? new ImportTaskSettings();
+            if (config == null) return new WebActivitySources { Readable = false };
+
+            var settings = config.ImportJobSettings ?? new ImportTaskSettings();
 
             return new WebActivitySources
             {
+                Readable = true,
                 WebTraffic = settings.WebTraffic,
                 UserMetadata = settings.GraphUsersMetadata,
 
                 // The importer resolves the Application Insights resource from this connection string
                 // (AppInsightsImporter.cs builds its AppInsightsAPIClient from it), so it is the single
                 // thing whose absence means "no page views can ever arrive".
-                AppInsightsConfigured = config != null
-                    && !string.IsNullOrWhiteSpace(config.AppInsightsConnectionString),
+                AppInsightsConfigured = !string.IsNullOrWhiteSpace(config.AppInsightsConnectionString),
             };
         }
     }
@@ -114,18 +124,17 @@ namespace Common.Entities.SpoWebActivity
         /// </param>
         /// <param name="anySearches">Whether any search has ever been recorded, or null when unknown.</param>
         /// <param name="anyClicks">Whether any element click has ever been recorded, or null when unknown.</param>
-        /// <param name="configurationReadable">
-        /// False when application configuration could not be read, in which case every import toggle
-        /// reads as off and must not be reported as a deliberate setting.
-        /// </param>
         public static WebActivityAvailability Build(
             WebActivitySources sources,
             WebActivityCollectionStatus collection = null,
             bool? anySearches = null,
             bool? anyClicks = null,
-            DateTime? nowUtc = null,
-            bool configurationReadable = true)
+            DateTime? nowUtc = null)
         {
+            // A null sources object means nobody managed to read configuration, which is exactly the
+            // "cannot tell" case - not "everything is switched off".
+            var configurationReadable = sources != null && sources.Readable;
+
             sources = sources ?? new WebActivitySources();
             collection = collection ?? new WebActivityCollectionStatus { Readable = false };
             var lastHitUtc = collection.LastHitUtc;

@@ -73,22 +73,10 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("availability")]
         public async Task<IHttpActionResult> Availability()
         {
-            var configurationReadable = true;
-            WebActivitySources sources;
-
-            try
-            {
-                sources = _sourcesFactory() ?? new WebActivitySources();
-            }
-            catch (Exception)
-            {
-                // A throwing AppConfig must not take the page down with a 500 - but it must also not
-                // be reported as "every import is switched off", which reads as a deliberate setting
-                // and sends an admin to the installer instead of to the broken configuration.
-                sources = new WebActivitySources { Readable = false };
-                configurationReadable = false;
-            }
-
+            // ReadSources marks an unreadable configuration rather than throwing, and Build reads that
+            // flag - so an unloadable config is reported as "the toggles could not be read" instead of
+            // as a tenant that has deliberately switched every import off.
+            var sources = ReadSources();
             var collection = await _store.GetCollectionStatusAsync().ConfigureAwait(false);
             var optional = await _store.GetOptionalFeatureUseAsync().ConfigureAwait(false);
 
@@ -97,8 +85,7 @@ namespace Web.AnalyticsWeb.Controllers
                 collection,
                 optional?.Item1,
                 optional?.Item2,
-                DateTime.UtcNow,
-                configurationReadable));
+                DateTime.UtcNow));
         }
 
         // GET: api/WebActivity/overview?days=28
@@ -323,23 +310,24 @@ namespace Web.AnalyticsWeb.Controllers
         #region Helpers
 
         /// <summary>
-        /// Reads the import toggles, treating a configuration failure as "nothing is available".
+        /// Reads the import toggles, marking a configuration failure rather than throwing.
         /// </summary>
         /// <remarks>
         /// A throwing <see cref="AppConfig"/> must not take the page down with a 500: the availability
         /// model's whole job is to explain why data is missing, and it can still do that when the
-        /// reason is that configuration could not be read.
+        /// reason is that configuration could not be read. It returns <c>Readable = false</c> rather
+        /// than a blank object, because a blank object is indistinguishable from a tenant that has
+        /// deliberately switched every import off - and only one of those is a reason to open the
+        /// installer.
         /// </remarks>
         private WebActivitySources ReadSources()
         {
             try
             {
-                return _sourcesFactory() ?? new WebActivitySources();
+                return _sourcesFactory() ?? new WebActivitySources { Readable = false };
             }
             catch (Exception)
             {
-                // Readable = false, so the page says the toggles could not be read rather than
-                // asserting that every import is deliberately switched off.
                 return new WebActivitySources { Readable = false };
             }
         }

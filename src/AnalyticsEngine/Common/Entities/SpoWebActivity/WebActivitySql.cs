@@ -413,7 +413,7 @@ ORDER BY " + order + @"
 OPTION (RECOMPILE);";
         }
 
-        /// <summary>Weekly visits for each of the busiest sites, for the stacked site-over-time chart.</summary>
+        /// <summary>Weekly PAGE VIEWS for each of the busiest sites, for the stacked site-over-time chart.</summary>
         public const string SiteOverTime = @"
 WITH" + HitWindowCte + @",
 TopSites AS (
@@ -470,7 +470,7 @@ SELECT TOP (@top)
 FROM Grouped AS g
 INNER JOIN dbo.urls AS u ON u.id = g.url_id
 LEFT JOIN dbo.page_titles AS pt ON pt.id = g.TitleId
-ORDER BY g.Visits DESC, g.PageViews DESC
+ORDER BY g.Visits DESC, g.PageViews DESC, g.url_id ASC
 OPTION (RECOMPILE);";
 
         /// <summary>Visits and page views per client attribute (browser, OS or device).</summary>
@@ -582,7 +582,7 @@ FROM (
 INNER JOIN dbo.urls AS u ON u.id = g.url_id
 LEFT JOIN dbo.page_titles AS pt ON pt.id = g.TitleId
 LEFT JOIN dbo.webs AS w ON w.id = g.WebId
-ORDER BY g.PageViews DESC
+ORDER BY g.PageViews DESC, g.url_id ASC
 OPTION (RECOMPILE);";
 
         /// <summary>The same page statistics, ranked so the slowest qualifying pages come first.</summary>
@@ -616,7 +616,7 @@ INNER JOIN dbo.urls AS u ON u.id = g.url_id
 LEFT JOIN dbo.page_titles AS pt ON pt.id = g.TitleId
 LEFT JOIN dbo.webs AS w ON w.id = g.WebId
 WHERE g.PageViews >= @minViews AND g.AverageLoadSeconds IS NOT NULL
-ORDER BY g.AverageLoadSeconds DESC
+ORDER BY g.AverageLoadSeconds DESC, g.url_id ASC
 OPTION (RECOMPILE);";
 
         /// <summary>The least-viewed pages, and how many pages fall under the quiet-page ceiling.</summary>
@@ -751,7 +751,7 @@ FROM (
 INNER JOIN dbo.urls AS u ON u.id = g.url_id
 LEFT JOIN dbo.page_titles AS pt ON pt.id = g.TitleId
 LEFT JOIN dbo.webs AS w ON w.id = g.WebId
-ORDER BY g.PageViews DESC
+ORDER BY g.PageViews DESC, g.url_id ASC
 OPTION (RECOMPILE);";
         }
 
@@ -794,7 +794,7 @@ LEFT JOIN Titles AS ft ON ft.url_id = s.FromUrlId
 LEFT JOIN Titles AS tt ON tt.url_id = s.ToUrlId
 LEFT JOIN dbo.page_titles AS fpt ON fpt.id = ft.TitleId
 LEFT JOIN dbo.page_titles AS tpt ON tpt.id = tt.TitleId
-ORDER BY s.Count DESC
+ORDER BY s.Count DESC, s.FromUrlId ASC, s.ToUrlId ASC
 OPTION (RECOMPILE);";
 
         /// <summary>What visitors clicked, when the tracker's element-click capture is switched on.</summary>
@@ -876,7 +876,7 @@ FROM Grouped AS g
 INNER JOIN dbo." + lookupTable + @" AS lk ON lk.id = g.PlaceId
 " + countryJoin + @"
 LEFT JOIN Visitors AS vi " + visitorJoin + @"
-ORDER BY g.PageViews DESC, g.PlaceId ASC
+ORDER BY g.PageViews DESC, g.PlaceId ASC, ISNULL(g.CountryId, -1) ASC
 OPTION (RECOMPILE);";
         }
 
@@ -898,7 +898,7 @@ SELECT
     (SELECT COUNT(DISTINCT s.user_id) FROM H AS h INNER JOIN dbo.sessions AS s ON s.id = h.session_id) AS Visitors
 OPTION (RECOMPILE);";
 
-        /// <summary>Weekly visits for each of the busiest countries.</summary>
+        /// <summary>Weekly PAGE VIEWS for each of the busiest countries.</summary>
         public const string CountryOverTime = @"
 WITH" + HitWindowCte + @",
 TopCountries AS (
@@ -1024,7 +1024,7 @@ SELECT TOP (@top)
 FROM Grouped AS g
 INNER JOIN dbo.search_terms AS t ON t.id = g.search_term_id
 LEFT JOIN Searchers AS sr ON sr.search_term_id = g.search_term_id
-ORDER BY g.Searches DESC
+ORDER BY g.Searches DESC, g.search_term_id ASC
 OPTION (RECOMPILE);";
 
         /// <summary>
@@ -1061,7 +1061,7 @@ SELECT TOP (@top)
 FROM Grouped AS g
 INNER JOIN dbo.search_terms AS t ON t.id = g.search_term_id
 WHERE g.Searches >= @minSearches AND g.DeadEnds > 0
-ORDER BY CAST(g.DeadEnds AS float) / g.Searches DESC, g.Searches DESC
+ORDER BY CAST(g.DeadEnds AS float) / g.Searches DESC, g.Searches DESC, g.search_term_id ASC
 OPTION (RECOMPILE);";
 
         /// <summary>Searches by day of week and hour of day, in UTC.</summary>
@@ -1165,13 +1165,19 @@ GROUP BY CASE WHEN h.page_load_time >= @loadCeiling THEN @loadOverflowBucket
 ORDER BY Bucket
 OPTION (RECOMPILE);";
 
-        /// <summary>Weekly page views by device, for the mobile-share trend.</summary>
+        /// <summary>Weekly page views by device, for the device-mix trend.</summary>
         /// <remarks>
-        /// Capped to the busiest devices, like the site and country stacks. Uncapped it would emit a
-        /// band per distinct <c>client_Model</c> - which is model-specific for phones, so hundreds of
-        /// them on a real estate - producing a large payload and a chart that cannot answer the
-        /// question its caption asks. The mobile SHARE is still computed from the untruncated
-        /// <see cref="DeviceTotals"/>, so capping the chart cannot bias that figure.
+        /// <para>
+        /// Every page view is represented. The busiest devices get their own band and everything else
+        /// is rolled into an explicit remainder rather than dropped, so the stack's height is the
+        /// week's total page views - which is what a stacked area chart's height claims to be.
+        /// </para>
+        /// <para>
+        /// Rolling up rather than truncating matters most for exactly the question this chart is
+        /// captioned with. <c>client_Model</c> is model-specific for phones and generic for desktops,
+        /// so a plain top-N would cut the fragmented mobile tail and show a responsive-design case as
+        /// far weaker than the untruncated mobile-share figure above it.
+        /// </para>
         /// </remarks>
         public const string DeviceOverTime = @"
 WITH" + HitWindowCte + @",
@@ -1181,16 +1187,22 @@ TopDevices AS (
     WHERE h.device_id IS NOT NULL
     GROUP BY h.device_id
     ORDER BY COUNT_BIG(*) DESC, h.device_id ASC
+),
+Banded AS (
+    SELECT " + "DATEADD(DAY, -(DATEDIFF(DAY, 0, h.hit_timestamp) % 7), CAST(h.hit_timestamp AS date))" + @" AS WeekStart,
+           CAST(CASE
+                WHEN h.device_id IS NULL THEN '(unknown device)'
+                WHEN t.device_id IS NULL THEN '(other devices)'
+                ELSE ISNULL(d.device_name, '(unknown device)')
+           END AS nvarchar(200)) AS Name
+    FROM H AS h
+    LEFT JOIN TopDevices AS t ON t.device_id = h.device_id
+    LEFT JOIN dbo.devices AS d ON d.id = h.device_id
 )
-SELECT " + "DATEADD(DAY, -(DATEDIFF(DAY, 0, h.hit_timestamp) % 7), CAST(h.hit_timestamp AS date))" + @" AS WeekStart,
-       CAST(ISNULL(d.device_name, '(unknown)') AS nvarchar(200)) AS Name,
-       COUNT_BIG(*) AS Count
-FROM H AS h
-INNER JOIN TopDevices AS t ON t.device_id = h.device_id
-INNER JOIN dbo.devices AS d ON d.id = h.device_id
-GROUP BY " + "DATEADD(DAY, -(DATEDIFF(DAY, 0, h.hit_timestamp) % 7), CAST(h.hit_timestamp AS date))" + @",
-         CAST(ISNULL(d.device_name, '(unknown)') AS nvarchar(200))
-ORDER BY WeekStart, Name
+SELECT b.WeekStart, b.Name, COUNT_BIG(*) AS Count
+FROM Banded AS b
+GROUP BY b.WeekStart, b.Name
+ORDER BY b.WeekStart, b.Name
 OPTION (RECOMPILE);";
 
         /// <summary>The Power BI report's "by DETAIL" table: browser x device x OS x city.</summary>
@@ -1231,7 +1243,9 @@ LEFT JOIN Visitors AS vi
       AND ISNULL(vi.device_id, -1) = ISNULL(g.device_id, -1)
       AND ISNULL(vi.os_id, -1)     = ISNULL(g.os_id, -1)
       AND ISNULL(vi.city_id, -1)   = ISNULL(g.city_id, -1)
-ORDER BY g.Visits DESC, g.PageViews DESC
+ORDER BY g.Visits DESC, g.PageViews DESC,
+         ISNULL(g.agent_id, -1) ASC, ISNULL(g.device_id, -1) ASC,
+         ISNULL(g.os_id, -1) ASC, ISNULL(g.city_id, -1) ASC
 OPTION (RECOMPILE);";
 
         #endregion

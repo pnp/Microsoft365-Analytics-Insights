@@ -19,6 +19,7 @@ namespace Tests.UnitTests
     {
         private static WebActivitySources AllOn() => new WebActivitySources
         {
+            Readable = true,
             WebTraffic = true,
             UserMetadata = true,
             AppInsightsConfigured = true,
@@ -154,8 +155,8 @@ namespace Tests.UnitTests
             // With configuration unreadable every toggle reads false, which would otherwise render as
             // a deliberate "the web traffic import is switched off" and send an admin to the
             // installer rather than to the broken configuration.
-            var model = WebActivityAvailability.Build(
-                null, Unreadable(), null, null, Now, configurationReadable: false);
+            // A null sources object IS the unreadable case: nobody managed to read configuration.
+            var model = WebActivityAvailability.Build(null, Unreadable(), null, null, Now);
 
             Assert.AreEqual(1, model.Reasons.Count, string.Join(" | ", model.Reasons));
             StringAssert.Contains(model.Reasons[0], "configuration could not be read");
@@ -175,6 +176,20 @@ namespace Tests.UnitTests
 
             Assert.IsFalse(model.Available);
             Assert.IsTrue(model.Reasons.Count > 0);
+        }
+
+        [TestMethod]
+        public void UnreadableConfiguration_IsCarriedOnTheSourcesObjectItself()
+        {
+            // Readability travels WITH the toggles rather than as a separate argument a caller can
+            // forget: a source object whose flags are all false because nothing could be read must
+            // never be reported as a tenant that switched every import off, whichever endpoint
+            // happens to be asking.
+            var unreadable = WebActivitySources.FromConfig(null);
+            Assert.IsFalse(unreadable.Readable);
+
+            var model = WebActivityAvailability.Build(unreadable, Unreadable(), null, null, Now);
+            StringAssert.Contains(model.Reasons[0], "configuration could not be read");
         }
     }
 }
