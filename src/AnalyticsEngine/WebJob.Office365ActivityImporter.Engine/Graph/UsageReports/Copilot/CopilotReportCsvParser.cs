@@ -43,8 +43,80 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             if (reportName == CopilotReportNames.UsageUserDetail) return ParseUserDetail(headers, rows);
             if (reportName == CopilotReportNames.UserCountSummary) return ParseSummary(headers, rows);
             if (reportName == CopilotReportNames.UserCountTrend) return ParseTrend(headers, rows);
+            if (reportName == CopilotReportNames.CoworkUsageUserDetail) return ParseCoworkUserDetail(headers, rows);
 
             throw new ArgumentOutOfRangeException(nameof(reportName), reportName, "Unknown Copilot report name.");
+        }
+
+        /// <summary>
+        /// Cowork per-user detail. Production requests this report through the same GA v1.0 CSV transport as
+        /// every other Copilot report, so it needs a CSV mapping here: without one the parse threw
+        /// ArgumentOutOfRangeException, which is not a Graph HTTP failure and so was not eligible for the
+        /// source's fallback chain - the whole Cowork import failed on every cycle.
+        /// <para>
+        /// Emits the shape <see cref="CoworkUsageUserDetailParser"/> consumes. Every metric goes in the
+        /// period object rather than at the root because that parser reads metrics from the period when one
+        /// is present, and only falls back to the root when there is none.
+        /// </para>
+        /// </summary>
+        private static List<JObject> ParseCoworkUserDetail(IReadOnlyList<string> headers, IEnumerable<IReadOnlyList<string>> rows)
+        {
+            var result = new List<JObject>();
+            foreach (var fields in rows)
+            {
+                var root = new JObject();
+                var period = new JObject();
+
+                for (var i = 0; i < headers.Count; i++)
+                {
+                    var value = Field(fields, i);
+                    if (string.IsNullOrWhiteSpace(value)) continue;
+
+                    var property = CoworkUserDetailProperty(headers[i]);
+                    if (property == null) continue;
+
+                    if (property == "reportRefreshDate" || property == "userPrincipalName" || property == "displayName")
+                    {
+                        root[property] = value;
+                    }
+                    else
+                    {
+                        period[property] = value;
+                    }
+                }
+
+                if (period.HasValues) root["coworkActivityUserDetailsByPeriod"] = new JArray(period);
+                result.Add(root);
+            }
+            return result;
+        }
+
+        private static string CoworkUserDetailProperty(string header)
+        {
+            var key = Key(header);
+            switch (key)
+            {
+                case "reportrefreshdate": return "reportRefreshDate";
+                case "reportperiod": return "reportPeriod";
+                case "userprincipalname":
+                case "userid": return "userPrincipalName";
+                case "displayname": return "displayName";
+                case "totaltasks":
+                case "totalcoworktasks": return "totalTasks";
+                case "scheduledtasks":
+                case "scheduledcoworktasks": return "scheduledTasks";
+                case "userinitiatedtasks":
+                case "userinitiatedcoworktasks": return "userInitiatedTasks";
+                case "activedays":
+                case "activeusagedays":
+                case "coworkactivedays": return "activeDays";
+                case "lastactivitydate":
+                case "lastactivitydateutc":
+                case "lastactivitydateutcuniversaltimecode": return "lastActivityDate";
+                case "retaineduser":
+                case "retainedcoworkuser": return "retainedCoworkUser";
+                default: return null;
+            }
         }
 
         private static List<JObject> ParseUserDetail(IReadOnlyList<string> headers, IEnumerable<IReadOnlyList<string>> rows)

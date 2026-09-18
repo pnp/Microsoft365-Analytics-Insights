@@ -1095,7 +1095,11 @@ namespace Common.Entities.CopilotAdoption
             result.Activation = BuildActivationSummary(current, activationWindowDays);
         }
 
-        private static CopilotAdoptionActivationSummary BuildActivationSummary(
+        /// <summary>
+        /// Internal rather than private so the activation-rate suppression rule (null, not 0%, when no
+        /// seat has a known assignment date) can be tested directly without a database.
+        /// </summary>
+        internal static CopilotAdoptionActivationSummary BuildActivationSummary(
             List<CopilotAdoptionCohortUserRow> currentRows,
             int activationWindowDays)
         {
@@ -1129,7 +1133,13 @@ namespace Common.Entities.CopilotAdoption
                 && !string.Equals(r.ActivationState, "assignedBeforeHistory", StringComparison.OrdinalIgnoreCase));
             var activatedNewSeats = currentRows.Count(r => string.Equals(r.Transition, CopilotAdoptionCohortTransitions.NewlyAssigned, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(r.ActivationState, "activatedWithinWindow", StringComparison.OrdinalIgnoreCase));
-            activation.ActivationRatePct = CopilotAdoptionScoring.Percentage(activatedNewSeats, denominator);
+            // Null, not 0, when no seat has a known assignment date. Seat dates come from #277 and are
+            // NULL for every row until that lands, so a non-nullable rate published a confident "0%
+            // activated" - reading as a failed onboarding programme - for a figure that was simply not
+            // measurable. SeatDateUnknownUsers already carries the reason.
+            activation.ActivationRatePct = denominator > 0
+                ? (double?)CopilotAdoptionScoring.Percentage(activatedNewSeats, denominator)
+                : null;
 
             activation.Distribution = BuildActivationDistribution(knownActivations);
             activation.ByDepartment = currentRows
@@ -1147,14 +1157,18 @@ namespace Common.Entities.CopilotAdoption
                         Segment = g.Key,
                         NewSeatsAssignedInPeriod = newKnown,
                         ActivatedWithinWindow = activated,
-                        ActivationRatePct = CopilotAdoptionScoring.Percentage(activated, newKnown),
+                        ActivationRatePct = newKnown > 0
+                            ? (double?)CopilotAdoptionScoring.Percentage(activated, newKnown)
+                            : null,
                         NeverActivatedUsers = groupRows.Count(r => string.Equals(r.ActivationState, "neverActivated", StringComparison.OrdinalIgnoreCase)),
                         SeatDateUnknownUsers = groupRows.Count(r => string.Equals(r.ActivationState, "seatDateUnknown", StringComparison.OrdinalIgnoreCase)),
                     };
                 })
                 .Where(s => s.NewSeatsAssignedInPeriod > 0 || s.NeverActivatedUsers > 0 || s.SeatDateUnknownUsers > 0)
                 .OrderByDescending(s => s.NeverActivatedUsers)
-                .ThenBy(s => s.ActivationRatePct)
+                // Nulls last: an unmeasurable department must not be ranked as though it were worse
+                // than a measured 0%, which is what LINQ's default null-first ordering would do.
+                .ThenBy(s => s.ActivationRatePct ?? double.MaxValue)
                 .ThenBy(s => s.Segment)
                 .ToList();
 
@@ -2690,7 +2704,15 @@ namespace Common.Entities.CopilotAdoption
                 ? (double?)CopilotAdoptionScoring.Percentage(summary.CoworkReportRetainedUsers.Value, summary.CoworkReportUsers)
                 : null;
 
-            summary.CoworkUsers = summary.CoworkReportUsers > 0 ? summary.CoworkReportUsers : summary.CoworkAuditUsers;
+            // "Has a row in Microsoft's report" is not the same as "has a task count in it": the report can
+            // report active days with a blank task cell, which the parser preserves as unknown rather than
+            // zero. CoworkReportUsers stays tasks-only because it is the denominator of tasks-per-user and
+            // retention; presence is counted separately so the headline does not deny a user the readiness
+            // tab is simultaneously calling Established.
+            var coworkReportSignalUsers = users.Count(u => u.CoworkReportTotalTasks.GetValueOrDefault() > 0
+                || u.CoworkReportActiveDays.GetValueOrDefault() > 0);
+
+            summary.CoworkUsers = coworkReportSignalUsers > 0 ? coworkReportSignalUsers : summary.CoworkAuditUsers;
             summary.CoworkEligibilityKnown = summary.CoworkEligibleUsers.HasValue;
             summary.CoworkAdoptionPct = summary.CoworkEligibilityKnown
                 ? (double?)CopilotAdoptionScoring.Percentage(summary.CoworkUsers, summary.CoworkEligibleUsers.Value)
@@ -2701,7 +2723,7 @@ namespace Common.Entities.CopilotAdoption
             }
             // Only claim a Cowork signal when Cowork was actually seen in either source. On a tenant that has
             // not been enabled for it, "0% Cowork adoption" reads as a failure rather than as "not available".
-            summary.CoworkDetected = summary.CoworkReportUsers > 0 || summary.CoworkInteractions > 0;
+            summary.CoworkDetected = coworkReportSignalUsers > 0 || summary.CoworkInteractions > 0;
 
             summary.Funnel = BuildFunnel(summary, users);
             summary.BandBreakdown = BuildBandBreakdown(users);

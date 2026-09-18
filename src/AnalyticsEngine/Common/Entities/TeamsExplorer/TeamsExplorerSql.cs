@@ -602,7 +602,10 @@ Members AS (
 Stats AS (
     SELECT ch.team_id,
            SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)) AS Messages,
-           SUM(CASE WHEN ISNULL(s.chats_count, 0) > 0 THEN 1 ELSE 0 END) AS MessageDays,
+           -- COUNT(DISTINCT date), not SUM(1): the source row is per CHANNEL per date, so summing a
+           -- flag while grouping by team counts channel-days. A team with ten busy channels would
+           -- report 300 active days in a 30-day window - a figure that cannot exist.
+           COUNT(DISTINCT CASE WHEN ISNULL(s.chats_count, 0) > 0 THEN s.[date] END) AS MessageDays,
            SUM(CASE WHEN s.sentiment_score IS NULL THEN 0
                     ELSE s.sentiment_score * ISNULL(s.chats_count, 0) END) AS SentimentWeight,
            SUM(CASE WHEN s.sentiment_score IS NULL THEN 0

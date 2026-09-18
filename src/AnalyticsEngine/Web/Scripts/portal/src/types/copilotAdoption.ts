@@ -269,7 +269,7 @@ export interface CopilotAdoptionActivationSegment {
   segment: string;
   newSeatsAssignedInPeriod: number;
   activatedWithinWindow: number;
-  activationRatePct: number;
+  activationRatePct: number | null;
   neverActivatedUsers: number;
   seatDateUnknownUsers: number;
 }
@@ -281,7 +281,7 @@ export interface CopilotAdoptionActivationSummary {
   assignedBeforeHistoryUsers: number;
   newSeatsAssignedInPeriod: number;
   activatedWithinWindow: number;
-  activationRatePct: number;
+  activationRatePct: number | null;
   neverActivatedUsers: number;
   tooNewToJudgeUsers: number;
   medianDaysToFirstUse: number | null;
