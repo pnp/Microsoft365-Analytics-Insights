@@ -238,7 +238,8 @@ namespace Common.Entities.SpoWebActivity
         public double? MobilePageViewPct { get; set; }
     }
 
-    /// <summary>The Overview tab.</summary>    [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
+    /// <summary>The Overview tab.</summary>
+    [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public sealed class WebActivityOverview : WebActivitySection
     {
         public WebActivityOverviewKpis Kpis { get; set; } = new WebActivityOverviewKpis();
