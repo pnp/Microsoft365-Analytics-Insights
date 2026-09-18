@@ -22,6 +22,10 @@ export interface LicenceTypeClassification {
   name: string;
   skuPartNumber: string;
   assignedUsers: number;
+  purchasedUnits: number | null;
+  unassignedUnits: number | null;
+  assignedIdleUsers: number;
+  purchasedUnitsRefreshedUtc: string | null;
   isCopilotSeat: boolean;
 }
 
@@ -65,10 +69,13 @@ export interface AdoptionResourceTypeRow {
 export interface AdoptionDataSources {
   auditAvailable: boolean;
   copilotUsageReportAvailable: boolean;
+  coworkUsageReportAvailable: boolean;
   m365UsageReportsAvailable: boolean;
   userMetadataAvailable: boolean;
   copilotUsageReportDate: string | null;
   copilotUsageReportPeriodDays: number;
+  coworkUsageReportDate: string | null;
+  coworkUsageReportPeriodDays: number;
   m365UsageReportDate: string | null;
   copilotUsageReportObfuscated: boolean;
 }
@@ -85,7 +92,44 @@ export interface AdoptionSegmentRow {
 }
 
 /** Every threshold and weight the adoption maths used, echoed back so a figure can be traced to its rule. */
+export interface AzureCostByCurrency {
+  currency: string;
+  cost: number;
+  includesEstimates?: boolean;
+}
+
+export interface CopilotSeatCostInput {
+  skuPartNumber: string;
+  currency: string;
+  cost: number;
+  period: 'monthly' | 'annual';
+  effectiveDateUtc: string | null;
+}
+
+export interface IdleLicenceSpendTier {
+  tier: string;
+  seats: number;
+  costs: AzureCostByCurrency[];
+}
+
+export interface IdleLicenceSpendCategory {
+  category: string;
+  seats: number;
+  costs: AzureCostByCurrency[];
+}
+
+export interface IdleLicenceSpendSummary {
+  configuredCosts: CopilotSeatCostInput[];
+  spendExposure: AzureCostByCurrency[];
+  reassignable: AzureCostByCurrency[];
+  reducibleAtRenewal: AzureCostByCurrency[];
+  unassignedSpendUnknown?: boolean;
+  tiers: IdleLicenceSpendTier[];
+  categories: IdleLicenceSpendCategory[];
+}
+
 export interface CopilotAdoptionOptions {
+  guidanceCatalogueVersion?: string;
   windowDays: number;
   historyDays: number;
   workingDaysPerWeek: number;
@@ -109,6 +153,7 @@ export interface CopilotAdoptionOptions {
   agentRetireInactiveDays: number;
   agentNewDays: number;
   reclaimGraceDays: number;
+  activationWindowDays: number;
   agentMinUsers: number;
   agentHistoryDays: number;
 
@@ -142,17 +187,144 @@ export interface CopilotAdoptionOptions {
   coworkMinutesSavedPerDocument: number;
   coworkEstimateLowerBoundRatio: number;
   /** Null means no monetary figure is produced at all - there is no defensible default. */
-  coworkLoadedCostPerHour: number | null;
-  coworkCurrencyCode: string | null;
 
   usageReportLagDays: number;
   topSegments: number;
   minSeatsPerSegment: number;
+  accountabilityDimension: string;
   maxLicensedUsersScored: number;
   maxOpportunityCandidates: number;
   maxAgents: number;
   maxUnlicensedUsersScored: number;
   maxCoworkUsersScored: number;
+  seatCosts: CopilotSeatCostInput[];
+}
+
+/** One Microsoft-published resource attached to an adoption action. */
+export interface AdoptionGuidanceLink {
+  actionCode: string;
+  title: string;
+  url: string;
+  expectedTitle: string;
+  audience: string;
+  publisher: string;
+  catalogueVersion: string;
+}
+
+export interface CopilotAdoptionPeriodRun {
+  periodEnd: string;
+  periodDays: number;
+  optionsHash: string;
+  auditAvailable: boolean;
+  reportObfuscated: boolean;
+  reportPeriodDays: number;
+  licensedUsers: number;
+  scoredUsers: number;
+  publishedUtc: string;
+  dataCutoffUtc: string;
+  coverageStatus: string;
+}
+
+export interface CopilotAdoptionPeriodComparisonGate {
+  left: CopilotAdoptionPeriodRun | null;
+  right: CopilotAdoptionPeriodRun | null;
+  optionsComparable: boolean;
+  message: string;
+}
+
+export interface CopilotAdoptionCohortSummary {
+  earlierPopulation: number;
+  currentPopulation: number;
+  newlyAssigned: number;
+  earlierPopulationTransitionTotal: number;
+  transitionsSumToEarlierPopulation: boolean;
+  reclaimCaveat: string;
+  warnings: string[];
+}
+
+export interface CopilotAdoptionCohortTransitionSummary {
+  code: string;
+  label: string;
+  description: string;
+  users: number;
+  shareOfEarlierPopulationPct: number;
+}
+
+export interface CopilotAdoptionCohortFlowSummary {
+  fromBand: string;
+  toBand: string;
+  transition: string;
+  users: number;
+}
+
+export interface CopilotAdoptionActivationDistributionBucket {
+  label: string;
+  users: number;
+  sharePct: number;
+}
+
+export interface CopilotAdoptionActivationSegment {
+  segment: string;
+  newSeatsAssignedInPeriod: number;
+  activatedWithinWindow: number;
+  activationRatePct: number | null;
+  neverActivatedUsers: number;
+  seatDateUnknownUsers: number;
+}
+
+export interface CopilotAdoptionActivationSummary {
+  activationWindowDays: number;
+  knownSeatStartUsers: number;
+  seatDateUnknownUsers: number;
+  assignedBeforeHistoryUsers: number;
+  newSeatsAssignedInPeriod: number;
+  activatedWithinWindow: number;
+  activationRatePct: number | null;
+  neverActivatedUsers: number;
+  tooNewToJudgeUsers: number;
+  medianDaysToFirstUse: number | null;
+  distribution: CopilotAdoptionActivationDistributionBucket[];
+  byDepartment: CopilotAdoptionActivationSegment[];
+  caveat: string;
+}
+
+export interface CopilotAdoptionCohortComparison {
+  gate: CopilotAdoptionPeriodComparisonGate;
+  summary: CopilotAdoptionCohortSummary;
+  transitions: CopilotAdoptionCohortTransitionSummary[];
+  flows: CopilotAdoptionCohortFlowSummary[];
+  activation: CopilotAdoptionActivationSummary;
+}
+
+export interface CopilotAdoptionCohortUserRow {
+  userId: number;
+  userPrincipalName: string;
+  mail: string | null;
+  department: string | null;
+  jobTitle: string | null;
+  manager: string | null;
+  accountEnabled: boolean | null;
+  existedInEarlierPeriod: boolean;
+  existsInCurrentPeriod: boolean;
+  activeInEarlierPeriod: boolean;
+  activeInCurrentPeriod: boolean;
+  fromBand: string;
+  toBand: string;
+  transition: string;
+  transitionLabel: string;
+  reclaimInterpretation: string | null;
+  seatFirstObservedUtc: string | null;
+  firstInteractionUtc: string | null;
+  daysToFirstUse: number | null;
+  activationState: string | null;
+}
+
+export interface CopilotAdoptionCohortUserPage {
+  total: number;
+  skip: number;
+  take: number;
+  rows: CopilotAdoptionCohortUserRow[];
+  warnings: string[];
 }
 
 /** One active-day habit bucket (Infrequent / Moderate / Frequent / Daily). */
@@ -180,6 +352,7 @@ export interface AdoptionActionSummary {
   description: string;
   users: number;
   sharePct: number;
+  guidanceLinks?: AdoptionGuidanceLink[];
 }
 
 /** What to do about an agent. Numeric values match the C# AgentHealth enum, worst first. */
@@ -270,6 +443,71 @@ export interface AdoptionCombinedSegmentRow {
   unlicensedAgentUserPct: number;
 }
 
+/** Adoption, reclaim and next-action counts for one accountable unit. */
+export interface AccountabilityRollupRow extends AdoptionSegmentRow {
+  reclaimableSeats: number;
+  reclaimCertainSeats: number;
+  reclaimProbableSeats: number;
+  reclaimReviewSeats: number;
+  reclaimExcludedUsers: number;
+  reclaimUsers: number;
+  reengageUsers: number;
+  coachUsers: number;
+  broadenUsers: number;
+  growUsers: number;
+  sustainUsers: number;
+  advocateUsers: number;
+  reviewUsers: number;
+  excludedUsers: number;
+  opportunityUsers: number;
+}
+
+export interface CopilotAdoptionMetricDelta {
+  metric: string;
+  label: string;
+  currentValue: number;
+  priorValue: number;
+  change: number;
+  unit: 'count' | 'percent' | string;
+  denominatorCurrent: number | null;
+  denominatorPrior: number | null;
+  denominatorChange: number | null;
+}
+
+export interface CopilotAdoptionPeriodMovement {
+  mode: 'previousPeriod' | 'samePeriodLastQuarter' | string;
+  available: boolean;
+  comparable: boolean;
+  currentPeriodEnd: string | null;
+  priorPeriodEnd: string | null;
+  periodDays: number;
+  comparisonLabel: string | null;
+  message: string | null;
+  deltas: CopilotAdoptionMetricDelta[];
+}
+
+export interface CopilotAdoptionTarget {
+  id: number;
+  metric: string;
+  label: string | null;
+  scopeType: string;
+  scopeValue: string | null;
+  targetValue: number;
+  owner: string;
+  baselinePeriodEnd: string;
+  baselinePeriodDays: number;
+  baselineValue: number;
+  baselineOptionsHash: string;
+  baselineScoringOptionsHash: string;
+  targetDate: string;
+  createdUtc: string;
+  createdBy: string | null;
+  currentValue: number | null;
+  progressPct: number | null;
+  comparable: boolean;
+  message: string | null;
+}
+
 /** The executive view. */
 export interface CopilotAdoptionSummary {
   generatedUtc: string;
@@ -289,6 +527,10 @@ export interface CopilotAdoptionSummary {
   habitRatePct: number;
   reclaimableSeats: number;
   disabledLicensedUsers: number;
+  purchasedCopilotSeats: number | null;
+  unassignedCopilotSeats: number | null;
+  subscribedSkusAvailable: boolean;
+  idleLicenceSpend: IdleLicenceSpendSummary | null;
   reclaimCertainSeats: number;
   reclaimProbableSeats: number;
   reclaimReviewSeats: number;
@@ -307,8 +549,19 @@ export interface CopilotAdoptionSummary {
   totalInteractions: number;
 
   coworkUsers: number;
-  coworkAdoptionPct: number;
+  coworkAdoptionPct: number | null;
+  coworkEligibilityKnown: boolean;
+  coworkEligibleUsers: number | null;
+  coworkAuditUsers: number;
   coworkInteractions: number;
+  coworkReportUsers: number;
+  coworkReportTotalTasks: number;
+  coworkReportScheduledTasks: number;
+  coworkReportUserInitiatedTasks: number;
+  coworkAutomationRatioPct: number | null;
+  coworkTasksPerActiveUser: number | null;
+  coworkReportRetainedUsers: number | null;
+  coworkReportRetentionPct: number | null;
   coworkDetected: boolean;
 
   /**
@@ -338,8 +591,14 @@ export interface CopilotAdoptionSummary {
   habitBuckets: AdoptionHabitBucket[];
   intensityByDepartment: AdoptionIntensityPoint[];
   actionPlan: AdoptionActionSummary[];
+  guidanceCatalogueVersion?: string;
+  guidanceLinks?: AdoptionGuidanceLink[];
   adoptionByDepartment: AdoptionSegmentRow[];
+  habitByDepartment: AdoptionSegmentRow[];
   adoptionByCountry: AdoptionSegmentRow[];
+  accountabilityDimension: string | null;
+  accountabilityDimensionLabel: string | null;
+  accountabilityRollup: AccountabilityRollupRow[];
   usageByApp: ReportCategory[];
   opportunityByDepartment: ReportCategory[];
   weeklyTrend: ReportSeries[];
@@ -350,6 +609,8 @@ export interface CopilotAdoptionSummary {
   topResourceTypes: AdoptionResourceTypeRow[];
   agents: AgentEstateSummary;
   unlicensed: UnlicensedPopulationSummary;
+  periodMovement: CopilotAdoptionPeriodMovement;
+  targets: CopilotAdoptionTarget[];
 
   options: CopilotAdoptionOptions;
   warnings: string[];
@@ -395,10 +656,22 @@ export interface LicensedUserAdoptionRow {
 
   interactions: number;
   activeDays: number;
+  auditInteractions: number;
+  auditActiveDays: number;
+  auditAppsUsed: number;
+  sourceComparisonAvailable: boolean;
   expectedActiveDays: number;
   appsUsed: number;
   agentsUsed: number;
   coworkInteractions: number;
+  coworkReportTotalTasks: number | null;
+  coworkReportScheduledTasks: number | null;
+  coworkReportUserInitiatedTasks: number | null;
+  coworkReportActiveDays: number | null;
+  coworkReportLastActivityDate: string | null;
+  coworkReportRetainedUser: boolean | null;
+  coworkAutomationRatioPct: number | null;
+  coworkCreditsPerTask: number | null;
   usedCowork: boolean;
 
   firstInteractionUtc: string | null;
@@ -547,6 +820,11 @@ export interface CoworkSegmentRow {
   primeCandidates: number;
   primeCandidateRatePct: number;
   regularCoworkUsers: number;
+  coworkReportTotalTasks: number;
+  coworkReportScheduledTasks: number;
+  coworkAutomationRatioPct: number | null;
+  coworkReportRetainedUsers: number | null;
+  coworkReportRetentionPct: number | null;
   coworkAdoptionPct: number;
   averageCoordinationLoad: number;
   averageFluency: number;
@@ -585,10 +863,8 @@ export interface CoworkValueEstimate {
   addressableDocuments: number;
   hoursPerMonthLow: number;
   hoursPerMonthHigh: number;
-  /** Null when no fully-loaded hourly cost was configured. The tool does not invent money. */
-  currencyPerMonthLow: number | null;
-  currencyPerMonthHigh: number | null;
-  currencyCode: string | null;
+  // No monetary fields: this estimate is modelled, and currency is reported only against idle
+  // licence spend, which is measured. See CoworkValueEstimate in CopilotAdoptionCoworkModels.cs.
   assumptions: string[];
 }
 
@@ -608,6 +884,14 @@ export interface CoworkReadinessRow {
   coworkInteractions: number;
   coworkActiveDays: number;
   lastCoworkInteractionUtc: string | null;
+  coworkReportTotalTasks: number | null;
+  coworkReportScheduledTasks: number | null;
+  coworkReportUserInitiatedTasks: number | null;
+  coworkReportActiveDays: number | null;
+  coworkReportLastActivityDate: string | null;
+  coworkReportRetainedUser: boolean | null;
+  coworkAutomationRatioPct: number | null;
+  coworkCreditsPerTask: number | null;
   usedCowork: boolean;
   regularCoworkUser: boolean;
 
@@ -658,4 +942,82 @@ export interface CoworkFilters {
   coworkUsersOnly: boolean;
   sortBy: string;
   sortDesc: boolean;
+}
+
+
+export interface CopilotAdoptionCreateInterventionRequest {
+  actionCode: string;
+  name?: string;
+  owner?: string;
+  interventionType?: string;
+  status?: string;
+  guidanceResource?: string;
+  dueUtc?: string | null;
+  intendedOutcome?: string;
+  notes?: string;
+  intendedReinvestmentType?: string;
+  intendedReinvestmentDescription?: string;
+}
+
+export interface CopilotAdoptionCohort {
+  cohortId: number;
+  name: string;
+  actionCode: string;
+  createdUtc: string;
+  createdBy: string;
+  baselinePeriodEnd: string;
+  baselinePeriodDays: number;
+  baselineOptionsHash: string;
+  closedUtc: string | null;
+  memberCount: number;
+  holdoutCount: number;
+}
+
+export interface CopilotAdoptionIntervention {
+  interventionId: number;
+  cohortId: number;
+  cohortName: string;
+  actionCode: string;
+  owner: string | null;
+  interventionType: string;
+  guidanceResource: string | null;
+  startedUtc: string | null;
+  dueUtc: string | null;
+  completedUtc: string | null;
+  status: string;
+  intendedOutcome: string | null;
+  notes: string | null;
+  intendedReinvestmentType: string;
+  intendedReinvestmentDescription: string | null;
+  createdUtc: string;
+  memberCount: number;
+  isOverdue: boolean;
+  isUnstarted: boolean;
+}
+
+export interface CopilotAdoptionLeadingIndicatorOutcome {
+  code: string;
+  label: string;
+  treatedChange: number;
+  controlChange: number;
+  differenceInDifferences: number;
+  movementLabel: string;
+}
+
+export interface CopilotAdoptionInterventionOutcome {
+  intervention: CopilotAdoptionIntervention;
+  cohort: CopilotAdoptionCohort;
+  followupPeriodEnd: string;
+  methodLabel: string;
+  observational: boolean;
+  refused: boolean;
+  refusalReason: string | null;
+  matchingCriteria: string;
+  treatedN: number;
+  controlN: number;
+  treatedChange: number;
+  controlChange: number;
+  differenceInDifferences: number;
+  effectSizeLabel: string | null;
+  leadingIndicators: CopilotAdoptionLeadingIndicatorOutcome[];
 }

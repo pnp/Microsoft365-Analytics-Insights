@@ -84,7 +84,7 @@ export default function InstallLogPage() {
   useEffect(() => {
     let cancelled = false;
     fetchInstallLog()
-      .then((e) => {
+      .then((e: any) => {
         if (!cancelled) setEntries(e);
       })
       .catch((err) => {
@@ -155,7 +155,7 @@ export default function InstallLogPage() {
                             View log
                           </Button>
                         </DialogTrigger>
-                        <DialogSurface className={styles.dialogSurface}>
+                        <DialogSurface className={styles.dialogSurface} mountNode={undefined}>
                           <DialogBody>
                             <DialogTitle>Install log — {new Date(e.dateApplied).toLocaleString()}</DialogTitle>
                             <DialogContent>

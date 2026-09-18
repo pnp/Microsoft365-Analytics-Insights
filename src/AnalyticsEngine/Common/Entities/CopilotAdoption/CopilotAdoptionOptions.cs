@@ -1,4 +1,6 @@
 ﻿using Newtonsoft.Json;
+using System;
+using System.Collections.Generic;
 
 namespace Common.Entities.CopilotAdoption
 {
@@ -12,6 +14,10 @@ namespace Common.Entities.CopilotAdoption
     /// </summary>
     public class CopilotAdoptionOptions
     {
+        /// <summary>Version of the Microsoft guidance catalogue attached to recommended actions.</summary>
+        [JsonProperty("guidanceCatalogueVersion")]
+        public string GuidanceCatalogueVersion { get; set; } = CopilotAdoptionGuidanceCatalogue.Version;
+
         /// <summary>Length of the reporting window in days. 28 matches Microsoft's own D28 usage reports.</summary>
         [JsonProperty("windowDays")]
         public int WindowDays { get; set; } = 28;
@@ -148,6 +154,14 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         [JsonProperty("reclaimGraceDays")]
         public int ReclaimGraceDays { get; set; } = 30;
+
+        /// <summary>
+        /// Days from first observed Copilot seat assignment in which a new seat should reach first use.
+        /// Defaults to the same 30-day grace concept as reclaim scoring, so a newly assigned seat is never
+        /// both "too new to judge" and "failed to activate" on the same day.
+        /// </summary>
+        [JsonProperty("activationWindowDays")]
+        public int ActivationWindowDays { get; set; } = 30;
 
         /// <summary>
         /// Distinct users an agent needs before its usage is treated as adoption rather than as its
@@ -439,24 +453,11 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("coworkEstimateLowerBoundRatio")]
         public double CoworkEstimateLowerBoundRatio { get; set; } = 0.5;
 
-        /// <summary>
-        /// Fully-loaded hourly cost used to express the modelled time saving in money.
-        ///
-        /// <b>Null by default, and null means no monetary figure is produced at all.</b> There is no
-        /// defensible default for this - it varies by role, country and employer - so the tool does not
-        /// invent one. An admin who wants a currency figure supplies the rate and owns it; until then the
-        /// estimate is reported in hours only.
-        /// </summary>
-        [JsonProperty("coworkLoadedCostPerHour")]
-        public double? CoworkLoadedCostPerHour { get; set; }
-
-        /// <summary>
-        /// Currency code for <see cref="CoworkLoadedCostPerHour"/>, used only as a display label. Not
-        /// defaulted, and no conversion is ever performed: the tool reports the number it was given in the
-        /// units it was given.
-        /// </summary>
-        [JsonProperty("coworkCurrencyCode")]
-        public string CoworkCurrencyCode { get; set; }
+        // There is deliberately no loaded-hourly-cost or currency option here. The Cowork estimate is a
+        // model built from assumed minutes-per-meeting/mail/document, and epic #559 rejects an ROI /
+        // "hours saved" calculator precisely because a fabricated money figure discredits the measured
+        // ones beside it. Currency belongs only on idle licence spend (#553), where the seat cost is a
+        // real price for a seat we can prove is unused.
 
         #endregion
 
@@ -530,6 +531,56 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("minSeatsPerSegment")]
         public int MinSeatsPerSegment { get; set; } = 5;
 
+        #region Licence cost inputs
+
+        /// <summary>
+        /// Optional admin-supplied Microsoft 365 Copilot seat prices, keyed by SKU part number. No
+        /// default is provided: a currency figure is only defensible when the admin supplies the price
+        /// and effective date that were used for this report.
+        /// </summary>
+        [JsonProperty("seatCosts")]
+        public List<CopilotSeatCostInput> SeatCosts { get; set; } = new List<CopilotSeatCostInput>();
+
+        #endregion
+
+        /// <summary>
+        /// Organisational field used for the accountability roll-up. Defaults to the direct manager:
+        /// that is the narrow governance-safe first cut for issue #556, while still allowing tenants
+        /// whose spending is owned by department, country, office or company to point the same roll-up
+        /// at the unit they actually manage.
+        /// </summary>
+        [JsonProperty("accountabilityDimension")]
+        public string AccountabilityDimension { get; set; } = CopilotAdoptionAccountabilityDimensions.DirectManager;
+
         public static CopilotAdoptionOptions Default => new CopilotAdoptionOptions();
+    }
+
+    public class CopilotSeatCostInput
+    {
+        [JsonProperty("skuPartNumber")]
+        public string SkuPartNumber { get; set; }
+
+        [JsonProperty("currency")]
+        public string Currency { get; set; }
+
+        [JsonProperty("cost")]
+        public decimal Cost { get; set; }
+
+        /// <summary>monthly or annual. Annual values are divided by twelve for monthly exposure.</summary>
+        [JsonProperty("period")]
+        public string Period { get; set; } = "monthly";
+
+        [JsonProperty("effectiveDateUtc")]
+        public DateTime? EffectiveDateUtc { get; set; }
+    }
+
+    /// <summary>Allowed accountability dimensions. Used as an allow-list before anything reaches SQL.</summary>
+    public static class CopilotAdoptionAccountabilityDimensions
+    {
+        public const string DirectManager = "directManager";
+        public const string Department = "department";
+        public const string Country = "country";
+        public const string Office = "office";
+        public const string Company = "company";
     }
 }

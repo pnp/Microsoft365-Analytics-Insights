@@ -119,6 +119,7 @@
     <Compile Include="ActivityAPI\Loaders\WebContentMetaDataLoader.cs" />
     <Compile Include="ActivityAPI\ActivityReportSqlPersistenceManager.cs" />
     <Compile Include="Constants.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionDigestPhase.cs" />
     <Compile Include="ActivityImportCache.cs" />
     <Compile Include="ImportLastRunStore.cs" />
     <Compile Include="ImportRuntimeOptions.cs" />
@@ -238,7 +239,9 @@
     <Compile Include="Graph\UsageReports\Aggregate\SharePointSitesWeeklyUsageReportLoader.cs" />
     <Compile Include="Graph\UsageReports\Copilot\CopilotReportRequest.cs" />
     <Compile Include="Graph\UsageReports\Copilot\CopilotReportSource.cs" />
+    <Compile Include="Graph\UsageReports\Copilot\CopilotReportCsvParser.cs" />
     <Compile Include="Graph\UsageReports\Copilot\CopilotUsageUserDetailLoader.cs" />
+    <Compile Include="Graph\UsageReports\Copilot\CoworkUsageUserDetailLoader.cs" />
     <Compile Include="Graph\UsageReports\Copilot\CopilotUsageReportPolicy.cs" />
     <Compile Include="Graph\UsageReports\Copilot\ICopilotUsagePersistenceManager.cs" />
     <Compile Include="Graph\UsageReports\Copilot\SqlCopilotUsagePersistenceManager.cs" />

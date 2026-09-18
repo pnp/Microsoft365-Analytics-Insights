@@ -287,7 +287,7 @@ export default function CoworkPanel({
       .then((result) => {
         if (!cancelled) setData(result);
       })
-      .catch((e) => {
+      .catch((e: any) => {
         if (cancelled || controller.signal.aborted) return;
         setError(e instanceof Error ? e.message : 'Failed to load the Cowork readiness list.');
       })
@@ -472,7 +472,7 @@ export default function CoworkPanel({
                     <td className={`${table.td} ${table.tdNumeric}`}>
                       {formatCount(row.regularCoworkUsers)}
                       <Text size={100} block className={table.tdSub}>
-                        {Math.round(row.coworkAdoptionPct)}%
+                        {row.coworkAutomationRatioPct === null ? '—' : `${Math.round(row.coworkAutomationRatioPct)}% automated`}
                       </Text>
                     </td>
                     <td className={`${table.td} ${table.tdNumeric}`}>
@@ -574,12 +574,6 @@ export default function CoworkPanel({
               {' '}
               a month across {formatCount(estimate.cohortUsers)} recommended users
             </Text>
-            {estimate.currencyPerMonthHigh !== null && estimate.currencyPerMonthLow !== null && (
-              <Text size={300} block style={{ marginTop: '4px' }}>
-                {formatCount(estimate.currencyPerMonthLow)}-{formatCount(estimate.currencyPerMonthHigh)}{' '}
-                {estimate.currencyCode ?? ''} a month at the configured loaded hourly cost
-              </Text>
-            )}
           </div>
 
           <Text size={200} block style={{ marginTop: '10px' }}>
@@ -606,8 +600,8 @@ export default function CoworkPanel({
             value={searchDraft}
             placeholder="Search name, email, department, job title or manager"
             aria-label="Search Cowork candidates"
-            onChange={(_e, d) => setSearchDraft(d.value)}
-            onKeyDown={(e) => {
+            onChange={(_e: any, d: any) => setSearchDraft(d.value)}
+            onKeyDown={(e: any) => {
               if (e.key === 'Enter') setFilters((f) => ({ ...f, search: searchDraft }));
             }}
           />
@@ -618,7 +612,7 @@ export default function CoworkPanel({
           <Select
             value={filters.department}
             aria-label="Filter Cowork candidates by department"
-            onChange={(_e, d) => setFilters((f) => ({ ...f, department: d.value }))}
+            onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, department: d.value }))}
           >
             <option value="">All departments</option>
             {(filterOptions?.departments ?? []).map((dept) => (
@@ -631,7 +625,7 @@ export default function CoworkPanel({
           <Select
             value={sortValue}
             aria-label="Sort Cowork candidates"
-            onChange={(_e, d) => {
+            onChange={(_e: any, d: any) => {
               const [sortBy, direction] = d.value.split(':');
               setFilters((f) => ({ ...f, sortBy, sortDesc: direction === 'desc' }));
             }}
@@ -650,7 +644,7 @@ export default function CoworkPanel({
             <Checkbox
               label="Policy list only"
               checked={filters.recommendedOnly}
-              onChange={(_e, d) =>
+              onChange={(_e: any, d: any) =>
                 setFilters((f) => ({ ...f, recommendedOnly: !!d.checked, tiers: [] }))
               }
             />
@@ -662,7 +656,7 @@ export default function CoworkPanel({
             <Checkbox
               label="Already using Cowork"
               checked={filters.coworkUsersOnly}
-              onChange={(_e, d) => setFilters((f) => ({ ...f, coworkUsersOnly: !!d.checked }))}
+              onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, coworkUsersOnly: !!d.checked }))}
             />
           </Tooltip>
 
@@ -855,7 +849,7 @@ export default function CoworkPanel({
                     <td className={table.td}>
                       {row.usedCowork ? (
                         <Badge className={styles.evidence} size="small">
-                          {formatCount(row.coworkInteractions)} in {row.coworkActiveDays}d
+                          {row.coworkReportTotalTasks !== null ? `${formatCount(row.coworkReportTotalTasks)} tasks in ${row.coworkReportActiveDays ?? 0}d` : row.coworkReportActiveDays !== null && row.coworkReportActiveDays > 0 ? `${formatCount(row.coworkReportActiveDays)}d reported` : `${formatCount(row.coworkInteractions)} audit interactions in ${row.coworkActiveDays}d`}
                         </Badge>
                       ) : (
                         <Text size={200} className={styles.muted}>

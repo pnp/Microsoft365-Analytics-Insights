@@ -435,7 +435,7 @@ export default function AgentCostsPage() {
           </Body1>
         </div>
         <div className={styles.controls}>
-          <Select value={String(days)} onChange={(_, d) => setDays(Number(d.value))} disabled={loading}>
+          <Select value={String(days)} onChange={(_: unknown, d: { value: string }) => setDays(Number(d.value))} disabled={loading}>
             {WINDOW_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
@@ -618,7 +618,7 @@ export default function AgentCostsPage() {
             <div className={`${styles.filterBar} ${styles.body}`}>
               <label className={styles.filterField}>
                 <span className={styles.filterLabel}>Agent</span>
-                <Select value={agentId} onChange={(_, d) => setAgentId(d.value)} disabled={loading}>
+                <Select value={agentId} onChange={(_: unknown, d: { value: string }) => setAgentId(d.value)} disabled={loading}>
                   <option value="">All agents</option>
                   {options?.agents.map((a) => (
                     <option key={a.id} value={a.id}>
@@ -629,7 +629,7 @@ export default function AgentCostsPage() {
               </label>
               <label className={styles.filterField}>
                 <span className={styles.filterLabel}>Environment</span>
-                <Select value={environmentId} onChange={(_, d) => setEnvironmentId(d.value)} disabled={loading}>
+                <Select value={environmentId} onChange={(_: unknown, d: { value: string }) => setEnvironmentId(d.value)} disabled={loading}>
                   <option value="">All environments</option>
                   {options?.environments.map((e) => (
                     <option key={e.id} value={e.id}>
@@ -640,7 +640,7 @@ export default function AgentCostsPage() {
               </label>
               <label className={styles.filterField}>
                 <span className={styles.filterLabel}>Harness</span>
-                <Select value={harness} onChange={(_, d) => setHarness(d.value)} disabled={loading}>
+                <Select value={harness} onChange={(_: unknown, d: { value: string }) => setHarness(d.value)} disabled={loading}>
                   <option value="">All harnesses</option>
                   {options?.harnesses.map((h) => (
                     <option key={h} value={h}>
@@ -651,7 +651,7 @@ export default function AgentCostsPage() {
               </label>
               <label className={styles.filterField}>
                 <span className={styles.filterLabel}>Billing feature</span>
-                <Select value={feature} onChange={(_, d) => setFeature(d.value)} disabled={loading}>
+                <Select value={feature} onChange={(_: unknown, d: { value: string }) => setFeature(d.value)} disabled={loading}>
                   <option value="">All features</option>
                   {options?.features.map((f) => (
                     <option key={f} value={f}>
@@ -662,7 +662,7 @@ export default function AgentCostsPage() {
               </label>
               <label className={styles.filterField}>
                 <span className={styles.filterLabel}>Search agent name</span>
-                <Input value={search} onChange={(_, d) => setSearch(d.value)} placeholder="Agent name or ID" />
+                <Input value={search} onChange={(_: unknown, d: { value: string }) => setSearch(d.value)} placeholder="Agent name or ID" />
               </label>
             </div>
           </Card>
@@ -683,7 +683,7 @@ export default function AgentCostsPage() {
             </div>
             <TabList
               selectedValue={dimension}
-              onTabSelect={((_, d) => setDimension(d.value as CreditDimension)) as SelectTabEventHandler}
+              onTabSelect={((_: unknown, d: { value: unknown }) => setDimension(d.value as CreditDimension)) as SelectTabEventHandler}
             >
               {availableCreditDimensions.map((d) => (
                 <Tab key={d.key} value={d.key}>
@@ -919,7 +919,7 @@ export default function AgentCostsPage() {
               </div>
               <Select
                 value={azureDimension}
-                onChange={(_, d) => setAzureDimension(d.value as AzureDimension)}
+                onChange={(_: unknown, d: { value: string }) => setAzureDimension(d.value as AzureDimension)}
                 disabled={loading}
               >
                 {availableAzureDimensions.map((d) => (

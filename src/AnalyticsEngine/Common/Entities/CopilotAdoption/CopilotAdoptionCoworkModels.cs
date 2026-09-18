@@ -1,4 +1,4 @@
-using Newtonsoft.Json;
+﻿using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 
@@ -48,6 +48,13 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>Most recent Cowork interaction inside the window.</summary>
         public DateTime? LastCoworkInteractionUtc { get; set; }
+
+        public int? CoworkReportTotalTasks { get; set; }
+        public int? CoworkReportScheduledTasks { get; set; }
+        public int? CoworkReportUserInitiatedTasks { get; set; }
+        public int? CoworkReportActiveDays { get; set; }
+        public DateTime? CoworkReportLastActivityDate { get; set; }
+        public bool? CoworkReportRetainedUser { get; set; }
 
         #endregion
 
@@ -146,6 +153,30 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("lastCoworkInteractionUtc")]
         public DateTime? LastCoworkInteractionUtc { get; set; }
+
+        [JsonProperty("coworkReportTotalTasks")]
+        public int? CoworkReportTotalTasks { get; set; }
+
+        [JsonProperty("coworkReportScheduledTasks")]
+        public int? CoworkReportScheduledTasks { get; set; }
+
+        [JsonProperty("coworkReportUserInitiatedTasks")]
+        public int? CoworkReportUserInitiatedTasks { get; set; }
+
+        [JsonProperty("coworkReportActiveDays")]
+        public int? CoworkReportActiveDays { get; set; }
+
+        [JsonProperty("coworkReportLastActivityDate")]
+        public DateTime? CoworkReportLastActivityDate { get; set; }
+
+        [JsonProperty("coworkReportRetainedUser")]
+        public bool? CoworkReportRetainedUser { get; set; }
+
+        [JsonProperty("coworkAutomationRatioPct")]
+        public double? CoworkAutomationRatioPct { get; set; }
+
+        [JsonProperty("coworkCreditsPerTask")]
+        public decimal? CoworkCreditsPerTask { get; set; }
 
         [JsonProperty("usedCowork")]
         public bool UsedCowork { get; set; }
@@ -309,6 +340,21 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("regularCoworkUsers")]
         public int RegularCoworkUsers { get; set; }
 
+        [JsonProperty("coworkReportTotalTasks")]
+        public int CoworkReportTotalTasks { get; set; }
+
+        [JsonProperty("coworkReportScheduledTasks")]
+        public int CoworkReportScheduledTasks { get; set; }
+
+        [JsonProperty("coworkAutomationRatioPct")]
+        public double? CoworkAutomationRatioPct { get; set; }
+
+        [JsonProperty("coworkReportRetainedUsers")]
+        public int? CoworkReportRetainedUsers { get; set; }
+
+        [JsonProperty("coworkReportRetentionPct")]
+        public double? CoworkReportRetentionPct { get; set; }
+
         [JsonProperty("coworkAdoptionPct")]
         public double CoworkAdoptionPct { get; set; }
 
@@ -427,17 +473,12 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("hoursPerMonthHigh")]
         public double HoursPerMonthHigh { get; set; }
 
-        /// <summary>Low end of the modelled monetary value, or null when no loaded cost was configured.</summary>
-        [JsonProperty("currencyPerMonthLow")]
-        public double? CurrencyPerMonthLow { get; set; }
-
-        /// <summary>High end of the modelled monetary value, or null when no loaded cost was configured.</summary>
-        [JsonProperty("currencyPerMonthHigh")]
-        public double? CurrencyPerMonthHigh { get; set; }
-
-        /// <summary>Currency label supplied by the admin. Null when no loaded cost was configured.</summary>
-        [JsonProperty("currencyCode")]
-        public string CurrencyCode { get; set; }
+        // Deliberately no monetary figure. Epic #559 rejects an ROI / "hours saved" calculator outright,
+        // and #553 approves currency on idle licence spend "and only on idle licence spend" - a seat we
+        // are provably paying for and provably not using. This estimate is modelled from assumed
+        // minutes-per-meeting/mail/document, so pricing it would put a fabricated number in a board pack
+        // next to measured ones and discredit them. The hours range stays because it is explicitly
+        // labelled a rollout-sizing model; converting it to money is the line the epic draws.
 
         #endregion
 

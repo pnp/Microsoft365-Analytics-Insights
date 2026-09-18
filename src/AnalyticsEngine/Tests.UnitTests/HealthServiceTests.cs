@@ -333,6 +333,32 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task Data_FailedCopilotAdoptionDigest_IsVisibleInHealth()
+        {
+            var source = new FakeHealthDataSource
+            {
+                CountsResult = new DatabaseCountsResult
+                {
+                    CopilotAdoptionDigest = new CopilotAdoptionDigestHealthRow
+                    {
+                        Status = "Failed",
+                        PeriodEnd = new DateTime(2026, 9, 16),
+                        UpdatedUtc = new DateTime(2026, 9, 17, 1, 2, 3, DateTimeKind.Utc),
+                        Error = "synthetic generation failure"
+                    }
+                }
+            };
+            var service = Build(source, new InMemoryHealthCache());
+
+            var section = await service.LoadDataAsync();
+
+            Assert.AreEqual("Failed", section.CopilotAdoptionDigestStatus);
+            Assert.AreEqual(HealthStatusNames.Degraded, section.Status);
+            Assert.IsTrue(section.Reasons.Any(r => r.Contains("Scheduled Copilot Adoption digest failed")
+                && r.Contains("synthetic generation failure")));
+        }
+
+        [TestMethod]
         public async Task Data_LastCopilotImport_IsTheNewestAcrossReports()
         {
             var newest = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);

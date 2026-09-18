@@ -22,7 +22,9 @@ import { AdoptionBand } from '../../types/copilotAdoption';
 import type {
   AdoptionActionSummary,
   AdoptionFilterOptions,
+  AdoptionDataSources,
   CopilotAdoptionOptions,
+  LicensedUserAdoptionRow,
   LicensedUserFilters,
   LicensedUserPage,
 } from '../../types/copilotAdoption';
@@ -112,6 +114,7 @@ export default function LicensedUsersPanel({
   filterOptions,
   actionPlan,
   options,
+  dataSources,
   seatLicenceTypeIds,
   initialBands,
   initialAction,
@@ -122,6 +125,8 @@ export default function LicensedUsersPanel({
   actionPlan: AdoptionActionSummary[];
   /** The thresholds actually used, so the column explanations quote real numbers rather than prose. */
   options: CopilotAdoptionOptions;
+  /** Source dates and periods used to label dual-source comparisons. */
+  dataSources?: AdoptionDataSources;
   seatLicenceTypeIds?: number[];
   initialBands?: AdoptionBand[];
   /**
@@ -160,7 +165,7 @@ export default function LicensedUsersPanel({
       .then((result) => {
         if (!cancelled) setData(result);
       })
-      .catch((e) => {
+      .catch((e: any) => {
         if (cancelled || controller.signal.aborted) return;
         setError(e instanceof Error ? e.message : 'Failed to load licensed users.');
       })
@@ -214,8 +219,8 @@ export default function LicensedUsersPanel({
           value={searchDraft}
           placeholder="Search name, email, department, job title or manager"
           aria-label="Search licensed Copilot users"
-          onChange={(_e, d) => setSearchDraft(d.value)}
-          onKeyDown={(e) => {
+          onChange={(_e: any, d: any) => setSearchDraft(d.value)}
+          onKeyDown={(e: any) => {
             if (e.key === 'Enter') setFilters((f) => ({ ...f, search: searchDraft }));
           }}
         />
@@ -226,7 +231,7 @@ export default function LicensedUsersPanel({
         <Select
           value={filters.bands.length === 1 ? String(filters.bands[0]) : ''}
           aria-label="Filter by engagement band"
-          onChange={(_e, d) =>
+          onChange={(_e: any, d: any) =>
             setFilters((f) => ({ ...f, bands: d.value === '' ? [] : [Number(d.value) as AdoptionBand] }))
           }
         >
@@ -241,7 +246,7 @@ export default function LicensedUsersPanel({
         <Select
           value={filters.actions.length === 1 ? filters.actions[0] : ''}
           aria-label="Filter by recommended action"
-          onChange={(_e, d) => setFilters((f) => ({ ...f, actions: d.value === '' ? [] : [d.value] }))}
+          onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, actions: d.value === '' ? [] : [d.value] }))}
         >
           <option value="">All recommended actions</option>
           {actionPlan.map((a) => (
@@ -254,7 +259,7 @@ export default function LicensedUsersPanel({
         <Select
           value={filters.reclaimEligibility}
           aria-label="Filter by reclaim eligibility"
-          onChange={(_e, d) => setFilters((f) => ({ ...f, reclaimEligibility: d.value }))}
+          onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, reclaimEligibility: d.value }))}
         >
           <option value="">All reclaim tiers</option>
           <option value="certain">Certain reclaim</option>
@@ -266,7 +271,7 @@ export default function LicensedUsersPanel({
         <Select
           value={filters.department}
           aria-label="Filter by department"
-          onChange={(_e, d) => setFilters((f) => ({ ...f, department: d.value }))}
+          onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, department: d.value }))}
         >
           <option value="">All departments</option>
           {(filterOptions?.departments ?? []).map((dept) => (
@@ -279,7 +284,7 @@ export default function LicensedUsersPanel({
         <Checkbox
           label="Cowork users only"
           checked={filters.coworkOnly}
-          onChange={(_e, d) => setFilters((f) => ({ ...f, coworkOnly: !!d.checked }))}
+          onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, coworkOnly: !!d.checked }))}
         />
         <Tooltip
           content="Disabled accounts still holding a Copilot licence - the clearest licences to reclaim."
@@ -288,7 +293,7 @@ export default function LicensedUsersPanel({
           <Checkbox
             label="Disabled accounts only"
             checked={filters.disabledOnly}
-            onChange={(_e, d) => setFilters((f) => ({ ...f, disabledOnly: !!d.checked }))}
+            onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, disabledOnly: !!d.checked }))}
           />
         </Tooltip>
 
@@ -401,7 +406,17 @@ export default function LicensedUsersPanel({
                   </span>
                 </SortableTh>
                 <SortableTh label="signal source" sortKey="signalSource" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
-                  Signal source
+                  <span className={styles.thWithInfo}>
+                    Signal source
+                    <InfoTip
+                      title="Signal source and reconciliation"
+                      content={{
+                        what: "Which source produced this row's engagement score, and whether both source figures are available for comparison.",
+                        how: `Audit rows use this product's Copilot audit-log import over the selected D${windowDays} window. usageReport rows use Microsoft's per-user Copilot usage report when the audit import has no signal for that user. Where both sources have signal, the cell shows both figures side by side instead of pretending one corrects the other.`,
+                        source: "Microsoft's report uses Microsoft's settled report period and covers licensed users only; the audit log covers the selected period and includes unlicensed Copilot Chat.",
+                      }}
+                    />
+                  </span>
                 </SortableTh>
                 <SortableTh
                   label="interactions"
@@ -517,14 +532,21 @@ export default function LicensedUsersPanel({
                   <td className={table.td}>
                     <BandBadge band={row.band} name={row.bandName} />
                   </td>
-                  <td className={table.td}>{row.signalSource}</td>
+                  <td className={table.td}>
+                    <Text size={200}>{sourceLabel(row.signalSource)}</Text>
+                    {row.sourceComparisonAvailable && (
+                      <Text size={100} block className={table.tdSub}>
+                        {sourceComparisonText(row, windowDays, dataSources)}
+                      </Text>
+                    )}
+                  </td>
                   <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.interactions)}</td>
                   <td className={`${table.td} ${table.tdNumeric}`}>
                     {row.activeDays} <span className={styles.muted}>/ {Math.round(row.expectedActiveDays)}</span>
                   </td>
                   <td className={`${table.td} ${table.tdNumeric}`}>{row.appsUsed}</td>
                   <td className={table.td}>
-                    {row.usedCowork ? `Yes (${formatCount(row.coworkInteractions)})` : 'No'}
+                    {row.usedCowork ? (row.coworkReportTotalTasks !== null ? `Yes (${formatCount(row.coworkReportTotalTasks)} tasks)` : row.coworkReportActiveDays !== null && row.coworkReportActiveDays > 0 ? `Yes (${formatCount(row.coworkReportActiveDays)} active days reported)` : `Yes (${formatCount(row.coworkInteractions)} audit interactions)`) : 'No'}
                   </td>
                   <td className={table.td}>
                     {formatDate(row.lastInteractionUtc)}
@@ -584,4 +606,22 @@ export default function LicensedUsersPanel({
       )}
     </Card>
   );
+}
+
+
+function sourceLabel(source: string): string {
+  return source === 'usageReport' ? 'Microsoft usage report' : source === 'audit' ? 'Audit log' : source;
+}
+
+function sourceComparisonText(row: LicensedUserAdoptionRow, windowDays: number, dataSources?: AdoptionDataSources): string {
+  const reportPeriod = dataSources?.copilotUsageReportPeriodDays
+    ? `D${dataSources.copilotUsageReportPeriodDays}`
+    : 'Microsoft window';
+  const snapshot = dataSources?.copilotUsageReportDate ? `, ${formatDate(dataSources.copilotUsageReportDate)}` : '';
+
+  return `Audit D${windowDays}: ${formatCount(row.auditInteractions)} interactions, ${formatCount(
+    row.auditActiveDays,
+  )} days. Microsoft report ${reportPeriod}${snapshot}: ${
+    row.reportPrompts === null ? '—' : formatCount(row.reportPrompts)
+  } prompts, ${row.reportActiveDays === null ? '—' : formatCount(row.reportActiveDays)} days.`;
 }

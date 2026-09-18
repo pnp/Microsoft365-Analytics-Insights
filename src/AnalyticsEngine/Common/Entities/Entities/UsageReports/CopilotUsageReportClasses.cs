@@ -1,4 +1,4 @@
-using Common.Entities.ActivityReports;
+﻿using Common.Entities.ActivityReports;
 using System;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
@@ -52,6 +52,9 @@ namespace Common.Entities.Entities.UsageReports
 
         /// <summary>Per-user detail. Licensed users only, and affected by the tenant's concealed-user-information setting.</summary>
         public const string UsageUserDetail = "getMicrosoft365CopilotUsageUserDetail";
+
+        /// <summary>Per-user Cowork task detail from the first-party Cowork usage report.</summary>
+        public const string CoworkUsageUserDetail = "getMicrosoft365CopilotCoworkUsageUserDetail";
     }
 
     /// <summary>
@@ -176,6 +179,11 @@ namespace Common.Entities.Entities.UsageReports
         [Column("active_usage_days")]
         public int? ActiveUsageDays { get; set; }
 
+        /// <summary>Graph schema version that produced this row (v1/v2), stored with the snapshot facts.</summary>
+        [Column("report_version")]
+        [MaxLength(10)]
+        public string ReportVersion { get; set; }
+
         #endregion
 
         #region Per-app last activity dates
@@ -239,6 +247,34 @@ namespace Common.Entities.Entities.UsageReports
         /// </summary>
         [Column("is_upn_obfuscated")]
         public bool IsUpnObfuscated { get; set; }
+    }
+
+
+    /// <summary>
+    /// Per-user Cowork task usage from the first-party Cowork usage report. The importer writes this table
+    /// with raw SQL rather than EF so adding the table does not require a model-snapshot change; the class
+    /// keeps cleanup and inventory tests aware of the table shape.
+    /// </summary>
+    [Table("cowork_usage_user_activity_log")]
+    public class CoworkUsageUserActivityLog : UserRelatedAbstractUsageActivity
+    {
+        [Column("report_period_days")]
+        public int ReportPeriodDays { get; set; }
+
+        [Column("total_tasks")]
+        public int? TotalTasks { get; set; }
+
+        [Column("scheduled_tasks")]
+        public int? ScheduledTasks { get; set; }
+
+        [Column("user_initiated_tasks")]
+        public int? UserInitiatedTasks { get; set; }
+
+        [Column("active_days")]
+        public int? ActiveDays { get; set; }
+
+        [Column("retained_user")]
+        public bool? RetainedUser { get; set; }
     }
 
     /// <summary>

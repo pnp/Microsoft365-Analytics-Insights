@@ -1,4 +1,4 @@
-using Common.Entities.Migrations;
+﻿using Common.Entities.Migrations;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.IO;
@@ -21,6 +21,13 @@ namespace Tests.UnitTests
     {
         private const string ReclaimInputsId = "202609131940001_CopilotReclaimEligibilityInputs";
         private const string PredecessorId = "202609101200001_RetireImportDbHacks";
+        private const string TargetsId = "202609171000001_CopilotAdoptionTargets";
+        // GraphCopilotUsageApiV2 landed between this migration and the period-fact tables, so the
+        // targets script now chains from it: that is the row whose Model blob carries report_version,
+        // and stamping anything older would leave EF seeing the schema as behind the build.
+        private const string DigestId = "202609171030001_CopilotAdoptionDigest";
+        private const string DigestPredecessorId = "202609171020002_CopilotAdoptionInterventions";
+        private const string TargetsPredecessorId = "202609170940001_CoworkUsageReportTables";
 
         [TestMethod]
         public void ReclaimInputsManualScript_ReplaysTheMigrationVerbatim()
@@ -127,6 +134,90 @@ namespace Tests.UnitTests
             }
         }
 
+
+        [TestMethod]
+        public void TargetsManualScript_ReplaysTheMigrationVerbatimAndCopiesPredecessorSnapshot()
+        {
+            var manual = ReadManualScript(TargetsId);
+
+            StringAssert.Contains(manual, CopilotAdoptionTargets.Up_Sql);
+            StringAssert.Contains(manual, $"IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'{TargetsPredecessorId}')");
+            StringAssert.Contains(manual, $"SELECT N'{TargetsId}', ContextKey, Model, ProductVersion");
+            StringAssert.Contains(manual, $"WHERE MigrationId = N'{TargetsPredecessorId}';");
+        }
+
+        [TestMethod]
+        public void TargetsManualScript_VerifiesSchemaOnlyBeforeStamping()
+        {
+            var manual = ReadManualScript(TargetsId);
+            var stampAt = manual.IndexOf("INSERT INTO dbo.__MigrationHistory", StringComparison.Ordinal);
+            Assert.IsTrue(stampAt > 0, "No __MigrationHistory stamp found.");
+            var preStamp = Normalise(manual.Substring(0, stampAt));
+
+            foreach (var required in new[]
+            {
+                "name = N'baseline_value'",
+                "name = N'baseline_scoring_options_hash'",
+                "N'IX_copilot_adoption_targets_active_scope'",
+            })
+            {
+                StringAssert.Contains(preStamp, required);
+            }
+
+            foreach (var line in manual.Split('\n'))
+            {
+                var trimmed = line.Trim();
+                if (trimmed.StartsWith("--", StringComparison.Ordinal)) continue;
+                var looksLikeRowProbe = trimmed.IndexOf("COUNT(", StringComparison.OrdinalIgnoreCase) >= 0
+                    || trimmed.IndexOf("COUNT_BIG(", StringComparison.OrdinalIgnoreCase) >= 0;
+                Assert.IsFalse(looksLikeRowProbe && trimmed.IndexOf("sys.", StringComparison.OrdinalIgnoreCase) < 0
+                    && trimmed.IndexOf("__MigrationHistory", StringComparison.OrdinalIgnoreCase) < 0,
+                    $"'{trimmed}' counts data rows. Target stamp guards must check schema only.");
+            }
+        }
+
+        [TestMethod]
+        public void DigestManualScript_ReplaysTheMigrationVerbatimAndCopiesPredecessorSnapshot()
+        {
+            var manual = ReadManualScript(DigestId);
+
+            StringAssert.Contains(manual, CopilotAdoptionDigest.Up_Sql);
+            StringAssert.Contains(manual, $"IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'{DigestPredecessorId}')");
+            StringAssert.Contains(manual, $"SELECT N'{DigestId}', ContextKey, Model, ProductVersion");
+            StringAssert.Contains(manual, $"WHERE MigrationId = N'{DigestPredecessorId}';");
+        }
+
+        [TestMethod]
+        public void DigestManualScript_VerifiesSchemaOnlyBeforeStamping()
+        {
+            var manual = ReadManualScript(DigestId);
+            var stampAt = manual.IndexOf("INSERT INTO dbo.__MigrationHistory", StringComparison.Ordinal);
+            Assert.IsTrue(stampAt > 0, "No __MigrationHistory stamp found.");
+            var preStamp = Normalise(manual.Substring(0, stampAt));
+
+            foreach (var required in new[]
+            {
+                "name = N'period_end'",
+                "name = N'recipients_hash'",
+                "name = N'error'",
+                "N'UX_copilot_adoption_digest_run_period_recipients'",
+                "N'IX_copilot_adoption_digest_run_updated'",
+            })
+            {
+                StringAssert.Contains(preStamp, required);
+            }
+
+            foreach (var line in manual.Split('\n'))
+            {
+                var trimmed = line.Trim();
+                if (trimmed.StartsWith("--", StringComparison.Ordinal)) continue;
+                var looksLikeRowProbe = trimmed.IndexOf("COUNT(", StringComparison.OrdinalIgnoreCase) >= 0
+                    || trimmed.IndexOf("COUNT_BIG(", StringComparison.OrdinalIgnoreCase) >= 0;
+                Assert.IsFalse(looksLikeRowProbe && trimmed.IndexOf("sys.", StringComparison.OrdinalIgnoreCase) < 0
+                    && trimmed.IndexOf("__MigrationHistory", StringComparison.OrdinalIgnoreCase) < 0,
+                    $"'{trimmed}' counts data rows. Digest stamp guards must check schema only.");
+            }
+        }
         /// <summary>Collapses whitespace so assertions are not hostage to SQL indentation or line breaks.</summary>
         private static string Normalise(string sql)
         {

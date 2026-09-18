@@ -64,6 +64,18 @@ namespace Web.AnalyticsWeb.Models.Health
         public string Error { get; set; }
     }
 
+    /// <summary>Most recent scheduled Copilot Adoption digest attempt.</summary>
+    public class CopilotAdoptionDigestHealthRow
+    {
+        public DateTime? PeriodEnd { get; set; }
+        public int? PeriodDays { get; set; }
+        public string Status { get; set; }
+        public string Phase { get; set; }
+        public DateTime? CompletedUtc { get; set; }
+        public DateTime UpdatedUtc { get; set; }
+        public string Error { get; set; }
+    }
+
     /// <summary>
     /// The SQL "data overview" figures. Each block fails independently, mirroring the two nested
     /// try/catch scopes this replaces: a DMV permission failure only sets <see cref="CountsError"/> and
@@ -88,6 +100,9 @@ namespace Web.AnalyticsWeb.Models.Health
 
         /// <summary>The latest import per Copilot usage report, or null when that query didn't run.</summary>
         public IReadOnlyList<CopilotUsageReportImportRow> CopilotUsageReportImports { get; set; }
+
+        /// <summary>The latest scheduled Copilot Adoption digest attempt, or null when none exists.</summary>
+        public CopilotAdoptionDigestHealthRow CopilotAdoptionDigest { get; set; }
 
         /// <summary>Set only on a hard failure (e.g. the database is unreachable).</summary>
         public string DataError { get; set; }

@@ -17,6 +17,7 @@ import { ArrowDownload16Regular, ArrowClockwise16Regular } from '@fluentui/react
 import { fetchOpportunities, opportunitiesExportUrl } from '../../api/copilotAdoptionApi';
 import type {
   AdoptionFilterOptions,
+  AdoptionGuidanceLink,
   CopilotAdoptionOptions,
   LicenceOpportunityPage,
   OpportunityFilters,
@@ -88,6 +89,16 @@ const useStyles = makeStyles({
     gap: '8px',
     marginBottom: '12px',
   },
+  guidance: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px',
+    marginBottom: '12px',
+    color: tokens.colorNeutralForeground3,
+  },
+  guidanceLink: {
+    color: tokens.colorBrandForegroundLink,
+  },
   emptyState: {
     display: 'flex',
     flexDirection: 'column',
@@ -128,12 +139,14 @@ export default function OpportunitiesPanel({
   windowDays,
   filterOptions,
   options,
+  guidanceLinks,
   seatLicenceTypeIds,
 }: {
   windowDays: number;
   filterOptions: AdoptionFilterOptions | null;
   /** The weights and targets actually used, so the score explanation quotes them rather than guessing. */
   options: CopilotAdoptionOptions;
+  guidanceLinks?: AdoptionGuidanceLink[];
   seatLicenceTypeIds?: number[];
 }) {
   const styles = useStyles();
@@ -174,7 +187,7 @@ export default function OpportunitiesPanel({
       .then((result) => {
         if (!cancelled) setData(result);
       })
-      .catch((e) => {
+      .catch((e: any) => {
         if (cancelled || controller.signal.aborted) return;
         setError(e instanceof Error ? e.message : 'Failed to load licence opportunities.');
       })
@@ -217,6 +230,7 @@ export default function OpportunitiesPanel({
   const relevantWarnings = (data?.warnings ?? []).filter(
     (w) => w.toLowerCase().includes('licence opportunit') || w.toLowerCase().includes('usage report'),
   );
+  const unlicensedGuidance = (guidanceLinks ?? []).filter((l) => l.actionCode === 'unlicensed');
 
   return (
     <Card>
@@ -226,8 +240,8 @@ export default function OpportunitiesPanel({
           value={searchDraft}
           placeholder="Search name, email, department, job title or manager"
           aria-label="Search licence candidates"
-          onChange={(_e, d) => setSearchDraft(d.value)}
-          onKeyDown={(e) => {
+          onChange={(_e: any, d: any) => setSearchDraft(d.value)}
+          onKeyDown={(e: any) => {
             if (e.key === 'Enter') setFilters((f) => ({ ...f, search: searchDraft }));
           }}
         />
@@ -238,7 +252,7 @@ export default function OpportunitiesPanel({
         <Select
           value={filters.department}
           aria-label="Filter candidates by department"
-          onChange={(_e, d) => setFilters((f) => ({ ...f, department: d.value }))}
+          onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, department: d.value }))}
         >
           <option value="">All departments</option>
           {(filterOptions?.departments ?? []).map((dept) => (
@@ -251,7 +265,7 @@ export default function OpportunitiesPanel({
         <Checkbox
           label="Recommended only"
           checked={filters.recommendedOnly}
-          onChange={(_e, d) => setFilters((f) => ({ ...f, recommendedOnly: !!d.checked }))}
+          onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, recommendedOnly: !!d.checked }))}
         />
         <Tooltip
           content="People already using Copilot Chat without a licence - proven demand, not an inference."
@@ -260,7 +274,7 @@ export default function OpportunitiesPanel({
           <Checkbox
             label="Already using Copilot"
             checked={filters.existingCopilotUsersOnly}
-            onChange={(_e, d) => setFilters((f) => ({ ...f, existingCopilotUsersOnly: !!d.checked }))}
+            onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, existingCopilotUsersOnly: !!d.checked }))}
           />
         </Tooltip>
 
@@ -291,6 +305,17 @@ export default function OpportunitiesPanel({
             <MessageBar key={warning} intent="warning">
               <MessageBarBody>{warning}</MessageBarBody>
             </MessageBar>
+          ))}
+        </div>
+      )}
+
+      {unlicensedGuidance.length > 0 && (
+        <div className={styles.guidance}>
+          <Text size={100}>Microsoft&apos;s guidance for this kind of user:</Text>
+          {unlicensedGuidance.map((link) => (
+            <a key={link.url} className={styles.guidanceLink} href={link.url} target="_blank" rel="noreferrer">
+              {link.title}
+            </a>
           ))}
         </div>
       )}

@@ -1,7 +1,9 @@
 ﻿using Common.Entities.Copilot;
+using Common.Entities.AgentCosts;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Common.Entities.CopilotAdoption
 {
@@ -72,6 +74,35 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("sharePct")]
         public double SharePct { get; set; }
+
+        /// <summary>Microsoft-published resources for the person who executes this action.</summary>
+        [JsonProperty("guidanceLinks")]
+        public List<AdoptionGuidanceLink> GuidanceLinks { get; set; } = new List<AdoptionGuidanceLink>();
+    }
+
+    /// <summary>One Microsoft-published resource in the versioned adoption-guidance catalogue.</summary>
+    public class AdoptionGuidanceLink
+    {
+        [JsonProperty("actionCode")]
+        public string ActionCode { get; set; }
+
+        [JsonProperty("title")]
+        public string Title { get; set; }
+
+        [JsonProperty("url")]
+        public string Url { get; set; }
+
+        [JsonProperty("expectedTitle")]
+        public string ExpectedTitle { get; set; }
+
+        [JsonProperty("audience")]
+        public string Audience { get; set; }
+
+        [JsonProperty("publisher")]
+        public string Publisher { get; set; }
+
+        [JsonProperty("catalogueVersion")]
+        public string CatalogueVersion { get; set; }
     }
 
     /// <summary>
@@ -215,6 +246,62 @@ namespace Common.Entities.CopilotAdoption
         public double AverageAdoptionScore { get; set; }
     }
 
+    /// <summary>
+    /// One accountable organisational unit: by default a direct manager's span, but configurable to
+    /// department, country, office or company for tenants whose Copilot spend is owned differently.
+    /// </summary>
+    public class AccountabilityRollupRow : AdoptionSegmentRow
+    {
+        [JsonProperty("reclaimableSeats")]
+        public int ReclaimableSeats { get; set; }
+
+        [JsonProperty("reclaimCertainSeats")]
+        public int ReclaimCertainSeats { get; set; }
+
+        [JsonProperty("reclaimProbableSeats")]
+        public int ReclaimProbableSeats { get; set; }
+
+        [JsonProperty("reclaimReviewSeats")]
+        public int ReclaimReviewSeats { get; set; }
+
+        [JsonProperty("reclaimExcludedUsers")]
+        public int ReclaimExcludedUsers { get; set; }
+
+        [JsonProperty("reclaimUsers")]
+        public int ReclaimUsers { get; set; }
+
+        [JsonProperty("reengageUsers")]
+        public int ReengageUsers { get; set; }
+
+        [JsonProperty("coachUsers")]
+        public int CoachUsers { get; set; }
+
+        [JsonProperty("broadenUsers")]
+        public int BroadenUsers { get; set; }
+
+        [JsonProperty("growUsers")]
+        public int GrowUsers { get; set; }
+
+        [JsonProperty("sustainUsers")]
+        public int SustainUsers { get; set; }
+
+        [JsonProperty("advocateUsers")]
+        public int AdvocateUsers { get; set; }
+
+        [JsonProperty("reviewUsers")]
+        public int ReviewUsers { get; set; }
+
+        [JsonProperty("excludedUsers")]
+        public int ExcludedUsers { get; set; }
+
+        /// <summary>
+        /// Absolute number of seats with an actionable opportunity, used for sorting. Large teams with
+        /// moderate gaps must outrank tiny teams with terrible percentages.
+        /// </summary>
+        [JsonProperty("opportunityUsers")]
+        public int OpportunityUsers { get; set; }
+    }
+
     /// <summary>Which underlying imports actually supplied data, so no headline number is silently wrong.</summary>
     public class AdoptionDataSources
     {
@@ -225,6 +312,10 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Microsoft's own per-user Copilot usage report has been imported.</summary>
         [JsonProperty("copilotUsageReportAvailable")]
         public bool CopilotUsageReportAvailable { get; set; }
+
+        /// <summary>The first-party Cowork usage report has been imported.</summary>
+        [JsonProperty("coworkUsageReportAvailable")]
+        public bool CoworkUsageReportAvailable { get; set; }
 
         /// <summary>The Microsoft 365 workload usage reports (Teams/Outlook/SharePoint/OneDrive) have data.</summary>
         [JsonProperty("m365UsageReportsAvailable")]
@@ -245,6 +336,12 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         [JsonProperty("copilotUsageReportPeriodDays")]
         public int CopilotUsageReportPeriodDays { get; set; }
+
+        [JsonProperty("coworkUsageReportDate")]
+        public DateTime? CoworkUsageReportDate { get; set; }
+
+        [JsonProperty("coworkUsageReportPeriodDays")]
+        public int CoworkUsageReportPeriodDays { get; set; }
 
         /// <summary>
         /// The last daily Microsoft 365 usage report available. It bounds the period the workload
@@ -279,6 +376,12 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("dataSources")]
         public AdoptionDataSources DataSources { get; set; } = new AdoptionDataSources();
+
+        [JsonProperty("guidanceCatalogueVersion")]
+        public string GuidanceCatalogueVersion { get; set; } = CopilotAdoptionGuidanceCatalogue.Version;
+
+        [JsonProperty("guidanceLinks")]
+        public List<AdoptionGuidanceLink> GuidanceLinks { get; set; } = CopilotAdoptionGuidanceCatalogue.All.ToList();
 
         /// <summary>Which licence types were counted as Copilot seats, so the population is auditable.</summary>
         [JsonProperty("seatLicenceTypes")]
@@ -341,6 +444,20 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Disabled accounts that still hold a Copilot seat. This is the zero-risk reclaim KPI.</summary>
         [JsonProperty("disabledLicensedUsers")]
         public int DisabledLicensedUsers { get; set; }
+
+        /// <summary>Purchased-vs-assigned Copilot seat inventory. Purchased is null when Graph subscribedSkUs was unavailable.</summary>
+        [JsonProperty("purchasedCopilotSeats")]
+        public int? PurchasedCopilotSeats { get; set; }
+
+        [JsonProperty("unassignedCopilotSeats")]
+        public int? UnassignedCopilotSeats { get; set; }
+
+        [JsonProperty("subscribedSkusAvailable")]
+        public bool SubscribedSkusAvailable { get; set; }
+
+        [JsonProperty("idleLicenceSpend")]
+        public IdleLicenceSpendSummary IdleLicenceSpend { get; set; }
+
 
         [JsonProperty("reclaimCertainSeats")]
         public int ReclaimCertainSeats { get; set; }
@@ -449,10 +566,43 @@ namespace Common.Entities.CopilotAdoption
         public int CoworkUsers { get; set; }
 
         [JsonProperty("coworkAdoptionPct")]
-        public double CoworkAdoptionPct { get; set; }
+        public double? CoworkAdoptionPct { get; set; }
+
+        [JsonProperty("coworkEligibilityKnown")]
+        public bool CoworkEligibilityKnown { get; set; }
+
+        [JsonProperty("coworkEligibleUsers")]
+        public int? CoworkEligibleUsers { get; set; }
+
+        [JsonProperty("coworkAuditUsers")]
+        public int CoworkAuditUsers { get; set; }
 
         [JsonProperty("coworkInteractions")]
         public long CoworkInteractions { get; set; }
+
+        [JsonProperty("coworkReportUsers")]
+        public int CoworkReportUsers { get; set; }
+
+        [JsonProperty("coworkReportTotalTasks")]
+        public int CoworkReportTotalTasks { get; set; }
+
+        [JsonProperty("coworkReportScheduledTasks")]
+        public int CoworkReportScheduledTasks { get; set; }
+
+        [JsonProperty("coworkReportUserInitiatedTasks")]
+        public int CoworkReportUserInitiatedTasks { get; set; }
+
+        [JsonProperty("coworkAutomationRatioPct")]
+        public double? CoworkAutomationRatioPct { get; set; }
+
+        [JsonProperty("coworkTasksPerActiveUser")]
+        public double? CoworkTasksPerActiveUser { get; set; }
+
+        [JsonProperty("coworkReportRetainedUsers")]
+        public int? CoworkReportRetainedUsers { get; set; }
+
+        [JsonProperty("coworkReportRetentionPct")]
+        public double? CoworkReportRetentionPct { get; set; }
 
         /// <summary>
         /// False when nothing in the data identifies Cowork at all - which on a tenant that has not
@@ -581,9 +731,28 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("adoptionByDepartment")]
         public List<AdoptionSegmentRow> AdoptionByDepartment { get; set; } = new List<AdoptionSegmentRow>();
 
+        /// <summary>Departments with the weakest habit formation, for the executive league table.</summary>
+        [JsonProperty("habitByDepartment")]
+        public List<AdoptionSegmentRow> HabitByDepartment { get; set; } = new List<AdoptionSegmentRow>();
+
         /// <summary>Adoption by country, for organisations that run enablement regionally.</summary>
         [JsonProperty("adoptionByCountry")]
         public List<AdoptionSegmentRow> AdoptionByCountry { get; set; } = new List<AdoptionSegmentRow>();
+
+        /// <summary>The configured accountability dimension used for <see cref="AccountabilityRollup"/>.</summary>
+        [JsonProperty("accountabilityDimension")]
+        public string AccountabilityDimension { get; set; } = CopilotAdoptionAccountabilityDimensions.DirectManager;
+
+        /// <summary>Human-readable label for the configured accountability dimension.</summary>
+        [JsonProperty("accountabilityDimensionLabel")]
+        public string AccountabilityDimensionLabel { get; set; } = "Direct manager";
+
+        /// <summary>
+        /// Adoption, reclaim and action counts by accountable organisational unit. Small groups are
+        /// suppressed with the same minimum-seat threshold as the existing segment charts.
+        /// </summary>
+        [JsonProperty("accountabilityRollup")]
+        public List<AccountabilityRollupRow> AccountabilityRollup { get; set; } = new List<AccountabilityRollupRow>();
 
         /// <summary>Where Copilot is actually being used (Teams, Word, Outlook, Copilot Chat...).</summary>
         [JsonProperty("usageByApp")]
@@ -640,6 +809,14 @@ namespace Common.Entities.CopilotAdoption
         public List<AdoptionSeries> WeeklyVolumeTrend { get; set; } = new List<AdoptionSeries>();
 
         #endregion
+
+        /// <summary>Closed-period movement for the headline figures. Never compares the current partial period.</summary>
+        [JsonProperty("periodMovement")]
+        public CopilotAdoptionPeriodMovement PeriodMovement { get; set; } = new CopilotAdoptionPeriodMovement();
+
+        /// <summary>Customer-defined internal goals evaluated against their frozen baseline.</summary>
+        [JsonProperty("targets")]
+        public List<CopilotAdoptionTarget> Targets { get; set; } = new List<CopilotAdoptionTarget>();
 
         /// <summary>The tuning actually used, echoed back so every figure can be traced to its rule.</summary>
         [JsonProperty("options")]
@@ -763,5 +940,53 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("warnings")]
         public List<string> Warnings { get; set; } = new List<string>();
+    }
+
+    public class IdleLicenceSpendSummary
+    {
+        [JsonProperty("configuredCosts")]
+        public List<CopilotSeatCostInput> ConfiguredCosts { get; set; } = new List<CopilotSeatCostInput>();
+
+        [JsonProperty("spendExposure")]
+        public List<AzureCostByCurrency> SpendExposure { get; set; } = new List<AzureCostByCurrency>();
+
+        [JsonProperty("reassignable")]
+        public List<AzureCostByCurrency> Reassignable { get; set; } = new List<AzureCostByCurrency>();
+
+        [JsonProperty("reducibleAtRenewal")]
+        public List<AzureCostByCurrency> ReducibleAtRenewal { get; set; } = new List<AzureCostByCurrency>();
+
+        [JsonProperty("unassignedSpendUnknown")]
+        public bool UnassignedSpendUnknown { get; set; }
+
+        [JsonProperty("tiers")]
+        public List<IdleLicenceSpendTier> Tiers { get; set; } = new List<IdleLicenceSpendTier>();
+
+        [JsonProperty("categories")]
+        public List<IdleLicenceSpendCategory> Categories { get; set; } = new List<IdleLicenceSpendCategory>();
+    }
+
+    public class IdleLicenceSpendTier
+    {
+        [JsonProperty("tier")]
+        public string Tier { get; set; }
+
+        [JsonProperty("seats")]
+        public int Seats { get; set; }
+
+        [JsonProperty("costs")]
+        public List<AzureCostByCurrency> Costs { get; set; } = new List<AzureCostByCurrency>();
+    }
+
+    public class IdleLicenceSpendCategory
+    {
+        [JsonProperty("category")]
+        public string Category { get; set; }
+
+        [JsonProperty("seats")]
+        public int Seats { get; set; }
+
+        [JsonProperty("costs")]
+        public List<AzureCostByCurrency> Costs { get; set; } = new List<AzureCostByCurrency>();
     }
 }

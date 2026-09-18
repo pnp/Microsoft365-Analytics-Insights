@@ -1,4 +1,4 @@
-﻿using DataUtils;
+using DataUtils;
 using System;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
@@ -83,11 +83,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Builds the change plan for one Graph user.
         /// </summary>
         /// <remarks>
-        /// <c>users.last_updated</c> is deliberately NOT part of the plan. The pipeline stamps it with
-        /// <c>DateTime.Now</c> (local, not UTC) at the very end of the per-user update, after manager
-        /// resolution - which can hit the database - so moving the read into this rule would change the
-        /// stored value. <c>IClock</c> only exposes <c>UtcNow</c>, so converting it is a behavioural
-        /// change and out of scope for #381.
+        /// <c>users.last_updated</c> is deliberately NOT part of the plan. The pipeline stamps one UTC
+        /// value per import cycle at the very end of the per-user update, after manager resolution -
+        /// which can hit the database - so moving the read into this pure rule would make the rule
+        /// time-dependent again.
         ///
         /// No null guard on <paramref name="graphUser"/>: the code this replaced dereferenced it
         /// directly, and the resulting <see cref="NullReferenceException"/> is operator-facing, so

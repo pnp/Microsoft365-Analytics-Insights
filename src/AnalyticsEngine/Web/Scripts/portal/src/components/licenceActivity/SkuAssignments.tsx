@@ -134,7 +134,7 @@ function SkuAssignments({ licences, selectedLicenceTypeId, onSelect }: SkuAssign
             value={filter}
             placeholder="Filter by licence name or code"
             aria-label="Filter licences"
-            onChange={(_e, d) => setFilter(d.value)}
+            onChange={(_e: any, d: any) => setFilter(d.value)}
           />
         )}
       </div>
@@ -178,7 +178,7 @@ function SkuAssignments({ licences, selectedLicenceTypeId, onSelect }: SkuAssign
                       type="button"
                       style={selectButtonStyle}
                       aria-pressed={selected}
-                      onClick={(e) => {
+                      onClick={(e: any) => {
                         // The row handler would otherwise fire too; harmless (same id) but avoid the
                         // duplicate call so onSelect stays once-per-activation for callers and tests.
                         e.stopPropagation();

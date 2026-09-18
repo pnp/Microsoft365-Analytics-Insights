@@ -1,0 +1,24 @@
+name: Copilot adoption guidance links
+
+on:
+  schedule:
+    - cron: '37 3 * * 1'
+  pull_request:
+    paths:
+      - src/AnalyticsEngine/Common/Entities/CopilotAdoption/**
+      - src/AnalyticsEngine/Web/Scripts/portal/src/components/copilotAdoption/**
+      - src/AnalyticsEngine/Web/Scripts/portal/src/types/copilotAdoption.ts
+      - .github/scripts/Test-CopilotAdoptionGuidanceLinks.ps1
+      - .github/workflows/copilot-adoption-guidance-links.yml
+  workflow_dispatch:
+
+jobs:
+  check_links:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Validate guidance link content
+        shell: pwsh
+        run: .\.github\scripts\Test-CopilotAdoptionGuidanceLinks.ps1
