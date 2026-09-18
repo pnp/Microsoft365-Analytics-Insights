@@ -1,4 +1,4 @@
-﻿using Newtonsoft.Json;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 
@@ -213,6 +213,7 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>True only when both the audit log and Microsoft's report have per-user figures to compare.</summary>
         [JsonProperty("sourceComparisonAvailable")]
         public bool SourceComparisonAvailable { get; set; }
+
 
         [JsonProperty("expectedActiveDays")]
         public double ExpectedActiveDays { get; set; }

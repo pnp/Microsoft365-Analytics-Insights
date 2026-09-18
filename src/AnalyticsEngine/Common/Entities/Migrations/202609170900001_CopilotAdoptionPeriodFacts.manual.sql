@@ -1,4 +1,4 @@
-﻿/* =====================================================================================================
+/* =====================================================================================================
    MANUAL SQL UPGRADE SCRIPT
    Migration: 202609170900001_CopilotAdoptionPeriodFacts
    =====================================================================================================
@@ -7,7 +7,7 @@
    past periods, so history starts accruing only when the scheduled publish path runs.
 
    RUN ORDER
-     Run after 202609151440027_CopilotPromptSafetyFields. This script stamps __MigrationHistory by
+     Run after 202609161200001_IndexTeamsExplorerQueries. This script stamps __MigrationHistory by
      copying that predecessor's model blob because the EF model is unchanged.
 
    SAFETY
@@ -148,16 +148,16 @@ BEGIN
     BEGIN
         RAISERROR(N'CopilotAdoptionPeriodFacts: NOT stamped - schema work incomplete. Missing: %s', 16, 1, @missing) WITH NOWAIT;
     END
-    ELSE IF EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609151440027_CopilotPromptSafetyFields')
+    ELSE IF EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609161200001_IndexTeamsExplorerQueries')
     BEGIN
         INSERT INTO dbo.__MigrationHistory (MigrationId, ContextKey, Model, ProductVersion)
         SELECT N'202609170900001_CopilotAdoptionPeriodFacts', ContextKey, Model, ProductVersion
         FROM dbo.__MigrationHistory
-        WHERE MigrationId = N'202609151440027_CopilotPromptSafetyFields';
+        WHERE MigrationId = N'202609161200001_IndexTeamsExplorerQueries';
         RAISERROR('CopilotAdoptionPeriodFacts: recorded in __MigrationHistory.', 0, 1) WITH NOWAIT;
     END
     ELSE
-        RAISERROR('CopilotAdoptionPeriodFacts: prerequisite 202609151440027_CopilotPromptSafetyFields is missing from __MigrationHistory, so the schema was not stamped.', 16, 1) WITH NOWAIT;
+        RAISERROR('CopilotAdoptionPeriodFacts: prerequisite 202609161200001_IndexTeamsExplorerQueries is missing from __MigrationHistory, so the schema was not stamped.', 16, 1) WITH NOWAIT;
 END
 ELSE
     RAISERROR('CopilotAdoptionPeriodFacts: already recorded in __MigrationHistory, nothing to do.', 0, 1) WITH NOWAIT;

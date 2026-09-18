@@ -15,7 +15,8 @@
     /// The EF model is deliberately unchanged: the tables are written and read through raw SQL so stored
     /// history can be populated by the scheduled/off-request publish path without extending the interactive
     /// DbContext surface. Because there is no model change, the .resx snapshot is a byte-identical copy of
-    /// 202609151440027_CopilotPromptSafetyFields and the manual script stamps by copying that predecessor.
+    /// 202609151440027_CopilotPromptSafetyFields's model, and the manual script stamps by copying its
+    /// immediate predecessor 202609161200001_IndexTeamsExplorerQueries, whose snapshot is the same blob.
     /// </summary>
     public partial class CopilotAdoptionPeriodFacts : DbMigration
     {
