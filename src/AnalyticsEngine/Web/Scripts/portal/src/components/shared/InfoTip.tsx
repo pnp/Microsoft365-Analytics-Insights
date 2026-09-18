@@ -1,5 +1,6 @@
 import {
   makeStyles,
+  mergeClasses,
   tokens,
   Text,
   Button,
@@ -18,8 +19,10 @@ const useStyles = makeStyles({
     padding: 0,
     color: tokens.colorNeutralForeground3,
   },
+  // Wide enough for a multi-line calculation to sit on one line each: a formula that wraps
+  // mid-expression reads as a different formula, which defeats the point of showing it verbatim.
   surface: {
-    maxWidth: '380px',
+    maxWidth: 'min(560px, calc(100vw - 32px))',
     display: 'flex',
     flexDirection: 'column',
     gap: '8px',
@@ -32,6 +35,26 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: '8px',
+  },
+  // "how" is prose in most tips but a short list in the ones explaining a composite score, where a
+  // single paragraph is a wall of text nobody reads. Fluent's Text renders a <span>, which cannot
+  // legally contain a list, so this is a plain div carrying the same typography.
+  how: {
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+    '& p': {
+      margin: 0,
+    },
+    '& ul': {
+      margin: 0,
+      paddingLeft: '18px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '4px',
+    },
   },
   formulaLabel: {
     color: tokens.colorNeutralForeground3,
@@ -48,6 +71,12 @@ const useStyles = makeStyles({
     whiteSpace: 'pre-wrap',
     color: tokens.colorNeutralForeground1,
   },
+  // A multi-line calculation is aligned on purpose, so it must never be re-wrapped: scroll it
+  // instead. Single-line formulas are often a sentence of arithmetic and still wrap normally.
+  formulaBlock: {
+    whiteSpace: 'pre',
+    overflowX: 'auto',
+  },
   source: {
     color: tokens.colorNeutralForeground3,
   },
@@ -57,7 +86,7 @@ const useStyles = makeStyles({
 export type InfoTipContent = {
   /** What the number claims, in one sentence. */
   what: ReactNode;
-  /** How it is worked out, in words. */
+  /** How it is worked out, in words - a short list where the figure has several components. */
   how?: ReactNode;
   /** The calculation itself, shown verbatim so it can be checked rather than trusted. */
   formula?: string;
@@ -76,6 +105,7 @@ export type InfoTipContent = {
  */
 export default function InfoTip({ title, content }: { title: string; content: InfoTipContent }) {
   const styles = useStyles();
+  const formulaIsMultiLine = typeof content.formula === 'string' && content.formula.includes('\n');
 
   return (
     <Popover withArrow positioning="below-end">
@@ -94,13 +124,17 @@ export default function InfoTip({ title, content }: { title: string; content: In
         </Text>
         <div className={styles.body}>
           <Text size={200}>{content.what}</Text>
-          {content.how && <Text size={200}>{content.how}</Text>}
+          {content.how && <div className={styles.how}>{content.how}</div>}
           {content.formula && (
             <div>
               <Text size={100} block className={styles.formulaLabel}>
                 Calculation
               </Text>
-              <div className={styles.formula}>{content.formula}</div>
+              <div
+                className={mergeClasses(styles.formula, formulaIsMultiLine && styles.formulaBlock)}
+              >
+                {content.formula}
+              </div>
             </div>
           )}
           {content.source && (

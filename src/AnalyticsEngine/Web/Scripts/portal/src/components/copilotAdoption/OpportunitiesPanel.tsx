@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, Fragment } from 'react';
 import {
   makeStyles,
   tokens,
@@ -23,9 +23,20 @@ import type {
   OpportunityFilters,
 } from '../../types/copilotAdoption';
 import Spinner from '../Spinner';
-import { RationaleCell, ScoreBar, SortableTh, useAdoptionTableStyles } from './adoptionShared';
+import {
+  DetailRationale,
+  DetailRow,
+  DetailSection,
+  DetailSections,
+  DetailStat,
+  DetailStats,
+  ExpandableUserCell,
+  ScoreBar,
+  SortableTh,
+  useAdoptionTableStyles,
+  useRowExpansion,
+} from './adoptionShared';
 import { formatCount, formatDate } from '../shared/KpiGrid';
-import InfoTip from '../shared/InfoTip';
 
 const PAGE_SIZE = 50;
 
@@ -73,11 +84,6 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForegroundOnBrand,
     backgroundColor: '#107c10',
     whiteSpace: 'nowrap',
-  },
-  thWithInfo: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: '2px',
   },
   warnings: {
     display: 'flex',
@@ -170,8 +176,13 @@ export default function OpportunitiesPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const { isExpanded, toggle: toggleRow, collapseAll } = useRowExpansion();
 
   useEffect(() => setPage(0), [filters, windowDays]);
+
+  // Paging or re-filtering replaces the rows under an open detail, so the expander would end up
+  // describing whoever happens to land on that line next.
+  useEffect(() => collapseAll(), [filters, windowDays, page, collapseAll]);
 
   useEffect(() => {
     let cancelled = false;
@@ -394,7 +405,7 @@ export default function OpportunitiesPanel({
                   defaultDescending
                   infoTitle="Business case score"
                   info={{
-                    what: `How strong the case for giving this person a Copilot licence is, from 0 to 100. Someone is counted in the "recommended for a licence" headline if they already use Copilot on at least ${options.opportunityProvenDemandMinActiveDays} distinct days without a licence (proven demand), or if this score reaches ${options.opportunityRecommendScore} (workload inferred). The Justification column on each row says which route applied, and the CSV export carries it as a "Qualified by" column.`,
+                    what: `How strong the case for giving this person a Copilot licence is, from 0 to 100. Someone is counted in the "recommended for a licence" headline if they already use Copilot on at least ${options.opportunityProvenDemandMinActiveDays} distinct days without a licence (proven demand), or if this score reaches ${options.opportunityRecommendScore} (workload inferred). Expand a row to see which route applied; the CSV export carries it as a "Qualified by" column.`,
                     how: `Four weighted signals, weighted so evidence beats inference. Already using Copilot Chat without a licence is worth ${options.opportunityUnlicensedCopilotWeight} points because it proves demand for Copilot itself; Teams collaboration is worth ${options.opportunityCollaborationWeight}, email ${options.opportunityEmailWeight} and document work ${options.opportunityDocumentWeight}, and those three only infer it from general Microsoft 365 activity. Each signal is a ratio against its own target and is capped at 1, so no single very heavy workload can carry someone over the line on its own. Proven demand has to qualify independently because the Copilot weight sits below the score bar, so recurrent unlicensed use could otherwise never clear it while general busyness could.`,
                     formula:
                       `copilot     = min(1, unlicensedCopilotInteractions / (${opportunityCopilotTargetExpression}))\n` +
@@ -405,7 +416,7 @@ export default function OpportunitiesPanel({
                       `recommended when unlicensedCopilotActiveDays >= ${options.opportunityProvenDemandMinActiveDays}\n` +
                       `               or score >= ${options.opportunityRecommendScore}`,
                     source:
-                      `Copilot use comes from the Copilot audit import and covers this period exactly. Its target of ${options.opportunityCopilotTarget} per ${options.opportunityCopilotTargetBasisDays} days is scaled to the selected period (about ${opportunityCopilotTargetApprox} here; the formula keeps the exact division so a candidate on the bar is not rounded across it) because it is a raw total, not a per-active-day average. The Teams, email and document figures are a per-active-day average across this same period, taken from Microsoft\u2019s daily usage reports - a day the user did not appear in the report at all does not drag the average down. Hover any row for its four component scores.`,
+                      `Copilot use comes from the Copilot audit import and covers this period exactly. Its target of ${options.opportunityCopilotTarget} per ${options.opportunityCopilotTargetBasisDays} days is scaled to the selected period (about ${opportunityCopilotTargetApprox} here; the formula keeps the exact division so a candidate on the bar is not rounded across it) because it is a raw total, not a per-active-day average. The Teams, email and document figures are a per-active-day average across this same period, taken from Microsoft\u2019s daily usage reports - a day the user did not appear in the report at all does not drag the average down. Expand a row for its four component scores and the full justification.`,
                   }}
                 >
                   Business case
@@ -439,77 +450,158 @@ export default function OpportunitiesPanel({
                 <SortableTh label="last Microsoft 365 activity" sortKey="lastM365" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
                   Last M365 activity
                 </SortableTh>
-                <th className={table.th}>
-                  <span className={styles.thWithInfo}>
-                    Justification
-                    <InfoTip
-                      title="Justification"
-                      content={{
-                        what: 'The score restated in plain English, naming the specific signals that produced it for this person.',
-                        how: 'Written per user rather than per band - unlike the licensed-user list, no two candidates reach the same score by the same route, so this genuinely differs from row to row. Shown to two lines here to keep the rows readable; hover a cell for the whole sentence.',
-                        source: 'Safe to paste directly into a licence request. It is also in the CSV export, in full.',
-                      }}
-                    />
-                  </span>
-                </th>
               </tr>
             </thead>
             <tbody>
-              {data.rows.map((row) => (
-                <tr key={row.userId}>
-                  <td className={`${table.td} ${table.stickyLeft}`}>
-                    <span className={styles.upn}>
-                      <Text size={200} weight="semibold">
-                        {row.userPrincipalName}
-                      </Text>
-                      <Text size={100} className={styles.muted}>
-                        {row.jobTitle || row.mail || ''}
-                      </Text>
-                    </span>
-                  </td>
-                  <td className={`${table.td} ${table.tdNoWrap}`}>{row.department || '\u2014'}</td>
-                  <td className={table.td}>
-                    <Tooltip
-                      relationship="description"
-                      content={`Copilot demand ${Math.round(row.copilotDemandScore)} / Collaboration ${Math.round(
-                        row.collaborationScore,
-                      )} / Email ${Math.round(row.emailScore)} / Documents ${Math.round(row.documentScore)}`}
-                    >
-                      <div>
-                        <ScoreBar score={row.opportunityScore} />
-                      </div>
-                    </Tooltip>
-                  </td>
-                  <td className={`${table.td} ${table.tdNoWrap}`}>
-                    {row.unlicensedCopilotInteractions > 0 ? (
-                      <Badge className={styles.evidence} size="small">
-                        {formatCount(row.unlicensedCopilotInteractions)} in {row.unlicensedCopilotActiveDays}d
-                      </Badge>
-                    ) : (
-                      <Text size={200} className={styles.muted}>
-                        Not yet
-                      </Text>
+              {data.rows.map((row) => {
+                const open = isExpanded(row.userId);
+                return (
+                  <Fragment key={row.userId}>
+                    <tr>
+                      <ExpandableUserCell
+                        open={open}
+                        onToggle={() => toggleRow(row.userId)}
+                        userPrincipalName={row.userPrincipalName}
+                        secondary={row.jobTitle || row.mail}
+                        className={table.stickyLeft}
+                      />
+                      <td className={`${table.td} ${table.tdNoWrap}`}>{row.department || '\u2014'}</td>
+                      <td className={table.td}>
+                        <Tooltip
+                          relationship="description"
+                          content={`Copilot demand ${Math.round(row.copilotDemandScore)} / Collaboration ${Math.round(
+                            row.collaborationScore,
+                          )} / Email ${Math.round(row.emailScore)} / Documents ${Math.round(row.documentScore)}`}
+                        >
+                          <div>
+                            <ScoreBar score={row.opportunityScore} />
+                          </div>
+                        </Tooltip>
+                      </td>
+                      <td className={`${table.td} ${table.tdNoWrap}`}>
+                        {row.unlicensedCopilotInteractions > 0 ? (
+                          <Badge className={styles.evidence} size="small">
+                            {formatCount(row.unlicensedCopilotInteractions)} in {row.unlicensedCopilotActiveDays}d
+                          </Badge>
+                        ) : (
+                          <Text size={200} className={styles.muted}>
+                            Not yet
+                          </Text>
+                        )}
+                      </td>
+                      <td className={`${table.td} ${table.tdNumeric}`}>
+                        {formatCount(row.teamsMessages)}
+                        <Text size={100} block className={table.tdSub}>
+                          {formatCount(row.teamsMeetings)} mtgs
+                        </Text>
+                      </td>
+                      <td className={`${table.td} ${table.tdNumeric}`}>
+                        {formatCount(row.emailsSent)}
+                        <Text size={100} block className={table.tdSub}>
+                          {formatCount(row.emailsRead)} read
+                        </Text>
+                      </td>
+                      <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.filesViewedOrEdited)}</td>
+                      <td className={`${table.td} ${table.tdNoWrap}`}>{formatDate(row.lastM365ActivityUtc)}</td>
+                    </tr>
+                    {open && (
+                      <DetailRow colSpan={8}>
+                        <DetailSections>
+                          <DetailSection title={`Business case - ${Math.round(row.opportunityScore)}/100`}>
+                            <DetailStats>
+                              <DetailStat
+                                label="Copilot demand"
+                                value={Math.round(row.copilotDemandScore)}
+                                sub={`weight ${options.opportunityUnlicensedCopilotWeight}`}
+                              />
+                              <DetailStat
+                                label="Collaboration"
+                                value={Math.round(row.collaborationScore)}
+                                sub={`weight ${options.opportunityCollaborationWeight}`}
+                              />
+                              <DetailStat
+                                label="Email"
+                                value={Math.round(row.emailScore)}
+                                sub={`weight ${options.opportunityEmailWeight}`}
+                              />
+                              <DetailStat
+                                label="Documents"
+                                value={Math.round(row.documentScore)}
+                                sub={`weight ${options.opportunityDocumentWeight}`}
+                              />
+                            </DetailStats>
+                          </DetailSection>
+
+                          <DetailSection title="Microsoft 365 activity (per active day)">
+                            <DetailStats>
+                              <DetailStat
+                                label="Teams messages"
+                                value={formatCount(row.teamsMessages)}
+                                sub={`with ${formatCount(row.teamsMeetings)} meetings \u00b7 target ${options.opportunityCollaborationTarget}`}
+                              />
+                              <DetailStat
+                                label="Emails sent"
+                                value={formatCount(row.emailsSent)}
+                                sub={`${formatCount(row.emailsRead)} read \u00b7 target ${options.opportunityEmailTarget}`}
+                              />
+                              <DetailStat
+                                label="Files"
+                                value={formatCount(row.filesViewedOrEdited)}
+                                sub={`viewed or edited \u00b7 target ${options.opportunityDocumentTarget}`}
+                              />
+                              <DetailStat
+                                label="Last M365 activity"
+                                value={formatDate(row.lastM365ActivityUtc)}
+                              />
+                            </DetailStats>
+                          </DetailSection>
+
+                          <DetailSection title="Unlicensed Copilot use">
+                            <DetailStats>
+                              <DetailStat
+                                label="Interactions"
+                                value={formatCount(row.unlicensedCopilotInteractions)}
+                                sub={`target ${opportunityCopilotTargetApprox} for this period`}
+                              />
+                              <DetailStat
+                                label="Active days"
+                                value={formatCount(row.unlicensedCopilotActiveDays)}
+                                sub={`proven demand at ${options.opportunityProvenDemandMinActiveDays}`}
+                              />
+                              <DetailStat
+                                label="Last Copilot use"
+                                value={formatDate(row.lastCopilotInteractionUtc)}
+                              />
+                              <DetailStat
+                                label="Qualified by"
+                                value={
+                                  row.unlicensedCopilotActiveDays >= options.opportunityProvenDemandMinActiveDays
+                                    ? 'Proven demand'
+                                    : row.recommended
+                                      ? 'Workload inferred'
+                                      : 'Not recommended'
+                                }
+                                sub={`recommend at ${options.opportunityRecommendScore}`}
+                              />
+                            </DetailStats>
+                          </DetailSection>
+                        </DetailSections>
+
+                        <DetailSection
+                          title="Justification"
+                          info={{
+                            what: 'The score restated in plain English, naming the specific signals that produced it for this person.',
+                            how: 'Written per user rather than per band - no two candidates reach the same score by the same route, so this genuinely differs from row to row.',
+                            source: 'Safe to paste directly into a licence request. It is also in the CSV export, in full.',
+                          }}
+                        >
+                          <DetailRationale text={row.rationale} />
+                        </DetailSection>
+                      </DetailRow>
                     )}
-                  </td>
-                  <td className={`${table.td} ${table.tdNumeric}`}>
-                    {formatCount(row.teamsMessages)}
-                    <Text size={100} block className={table.tdSub}>
-                      {formatCount(row.teamsMeetings)} mtgs
-                    </Text>
-                  </td>
-                  <td className={`${table.td} ${table.tdNumeric}`}>
-                    {formatCount(row.emailsSent)}
-                    <Text size={100} block className={table.tdSub}>
-                      {formatCount(row.emailsRead)} read
-                    </Text>
-                  </td>
-                  <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.filesViewedOrEdited)}</td>
-                  <td className={`${table.td} ${table.tdNoWrap}`}>{formatDate(row.lastM365ActivityUtc)}</td>
-                  <td className={table.td}>
-                    <RationaleCell text={row.rationale} />
-                  </td>
-                </tr>
-              ))}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>

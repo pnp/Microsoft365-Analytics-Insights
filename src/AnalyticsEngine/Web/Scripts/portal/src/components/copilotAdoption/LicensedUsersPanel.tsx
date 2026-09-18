@@ -365,23 +365,62 @@ export default function LicensedUsersPanel({
                   onSort={applySort}
                   infoTitle="Engagement score"
                   info={{
-                    what: 'How embedded Copilot is in this person\u2019s working week, from 0 to 100. Not "did they use it" - two people who each used it once score the same on that, and need the same response, which is rarely useful.',
-                    how: `Three components: frequency (${formatPct(
-                      weightSharePct(options.frequencyWeight, scoreWeights),
-                    )}) against a target of ${formatPct(
-                      options.frequencyTargetRatio * 100,
-                    )} of available working days, depth (${formatPct(
-                      weightSharePct(options.depthWeight, scoreWeights),
-                    )}) against ${options.depthTargetInteractionsPerActiveDay} interactions per active day, and breadth (${formatPct(
-                      weightSharePct(options.breadthWeight, scoreWeights),
-                    )}) against ${options.breadthTargetApps} Copilot surfaces. Each component is capped at 100% before weighting, so nothing above target buys extra credit. Depth is additionally scaled down below ${options.depthMinActiveDays} active days, because it divides by a number the user controls - a few prompts in one afternoon would otherwise score full marks. Expected active days is prorated for accounts younger than the reporting period.`,
+                    what: 'How much a part of this person\u2019s working week Copilot has become, scored 0 to 100. Deliberately not "did they use it": two people who each tried it once look identical on that, and that never tells you what to do next.',
+                    how: (
+                      <>
+                        <p>
+                          Three things, each measured against a target and each capped there, so
+                          going past a target buys no extra credit:
+                        </p>
+                        <ul>
+                          <li>
+                            <strong>
+                              How often - frequency (
+                              {formatPct(weightSharePct(options.frequencyWeight, scoreWeights))})
+                            </strong>
+                            : days they used Copilot, against{' '}
+                            {formatPct(options.frequencyTargetRatio * 100)} of their available
+                            working days.
+                          </li>
+                          <li>
+                            <strong>
+                              How much - depth (
+                              {formatPct(weightSharePct(options.depthWeight, scoreWeights))})
+                            </strong>
+                            : interactions on each day they did use it, against a target of{' '}
+                            {options.depthTargetInteractionsPerActiveDay}.
+                          </li>
+                          <li>
+                            <strong>
+                              How widely - breadth (
+                              {formatPct(weightSharePct(options.breadthWeight, scoreWeights))})
+                            </strong>
+                            : how many different Copilot apps they use, against a target of{' '}
+                            {options.breadthTargetApps}.
+                          </li>
+                        </ul>
+                        <p>
+                          <strong>Confidence</strong> keeps depth honest. Depth is a per-day
+                          average, so somebody active on a single day can hit the target in one
+                          sitting and read as a power user. Depth therefore only counts in full once
+                          Copilot has been used on {options.depthMinActiveDays} separate days; below
+                          that it counts in proportion, so half as many days counts for half.
+                        </p>
+                        <p>
+                          Accounts newer than the reporting period get a smaller frequency target,
+                          so nobody is marked down for days before they joined.
+                        </p>
+                      </>
+                    ),
                     formula:
-                      'freq       = min(1, activeDays / expectedActiveDays)\n' +
+                      'frequency  = min(1, activeDays / expectedActiveDays)\n' +
                       `confidence = min(1, activeDays / ${options.depthMinActiveDays})\n` +
-                      'depth      = min(1, interactions / activeDays / depthTarget) x confidence\n' +
-                      'breadth    = min(1, appsUsed / breadthTarget)\n' +
-                      `score = (freq*${options.frequencyWeight} + depth*${options.depthWeight} + breadth*${options.breadthWeight})\n` +
-                      `        / ${weightSum} x 100`,
+                      `depth      = min(1, interactions / activeDays / ${options.depthTargetInteractionsPerActiveDay}) x confidence\n` +
+                      `breadth    = min(1, appsUsed / ${options.breadthTargetApps})\n` +
+                      `score      = (frequency x ${options.frequencyWeight} + depth x ${options.depthWeight} + breadth x ${options.breadthWeight})` +
+                      (Math.abs(weightSum - 1) < 1e-9
+                        ? ' x 100'
+                        : `\n             / ${weightSum} x 100`),
                     source: 'Hover the bar on any row for that user\u2019s three component scores.',
                   }}
                 >
