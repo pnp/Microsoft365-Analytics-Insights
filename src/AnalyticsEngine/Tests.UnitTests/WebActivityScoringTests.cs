@@ -515,6 +515,52 @@ namespace Tests.UnitTests
                 "A search verdict with no searches behind it is an assertion about nothing.");
         }
 
+        [TestMethod]
+        public void ConcentrationJudgement_IsSuppressedUntilADecileCanExist()
+        {
+            // A single page is more than a tenth of any site with fewer than ten pages, so the
+            // top-decile calculation clamps to one page and reports that page's share under a
+            // heading claiming it is the busiest 10%. Say nothing instead.
+            var few = Healthy();
+            few.UniquePages = WebActivityScoring.MinimumPagesForDecile - 1;
+            Assert.IsFalse(
+                WebActivityScoring.Judgements(few).Any(j => j.Key == "concentration"),
+                "A decile is not expressible below the threshold.");
+
+            var enough = Healthy();
+            enough.UniquePages = WebActivityScoring.MinimumPagesForDecile;
+            Assert.IsTrue(
+                WebActivityScoring.Judgements(enough).Any(j => j.Key == "concentration"),
+                "At the threshold the busiest tenth is a real tenth.");
+
+            // The UI reads this threshold off the window rather than hard-coding its own copy, so
+            // the Overview judgement and the Page views chart cannot disappear independently.
+            var window = WebActivityWindow.From(WebActivityQuery.Create(28, DateTime.UtcNow));
+            Assert.AreEqual(WebActivityScoring.MinimumPagesForDecile, window.MinimumPagesForDecile);
+        }
+
+        [TestMethod]
+        public void BounceJudgement_IsSuppressedWhenThereAreNoVisitsToBounce()
+        {
+            // hits.session_id is nullable, so a window can hold page views and no visits at all.
+            // Bounce rate and pages-per-visit are both zero there, which lands in the "good" band -
+            // reassuring an admin that "most visits go beyond the first page" about visits that
+            // were never recorded.
+            var noVisits = Healthy();
+            noVisits.Visits = 0;
+            noVisits.BouncePct = 0;
+            noVisits.PagesPerVisit = 0;
+
+            var judgements = WebActivityScoring.Judgements(noVisits);
+
+            Assert.IsFalse(
+                judgements.Any(j => j.Key == "bounce"),
+                "A bounce verdict needs visits to be about.");
+            Assert.IsFalse(
+                judgements.Any(j => j.Tone == "good" && j.Detail.Contains("Most visits go beyond")),
+                "Nothing may report healthy engagement from zero visits.");
+        }
+
         #endregion
     }
 }

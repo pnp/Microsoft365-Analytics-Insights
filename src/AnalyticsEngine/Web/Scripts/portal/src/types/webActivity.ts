@@ -23,6 +23,11 @@ export interface WebActivityWindow {
   minimumViews: number;
   /** False when the window is too short for every engagement band to be reachable. */
   segmentsFullyReachable: boolean;
+  /**
+   * Distinct viewed pages needed before a "busiest 10%" share means anything. Comes from the
+   * server so the Overview judgement and the Page views chart are suppressed together.
+   */
+  minimumPagesForDecile: number;
 }
 
 /** A verdict on one headline figure. */

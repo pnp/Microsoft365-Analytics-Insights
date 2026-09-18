@@ -62,6 +62,16 @@ namespace Common.Entities.SpoWebActivity
         /// </remarks>
         public bool SegmentsFullyReachable { get; set; }
 
+        /// <summary>
+        /// Distinct viewed pages needed before a "busiest 10% of pages" share means anything.
+        /// </summary>
+        /// <remarks>
+        /// Carried on the window so the server owns the threshold and the UI cannot drift from it:
+        /// the Overview tab's judgement and the Page views tab's chart are suppressed together or
+        /// not at all.
+        /// </remarks>
+        public int MinimumPagesForDecile { get; set; }
+
         public static WebActivityWindow From(WebActivityQuery query)
         {
             return new WebActivityWindow
@@ -78,6 +88,7 @@ namespace Common.Entities.SpoWebActivity
 
                 // Whether the engagement mix can distinguish its lower bands at this window length.
                 SegmentsFullyReachable = WebActivityScoring.SegmentsFullyReachable(query.Days),
+                MinimumPagesForDecile = WebActivityScoring.MinimumPagesForDecile,
             };
         }
     }

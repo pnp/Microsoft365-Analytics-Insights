@@ -480,7 +480,12 @@ namespace Common.Entities.SpoWebActivity
             }
 
             judgements.Add(ReachJudgement(inputs));
-            judgements.Add(BounceJudgement(inputs));
+
+            // Guarded like the search judgement below it: hits carry a nullable session_id, so a
+            // window can hold page views and no visits at all. Bounce rate and pages-per-visit are
+            // both zero there, which lands on the "good" band and tells an admin "most visits go
+            // beyond the first page" about visits that were never recorded.
+            if (inputs.Visits > 0) judgements.Add(BounceJudgement(inputs));
 
             if (inputs.AverageLoadSeconds.HasValue) judgements.Add(LoadJudgement(inputs));
             if (inputs.Visits > 0 && inputs.SearchAvailable) judgements.Add(SearchJudgement(inputs));

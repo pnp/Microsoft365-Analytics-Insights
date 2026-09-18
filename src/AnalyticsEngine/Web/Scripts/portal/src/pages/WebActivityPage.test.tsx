@@ -40,6 +40,7 @@ const window28: WebActivityWindow = {
   top: 15,
   minimumViews: 5,
   segmentsFullyReachable: true,
+  minimumPagesForDecile: 10,
 };
 
 const availability = (over: Partial<WebActivityAvailability> = {}): WebActivityAvailability => ({
