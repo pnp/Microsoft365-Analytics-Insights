@@ -1477,15 +1477,6 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Modelled hours a month (high)", estimate.HoursPerMonthHigh,
                 "MODELLED. The upper bound. Quote the range, never a single figure.");
 
-            if (estimate.CurrencyPerMonthHigh.HasValue)
-            {
-                var code = string.IsNullOrWhiteSpace(estimate.CurrencyCode) ? string.Empty : $" ({estimate.CurrencyCode})";
-                AddMeta(sheet, "Modelled value a month, low" + code, estimate.CurrencyPerMonthLow.Value,
-                    "MODELLED. Hours multiplied by the fully-loaded hourly cost configured for this report.");
-                AddMeta(sheet, "Modelled value a month, high" + code, estimate.CurrencyPerMonthHigh.Value,
-                    "MODELLED. No currency conversion is performed - this is the rate as supplied.");
-            }
-
             sheet.AddBlankRow();
             sheet.AddTitle("Assumptions");
             foreach (var assumption in estimate.Assumptions)

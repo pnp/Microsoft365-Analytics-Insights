@@ -1,4 +1,4 @@
-﻿// Mirrors Common/Entities/CopilotAdoption/CopilotAdoptionModels.cs (returned by api/CopilotAdoption).
+// Mirrors Common/Entities/CopilotAdoption/CopilotAdoptionModels.cs (returned by api/CopilotAdoption).
 //
 // The chart shapes (AdoptionSeries / AdoptionCategory) are deliberately identical to the Reports
 // area's ReportSeries / ReportCategory so the existing TimeSeriesChart and CategoryBarChart
@@ -187,8 +187,6 @@ export interface CopilotAdoptionOptions {
   coworkMinutesSavedPerDocument: number;
   coworkEstimateLowerBoundRatio: number;
   /** Null means no monetary figure is produced at all - there is no defensible default. */
-  coworkLoadedCostPerHour: number | null;
-  coworkCurrencyCode: string | null;
 
   usageReportLagDays: number;
   topSegments: number;
@@ -865,10 +863,8 @@ export interface CoworkValueEstimate {
   addressableDocuments: number;
   hoursPerMonthLow: number;
   hoursPerMonthHigh: number;
-  /** Null when no fully-loaded hourly cost was configured. The tool does not invent money. */
-  currencyPerMonthLow: number | null;
-  currencyPerMonthHigh: number | null;
-  currencyCode: string | null;
+  // No monetary fields: this estimate is modelled, and currency is reported only against idle
+  // licence spend, which is measured. See CoworkValueEstimate in CopilotAdoptionCoworkModels.cs.
   assumptions: string[];
 }
 
