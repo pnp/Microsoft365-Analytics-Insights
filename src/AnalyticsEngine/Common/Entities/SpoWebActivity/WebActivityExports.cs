@@ -37,12 +37,14 @@ namespace Common.Entities.SpoWebActivity
         }
 
         /// <summary>
-        /// Every page export shares one column set.
+        /// The full page statistics, for the most-viewed export.
         /// </summary>
         /// <remarks>
-        /// The top-pages, quiet-pages, slow-pages, entry-pages and exit-pages exports differ only in
-        /// which rows they carry and how they are ordered. Giving them different shapes would make them
-        /// impossible to compare in a spreadsheet, which is the only reason anyone exports them.
+        /// Only for exports whose query actually computes entries, exits and bounces. The
+        /// slow-page and quiet-page queries do not - they hard-code those columns to zero because
+        /// ranking by load time or by obscurity does not need an ordered pass over each visit - and
+        /// exporting a placeholder zero under a heading like "Bounces" states a fact the query never
+        /// established.
         /// </remarks>
         public static IReadOnlyList<CsvColumn<WebActivityPageRow>> PageColumns()
         {
@@ -60,6 +62,60 @@ namespace Common.Entities.SpoWebActivity
                 new CsvColumn<WebActivityPageRow>("Bounces (entered and left without going further)", r => r.Bounces),
                 new CsvColumn<WebActivityPageRow>("Bounce rate (% of entries)", r => r.BouncePct),
             };
+        }
+
+        /// <summary>
+        /// Traffic and timing only, for the slow-page and quiet-page exports.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately omits entries, exits and bounces: those queries do not compute them, so the
+        /// model carries zeros. A spreadsheet column of zeros under "Bounces" is indistinguishable
+        /// from a measurement, and someone pruning content would act on it.
+        /// </remarks>
+        public static IReadOnlyList<CsvColumn<WebActivityPageRow>> PageTrafficColumns()
+        {
+            return new List<CsvColumn<WebActivityPageRow>>
+            {
+                new CsvColumn<WebActivityPageRow>("Page title", r => r.Title),
+                new CsvColumn<WebActivityPageRow>("URL", r => r.Url),
+                new CsvColumn<WebActivityPageRow>("Site", r => r.Site),
+                new CsvColumn<WebActivityPageRow>("Page views", r => r.PageViews),
+                new CsvColumn<WebActivityPageRow>("Unique page views (once per visit)", r => r.UniquePageViews),
+                new CsvColumn<WebActivityPageRow>("Average seconds on page", r => r.AverageSecondsOnPage),
+                new CsvColumn<WebActivityPageRow>("Average load seconds", r => r.AverageLoadSeconds),
+            };
+        }
+
+        /// <summary>
+        /// The entry-page and exit-page exports.
+        /// </summary>
+        /// <remarks>
+        /// <paramref name="valueHeading"/> names what the count column holds. Those queries filter to
+        /// a visit's first or last page view before aggregating, so the count is ENTRIES or EXITS -
+        /// not the page's total traffic - and a "Page views" heading over it would invite a reader to
+        /// compare it with the most-viewed export, which counts something else.
+        /// </remarks>
+        public static IReadOnlyList<CsvColumn<WebActivityPageRow>> EndpointPageColumns(
+            string valueHeading,
+            bool includeBounce)
+        {
+            var columns = new List<CsvColumn<WebActivityPageRow>>
+            {
+                new CsvColumn<WebActivityPageRow>("Page title", r => r.Title),
+                new CsvColumn<WebActivityPageRow>("URL", r => r.Url),
+                new CsvColumn<WebActivityPageRow>("Site", r => r.Site),
+                new CsvColumn<WebActivityPageRow>(valueHeading, r => r.PageViews),
+                new CsvColumn<WebActivityPageRow>("Average seconds on page", r => r.AverageSecondsOnPage),
+            };
+
+            if (includeBounce)
+            {
+                columns.Add(new CsvColumn<WebActivityPageRow>(
+                    "Bounces (entered and left without going further)", r => r.Bounces));
+                columns.Add(new CsvColumn<WebActivityPageRow>("Bounce rate (% of entries)", r => r.BouncePct));
+            }
+
+            return columns;
         }
 
         /// <summary>The page-to-page steps.</summary>

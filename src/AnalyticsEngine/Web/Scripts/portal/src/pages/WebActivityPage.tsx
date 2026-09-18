@@ -319,10 +319,14 @@ export default function WebActivityPage() {
       {availability && <AvailabilityBar availability={availability} />}
 
       {availability && !availability.available && (
-        <MessageBar intent="warning" style={{ marginTop: '12px' }}>
+        <MessageBar
+          intent={availability.collectionStatusKnown ? 'warning' : 'error'}
+          style={{ marginTop: '12px' }}
+        >
           <MessageBarBody>
-            No SharePoint page views have been collected, so this page has nothing to report. The
-            details above say exactly what to enable or deploy.
+            {availability.collectionStatusKnown
+              ? 'No SharePoint page views have been collected, so this page has nothing to report. The details above say exactly what to enable or deploy.'
+              : 'Whether any page views have been collected could not be determined - the check against the page-hit table failed. This is not evidence that the tracker is broken, so do not redeploy it on the strength of this message; the details above say where to look first.'}
           </MessageBarBody>
         </MessageBar>
       )}

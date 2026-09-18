@@ -365,6 +365,19 @@ namespace Tests.UnitTests
             var result = WebActivityScoring.Judgements(off);
             Assert.AreEqual(1, result.Count, "Nothing else can be said when nothing is being collected.");
             Assert.AreEqual("import-off", result[0].Key);
+            StringAssert.Contains(result[0].Headline, "switched off");
+
+            // Same false toggle, different cause: when configuration could not be READ, every flag
+            // defaults to false, and asserting the import is switched off sends an admin to the
+            // installer instead of to the configuration that will not load.
+            var unreadable = Healthy();
+            unreadable.WebTrafficAvailable = false;
+            unreadable.ConfigurationReadable = false;
+            var unreadableResult = WebActivityScoring.Judgements(unreadable);
+            Assert.AreEqual(1, unreadableResult.Count);
+            Assert.AreEqual("import-off", unreadableResult[0].Key);
+            StringAssert.Contains(unreadableResult[0].Headline, "could not be read");
+            Assert.IsFalse(unreadableResult[0].Headline.Contains("switched off"));
 
             var empty = Healthy();
             empty.PageViews = 0;

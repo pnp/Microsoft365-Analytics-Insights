@@ -28,7 +28,11 @@ describe('webActivityShared thresholds', () => {
   // These MUST match WebActivityScoring on the server. The server decides the tone of its own
   // judgements and the client decides the tone of the KPI cards; if they drift, the page states a
   // figure is healthy next to a red card and nothing else on it can be trusted.
-  it('matches the server band boundaries', () => {
+  //
+  // This pins the CLIENT half only - nothing here can see the C# constants, so it catches an
+  // accidental edit to these literals, not server drift. Changing a boundary means changing it in
+  // WebActivityScoring.cs, here, and in this test, deliberately.
+  it('pins the client band boundaries against accidental edits', () => {
     expect(HIGH_BOUNCE_PCT).toBe(60);
     expect(HEALTHY_BOUNCE_PCT).toBe(40);
     expect(LOW_REACH_PCT).toBe(25);

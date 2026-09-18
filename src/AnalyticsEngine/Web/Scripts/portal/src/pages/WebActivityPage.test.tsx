@@ -50,6 +50,7 @@ const availability = (over: Partial<WebActivityAvailability> = {}): WebActivityA
   lastHitUtc: '2026-03-20T09:00:00Z',
   searchAvailable: true,
   clickTrackingAvailable: true,
+  collectionStatusKnown: true,
   available: true,
   reasons: [],
   ...over,
@@ -291,6 +292,26 @@ describe('WebActivityPage', () => {
     await screen.findByText(/No SharePoint page views have been collected/);
     fireEvent.click(screen.getByRole('button', { name: /Show what is missing/ }));
     await screen.findByText(/Add the AI Tracker app/);
+  });
+
+  it('does not blame the tracker when the collection check itself failed', async () => {
+    mockAvailability.mockResolvedValue(
+      availability({
+        hasAnyHits: false,
+        lastHitUtc: null,
+        collectionStatusKnown: false,
+        available: false,
+        reasons: ['Whether any page view has ever arrived could not be determined.'],
+      }),
+    );
+
+    renderWithProvider(<WebActivityPage />);
+
+    // "Nothing was collected" and "we could not tell" need completely different advice: the first
+    // sends an admin to redeploy the tracker across every site collection, and giving that advice
+    // because a query timed out costs a day and fixes nothing.
+    await screen.findByText(/could not be determined/);
+    expect(screen.queryByText(/No SharePoint page views have been collected/)).not.toBeInTheDocument();
   });
 
   it('exports the quiet-page list for the period on screen', async () => {

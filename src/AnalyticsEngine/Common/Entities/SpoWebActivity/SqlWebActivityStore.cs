@@ -266,6 +266,7 @@ namespace Common.Entities.SpoWebActivity
             {
                 WebTrafficAvailable = sources.WebTraffic,
                 SearchAvailable = search.Searches > 0,
+                ConfigurationReadable = sources.Readable,
                 DirectoryImported = sources.UserMetadata,
                 PageViews = kpi.PageViews,
                 Visits = kpi.Visits,

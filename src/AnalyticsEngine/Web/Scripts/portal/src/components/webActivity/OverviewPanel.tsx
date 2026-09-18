@@ -113,8 +113,8 @@ export default function OverviewPanel({
         how:
           'Mean of the page load time the tracker reports per view, in seconds. Views where the '
           + 'browser did not report a load time are excluded rather than counted as zero, and a dash '
-          + 'means none reported one. The mean hides the slow tail - the Technology tab carries the '
-          + '95th percentile. Average time on page ' + DWELL_CAVEAT.charAt(0).toLowerCase()
+          + 'means none reported one. The mean hides the slow tail: the Technology tab carries the '
+          + '95th percentile, and the Page views tab ranks the slowest pages. Average time on page ' + DWELL_CAVEAT.charAt(0).toLowerCase()
           + DWELL_CAVEAT.slice(1),
       },
     },

@@ -85,7 +85,7 @@ namespace Web.AnalyticsWeb.Controllers
                 // A throwing AppConfig must not take the page down with a 500 - but it must also not
                 // be reported as "every import is switched off", which reads as a deliberate setting
                 // and sends an admin to the installer instead of to the broken configuration.
-                sources = new WebActivitySources();
+                sources = new WebActivitySources { Readable = false };
                 configurationReadable = false;
             }
 
@@ -232,7 +232,7 @@ namespace Web.AnalyticsWeb.Controllers
                 {
                     var pages = await _store.GetPagesAsync(query).ConfigureAwait(false);
                     failure = ErrorFor(pages, "pages-quiet");
-                    csv = CsvSerialiser.ToBytes(pages.QuietPages, WebActivityExports.PageColumns());
+                    csv = CsvSerialiser.ToBytes(pages.QuietPages, WebActivityExports.PageTrafficColumns());
                     break;
                 }
 
@@ -240,7 +240,7 @@ namespace Web.AnalyticsWeb.Controllers
                 {
                     var pages = await _store.GetPagesAsync(query).ConfigureAwait(false);
                     failure = ErrorFor(pages, "pages-slowest");
-                    csv = CsvSerialiser.ToBytes(pages.SlowestPages, WebActivityExports.PageColumns());
+                    csv = CsvSerialiser.ToBytes(pages.SlowestPages, WebActivityExports.PageTrafficColumns());
                     break;
                 }
 
@@ -248,7 +248,9 @@ namespace Web.AnalyticsWeb.Controllers
                 {
                     var journeys = await _store.GetJourneysAsync(query).ConfigureAwait(false);
                     failure = ErrorFor(journeys, "journeys-entry");
-                    csv = CsvSerialiser.ToBytes(journeys.EntryPages, WebActivityExports.PageColumns());
+                    csv = CsvSerialiser.ToBytes(
+                        journeys.EntryPages,
+                        WebActivityExports.EndpointPageColumns("Visits entering here", includeBounce: true));
                     break;
                 }
 
@@ -256,7 +258,9 @@ namespace Web.AnalyticsWeb.Controllers
                 {
                     var journeys = await _store.GetJourneysAsync(query).ConfigureAwait(false);
                     failure = ErrorFor(journeys, "journeys-exit");
-                    csv = CsvSerialiser.ToBytes(journeys.ExitPages, WebActivityExports.PageColumns());
+                    csv = CsvSerialiser.ToBytes(
+                        journeys.ExitPages,
+                        WebActivityExports.EndpointPageColumns("Visits ending here", includeBounce: false));
                     break;
                 }
 
@@ -334,7 +338,9 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch (Exception)
             {
-                return new WebActivitySources();
+                // Readable = false, so the page says the toggles could not be read rather than
+                // asserting that every import is deliberately switched off.
+                return new WebActivitySources { Readable = false };
             }
         }
 

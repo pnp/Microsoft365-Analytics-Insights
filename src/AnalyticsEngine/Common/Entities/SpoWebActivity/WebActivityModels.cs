@@ -469,8 +469,12 @@ namespace Common.Entities.SpoWebActivity
         public long Visits { get; set; }
         public int Visitors { get; set; }
         public int Countries { get; set; }
-        public int Cities { get; set; }
-        public int Provinces { get; set; }
+
+        /// <summary>Distinct (city, country) pairs - the city lookup is keyed on name alone.</summary>
+        public long Cities { get; set; }
+
+        /// <summary>Distinct (region, country) pairs.</summary>
+        public long Provinces { get; set; }
 
         /// <summary>Page views whose location the tracker could not resolve.</summary>
         public long UnknownLocationPageViews { get; set; }

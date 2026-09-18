@@ -571,8 +571,14 @@ namespace Tests.UnitTests
             var geography = await NewStore().GetGeographyAsync(NewQuery());
 
             Assert.AreEqual(1, geography.Kpis.Countries);
-            Assert.AreEqual(1, geography.Kpis.Cities);
-            Assert.AreEqual(1, geography.Kpis.Provinces);
+
+            // TWO (city, country) pairs, from ONE city lookup row. dbo.cities is keyed on the name
+            // alone, so London, UK and London, Ontario would share a row - and here the city-only
+            // page view pairs the same London with an unknown country. Counting distinct city rows
+            // would say "1 city" above a list showing two, and on a multi-country tenant would merge
+            // two real cities' traffic under whichever country id happened to be larger.
+            Assert.AreEqual(2, geography.Kpis.Cities);
+            Assert.AreEqual(2, geography.Kpis.Provinces);
             Assert.AreEqual(11, geography.Kpis.LocatedPageViews);
 
             // Each list's share is against the page views that resolved to THAT attribute. A page
@@ -593,8 +599,14 @@ namespace Tests.UnitTests
             // city-only page view belongs to neither this row nor its denominator.
             Assert.AreEqual(100, geography.Countries[0].SharePct, 0.01);
 
-            // A city carries its country so two same-named cities can be told apart.
+            // A city carries its country so two same-named cities can be told apart - and the
+            // city-only page view appears as the same city with no country rather than being folded
+            // into the United Kingdom row.
+            Assert.AreEqual(2, geography.Cities.Count);
             Assert.AreEqual("United Kingdom", geography.Cities[0].Country);
+            Assert.AreEqual(10, geography.Cities[0].PageViews);
+            Assert.IsNull(geography.Cities[1].Country);
+            Assert.AreEqual(1, geography.Cities[1].PageViews);
         }
 
         [TestMethod]

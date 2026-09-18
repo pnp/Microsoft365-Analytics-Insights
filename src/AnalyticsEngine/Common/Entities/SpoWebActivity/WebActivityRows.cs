@@ -195,8 +195,19 @@ namespace Common.Entities.SpoWebActivity
         public class GeographyKpiRow
         {
             public int Countries { get; set; }
-            public int Cities { get; set; }
-            public int Provinces { get; set; }
+
+            /// <summary>
+            /// Distinct (city, country) pairs, not distinct city rows.
+            /// </summary>
+            /// <remarks>
+            /// <c>dbo.cities</c> is keyed on the name alone, so London, UK and London, Ontario share
+            /// one row. The leaderboard splits them by country, so the count has to as well or it
+            /// would disagree with the list beneath it.
+            /// </remarks>
+            public long Cities { get; set; }
+
+            /// <summary>Distinct (region, country) pairs, for the same reason as <see cref="Cities"/>.</summary>
+            public long Provinces { get; set; }
 
             /// <summary>Page views that resolved to a country - the denominator of the country shares.</summary>
             public long CountryPageViews { get; set; }

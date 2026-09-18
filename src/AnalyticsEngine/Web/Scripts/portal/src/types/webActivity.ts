@@ -88,6 +88,11 @@ export interface WebActivityAvailability {
   lastHitUtc: string | null;
   searchAvailable: boolean;
   clickTrackingAvailable: boolean;
+  /**
+   * False when the check against the page-hit table FAILED, so hasAnyHits and lastHitUtc mean
+   * "could not tell" rather than "nothing collected". The two need completely different advice.
+   */
+  collectionStatusKnown: boolean;
   available: boolean;
   reasons: string[];
 }
@@ -229,6 +234,7 @@ export interface WebActivityGeographyKpis {
   visits: number;
   visitors: number;
   countries: number;
+  /** Distinct (city, country) pairs - the city lookup is keyed on name alone. */
   cities: number;
   provinces: number;
   unknownLocationPageViews: number;

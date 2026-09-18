@@ -421,7 +421,7 @@ TopSites AS (
     FROM H AS h
     WHERE h.web_id IS NOT NULL
     GROUP BY h.web_id
-    ORDER BY COUNT_BIG(*) DESC
+    ORDER BY COUNT_BIG(*) DESC, h.web_id ASC
 )
 SELECT " + "DATEADD(DAY, -(DATEDIFF(DAY, 0, h.hit_timestamp) % 7), CAST(h.hit_timestamp AS date))" + @" AS WeekStart,
        CAST(ISNULL(w.title, w.url_base) AS nvarchar(300)) AS Name,
@@ -806,7 +806,7 @@ FROM dbo.hits_clicked_elements AS c
 LEFT JOIN dbo.hits_clicked_element_titles AS t ON t.id = c.element_title_id
 WHERE c.[timestamp] >= @from AND c.[timestamp] < @to
 GROUP BY CAST(ISNULL(t.name, N'(untitled element)') AS nvarchar(200))
-ORDER BY COUNT_BIG(*) DESC
+ORDER BY COUNT_BIG(*) DESC, CAST(ISNULL(t.name, N'(untitled element)') AS nvarchar(200)) ASC
 OPTION (RECOMPILE);";
 
         /// <summary>How many element clicks were recorded at all, so an empty list can be explained.</summary>
@@ -828,6 +828,11 @@ OPTION (RECOMPILE);";
         /// </remarks>
         public static string ByPlace(string keyColumn, string lookupTable, string nameColumn, bool withCountry)
         {
+            // A city or province lookup is keyed on its NAME alone, so London, UK and London, Ontario
+            // share one row. Grouping by the place id only would merge their traffic and then label
+            // the result with whichever country id happened to be larger. Grouping by the pair keeps
+            // them apart - which is the whole reason the UI shows a country column beside the city.
+            var groupKey = withCountry ? "h." + keyColumn + ", h.country_id" : "h." + keyColumn;
             var countrySelect = withCountry
                 ? "CAST(c.country_name AS nvarchar(250))"
                 : "CAST(NULL AS nvarchar(250))";
@@ -836,25 +841,30 @@ OPTION (RECOMPILE);";
                 ? "LEFT JOIN dbo.countries AS c ON c.id = g.CountryId"
                 : string.Empty;
 
-            var countryGroup = withCountry ? "MAX(h.country_id)" : "CAST(NULL AS int)";
+            var countryProjection = withCountry ? "h.country_id" : "CAST(NULL AS int)";
+            var visitorJoin = withCountry
+                ? "ON vi.PlaceId = g.PlaceId AND ISNULL(vi.CountryId, -1) = ISNULL(g.CountryId, -1)"
+                : "ON vi.PlaceId = g.PlaceId";
 
             return @"
 WITH" + HitWindowCte + @",
 Grouped AS (
     SELECT h." + keyColumn + @" AS PlaceId,
-           " + countryGroup + @"          AS CountryId,
+           " + countryProjection + @"          AS CountryId,
            COUNT_BIG(*)                   AS PageViews,
            COUNT(DISTINCT h.session_id)   AS Visits
     FROM H AS h
     WHERE h." + keyColumn + @" IS NOT NULL
-    GROUP BY h." + keyColumn + @"
+    GROUP BY " + groupKey + @"
 ),
 Visitors AS (
-    SELECT h." + keyColumn + @" AS PlaceId, COUNT(DISTINCT s.user_id) AS Visitors
+    SELECT h." + keyColumn + @" AS PlaceId,
+           " + countryProjection + @"          AS CountryId,
+           COUNT(DISTINCT s.user_id)      AS Visitors
     FROM H AS h
     INNER JOIN dbo.sessions AS s ON s.id = h.session_id
     WHERE h." + keyColumn + @" IS NOT NULL
-    GROUP BY h." + keyColumn + @"
+    GROUP BY " + groupKey + @"
 )
 SELECT TOP (@top)
        CAST(lk." + nameColumn + @" AS nvarchar(250)) AS Name,
@@ -865,8 +875,8 @@ SELECT TOP (@top)
 FROM Grouped AS g
 INNER JOIN dbo." + lookupTable + @" AS lk ON lk.id = g.PlaceId
 " + countryJoin + @"
-LEFT JOIN Visitors AS vi ON vi.PlaceId = g.PlaceId
-ORDER BY g.PageViews DESC
+LEFT JOIN Visitors AS vi " + visitorJoin + @"
+ORDER BY g.PageViews DESC, g.PlaceId ASC
 OPTION (RECOMPILE);";
         }
 
@@ -875,8 +885,10 @@ OPTION (RECOMPILE);";
 WITH" + HitWindowCte + @"
 SELECT
     (SELECT COUNT(DISTINCT h.country_id) FROM H AS h WHERE h.country_id IS NOT NULL)                   AS Countries,
-    (SELECT COUNT(DISTINCT h.city_id) FROM H AS h WHERE h.city_id IS NOT NULL)                         AS Cities,
-    (SELECT COUNT(DISTINCT h.location_province_id) FROM H AS h WHERE h.location_province_id IS NOT NULL) AS Provinces,
+    (SELECT COUNT_BIG(*) FROM (SELECT DISTINCT h.city_id, h.country_id FROM H AS h
+                               WHERE h.city_id IS NOT NULL) AS c)                                       AS Cities,
+    (SELECT COUNT_BIG(*) FROM (SELECT DISTINCT h.location_province_id, h.country_id FROM H AS h
+                               WHERE h.location_province_id IS NOT NULL) AS p)                         AS Provinces,
     (SELECT COUNT_BIG(*) FROM H AS h WHERE h.country_id IS NOT NULL)                                   AS CountryPageViews,
     (SELECT COUNT_BIG(*) FROM H AS h WHERE h.city_id IS NOT NULL)                                      AS CityPageViews,
     (SELECT COUNT_BIG(*) FROM H AS h WHERE h.location_province_id IS NOT NULL)                         AS ProvincePageViews,
@@ -894,7 +906,7 @@ TopCountries AS (
     FROM H AS h
     WHERE h.country_id IS NOT NULL
     GROUP BY h.country_id
-    ORDER BY COUNT_BIG(*) DESC
+    ORDER BY COUNT_BIG(*) DESC, h.country_id ASC
 )
 SELECT " + "DATEADD(DAY, -(DATEDIFF(DAY, 0, h.hit_timestamp) % 7), CAST(h.hit_timestamp AS date))" + @" AS WeekStart,
        CAST(c.country_name AS nvarchar(250)) AS Name,
@@ -1093,7 +1105,7 @@ SELECT TOP (@top)
 FROM Context AS c
 INNER JOIN dbo.webs AS w ON w.id = c.web_id
 GROUP BY CAST(ISNULL(w.title, w.url_base) AS nvarchar(300))
-ORDER BY COUNT_BIG(*) DESC
+ORDER BY COUNT_BIG(*) DESC, CAST(ISNULL(w.title, w.url_base) AS nvarchar(300)) ASC
 OPTION (RECOMPILE);";
 
         #endregion
@@ -1154,13 +1166,28 @@ ORDER BY Bucket
 OPTION (RECOMPILE);";
 
         /// <summary>Weekly page views by device, for the mobile-share trend.</summary>
+        /// <remarks>
+        /// Capped to the busiest devices, like the site and country stacks. Uncapped it would emit a
+        /// band per distinct <c>client_Model</c> - which is model-specific for phones, so hundreds of
+        /// them on a real estate - producing a large payload and a chart that cannot answer the
+        /// question its caption asks. The mobile SHARE is still computed from the untruncated
+        /// <see cref="DeviceTotals"/>, so capping the chart cannot bias that figure.
+        /// </remarks>
         public const string DeviceOverTime = @"
-WITH" + HitWindowCte + @"
+WITH" + HitWindowCte + @",
+TopDevices AS (
+    SELECT TOP (@top) h.device_id
+    FROM H AS h
+    WHERE h.device_id IS NOT NULL
+    GROUP BY h.device_id
+    ORDER BY COUNT_BIG(*) DESC, h.device_id ASC
+)
 SELECT " + "DATEADD(DAY, -(DATEDIFF(DAY, 0, h.hit_timestamp) % 7), CAST(h.hit_timestamp AS date))" + @" AS WeekStart,
        CAST(ISNULL(d.device_name, '(unknown)') AS nvarchar(200)) AS Name,
        COUNT_BIG(*) AS Count
 FROM H AS h
-LEFT JOIN dbo.devices AS d ON d.id = h.device_id
+INNER JOIN TopDevices AS t ON t.device_id = h.device_id
+INNER JOIN dbo.devices AS d ON d.id = h.device_id
 GROUP BY " + "DATEADD(DAY, -(DATEDIFF(DAY, 0, h.hit_timestamp) % 7), CAST(h.hit_timestamp AS date))" + @",
          CAST(ISNULL(d.device_name, '(unknown)') AS nvarchar(200))
 ORDER BY WeekStart, Name

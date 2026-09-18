@@ -9,7 +9,13 @@ import {
   MessageBarBody,
   MessageBarTitle,
 } from '@fluentui/react-components';
-import { ChevronDown16Regular, ChevronRight16Regular, CheckmarkCircle16Regular, Dismiss16Regular } from '@fluentui/react-icons';
+import {
+  ChevronDown16Regular,
+  ChevronRight16Regular,
+  CheckmarkCircle16Regular,
+  Dismiss16Regular,
+  Question16Regular,
+} from '@fluentui/react-icons';
 import type { WebActivityAvailability } from '../../types/webActivity';
 import { formatDate } from './webActivityShared';
 
@@ -60,7 +66,7 @@ export default function AvailabilityBar({ availability }: { availability: WebAct
   const styles = useStyles();
   const [expanded, setExpanded] = useState(false);
 
-  const sources: { label: string; on: boolean; detail?: string }[] = [
+  const sources: { label: string; on: boolean; unknown?: boolean; detail?: string }[] = [
     { label: 'Web traffic import', on: availability.webTrafficAvailable },
     { label: 'Application Insights', on: availability.appInsightsConfigured },
     {
@@ -83,11 +89,19 @@ export default function AvailabilityBar({ availability }: { availability: WebAct
           <Badge
             key={source.label}
             appearance="tint"
-            color={source.on ? 'success' : 'informative'}
-            icon={source.on ? <CheckmarkCircle16Regular /> : <Dismiss16Regular />}
+            color={source.unknown ? 'warning' : source.on ? 'success' : 'informative'}
+            icon={
+              source.unknown ? (
+                <Question16Regular />
+              ) : source.on ? (
+                <CheckmarkCircle16Regular />
+              ) : (
+                <Dismiss16Regular />
+              )
+            }
             title={source.detail}
           >
-            {source.label}: {source.on ? 'on' : 'off'}
+            {source.label}: {source.unknown ? 'unknown' : source.on ? 'on' : 'off'}
             {source.detail ? ` \u2013 ${source.detail}` : ''}
           </Badge>
         ))}

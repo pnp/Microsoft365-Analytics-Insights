@@ -28,6 +28,17 @@ namespace Common.Entities.SpoWebActivity
         /// <summary>An Application Insights connection string is configured, without which nothing is imported.</summary>
         public bool AppInsightsConfigured { get; set; }
 
+        /// <summary>
+        /// False when application configuration could not be read at all.
+        /// </summary>
+        /// <remarks>
+        /// Every other flag on this object defaults to false, so an unreadable configuration is
+        /// indistinguishable from one with every import switched off - and the page would then tell
+        /// an admin their web-traffic import is disabled, sending them to the installer rather than
+        /// to the configuration that will not load. This says which.
+        /// </remarks>
+        public bool Readable { get; set; } = true;
+
         /// <summary>Reads the toggles from application configuration.</summary>
         public static WebActivitySources FromConfig(AppConfig config)
         {

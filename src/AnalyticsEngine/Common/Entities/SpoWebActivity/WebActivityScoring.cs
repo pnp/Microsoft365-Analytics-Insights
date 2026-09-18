@@ -423,10 +423,17 @@ namespace Common.Entities.SpoWebActivity
                 {
                     Key = "import-off",
                     Tone = "warning",
-                    Headline = "The web-traffic import is switched off",
-                    Detail = "Nothing on this page can be measured until the SharePoint page-view tracker is "
-                        + "collecting hits. Enable the web traffic import in the installer and deploy the "
-                        + "AI Tracker to the sites you want reported on.",
+                    Headline = inputs.ConfigurationReadable
+                        ? "The web-traffic import is switched off"
+                        : "Application configuration could not be read",
+                    Detail = inputs.ConfigurationReadable
+                        ? "Nothing on this page can be measured until the SharePoint page-view tracker is "
+                            + "collecting hits. Enable the web traffic import in the installer and deploy the "
+                            + "AI Tracker to the sites you want reported on."
+                        : "The import toggles cannot be read, so whether the web-traffic import is on is "
+                            + "unknown - it is NOT necessarily switched off. Any figures below came from data "
+                            + "that is already in the database. Fix the configuration before changing anything "
+                            + "in the installer.",
                 });
 
                 return judgements;
@@ -552,14 +559,14 @@ namespace Common.Entities.SpoWebActivity
                 Tone = tone,
                 Headline = headline,
                 Detail = average >= SlowLoadSeconds
-                    ? "That is slow enough for people to feel it. The Technology tab ranks the slowest pages "
-                        + "and shows whether it is specific to a browser or device, which is the first thing "
-                        + "to rule out."
+                    ? "That is slow enough for people to feel it. The Page views tab ranks the slowest "
+                        + "pages; the Technology tab shows whether it is specific to a browser or device, "
+                        + "which is the first thing to rule out."
                     : tailIsBad
                         ? "The average is fine but the slow tail is not, and the tail is what a complaining "
-                            + "minority is describing. Start from the slowest pages on the Technology tab."
+                            + "minority is describing. Start from the slowest pages on the Page views tab."
                         : average > FastLoadSeconds
-                            ? "Acceptable, with headroom. Check the slowest pages on the Technology tab before "
+                            ? "Acceptable, with headroom. Check the slowest pages on the Page views tab before "
                                 + "the list grows."
                             : tail.HasValue
                                 // Only claim the tail is fine when the tail was actually measured. The
@@ -660,6 +667,11 @@ namespace Common.Entities.SpoWebActivity
     {
         public bool WebTrafficAvailable { get; set; }
         public bool SearchAvailable { get; set; }
+
+        /// <summary>
+        /// False when configuration could not be read, so every toggle reads as off by default.
+        /// </summary>
+        public bool ConfigurationReadable { get; set; } = true;
 
         /// <summary>True when the directory is a real population rather than "users we have seen".</summary>
         public bool DirectoryImported { get; set; }
