@@ -210,7 +210,8 @@ export interface WebActivityJourneyKpis {
   bouncePct: number;
   pagesPerVisit: number;
   medianPagesPerVisit: number;
-  averageVisitSeconds: number;
+  /** Null when no visit reported a dwell time - not a zero-second visit. */
+  averageVisitSeconds: number | null;
   clicks: number;
 }
 
@@ -234,6 +235,10 @@ export interface WebActivityGeographyKpis {
   unknownLocationPct: number;
   /** Page views that DID resolve to a place - the denominator every place share is against. */
   locatedPageViews: number;
+  /** Page views that resolved to a COUNTRY - the country chart's denominator. */
+  countryPageViews: number;
+  cityPageViews: number;
+  provincePageViews: number;
 }
 
 export interface WebActivityPlaceRow {
@@ -263,6 +268,8 @@ export interface WebActivitySearchKpis {
   strugglingVisits: number;
   deadEndSearches: number;
   deadEndPct: number;
+  /** The grace window the dead-end measure uses, so the UI never states a stale number. */
+  deadEndGraceSeconds: number;
 }
 
 export interface WebActivitySearchTermRow {

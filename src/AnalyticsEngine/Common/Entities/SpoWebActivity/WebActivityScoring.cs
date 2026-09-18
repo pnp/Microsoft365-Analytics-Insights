@@ -126,13 +126,14 @@ namespace Common.Entities.SpoWebActivity
         /// True when <paramref name="windowDays"/> is long enough for every segment to be reachable.
         /// </summary>
         /// <remarks>
-        /// "Rare" needs a visitor with at least two active days to fall below
-        /// <see cref="OccasionalVisitorShare"/>, so the window must have at least 2 / 0.08 = 25 days.
+        /// "Rare" needs a visitor with at least two active days to fall STRICTLY below
+        /// <see cref="OccasionalVisitorShare"/>, so the window must be longer than 2 / 0.08 = 25 days
+        /// - at exactly 25 days the ratio equals the threshold and lands in "Occasional" instead.
         /// Below that the mix genuinely cannot distinguish the lower bands, and the UI explains that
         /// rather than presenting an unreachable empty band as a finding.
         /// </remarks>
         public static bool SegmentsFullyReachable(int windowDays) =>
-            windowDays >= (int)Math.Ceiling(2 / OccasionalVisitorShare);
+            windowDays > 2 / OccasionalVisitorShare;
 
         /// <summary>Segments in the order they should be displayed - most engaged first.</summary>
         public static readonly IReadOnlyList<string> VisitorSegments =
@@ -519,7 +520,15 @@ namespace Common.Entities.SpoWebActivity
                         : average > FastLoadSeconds
                             ? "Acceptable, with headroom. Check the slowest pages on the Technology tab before "
                                 + "the list grows."
-                            : "Page load is comfortably fast, at the average and in the slow tail.",
+                            : tail.HasValue
+                                // Only claim the tail is fine when the tail was actually measured. The
+                                // percentile comes from its own query, which can fail while this one
+                                // succeeds - and "comfortably fast in the slow tail" is exactly the
+                                // reassurance a reader should not be given about a figure nobody read.
+                                ? "Page load is comfortably fast, at the average and in the slow tail."
+                                : "Page load is comfortably fast on average. The slow tail could not be "
+                                    + "measured for this period, so check the Technology tab before "
+                                    + "concluding it is fast for everyone.",
             };
         }
 

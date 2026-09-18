@@ -142,6 +142,7 @@ const search = (over: Partial<WebActivitySearch> = {}): WebActivitySearch => ({
     strugglingVisits: 40,
     deadEndSearches: 210,
     deadEndPct: 23.3,
+    deadEndGraceSeconds: 5,
   },
   topTerms: [{ term: 'expenses', searches: 120, searchers: 90, deadEnds: 5, deadEndPct: 4.2 }],
   deadEndTerms: [],

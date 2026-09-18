@@ -312,7 +312,7 @@ OPTION (RECOMPILE);";
         public const string VisitDepth = @"
 WITH" + HitWindowCte + @",
 " + VisitCte + @"
-SELECT v.PageViews AS Pages, COUNT_BIG(*) AS Visits, ISNULL(SUM(v.Seconds), 0) AS Seconds
+SELECT v.PageViews AS Pages, COUNT_BIG(*) AS Visits, SUM(v.Seconds) AS Seconds
 FROM V AS v
 GROUP BY v.PageViews
 ORDER BY v.PageViews
@@ -361,8 +361,20 @@ OPTION (RECOMPILE);";
 
         #region Sites
 
-        /// <summary>Traffic per SharePoint web, for the site leaderboards on Overview, Visits and Pages.</summary>
-        public const string BySite = @"
+        /// <summary>
+        /// Traffic per SharePoint web, for the site leaderboards on Overview, Visits and Pages.
+        /// </summary>
+        /// <remarks>
+        /// Ranked by the measure the caller actually displays. A leaderboard that selects its top N
+        /// by page views and then prints visit counts can omit the site with the MOST visits - a busy
+        /// site with shallow sessions loses to a quiet one with deep ones - and is not even sorted by
+        /// the number on screen.
+        /// </remarks>
+        public static string BySite(bool rankByVisits)
+        {
+            var order = rankByVisits ? "g.Visits DESC, g.PageViews DESC" : "g.PageViews DESC, g.Visits DESC";
+
+            return @"
 WITH" + HitWindowCte + @",
 Grouped AS (
     SELECT h.web_id,
@@ -397,8 +409,9 @@ FROM Grouped AS g
 INNER JOIN dbo.webs AS w ON w.id = g.web_id
 LEFT JOIN Upv AS up ON up.web_id = g.web_id
 LEFT JOIN Visitors AS vi ON vi.web_id = g.web_id
-ORDER BY g.PageViews DESC
+ORDER BY " + order + @"
 OPTION (RECOMPILE);";
+        }
 
         /// <summary>Weekly visits for each of the busiest sites, for the stacked site-over-time chart.</summary>
         public const string SiteOverTime = @"
@@ -465,9 +478,21 @@ OPTION (RECOMPILE);";
         /// One statement shaped by its lookup table rather than three near-identical constants, so the
         /// three cannot drift. The lookup name and its key column are supplied by the call site from a
         /// fixed set - they are never taken from a request - so no user input reaches the SQL text.
+        ///
+        /// <para>
+        /// Ranked by the measure the caller displays. Selecting the top N by page views and then
+        /// printing visit counts can omit the browser or device with the MOST visits, and leaves the
+        /// list not even sorted by the number on screen.
+        /// </para>
         /// </remarks>
-        public static string ByClientAttribute(string lookupTable, string keyColumn, string nameColumn)
+        public static string ByClientAttribute(
+            string lookupTable,
+            string keyColumn,
+            string nameColumn,
+            bool rankByVisits = false)
         {
+            var order = rankByVisits ? "g.Visits DESC, g.PageViews DESC" : "g.PageViews DESC, g.Visits DESC";
+
             return @"
 WITH" + HitWindowCte + @",
 Grouped AS (
@@ -497,7 +522,7 @@ SELECT TOP (@top)
 FROM Grouped AS g
 INNER JOIN dbo." + lookupTable + @" AS lk ON lk.id = g.LookupId
 LEFT JOIN Visitors AS vi ON vi.LookupId = g.LookupId
-ORDER BY g.PageViews DESC
+ORDER BY " + order + @"
 OPTION (RECOMPILE);";
         }
 
@@ -852,6 +877,9 @@ SELECT
     (SELECT COUNT(DISTINCT h.country_id) FROM H AS h WHERE h.country_id IS NOT NULL)                   AS Countries,
     (SELECT COUNT(DISTINCT h.city_id) FROM H AS h WHERE h.city_id IS NOT NULL)                         AS Cities,
     (SELECT COUNT(DISTINCT h.location_province_id) FROM H AS h WHERE h.location_province_id IS NOT NULL) AS Provinces,
+    (SELECT COUNT_BIG(*) FROM H AS h WHERE h.country_id IS NOT NULL)                                   AS CountryPageViews,
+    (SELECT COUNT_BIG(*) FROM H AS h WHERE h.city_id IS NOT NULL)                                      AS CityPageViews,
+    (SELECT COUNT_BIG(*) FROM H AS h WHERE h.location_province_id IS NOT NULL)                         AS ProvincePageViews,
     (SELECT COUNT_BIG(*) FROM H AS h WHERE h.country_id IS NULL AND h.city_id IS NULL)                 AS UnknownLocationPageViews,
     (SELECT COUNT_BIG(*) FROM H AS h)                                                                  AS PageViews,
     (SELECT CAST(COUNT(DISTINCT h.session_id) AS bigint) FROM H AS h WHERE h.session_id IS NOT NULL) AS Visits,

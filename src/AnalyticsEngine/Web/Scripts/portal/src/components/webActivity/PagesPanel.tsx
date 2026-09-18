@@ -212,6 +212,7 @@ export default function PagesPanel({
           <PageTable
             rows={data.quietPages}
             columns={{ site: true, uniquePageViews: true, dwell: true, load: false }}
+            dwellFootnote
           />
         </SectionCard>
 

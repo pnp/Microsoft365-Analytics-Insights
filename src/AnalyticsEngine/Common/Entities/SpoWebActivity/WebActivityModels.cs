@@ -424,8 +424,15 @@ namespace Common.Entities.SpoWebActivity
         /// <summary>Median pages per visit, which a long tail of deep visits cannot inflate.</summary>
         public int MedianPagesPerVisit { get; set; }
 
-        /// <summary>Mean visit length in seconds, summed from the per-page dwell times.</summary>
-        public double AverageVisitSeconds { get; set; }
+        /// <summary>
+        /// Mean visit length in seconds, or null when no visit reported a dwell time.
+        /// </summary>
+        /// <remarks>
+        /// Summed from the per-page dwell times, which exclude each visit's last page - so this
+        /// under-states real visit length, consistently, and is still usable for comparing periods.
+        /// Null rather than zero when nothing was measured: "0s" reads as a finding.
+        /// </remarks>
+        public double? AverageVisitSeconds { get; set; }
 
         /// <summary>Recorded element clicks - only populated when the tracker's click capture is on.</summary>
         public long Clicks { get; set; }
@@ -479,6 +486,23 @@ namespace Common.Entities.SpoWebActivity
         /// much traffic came from the countries it did not list.
         /// </remarks>
         public long LocatedPageViews { get; set; }
+
+        /// <summary>
+        /// Page views that resolved to a COUNTRY - the denominator the country chart and its
+        /// remainder must use.
+        /// </summary>
+        /// <remarks>
+        /// Not the same as <see cref="LocatedPageViews"/>, which also counts a page view that
+        /// resolved to a city but not a country. Using the looser total would quietly fold those
+        /// into an "other countries" slice they do not belong to.
+        /// </remarks>
+        public long CountryPageViews { get; set; }
+
+        /// <summary>Page views that resolved to a city.</summary>
+        public long CityPageViews { get; set; }
+
+        /// <summary>Page views that resolved to a state, province or region.</summary>
+        public long ProvincePageViews { get; set; }
     }
 
     /// <summary>A place, with the traffic that came from it.</summary>
@@ -545,6 +569,15 @@ namespace Common.Entities.SpoWebActivity
         public long DeadEndSearches { get; set; }
 
         public double DeadEndPct { get; set; }
+
+        /// <summary>
+        /// The grace window the dead-end measure uses, in seconds.
+        /// </summary>
+        /// <remarks>
+        /// Published so the UI can state the real threshold instead of repeating a number that drifts
+        /// the moment the constant is tuned - which it already did once.
+        /// </remarks>
+        public int DeadEndGraceSeconds { get; set; }
     }
 
     /// <summary>A search term and how well it worked out.</summary>

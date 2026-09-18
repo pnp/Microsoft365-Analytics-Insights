@@ -146,27 +146,61 @@ namespace Tests.UnitTests
         #region Visitor segments and depth
 
         [TestMethod]
-        public void VisitorSegments_AreAShareOfWorkingDaysNotFixedDayCounts()
+        public void VisitorSegments_AreAShareOfTheWindowsOwnDays()
         {
-            // The same behaviour - visiting on two thirds of the working days - must land in the same
-            // segment over a week as it does over a quarter, or the engagement mix changes meaning
-            // every time the period selector moves.
-            Assert.AreEqual("Daily", WebActivityScoring.VisitorSegment(4, 5));
-            Assert.AreEqual("Daily", WebActivityScoring.VisitorSegment(52, 65));
+            // Active days are counted over CALENDAR dates, so the denominator has to be calendar days
+            // too. Dividing weekend-inclusive active days by weekday-only working days compares two
+            // different day populations, and a weekend-only visitor could exceed 100% of it.
+            Assert.AreEqual("Daily", WebActivityScoring.VisitorSegment(20, 28));
+            Assert.AreEqual("Daily", WebActivityScoring.VisitorSegment(260, 365));
 
-            Assert.AreEqual("None", WebActivityScoring.VisitorSegment(0, 20));
-            Assert.AreEqual("One-off", WebActivityScoring.VisitorSegment(1, 20));
-            Assert.AreEqual("Rare", WebActivityScoring.VisitorSegment(2, 40));
-            Assert.AreEqual("Occasional", WebActivityScoring.VisitorSegment(5, 40));
-            Assert.AreEqual("Regular", WebActivityScoring.VisitorSegment(12, 40));
+            Assert.AreEqual("None", WebActivityScoring.VisitorSegment(0, 28));
+            Assert.AreEqual("One-off", WebActivityScoring.VisitorSegment(1, 28));
+            Assert.AreEqual("Rare", WebActivityScoring.VisitorSegment(2, 28));
+            Assert.AreEqual("Occasional", WebActivityScoring.VisitorSegment(4, 28));
+            Assert.AreEqual("Regular", WebActivityScoring.VisitorSegment(10, 28));
 
-            // A single visit is "One-off" whatever the window length: on a one-week window it would
-            // otherwise be 20% of working days and get called "Occasional", which is a claim about a
-            // habit that one visit cannot support.
-            Assert.AreEqual("One-off", WebActivityScoring.VisitorSegment(1, 5));
+            // A single visit is "One-off" whatever the window length: over a week it would otherwise
+            // be 14% of the period and get called "Occasional", which is a claim about a habit that
+            // one visit cannot support.
+            Assert.AreEqual("One-off", WebActivityScoring.VisitorSegment(1, 7));
 
-            // Never divides by zero, even for a window with no working days at all.
+            // Never divides by zero.
             Assert.AreEqual("Daily", WebActivityScoring.VisitorSegment(2, 0));
+        }
+
+        [TestMethod]
+        public void VisitorSegments_AdmitWhenTheWindowIsTooShortToSeparateThem()
+        {
+            // Over 7 days a visitor has 1-7 active days, so there is no count between "one-off" and
+            // 2/7 = 29%: the Occasional and Rare bands cannot be reached at all. An empty band means
+            // "this period cannot tell", and the page has to say which.
+            var shortWindow = Enumerable.Range(1, 7)
+                .Select(d => WebActivityScoring.VisitorSegment(d, 7))
+                .Distinct()
+                .ToList();
+            CollectionAssert.DoesNotContain(shortWindow, "Occasional");
+            CollectionAssert.DoesNotContain(shortWindow, "Rare");
+            Assert.IsFalse(WebActivityScoring.SegmentsFullyReachable(7));
+
+            // The boundary is STRICT: at exactly 25 days, 2/25 equals the Occasional threshold and
+            // lands in that band, so Rare is still unreachable. 26 is the first window where the
+            // helper's promise actually holds.
+            Assert.IsFalse(WebActivityScoring.SegmentsFullyReachable(25));
+            Assert.IsTrue(WebActivityScoring.SegmentsFullyReachable(26));
+            Assert.AreEqual("Occasional", WebActivityScoring.VisitorSegment(2, 25));
+            Assert.AreEqual("Rare", WebActivityScoring.VisitorSegment(2, 26));
+
+            // Every window the UI actually offers, answered correctly.
+            foreach (var days in WebActivityQuery.AllowedWindowDays)
+            {
+                var reachable = Enumerable.Range(1, days)
+                    .Select(d => WebActivityScoring.VisitorSegment(d, days))
+                    .Distinct()
+                    .ToList();
+                var everyBand = WebActivityScoring.VisitorSegments.All(s => reachable.Contains(s));
+                Assert.AreEqual(everyBand, WebActivityScoring.SegmentsFullyReachable(days), days.ToString());
+            }
         }
 
         [TestMethod]
@@ -360,12 +394,15 @@ namespace Tests.UnitTests
             Assert.AreEqual("warning", judgement.Tone);
             StringAssert.Contains(judgement.Headline, "one view in twenty");
 
-            // With no tail reported the headline must not invent one.
+            // With no tail reported the headline must not invent one - and, more importantly, the
+            // detail must not reassure the reader that the tail is fine. The percentile comes from
+            // its own query, which can fail while the average's query succeeds.
             var meanOnly = Healthy();
             meanOnly.P95LoadSeconds = null;
             var plain = WebActivityScoring.Judgements(meanOnly).Single(j => j.Key == "performance");
             Assert.AreEqual("good", plain.Tone);
             Assert.IsFalse(plain.Headline.Contains("one view in twenty"));
+            StringAssert.Contains(plain.Detail, "could not be measured");
         }
 
         [TestMethod]

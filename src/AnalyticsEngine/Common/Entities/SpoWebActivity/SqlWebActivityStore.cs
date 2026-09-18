@@ -148,7 +148,7 @@ namespace Common.Entities.SpoWebActivity
             var segmentTask = RunAsync<ActiveDaysRow>("overview-segments", WebActivitySql.VisitorActiveDays, query);
             var depthTask = RunAsync<VisitDepthRow>("overview-depth", WebActivitySql.VisitDepth, query);
             var heatTask = RunAsync<HeatCellRow>("overview-heatmap", WebActivitySql.Heatmap, query);
-            var siteTask = RunAsync<SiteRow>("overview-sites", WebActivitySql.BySite, query);
+            var siteTask = RunAsync<SiteRow>("overview-sites", SiteByPageViewsSql, query);
             var deviceTask = RunAsync<NamedCountRow>("overview-devices", WebActivitySql.DeviceTotals, query);
             var distributionTask = RunAsync<PageViewDistributionRow>(
                 "overview-distribution", WebActivitySql.PageViewDistribution, query);
@@ -256,10 +256,10 @@ namespace Common.Entities.SpoWebActivity
 
             var kpiTask = RunAsync<VisitKpiRow>("visits-kpis", WebActivitySql.VisitKpis, query);
             var trendTask = RunAsync<TrendRow>("visits-trend", WebActivitySql.OverviewTrend, query);
-            var siteTask = RunAsync<SiteRow>("visits-sites", WebActivitySql.BySite, query);
+            var siteTask = RunAsync<SiteRow>("visits-sites", SiteByVisitsSql, query);
             var pageTask = RunAsync<NamedCountRow>("visits-pages", WebActivitySql.VisitsByPage, query);
-            var deviceTask = RunAsync<PlatformRow>("visits-devices", DeviceSql, query);
-            var browserTask = RunAsync<PlatformRow>("visits-browsers", BrowserSql, query);
+            var deviceTask = RunAsync<PlatformRow>("visits-devices", DeviceByVisitsSql, query);
+            var browserTask = RunAsync<PlatformRow>("visits-browsers", BrowserByVisitsSql, query);
             var heatTask = RunAsync<HeatCellRow>("visits-heatmap", WebActivitySql.Heatmap, query);
             var siteTimeTask = RunAsync<StackRow>("visits-site-over-time", WebActivitySql.SiteOverTime, query);
 
@@ -329,7 +329,7 @@ namespace Common.Entities.SpoWebActivity
             var topTask = RunAsync<PageRow>("pages-top", WebActivitySql.PageStats, query);
             var slowTask = RunAsync<PageRow>("pages-slowest", WebActivitySql.SlowestPages, query);
             var quietTask = RunAsync<PageRow>("pages-quiet", WebActivitySql.QuietPages, query);
-            var siteTask = RunAsync<SiteRow>("pages-sites", WebActivitySql.BySite, query);
+            var siteTask = RunAsync<SiteRow>("pages-sites", SiteByPageViewsSql, query);
             var periodTask = RunAsync<WeekHourRow>("pages-period-over-time", WebActivitySql.PeriodOverTime, query);
             var distributionTask = RunAsync<PageViewDistributionRow>(
                 "pages-distribution", WebActivitySql.PageViewDistribution, query);
@@ -412,7 +412,7 @@ namespace Common.Entities.SpoWebActivity
             var visits = depth.Sum(r => r.Visits);
             var pageViews = depth.Sum(r => r.Pages * r.Visits);
             var bounces = depth.Where(r => r.Pages == 1).Sum(r => r.Visits);
-            var seconds = depth.Sum(r => r.Seconds ?? 0);
+            var measuredDwell = depth.Where(r => r.Seconds.HasValue).ToList();
 
             model.Kpis = new WebActivityJourneyKpis
             {
@@ -421,7 +421,11 @@ namespace Common.Entities.SpoWebActivity
                 BouncePct = WebActivityScoring.Percentage(bounces, visits),
                 PagesPerVisit = visits > 0 ? (double)pageViews / visits : 0,
                 MedianPagesPerVisit = MedianPages(depth),
-                AverageVisitSeconds = visits > 0 ? seconds / visits : 0,
+                // Null rather than zero when nothing reported a dwell time: a confident "0s average
+                // visit" is the same missing-data failure the timing KPIs were just fixed for.
+                AverageVisitSeconds = measuredDwell.Count > 0 && visits > 0
+                    ? (double?)(measuredDwell.Sum(r => r.Seconds.Value) / visits)
+                    : null,
                 Clicks = clickCountTask.Result.Rows.FirstOrDefault()?.Clicks ?? 0,
             };
 
@@ -495,11 +499,17 @@ namespace Common.Entities.SpoWebActivity
                 UnknownLocationPageViews = kpi.UnknownLocationPageViews,
                 UnknownLocationPct = WebActivityScoring.Percentage(kpi.UnknownLocationPageViews, kpi.PageViews),
                 LocatedPageViews = kpi.PageViews - kpi.UnknownLocationPageViews,
+                CountryPageViews = kpi.CountryPageViews,
+                CityPageViews = kpi.CityPageViews,
+                ProvincePageViews = kpi.ProvincePageViews,
             };
 
-            model.Countries = ToPlaces(countryTask.Result.Rows, kpi.PageViews);
-            model.Cities = ToPlaces(cityTask.Result.Rows, kpi.PageViews);
-            model.Provinces = ToPlaces(provinceTask.Result.Rows, kpi.PageViews);
+            // Each list's share is against the page views that resolved to THAT attribute. A page
+            // view with a city but no country belongs to neither a country row nor the country
+            // denominator, so a single "located" total would quietly inflate every country's share.
+            model.Countries = ToPlaces(countryTask.Result.Rows, kpi.CountryPageViews);
+            model.Cities = ToPlaces(cityTask.Result.Rows, kpi.CityPageViews);
+            model.Provinces = ToPlaces(provinceTask.Result.Rows, kpi.ProvincePageViews);
 
             model.CountryOverTime = trendTask.Result.Rows
                 .Select(r => new WebActivityStackPoint { WeekStart = AsUtc(r.WeekStart), Name = r.Name, Count = r.Count })
@@ -550,6 +560,7 @@ namespace Common.Entities.SpoWebActivity
                 StrugglingVisits = kpi.StrugglingVisits,
                 DeadEndSearches = kpi.DeadEndSearches,
                 DeadEndPct = WebActivityScoring.Percentage(kpi.DeadEndSearches, kpi.Searches),
+                DeadEndGraceSeconds = WebActivitySql.SearchDeadEndGraceSeconds,
             };
 
             model.TopTerms = termTask.Result.Rows.Select(ToTermModel).ToList();
@@ -611,7 +622,9 @@ namespace Common.Entities.SpoWebActivity
                 MobilePct = MobileSharePct(deviceTotalsTask.Result.Rows),
                 AverageLoadSeconds = kpi.AverageLoadSeconds,
                 P95LoadSeconds = p95Bucket.HasValue
-                    ? (double?)((p95Bucket.Value + 1) * WebActivitySql.LoadBucketSeconds)
+                    ? (double?)(p95Bucket.Value >= WebActivitySql.LoadOverflowBucket
+                        ? WebActivitySql.LoadBucketCeilingSeconds
+                        : (p95Bucket.Value + 1) * WebActivitySql.LoadBucketSeconds)
                     : null,
                 P95AtCeiling = p95Bucket.HasValue && p95Bucket.Value >= WebActivitySql.LoadOverflowBucket,
                 LoadCeilingSeconds = WebActivitySql.LoadBucketCeilingSeconds,
@@ -668,6 +681,19 @@ namespace Common.Entities.SpoWebActivity
         internal static readonly string DeviceSql =
             WebActivitySql.ByClientAttribute("devices", "device_id", "device_name");
 
+        // The Visits tab prints visit counts, so its leaderboards must be RANKED by visits. Ranking
+        // by page views and printing visits can omit the browser or device with the most visits
+        // entirely, and leaves the rest sorted by a column that is not on screen.
+        internal static readonly string BrowserByVisitsSql =
+            WebActivitySql.ByClientAttribute("browsers", "agent_id", "browser_name", rankByVisits: true);
+
+        internal static readonly string DeviceByVisitsSql =
+            WebActivitySql.ByClientAttribute("devices", "device_id", "device_name", rankByVisits: true);
+
+        internal static readonly string SiteByPageViewsSql = WebActivitySql.BySite(rankByVisits: false);
+
+        internal static readonly string SiteByVisitsSql = WebActivitySql.BySite(rankByVisits: true);
+
         internal static readonly string CountrySql =
             WebActivitySql.ByPlace("country_id", "countries", "country_name", false);
 
@@ -685,7 +711,15 @@ namespace Common.Entities.SpoWebActivity
             var bucket = WebActivityScoring.PercentileBucket(
                 buckets.Select(r => new KeyValuePair<int, long>(r.Bucket, r.Count)), 0.95);
 
-            return bucket.HasValue ? (double?)((bucket.Value + 1) * WebActivitySql.LoadBucketSeconds) : null;
+            if (!bucket.HasValue) return null;
+
+            // Everything slower than the ceiling shares the overflow bucket, so its upper edge is not
+            // evidence of anything. Reporting the ceiling itself keeps the claim to what the
+            // histogram actually proves - "at least this" - and keeps the judgement in step with the
+            // Technology tab, which renders the same case as a lower bound.
+            if (bucket.Value >= WebActivitySql.LoadOverflowBucket) return WebActivitySql.LoadBucketCeilingSeconds;
+
+            return (bucket.Value + 1) * WebActivitySql.LoadBucketSeconds;
         }
 
         /// <summary>

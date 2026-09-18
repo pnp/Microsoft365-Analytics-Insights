@@ -31,9 +31,9 @@ import {
  * The Web searches tab - the in-app replacement for the Power BI report's search page.
  *
  * Keeps the term leaderboard and the time breakdowns, and adds the measure that makes the tab
- * actionable rather than merely interesting: how often a search was followed by nothing at all.
- * Top search terms are a demand signal; terms that repeatedly lead nowhere are a content gap with a
- * name attached.
+ * actionable rather than merely interesting: how often a search recorded no further page view.
+ * Top search terms are a demand signal; terms that repeatedly record nothing after them are worth
+ * investigating - though the measure is an upper bound, not a count of failed searches.
  */
 export default function SearchPanel({
   data,
@@ -107,10 +107,12 @@ export default function SearchPanel({
         how:
           'A proxy, not a fact. The import records the term and the time, not the result count or '
           + 'whether a result was clicked, so a genuine zero-result search and a search whose '
-          + 'results were ignored look identical here. Page views within 10 seconds of the search '
-          + 'are ignored, because the search results page is itself a page view and would otherwise '
-          + 'make every search look successful. A search at the very end of the working day also '
-          + 'lands in this bucket.',
+          + 'results were ignored look identical here. Page views within '
+          + String(data.kpis.deadEndGraceSeconds)
+          + ' seconds of the search do not count, because the search results page is itself a page '
+          + 'view and would otherwise make every search look successful - which also means a fast '
+          + 'click-through lands in this bucket, as does a search that was simply the last thing '
+          + 'someone did that day. Read it as an upper bound.',
       },
     },
   ];
@@ -169,9 +171,10 @@ export default function SearchPanel({
           title="Terms that lead nowhere"
           description={`Terms searched at least 3 times, ranked by the share of searches with no further page view.`}
           note={
-            'Read this as a content-gap backlog. Each row is a phrase people expect to find '
-            + 'something for and apparently did not - either the page does not exist, or it exists '
-            + 'and does not use their words.'
+            'Each row is a term that repeatedly recorded no further page view. That is worth '
+            + 'checking - the page may not exist, or may not use their words - but it is not proof '
+            + 'of a failed search: a visitor who clicked a result quickly, or who searched as their '
+            + 'last action, counts here too.'
           }
           query={queryFor(data.queries, 'search-dead-ends')}
           isEmpty={data.deadEndTerms.length === 0}

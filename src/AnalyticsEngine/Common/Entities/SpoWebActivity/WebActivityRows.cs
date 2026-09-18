@@ -75,7 +75,14 @@ namespace Common.Entities.SpoWebActivity
 
             public long Visits { get; set; }
 
-            /// <summary>Total dwell seconds across those visits, or null when never reported.</summary>
+            /// <summary>
+            /// Total dwell seconds across those visits, or null when none of them reported one.
+            /// </summary>
+            /// <remarks>
+            /// Deliberately NOT coalesced to zero in SQL. "No visit in this band had a measurable dwell
+            /// time" and "those visits took no time at all" are different statements, and the second
+            /// is one the data cannot support.
+            /// </remarks>
             public double? Seconds { get; set; }
         }
 
@@ -190,6 +197,16 @@ namespace Common.Entities.SpoWebActivity
             public int Countries { get; set; }
             public int Cities { get; set; }
             public int Provinces { get; set; }
+
+            /// <summary>Page views that resolved to a country - the denominator of the country shares.</summary>
+            public long CountryPageViews { get; set; }
+
+            /// <summary>Page views that resolved to a city.</summary>
+            public long CityPageViews { get; set; }
+
+            /// <summary>Page views that resolved to a state, province or region.</summary>
+            public long ProvincePageViews { get; set; }
+
             public long UnknownLocationPageViews { get; set; }
             public long PageViews { get; set; }
             public long Visits { get; set; }

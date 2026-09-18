@@ -57,7 +57,7 @@ export default function JourneysPanel({
   const items: KpiDefinition[] = [
     {
       key: 'bounce',
-      label: 'Bounce rate',
+      label: 'Bounce rate (single-page visits)',
       value: formatPct(kpis.bouncePct),
       hint: `${formatCount(kpis.bounces)} of ${formatCount(kpis.visits)} visits`,
       tone: bounceTone(kpis.bouncePct),

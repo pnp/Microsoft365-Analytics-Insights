@@ -179,7 +179,15 @@ export default function WebActivityPage() {
       (selectedTab === 'geography' && geographyData) ||
       (selectedTab === 'search' && searchData) ||
       (selectedTab === 'technology' && technologyData);
-    if (alreadyHave) return;
+    if (alreadyHave) {
+      // Reset the request state before bailing out. Switching away from a still-loading tab aborts
+      // its request, and an aborted request deliberately does not clear `loading` - so without this
+      // the spinner state (and the disabled Refresh button) would survive into a tab that already
+      // has its data, and the previous tab's error would be shown against it.
+      setLoading(false);
+      setError(null);
+      return;
+    }
 
     const controller = new AbortController();
     setLoading(true);

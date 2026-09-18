@@ -15,6 +15,7 @@ import { KpiGrid, type KpiDefinition } from '../shared/KpiGrid';
 import { seriesColor } from '../charts/chartCommon';
 import type { WebActivityPlatformRow, WebActivityTechnology } from '../../types/webActivity';
 import {
+  DWELL_CAVEAT,
   FailedQueryNote,
   SectionCard,
   WindowNote,
@@ -210,6 +211,7 @@ export default function TechnologyPanel({
         <SectionCard
           title="Detail"
           description="Browser, device, operating system and city together, ranked by visits."
+          note={DWELL_CAVEAT}
           query={queryFor(data.queries, 'tech-detail')}
           isEmpty={data.detail.length === 0}
           actions={

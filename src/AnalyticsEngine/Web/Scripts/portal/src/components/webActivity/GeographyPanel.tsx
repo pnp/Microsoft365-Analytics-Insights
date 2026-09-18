@@ -29,11 +29,12 @@ export default function GeographyPanel({ data }: { data: WebActivityGeography })
   const styles = useWebActivityStyles();
   const kpis = data.kpis;
 
-  // The listed countries plus an explicit remainder, so a tenant with more countries than the page
-  // shows does not see the visible ones inflated to cover all of the located traffic.
+  // The listed countries plus an explicit remainder. The denominator is the page views that
+  // resolved to a COUNTRY, not the looser 'located' total - a page view with a city but no country
+  // belongs to neither a country row nor this remainder, and folding it in would inflate the slice.
   const countryCategories = withRemainder(
     data.countries.map((c) => ({ label: c.name, value: c.pageViews })),
-    kpis.locatedPageViews,
+    kpis.countryPageViews,
     'Other countries',
   );
 

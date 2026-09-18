@@ -483,6 +483,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(6, journeys.Kpis.Visits);
             Assert.AreEqual(3, journeys.Kpis.Bounces);
             Assert.AreEqual(1, journeys.Kpis.Clicks);
+            Assert.IsTrue(journeys.Kpis.AverageVisitSeconds.HasValue);
 
             var entry = journeys.EntryPages.Single(p => p.Url == HomeUrl);
             Assert.AreEqual(4, entry.Entries);
@@ -529,6 +530,10 @@ namespace Tests.UnitTests
 
             // Six visits, two of which searched.
             Assert.AreEqual(100.0 * 2 / 6, search.Kpis.SearchReliancePct, 0.01);
+
+            // The UI states the grace window, so it has to come from the same constant the SQL uses
+            // rather than being re-typed into a tooltip - which is how it went stale once already.
+            Assert.AreEqual(WebActivitySql.SearchDeadEndGraceSeconds, search.Kpis.DeadEndGraceSeconds);
         }
 
         [TestMethod]
@@ -565,6 +570,13 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, geography.Kpis.Cities);
             Assert.AreEqual(1, geography.Kpis.Provinces);
             Assert.AreEqual(11, geography.Kpis.LocatedPageViews);
+
+            // Each list's share is against the page views that resolved to THAT attribute. A page
+            // view with a city but no country belongs to neither a country row nor the country
+            // denominator, so a single 'located' total would inflate every country's share.
+            Assert.AreEqual(11, geography.Kpis.CountryPageViews);
+            Assert.AreEqual(11, geography.Kpis.CityPageViews);
+            Assert.AreEqual(11, geography.Kpis.ProvincePageViews);
             Assert.AreEqual(0, geography.Kpis.UnknownLocationPageViews);
             Assert.AreEqual(6, geography.Kpis.Visits);
 
@@ -613,6 +625,7 @@ namespace Tests.UnitTests
             Assert.IsNull(overview.Kpis.AverageLoadSeconds, "No data is not a zero-second page load.");
             Assert.IsNull(overview.Kpis.AverageSecondsOnPage);
             Assert.IsNull(overview.Kpis.MobilePageViewPct);
+            Assert.IsNull(overview.Kpis.ReachPct, "No visitors is not 0% of the directory... it is 0%.");
             Assert.AreEqual(0, overview.Queries.Count(q => q.Error != null));
 
             // The directory is not windowed, so reach still has a denominator.
