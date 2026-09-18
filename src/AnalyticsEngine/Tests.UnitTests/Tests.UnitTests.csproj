@@ -205,6 +205,12 @@
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoTables.cs">
       <Link>DemoGenerator\DemoTables.cs</Link>
     </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoWebCatalogue.cs">
+      <Link>DemoGenerator\DemoWebCatalogue.cs</Link>
+    </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoWebActivityGenerator.cs">
+      <Link>DemoGenerator\DemoWebActivityGenerator.cs</Link>
+    </Compile>
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoCollaborationTables.cs">
       <Link>DemoGenerator\DemoCollaborationTables.cs</Link>
     </Compile>
@@ -283,6 +289,10 @@
     <Compile Include="TeamsExplorerIndexMigrationTests.cs" />
     <Compile Include="TeamsExplorerScoringTests.cs" />
     <Compile Include="TeamsExplorerSqlIntegrationTests.cs" />
+    <Compile Include="WebActivityApiContractTests.cs" />
+    <Compile Include="WebActivityScoringTests.cs" />
+    <Compile Include="WebActivityAvailabilityTests.cs" />
+    <Compile Include="WebActivitySqlIntegrationTests.cs" />
     <Compile Include="CopilotInteractionHistoryTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeCopilotEventAdaptor.cs" />
     <Compile Include="FakeLoaderClasses\InMemoryCopilotUsagePersistenceManager.cs" />
