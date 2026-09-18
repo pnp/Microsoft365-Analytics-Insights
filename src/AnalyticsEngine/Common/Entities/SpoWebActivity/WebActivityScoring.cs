@@ -174,6 +174,19 @@ namespace Common.Entities.SpoWebActivity
         /// <summary>A page viewed this many times or fewer in the window is a pruning candidate.</summary>
         public const int QuietPageViewCeiling = 3;
 
+        /// <summary>
+        /// How many distinct pages must have been viewed before a "busiest 10% of pages" figure means
+        /// anything.
+        /// </summary>
+        /// <remarks>
+        /// Below ten pages a decile cannot be expressed: the top-decile calculation clamps to at
+        /// least one page, so a site with one viewed page reports that its "busiest 10% of pages took
+        /// 100% of page views" - a contradiction dressed as a finding. Same reasoning as
+        /// <see cref="SegmentsFullyReachable"/>: say nothing rather than say something the data
+        /// cannot support.
+        /// </remarks>
+        public const int MinimumPagesForDecile = 10;
+
         #endregion
 
         #region Helpers
@@ -471,7 +484,7 @@ namespace Common.Entities.SpoWebActivity
 
             if (inputs.AverageLoadSeconds.HasValue) judgements.Add(LoadJudgement(inputs));
             if (inputs.Visits > 0 && inputs.SearchAvailable) judgements.Add(SearchJudgement(inputs));
-            if (inputs.UniquePages > 0) judgements.Add(ConcentrationJudgement(inputs));
+            if (inputs.UniquePages >= MinimumPagesForDecile) judgements.Add(ConcentrationJudgement(inputs));
             if (inputs.MobilePageViewPct.HasValue) judgements.Add(MobileJudgement(inputs));
 
             return judgements;

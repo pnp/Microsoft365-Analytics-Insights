@@ -177,7 +177,8 @@ V AS (
         }
 
         /// <summary>
-        /// The title to show for a page: the one carried by that page's most recent hit in the window.
+        /// The title to show for a page: the one carried by that page's most recent TITLED hit in
+        /// the window.
         /// </summary>
         /// <remarks>
         /// <para>
@@ -194,23 +195,33 @@ V AS (
         /// the new title a LOWER id, so <c>MAX</c> keeps returning the old name indefinitely.
         /// </para>
         /// <para>
+        /// Untitled hits are excluded from the aggregate rather than mapped to a sentinel. A hit with
+        /// no <c>page_title_id</c> is a MISSING OBSERVATION, not a rename to "no name": the tracker
+        /// can fire before <c>document.title</c> resolves. Letting such a hit win - which a sentinel
+        /// does whenever it is the newest, and also on any timestamp tie, since the unsigned byte
+        /// comparison ranks <c>0xFFFFFFFF</c> above every real id - would drop a page that has a
+        /// perfectly good known title back to displaying its raw URL. The result is NULL only when NO
+        /// hit in the window carried a title, which is the one case where there is genuinely nothing
+        /// to show.
+        /// </para>
+        /// <para>
         /// The binary ordering is only chronological because <c>datetime</c>'s first four bytes are a
         /// day count that is positive for any date after 1900, which every page hit is.
         /// </para>
         /// </remarks>
         public const string LatestTitleId =
-            "NULLIF(CAST(SUBSTRING(MAX("
-            + "CAST(h.hit_timestamp AS binary(8)) + CAST(ISNULL(h.page_title_id, -1) AS binary(4))"
-            + "), 9, 4) AS int), -1)";
+            "CAST(SUBSTRING(MAX(CASE WHEN h.page_title_id IS NOT NULL THEN "
+            + "CAST(h.hit_timestamp AS binary(8)) + CAST(h.page_title_id AS binary(4)) END"
+            + "), 9, 4) AS int)";
 
         /// <summary>
         /// <see cref="LatestTitleId"/> for the <c>Ordered</c> CTEs, which alias the hit rows as
         /// <c>o</c>. Those CTEs must project <c>hit_timestamp</c> for this to resolve.
         /// </summary>
         public const string LatestTitleIdOrdered =
-            "NULLIF(CAST(SUBSTRING(MAX("
-            + "CAST(o.hit_timestamp AS binary(8)) + CAST(ISNULL(o.page_title_id, -1) AS binary(4))"
-            + "), 9, 4) AS int), -1)";
+            "CAST(SUBSTRING(MAX(CASE WHEN o.page_title_id IS NOT NULL THEN "
+            + "CAST(o.hit_timestamp AS binary(8)) + CAST(o.page_title_id AS binary(4)) END"
+            + "), 9, 4) AS int)";
 
         #endregion
 
@@ -426,7 +437,11 @@ Visitors AS (
     GROUP BY h.web_id
 )
 SELECT TOP (@top)
-       CAST(ISNULL(w.title, w.url_base) AS nvarchar(300)) AS Name,
+       CAST(CASE
+            WHEN COUNT(*) OVER (PARTITION BY ISNULL(w.title, w.url_base)) > 1
+            THEN ISNULL(w.title, w.url_base) + ' (' + w.url_base + ')'
+            ELSE ISNULL(w.title, w.url_base)
+       END AS nvarchar(300))                              AS Name,
        CAST(w.url_base AS nvarchar(500))                  AS Url,
        g.PageViews,
        ISNULL(up.UniquePageViews, 0)                      AS UniquePageViews,
@@ -643,6 +658,12 @@ ORDER BY g.PageViews DESC, g.url_id ASC
 OPTION (RECOMPILE);";
 
         /// <summary>The same page statistics, ranked so the slowest qualifying pages come first.</summary>
+        /// <remarks>
+        /// The view floor counts views that actually CARRY a load time, not all views. Page load time
+        /// is optional telemetry, so a page opened fifty times with one timed 20-second load would
+        /// otherwise clear a floor of five on its untimed views and top the table on a single
+        /// measurement - exactly the "noise presented as a finding" the floor exists to prevent.
+        /// </remarks>
         public const string SlowestPages = @"
 WITH" + HitWindowCte + @",
 Grouped AS (
@@ -650,6 +671,7 @@ Grouped AS (
            " + LatestTitleId + @" AS TitleId,
            MAX(h.web_id)          AS WebId,
            COUNT_BIG(*)           AS PageViews,
+           COUNT(h.page_load_time) AS MeasuredPageViews,
            COUNT(DISTINCT h.session_id) AS UniquePageViews,
            AVG(h.seconds_on_page) AS AverageSecondsOnPage,
            AVG(h.page_load_time)  AS AverageLoadSeconds
@@ -672,7 +694,7 @@ FROM Grouped AS g
 INNER JOIN dbo.urls AS u ON u.id = g.url_id
 LEFT JOIN dbo.page_titles AS pt ON pt.id = g.TitleId
 LEFT JOIN dbo.webs AS w ON w.id = g.WebId
-WHERE g.PageViews >= @minViews AND g.AverageLoadSeconds IS NOT NULL
+WHERE g.MeasuredPageViews >= @minViews AND g.AverageLoadSeconds IS NOT NULL
 ORDER BY g.AverageLoadSeconds DESC, g.url_id ASC
 OPTION (RECOMPILE);";
 
@@ -764,12 +786,16 @@ OPTION (RECOMPILE);";
         /// whole point.
         /// <para>
         /// <c>@minViews</c> keeps a page that was entered twice and bounced twice off the top of the
-        /// list; a 100% rate over a handful of visits is noise, not a finding.
+        /// list; a 100% rate over a handful of visits is noise, not a finding. Pages with NO bounces
+        /// are excluded outright - without that, a tenant with fewer than N qualifying pages fills
+        /// the remaining slots with its busiest landing pages at a 0% rate, and the volume tie-break
+        /// sorts them to the TOP of a table captioned "the pages costing you the most traffic".
         /// </para>
         /// </remarks>
         public static readonly string BouncePages = EndpointPages(
             "FirstSeq",
-            havingSql: "HAVING SUM(CASE WHEN o.FirstSeq = 1 THEN 1 ELSE 0 END) >= @minViews",
+            havingSql: "HAVING SUM(CASE WHEN o.FirstSeq = 1 THEN 1 ELSE 0 END) >= @minViews"
+                     + " AND SUM(CASE WHEN o.VisitPages = 1 THEN 1 ELSE 0 END) > 0",
             orderSql: "ORDER BY CAST(g.Bounces AS float) / NULLIF(g.Entries, 0) DESC, g.Entries DESC, g.url_id ASC");
 
         /// <summary>

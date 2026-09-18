@@ -746,6 +746,12 @@ namespace Tests.UnitTests
                 Assert.IsTrue(
                     page.Bounces <= page.Entries,
                     "A page's bounces and entries must come from the same rows, or the rate exceeds 100%.");
+
+                // A page nobody bounced off is not a "landing page people leave from". Without this
+                // filter a tenant with few qualifying pages fills the table with its busiest landing
+                // pages at 0%, and the volume tie-break puts them at the TOP of a list captioned
+                // "the pages costing you the most traffic".
+                Assert.IsTrue(page.Bounces > 0, "Zero-bounce pages must not appear in the bounce list.");
             }
         }
 
@@ -777,7 +783,11 @@ INSERT INTO @t VALUES
  (1, CONVERT(datetime, '2026-06-01 09:00', 120), 1),
  (2, CONVERT(datetime, '2026-01-01 09:00', 120), NULL),
  (3, CONVERT(datetime, '2026-02-01 09:00', 120), 55),
- (3, CONVERT(datetime, '2026-01-01 09:00', 120), 77);
+ (3, CONVERT(datetime, '2026-01-01 09:00', 120), 77),
+ (4, CONVERT(datetime, '2026-01-01 09:00', 120), 42),
+ (4, CONVERT(datetime, '2026-06-01 09:00', 120), NULL),
+ (5, CONVERT(datetime, '2026-03-01 09:00', 120), 63),
+ (5, CONVERT(datetime, '2026-03-01 09:00', 120), NULL);
 ";
             var expression = WebActivitySql.LatestTitleId.Replace("h.", string.Empty);
 
@@ -786,15 +796,30 @@ INSERT INTO @t VALUES
             Assert.AreEqual(1, renamed,
                 "The current title wins even though the old one has a higher lookup id.");
 
-            var untitled = Scalar(setup
+            var neverTitled = Scalar(setup
                 + "SELECT " + expression + " FROM @t WHERE url_id = 2 GROUP BY url_id;");
-            Assert.AreEqual(DBNull.Value, untitled,
-                "A latest hit with no title must be NULL, not the -1 sentinel the expression uses.");
+            Assert.AreEqual(DBNull.Value, neverTitled,
+                "NULL only when NO hit in the window carried a title.");
 
             var outOfOrder = Scalar(setup
                 + "SELECT " + expression + " FROM @t WHERE url_id = 3 GROUP BY url_id;");
             Assert.AreEqual(55, outOfOrder,
                 "Chronology decides, not row order and not the larger id.");
+
+            // An untitled hit is a missing observation, not a rename to "no name". The tracker can
+            // fire before document.title resolves, and a page with a perfectly good known title must
+            // not fall back to showing its raw URL just because its newest hit happened to lack one.
+            var latestHitUntitled = Scalar(setup
+                + "SELECT " + expression + " FROM @t WHERE url_id = 4 GROUP BY url_id;");
+            Assert.AreEqual(42, latestHitUntitled,
+                "The most recent KNOWN title wins over a newer untitled hit.");
+
+            // Same point at a timestamp tie, which is where a sentinel is most dangerous: 0xFFFFFFFF
+            // sorts above every real id under the unsigned byte comparison MAX uses.
+            var tiedWithUntitled = Scalar(setup
+                + "SELECT " + expression + " FROM @t WHERE url_id = 5 GROUP BY url_id;");
+            Assert.AreEqual(63, tiedWithUntitled,
+                "A tie against an untitled hit must not erase the title.");
         }
 
         #endregion

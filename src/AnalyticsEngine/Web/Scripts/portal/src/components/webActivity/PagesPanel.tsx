@@ -29,6 +29,13 @@ import {
 } from './webActivityShared';
 
 /**
+ * Below this many viewed pages a "busiest 10%" share is not expressible - the top decile clamps to
+ * one page, so the figure would always read close to 100%. Mirrors MinimumPagesForDecile in
+ * WebActivityScoring.cs, which suppresses the matching judgement.
+ */
+const MINIMUM_PAGES_FOR_DECILE = 10;
+
+/**
  * The Page views tab - the in-app replacement for the Power BI report's "Page Views" page.
  *
  * Keeps total-versus-unique page views, the per-site split and the period-of-day breakdown over
@@ -275,7 +282,12 @@ export default function PagesPanel({
           title="How concentrated the traffic is"
           description="The share of all page views taken by the busiest tenth of pages."
           query={queryFor(data.queries, 'pages-distribution')}
-          isEmpty={kpis.uniquePages === 0}
+          isEmpty={kpis.uniquePages < MINIMUM_PAGES_FOR_DECILE}
+          emptyMessage={
+            `A busiest-tenth figure needs at least ${MINIMUM_PAGES_FOR_DECILE} pages with views to `
+            + 'mean anything. Below that the "top 10%" would be a single page, so the share would '
+            + 'always read close to 100%.'
+          }
         >
           <CategoryBarChart
             valueLabel="Share of page views (%)"
