@@ -25,7 +25,7 @@ import type {
   CoworkTier,
 } from '../../types/copilotAdoption';
 import Spinner from '../Spinner';
-import { ScoreBar, useAdoptionTableStyles } from './adoptionShared';
+import { RationaleCell, ScoreBar, useAdoptionTableStyles } from './adoptionShared';
 import { formatCount, formatDate } from '../shared/KpiGrid';
 // Credits are fractional and a per-user total over a short window is routinely below 1.
 // formatCount is documented as a WHOLE-number formatter, so it renders a real 0.4 as "0" -
@@ -91,10 +91,6 @@ const useStyles = makeStyles({
     gap: '12px',
     marginTop: '12px',
     flexWrap: 'wrap',
-  },
-  rationale: {
-    maxWidth: '340px',
-    color: tokens.colorNeutralForeground2,
   },
   upn: {
     display: 'flex',
@@ -726,7 +722,7 @@ export default function CoworkPanel({
             <table className={table.table}>
               <thead>
                 <tr>
-                  <th className={table.th}>User</th>
+                  <th className={`${table.th} ${table.stickyLeft}`}>User</th>
                   <th className={table.th}>Department</th>
                   <th className={table.th}>
                     <span className={styles.thWithInfo}>
@@ -801,7 +797,7 @@ export default function CoworkPanel({
               <tbody>
                 {data.rows.map((row) => (
                   <tr key={row.userId}>
-                    <td className={table.td}>
+                    <td className={`${table.td} ${table.stickyLeft}`}>
                       <span className={styles.upn}>
                         <Text size={200} weight="semibold">
                           {row.userPrincipalName}
@@ -811,8 +807,8 @@ export default function CoworkPanel({
                         </Text>
                       </span>
                     </td>
-                    <td className={table.td}>{row.department || '\u2014'}</td>
-                    <td className={table.td}>
+                    <td className={`${table.td} ${table.tdNoWrap}`}>{row.department || '\u2014'}</td>
+                    <td className={`${table.td} ${table.tdNoWrap}`}>
                       <span className={styles.upn}>
                         <Text size={200}>{row.tierLabel}</Text>
                         <span style={{ marginTop: '3px' }}>
@@ -878,9 +874,7 @@ export default function CoworkPanel({
                       </td>
                     )}
                     <td className={table.td}>
-                      <Text size={200} className={styles.rationale}>
-                        {row.rationale}
-                      </Text>
+                      <RationaleCell text={row.rationale} />
                     </td>
                   </tr>
                 ))}

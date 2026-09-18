@@ -74,10 +74,15 @@ describe('ConversationsPanel', () => {
   });
 
   it('always states the sentiment scale next to a sentiment figure', () => {
-    renderWithProvider(<ConversationsPanel data={conversations()} />);
+    const { container } = renderWithProvider(<ConversationsPanel data={conversations()} />);
 
     expect(screen.getAllByText(/0\.5 is neutral/).length).toBeGreaterThan(0);
-    expect(screen.getByText('0.50 (neutral)')).toBeInTheDocument();
+
+    // The score is drawn as a traffic light rather than printed, so the exact figure has to be
+    // reachable from the graphic itself - not only from the section's scale note.
+    const lit = container.querySelector('[data-lamp="neutral"][data-lit="true"]');
+    expect(lit).not.toBeNull();
+    expect(lit?.closest('[title]')?.getAttribute('title')).toContain('Sentiment 0.50 (neutral)');
   });
 });
 

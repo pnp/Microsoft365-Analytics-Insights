@@ -132,7 +132,7 @@ function row(over: Partial<LicensedUserAdoptionRow>): LicensedUserAdoptionRow {
 describe('LicensedUsersPanel source reconciliation', () => {
   beforeEach(() => vi.mocked(fetchLicensedUsers).mockReset());
 
-  it('shows both source figures only for rows covered by both sources', async () => {
+  it('keeps both source figures on hover only for rows covered by both sources', async () => {
     const page: LicensedUserPage = {
       total: 3,
       skip: 0,
@@ -189,19 +189,27 @@ describe('LicensedUsersPanel source reconciliation', () => {
     );
 
     expect(await screen.findByText('both@contoso.com')).toBeInTheDocument();
-    expect(screen.getAllByText((_content, element) => {
-      const text = element?.textContent ?? '';
-      return text.includes('Audit D28: 12 interactions, 4 days.')
-        && text.includes('Microsoft report D28')
-        && text.includes('18 prompts, 5 days.');
-    }).length).toBeGreaterThan(0);
+
+    // The reconciliation figures are carried on hover rather than printed inline: rendered in full
+    // they wrapped to five lines and set the height of every row in the table. They must still be
+    // reachable, and still be per-row - that is what this asserts.
+    const markers = screen.getAllByText('both sources');
+    expect(markers).toHaveLength(2);
+
+    const titles = markers.map((m) => m.getAttribute('title') ?? '');
+    expect(titles.some((t) =>
+      t.includes('Audit D28: 12 interactions, 4 days.')
+      && t.includes('Microsoft report D28')
+      && t.includes('18 prompts, 5 days.'))).toBe(true);
+    expect(titles.some((t) =>
+      t.includes('Audit D28: 0 interactions, 0 days.')
+      && t.includes('Microsoft report D28')
+      && t.includes('18 prompts, 5 days.'))).toBe(true);
+
     expect(screen.getAllByText('Audit log')).toHaveLength(2);
     expect(screen.getByText('Microsoft usage report')).toBeInTheDocument();
-    expect(screen.getAllByText((_content, element) => {
-      const text = element?.textContent ?? '';
-      return text.includes('Audit D28: 0 interactions, 0 days.')
-        && text.includes('Microsoft report D28')
-        && text.includes('18 prompts, 5 days.');
-    }).length).toBeGreaterThan(0);
+
+    // The audit-only row has nothing to reconcile, so it must not claim it has.
+    expect(screen.queryByText(/Audit D28: 12 interactions, 4 days\./)).toBeNull();
   });
 });

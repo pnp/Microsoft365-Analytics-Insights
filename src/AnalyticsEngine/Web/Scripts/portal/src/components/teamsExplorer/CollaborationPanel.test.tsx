@@ -114,8 +114,8 @@ describe('CollaborationPanel', () => {
     expect(screen.getAllByText('ownerless').length).toBeGreaterThan(0);
   });
 
-  it('renders sentiment on its own scale, never as a percentage', () => {
-    renderWithProvider(
+  it('renders sentiment as a traffic light, never as a percentage', () => {
+    const { container } = renderWithProvider(
       <CollaborationPanel
         data={data()}
         analyticsAvailable
@@ -126,8 +126,20 @@ describe('CollaborationPanel', () => {
       />,
     );
 
-    expect(screen.getByText('0.75 (positive)')).toBeInTheDocument();
+    // 0.75 is above the neutral band, so the green lamp is the lit one and neither of the others is.
+    const lit = container.querySelectorAll('[data-lit="true"]');
+    expect(lit.length).toBe(1);
+    expect(lit[0].getAttribute('data-lamp')).toBe('positive');
+
+    // The exact figure is still quotable - it moved to the hover, not out of the page - and it is
+    // still on its own 0-1 scale rather than restated as a percentage.
+    expect(lit[0].closest('[title]')?.getAttribute('title')).toContain('Sentiment 0.75 (positive)');
     expect(screen.queryByText('75%')).not.toBeInTheDocument();
+
+    // The second team was never scored. It must show a dash and NO lamps: zero is the most negative
+    // possible score, so drawing "unscored" as a lit red lamp would invert its meaning.
+    expect(container.querySelectorAll('[data-lamp]').length).toBe(3);
+    expect(screen.getByText('\u2014')).toBeInTheDocument();
   });
 
   it('states that dormant only covers authorised teams', () => {

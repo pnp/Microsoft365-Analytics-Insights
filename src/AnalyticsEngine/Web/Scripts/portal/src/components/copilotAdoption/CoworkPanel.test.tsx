@@ -282,7 +282,7 @@ describe('CoworkPanel', () => {
     expect(screen.getByText(/300-600 hours/)).toBeTruthy();
   });
 
-  it('shows no monetary figure when no loaded hourly cost is configured', async () => {
+  it('never converts the modelled hours into money', async () => {
     render(
       summary({
         coworkValueEstimate: {
@@ -293,12 +293,16 @@ describe('CoworkPanel', () => {
           addressableDocuments: 9600,
           hoursPerMonthLow: 300,
           hoursPerMonthHigh: 600,
-          assumptions: ['No monetary value is shown because no fully-loaded hourly cost has been configured.'],
+          assumptions: ['No monetary value is shown. This product has no defensible fully-loaded hourly rate, so it does not invent one.'],
         },
       }),
     );
 
+    // Hours are the whole output. A currency figure derived from a modelled number is how a model
+    // ends up quoted as a saving, which is exactly what this estimate must not become.
+    expect(screen.getByText(/300-600 hours/)).toBeTruthy();
     expect(screen.queryByText(/at the configured loaded hourly cost/)).toBeNull();
+    expect(document.body.textContent).not.toMatch(/[£$€]\s?\d/);
   });
 
   it('hides the estimate entirely for an empty cohort', async () => {
