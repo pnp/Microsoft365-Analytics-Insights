@@ -379,6 +379,7 @@ export default function WebActivityPage() {
             onExportEntry={() => runExport('entry-pages')}
             onExportExit={() => runExport('exit-pages')}
             onExportTransitions={() => runExport('transitions')}
+            onExportFlows={() => runExport('flows')}
             exporting={exporting}
           />
         )}

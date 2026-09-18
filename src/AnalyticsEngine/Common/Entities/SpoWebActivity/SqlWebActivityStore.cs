@@ -473,17 +473,19 @@ namespace Common.Entities.SpoWebActivity
             var exitTask = RunAsync<PageRow>("journeys-exit", WebActivitySql.ExitPages, query);
             var bounceTask = RunAsync<PageRow>("journeys-bounce", WebActivitySql.BouncePages, query);
             var transitionTask = RunAsync<TransitionRow>("journeys-transitions", WebActivitySql.Transitions, query);
+            var flowTask = RunAsync<StartEndFlowRow>("journeys-flows", WebActivitySql.StartEndFlows, query);
             var clickTask = RunAsync<NamedCountRow>("journeys-clicks", WebActivitySql.ClickedElements, query);
             var clickCountTask = RunAsync<ClickCountRow>("journeys-click-count", WebActivitySql.ClickCount, query);
 
-            await Task.WhenAll(depthTask, entryTask, exitTask, bounceTask, transitionTask, clickTask, clickCountTask)
+            await Task.WhenAll(
+                depthTask, entryTask, exitTask, bounceTask, transitionTask, flowTask, clickTask, clickCountTask)
                 .ConfigureAwait(false);
 
             var model = new WebActivityJourneys { Window = window };
             model.Queries.AddRange(new[]
             {
                 depthTask.Result.Info, entryTask.Result.Info, exitTask.Result.Info, bounceTask.Result.Info,
-                transitionTask.Result.Info, clickTask.Result.Info, clickCountTask.Result.Info,
+                transitionTask.Result.Info, flowTask.Result.Info, clickTask.Result.Info, clickCountTask.Result.Info,
             });
 
             var depth = depthTask.Result.Rows;
@@ -516,6 +518,29 @@ namespace Common.Entities.SpoWebActivity
             // panel exists to find. The rate is still each page's own bounces over its own entries,
             // so it cannot exceed 100%.
             model.BouncePages = bounceTask.Result.Rows.Select(ToPageModel).ToList();
+
+            model.Flows = flowTask.Result.Rows
+                .Select(r => new WebActivityFlowRow
+                {
+                    StartTitle = r.StartTitle,
+                    StartUrl = r.StartUrl,
+                    EndTitle = r.EndTitle,
+                    EndUrl = r.EndUrl,
+                    Visits = r.Visits,
+                    SinglePageVisits = r.SinglePageVisits,
+                    AveragePages = r.AveragePages,
+                    SharePct = r.SharePct ?? 0,
+
+                    // Compared on URL, not on title: two different pages can share a title, and the
+                    // diagram draws this one as a "came back to where it started" band.
+                    EndedWhereItStarted = string.Equals(r.StartUrl, r.EndUrl, StringComparison.Ordinal),
+                })
+                .ToList();
+
+            // How much of the traffic the truncated diagram actually accounts for. Summed from the
+            // rows' own shares, which are already against ALL paired visits rather than the top N,
+            // so this is honest about what the Sankey leaves out.
+            model.FlowsCoveragePct = Math.Min(100, model.Flows.Sum(f => f.SharePct));
 
             model.Transitions = transitionTask.Result.Rows
                 .Select(r => new WebActivityTransitionRow
@@ -721,7 +746,7 @@ namespace Common.Entities.SpoWebActivity
                     Visits = r.Visits,
                     Visitors = r.Visitors,
                     PageViews = r.PageViews,
-                    PageViewsPerVisit = r.Visits > 0 ? (double)r.PageViews / r.Visits : 0,
+                    PageViewsPerVisit = r.Visits > 0 ? (double?)((double)r.VisitPageViews / r.Visits) : null,
                     AverageSecondsOnPage = r.AverageSecondsOnPage,
                     AverageLoadSeconds = r.AverageLoadSeconds,
                 })

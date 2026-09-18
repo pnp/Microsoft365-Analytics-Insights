@@ -186,6 +186,18 @@ namespace Common.Entities.SpoWebActivity
             public double? SharePct { get; set; }
         }
 
+        public class StartEndFlowRow
+        {
+            public string StartTitle { get; set; }
+            public string StartUrl { get; set; }
+            public string EndTitle { get; set; }
+            public string EndUrl { get; set; }
+            public long Visits { get; set; }
+            public long SinglePageVisits { get; set; }
+            public double? AveragePages { get; set; }
+            public double? SharePct { get; set; }
+        }
+
         public class ClickCountRow
         {
             public long Clicks { get; set; }
@@ -285,6 +297,7 @@ namespace Common.Entities.SpoWebActivity
             public long Visits { get; set; }
             public int Visitors { get; set; }
             public long PageViews { get; set; }
+            public long VisitPageViews { get; set; }
             public double? AverageSecondsOnPage { get; set; }
             public double? AverageLoadSeconds { get; set; }
         }

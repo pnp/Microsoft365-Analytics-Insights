@@ -132,6 +132,23 @@ namespace Common.Entities.SpoWebActivity
             };
         }
 
+        /// <summary>The whole-visit start-to-end flows behind the Sankey.</summary>
+        public static IReadOnlyList<CsvColumn<WebActivityFlowRow>> FlowColumns()
+        {
+            return new List<CsvColumn<WebActivityFlowRow>>
+            {
+                new CsvColumn<WebActivityFlowRow>("Started on", r => r.StartTitle),
+                new CsvColumn<WebActivityFlowRow>("Start URL", r => r.StartUrl),
+                new CsvColumn<WebActivityFlowRow>("Ended on", r => r.EndTitle),
+                new CsvColumn<WebActivityFlowRow>("End URL", r => r.EndUrl),
+                new CsvColumn<WebActivityFlowRow>("Visits", r => r.Visits),
+                new CsvColumn<WebActivityFlowRow>("Ended where it started", r => r.EndedWhereItStarted),
+                new CsvColumn<WebActivityFlowRow>("Single-page visits", r => r.SinglePageVisits),
+                new CsvColumn<WebActivityFlowRow>("Average pages seen", r => r.AveragePages),
+                new CsvColumn<WebActivityFlowRow>("Share of all visits (%)", r => r.SharePct),
+            };
+        }
+
         /// <summary>
         /// The search-term list.
         /// </summary>

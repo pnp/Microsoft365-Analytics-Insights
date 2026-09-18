@@ -267,6 +267,14 @@ namespace Web.AnalyticsWeb.Controllers
                     break;
                 }
 
+                case "flows":
+                {
+                    var journeys = await _store.GetJourneysAsync(query).ConfigureAwait(false);
+                    failure = ErrorFor(journeys, "journeys-flows");
+                    csv = CsvSerialiser.ToBytes(journeys.Flows, WebActivityExports.FlowColumns());
+                    break;
+                }
+
                 case "search-terms":
                 {
                     var search = await _store.GetSearchAsync(query).ConfigureAwait(false);

@@ -10,6 +10,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowDownload16Regular, ArrowRight16Regular } from '@fluentui/react-icons';
 import CategoryBarChart from '../charts/CategoryBarChart';
+import SankeyChart from '../charts/SankeyChart';
 import PageTable from './PageTable';
 import { KpiGrid, type KpiDefinition } from '../shared/KpiGrid';
 import type { WebActivityJourneys } from '../../types/webActivity';
@@ -42,6 +43,7 @@ export default function JourneysPanel({
   onExportEntry,
   onExportExit,
   onExportTransitions,
+  onExportFlows,
   exporting,
 }: {
   data: WebActivityJourneys;
@@ -49,6 +51,7 @@ export default function JourneysPanel({
   onExportEntry: () => void;
   onExportExit: () => void;
   onExportTransitions: () => void;
+  onExportFlows: () => void;
   exporting: boolean;
 }) {
   const styles = useWebActivityStyles();
@@ -198,6 +201,55 @@ export default function JourneysPanel({
             label="Where visits end"
             valueHeading="Exits"
             columns={{ site: true, uniquePageViews: false, dwell: false }}
+          />
+        </SectionCard>
+
+        <SectionCard
+          title="Where visits start, and where they end up"
+          description="Each band is a set of visits that began on the page on the left and finished on the page on the right."
+          note={
+            'This is the question the two lists above cannot answer between them. They say which '
+            + 'pages are common starts and which are common ends, separately; this says which start '
+            + 'leads to which end - so you can see whether people landing on the home page reach the '
+            + 'service they came for, or finish on the page they arrived at. Bands that return to '
+            + 'the same page are visits that ended where they began, and are drawn in grey rather '
+            + 'than hidden: on most intranets they are the single biggest group, and leaving them '
+            + 'out would imply a journey happened where none did.'
+          }
+          query={queryFor(data.queries, 'journeys-flows')}
+          isEmpty={data.flows.length === 0}
+          emptyMessage="No visit in this period could be paired to a start and an end page."
+          actions={
+            <Button
+              appearance="subtle"
+              size="small"
+              icon={<ArrowDownload16Regular />}
+              onClick={onExportFlows}
+              disabled={exporting}
+            >
+              Export
+            </Button>
+          }
+        >
+          <SankeyChart
+            flows={data.flows.map((f) => ({
+              sourceLabel: f.startTitle,
+              targetLabel: f.endedWhereItStarted ? `${f.endTitle} (stayed)` : f.endTitle,
+              value: f.visits,
+              isSelfFlow: f.endedWhereItStarted,
+              detail: [
+                `${formatPct(f.sharePct)} of all visits`,
+                f.averagePages != null ? `${formatDecimal(f.averagePages)} pages on average` : '',
+                f.endedWhereItStarted && f.singlePageVisits > 0
+                  ? `${formatCount(f.singlePageVisits)} saw only this page`
+                  : '',
+              ].filter((d) => d !== ''),
+            }))}
+            valueLabel="visits"
+            caption={
+              `Showing the top ${data.flows.length} start-to-end pairs, which cover `
+              + `${formatPct(data.flowsCoveragePct)} of all visits that could be paired.`
+            }
           />
         </SectionCard>
 

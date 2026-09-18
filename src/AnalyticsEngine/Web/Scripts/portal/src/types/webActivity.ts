@@ -213,7 +213,22 @@ export interface WebActivityTransitionRow {
   toTitle: string;
   toUrl: string;
   count: number;
+  /** Share of all steps taken out of the "from" page, 0-100. */
   sharePct: number;
+}
+
+export interface WebActivityFlowRow {
+  startTitle: string;
+  startUrl: string;
+  endTitle: string;
+  endUrl: string;
+  visits: number;
+  singlePageVisits: number;
+  averagePages: number | null;
+  /** Share of ALL paired visits, 0-100 - not of the truncated top N. */
+  sharePct: number;
+  /** True when the visit ended on the page it began on. */
+  endedWhereItStarted: boolean;
 }
 
 export interface WebActivityJourneyKpis {
@@ -233,6 +248,9 @@ export interface WebActivityJourneys extends WebActivitySection {
   exitPages: WebActivityPageRow[];
   bouncePages: WebActivityPageRow[];
   transitions: WebActivityTransitionRow[];
+  flows: WebActivityFlowRow[];
+  /** Share of all paired visits the truncated flow list covers, 0-100. */
+  flowsCoveragePct: number;
   depth: WebActivityBucket[];
   clickedElements: WebActivityNamedCount[];
 }
@@ -338,7 +356,7 @@ export interface WebActivityTechnologyDetailRow {
   visits: number;
   visitors: number;
   pageViews: number;
-  pageViewsPerVisit: number;
+  pageViewsPerVisit: number | null;
   averageSecondsOnPage: number | null;
   averageLoadSeconds: number | null;
 }
@@ -360,5 +378,6 @@ export type WebActivityExportSection =
   | 'entry-pages'
   | 'exit-pages'
   | 'transitions'
+  | 'flows'
   | 'search-terms'
   | 'technology';

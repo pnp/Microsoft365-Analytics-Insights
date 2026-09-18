@@ -892,6 +892,57 @@ INSERT INTO @t VALUES
             }
         }
 
+        [TestMethod]
+        public async Task Flows_PairEachVisitsFirstPageWithItsLastAndKeepTheOnesThatStayedPut()
+        {
+            // The Sankey answers a question the entry and exit lists cannot answer between them:
+            // which start leads to which end. A visit that never left its landing page is a real
+            // answer to that question, so it is kept and flagged rather than dropped.
+            var journeys = await NewStore().GetJourneysAsync(NewQuery());
+
+            Assert.IsTrue(journeys.Flows.Count > 0, "The fixture seeds visits with a first and last page.");
+
+            // Every visit that has any page view has exactly one first page and one last page, so
+            // the flows must account for every visit - no more and no less.
+            var pairedVisits = journeys.Flows.Sum(f => f.Visits);
+            Assert.AreEqual(
+                journeys.Kpis.Visits,
+                pairedVisits,
+                "Every visit pairs to exactly one (start, end), so the bands must sum to all visits.");
+
+            foreach (var flow in journeys.Flows)
+            {
+                Assert.IsTrue(flow.Visits > 0);
+                Assert.IsTrue(flow.SinglePageVisits <= flow.Visits);
+
+                // A single-page visit started and ended on the same page by definition, so it can
+                // never appear on a flow between two different pages.
+                if (!flow.EndedWhereItStarted)
+                {
+                    Assert.AreEqual(0, flow.SinglePageVisits,
+                        "A visit that moved pages cannot also be a single-page visit.");
+                }
+
+                Assert.AreEqual(
+                    flow.EndedWhereItStarted,
+                    string.Equals(flow.StartUrl, flow.EndUrl, StringComparison.Ordinal),
+                    "The self-flow flag must follow the URL, not the title - two pages can share a title.");
+            }
+
+            // The fixture seeds bounces, so at least one flow must be a stayed-put one.
+            Assert.IsTrue(
+                journeys.Flows.Any(f => f.EndedWhereItStarted && f.SinglePageVisits > 0),
+                "The seeded bounces must show up as visits that ended where they began.");
+
+            // Shares are against ALL paired visits, not the truncated top N, so the diagram can say
+            // honestly how much of the traffic it is showing.
+            Assert.IsTrue(journeys.FlowsCoveragePct > 0 && journeys.FlowsCoveragePct <= 100);
+            Assert.AreEqual(
+                100,
+                Math.Round(journeys.Flows.Sum(f => f.SharePct)),
+                "The fixture is small enough that nothing is truncated, so the shares must total 100%.");
+        }
+
         #endregion
     }
 }

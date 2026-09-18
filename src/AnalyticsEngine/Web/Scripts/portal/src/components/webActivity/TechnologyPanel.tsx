@@ -20,6 +20,7 @@ import {
   SectionCard,
   WindowNote,
   formatCount,
+  formatDecimal,
   formatDuration,
   formatPct,
   formatSeconds,
@@ -253,7 +254,7 @@ export default function TechnologyPanel({
                     <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.visitors)}</TableCell>
                     <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.pageViews)}</TableCell>
                     <TableCell className={`${styles.td} ${styles.numeric}`}>
-                      {(Math.round(row.pageViewsPerVisit * 10) / 10).toFixed(1)}
+                      {row.pageViewsPerVisit != null ? formatDecimal(row.pageViewsPerVisit) : '\u2014'}
                     </TableCell>
                     <TableCell className={`${styles.td} ${styles.numeric}`}>
                       {formatDuration(row.averageSecondsOnPage)}

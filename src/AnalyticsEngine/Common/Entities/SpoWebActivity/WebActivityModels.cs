@@ -430,6 +430,36 @@ namespace Common.Entities.SpoWebActivity
         public double SharePct { get; set; }
     }
 
+    /// <summary>
+    /// Where a visit started and where it ended, as one flow, for the Sankey diagram.
+    /// </summary>
+    [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
+    public sealed class WebActivityFlowRow
+    {
+        public string StartTitle { get; set; }
+        public string StartUrl { get; set; }
+        public string EndTitle { get; set; }
+        public string EndUrl { get; set; }
+
+        /// <summary>Visits that started on the start page and ended on the end page.</summary>
+        public long Visits { get; set; }
+
+        /// <summary>
+        /// How many of those visits saw only ONE page. Non-zero only when start and end are the
+        /// same page, and then usually all of them - the UI labels these rather than hiding them.
+        /// </summary>
+        public long SinglePageVisits { get; set; }
+
+        /// <summary>Average pages seen by the visits on this flow, or null when nothing reported.</summary>
+        public double? AveragePages { get; set; }
+
+        /// <summary>Share of ALL paired visits, 0-100 - not of the truncated top N.</summary>
+        public double SharePct { get; set; }
+
+        /// <summary>True when the visit ended on the page it began on.</summary>
+        public bool EndedWhereItStarted { get; set; }
+    }
+
     /// <summary>The Journeys tab's headline figures.</summary>
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public sealed class WebActivityJourneyKpis
@@ -470,6 +500,17 @@ namespace Common.Entities.SpoWebActivity
         public List<WebActivityPageRow> BouncePages { get; set; } = new List<WebActivityPageRow>();
 
         public List<WebActivityTransitionRow> Transitions { get; set; } = new List<WebActivityTransitionRow>();
+
+        /// <summary>
+        /// Start-to-end flows for the Sankey: which landing page led to which last page.
+        /// </summary>
+        public List<WebActivityFlowRow> Flows { get; set; } = new List<WebActivityFlowRow>();
+
+        /// <summary>
+        /// Share of all paired visits covered by <see cref="Flows"/> after truncation, 0-100, so the
+        /// diagram can say how much of the traffic it is actually showing.
+        /// </summary>
+        public double FlowsCoveragePct { get; set; }
 
         public List<WebActivityBucket> Depth { get; set; } = new List<WebActivityBucket>();
 
@@ -712,7 +753,12 @@ namespace Common.Entities.SpoWebActivity
         public long Visits { get; set; }
         public int Visitors { get; set; }
         public long PageViews { get; set; }
-        public double PageViewsPerVisit { get; set; }
+        /// <summary>
+        /// Visit-attributed page views divided by visits, or NULL when this combination produced no
+        /// visits at all - hits carry a nullable session id, so a row can have page views and no
+        /// visit to divide by, and a confident 0.0 there is a measurement that was never made.
+        /// </summary>
+        public double? PageViewsPerVisit { get; set; }
         public double? AverageSecondsOnPage { get; set; }
         public double? AverageLoadSeconds { get; set; }
     }

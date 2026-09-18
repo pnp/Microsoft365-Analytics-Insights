@@ -924,6 +924,81 @@ LEFT JOIN dbo.page_titles AS tpt ON tpt.id = tt.TitleId
 ORDER BY s.Count DESC, s.FromUrlId ASC, s.ToUrlId ASC
 OPTION (RECOMPILE);";
 
+        /// <summary>
+        /// Whole-visit flows: where a visit STARTED and where it ended, as a pair, for the Sankey.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// This is not the same question as the entry-page and exit-page leaderboards beside it.
+        /// Those say which pages are common starts and which are common ends, independently; this
+        /// says which start leads to which end, which is the thing that tells an intranet owner
+        /// whether people arriving at the home page reach the service they came for or bail out on
+        /// the same page.
+        /// </para>
+        /// <para>
+        /// Same-page flows are KEPT here, unlike <see cref="Transitions"/>, and are exactly the
+        /// visits that started and ended on one page. They are the single biggest band on most
+        /// intranets and hiding them would make the diagram claim a journey happened where none did,
+        /// so they are flagged with <c>SinglePage</c> for the UI to label rather than dropped.
+        /// </para>
+        /// <para>
+        /// The pairing joins the ranked set to itself on the session rather than using two window
+        /// functions on one row, because first and last need different ORDER BY directions.
+        /// </para>
+        /// </remarks>
+        public const string StartEndFlows = @"
+WITH" + HitWindowCte + @",
+Ranked AS (
+    SELECT h.session_id, h.url_id,
+           ROW_NUMBER() OVER (PARTITION BY h.session_id ORDER BY h.hit_timestamp ASC,  h.id ASC)  AS FirstSeq,
+           ROW_NUMBER() OVER (PARTITION BY h.session_id ORDER BY h.hit_timestamp DESC, h.id DESC) AS LastSeq,
+           COUNT(*) OVER (PARTITION BY h.session_id)                                              AS VisitPages
+    FROM H AS h
+    WHERE h.session_id IS NOT NULL
+),
+Pairs AS (
+    SELECT f.url_id AS StartUrlId, l.url_id AS EndUrlId, f.VisitPages
+    FROM Ranked AS f
+    INNER JOIN Ranked AS l ON l.session_id = f.session_id AND l.LastSeq = 1
+    WHERE f.FirstSeq = 1
+),
+Flows AS (
+    SELECT p.StartUrlId,
+           p.EndUrlId,
+           COUNT_BIG(*)                                                        AS Visits,
+           CAST(SUM(CASE WHEN p.VisitPages = 1 THEN 1 ELSE 0 END) AS bigint)   AS SinglePageVisits,
+           AVG(CAST(p.VisitPages AS float))                                    AS AveragePages
+    FROM Pairs AS p
+    GROUP BY p.StartUrlId, p.EndUrlId
+),
+Titles AS (
+    SELECT h.url_id, " + LatestTitleId + @" AS TitleId
+    FROM H AS h
+    GROUP BY h.url_id
+)
+SELECT TOP (@top)
+       CAST(ISNULL(spt.title, su.full_url) AS nvarchar(300)) AS StartTitle,
+       CAST(su.full_url AS nvarchar(850))                    AS StartUrl,
+       CAST(ISNULL(ept.title, eu.full_url) AS nvarchar(300)) AS EndTitle,
+       CAST(eu.full_url AS nvarchar(850))                    AS EndUrl,
+       fl.Visits,
+       fl.SinglePageVisits,
+       fl.AveragePages,
+
+       -- Share of ALL paired visits, not of the truncated top N, so the diagram can honestly say
+       -- how much of the traffic it is showing.
+       CAST(fl.Visits AS float) * 100.0
+           / NULLIF((SELECT SUM(f2.Visits) FROM Flows AS f2), 0)               AS SharePct
+FROM Flows AS fl
+INNER JOIN dbo.urls AS su ON su.id = fl.StartUrlId
+INNER JOIN dbo.urls AS eu ON eu.id = fl.EndUrlId
+LEFT JOIN Titles AS st ON st.url_id = fl.StartUrlId
+LEFT JOIN Titles AS et ON et.url_id = fl.EndUrlId
+LEFT JOIN dbo.page_titles AS spt ON spt.id = st.TitleId
+LEFT JOIN dbo.page_titles AS ept ON ept.id = et.TitleId
+ORDER BY fl.Visits DESC, fl.StartUrlId ASC, fl.EndUrlId ASC
+OPTION (RECOMPILE);";
+
         /// <summary>What visitors clicked, when the tracker's element-click capture is switched on.</summary>
         public const string ClickedElements = @"
 SELECT TOP (@top)
@@ -1359,6 +1434,7 @@ WITH" + HitWindowCte + @",
 Grouped AS (
     SELECT h.agent_id, h.device_id, h.os_id, h.city_id,
            COUNT_BIG(*)                 AS PageViews,
+           CAST(SUM(CASE WHEN h.session_id IS NOT NULL THEN 1 ELSE 0 END) AS bigint) AS VisitPageViews,
            COUNT(DISTINCT h.session_id) AS Visits,
            AVG(h.seconds_on_page)       AS AverageSecondsOnPage,
            AVG(CASE WHEN h.page_load_time > 0 THEN h.page_load_time END) AS AverageLoadSeconds
@@ -1379,6 +1455,7 @@ SELECT TOP (@top)
        CAST(g.Visits AS bigint)                                   AS Visits,
        ISNULL(vi.Visitors, 0)                                     AS Visitors,
        g.PageViews,
+       g.VisitPageViews,
        g.AverageSecondsOnPage,
        g.AverageLoadSeconds
 FROM Grouped AS g
