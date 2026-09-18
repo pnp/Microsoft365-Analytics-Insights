@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest';
 import SankeyChart, { type SankeyFlow } from './SankeyChart';
 
 const flows: SankeyFlow[] = [
-  { sourceLabel: 'Home', targetLabel: 'Expenses', value: 60 },
-  { sourceLabel: 'Home', targetLabel: 'Home (stayed)', value: 30, isSelfFlow: true },
-  { sourceLabel: 'News', targetLabel: 'Expenses', value: 10 },
+  { sourceKey: '/home', sourceLabel: 'Home', targetKey: '/expenses', targetLabel: 'Expenses', value: 60 },
+  { sourceKey: '/home', sourceLabel: 'Home', targetKey: '/home', targetLabel: 'Home', value: 30, isSelfFlow: true },
+  { sourceKey: '/news', sourceLabel: 'News', targetKey: '/expenses', targetLabel: 'Expenses', value: 10 },
 ];
 
 describe('SankeyChart', () => {
@@ -18,8 +18,8 @@ describe('SankeyChart', () => {
     render(
       <SankeyChart
         flows={[
-          { sourceLabel: 'Home', targetLabel: 'Expenses', value: 0 },
-          { sourceLabel: 'News', targetLabel: 'Policies', value: -5 },
+          { sourceKey: '/home', sourceLabel: 'Home', targetKey: '/expenses', targetLabel: 'Expenses', value: 0 },
+          { sourceKey: '/news', sourceLabel: 'News', targetKey: '/policies', targetLabel: 'Policies', value: -5 },
         ]}
         valueLabel="visits"
       />,
@@ -46,6 +46,29 @@ describe('SankeyChart', () => {
     // Three flows in, three ribbons out. Dropping the self-flow would imply a journey happened
     // where none did, and on most intranets it is the largest single band.
     expect(container.querySelectorAll('svg path').length).toBe(3);
+  });
+
+  it('keeps two pages that share a title apart, because SharePoint titles are not unique', () => {
+    // The SQL keys flows on url ids, so two different pages both called "Home" arrive as two
+    // distinct flows. Keying the chart on the title instead merged them into one node whose height
+    // was a number no real page had, and produced duplicate React keys on the ribbons.
+    const shared: SankeyFlow[] = [
+      { sourceKey: '/sites/a/home', sourceLabel: 'Home', targetKey: '/expenses', targetLabel: 'Expenses', value: 40 },
+      { sourceKey: '/sites/b/home', sourceLabel: 'Home', targetKey: '/expenses', targetLabel: 'Expenses', value: 30 },
+    ];
+
+    const { container } = render(<SankeyChart flows={shared} valueLabel="visits" />);
+
+    // The discriminating assertion. Both shapes draw two ribbons and two screen-reader rows, so
+    // only the NODE count tells them apart: keyed on the title the left column collapses to a
+    // single "Home" node worth 70 visits (2 rects); keyed on the URL it is two nodes (3 rects).
+    expect(container.querySelectorAll('svg rect').length).toBe(3);
+    expect(container.querySelectorAll('svg path').length).toBe(2);
+
+    const rows = screen.getAllByRole('row', { name: /Home Expenses/i });
+    expect(rows.length).toBe(2);
+    expect(screen.getByRole('row', { name: /Home Expenses 40/i })).toBeInTheDocument();
+    expect(screen.getByRole('row', { name: /Home Expenses 30/i })).toBeInTheDocument();
   });
 
   it('gives the diagram an accessible name that says what it measures', () => {

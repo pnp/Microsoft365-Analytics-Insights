@@ -902,13 +902,22 @@ INSERT INTO @t VALUES
 
             Assert.IsTrue(journeys.Flows.Count > 0, "The fixture seeds visits with a first and last page.");
 
-            // Every visit that has any page view has exactly one first page and one last page, so
-            // the flows must account for every visit - no more and no less.
+            // Every visit has exactly one first page and one last page, so the pairs account for
+            // every visit - but the list is TOP (N), so that identity only holds while nothing was
+            // truncated. Assert the invariant that is actually true in both cases, and the equality
+            // only when the query returned fewer rows than its limit.
             var pairedVisits = journeys.Flows.Sum(f => f.Visits);
-            Assert.AreEqual(
-                journeys.Kpis.Visits,
-                pairedVisits,
-                "Every visit pairs to exactly one (start, end), so the bands must sum to all visits.");
+            Assert.IsTrue(
+                pairedVisits <= journeys.Kpis.Visits,
+                "A visit pairs to exactly one (start, end), so the bands can never exceed all visits.");
+
+            if (journeys.Flows.Count < journeys.Window.Top)
+            {
+                Assert.AreEqual(
+                    journeys.Kpis.Visits,
+                    pairedVisits,
+                    "Nothing was truncated, so every visit must appear on exactly one band.");
+            }
 
             foreach (var flow in journeys.Flows)
             {
@@ -937,10 +946,14 @@ INSERT INTO @t VALUES
             // Shares are against ALL paired visits, not the truncated top N, so the diagram can say
             // honestly how much of the traffic it is showing.
             Assert.IsTrue(journeys.FlowsCoveragePct > 0 && journeys.FlowsCoveragePct <= 100);
-            Assert.AreEqual(
-                100,
-                Math.Round(journeys.Flows.Sum(f => f.SharePct)),
-                "The fixture is small enough that nothing is truncated, so the shares must total 100%.");
+
+            if (journeys.Flows.Count < journeys.Window.Top)
+            {
+                Assert.AreEqual(
+                    100,
+                    Math.Round(journeys.FlowsCoveragePct),
+                    "Nothing was truncated, so the diagram covers all of the paired visits.");
+            }
         }
 
         #endregion

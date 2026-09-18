@@ -233,11 +233,14 @@ export default function JourneysPanel({
         >
           <SankeyChart
             flows={data.flows.map((f) => ({
+              sourceKey: f.startUrl,
               sourceLabel: f.startTitle,
-              targetLabel: f.endedWhereItStarted ? `${f.endTitle} (stayed)` : f.endTitle,
+              targetKey: f.endUrl,
+              targetLabel: f.endTitle,
               value: f.visits,
               isSelfFlow: f.endedWhereItStarted,
               detail: [
+                f.endedWhereItStarted ? 'Ended on the page it started on' : '',
                 `${formatPct(f.sharePct)} of all visits`,
                 f.averagePages != null ? `${formatDecimal(f.averagePages)} pages on average` : '',
                 f.endedWhereItStarted && f.singlePageVisits > 0

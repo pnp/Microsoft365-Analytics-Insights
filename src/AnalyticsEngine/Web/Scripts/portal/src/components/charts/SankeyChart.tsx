@@ -43,9 +43,18 @@ const useStyles = makeStyles({
 });
 
 export type SankeyFlow = {
-  /** Left-hand node label. */
+  /**
+   * Stable identity for the left-hand node. Must be the URL, not the title: SharePoint page titles
+   * are not unique, and keying nodes on the title silently merges two different pages into one band
+   * whose height is a number no real page had. The SQL already keys these flows on the url ids for
+   * the same reason.
+   */
+  sourceKey: string;
+  /** Left-hand node label, for display only. */
   sourceLabel: string;
-  /** Right-hand node label. */
+  /** Stable identity for the right-hand node. Must be the URL - see {@link sourceKey}. */
+  targetKey: string;
+  /** Right-hand node label, for display only. */
   targetLabel: string;
   value: number;
   /** Drawn in a muted tone and labelled, rather than as a journey. */
@@ -93,29 +102,34 @@ export default function SankeyChart({ flows, valueLabel, height = 420, caption }
     if (positive.length === 0) return null;
 
     // A page can be both a start and an end, so the two columns are indexed separately - the same
-    // label on the left and on the right is the same page but a different node.
-    const sources = new Map<string, number>();
-    const targets = new Map<string, number>();
+    // page on the left and on the right is one page but two nodes. Identity is the URL, never the
+    // label: two different pages routinely share a title on SharePoint.
+    const sources = new Map<string, { label: string; value: number }>();
+    const targets = new Map<string, { label: string; value: number }>();
     for (const f of positive) {
-      sources.set(f.sourceLabel, (sources.get(f.sourceLabel) ?? 0) + f.value);
-      targets.set(f.targetLabel, (targets.get(f.targetLabel) ?? 0) + f.value);
+      const s = sources.get(f.sourceKey);
+      sources.set(f.sourceKey, { label: f.sourceLabel, value: (s?.value ?? 0) + f.value });
+      const t = targets.get(f.targetKey);
+      targets.set(f.targetKey, { label: f.targetLabel, value: (t?.value ?? 0) + f.value });
     }
 
     const plotTop = 8;
     const plotH = height - 16;
 
-    const build = (totals: Map<string, number>): Map<string, Node> => {
-      const entries = [...totals.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-      const sum = entries.reduce((s, [, v]) => s + v, 0);
+    const build = (totals: Map<string, { label: string; value: number }>): Map<string, Node> => {
+      const entries = [...totals.entries()].sort(
+        (a, b) => b[1].value - a[1].value || a[1].label.localeCompare(b[1].label) || a[0].localeCompare(b[0]),
+      );
+      const sum = entries.reduce((s, [, v]) => s + v.value, 0);
       const gaps = NODE_GAP * Math.max(0, entries.length - 1);
       const usable = Math.max(1, plotH - gaps);
 
       const nodes = new Map<string, Node>();
       let y = plotTop;
-      for (const [label, value] of entries) {
+      for (const [key, { label, value }] of entries) {
         // Floor of 2px so a tiny flow is still visible and still hoverable.
         const h = Math.max(2, sum > 0 ? (value / sum) * usable : 0);
-        nodes.set(label, { key: label, label, value, y, h });
+        nodes.set(key, { key, label, value, y, h });
         y += h + NODE_GAP;
       }
       return nodes;
@@ -131,19 +145,19 @@ export default function SankeyChart({ flows, valueLabel, height = 420, caption }
 
     const ordered = [...positive].sort((a, b) => b.value - a.value);
     const ribbons = ordered.map((f, i) => {
-      const s = left.get(f.sourceLabel)!;
-      const t = right.get(f.targetLabel)!;
-      const sSum = sources.get(f.sourceLabel)!;
-      const tSum = targets.get(f.targetLabel)!;
+      const s = left.get(f.sourceKey)!;
+      const t = right.get(f.targetKey)!;
+      const sSum = sources.get(f.sourceKey)!.value;
+      const tSum = targets.get(f.targetKey)!.value;
 
       const sh = (f.value / sSum) * s.h;
       const th = (f.value / tSum) * t.h;
 
-      const sy = s.y + (leftCursor.get(f.sourceLabel) ?? 0);
-      const ty = t.y + (rightCursor.get(f.targetLabel) ?? 0);
+      const sy = s.y + (leftCursor.get(f.sourceKey) ?? 0);
+      const ty = t.y + (rightCursor.get(f.targetKey) ?? 0);
 
-      leftCursor.set(f.sourceLabel, (leftCursor.get(f.sourceLabel) ?? 0) + sh);
-      rightCursor.set(f.targetLabel, (rightCursor.get(f.targetLabel) ?? 0) + th);
+      leftCursor.set(f.sourceKey, (leftCursor.get(f.sourceKey) ?? 0) + sh);
+      rightCursor.set(f.targetKey, (rightCursor.get(f.targetKey) ?? 0) + th);
 
       return { flow: f, index: i, sy, sh, ty, th };
     });
@@ -176,7 +190,7 @@ export default function SankeyChart({ flows, valueLabel, height = 420, caption }
 
           return (
             <path
-              key={`${r.flow.sourceLabel}\u0000${r.flow.targetLabel}`}
+              key={`${r.flow.sourceKey}\u0000${r.flow.targetKey}`}
               d={`${top} ${bottom}`}
               fill={r.flow.isSelfFlow ? tokens.colorNeutralForeground4 : seriesColor(r.index)}
               opacity={active ? 0.85 : r.flow.isSelfFlow ? 0.3 : 0.45}
@@ -267,7 +281,7 @@ export default function SankeyChart({ flows, valueLabel, height = 420, caption }
         </thead>
         <tbody>
           {model.ribbons.map((r) => (
-            <tr key={`sr-${r.flow.sourceLabel}\u0000${r.flow.targetLabel}`}>
+            <tr key={`sr-${r.flow.sourceKey}\u0000${r.flow.targetKey}`}>
               <td>{r.flow.sourceLabel}</td>
               <td>{r.flow.isSelfFlow ? 'the same page' : r.flow.targetLabel}</td>
               <td>{formatValue(r.flow.value)}</td>
