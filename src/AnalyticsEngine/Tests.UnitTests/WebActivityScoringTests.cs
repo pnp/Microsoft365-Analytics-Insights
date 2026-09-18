@@ -557,7 +557,7 @@ namespace Tests.UnitTests
                 judgements.Any(j => j.Key == "bounce"),
                 "A bounce verdict needs visits to be about.");
             Assert.IsFalse(
-                judgements.Any(j => j.Tone == "good" && j.Detail.Contains("Most visits go beyond")),
+                judgements.Any(j => j.Key == "bounce" && j.Tone == "good"),
                 "Nothing may report healthy engagement from zero visits.");
         }
 

@@ -230,6 +230,7 @@ namespace Common.Entities.SpoWebActivity
                 kpiTask.Result.Info, halvesTask.Result.Info, trendTask.Result.Info, segmentTask.Result.Info,
                 depthTask.Result.Info, heatTask.Result.Info, siteTask.Result.Info, deviceTask.Result.Info,
                 distributionTask.Result.Info, searchTask.Result.Info, histogramTask.Result.Info,
+                everTask.Result.Info,
             });
 
             var kpi = kpiTask.Result.Rows.FirstOrDefault() ?? new OverviewKpiRow();
@@ -293,7 +294,12 @@ namespace Common.Entities.SpoWebActivity
                 // A failed KPI query yields the same all-zero row as a genuinely empty window, so
                 // say which it was rather than letting the scoring guess from the zeros.
                 KpisUnavailable = kpiTask.Result.Info.Error != null,
-                HasEverCollected = everTask.Result.Rows.FirstOrDefault()?.LastHitUtc != null,
+
+                // An unreadable collection history counts as "has collected": the only thing this
+                // flag unlocks is telling an admin their tracker was never deployed, and a failed
+                // MAX() is not evidence for that.
+                HasEverCollected = everTask.Result.Info.Error != null
+                    || everTask.Result.Rows.FirstOrDefault()?.LastHitUtc != null,
 
                 PageViews = kpi.PageViews,
                 Visits = kpi.Visits,
@@ -442,13 +448,14 @@ namespace Common.Entities.SpoWebActivity
                     Name = r.Name,
                     Url = r.Url,
                     PageViews = r.PageViews,
+                    VisitPageViews = r.VisitPageViews,
                     UniquePageViews = r.UniquePageViews,
                     Visits = r.Visits,
                     Visitors = r.Visitors,
                 })
                 .ToList();
 
-            model.PeriodOverTime = BuildPeriodOverTime(periodTask.Result.Rows);
+            model.PeriodOverTime = BuildPeriodOverTime(periodTask.Result.Rows, query);
 
             return model;
         }
@@ -1123,7 +1130,9 @@ namespace Common.Entities.SpoWebActivity
                 .ToList();
         }
 
-        private static List<WebActivityStackPoint> BuildPeriodOverTime(IEnumerable<WeekHourRow> rows)
+        private static List<WebActivityStackPoint> BuildPeriodOverTime(
+            IEnumerable<WeekHourRow> rows,
+            WebActivityQuery query)
         {
             var totals = new Dictionary<Tuple<DateTime, string>, long>();
 
@@ -1133,6 +1142,23 @@ namespace Common.Entities.SpoWebActivity
                 var key = Tuple.Create(row.WeekStart, WebActivityScoring.PeriodFor(row.Hour).Label);
                 totals.TryGetValue(key, out long current);
                 totals[key] = current + row.Count;
+            }
+
+            // On the same weekly spine as every other chart on the page. Without it an ingestion
+            // outage is not drawn as a dip, it is drawn as nothing at all, and the weeks either side
+            // are joined as though collection never stopped.
+            if (totals.Count > 0)
+            {
+                var periods = totals.Keys.Select(k => k.Item2).Distinct(StringComparer.Ordinal).ToList();
+
+                foreach (var week in WeekSpine(query))
+                {
+                    foreach (var period in periods)
+                    {
+                        var key = Tuple.Create(week, period);
+                        if (!totals.ContainsKey(key)) totals[key] = 0;
+                    }
+                }
             }
 
             return totals

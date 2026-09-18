@@ -106,6 +106,7 @@ namespace Common.Entities.SpoWebActivity
             public string Name { get; set; }
             public string Url { get; set; }
             public long PageViews { get; set; }
+            public long VisitPageViews { get; set; }
             public long UniquePageViews { get; set; }
             public long Visits { get; set; }
             public int Visitors { get; set; }

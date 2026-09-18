@@ -45,7 +45,9 @@ export default function GeographyPanel({ data }: { data: WebActivityGeography })
       value: formatCount(kpis.visits),
       info: {
         what: 'Visits with at least one page view in the period.',
-        how: 'The same visit count as the other tabs, repeated here so the shares below have a denominator on screen.',
+        how:
+          'The same visit count as the other tabs, for scale. The location shares below are worked '
+          + 'out over located PAGE VIEWS, not over this number.',
       },
     },
     {

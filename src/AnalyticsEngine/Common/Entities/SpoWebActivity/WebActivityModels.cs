@@ -401,6 +401,12 @@ namespace Common.Entities.SpoWebActivity
         public string Name { get; set; }
         public string Url { get; set; }
         public long PageViews { get; set; }
+
+        /// <summary>
+        /// Page views on this site that belong to a visit. The only correct numerator for a
+        /// per-visit ratio, since <see cref="PageViews"/> also counts hits with no session.
+        /// </summary>
+        public long VisitPageViews { get; set; }
         public long UniquePageViews { get; set; }
         public long Visits { get; set; }
         public int Visitors { get; set; }

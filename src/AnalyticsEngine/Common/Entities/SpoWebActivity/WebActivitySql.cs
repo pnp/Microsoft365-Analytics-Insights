@@ -435,6 +435,7 @@ WITH" + HitWindowCte + @",
 Grouped AS (
     SELECT h.web_id,
            COUNT_BIG(*)                 AS PageViews,
+           CAST(SUM(CASE WHEN h.session_id IS NOT NULL THEN 1 ELSE 0 END) AS bigint) AS VisitPageViews,
            COUNT(DISTINCT h.session_id) AS Visits
     FROM H AS h
     WHERE h.web_id IS NOT NULL
@@ -462,6 +463,7 @@ SELECT TOP (@top)
        END AS nvarchar(300))                              AS Name,
        CAST(w.url_base AS nvarchar(500))                  AS Url,
        g.PageViews,
+       g.VisitPageViews,
        ISNULL(up.UniquePageViews, 0)                      AS UniquePageViews,
        CAST(g.Visits AS bigint)                           AS Visits,
        ISNULL(vi.Visitors, 0)                             AS Visitors

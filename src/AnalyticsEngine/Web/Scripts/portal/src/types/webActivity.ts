@@ -179,6 +179,8 @@ export interface WebActivitySiteRow {
   name: string;
   url: string | null;
   pageViews: number;
+  /** Page views belonging to a visit - the correct numerator for a per-visit ratio. */
+  visitPageViews: number;
   uniquePageViews: number;
   visits: number;
   visitors: number;

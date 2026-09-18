@@ -79,8 +79,11 @@ export default function PagesPanel({
       label: 'Pages per visit',
       value: formatDecimal(kpis.pagesPerVisit),
       info: {
-        what: 'Average number of pages seen in a visit.',
-        how: 'Total page views divided by total visits.',
+        what: 'Average number of page views recorded in a visit.',
+        how:
+          'Page views that belong to a visit, divided by visits. Page views arriving without a '
+          + 'session are excluded from the top line here, so this does not equal the Total page '
+          + 'views card divided by Visits. A refresh counts as another view.',
       },
     },
     {
@@ -251,7 +254,7 @@ export default function PagesPanel({
                     <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(site.visits)}</TableCell>
                     <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(site.visitors)}</TableCell>
                     <TableCell className={`${styles.td} ${styles.numeric}`}>
-                      {site.visits > 0 ? formatDecimal(site.pageViews / site.visits) : '\u2014'}
+                      {site.visits > 0 ? formatDecimal(site.visitPageViews / site.visits) : '\u2014'}
                     </TableCell>
                   </TableRow>
                 ))}
