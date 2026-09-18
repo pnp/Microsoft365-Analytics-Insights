@@ -71,8 +71,6 @@ const options: CopilotAdoptionOptions = {
   coworkMinutesSavedPerMailThread: 5,
   coworkMinutesSavedPerDocument: 8,
   coworkEstimateLowerBoundRatio: 0.5,
-  coworkLoadedCostPerHour: null,
-  coworkCurrencyCode: null,
   usageReportLagDays: 3,
   topSegments: 10,
   minSeatsPerSegment: 5,
@@ -143,7 +141,7 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
     coworkQuadrant: [],
     coworkByDepartment: [],
     coworkCreditPosition: { available: false, snapshotUtc: null, entitled: null, consumed: null, available_credits: null, payAsYouGoConsumed: null, status: null, perUserCreditsAvailable: false },
-    coworkValueEstimate: { isModelled: false, cohortUsers: 0, addressableMeetings: 0, addressableMailThreads: 0, addressableDocuments: 0, hoursPerMonthLow: 0, hoursPerMonthHigh: 0, currencyPerMonthLow: null, currencyPerMonthHigh: null, currencyCode: null, assumptions: [] },
+    coworkValueEstimate: { isModelled: false, cohortUsers: 0, addressableMeetings: 0, addressableMailThreads: 0, addressableDocuments: 0, hoursPerMonthLow: 0, hoursPerMonthHigh: 0, assumptions: [] },
     unlicensedActiveUsers: 14,
     recommendedForLicence: 9,
     funnel: [

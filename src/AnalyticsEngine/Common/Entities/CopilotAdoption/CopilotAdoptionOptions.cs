@@ -453,24 +453,11 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("coworkEstimateLowerBoundRatio")]
         public double CoworkEstimateLowerBoundRatio { get; set; } = 0.5;
 
-        /// <summary>
-        /// Fully-loaded hourly cost used to express the modelled time saving in money.
-        ///
-        /// <b>Null by default, and null means no monetary figure is produced at all.</b> There is no
-        /// defensible default for this - it varies by role, country and employer - so the tool does not
-        /// invent one. An admin who wants a currency figure supplies the rate and owns it; until then the
-        /// estimate is reported in hours only.
-        /// </summary>
-        [JsonProperty("coworkLoadedCostPerHour")]
-        public double? CoworkLoadedCostPerHour { get; set; }
-
-        /// <summary>
-        /// Currency code for <see cref="CoworkLoadedCostPerHour"/>, used only as a display label. Not
-        /// defaulted, and no conversion is ever performed: the tool reports the number it was given in the
-        /// units it was given.
-        /// </summary>
-        [JsonProperty("coworkCurrencyCode")]
-        public string CoworkCurrencyCode { get; set; }
+        // There is deliberately no loaded-hourly-cost or currency option here. The Cowork estimate is a
+        // model built from assumed minutes-per-meeting/mail/document, and epic #559 rejects an ROI /
+        // "hours saved" calculator precisely because a fabricated money figure discredits the measured
+        // ones beside it. Currency belongs only on idle licence spend (#553), where the seat cost is a
+        // real price for a seat we can prove is unused.
 
         #endregion
 
