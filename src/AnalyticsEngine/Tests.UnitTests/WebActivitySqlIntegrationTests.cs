@@ -867,6 +867,29 @@ INSERT INTO @t VALUES
                 Assert.AreEqual(1, perName.Count, "Every stacked series must have the same number of weeks.");
                 Assert.AreEqual(weeks.Count, perName[0], "Stacked series must use the same spine as the trend.");
             }
+
+            // The period-of-day chart builds its keys from raw SQL DateTimes (Kind Unspecified) and
+            // fills from the spine (Kind Utc). DateTime equality ignores Kind, so those must collide
+            // into one key - if they ever stopped doing so, every week would appear twice and the
+            // chart would silently double.
+            var pages = await store.GetPagesAsync(query);
+            if (pages.PeriodOverTime.Count > 0)
+            {
+                var periodWeeks = pages.PeriodOverTime
+                    .GroupBy(p => p.Name, StringComparer.Ordinal)
+                    .Select(g => g.Select(p => p.WeekStart).ToList())
+                    .ToList();
+
+                foreach (var series in periodWeeks)
+                {
+                    CollectionAssert.AllItemsAreUnique(series, "A week must appear once per series.");
+                    Assert.AreEqual(weeks.Count, series.Count, "The period chart must use the same spine.");
+                }
+
+                Assert.IsTrue(
+                    pages.PeriodOverTime.All(p => p.WeekStart.Kind == DateTimeKind.Utc),
+                    "An unstamped week serialises without a Z and is read as local time by the browser.");
+            }
         }
 
         #endregion
