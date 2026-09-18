@@ -996,10 +996,13 @@ Grouped AS (
     GROUP BY sc.search_term_id
 ),
 Searchers AS (
-    SELECT sc.search_term_id, COUNT(DISTINCT se.user_id) AS Searchers
-    FROM Scored AS sc
-    INNER JOIN dbo.sessions AS se ON se.id = sc.session_id
-    GROUP BY sc.search_term_id
+    -- Reads S, not Scored: counting distinct users does not need the dead-end check, and
+    -- selecting from Scored makes the optimiser evaluate that correlated NOT EXISTS against
+    -- dbo.hits a second time for every search in the window.
+    SELECT s.search_term_id, COUNT(DISTINCT se.user_id) AS Searchers
+    FROM S AS s
+    INNER JOIN dbo.sessions AS se ON se.id = s.session_id
+    GROUP BY s.search_term_id
 )
 SELECT TOP (@top)
        CAST(t.search_term AS nvarchar(250)) AS Term,

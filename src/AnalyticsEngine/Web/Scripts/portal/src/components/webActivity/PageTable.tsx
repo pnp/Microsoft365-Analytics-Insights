@@ -43,12 +43,15 @@ export default function PageTable({
   columns,
   valueHeading = 'Page views',
   dwellFootnote,
+  label,
 }: {
   rows: WebActivityPageRow[];
   columns?: PageTableColumns;
   valueHeading?: string;
   /** Shown under the table when it carries a dwell column that needs its caveat repeating. */
   dwellFootnote?: boolean;
+  /** Accessible name. Five different tables render through here, so each needs its own. */
+  label: string;
 }) {
   const styles = useWebActivityStyles();
   const show = {
@@ -64,7 +67,7 @@ export default function PageTable({
 
   return (
     <div className={styles.tableWrap}>
-      <Table size="small" aria-label="Pages">
+      <Table size="small" aria-label={label}>
         <TableHeader>
           <TableRow>
             <TableHeaderCell>Page</TableHeaderCell>

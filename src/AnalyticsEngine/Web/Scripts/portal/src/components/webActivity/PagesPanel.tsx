@@ -153,6 +153,7 @@ export default function PagesPanel({
         >
           <PageTable
             rows={data.topPages}
+            label="Most viewed pages"
             columns={{ site: true, uniquePageViews: true, dwell: true, load: true, entries: true, bounce: true }}
             dwellFootnote
           />
@@ -182,6 +183,7 @@ export default function PagesPanel({
         >
           <PageTable
             rows={data.slowestPages}
+            label="Slowest pages"
             columns={{ site: true, uniquePageViews: false, dwell: false, load: true }}
           />
         </SectionCard>
@@ -211,6 +213,7 @@ export default function PagesPanel({
         >
           <PageTable
             rows={data.quietPages}
+            label="Pages nobody reads"
             columns={{ site: true, uniquePageViews: true, dwell: true, load: false }}
             dwellFootnote
           />

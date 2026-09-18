@@ -164,7 +164,7 @@ export default function SearchPanel({
             </Button>
           }
         >
-          <TermTable rows={data.topTerms} />
+          <TermTable rows={data.topTerms} label="Top search terms" />
         </SectionCard>
 
         <SectionCard
@@ -180,7 +180,7 @@ export default function SearchPanel({
           isEmpty={data.deadEndTerms.length === 0}
           emptyMessage="No term was searched often enough, or failed often enough, to rank."
         >
-          <TermTable rows={data.deadEndTerms} hideSearchers />
+          <TermTable rows={data.deadEndTerms} hideSearchers label="Terms that led nowhere" />
         </SectionCard>
 
         <SectionCard
@@ -233,12 +233,20 @@ export default function SearchPanel({
   );
 }
 
-function TermTable({ rows, hideSearchers }: { rows: WebActivitySearchTermRow[]; hideSearchers?: boolean }) {
+function TermTable({
+  rows,
+  hideSearchers,
+  label,
+}: {
+  rows: WebActivitySearchTermRow[];
+  hideSearchers?: boolean;
+  label: string;
+}) {
   const styles = useWebActivityStyles();
 
   return (
     <div className={styles.tableWrap}>
-      <Table size="small" aria-label="Search terms">
+      <Table size="small" aria-label={label}>
         <TableHeader>
           <TableRow>
             <TableHeaderCell>Term</TableHeaderCell>

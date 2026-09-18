@@ -3,6 +3,7 @@ using Common.Entities.Config;
 using Common.Entities.CopilotAdoption;
 using Common.Entities.SpoWebActivity;
 using System;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -72,16 +73,32 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("availability")]
         public async Task<IHttpActionResult> Availability()
         {
-            var sources = ReadSources();
-            var lastHit = await _store.GetLastHitAsync().ConfigureAwait(false);
+            var configurationReadable = true;
+            WebActivitySources sources;
+
+            try
+            {
+                sources = _sourcesFactory() ?? new WebActivitySources();
+            }
+            catch (Exception)
+            {
+                // A throwing AppConfig must not take the page down with a 500 - but it must also not
+                // be reported as "every import is switched off", which reads as a deliberate setting
+                // and sends an admin to the installer instead of to the broken configuration.
+                sources = new WebActivitySources();
+                configurationReadable = false;
+            }
+
+            var collection = await _store.GetCollectionStatusAsync().ConfigureAwait(false);
             var optional = await _store.GetOptionalFeatureUseAsync().ConfigureAwait(false);
 
             return Ok(WebActivityAvailability.Build(
                 sources,
-                lastHit,
+                collection,
                 optional?.Item1,
                 optional?.Item2,
-                DateTime.UtcNow));
+                DateTime.UtcNow,
+                configurationReadable));
         }
 
         // GET: api/WebActivity/overview?days=28
@@ -163,9 +180,17 @@ namespace Web.AnalyticsWeb.Controllers
         /// A section as a CSV download.
         /// </summary>
         /// <remarks>
-        /// Exports are NOT served from the section cache. A cached payload is capped at the page's
-        /// display row count, and someone clicking Export on a content-pruning list wants the rows they
+        /// <para>
+        /// Exports are capped at <see cref="WebActivityQuery.MaximumTop"/> rather than the page's
+        /// display row count: someone clicking Export on a content-pruning list wants the rows they
         /// asked for, not the fifteen the chart happened to show.
+        /// </para>
+        /// <para>
+        /// A failed query is a 503, NOT an empty file. The store captures a timeout as a per-section
+        /// error and returns no rows, so serialising them anyway would hand an admin a spreadsheet
+        /// containing only a header row - which reads as "your intranet has no quiet pages" and is
+        /// exactly the wrong conclusion.
+        /// </para>
         /// </remarks>
         // GET: api/WebActivity/export/quiet-pages?days=28&top=500
         [HttpGet]
@@ -187,13 +212,26 @@ namespace Web.AnalyticsWeb.Controllers
 
             var query = BuildQuery(days, top);
             var normalised = section.ToLowerInvariant();
+
+            // Exports rebuild a whole tab, so a repeated click - or a script - would re-run every
+            // query behind it. Cached on its own key (the display cache is capped at a different row
+            // count, so the two can never be confused).
+            var cacheKey = query.CacheKey("export::" + normalised);
+            if (MemoryCache.Default.Get(cacheKey) is byte[] cachedCsv)
+            {
+                return CsvResponse(cachedCsv, CsvSerialiser.FileName(
+                    WebActivityExports.FileNamePrefix(normalised), DateTime.UtcNow));
+            }
+
             byte[] csv;
+            string failure;
 
             switch (normalised)
             {
                 case "quiet-pages":
                 {
                     var pages = await _store.GetPagesAsync(query).ConfigureAwait(false);
+                    failure = ErrorFor(pages, "pages-quiet");
                     csv = CsvSerialiser.ToBytes(pages.QuietPages, WebActivityExports.PageColumns());
                     break;
                 }
@@ -201,6 +239,7 @@ namespace Web.AnalyticsWeb.Controllers
                 case "slow-pages":
                 {
                     var pages = await _store.GetPagesAsync(query).ConfigureAwait(false);
+                    failure = ErrorFor(pages, "pages-slowest");
                     csv = CsvSerialiser.ToBytes(pages.SlowestPages, WebActivityExports.PageColumns());
                     break;
                 }
@@ -208,6 +247,7 @@ namespace Web.AnalyticsWeb.Controllers
                 case "entry-pages":
                 {
                     var journeys = await _store.GetJourneysAsync(query).ConfigureAwait(false);
+                    failure = ErrorFor(journeys, "journeys-entry");
                     csv = CsvSerialiser.ToBytes(journeys.EntryPages, WebActivityExports.PageColumns());
                     break;
                 }
@@ -215,6 +255,7 @@ namespace Web.AnalyticsWeb.Controllers
                 case "exit-pages":
                 {
                     var journeys = await _store.GetJourneysAsync(query).ConfigureAwait(false);
+                    failure = ErrorFor(journeys, "journeys-exit");
                     csv = CsvSerialiser.ToBytes(journeys.ExitPages, WebActivityExports.PageColumns());
                     break;
                 }
@@ -222,6 +263,7 @@ namespace Web.AnalyticsWeb.Controllers
                 case "transitions":
                 {
                     var journeys = await _store.GetJourneysAsync(query).ConfigureAwait(false);
+                    failure = ErrorFor(journeys, "journeys-transitions");
                     csv = CsvSerialiser.ToBytes(journeys.Transitions, WebActivityExports.TransitionColumns());
                     break;
                 }
@@ -229,6 +271,7 @@ namespace Web.AnalyticsWeb.Controllers
                 case "search-terms":
                 {
                     var search = await _store.GetSearchAsync(query).ConfigureAwait(false);
+                    failure = ErrorFor(search, "search-terms");
                     csv = CsvSerialiser.ToBytes(search.TopTerms, WebActivityExports.SearchTermColumns());
                     break;
                 }
@@ -236,6 +279,7 @@ namespace Web.AnalyticsWeb.Controllers
                 case "technology":
                 {
                     var technology = await _store.GetTechnologyAsync(query).ConfigureAwait(false);
+                    failure = ErrorFor(technology, "tech-detail");
                     csv = CsvSerialiser.ToBytes(technology.Detail, WebActivityExports.TechnologyColumns());
                     break;
                 }
@@ -243,14 +287,33 @@ namespace Web.AnalyticsWeb.Controllers
                 default:
                 {
                     var pages = await _store.GetPagesAsync(query).ConfigureAwait(false);
+                    failure = ErrorFor(pages, "pages-top");
                     csv = CsvSerialiser.ToBytes(pages.TopPages, WebActivityExports.PageColumns());
                     break;
                 }
             }
 
+            if (failure != null)
+            {
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                {
+                    Content = new StringContent(
+                        "The query behind this export could not be completed, so the file would have been "
+                        + "empty rather than genuinely empty: " + failure),
+                };
+            }
+
+            MemoryCache.Default.Set(cacheKey, csv, DateTimeOffset.UtcNow.AddSeconds(CacheSeconds));
+
             return CsvResponse(csv, CsvSerialiser.FileName(
                 WebActivityExports.FileNamePrefix(normalised),
                 DateTime.UtcNow));
+        }
+
+        /// <summary>The error from the query that produced an export's rows, or null when it succeeded.</summary>
+        private static string ErrorFor(WebActivitySection section, string queryKey)
+        {
+            return section?.Queries?.FirstOrDefault(q => q.Key == queryKey)?.Error;
         }
 
         #region Helpers

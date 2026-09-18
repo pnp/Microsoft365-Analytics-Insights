@@ -258,7 +258,7 @@ namespace Tests.UnitTests
                 // Visit 6: searched and stopped. The search results page view lands INSIDE the grace
                 // window, which is exactly the case a naive "was there a later hit?" test gets wrong.
                 var deadEnd = NewSession(db, grace, "s-deadend");
-                AddHit(context, deadEnd, _quietUrlId, TrafficDay.AddHours(14), 12, 0.9);
+                AddHit(context, deadEnd, _quietUrlId, TrafficDay.AddHours(14), 12, 0.9, withoutCountry: true);
 
                 db.SaveChanges();
 
@@ -342,7 +342,8 @@ namespace Tests.UnitTests
             DateTime when,
             double seconds,
             double load,
-            bool mobile = false)
+            bool mobile = false,
+            bool withoutCountry = false)
         {
             var db = context.Db;
 
@@ -359,7 +360,10 @@ namespace Tests.UnitTests
                 agent = mobile ? context.MobileBrowser : context.Browser,
                 device = mobile ? context.MobileDevice : context.Device,
                 os = mobile ? context.MobileOs : context.Os,
-                country = context.Country,
+                // One seeded page view resolves to a city but NOT a country. Geo-IP genuinely does
+                // this, and it is the case that tells a per-attribute denominator apart from a single
+                // "located" total - without it the fixture cannot detect that regression.
+                country = withoutCountry ? null : context.Country,
                 city = context.City,
                 location_province = context.Province,
             });
@@ -574,14 +578,19 @@ namespace Tests.UnitTests
             // Each list's share is against the page views that resolved to THAT attribute. A page
             // view with a city but no country belongs to neither a country row nor the country
             // denominator, so a single 'located' total would inflate every country's share.
-            Assert.AreEqual(11, geography.Kpis.CountryPageViews);
+            // The three denominators must genuinely differ, or this fixture could not tell a
+            // per-attribute total from the looser 'located' one - which is the bug being guarded.
+            Assert.AreEqual(10, geography.Kpis.CountryPageViews, "One page view has a city but no country.");
             Assert.AreEqual(11, geography.Kpis.CityPageViews);
             Assert.AreEqual(11, geography.Kpis.ProvincePageViews);
             Assert.AreEqual(0, geography.Kpis.UnknownLocationPageViews);
             Assert.AreEqual(6, geography.Kpis.Visits);
 
             Assert.AreEqual("United Kingdom", geography.Countries[0].Name);
-            Assert.AreEqual(11, geography.Countries[0].PageViews);
+            Assert.AreEqual(10, geography.Countries[0].PageViews);
+
+            // 100% of the page views that RESOLVED TO A COUNTRY, not of all located traffic - the
+            // city-only page view belongs to neither this row nor its denominator.
             Assert.AreEqual(100, geography.Countries[0].SharePct, 0.01);
 
             // A city carries its country so two same-named cities can be told apart.
@@ -640,9 +649,12 @@ namespace Tests.UnitTests
         {
             var store = NewStore();
 
-            var lastHit = await store.GetLastHitAsync();
-            Assert.IsNotNull(lastHit);
-            Assert.AreEqual(TrafficDay.AddHours(14), lastHit.Value);
+            var collection = await store.GetCollectionStatusAsync();
+            Assert.IsTrue(collection.Readable, "A successful read must say so, not just return a date.");
+            Assert.IsNotNull(collection.LastHitUtc);
+            Assert.AreEqual(TrafficDay.AddHours(14), collection.LastHitUtc.Value);
+            Assert.AreEqual(DateTimeKind.Utc, collection.LastHitUtc.Value.Kind,
+                "An unstamped timestamp serialises with no timezone and is parsed as local time.");
 
             var optional = await store.GetOptionalFeatureUseAsync();
             Assert.IsNotNull(optional);

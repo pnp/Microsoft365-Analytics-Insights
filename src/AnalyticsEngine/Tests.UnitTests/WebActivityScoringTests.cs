@@ -295,7 +295,36 @@ namespace Tests.UnitTests
             // a meaningful answer rather than a division by zero.
             Assert.AreEqual(50.0, WebActivityScoring.TopDecileShare(new long[] { 10, 5, 5 }), 1e-9);
             Assert.AreEqual(0, WebActivityScoring.TopDecileShare(new long[0]), 1e-9);
-            Assert.AreEqual(0, WebActivityScoring.TopDecileShare(null), 1e-9);
+            Assert.AreEqual(0, WebActivityScoring.TopDecileShare((IEnumerable<long>)null), 1e-9);
+        }
+
+        [TestMethod]
+        public void TopDecileShare_OverADistributionMatchesTheExpandedForm()
+        {
+            // The SQL returns (views, how many pages had that many views) precisely so it never has
+            // to send a row per page - an intranet has millions. Expanding it back out to compute
+            // this would allocate one element per page on the large object heap and then sort it, so
+            // the distribution form is the real implementation and must agree with the flat one.
+            var flat = new long[] { 100, 100, 50, 50, 50, 10, 10, 10, 10, 10, 1, 1 };
+            var distribution = new[]
+            {
+                new KeyValuePair<long, long>(100, 2),
+                new KeyValuePair<long, long>(50, 3),
+                new KeyValuePair<long, long>(10, 5),
+                new KeyValuePair<long, long>(1, 2),
+            };
+
+            Assert.AreEqual(
+                WebActivityScoring.TopDecileShare(flat),
+                WebActivityScoring.TopDecileShareOfDistribution(distribution),
+                1e-9);
+
+            // A bucket can be split by the decile boundary: 20 pages means the top decile is 2, both
+            // of which come out of a bucket holding 5.
+            var split = new[] { new KeyValuePair<long, long>(10, 5), new KeyValuePair<long, long>(1, 15) };
+            Assert.AreEqual(20.0 / 65.0 * 100, WebActivityScoring.TopDecileShareOfDistribution(split), 1e-9);
+
+            Assert.AreEqual(0, WebActivityScoring.TopDecileShareOfDistribution(null), 1e-9);
         }
 
         [TestMethod]

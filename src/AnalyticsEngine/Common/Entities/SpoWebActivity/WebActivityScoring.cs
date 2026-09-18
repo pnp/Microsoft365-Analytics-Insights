@@ -201,19 +201,60 @@ namespace Common.Entities.SpoWebActivity
         /// The share of a total held by the top decile of a distribution, as a percentage.
         /// </summary>
         /// <remarks>
-        /// Used for "is this intranet actually a handful of pages?". At least one row always counts as
-        /// the top decile, so a ten-page intranet still produces a meaningful answer.
+        /// <para>
+        /// Takes the distribution as (value, how many items have it) pairs rather than one element
+        /// per item. That is not a convenience: the caller's SQL deliberately returns page views
+        /// grouped into frequency buckets so it never has to send a row per page, and expanding them
+        /// back out would allocate one element per page on the intranet - millions on a large tenant,
+        /// on the large object heap, and then sort them.
+        /// </para>
+        /// <para>
+        /// At least one item always counts as the top decile, so a ten-page intranet still produces a
+        /// meaningful answer.
+        /// </para>
+        /// </remarks>
+        public static double TopDecileShareOfDistribution(IEnumerable<KeyValuePair<long, long>> distribution)
+        {
+            var ordered = (distribution ?? Enumerable.Empty<KeyValuePair<long, long>>())
+                .Where(b => b.Key > 0 && b.Value > 0)
+                .OrderByDescending(b => b.Key)
+                .ToList();
+            if (ordered.Count == 0) return 0;
+
+            var items = ordered.Sum(b => b.Value);
+            var total = ordered.Sum(b => b.Key * b.Value);
+            if (items <= 0 || total <= 0) return 0;
+
+            var take = Math.Max(1, (long)Math.Ceiling(items / 10.0));
+            long taken = 0;
+            long takenTotal = 0;
+
+            foreach (var bucket in ordered)
+            {
+                if (taken >= take) break;
+
+                var fromThisBucket = Math.Min(bucket.Value, take - taken);
+                taken += fromThisBucket;
+                takenTotal += bucket.Key * fromThisBucket;
+            }
+
+            return (double)takenTotal / total * 100.0;
+        }
+
+        /// <summary>
+        /// The same measure over a flat list of values, for callers that genuinely have one.
+        /// </summary>
+        /// <remarks>
+        /// Groups into a distribution and delegates, so there is only one implementation of the
+        /// arithmetic to get wrong.
         /// </remarks>
         public static double TopDecileShare(IEnumerable<long> values)
         {
-            var ordered = values?.Where(v => v > 0).OrderByDescending(v => v).ToList() ?? new List<long>();
-            if (ordered.Count == 0) return 0;
+            var grouped = (values ?? Enumerable.Empty<long>())
+                .GroupBy(v => v)
+                .Select(g => new KeyValuePair<long, long>(g.Key, g.LongCount()));
 
-            var take = Math.Max(1, (int)Math.Ceiling(ordered.Count / 10.0));
-            var total = ordered.Sum();
-            if (total <= 0) return 0;
-
-            return (double)ordered.Take(take).Sum() / total * 100.0;
+            return TopDecileShareOfDistribution(grouped);
         }
 
         #endregion

@@ -80,6 +80,12 @@ namespace Common.Entities.SpoWebActivity
         /// <summary>At least one element click has been recorded by the tracker's optional click capture.</summary>
         public bool ClickTrackingAvailable { get; set; }
 
+        /// <summary>
+        /// False when the check against the page-hit table failed, so <see cref="HasAnyHits"/> and
+        /// <see cref="LastHitUtc"/> mean "could not tell" rather than "nothing collected".
+        /// </summary>
+        public bool CollectionStatusKnown { get; set; }
+
         /// <summary>True when the page has something to report.</summary>
         public bool Available => WebTrafficAvailable && HasAnyHits;
 
@@ -90,21 +96,28 @@ namespace Common.Entities.SpoWebActivity
         /// Builds the availability model.
         /// </summary>
         /// <param name="sources">The configured import toggles.</param>
-        /// <param name="lastHitUtc">
-        /// The newest page hit of any age, or null when it could not be read. Null is reported as
-        /// "unknown" rather than as "no data": telling an admin the tracker has collected nothing
-        /// because a query failed would send them to redeploy a tracker that is working.
+        /// <param name="collection">
+        /// Whether the page-hit table could be read, and the newest hit in it. A read FAILURE is
+        /// reported as "unknown" rather than as "nothing collected": telling an admin the tracker has
+        /// never collected anything because a query failed sends them to redeploy a working tracker.
         /// </param>
         /// <param name="anySearches">Whether any search has ever been recorded, or null when unknown.</param>
         /// <param name="anyClicks">Whether any element click has ever been recorded, or null when unknown.</param>
+        /// <param name="configurationReadable">
+        /// False when application configuration could not be read, in which case every import toggle
+        /// reads as off and must not be reported as a deliberate setting.
+        /// </param>
         public static WebActivityAvailability Build(
             WebActivitySources sources,
-            DateTime? lastHitUtc = null,
+            WebActivityCollectionStatus collection = null,
             bool? anySearches = null,
             bool? anyClicks = null,
-            DateTime? nowUtc = null)
+            DateTime? nowUtc = null,
+            bool configurationReadable = true)
         {
             sources = sources ?? new WebActivitySources();
+            collection = collection ?? new WebActivityCollectionStatus { Readable = false };
+            var lastHitUtc = collection.LastHitUtc;
 
             var model = new WebActivityAvailability
             {
@@ -115,7 +128,18 @@ namespace Common.Entities.SpoWebActivity
                 LastHitUtc = lastHitUtc,
                 SearchAvailable = anySearches ?? true,
                 ClickTrackingAvailable = anyClicks ?? true,
+                CollectionStatusKnown = collection.Readable,
             };
+
+            if (!configurationReadable)
+            {
+                model.Reasons.Add(
+                    "Application configuration could not be read, so none of the import toggles below can "
+                    + "be trusted - they are all showing as off because the settings are unreadable, not "
+                    + "necessarily because they are switched off. Fix the configuration first; check the "
+                    + "Service configuration page and the application's event log.");
+                return model;
+            }
 
             if (!sources.WebTraffic)
             {
@@ -132,11 +156,16 @@ namespace Common.Entities.SpoWebActivity
             }
             else if (!lastHitUtc.HasValue)
             {
-                model.Reasons.Add(
-                    "The web traffic import is switched on and configured, but no page view has ever arrived. "
-                    + "The usual cause is that the SharePoint tracker is not deployed: add the AI Tracker app "
-                    + "to the site collections you want reported on, and confirm it points at the same "
-                    + "Application Insights resource this deployment reads.");
+                // Only advise redeploying the tracker when we actually KNOW nothing has arrived.
+                model.Reasons.Add(collection.Readable
+                    ? "The web traffic import is switched on and configured, but no page view has ever arrived. "
+                        + "The usual cause is that the SharePoint tracker is not deployed: add the AI Tracker app "
+                        + "to the site collections you want reported on, and confirm it points at the same "
+                        + "Application Insights resource this deployment reads."
+                    : "Whether any page view has ever arrived could not be determined - the check against the "
+                        + "page-hit table failed. That says nothing about the tracker, so do not redeploy it on "
+                        + "the strength of this; look at the database connection on the Service health page "
+                        + "first.");
             }
             else
             {

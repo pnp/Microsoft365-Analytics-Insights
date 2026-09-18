@@ -5,18 +5,37 @@ using System.Data;
 using System.Data.Entity;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using static Common.Entities.SpoWebActivity.WebActivityRows;
 
 namespace Common.Entities.SpoWebActivity
 {
+    /// <summary>
+    /// Whether the page-hit table could be read, and the newest hit in it.
+    /// </summary>
+    /// <remarks>
+    /// A tri-state, because the availability model gives DIFFERENT advice for "the tracker has never
+    /// collected anything" (deploy it) and "we could not tell" (do nothing). Collapsing both into a
+    /// null <see cref="LastHitUtc"/> is how an admin ends up redeploying a tracker that works because
+    /// one query timed out.
+    /// </remarks>
+    public sealed class WebActivityCollectionStatus
+    {
+        /// <summary>False when the query failed, so nothing below can be trusted.</summary>
+        public bool Readable { get; set; }
+
+        /// <summary>The newest page hit of any age, or null when there are none.</summary>
+        public DateTime? LastHitUtc { get; set; }
+    }
+
     /// <summary>Loads the SharePoint web-activity page's sections.</summary>
     public interface IWebActivityStore
     {
         /// <summary>
-        /// The newest page hit of any age, or null when there are none or it could not be read.
+        /// Whether page hits are readable at all, and the newest one - ignoring the reporting window.
         /// </summary>
-        Task<DateTime?> GetLastHitAsync();
+        Task<WebActivityCollectionStatus> GetCollectionStatusAsync();
 
         /// <summary>
         /// Whether any search and any element click has ever been recorded, or null when unknown.
@@ -66,6 +85,27 @@ namespace Common.Entities.SpoWebActivity
         private readonly IAnalyticsDbContextFactory _contextFactory;
         private readonly int _commandTimeoutSeconds;
 
+        /// <summary>
+        /// Database queries this store will run at once, across all callers in the process.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Every section is its own command on its own connection, which is what lets one slow
+        /// leaderboard fail without taking its tab down - but a tab has up to eleven of them, and the
+        /// page issues two requests on load. Unbounded, a handful of concurrent admins would exhaust
+        /// the ADO.NET pool (100 connections by default) and start timing out on connection
+        /// acquisition, which surfaces as an unexplained failure rather than as a slow query.
+        /// </para>
+        /// <para>
+        /// Six is chosen against the per-query timeout: eleven queries in two waves is at most
+        /// ~50 seconds even if every one of them times out, well inside the ~230s Azure App Service
+        /// request limit, while capping a single page load at six connections rather than thirteen.
+        /// </para>
+        /// </remarks>
+        internal const int MaxConcurrentQueries = 6;
+
+        private static readonly SemaphoreSlim QuerySlots = new SemaphoreSlim(MaxConcurrentQueries);
+
         public SqlWebActivityStore(IAnalyticsDbContextFactory contextFactory)
             : this(contextFactory, WebActivitySql.CommandTimeoutSeconds)
         {
@@ -80,14 +120,14 @@ namespace Common.Entities.SpoWebActivity
         #region Availability
 
         /// <summary>
-        /// The newest page hit, regardless of the reporting window.
+        /// The newest page hit, regardless of the reporting window, and whether it could be read.
         /// </summary>
         /// <remarks>
-        /// Returns null rather than a default date when the read fails. A failed query reported to an
-        /// admin as "the tracker has never collected anything" would send them to redeploy a tracker
-        /// that is working perfectly.
+        /// Reports the failure rather than folding it into "no hits". A failed query presented to an
+        /// admin as "the tracker has never collected anything" sends them to redeploy a tracker that
+        /// is working perfectly, which is the opposite of useful.
         /// </remarks>
-        public async Task<DateTime?> GetLastHitAsync()
+        public async Task<WebActivityCollectionStatus> GetCollectionStatusAsync()
         {
             try
             {
@@ -99,12 +139,16 @@ namespace Common.Entities.SpoWebActivity
                         .ToListAsync()
                         .ConfigureAwait(false);
 
-                    return AsUtc(rows.FirstOrDefault()?.LastHitUtc);
+                    return new WebActivityCollectionStatus
+                    {
+                        Readable = true,
+                        LastHitUtc = AsUtc(rows.FirstOrDefault()?.LastHitUtc),
+                    };
                 }
             }
             catch (Exception)
             {
-                return null;
+                return new WebActivityCollectionStatus { Readable = false };
             }
         }
 
@@ -840,19 +884,17 @@ namespace Common.Entities.SpoWebActivity
         }
 
         /// <summary>Share of all page views held by the busiest tenth of pages.</summary>
+        /// <remarks>
+        /// The distribution is (views, how many pages had exactly that many views) and is passed
+        /// through in that form. Expanding it to one element per page would allocate a multi-million
+        /// element list on a large tenant - which is precisely why the SQL groups it in the first
+        /// place - and then sort it.
+        /// </remarks>
         private static double TopDecilePageShare(IEnumerable<PageViewDistributionRow> distribution)
         {
-            // The distribution is (views, how many pages had exactly that many views), so it is
-            // expanded back into one value per page. It is bounded by the number of DISTINCT view
-            // counts multiplied out - which is the page count - so this is the one place the page
-            // list is materialised, and only as a list of longs.
-            var values = new List<long>();
-            foreach (var row in distribution ?? Enumerable.Empty<PageViewDistributionRow>())
-            {
-                for (long i = 0; i < row.Pages; i++) values.Add(row.Views);
-            }
-
-            return WebActivityScoring.TopDecileShare(values);
+            return WebActivityScoring.TopDecileShareOfDistribution(
+                (distribution ?? Enumerable.Empty<PageViewDistributionRow>())
+                    .Select(r => new KeyValuePair<long, long>(r.Views, r.Pages)));
         }
 
         private static List<WebActivityTrendPoint> BuildTrend(IEnumerable<TrendRow> rows)
@@ -1084,6 +1126,8 @@ namespace Common.Entities.SpoWebActivity
             var result = new QueryResult<T> { Info = info };
             var watch = Stopwatch.StartNew();
 
+            await QuerySlots.WaitAsync().ConfigureAwait(false);
+
             try
             {
                 using (var db = _contextFactory.Create())
@@ -1101,6 +1145,7 @@ namespace Common.Entities.SpoWebActivity
             }
             finally
             {
+                QuerySlots.Release();
                 watch.Stop();
                 info.ElapsedMs = watch.ElapsedMilliseconds;
             }

@@ -141,6 +141,7 @@ export default function JourneysPanel({
         >
           <PageTable
             rows={data.entryPages}
+            label="Where visits start"
             valueHeading="Entries"
             columns={{ site: true, uniquePageViews: false, dwell: true, bounce: true }}
             dwellFootnote
@@ -161,6 +162,7 @@ export default function JourneysPanel({
         >
           <PageTable
             rows={data.bouncePages}
+            label="Landing pages people leave from"
             valueHeading="Entries"
             columns={{ site: true, uniquePageViews: false, dwell: false, bounce: true }}
           />
@@ -190,6 +192,7 @@ export default function JourneysPanel({
         >
           <PageTable
             rows={data.exitPages}
+            label="Where visits end"
             valueHeading="Exits"
             columns={{ site: true, uniquePageViews: false, dwell: false }}
           />
@@ -223,7 +226,7 @@ export default function JourneysPanel({
               <TableHeader>
                 <TableRow>
                   <TableHeaderCell>From</TableHeaderCell>
-                  <TableHeaderCell />
+                  <TableHeaderCell>Step</TableHeaderCell>
                   <TableHeaderCell>To</TableHeaderCell>
                   <TableHeaderCell className={styles.numeric}>Times</TableHeaderCell>
                   <TableHeaderCell className={styles.numeric}>Share of exits from</TableHeaderCell>
@@ -238,7 +241,9 @@ export default function JourneysPanel({
                       </div>
                     </TableCell>
                     <TableCell className={styles.td}>
-                      <ArrowRight16Regular />
+                      {/* Decorative: the From and To columns already carry the meaning, and the
+                          glyph does not mirror under a right-to-left locale. */}
+                      <ArrowRight16Regular aria-hidden="true" />
                     </TableCell>
                     <TableCell className={styles.td}>
                       <div className={styles.ellipsis} title={step.toUrl}>

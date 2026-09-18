@@ -146,7 +146,7 @@ export default function GeographyPanel({ data }: { data: WebActivityGeography })
 
         <SectionCard
           title="Country reach"
-          description="Page views per country, as a share of all located traffic."
+          description="Page views per country, as a share of the page views that resolved to a country."
           query={queryFor(data.queries, 'geo-countries')}
           isEmpty={data.countries.length === 0}
         >
