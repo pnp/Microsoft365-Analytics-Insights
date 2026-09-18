@@ -473,12 +473,14 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("hoursPerMonthHigh")]
         public double HoursPerMonthHigh { get; set; }
 
-        // Deliberately no monetary figure. Epic #559 rejects an ROI / "hours saved" calculator outright,
-        // and #553 approves currency on idle licence spend "and only on idle licence spend" - a seat we
-        // are provably paying for and provably not using. This estimate is modelled from assumed
-        // minutes-per-meeting/mail/document, so pricing it would put a fabricated number in a board pack
-        // next to measured ones and discredit them. The hours range stays because it is explicitly
-        // labelled a rollout-sizing model; converting it to money is the line the epic draws.
+        // Deliberately no monetary figure, and no monetary figure anywhere else in this report either.
+        // Epic #559 rejects an ROI / "hours saved" calculator outright. The idle-licence-spend figure
+        // that #553 once allowed has since been withdrawn as well: it priced idle seats from a per-SKU
+        // price typed into the page header, which is not a source of truth about what a tenant pays, and
+        // a money figure derived from one gets quoted in a renewal negotiation as though it were. This
+        // estimate is modelled from assumed minutes-per-meeting/mail/document, so pricing it would be
+        // worse again. The hours range stays because it is explicitly labelled a rollout-sizing model;
+        // converting it to money is the line the epic draws.
 
         #endregion
 

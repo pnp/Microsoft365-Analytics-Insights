@@ -287,41 +287,30 @@ namespace Tests.UnitTests
             AssertFollowedBy(table, "docx", "Tenant content");
         }
 
+        /// <summary>
+        /// The workbook, like the page, reports seats and people rather than money.
+        /// </summary>
+        /// <remarks>
+        /// It used to carry an "Idle spend exposure" row and the seat prices behind it, derived from
+        /// prices typed into the page header. Those were withdrawn: a typed-in price is not a source of
+        /// truth about what a tenant pays, and a workbook cell is exactly where such a figure gets
+        /// re-used as though it were. The Cowork time saving - in hours - is the only value estimate
+        /// this report makes.
+        /// </remarks>
         [TestMethod]
-        public void Workbook_RecordsIdleSpendUnknownsAndSeatPricesUsed()
+        public void Workbook_QuotesNoMoney()
         {
-            var analysis = SyntheticAnalysis();
-            analysis.Summary.IdleLicenceSpend = new IdleLicenceSpendSummary
+            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
+
+            foreach (var banned in new[] { "Idle spend", "Seat price used", "reducible at renewal", "Currency" })
             {
-                UnassignedSpendUnknown = true,
-                ConfiguredCosts = new List<CopilotSeatCostInput>
-                {
-                    new CopilotSeatCostInput
-                    {
-                        SkuPartNumber = "Microsoft_365_Copilot",
-                        Currency = "GBP",
-                        Cost = 30m,
-                        Period = "monthly",
-                        EffectiveDateUtc = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc),
-                    },
-                },
-                SpendExposure = new List<Common.Entities.AgentCosts.AzureCostByCurrency>
-                {
-                    new Common.Entities.AgentCosts.AzureCostByCurrency { Currency = "GBP", Cost = 30m },
-                },
-                Reassignable = new List<Common.Entities.AgentCosts.AzureCostByCurrency>
-                {
-                    new Common.Entities.AgentCosts.AzureCostByCurrency { Currency = "GBP", Cost = 30m },
-                },
-            };
+                Assert.IsFalse(
+                    text.IndexOf(banned, StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"The Copilot Adoption workbook must not contain '{banned}'.");
+            }
 
-            var text = SheetText(CopilotAdoptionWorkbook.Build(analysis));
-
-            StringAssert.Contains(text, "GBP 30.00; Unknown unassigned",
-                "Unknown unassigned inventory must be visible beside the money figure, not rendered as not configured.");
-            StringAssert.Contains(text, "Seat price used - Microsoft_365_Copilot");
-            StringAssert.Contains(text, "GBP 30.00 monthly");
-            StringAssert.Contains(text, "Effective 2026-09-01");
+            // The seat inventory itself is still reported - those are counts, not prices.
+            StringAssert.Contains(text, "Purchased Copilot seats");
         }
 
         /// <summary>

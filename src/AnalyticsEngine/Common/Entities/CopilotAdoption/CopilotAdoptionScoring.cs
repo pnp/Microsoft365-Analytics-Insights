@@ -1715,7 +1715,8 @@ namespace Common.Entities.CopilotAdoption
 
             estimate.Assumptions.Add(
                 "No monetary value is shown. Pricing a modelled saving would state a figure this product "
-                + "cannot evidence; currency is reported only against idle licence spend, which is measured.");
+                + "cannot evidence, and it has no defensible fully-loaded hourly rate to price it with. "
+                + "This report reports seats, people and hours - never money.");
 
             return estimate;
         }

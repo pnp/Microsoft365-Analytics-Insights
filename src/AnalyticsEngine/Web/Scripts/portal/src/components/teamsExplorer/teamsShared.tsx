@@ -66,32 +66,13 @@ export function formatRange(fromIso: string, toIso: string): string {
 }
 
 /**
- * Channel sentiment in words.
+ * Channel sentiment in words and figures.
  *
- * The stored score is a chat-count weighted mean of a TERNARY score - negative = 0, neutral = 0.5,
- * positive = 1 - so 0.5 is exactly neutral and the number is NOT a percentage of positive messages.
- * (It is also a different scale from `copilot_interactions.sentiment_score`, which stores the raw
- * positive-confidence score, so the two must never be compared.) Rendering it as "50%" is the
- * single easiest way to misread this page, which is why every caller goes through here.
+ * Re-exported from the shared module so the scale is defined exactly once. See
+ * `components/shared/SentimentLight.tsx` for why this is not a percentage - it is the single easiest
+ * figure on this page to misread, so every caller goes through there.
  */
-export function formatSentiment(value: number | null | undefined): string {
-  if (value === null || value === undefined) return '\u2014';
-  return `${value.toFixed(2)} (${sentimentLabel(value)})`;
-}
-
-/** The word for a sentiment score, using bands either side of neutral. */
-export function sentimentLabel(value: number): string {
-  if (value < 0.35) return 'negative';
-  if (value < 0.45) return 'leaning negative';
-  if (value <= 0.55) return 'neutral';
-  if (value <= 0.65) return 'leaning positive';
-  return 'positive';
-}
-
-/** Explains the sentiment scale wherever it is shown. */
-export const SENTIMENT_SCALE_NOTE =
-  'Sentiment runs 0 (negative) to 1 (positive), weighted by message count, and 0.5 is neutral. '
-  + 'It is not a percentage of positive messages.';
+export { formatSentiment, sentimentLabel, SENTIMENT_SCALE_NOTE } from '../shared/SentimentLight';
 
 /** Named counts -> bar/treemap/word-cloud categories. */
 export function toCategories(rows: TeamsNamedCount[]): ReportCategory[] {

@@ -34,7 +34,6 @@ import type {
   AdoptionFilterOptions,
   CopilotAdoptionAvailability,
   CopilotAdoptionSummary,
-  CopilotSeatCostInput,
 } from '../types/copilotAdoption';
 import Spinner from '../components/Spinner';
 import SqlPopover from '../components/SqlPopover';
@@ -218,8 +217,6 @@ export default function CopilotAdoptionPage() {
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [filterOptions, setFilterOptions] = useState<AdoptionFilterOptions | null>(null);
   const [sql, setSql] = useState<Record<string, string> | null>(null);
-  const [seatCostDrafts, setSeatCostDrafts] = useState<Record<string, { cost: string; currency: string; period: 'monthly' | 'annual'; effectiveDate: string }>>({});
-  const [appliedSeatCosts, setAppliedSeatCosts] = useState<CopilotSeatCostInput[]>([]);
   const lastSummaryWindow = useRef<number | null>(null);
   const [interventionMessage, setInterventionMessage] = useState<string | null>(null);
 
@@ -256,7 +253,7 @@ export default function CopilotAdoptionPage() {
     setSummaryLoading(true);
     setSummaryError(null);
 
-    fetchAdoptionSummary(windowDays, undefined, controller.signal, appliedSeatCosts, comparisonMode)
+    fetchAdoptionSummary(windowDays, undefined, controller.signal, comparisonMode)
       .then((s) => {
         if (!cancelled) {
           lastSummaryWindow.current = windowDays;
@@ -292,7 +289,7 @@ export default function CopilotAdoptionPage() {
       // changed or the page unmounted.
       controller.abort();
     };
-  }, [availability, windowDays, comparisonMode, appliedSeatCosts]);
+  }, [availability, windowDays, comparisonMode]);
 
   const onTabSelect: SelectTabEventHandler = (_e: unknown, data: { value: unknown }) => {
     setDrillAction(undefined);
@@ -362,14 +359,6 @@ export default function CopilotAdoptionPage() {
             ))}
           </Select>
 
-          {summary && (
-            <SeatCostInputs
-              summary={summary}
-              drafts={seatCostDrafts}
-              onChange={setSeatCostDrafts}
-              onApply={() => setAppliedSeatCosts(buildSeatCostInputs(seatCostDrafts))}
-            />
-          )}
           {availability?.available && (
             <>
               <Text size={200} className={styles.muted}>
@@ -404,7 +393,7 @@ export default function CopilotAdoptionPage() {
                 appearance="primary"
                 icon={<ArrowDownload16Regular />}
                 as="a"
-                href={summary ? workbookExportUrl(windowDays, undefined, appliedSeatCosts, comparisonMode) : undefined}
+                href={summary ? workbookExportUrl(windowDays, undefined, comparisonMode) : undefined}
                 disabled={!summary}
               >
                 Excel report
@@ -593,64 +582,6 @@ export default function CopilotAdoptionPage() {
  * quite different causes applies. Zero licensed users is nearly always one of three things, so say
  * which three and what to do about each.
  */
-
-function buildSeatCostInputs(
-  drafts: Record<string, { cost: string; currency: string; period: 'monthly' | 'annual'; effectiveDate: string }>,
-): CopilotSeatCostInput[] {
-  return Object.entries(drafts)
-    .map(([skuPartNumber, d]) => ({
-      skuPartNumber,
-      currency: d.currency.trim().toUpperCase(),
-      cost: Number(d.cost),
-      period: d.period,
-      effectiveDateUtc: d.effectiveDate ? `${d.effectiveDate}T00:00:00Z` : null,
-    }))
-    .filter((d) => d.currency && d.effectiveDateUtc && Number.isFinite(d.cost) && d.cost > 0);
-}
-
-function SeatCostInputs({
-  summary,
-  drafts,
-  onChange,
-  onApply,
-}: {
-  summary: CopilotAdoptionSummary;
-  drafts: Record<string, { cost: string; currency: string; period: 'monthly' | 'annual'; effectiveDate: string }>;
-  onChange: (value: Record<string, { cost: string; currency: string; period: 'monthly' | 'annual'; effectiveDate: string }>) => void;
-  onApply: () => void;
-}) {
-  const seatSkus = (summary.seatLicenceTypes ?? []).filter((l) => l.isCopilotSeat);
-  if (seatSkus.length === 0) return null;
-
-  const update = (sku: string, patch: Partial<{ cost: string; currency: string; period: 'monthly' | 'annual'; effectiveDate: string }>) => {
-    const current = drafts[sku] ?? { cost: '', currency: '', period: 'monthly', effectiveDate: '' };
-    onChange({ ...drafts, [sku]: { ...current, ...patch } });
-  };
-
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
-      <Text size={200}>Seat cost</Text>
-      {seatSkus.map((sku) => {
-        const d = drafts[sku.skuPartNumber] ?? { cost: '', currency: '', period: 'monthly' as const, effectiveDate: '' };
-        return (
-          <span key={sku.id} style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
-            <Text size={200}>{sku.skuPartNumber}</Text>
-            <input aria-label={`${sku.skuPartNumber} cost`} value={d.cost} onChange={(e) => update(sku.skuPartNumber, { cost: e.target.value })} placeholder="cost" style={{ width: 72 }} />
-            <input aria-label={`${sku.skuPartNumber} currency`} value={d.currency} onChange={(e) => update(sku.skuPartNumber, { currency: e.target.value })} placeholder="GBP" style={{ width: 52 }} />
-            <select aria-label={`${sku.skuPartNumber} period`} value={d.period} onChange={(e) => update(sku.skuPartNumber, { period: e.target.value as 'monthly' | 'annual' })}>
-              <option value="monthly">monthly</option>
-              <option value="annual">annual</option>
-            </select>
-            <input aria-label={`${sku.skuPartNumber} effective date`} type="date" value={d.effectiveDate} onChange={(e) => update(sku.skuPartNumber, { effectiveDate: e.target.value })} />
-          </span>
-        );
-      })}
-      <Button size="small" onClick={onApply} disabled={buildSeatCostInputs(drafts).length === 0}>
-        Apply
-      </Button>
-    </div>
-  );
-}
 
 function FirstRunState({ summary }: { summary: CopilotAdoptionSummary }) {
   const styles = useStyles();
@@ -1049,26 +980,6 @@ function AnalystTab({
                 </li>
               ))}
             </ul>
-          </div>
-        </Card>
-      )}
-
-      {summary.idleLicenceSpend && (
-        <Card>
-          <div className={styles.cardHead}>
-            <div>
-              <Text weight="semibold" size={400}>Idle licence spend</Text>
-              <Text size={200} block className={styles.muted}>
-                Monthly exposure only for configured SKU prices. Currencies are listed separately and never added together.
-                {' '}Prices used: {formatConfiguredSeatCosts(summary.idleLicenceSpend.configuredCosts)}.
-              </Text>
-            </div>
-          </div>
-          <div className={styles.cardBody}>
-            <p>
-              Exposure {formatCosts(summary.idleLicenceSpend.spendExposure, summary.idleLicenceSpend.unassignedSpendUnknown)}; reassignable {formatCosts(summary.idleLicenceSpend.reassignable)}; reducible at renewal {formatCosts(summary.idleLicenceSpend.reducibleAtRenewal, summary.idleLicenceSpend.unassignedSpendUnknown)}.
-            </p>
-            <p className={styles.muted}>Reassignable means assigned idle seats that can be given to someone else. Reducible means purchased but unassigned seats that can be reduced at renewal. The Certain tier can be quoted alone: {formatTierCosts(summary.idleLicenceSpend.tiers, 'Certain')}.</p>
           </div>
         </Card>
       )}
@@ -2090,9 +2001,10 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 from Microsoft&#8217;s usage reports; the hours are those volumes multiplied by an
                 editable assumption ({o.coworkMinutesSavedPerMeeting} minutes per meeting,{' '}
                 {o.coworkMinutesSavedPerMailThread} per email, {o.coworkMinutesSavedPerDocument} per
-                document), published as a range rather than a single figure. No monetary value is shown
-                at all unless a fully-loaded hourly cost has been configured - there is no defensible
-                default for that, so the tool does not invent one.
+                document), published as a range rather than a single figure. It is reported in hours and
+                never converted to money: the conversion would need a fully-loaded hourly rate this
+                product has no way of knowing, and putting a currency figure on a modelled number is how
+                a model gets quoted as a saving.
               </Text>
               <Text>
                 <strong>Credit figures are the shared Copilot Credits pool, not Cowork spend.</strong>{' '}
@@ -2249,30 +2161,6 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
       </Accordion>
     </Card>
   );
-}
-
-export function formatCosts(values: { currency: string; cost: number }[], unknown = false): string {
-  if (unknown) return values.length === 0 ? 'Unknown' : `${values.map(formatCost).join('; ')}; Unknown unassigned`;
-  return values.length === 0 ? 'not configured' : values.map(formatCost).join('; ');
-}
-
-function formatTierCosts(tiers: { tier: string; costs: { currency: string; cost: number }[] }[], tier: string): string {
-  const match = tiers.find((t) => t.tier.toLowerCase() === tier.toLowerCase());
-  return match ? formatCosts(match.costs) : 'none';
-}
-
-function formatCost(value: { currency: string; cost: number }): string {
-  return `${value.currency} ${Math.round(value.cost).toLocaleString()}`;
-}
-
-function formatConfiguredSeatCosts(costs: CopilotSeatCostInput[]): string {
-  if (!costs.length) return 'none';
-  return costs
-    .map((cost) => {
-      const effectiveDate = cost.effectiveDateUtc ? formatDate(cost.effectiveDateUtc) : 'unknown date';
-      return `${cost.skuPartNumber}: ${cost.currency} ${cost.cost.toLocaleString()} ${cost.period}, effective ${effectiveDate}`;
-    })
-    .join('; ');
 }
 
 /** The Executive view keeps only the board-pack headlines; the Analyst view keeps the full KPI set. */

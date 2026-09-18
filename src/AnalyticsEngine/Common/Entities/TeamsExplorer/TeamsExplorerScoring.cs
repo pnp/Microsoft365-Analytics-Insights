@@ -1,3 +1,5 @@
+using Newtonsoft.Json;
+using Newtonsoft.Json.Serialization;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -62,6 +64,14 @@ namespace Common.Entities.TeamsExplorer
     }
 
     /// <summary>A short plain-English statement about the tenant, with the tone it should be shown in.</summary>
+    /// <remarks>
+    /// The camelCase naming strategy is not decoration. This type is serialised straight to the
+    /// portal, which has no camelCase contract resolver configured, so without it the payload carries
+    /// <c>Headline</c> / <c>Detail</c> / <c>Tone</c> and the Overview tab renders a row of blank cards
+    /// - present, correctly counted, and empty. Every other model reaching the portal carries the
+    /// same attribute; <c>TeamsExplorerApiContractTests</c> now asserts it for all of them.
+    /// </remarks>
+    [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public sealed class TeamsJudgement
     {
         public TeamsJudgement(string key, string tone, string headline, string detail)

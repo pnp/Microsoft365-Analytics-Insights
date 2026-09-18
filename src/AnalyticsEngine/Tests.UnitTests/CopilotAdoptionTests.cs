@@ -1770,8 +1770,21 @@ namespace Tests.UnitTests
         #region Summary assembly
 
 
+        /// <summary>
+        /// The adoption summary reports seats and people, never money.
+        /// </summary>
+        /// <remarks>
+        /// The page used to take per-SKU seat prices typed into its header and publish an "idle licence
+        /// spend" figure from them. That was withdrawn deliberately: a price typed into a report header
+        /// is not a source of truth about what a tenant pays, and a money figure derived from one gets
+        /// quoted in a renewal negotiation as though it were. The only value estimate the product makes
+        /// is the Cowork time saving, and that is reported in hours.
+        ///
+        /// Asserted over the serialised payload rather than over a property list, because the way this
+        /// comes back is somebody re-adding a currency field to a nested model.
+        /// </remarks>
         [TestMethod]
-        public void IdleLicenceSpend_IsAbsentWhenNoCostConfigured()
+        public void Summary_CarriesNoMonetaryFigures()
         {
             var analysis = SampleAnalysis();
             analysis.Summary.SeatLicenceTypes.Add(new LicenceTypeClassification
@@ -1792,7 +1805,19 @@ namespace Tests.UnitTests
 
             new CopilotAdoptionService().FinaliseSummary(analysis);
 
-            Assert.IsNull(analysis.Summary.IdleLicenceSpend, "No cost configured should preserve today's count-only output.");
+            var json = Newtonsoft.Json.JsonConvert.SerializeObject(analysis.Summary);
+
+            foreach (var banned in new[] { "idleLicenceSpend", "seatCost", "currency", "spendExposure", "reducibleAtRenewal" })
+            {
+                Assert.IsFalse(
+                    json.IndexOf(banned, StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"The Copilot Adoption summary must not carry '{banned}'. This report deliberately talks about "
+                    + "seats and people, and about time saved for Cowork - never about money.");
+            }
+
+            // The seat COUNTS are still published: they are observed, not priced.
+            Assert.AreEqual(6, analysis.Summary.PurchasedCopilotSeats);
+            Assert.AreEqual(0, analysis.Summary.UnassignedCopilotSeats);
         }
 
         [TestMethod]
@@ -1839,8 +1864,11 @@ namespace Tests.UnitTests
                 "The contradiction has to be visible where the KPI/workbook warnings come from.");
         }
 
+        /// <summary>
+        /// Assigned-idle seats are still broken down per SKU - that is a seat count, not a price.
+        /// </summary>
         [TestMethod]
-        public void IdleLicenceSpend_SplitsConfidenceTiersAndDecisionTypesWithoutCrossCurrencySumming()
+        public void AssignedIdleSeats_AreCountedPerSku()
         {
             var analysis = new CopilotAdoptionAnalysis();
             analysis.Summary.SeatLicenceTypes.AddRange(new[]
@@ -1862,132 +1890,10 @@ namespace Tests.UnitTests
             analysis.LicensedUsers.AddRange(new[] { certain, probable, review });
             analysis.Summary.LicensedUsers = 3;
 
-            var options = new CopilotAdoptionOptions
-            {
-                SeatCosts = new List<CopilotSeatCostInput>
-                {
-                    new CopilotSeatCostInput { SkuPartNumber = "Microsoft_365_Copilot", Currency = "GBP", Cost = 360m, Period = "annual", EffectiveDateUtc = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc) },
-                    new CopilotSeatCostInput { SkuPartNumber = "Microsoft_365_Copilot_EDU", Currency = "EUR", Cost = 12m, Period = "monthly", EffectiveDateUtc = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc) },
-                }
-            };
+            new CopilotAdoptionService().FinaliseSummary(analysis);
 
-            new CopilotAdoptionService(options).FinaliseSummary(analysis);
-
-            var spend = analysis.Summary.IdleLicenceSpend;
-            Assert.IsNotNull(spend);
             Assert.AreEqual(1, analysis.Summary.SeatLicenceTypes.Single(l => l.SkuPartNumber == "Microsoft_365_Copilot").AssignedIdleUsers);
             Assert.AreEqual(1, analysis.Summary.SeatLicenceTypes.Single(l => l.SkuPartNumber == "Microsoft_365_Copilot_EDU").AssignedIdleUsers);
-            Assert.AreEqual(2, spend.SpendExposure.Count, "Currencies must remain separate, never summed into a single figure.");
-            Assert.AreEqual(90m, spend.SpendExposure.Single(c => c.Currency == "GBP").Cost, "One certain assigned seat plus two unassigned seats at GBP 30/month.");
-            Assert.AreEqual(24m, spend.SpendExposure.Single(c => c.Currency == "EUR").Cost, "One probable assigned seat plus one unassigned seat at EUR 12/month.");
-            Assert.AreEqual(30m, spend.Reassignable.Single(c => c.Currency == "GBP").Cost, "Assigned idle spend is reassignable.");
-            Assert.AreEqual(12m, spend.Reassignable.Single(c => c.Currency == "EUR").Cost, "Assigned idle spend is reassignable, per currency.");
-            Assert.AreEqual(60m, spend.ReducibleAtRenewal.Single(c => c.Currency == "GBP").Cost, "Unassigned spend is reducible at renewal and kept separate from reassignable.");
-            Assert.AreEqual(12m, spend.ReducibleAtRenewal.Single(c => c.Currency == "EUR").Cost, "Unassigned spend is reducible at renewal, per currency.");
-            Assert.AreEqual(30m, spend.Tiers.Single(t => t.Tier == CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain).Costs.Single().Cost);
-            Assert.AreEqual(12m, spend.Tiers.Single(t => t.Tier == CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable).Costs.Single().Cost);
-            Assert.IsFalse(spend.Tiers.Any(t => t.Tier == CopilotAdoptionScoring.ReclaimEligibilityTiers.Review), "Review-only seats are not eligible idle-spend exposure.");
-        }
-
-        [TestMethod]
-        public void IdleLicenceSpend_MarksUnassignedSpendUnknownWithoutDroppingAssignedExposure()
-        {
-            var analysis = new CopilotAdoptionAnalysis();
-            analysis.Summary.SeatLicenceTypes.Add(new LicenceTypeClassification
-            {
-                Id = 1,
-                Name = "Microsoft 365 Copilot",
-                SkuPartNumber = "Microsoft_365_Copilot",
-                AssignedUsers = 1,
-                PurchasedUnits = null,
-                UnassignedUnits = null,
-                IsCopilotSeat = true,
-            });
-            var certain = ScoredUser("disabled@contoso.com", 0, AdoptionBand.NeverUsed);
-            certain.AccountEnabled = false;
-            CopilotAdoptionScoring.ApplyReclaimEligibility(certain);
-            certain.SeatLicences = "Microsoft 365 Copilot";
-            certain.SeatLicenceTypeIds.Add(1);
-            analysis.LicensedUsers.Add(certain);
-            analysis.Summary.LicensedUsers = 1;
-
-            var options = new CopilotAdoptionOptions
-            {
-                SeatCosts = new List<CopilotSeatCostInput>
-                {
-                    new CopilotSeatCostInput { SkuPartNumber = "Microsoft_365_Copilot", Currency = "GBP", Cost = 30m, Period = "monthly", EffectiveDateUtc = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc) },
-                }
-            };
-
-            new CopilotAdoptionService(options).FinaliseSummary(analysis);
-
-            var spend = analysis.Summary.IdleLicenceSpend;
-            Assert.IsNotNull(spend);
-            Assert.IsTrue(spend.UnassignedSpendUnknown, "Unknown unassigned seats must stay attached to the money figure.");
-            Assert.AreEqual(30m, spend.SpendExposure.Single(c => c.Currency == "GBP").Cost);
-            Assert.AreEqual(30m, spend.Reassignable.Single(c => c.Currency == "GBP").Cost);
-            Assert.AreEqual(0, spend.ReducibleAtRenewal.Count, "The unassigned component is unknown, not zero and not not-configured.");
-        }
-
-        [TestMethod]
-        public void IdleLicenceSpend_AnnualPricesMultiplyBeforeRounding()
-        {
-            var analysis = new CopilotAdoptionAnalysis();
-            analysis.Summary.SeatLicenceTypes.Add(new LicenceTypeClassification
-            {
-                Id = 1,
-                Name = "Microsoft 365 Copilot",
-                SkuPartNumber = "Microsoft_365_Copilot",
-                AssignedUsers = 0,
-                PurchasedUnits = 1000,
-                UnassignedUnits = 1000,
-                IsCopilotSeat = true,
-            });
-
-            var options = new CopilotAdoptionOptions
-            {
-                SeatCosts = new List<CopilotSeatCostInput>
-                {
-                    new CopilotSeatCostInput { SkuPartNumber = "Microsoft_365_Copilot", Currency = "GBP", Cost = 350m, Period = "annual", EffectiveDateUtc = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc) },
-                }
-            };
-
-            new CopilotAdoptionService(options).FinaliseSummary(analysis);
-
-            Assert.AreEqual(29166.67m, analysis.Summary.IdleLicenceSpend.ReducibleAtRenewal.Single().Cost);
-        }
-
-        [TestMethod]
-        public void IdleLicenceSpend_TierAndAssignedIdleSeatsCountUsersNotSkuPairs()
-        {
-            var analysis = new CopilotAdoptionAnalysis();
-            analysis.Summary.SeatLicenceTypes.AddRange(new[]
-            {
-                new LicenceTypeClassification { Id = 1, Name = "Microsoft 365 Copilot", SkuPartNumber = "Microsoft_365_Copilot", AssignedUsers = 1, PurchasedUnits = 1, UnassignedUnits = 0, IsCopilotSeat = true },
-                new LicenceTypeClassification { Id = 2, Name = "Microsoft 365 Copilot EDU", SkuPartNumber = "Microsoft_365_Copilot_EDU", AssignedUsers = 1, PurchasedUnits = 1, UnassignedUnits = 0, IsCopilotSeat = true },
-            });
-            var certain = ScoredUser("disabled@contoso.com", 0, AdoptionBand.NeverUsed);
-            certain.AccountEnabled = false;
-            CopilotAdoptionScoring.ApplyReclaimEligibility(certain);
-            certain.SeatLicences = "Microsoft 365 Copilot, Microsoft 365 Copilot EDU";
-            certain.SeatLicenceTypeIds.AddRange(new[] { 1, 2 });
-            analysis.LicensedUsers.Add(certain);
-
-            var options = new CopilotAdoptionOptions
-            {
-                SeatCosts = new List<CopilotSeatCostInput>
-                {
-                    new CopilotSeatCostInput { SkuPartNumber = "Microsoft_365_Copilot", Currency = "GBP", Cost = 10m, Period = "monthly", EffectiveDateUtc = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc) },
-                    new CopilotSeatCostInput { SkuPartNumber = "Microsoft_365_Copilot_EDU", Currency = "GBP", Cost = 20m, Period = "monthly", EffectiveDateUtc = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc) },
-                }
-            };
-
-            new CopilotAdoptionService(options).FinaliseSummary(analysis);
-
-            var spend = analysis.Summary.IdleLicenceSpend;
-            Assert.AreEqual(30m, spend.Reassignable.Single(c => c.Currency == "GBP").Cost, "Money still counts both priced seat instances.");
-            Assert.AreEqual(1, spend.Tiers.Single(t => t.Tier == CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain).Seats);
-            Assert.AreEqual(1, spend.Categories.Single(c => c.Category == "Assigned idle").Seats);
         }
 
         [TestMethod]

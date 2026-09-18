@@ -15,7 +15,6 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         Task<CopilotAdoptionAnalysis> RunAsync(
             int windowDays,
             List<int> seatLicenceTypeIds,
-            List<CopilotSeatCostInput> seatCosts,
             ICopilotAdoptionRunTelemetry telemetry);
     }
 
@@ -24,12 +23,10 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         public Task<CopilotAdoptionAnalysis> RunAsync(
             int windowDays,
             List<int> seatLicenceTypeIds,
-            List<CopilotSeatCostInput> seatCosts,
             ICopilotAdoptionRunTelemetry telemetry)
         {
             var options = CopilotAdoptionOptions.Default;
             options.WindowDays = windowDays;
-            options.SeatCosts = seatCosts ?? new List<CopilotSeatCostInput>();
 
             var service = new CopilotAdoptionService(
                 options,
@@ -142,11 +139,10 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         public async Task<CopilotAdoptionAnalysis> TryGetAsync(
             int windowDays,
             List<int> seatLicenceTypeIds,
-            List<CopilotSeatCostInput> seatCosts,
             TimeSpan waitBudget,
             CancellationToken cancellationToken)
         {
-            var task = GetAsync(windowDays, seatLicenceTypeIds, seatCosts);
+            var task = GetAsync(windowDays, seatLicenceTypeIds);
             if (task.IsCompleted) return await task;
 
             var finished = await Task.WhenAny(task, Task.Delay(waitBudget, cancellationToken));
@@ -155,12 +151,10 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 
         internal Task<CopilotAdoptionAnalysis> GetAsync(
             int windowDays,
-            List<int> seatLicenceTypeIds,
-            List<CopilotSeatCostInput> seatCosts)
+            List<int> seatLicenceTypeIds)
         {
             var ids = seatLicenceTypeIds ?? new List<int>();
-            var costs = seatCosts ?? new List<CopilotSeatCostInput>();
-            var cacheKey = CacheKey(windowDays, ids, costs);
+            var cacheKey = CacheKey(windowDays, ids);
 
             if (_cache.TryGet(cacheKey, out var cached))
             {
@@ -186,7 +180,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 // Starting the run on the thread pool gives it no ambient SynchronizationContext at all,
                 // which fixes this for every await in the analysis - including ones not yet written -
                 // rather than relying on ~32 separate ConfigureAwait(false) calls staying correct.
-                () => Task.Run(() => RunAndPublishAsync(cacheKey, candidate, windowDays, ids, costs)),
+                () => Task.Run(() => RunAndPublishAsync(cacheKey, candidate, windowDays, ids)),
                 LazyThreadSafetyMode.ExecutionAndPublication);
 
             var effective = _inFlight.GetOrAdd(cacheKey, candidate);
@@ -203,28 +197,21 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             return effective.Value;
         }
 
-        internal static string CacheKey(int windowDays, IEnumerable<int> seatLicenceTypeIds, IEnumerable<CopilotSeatCostInput> seatCosts = null)
+        internal static string CacheKey(int windowDays, IEnumerable<int> seatLicenceTypeIds)
         {
             var ids = (seatLicenceTypeIds ?? Enumerable.Empty<int>())
                 .Distinct()
                 .OrderBy(id => id)
                 .ToList();
-            var costs = (seatCosts ?? Enumerable.Empty<CopilotSeatCostInput>())
-                .Where(c => c != null && !string.IsNullOrWhiteSpace(c.SkuPartNumber) && !string.IsNullOrWhiteSpace(c.Currency) && c.Cost > 0)
-                .Select(c => $"{c.SkuPartNumber.Trim().ToUpperInvariant()}={c.Currency.Trim().ToUpperInvariant()}:{c.Cost}:{(c.Period ?? "monthly").Trim().ToLowerInvariant()}:{c.EffectiveDateUtc:O}")
-                .OrderBy(c => c, StringComparer.Ordinal)
-                .ToList();
             return CacheKeyPrefix + windowDays + "::"
-                   + (ids.Count == 0 ? "auto" : string.Join(",", ids))
-                   + "::costs=" + (costs.Count == 0 ? "none" : string.Join("|", costs));
+                   + (ids.Count == 0 ? "auto" : string.Join(",", ids));
         }
 
         private async Task<CopilotAdoptionAnalysis> RunAndPublishAsync(
             string cacheKey,
             Lazy<Task<CopilotAdoptionAnalysis>> generation,
             int windowDays,
-            List<int> seatLicenceTypeIds,
-            List<CopilotSeatCostInput> seatCosts)
+            List<int> seatLicenceTypeIds)
         {
             ICopilotAdoptionAnalysisTelemetry telemetry =
                 NullCopilotAdoptionAnalysisTelemetry.Instance;
@@ -247,7 +234,6 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 var analysis = await _runner.RunAsync(
                     windowDays,
                     seatLicenceTypeIds,
-                    seatCosts,
                     telemetry).ConfigureAwait(false);
                 var serviceDurationMs = watch.ElapsedMilliseconds;
 

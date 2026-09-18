@@ -23,7 +23,7 @@ import type {
   OpportunityFilters,
 } from '../../types/copilotAdoption';
 import Spinner from '../Spinner';
-import { ScoreBar, SortableTh, useAdoptionTableStyles } from './adoptionShared';
+import { RationaleCell, ScoreBar, SortableTh, useAdoptionTableStyles } from './adoptionShared';
 import { formatCount, formatDate } from '../shared/KpiGrid';
 import InfoTip from '../shared/InfoTip';
 
@@ -64,10 +64,6 @@ const useStyles = makeStyles({
     gap: '12px',
     marginTop: '12px',
     flexWrap: 'wrap',
-  },
-  rationale: {
-    maxWidth: '360px',
-    color: tokens.colorNeutralForeground2,
   },
   upn: {
     display: 'flex',
@@ -383,7 +379,7 @@ export default function OpportunitiesPanel({
           <table className={table.table}>
             <thead>
               <tr>
-                <SortableTh label="user" sortKey="upn" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
+                <SortableTh label="user" sortKey="upn" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} className={table.stickyLeft}>
                   User
                 </SortableTh>
                 <SortableTh label="department" sortKey="department" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
@@ -396,27 +392,23 @@ export default function OpportunitiesPanel({
                   descending={filters.sortDesc}
                   onSort={applySort}
                   defaultDescending
+                  infoTitle="Business case score"
+                  info={{
+                    what: `How strong the case for giving this person a Copilot licence is, from 0 to 100. Someone is counted in the "recommended for a licence" headline if they already use Copilot on at least ${options.opportunityProvenDemandMinActiveDays} distinct days without a licence (proven demand), or if this score reaches ${options.opportunityRecommendScore} (workload inferred). The Justification column on each row says which route applied, and the CSV export carries it as a "Qualified by" column.`,
+                    how: `Four weighted signals, weighted so evidence beats inference. Already using Copilot Chat without a licence is worth ${options.opportunityUnlicensedCopilotWeight} points because it proves demand for Copilot itself; Teams collaboration is worth ${options.opportunityCollaborationWeight}, email ${options.opportunityEmailWeight} and document work ${options.opportunityDocumentWeight}, and those three only infer it from general Microsoft 365 activity. Each signal is a ratio against its own target and is capped at 1, so no single very heavy workload can carry someone over the line on its own. Proven demand has to qualify independently because the Copilot weight sits below the score bar, so recurrent unlicensed use could otherwise never clear it while general busyness could.`,
+                    formula:
+                      `copilot     = min(1, unlicensedCopilotInteractions / (${opportunityCopilotTargetExpression}))\n` +
+                      `collab      = min(1, (teamsMessages + teamsMeetings) / ${options.opportunityCollaborationTarget})\n` +
+                      `email       = min(1, (emailsSent + emailsRead) / ${options.opportunityEmailTarget})\n` +
+                      `documents   = min(1, filesViewedOrEdited / ${options.opportunityDocumentTarget})\n` +
+                      `score = copilot*${options.opportunityUnlicensedCopilotWeight} + collab*${options.opportunityCollaborationWeight} + email*${options.opportunityEmailWeight} + documents*${options.opportunityDocumentWeight}\n\n` +
+                      `recommended when unlicensedCopilotActiveDays >= ${options.opportunityProvenDemandMinActiveDays}\n` +
+                      `               or score >= ${options.opportunityRecommendScore}`,
+                    source:
+                      `Copilot use comes from the Copilot audit import and covers this period exactly. Its target of ${options.opportunityCopilotTarget} per ${options.opportunityCopilotTargetBasisDays} days is scaled to the selected period (about ${opportunityCopilotTargetApprox} here; the formula keeps the exact division so a candidate on the bar is not rounded across it) because it is a raw total, not a per-active-day average. The Teams, email and document figures are a per-active-day average across this same period, taken from Microsoft\u2019s daily usage reports - a day the user did not appear in the report at all does not drag the average down. Hover any row for its four component scores.`,
+                  }}
                 >
-                  <span className={styles.thWithInfo}>
-                    Business case
-                    <InfoTip
-                      title="Business case score"
-                      content={{
-                        what: `How strong the case for giving this person a Copilot licence is, from 0 to 100. Someone is counted in the "recommended for a licence" headline if they already use Copilot on at least ${options.opportunityProvenDemandMinActiveDays} distinct days without a licence (proven demand), or if this score reaches ${options.opportunityRecommendScore} (workload inferred). The Justification column on each row says which route applied, and the CSV export carries it as a "Qualified by" column.`,
-                        how: `Four weighted signals, weighted so evidence beats inference. Already using Copilot Chat without a licence is worth ${options.opportunityUnlicensedCopilotWeight} points because it proves demand for Copilot itself; Teams collaboration is worth ${options.opportunityCollaborationWeight}, email ${options.opportunityEmailWeight} and document work ${options.opportunityDocumentWeight}, and those three only infer it from general Microsoft 365 activity. Each signal is a ratio against its own target and is capped at 1, so no single very heavy workload can carry someone over the line on its own. Proven demand has to qualify independently because the Copilot weight sits below the score bar, so recurrent unlicensed use could otherwise never clear it while general busyness could.`,
-                        formula:
-                          `copilot     = min(1, unlicensedCopilotInteractions / (${opportunityCopilotTargetExpression}))\n` +
-                          `collab      = min(1, (teamsMessages + teamsMeetings) / ${options.opportunityCollaborationTarget})\n` +
-                          `email       = min(1, (emailsSent + emailsRead) / ${options.opportunityEmailTarget})\n` +
-                          `documents   = min(1, filesViewedOrEdited / ${options.opportunityDocumentTarget})\n` +
-                          `score = copilot*${options.opportunityUnlicensedCopilotWeight} + collab*${options.opportunityCollaborationWeight} + email*${options.opportunityEmailWeight} + documents*${options.opportunityDocumentWeight}\n\n` +
-                          `recommended when unlicensedCopilotActiveDays >= ${options.opportunityProvenDemandMinActiveDays}\n` +
-                          `               or score >= ${options.opportunityRecommendScore}`,
-                        source:
-                          `Copilot use comes from the Copilot audit import and covers this period exactly. Its target of ${options.opportunityCopilotTarget} per ${options.opportunityCopilotTargetBasisDays} days is scaled to the selected period (about ${opportunityCopilotTargetApprox} here; the formula keeps the exact division so a candidate on the bar is not rounded across it) because it is a raw total, not a per-active-day average. The Teams, email and document figures are a per-active-day average across this same period, taken from Microsoft\u2019s daily usage reports - a day the user did not appear in the report at all does not drag the average down. Hover any row for its four component scores.`,
-                      }}
-                    />
-                  </span>
+                  Business case
                 </SortableTh>
                 <SortableTh
                   label="unlicensed Copilot use"
@@ -425,19 +417,15 @@ export default function OpportunitiesPanel({
                   descending={filters.sortDesc}
                   onSort={applySort}
                   defaultDescending
+                  infoTitle="Already using Copilot"
+                  info={{
+                    what: 'Copilot interactions this person made in the selected period despite holding no Microsoft 365 Copilot licence - almost always Copilot Chat, which is available without one.',
+                    how: 'Counted from the Copilot audit log for users who hold none of the SKUs classified as a Copilot licence. Shown as interactions and the number of distinct days they happened on, because ten interactions across ten days is a habit and ten in one afternoon is an experiment.',
+                    source:
+                      'Invisible in Microsoft\u2019s own Copilot usage report, which only covers licensed users. It needs the Copilot audit import to be enabled.',
+                  }}
                 >
-                  <span className={styles.thWithInfo}>
-                    Already using Copilot
-                    <InfoTip
-                      title="Already using Copilot"
-                      content={{
-                        what: 'Copilot interactions this person made in the selected period despite holding no Microsoft 365 Copilot licence - almost always Copilot Chat, which is available without one.',
-                        how: 'Counted from the Copilot audit log for users who hold none of the SKUs classified as a Copilot licence. Shown as interactions and the number of distinct days they happened on, because ten interactions across ten days is a habit and ten in one afternoon is an experiment.',
-                        source:
-                          'Invisible in Microsoft\u2019s own Copilot usage report, which only covers licensed users. It needs the Copilot audit import to be enabled.',
-                      }}
-                    />
-                  </span>
+                  Already using Copilot
                 </SortableTh>
                 <SortableTh label="Teams activity" sortKey="collaboration" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} numeric defaultDescending>
                   Teams (per day)
@@ -458,8 +446,8 @@ export default function OpportunitiesPanel({
                       title="Justification"
                       content={{
                         what: 'The score restated in plain English, naming the specific signals that produced it for this person.',
-                        how: 'Written per user rather than per band - unlike the licensed-user list, no two candidates reach the same score by the same route, so this genuinely differs from row to row.',
-                        source: 'Safe to paste directly into a licence request. It is also in the CSV export.',
+                        how: 'Written per user rather than per band - unlike the licensed-user list, no two candidates reach the same score by the same route, so this genuinely differs from row to row. Shown to two lines here to keep the rows readable; hover a cell for the whole sentence.',
+                        source: 'Safe to paste directly into a licence request. It is also in the CSV export, in full.',
                       }}
                     />
                   </span>
@@ -469,7 +457,7 @@ export default function OpportunitiesPanel({
             <tbody>
               {data.rows.map((row) => (
                 <tr key={row.userId}>
-                  <td className={table.td}>
+                  <td className={`${table.td} ${table.stickyLeft}`}>
                     <span className={styles.upn}>
                       <Text size={200} weight="semibold">
                         {row.userPrincipalName}
@@ -479,7 +467,7 @@ export default function OpportunitiesPanel({
                       </Text>
                     </span>
                   </td>
-                  <td className={table.td}>{row.department || '\u2014'}</td>
+                  <td className={`${table.td} ${table.tdNoWrap}`}>{row.department || '\u2014'}</td>
                   <td className={table.td}>
                     <Tooltip
                       relationship="description"
@@ -492,7 +480,7 @@ export default function OpportunitiesPanel({
                       </div>
                     </Tooltip>
                   </td>
-                  <td className={table.td}>
+                  <td className={`${table.td} ${table.tdNoWrap}`}>
                     {row.unlicensedCopilotInteractions > 0 ? (
                       <Badge className={styles.evidence} size="small">
                         {formatCount(row.unlicensedCopilotInteractions)} in {row.unlicensedCopilotActiveDays}d
@@ -516,11 +504,9 @@ export default function OpportunitiesPanel({
                     </Text>
                   </td>
                   <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.filesViewedOrEdited)}</td>
-                  <td className={table.td}>{formatDate(row.lastM365ActivityUtc)}</td>
+                  <td className={`${table.td} ${table.tdNoWrap}`}>{formatDate(row.lastM365ActivityUtc)}</td>
                   <td className={table.td}>
-                    <Text size={200} className={styles.rationale}>
-                      {row.rationale}
-                    </Text>
+                    <RationaleCell text={row.rationale} />
                   </td>
                 </tr>
               ))}

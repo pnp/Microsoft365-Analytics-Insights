@@ -421,7 +421,7 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Purchased Copilot seats", summary.PurchasedCopilotSeats.HasValue ? (object)summary.PurchasedCopilotSeats.Value : "Unknown",
                 "Purchased seats from Graph subscribedSkus prepaidUnits for the SKUs classified as Copilot seats. Unknown means subscribedSkus was unavailable or the permission is missing - deliberately not zero.");
             AddMeta(sheet, "Unassigned Copilot seats", summary.UnassignedCopilotSeats.HasValue ? (object)summary.UnassignedCopilotSeats.Value : "Unknown",
-                "Purchased minus assigned, per Copilot SKU. Feeds idle spend as its own reducible-at-renewal category, not merged with assigned-but-idle seats.");
+                "Purchased minus assigned, per Copilot SKU. A seat nobody holds, as distinct from a seat somebody holds but does not use - the two need different decisions, so they are never merged.");
             AddMeta(sheet, "Users analysed", summary.ScoredUsers,
                 summary.ScoredUsers < summary.LicensedUsers
                     ? "FEWER THAN THE SEAT COUNT. Every rate below is of these users, not of the whole tenant, "
@@ -459,29 +459,6 @@ namespace Common.Entities.CopilotAdoption
                 "Seats kept out of the reclaimable total because they were scored from Microsoft's usage report over a period that is not this analysis window.");
             AddMeta(sheet, "Reclaimable but still active", summary.ReclaimSeatsFromActiveBands,
                 "Reclaimable seats that are not never-used or dormant - disabled accounts that were still active when they were disabled. Never used + Dormant + this = Reclaimable + both held-back figures.");
-
-            if (summary.IdleLicenceSpend != null)
-            {
-                AddMeta(sheet, "Idle spend exposure", FormatCosts(summary.IdleLicenceSpend.SpendExposure, summary.IdleLicenceSpend.UnassignedSpendUnknown),
-                    "Monthly exposure for configured SKU prices only. This is assigned idle seats plus unassigned seats; currencies are never added together.");
-                AddMeta(sheet, "Idle spend - reassignable", FormatCosts(summary.IdleLicenceSpend.Reassignable),
-                    "Assigned idle seats that can be given to another user. This is not a cash saving unless the tenant later buys fewer seats.");
-                AddMeta(sheet, "Idle spend - reducible at renewal", FormatCosts(summary.IdleLicenceSpend.ReducibleAtRenewal, summary.IdleLicenceSpend.UnassignedSpendUnknown),
-                    "Purchased but unassigned seats. This is the renewal reduction opportunity, separate from reassignable seats.");
-                foreach (var cost in summary.IdleLicenceSpend.ConfiguredCosts)
-                {
-                    AddMeta(sheet, "Seat price used - " + cost.SkuPartNumber,
-                        $"{cost.Currency} {cost.Cost:N2} {cost.Period}",
-                        cost.EffectiveDateUtc.HasValue
-                            ? $"Effective {cost.EffectiveDateUtc.Value:yyyy-MM-dd}. This is the configured price used for the idle-spend figures in this workbook."
-                            : "No effective date was supplied.");
-                }
-                foreach (var tier in summary.IdleLicenceSpend.Tiers)
-                {
-                    AddMeta(sheet, "Idle spend - " + tier.Tier, FormatCosts(tier.Costs),
-                        "Assigned idle spend in this reclaim-confidence tier. Certain can be quoted on its own.");
-                }
-            }
 
             var last = sheet.CurrentRow;
 
@@ -1705,24 +1682,6 @@ namespace Common.Entities.CopilotAdoption
             }
 
             sheet.FreezeTopRows(3);
-        }
-
-        private static string FormatCosts(List<Common.Entities.AgentCosts.AzureCostByCurrency> costs, bool unknown = false)
-        {
-            if (unknown)
-            {
-                return costs == null || costs.Count == 0
-                    ? "Unknown"
-                    : string.Join("; ", costs.Select(FormatCost)) + "; Unknown unassigned";
-            }
-
-            if (costs == null || costs.Count == 0) return "Not configured";
-            return string.Join("; ", costs.Select(FormatCost));
-        }
-
-        private static string FormatCost(Common.Entities.AgentCosts.AzureCostByCurrency cost)
-        {
-            return cost.Currency + " " + cost.Cost.ToString("N2");
         }
 
         private static string SourceComparisonSummary(LicensedUserAdoptionRow user, CopilotAdoptionSummary summary)

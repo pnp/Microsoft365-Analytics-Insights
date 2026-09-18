@@ -4,6 +4,8 @@ import { AdoptionBand } from '../../types/copilotAdoption';
 import type { AdoptionSegmentRow } from '../../types/copilotAdoption';
 import { ADOPTION_BANDS } from '../charts/GaugeRing';
 import { formatCount, formatPct } from '../shared/KpiGrid';
+import InfoTip from '../shared/InfoTip';
+import type { InfoTipContent } from '../shared/InfoTip';
 
 /**
  * Band colours run cold-to-warm with maturity, and the two zero-usage bands are deliberately the
@@ -60,6 +62,25 @@ const useStyles = makeStyles({
   table: {
     width: '100%',
     borderCollapse: 'collapse',
+  },
+  /**
+   * A cell holding a full sentence rather than a value.
+   *
+   * Clamped to two lines, with the whole text on hover. Unclamped, these columns decided the height
+   * of every row in the table: squeezed into whatever width the numeric columns left over, a
+   * three-line justification became a fifteen-line column and three users filled the screen. The
+   * text is not dropped - it is on the cell's title, and in full in the CSV export, which is where a
+   * sentence that long actually gets read.
+   */
+  rationale: {
+    display: '-webkit-box',
+    WebkitBoxOrient: 'vertical',
+    WebkitLineClamp: 2,
+    overflow: 'hidden',
+    color: tokens.colorNeutralForeground2,
+    minWidth: '200px',
+    maxWidth: '320px',
+    cursor: 'help',
   },
   th: {
     textAlign: 'left',
@@ -119,6 +140,20 @@ const useStyles = makeStyles({
     fontSize: '9px',
     lineHeight: '1',
   },
+  /**
+   * Wraps the sort button and the column's "i" as SIBLINGS.
+   *
+   * They used to be nested - the `InfoTip` was passed in as `children` of the sort button - which is
+   * invalid HTML (a button inside a button) and meant the info icon could not be clicked at all: the
+   * click bubbled to the sort handler and re-sorted the table instead of opening the definition. On
+   * a page whose whole premise is "every figure carries its definition", an unreachable definition is
+   * a real defect, not a nicety.
+   */
+  thContent: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '2px',
+  },
   sortArrowActive: {
     color: tokens.colorBrandForeground1,
   },
@@ -146,6 +181,40 @@ const useStyles = makeStyles({
     borderLeftWidth: '1px',
     borderLeftStyle: 'solid',
     borderLeftColor: tokens.colorNeutralStroke2,
+    // The shadow matters as much as the hairline: without it the column it floats over looks
+    // truncated rather than scrolled-under, which reads as a rendering bug.
+    boxShadow: `-6px 0 6px -6px ${tokens.colorNeutralShadowAmbient}`,
+  },
+  /**
+   * Pins a column to the LEFT-hand edge of a horizontally scrolling table.
+   *
+   * These tables are wider than a laptop screen, so reading a column on the right means scrolling the
+   * user's own name off the left - at which point the row being read is anonymous. Pinning the
+   * identity column keeps "who is this about?" answerable at every scroll position, which is the one
+   * thing a reader needs at all times.
+   *
+   * Needs an opaque background for the same reason as `stickyRight`: the cells it overlaps scroll
+   * underneath it.
+   */
+  stickyLeft: {
+    position: 'sticky',
+    left: '0',
+    zIndex: 1,
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRightWidth: '1px',
+    borderRightStyle: 'solid',
+    borderRightColor: tokens.colorNeutralStroke2,
+    boxShadow: `6px 0 6px -6px ${tokens.colorNeutralShadowAmbient}`,
+  },
+  /**
+   * Keeps a value cell on one line.
+   *
+   * Applied per column rather than to every `td`, because the same table also carries prose columns
+   * that genuinely have to wrap. A date, a badge or a count that wraps sets the height of the whole
+   * row for no benefit.
+   */
+  tdNoWrap: {
+    whiteSpace: 'nowrap',
   },
   td: {
     padding: '6px 10px',
@@ -329,7 +398,29 @@ export function useAdoptionTableStyles() {
 }
 
 /**
- * A sortable column header.
+ * A per-row explanation, shown compactly.
+ *
+ * These columns carry a full sentence written for one specific user, so they cannot be replaced by a
+ * legend the way the recommended-action column was. Rendered whole they decide the height of every
+ * row - a justification wrapping to fifteen lines in a squeezed column put three users on a screen -
+ * so it is clamped to two lines, with the full text on hover and in full in the CSV export.
+ */
+export function RationaleCell({ text }: { text: string }) {
+  const styles = useStyles();
+
+  if (!text) {
+    return <span>{'\u2014'}</span>;
+  }
+
+  return (
+    <Text size={200} className={styles.rationale} title={text}>
+      {text}
+    </Text>
+  );
+}
+
+/**
+ * A sortable column header, optionally carrying the column's definition.
  *
  * Clicking selects the column; clicking the column that is already selected reverses it. The first
  * click uses `defaultDescending`, because the useful first answer differs per column: "most
@@ -338,6 +429,12 @@ export function useAdoptionTableStyles() {
  *
  * `aria-sort` lives on the `th` (that is where assistive technology looks for it) while the control
  * itself is a real `button`, so the header is reachable and operable from the keyboard.
+ *
+ * The definition is passed as `info` rather than rendered into `children` ON PURPOSE. An `InfoTip`
+ * is itself a button, so putting one inside the sort button produced nested buttons: the browser
+ * hoisted the inner one out of the header, and every attempt to open the definition landed on the
+ * sort handler and re-sorted the table instead. Kept as siblings, both are clickable and both are
+ * separate tab stops.
  */
 export function SortableTh({
   label,
@@ -348,6 +445,8 @@ export function SortableTh({
   numeric = false,
   defaultDescending = false,
   className,
+  info,
+  infoTitle,
   children,
 }: {
   /** Accessible name for the sort control. Use `children` to render something richer. */
@@ -360,6 +459,10 @@ export function SortableTh({
   /** Direction applied when this column is selected from cold. */
   defaultDescending?: boolean;
   className?: string;
+  /** The column's definition, shown by an "i" that sits OUTSIDE the sort button. */
+  info?: InfoTipContent;
+  /** Heading for the definition popover. Defaults to the column's own label. */
+  infoTitle?: string;
   children?: ReactNode;
 }) {
   const styles = useStyles();
@@ -375,20 +478,23 @@ export function SortableTh({
       className={`${styles.th}${numeric ? ` ${styles.thNumeric}` : ''}${className ? ` ${className}` : ''}`}
       aria-sort={ariaSort}
     >
-      <button
-        type="button"
-        className={styles.sortButton}
-        onClick={() => onSort(sortKey, active ? !descending : defaultDescending)}
-        title={`Sort by ${label}`}
-      >
-        {children ?? label}
-        <span
-          className={`${styles.sortArrow} ${active ? styles.sortArrowActive : styles.sortArrowIdle}`}
-          aria-hidden="true"
+      <span className={styles.thContent}>
+        <button
+          type="button"
+          className={styles.sortButton}
+          onClick={() => onSort(sortKey, active ? !descending : defaultDescending)}
+          title={`Sort by ${label}`}
         >
-          {active ? (descending ? '\u25BC' : '\u25B2') : '\u25B2'}
-        </span>
-      </button>
+          {children ?? label}
+          <span
+            className={`${styles.sortArrow} ${active ? styles.sortArrowActive : styles.sortArrowIdle}`}
+            aria-hidden="true"
+          >
+            {active ? (descending ? '\u25BC' : '\u25B2') : '\u25B2'}
+          </span>
+        </button>
+        {info && <InfoTip title={infoTitle ?? label} content={info} />}
+      </span>
     </th>
   );
 }

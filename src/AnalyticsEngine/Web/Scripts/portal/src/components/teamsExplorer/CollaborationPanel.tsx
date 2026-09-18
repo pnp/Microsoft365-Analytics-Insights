@@ -18,6 +18,7 @@ import { KpiGrid } from '../shared/KpiGrid';
 import type { KpiDefinition } from '../shared/KpiGrid';
 import CategoryBarChart from '../charts/CategoryBarChart';
 import TimeSeriesChart from '../charts/TimeSeriesChart';
+import SentimentLight from '../shared/SentimentLight';
 import type { TeamsCollaboration } from '../../types/teamsExplorer';
 import {
   SENTIMENT_SCALE_NOTE,
@@ -25,7 +26,6 @@ import {
   WindowNote,
   bucketsToCategories,
   formatCount,
-  formatSentiment,
   queryFor,
   toCategories,
   useTeamsStyles,
@@ -233,7 +233,7 @@ export default function CollaborationPanel({
                     <TableCell className={styles.numeric}>{formatCount(team.messages)}</TableCell>
                     <TableCell className={styles.numeric}>{formatCount(team.reactions)}</TableCell>
                     <TableCell className={styles.numeric}>{formatCount(team.activeDays)}</TableCell>
-                    <TableCell>{formatSentiment(team.sentiment)}</TableCell>
+                    <TableCell><SentimentLight value={team.sentiment} /></TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -283,7 +283,7 @@ export default function CollaborationPanel({
                     <TableCell className={styles.numeric}>{formatCount(channel.reactions)}</TableCell>
                     <TableCell className={styles.numeric}>{formatCount(channel.tabs)}</TableCell>
                     <TableCell className={styles.numeric}>{formatCount(channel.activeDays)}</TableCell>
-                    <TableCell>{formatSentiment(channel.sentiment)}</TableCell>
+                    <TableCell><SentimentLight value={channel.sentiment} /></TableCell>
                   </TableRow>
                 ))}
               </TableBody>

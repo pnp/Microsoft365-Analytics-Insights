@@ -278,6 +278,7 @@
     <Compile Include="DlpCopilotTests.cs" />
     <Compile Include="DlpApiContractTests.cs" />
     <Compile Include="DlpApiSqlIntegrationTests.cs" />
+    <Compile Include="TeamsExplorerApiContractTests.cs" />
     <Compile Include="TeamsExplorerAvailabilityTests.cs" />
     <Compile Include="TeamsExplorerIndexMigrationTests.cs" />
     <Compile Include="TeamsExplorerScoringTests.cs" />

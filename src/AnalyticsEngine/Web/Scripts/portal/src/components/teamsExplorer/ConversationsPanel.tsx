@@ -14,13 +14,13 @@ import {
 import WordCloud from '../charts/WordCloud';
 import CategoryBarChart from '../charts/CategoryBarChart';
 import TimeSeriesChart from '../charts/TimeSeriesChart';
+import SentimentLight from '../shared/SentimentLight';
 import type { TeamsConversations } from '../../types/teamsExplorer';
 import {
   SENTIMENT_SCALE_NOTE,
   SectionCard,
   WindowNote,
   formatCount,
-  formatSentiment,
   queryFor,
   toCategories,
   useTeamsStyles,
@@ -139,7 +139,7 @@ export default function ConversationsPanel({ data }: { data: TeamsConversations 
                   <TableRow key={row.name}>
                     <TableCell>{row.name}</TableCell>
                     <TableCell className={styles.numeric}>{formatCount(row.messages)}</TableCell>
-                    <TableCell>{formatSentiment(row.sentiment)}</TableCell>
+                    <TableCell><SentimentLight value={row.sentiment} /></TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -168,7 +168,7 @@ export default function ConversationsPanel({ data }: { data: TeamsConversations 
                   <TableRow key={row.name}>
                     <TableCell>{row.name}</TableCell>
                     <TableCell className={styles.numeric}>{formatCount(row.messages)}</TableCell>
-                    <TableCell>{formatSentiment(row.sentiment)}</TableCell>
+                    <TableCell><SentimentLight value={row.sentiment} /></TableCell>
                   </TableRow>
                 ))}
               </TableBody>

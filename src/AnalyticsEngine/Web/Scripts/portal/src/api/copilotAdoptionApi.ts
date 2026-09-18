@@ -5,7 +5,6 @@ import type {
   CopilotAdoptionCohortComparison,
   CopilotAdoptionCohortUserPage,
   CopilotAdoptionSummary,
-  CopilotSeatCostInput,
   CoworkFilters,
   CoworkReadinessPage,
   LicenceOpportunityPage,
@@ -105,13 +104,10 @@ async function postJson<T>(path: string, body: unknown, what: string): Promise<T
   return response.json() as Promise<T>;
 }
 
-function scopeParams(windowDays: number, seatLicenceTypeIds?: number[], seatCosts?: CopilotSeatCostInput[]): URLSearchParams {
+function scopeParams(windowDays: number, seatLicenceTypeIds?: number[]): URLSearchParams {
   const params = new URLSearchParams({ windowDays: String(windowDays) });
   if (seatLicenceTypeIds && seatLicenceTypeIds.length > 0) {
     params.set('seatLicenceTypeIds', seatLicenceTypeIds.join(','));
-  }
-  if (seatCosts && seatCosts.length > 0) {
-    params.set('seatCosts', JSON.stringify(seatCosts));
   }
   return params;
 }
@@ -164,10 +160,9 @@ export function fetchAdoptionSummary(
   windowDays: number,
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
-  seatCosts?: CopilotSeatCostInput[],
   comparisonMode = 'previousPeriod',
 ): Promise<CopilotAdoptionSummary> {
-  const params = scopeParams(windowDays, seatLicenceTypeIds, seatCosts);
+  const params = scopeParams(windowDays, seatLicenceTypeIds);
   params.set('comparisonMode', comparisonMode);
   return getJson<CopilotAdoptionSummary>(
     `/summary?${params}`,
@@ -180,10 +175,9 @@ export function fetchAdoptionFilters(
   windowDays: number,
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
-  seatCosts?: CopilotSeatCostInput[],
 ): Promise<AdoptionFilterOptions> {
   return getJson<AdoptionFilterOptions>(
-    `/filters?${scopeParams(windowDays, seatLicenceTypeIds, seatCosts)}`,
+    `/filters?${scopeParams(windowDays, seatLicenceTypeIds)}`,
     'the Copilot adoption filters',
     signal,
   );
@@ -196,9 +190,8 @@ export function fetchLicensedUsers(
   take: number,
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
-  seatCosts?: CopilotSeatCostInput[],
 ): Promise<LicensedUserPage> {
-  const params = applyLicensedUserFilters(scopeParams(windowDays, seatLicenceTypeIds, seatCosts), filters);
+  const params = applyLicensedUserFilters(scopeParams(windowDays, seatLicenceTypeIds), filters);
   params.set('skip', String(skip));
   params.set('take', String(take));
 
@@ -212,9 +205,8 @@ export function fetchOpportunities(
   take: number,
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
-  seatCosts?: CopilotSeatCostInput[],
 ): Promise<LicenceOpportunityPage> {
-  const params = applyOpportunityFilters(scopeParams(windowDays, seatLicenceTypeIds, seatCosts), filters);
+  const params = applyOpportunityFilters(scopeParams(windowDays, seatLicenceTypeIds), filters);
   params.set('skip', String(skip));
   params.set('take', String(take));
 
@@ -228,9 +220,8 @@ export function fetchCowork(
   take: number,
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
-  seatCosts?: CopilotSeatCostInput[],
 ): Promise<CoworkReadinessPage> {
-  const params = applyCoworkFilters(scopeParams(windowDays, seatLicenceTypeIds, seatCosts), filters);
+  const params = applyCoworkFilters(scopeParams(windowDays, seatLicenceTypeIds), filters);
   params.set('skip', String(skip));
   params.set('take', String(take));
 
@@ -241,10 +232,9 @@ export function fetchAdoptionSql(
   windowDays: number,
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
-  seatCosts?: CopilotSeatCostInput[],
 ): Promise<Record<string, string>> {
   return getJson<Record<string, string>>(
-    `/sql?${scopeParams(windowDays, seatLicenceTypeIds, seatCosts)}`,
+    `/sql?${scopeParams(windowDays, seatLicenceTypeIds)}`,
     'the Copilot adoption queries',
     signal,
   );
@@ -327,9 +317,8 @@ export function licensedUsersExportUrl(
   windowDays: number,
   filters: LicensedUserFilters,
   seatLicenceTypeIds?: number[],
-  seatCosts?: CopilotSeatCostInput[],
 ): string {
-  const params = applyLicensedUserFilters(scopeParams(windowDays, seatLicenceTypeIds, seatCosts), filters);
+  const params = applyLicensedUserFilters(scopeParams(windowDays, seatLicenceTypeIds), filters);
   return `${baseUrl()}/licensed-users/export?${params}`;
 }
 
@@ -337,9 +326,8 @@ export function opportunitiesExportUrl(
   windowDays: number,
   filters: OpportunityFilters,
   seatLicenceTypeIds?: number[],
-  seatCosts?: CopilotSeatCostInput[],
 ): string {
-  const params = applyOpportunityFilters(scopeParams(windowDays, seatLicenceTypeIds, seatCosts), filters);
+  const params = applyOpportunityFilters(scopeParams(windowDays, seatLicenceTypeIds), filters);
   return `${baseUrl()}/opportunities/export?${params}`;
 }
 
@@ -354,9 +342,8 @@ export function coworkExportUrl(
   windowDays: number,
   filters: CoworkFilters,
   seatLicenceTypeIds?: number[],
-  seatCosts?: CopilotSeatCostInput[],
 ): string {
-  const params = applyCoworkFilters(scopeParams(windowDays, seatLicenceTypeIds, seatCosts), filters);
+  const params = applyCoworkFilters(scopeParams(windowDays, seatLicenceTypeIds), filters);
   return `${baseUrl()}/cowork/export?${params}`;
 }
 
@@ -371,10 +358,9 @@ export function coworkExportUrl(
 export function workbookExportUrl(
   windowDays: number,
   seatLicenceTypeIds?: number[],
-  seatCosts?: CopilotSeatCostInput[],
   comparisonMode = 'previousPeriod',
 ): string {
-  const params = scopeParams(windowDays, seatLicenceTypeIds, seatCosts);
+  const params = scopeParams(windowDays, seatLicenceTypeIds);
   params.set('comparisonMode', comparisonMode);
   return `${baseUrl()}/export/workbook?${params}`;
 }
