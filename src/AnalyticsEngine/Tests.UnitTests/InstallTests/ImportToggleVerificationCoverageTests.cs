@@ -1,4 +1,4 @@
-using App.ControlPanel.Engine;
+﻿using App.ControlPanel.Engine;
 using Common.Entities;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -110,7 +110,7 @@ namespace Tests.UnitTests.InstallTests
         {
             var expectedPermissionsByToggle = new Dictionary<string, string[]>
             {
-                [nameof(ImportTaskSettings.GraphUsersMetadata)] = new[] { "User.Read.All", "Directory.Read.All" },
+                [nameof(ImportTaskSettings.GraphUsersMetadata)] = new[] { "User.Read.All", "Directory.Read.All", "Organization.Read.All" },
                 [nameof(ImportTaskSettings.SentEmails)] = new[] { "Mail.Read" },
                 [nameof(ImportTaskSettings.Calls)] = new[] { "CallRecords.Read.All" },
                 [nameof(ImportTaskSettings.ImportDlp)] = new[] { "ActivityFeed.ReadDlp" },

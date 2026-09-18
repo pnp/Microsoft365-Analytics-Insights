@@ -361,6 +361,10 @@ namespace WebJob.Office365ActivityImporter
                 // others. The phase handles its own errors and cadence gating.
                 await tasks.ImportAgentCosts();
 
+                // Optional monthly aggregate Copilot Adoption digest. It is deliberately after imports and
+                // repairs so the closed-period snapshot is based on the freshest complete data available.
+                await tasks.SendCopilotAdoptionDigest();
+
 #if DEBUG
                 runAgain = false; // Debug only runs once; release runs forever. 
 #endif
@@ -377,7 +381,14 @@ namespace WebJob.Office365ActivityImporter
                 // its "last uploaded" timestamp across cycles.
                 using (var db = new AnalyticsEntitiesContext())
                 {
-                    var sqlUsageBuilder = new SqlUsageStatsBuilder(db, logger, configuredSettings.TenantGUID);
+                    // Anonymised Copilot/licence adoption metrics ride along with the deployment stats.
+                    // The collector does its own availability and weekly-cadence gating and fails soft,
+                    // so on most cycles this costs a single Redis read. It reuses graphLastRunStore -
+                    // hoisted outside this loop - so the in-memory fallback keeps its cadence stamp
+                    // across cycles rather than re-running the analysis every time.
+                    var adoptionStatsCollector = new AdoptionStatsCollector(configuredSettings, graphLastRunStore, logger);
+
+                    var sqlUsageBuilder = new SqlUsageStatsBuilder(db, logger, configuredSettings.TenantGUID, adoptionStatsCollector);
                     using (var statsUploader = new WebApiStatsUploader(configuredSettings.StatsApiUrl, configuredSettings.StatsApiSecret, logger))
                     {
                         var stats = new UsageStatsManager(sqlUsageBuilder, statsDatesLoader, statsUploader, logger);

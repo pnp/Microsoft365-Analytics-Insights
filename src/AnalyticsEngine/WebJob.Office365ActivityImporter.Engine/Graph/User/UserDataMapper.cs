@@ -16,19 +16,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private readonly AnalyticsLogger _logger;
         private readonly UserMetadataCache _userMetaCache;
         private readonly ManagerPrefetchCache _managerPrefetch;
+        private readonly IClock _clock;
         private Dictionary<string, GraphUser> _graphUsersByAadId;
 
         /// <summary>
         /// Constructor without a lookup store: manager resolution falls back to the original
         /// per-user database query. Kept so existing call sites and tests do not have to change.
         /// </summary>
-        public UserDataMapper(AnalyticsLogger logger, UserMetadataCache userMetaCache)
+        public UserDataMapper(AnalyticsLogger logger, UserMetadataCache userMetaCache, IClock clock = null)
         {
             // Deliberately not chained to the overload below: a constructor initialiser runs before
             // the body, so chaining would move the store's own argument checks ahead of these and
             // change which ParamName a caller sees.
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _userMetaCache = userMetaCache ?? throw new ArgumentNullException(nameof(userMetaCache));
+            _clock = clock ?? SystemClock.Instance;
             _managerPrefetch = new ManagerPrefetchCache(null);
         }
 
@@ -36,11 +38,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Used by <see cref="PrefetchManagersForBatchAsync"/> to resolve a whole batch's managers in
         /// one query instead of one query per user (#371).
         /// </param>
-        public UserDataMapper(AnalyticsLogger logger, UserMetadataCache userMetaCache, IUserLookupStore userLookupStore)
+        public UserDataMapper(AnalyticsLogger logger, UserMetadataCache userMetaCache, IUserLookupStore userLookupStore, IClock clock = null)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _userMetaCache = userMetaCache ?? throw new ArgumentNullException(nameof(userMetaCache));
             if (userLookupStore == null) throw new ArgumentNullException(nameof(userLookupStore));
+            _clock = clock ?? SystemClock.Instance;
             _managerPrefetch = new ManagerPrefetchCache(userLookupStore);
         }
 
@@ -114,7 +117,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             List<GraphUser> allGraphUsers,
             Common.Entities.User dbUser,
             Dictionary<string, Common.Entities.User> dbUsersByAadId = null,
-            List<Common.Entities.User> allDbUsers = null)
+            List<Common.Entities.User> allDbUsers = null,
+            DateTime? lastUpdatedUtc = null)
         {
             var plan = UserMetadataMappingRules.BuildPlan(graphUser);
             ApplyDirectFields(dbUser, plan);
@@ -210,7 +214,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // Update manager
             await UpdateUserManager(db, plan.ManagerAadId, allGraphUsers, dbUser, dbUsersByAadId, allDbUsers);
 
-            dbUser.LastUpdated = DateTime.Now;
+            dbUser.LastUpdated = lastUpdatedUtc ?? _clock.UtcNow;
         }
 
         /// <summary>

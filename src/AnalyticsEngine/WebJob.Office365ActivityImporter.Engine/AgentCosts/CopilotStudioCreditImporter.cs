@@ -199,11 +199,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                     usageDate.ToString("yyyy-MM-dd"),
                     row.EnvironmentId,
                     row.ResourceId,
-                    row.FeatureName,
-                    row.ChannelId,
-                    row.LlmModel,
-                    row.ToolInvoked,
-                    row.KnowledgeSources);
+                    row.FeatureName);
 
                 if (byHash.TryGetValue(hash, out var existing))
                 {
@@ -243,10 +239,6 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                     AgentName = row.ResourceName,
                     Harness = CopilotStudioHarnessClassifier.Classify(row.FeatureName),
                     FeatureName = row.FeatureName,
-                    ChannelId = row.ChannelId,
-                    LlmModel = row.LlmModel,
-                    ToolInvoked = row.ToolInvoked,
-                    KnowledgeSources = row.KnowledgeSources,
                     BilledCredits = row.Consumed,
                     NonBilledCredits = row.NonBillableQuantity,
                     DistinctUsers = row.Users,

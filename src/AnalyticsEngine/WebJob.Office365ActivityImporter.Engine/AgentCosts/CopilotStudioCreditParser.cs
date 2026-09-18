@@ -230,15 +230,43 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 // day. The importer falls back to the requested date when it is absent.
                 AsOfDate = GetDateTime(row, "asOfDate") ?? (metadata != null ? GetDateTime(metadata, "AsOfDate") : null),
 
-                ResourceName = metadata != null ? GetString(metadata, "ResourceName") : null,
-                NonBillableQuantity = metadata != null ? GetDecimal(metadata, "NonBillableQuantity") : null,
+                // Each of these accepts more than one name because the REST reference and the observed
+                // payload disagree, and matching is case-insensitive only - "Feature" and "FeatureName" are
+                // DIFFERENT names, so reading just one of them silently yields null for ever.
+                //
+                // The reference documents metadata as "Feature, ProductName and nonBillableConsumed"; the
+                // names below on the left are the ones observed in practice. Neither source is safe to treat
+                // as authoritative: the same reference also documents a flat envelope that live tenants do
+                // not return. Accepting both costs nothing and removes a whole class of always-null column.
+                ResourceName = FirstString(metadata, "ResourceName", "ProductName"),
+                NonBillableQuantity = FirstDecimal(metadata, "NonBillableQuantity", "nonBillableConsumed"),
+                FeatureName = FirstString(metadata, "FeatureName", "Feature"),
                 Users = metadata != null ? GetInt(metadata, "Users") : null,
-                ChannelId = metadata != null ? GetString(metadata, "ChannelId") : null,
-                KnowledgeSources = metadata != null ? GetString(metadata, "KnowledgeSources") : null,
-                ToolInvoked = metadata != null ? GetString(metadata, "ToolInvoked") : null,
-                LlmModel = metadata != null ? GetString(metadata, "LLMModel") : null,
-                FeatureName = metadata != null ? GetString(metadata, "FeatureName") : null,
             };
+        }
+
+        /// <summary>First non-empty value among several accepted names for the same field.</summary>
+        private static string FirstString(JObject o, params string[] names)
+        {
+            if (o == null) return null;
+            foreach (var n in names)
+            {
+                var v = GetString(o, n);
+                if (v != null) return v;
+            }
+            return null;
+        }
+
+        /// <summary>First present value among several accepted names for the same numeric field.</summary>
+        private static decimal? FirstDecimal(JObject o, params string[] names)
+        {
+            if (o == null) return null;
+            foreach (var n in names)
+            {
+                var v = GetDecimal(o, n);
+                if (v.HasValue) return v;
+            }
+            return null;
         }
 
         /// <summary>Case-insensitive property read, because the response casing is not ours to rely on.</summary>

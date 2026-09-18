@@ -5,6 +5,8 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Newtonsoft.Json.Linq;
+using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot;
 using CopilotAdoptionAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.CopilotAdoptionAPIController;
 
 namespace Tests.UnitTests
@@ -344,6 +346,86 @@ namespace Tests.UnitTests
 
         #endregion
 
+
+        [TestMethod]
+        public void ReportTasks_BeatAuditInteractions_ForCoworkUsage()
+        {
+            var row = Idle();
+            row.CoworkInteractions = 50;
+            row.CoworkActiveDays = 1;
+            row.CoworkReportTotalTasks = 3;
+            row.CoworkReportScheduledTasks = 2;
+            row.CoworkReportUserInitiatedTasks = 1;
+            row.CoworkReportActiveDays = Options().CoworkRegularMinActiveDays;
+
+            var scored = CopilotAdoptionScoring.ScoreCoworkReadiness(row, Options());
+
+            Assert.IsTrue(scored.UsedCowork);
+            Assert.IsTrue(scored.RegularCoworkUser,
+                "Regularity must come from Microsoft's Cowork usage report when task data is present.");
+            Assert.AreEqual(3, scored.CoworkReportTotalTasks);
+            Assert.AreEqual(50, scored.CoworkInteractions,
+                "Audit interactions are retained separately for reconciliation, not relabelled as tasks.");
+            Assert.AreEqual(CopilotAdoptionScoring.Percentage(2, 3), scored.CoworkAutomationRatioPct.Value);
+            StringAssert.Contains(scored.Rationale, "Cowork task");
+        }
+
+        [TestMethod]
+        public void CoworkAdoptionPct_IsSuppressed_WhenEligibilityIsUnknown()
+        {
+            var analysis = new CopilotAdoptionAnalysis
+            {
+                LicensedUsers = new List<LicensedUserAdoptionRow>
+                {
+                    new LicensedUserAdoptionRow { UserId = 1, UserPrincipalName = "aisha.rahman@contoso.com", CoworkReportTotalTasks = 4, UsedCowork = true },
+                },
+            };
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(1, analysis.Summary.CoworkUsers);
+            Assert.IsNull(analysis.Summary.CoworkAdoptionPct,
+                "Eligibility is spending-policy scope. Until that denominator is imported, the percentage must be unknown rather than licensed-user based.");
+            Assert.IsTrue(analysis.Summary.Warnings.Any(w => w.IndexOf("deprecated Cowork agent", StringComparison.OrdinalIgnoreCase) >= 0));
+        }
+
+        [TestMethod]
+        public void CoworkUsageReportParser_ReadsDocumentedTaskColumns()
+        {
+            var row = CoworkUsageUserDetailParser.Parse(new[]
+            {
+                JObject.Parse(@"{
+                    'reportRefreshDate': '2026-09-01',
+                    'userId': 'aisha.rahman@contoso.com',
+                    'totalTasks': 10,
+                    'scheduledTasks': 4,
+                    'userInitiatedTasks': 6,
+                    'activeDays': 5,
+                    'lastActivityDate': '2026-08-31'
+                }")
+            }).Single();
+
+            Assert.AreEqual("aisha.rahman@contoso.com", row.UserPrincipalName);
+            Assert.AreEqual(10, row.TotalTasks);
+            Assert.AreEqual(4, row.ScheduledTasks);
+            Assert.AreEqual(6, row.UserInitiatedTasks);
+            Assert.AreEqual(5, row.ActiveDays);
+            Assert.AreEqual(new DateTime(2026, 8, 31), row.LastActivityDate.Value.Date);
+        }
+
+        [TestMethod]
+        public void CoworkAgentLookup_IsNotAnEligibilityQuery()
+        {
+            var sql = CopilotAdoptionSql.CoworkAgentIdsSql;
+
+            StringAssert.Contains(sql, "Copilot.M365Copilot.Cowork");
+            Assert.IsFalse(sql.IndexOf("name LIKE", StringComparison.OrdinalIgnoreCase) >= 0,
+                "Agent display names are customer-controlled. This lookup feeds observed Cowork usage, so a "
+                + "tenant-owned agent name must not outrank inferred Cowork tiers.");
+            Assert.IsFalse(sql.IndexOf("spending", StringComparison.OrdinalIgnoreCase) >= 0,
+                "This query may only reconcile audit interactions; Cowork eligibility comes from spending policies, not the deprecated agent entry.");
+        }
+
         #region Rationale wording
 
         [TestMethod]
@@ -472,34 +554,40 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void Estimate_ProducesNoCurrency_WhenNoLoadedCostIsConfigured()
+        public void Estimate_NeverProducesAMonetaryFigure()
         {
-            var options = Options();
-            Assert.IsFalse(options.CoworkLoadedCostPerHour.HasValue,
-                "There is no defensible default hourly cost, so the shipped default must be unset.");
+            // Epic #559 rejects an ROI / "hours saved" calculator, and #553 confines currency to idle
+            // licence spend - a measured price for a seat we can prove is unused. This estimate is
+            // modelled from assumed minutes per meeting/mail/document, so pricing it would put a
+            // fabricated number in a board pack beside measured ones. The hours range survives because
+            // it is labelled a rollout-sizing model; the money does not.
+            var estimate = CopilotAdoptionScoring.EstimateCoworkValue(Cohort(5), Options());
 
-            var estimate = CopilotAdoptionScoring.EstimateCoworkValue(Cohort(5), options);
+            // Assert on the serialised FIELD NAMES, not the whole payload: the assumption prose
+            // deliberately explains why no money is shown, so a substring search over the entire JSON
+            // would match its own disclaimer and fail for the wrong reason.
+            var fields = JObject.FromObject(estimate).Properties().Select(p => p.Name).ToList();
+            Assert.IsFalse(fields.Any(n => n.IndexOf("currency", StringComparison.OrdinalIgnoreCase) >= 0),
+                "No monetary field may be serialised to any caller - UI, workbook or API. Found: "
+                + string.Join(", ", fields));
 
-            Assert.IsNull(estimate.CurrencyPerMonthLow, "The tool must not invent money.");
-            Assert.IsNull(estimate.CurrencyPerMonthHigh);
-            Assert.IsNull(estimate.CurrencyCode);
+            Assert.IsTrue(estimate.HoursPerMonthHigh > 0,
+                "The modelled hours range is deliberately retained; only the monetary conversion is removed.");
             Assert.IsTrue(
-                estimate.Assumptions.Any(a => a.IndexOf("no fully-loaded hourly cost", StringComparison.OrdinalIgnoreCase) >= 0),
+                estimate.Assumptions.Any(a => a.IndexOf("No monetary value is shown", StringComparison.OrdinalIgnoreCase) >= 0),
                 "The absence of a monetary figure must be explained rather than silently omitted.");
         }
 
         [TestMethod]
-        public void Estimate_ProducesCurrency_WhenALoadedCostIsConfigured()
+        public void Options_CarryNoLoadedCostOrCurrencyKnob()
         {
-            var options = Options();
-            options.CoworkLoadedCostPerHour = 60;
-            options.CoworkCurrencyCode = "GBP";
+            // A configuration surface for an hourly rate is how a monetary figure would creep back in.
+            var fields = JObject.FromObject(Options()).Properties().Select(p => p.Name).ToList();
 
-            var estimate = CopilotAdoptionScoring.EstimateCoworkValue(Cohort(5), options);
-
-            Assert.IsTrue(estimate.CurrencyPerMonthHigh > 0);
-            Assert.AreEqual("GBP", estimate.CurrencyCode);
-            Assert.IsTrue(estimate.CurrencyPerMonthLow < estimate.CurrencyPerMonthHigh);
+            Assert.IsFalse(fields.Any(n => n.IndexOf("LoadedCost", StringComparison.OrdinalIgnoreCase) >= 0),
+                "No loaded-hourly-cost option may exist on the Cowork estimate.");
+            Assert.IsFalse(fields.Any(n => n.IndexOf("coworkCurrency", StringComparison.OrdinalIgnoreCase) >= 0),
+                "No Cowork currency option may exist.");
         }
 
         [TestMethod]
@@ -641,7 +729,7 @@ namespace Tests.UnitTests
         {
             var creditHeader = CopilotAdoptionExports.CoworkReadinessColumns()
                 .Select(c => c.Header)
-                .Single(h => h.IndexOf("Credits", StringComparison.OrdinalIgnoreCase) >= 0);
+                .Single(h => h.IndexOf("not attributable", StringComparison.OrdinalIgnoreCase) >= 0);
 
             // Microsoft meters Cowork against the shared Copilot Credits pool with no per-row workload
             // discriminator, so a "Cowork credits" column would be a fabrication.
@@ -690,7 +778,10 @@ namespace Tests.UnitTests
             foreach (var expected in new[]
             {
                 "userPrincipalName", "department", "coworkInteractions", "coworkActiveDays",
-                "lastCoworkInteractionUtc", "usedCowork", "regularCoworkUser",
+                "lastCoworkInteractionUtc", "coworkReportTotalTasks", "coworkReportScheduledTasks",
+                "coworkReportUserInitiatedTasks", "coworkReportActiveDays", "coworkReportLastActivityDate",
+                "coworkReportRetainedUser", "coworkAutomationRatioPct", "coworkCreditsPerTask",
+                "usedCowork", "regularCoworkUser",
                 "coordinationLoadScore", "fluencyScore", "adoptionScore", "agentsUsed",
                 "collaborationScore", "meetingScore", "emailScore", "documentScore",
                 "teamsMessages", "teamsMeetings", "emailsSent", "emailsRead", "filesViewedOrEdited",
@@ -742,7 +833,10 @@ namespace Tests.UnitTests
                 "coworkTriallingUsers", "coworkPrimeCandidates", "coworkBuildFluencyFirst",
                 "coworkRecommendedForPolicy", "coworkAverageCoordinationLoad", "coworkAverageFluency",
                 "coworkTiers", "coworkQuadrant", "coworkByDepartment", "coworkCreditPosition",
-                "coworkValueEstimate",
+                "coworkValueEstimate", "coworkReportUsers", "coworkReportTotalTasks",
+                "coworkReportScheduledTasks", "coworkReportUserInitiatedTasks", "coworkAutomationRatioPct",
+                "coworkTasksPerActiveUser", "coworkReportRetainedUsers", "coworkReportRetentionPct",
+                "coworkAuditUsers", "coworkEligibilityKnown", "coworkEligibleUsers",
             })
             {
                 Assert.IsTrue(json.Property(expected) != null,

@@ -14,11 +14,16 @@ namespace Web.Startup
     public class CosmosSchemaInitializer : IHostedService
     {
         private readonly CosmosTelemetrySaveAdaptor _adaptor;
+        private readonly CosmosClientAnnotationStore _annotationStore;
         private readonly ILogger<CosmosSchemaInitializer> _logger;
 
-        public CosmosSchemaInitializer(CosmosTelemetrySaveAdaptor adaptor, ILogger<CosmosSchemaInitializer> logger)
+        public CosmosSchemaInitializer(
+            CosmosTelemetrySaveAdaptor adaptor,
+            CosmosClientAnnotationStore annotationStore,
+            ILogger<CosmosSchemaInitializer> logger)
         {
             _adaptor = adaptor;
+            _annotationStore = annotationStore;
             _logger = logger;
         }
 
@@ -27,6 +32,7 @@ namespace Web.Startup
             try
             {
                 await _adaptor.Init();
+                await _annotationStore.Init();
                 _logger.LogInformation("Cosmos database and containers verified.");
             }
             catch (Exception ex)

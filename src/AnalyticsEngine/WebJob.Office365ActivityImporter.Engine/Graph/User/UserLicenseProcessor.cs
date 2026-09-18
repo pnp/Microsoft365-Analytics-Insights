@@ -1,10 +1,11 @@
-using Common.Entities;
+﻿using Common.Entities;
 using DataUtils;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
+using Microsoft.Data.SqlClient;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -147,6 +148,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
             await db.SaveChangesAsync();
 
+            await SaveSubscribedSkuCapacityAsync(db, skuLicenseTypes);
+
             // Build the state Graph says the table should be in. Using a set also gives us the
             // de-duplication the UNIQUE index on (license_type_id, user_id) demands: two SKU part
             // numbers (e.g. RIGHTSMANAGEMENT and RIGHTSMANAGEMENT_CE) can resolve to the same
@@ -215,6 +218,57 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var removed = await store.RemoveAssignments(removals);
 
             _logger.LogInformation($"User import - licence refresh complete: {added.ToString("N0")} assignment(s) added, {removed.ToString("N0")} removed.");
+        }
+
+
+        private async Task SaveSubscribedSkuCapacityAsync(
+            AnalyticsEntitiesContext db,
+            List<KeyValuePair<SubscribedSku, LicenseType>> skuLicenseTypes)
+        {
+            var columnsExist = await db.Database.SqlQuery<int>(
+                "SELECT CASE WHEN COL_LENGTH(N'dbo.license_types', N'prepaid_enabled_units') IS NULL " +
+                "OR COL_LENGTH(N'dbo.license_types', N'subscribed_sku_refreshed_utc') IS NULL THEN 0 ELSE 1 END").SingleAsync();
+            if (columnsExist == 0)
+            {
+                _logger.LogWarning("User import - subscribed SKU capacity columns are not present yet; purchased/unassigned Copilot seats will remain unknown until the database migration has run.");
+                return;
+            }
+
+            var refreshedUtc = DateTime.UtcNow;
+            var capacityByLicenceType = skuLicenseTypes
+                .GroupBy(pair => pair.Value.ID)
+                .Select(g => new
+                {
+                    LicenceTypeId = g.Key,
+                    Enabled = g.Any(pair => pair.Key.PrepaidUnits?.Enabled != null) ? g.Sum(pair => pair.Key.PrepaidUnits?.Enabled) : (int?)null,
+                    Warning = g.Any(pair => pair.Key.PrepaidUnits?.Warning != null) ? g.Sum(pair => pair.Key.PrepaidUnits?.Warning) : (int?)null,
+                    Suspended = g.Any(pair => pair.Key.PrepaidUnits?.Suspended != null) ? g.Sum(pair => pair.Key.PrepaidUnits?.Suspended) : (int?)null,
+                })
+                .ToList();
+
+            foreach (var capacity in capacityByLicenceType)
+            {
+                await db.Database.ExecuteSqlCommandAsync(
+                    "UPDATE dbo.license_types " +
+                    "SET prepaid_enabled_units = @enabled, prepaid_warning_units = @warning, prepaid_suspended_units = @suspended, subscribed_sku_refreshed_utc = @refreshedUtc " +
+                    "WHERE id = @id",
+                    new SqlParameter("@enabled", (object)capacity.Enabled ?? DBNull.Value),
+                    new SqlParameter("@warning", (object)capacity.Warning ?? DBNull.Value),
+                    new SqlParameter("@suspended", (object)capacity.Suspended ?? DBNull.Value),
+                    new SqlParameter("@refreshedUtc", refreshedUtc),
+                    new SqlParameter("@id", capacity.LicenceTypeId));
+            }
+        }
+
+        public static async Task MarkSubscribedSkuCapacityUnavailableAsync(AnalyticsEntitiesContext db, AnalyticsLogger logger)
+        {
+            var columnsExist = await db.Database.SqlQuery<int>(
+                "SELECT CASE WHEN COL_LENGTH(N'dbo.license_types', N'subscribed_sku_refreshed_utc') IS NULL THEN 0 ELSE 1 END").SingleAsync();
+            if (columnsExist == 0) return;
+
+            var cleared = await db.Database.ExecuteSqlCommandAsync(
+                "UPDATE dbo.license_types SET prepaid_enabled_units = NULL, prepaid_warning_units = NULL, prepaid_suspended_units = NULL, subscribed_sku_refreshed_utc = NULL");
+            logger?.LogWarning($"User import - tenant subscribedSkus were unavailable, so cleared purchased-seat capacity for {cleared.ToString("N0")} licence type(s). Copilot Adoption will show purchased/unassigned seats as unknown, not zero.");
         }
 
         /// <summary>

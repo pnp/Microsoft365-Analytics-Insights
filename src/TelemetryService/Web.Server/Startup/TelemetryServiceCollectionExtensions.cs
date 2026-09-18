@@ -39,6 +39,12 @@ namespace Web.Startup
             services.AddSingleton<ITelemetrySaveAdaptor>(sp => sp.GetRequiredService<CosmosTelemetrySaveAdaptor>());
             services.AddSingleton<ITelemetryQueryAdaptor>(sp => sp.GetRequiredService<CosmosTelemetrySaveAdaptor>());
 
+            // Maintainer annotations live in their own container - see ClientAnnotation for why they
+            // cannot share the "current" container with the telemetry documents.
+            services.AddSingleton(sp => new CosmosClientAnnotationStore(
+                sp.GetRequiredService<CosmosClient>(), config.CosmosDb));
+            services.AddSingleton<IClientAnnotationStore>(sp => sp.GetRequiredService<CosmosClientAnnotationStore>());
+
             services.AddTelemetryDomainServices(config);
 
             // Container creation used to run inline before the host was built, which meant a Cosmos
@@ -64,7 +70,8 @@ namespace Web.Startup
                 sp.GetRequiredService<ILogger<DashboardService>>(),
                 sp.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>(),
                 config.GetMaxDashboardItems(),
-                config.GetDashboardCacheDuration()));
+                config.GetDashboardCacheDuration(),
+                sp.GetService<IClientAnnotationStore>()));
 
             return services;
         }

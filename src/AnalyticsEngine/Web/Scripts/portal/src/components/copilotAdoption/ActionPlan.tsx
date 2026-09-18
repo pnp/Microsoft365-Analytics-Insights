@@ -1,6 +1,7 @@
-import { makeStyles, tokens, Text, Badge } from '@fluentui/react-components';
+import { makeStyles, tokens, Text, Badge, Button } from '@fluentui/react-components';
+import type { MouseEvent } from 'react';
 import type { AdoptionActionSummary } from '../../types/copilotAdoption';
-import { formatCount, formatPct } from './KpiGrid';
+import { formatCount, formatPct } from '../shared/KpiGrid';
 
 /**
  * Action colours run from "this licence is costing money" through to "this licence is paying for itself",
@@ -27,7 +28,7 @@ const useStyles = makeStyles({
   },
   row: {
     display: 'grid',
-    gridTemplateColumns: 'minmax(140px, 170px) minmax(60px, auto) 1fr',
+    gridTemplateColumns: 'minmax(140px, 170px) minmax(60px, auto) 1fr auto',
     gap: '12px',
     alignItems: 'start',
   },
@@ -51,6 +52,21 @@ const useStyles = makeStyles({
   description: {
     color: tokens.colorNeutralForeground2,
   },
+  guidance: {
+    marginTop: '4px',
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'baseline',
+    gap: '6px',
+    color: tokens.colorNeutralForeground3,
+  },
+  // A bare <a> does not inherit Fluent's Text sizing, so without an explicit size it rendered at the
+  // browser default and towered over the label next to it.
+  guidanceLink: {
+    color: tokens.colorBrandForegroundLink,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+  },
   empty: {
     color: tokens.colorNeutralForeground3,
     padding: '20px 0',
@@ -73,6 +89,9 @@ const useStyles = makeStyles({
       outlineStyle: 'solid',
       outlineColor: tokens.colorStrokeFocus2,
     },
+  },
+  actionButton: {
+    whiteSpace: 'nowrap',
   },
   drill: {
     color: tokens.colorBrandForegroundLink,
@@ -103,9 +122,11 @@ export default function ActionPlan({
   actions,
   showCounts = true,
   onSelect,
+  onCreateIntervention,
 }: {
   actions: AdoptionActionSummary[];
   showCounts?: boolean;
+  onCreateIntervention?: (code: string) => void;
   /**
    * Drill-through. Without it the plan states "76 people need coaching" and then leaves the reader
    * to rebuild that exact group by hand from the filters on another tab - which is both tedious and
@@ -136,7 +157,7 @@ export default function ActionPlan({
             onClick={onSelect ? () => onSelect(a.code) : undefined}
             onKeyDown={
               onSelect
-                ? (e) => {
+                ? (e: any) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
                       onSelect(a.code);
@@ -156,6 +177,24 @@ export default function ActionPlan({
             )}
             <Text size={200} className={styles.description}>
               {a.description}
+              {(a.guidanceLinks?.length ?? 0) > 0 && (
+                <span className={styles.guidance}>
+                  <Text size={200}>Microsoft&apos;s guidance for this kind of user:</Text>
+                  {a.guidanceLinks?.map((link) => (
+                    <a
+                      key={`${a.code}-${link.url}`}
+                      className={styles.guidanceLink}
+                      href={link.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => e.stopPropagation()}
+                    >
+                      {link.title}
+                    </a>
+                  ))}
+                </span>
+              )}
               {onSelect && (
                 <>
                   {' '}
@@ -165,6 +204,19 @@ export default function ActionPlan({
                 </>
               )}
             </Text>
+            {onCreateIntervention && (
+              <Button
+                size="small"
+                appearance="secondary"
+                className={styles.actionButton}
+                onClick={(e: MouseEvent<HTMLButtonElement>) => {
+                  e.stopPropagation();
+                  onCreateIntervention(a.code);
+                }}
+              >
+                Start intervention
+              </Button>
+            )}
           </div>
         );
       })}

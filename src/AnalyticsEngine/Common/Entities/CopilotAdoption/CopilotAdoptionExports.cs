@@ -325,9 +325,20 @@ namespace Common.Entities.CopilotAdoption
                 new CsvColumn<LicensedUserAdoptionRow>("Active days in period", r => r.ActiveDays),
                 new CsvColumn<LicensedUserAdoptionRow>("Active days for full marks", r => r.ExpectedActiveDays),
                 new CsvColumn<LicensedUserAdoptionRow>("Copilot apps used", r => r.AppsUsed),
+                new CsvColumn<LicensedUserAdoptionRow>("Source comparison available", r => r.SourceComparisonAvailable),
+                new CsvColumn<LicensedUserAdoptionRow>("Audit interactions in selected period", r => r.AuditInteractions),
+                new CsvColumn<LicensedUserAdoptionRow>("Audit active days in selected period", r => r.AuditActiveDays),
+                new CsvColumn<LicensedUserAdoptionRow>("Audit apps used in selected period", r => r.AuditAppsUsed),
                 new CsvColumn<LicensedUserAdoptionRow>("Copilot agents used", r => r.AgentsUsed),
                 new CsvColumn<LicensedUserAdoptionRow>("Used Cowork", r => r.UsedCowork),
-                new CsvColumn<LicensedUserAdoptionRow>("Cowork interactions", r => r.CoworkInteractions),
+                new CsvColumn<LicensedUserAdoptionRow>("Cowork usage-report total tasks", r => r.CoworkReportTotalTasks),
+                new CsvColumn<LicensedUserAdoptionRow>("Cowork usage-report scheduled tasks", r => r.CoworkReportScheduledTasks),
+                new CsvColumn<LicensedUserAdoptionRow>("Cowork usage-report user-initiated tasks", r => r.CoworkReportUserInitiatedTasks),
+                new CsvColumn<LicensedUserAdoptionRow>("Cowork usage-report active days", r => r.CoworkReportActiveDays),
+                new CsvColumn<LicensedUserAdoptionRow>("Cowork usage-report last activity", r => r.CoworkReportLastActivityDate),
+                new CsvColumn<LicensedUserAdoptionRow>("Cowork automation ratio %", r => r.CoworkAutomationRatioPct),
+                new CsvColumn<LicensedUserAdoptionRow>("Cowork retained in Microsoft report", r => r.CoworkReportRetainedUser),
+                new CsvColumn<LicensedUserAdoptionRow>("Cowork audit interactions (not tasks)", r => r.CoworkInteractions),
 
                 new CsvColumn<LicensedUserAdoptionRow>("First use (UTC)", r => r.FirstInteractionUtc),
                 new CsvColumn<LicensedUserAdoptionRow>("Last use (UTC)", r => r.LastInteractionUtc),
@@ -339,6 +350,8 @@ namespace Common.Entities.CopilotAdoption
 
                 new CsvColumn<LicensedUserAdoptionRow>("Recommended action", r => r.RecommendedActionLabel),
                 new CsvColumn<LicensedUserAdoptionRow>("Recommended action detail", r => r.RecommendedAction),
+                new CsvColumn<LicensedUserAdoptionRow>("Microsoft guidance resources", r => CopilotAdoptionGuidanceCatalogue.TitlesForAction(r.RecommendedActionCode)),
+                new CsvColumn<LicensedUserAdoptionRow>("Microsoft guidance URLs", r => CopilotAdoptionGuidanceCatalogue.UrlsForAction(r.RecommendedActionCode)),
             };
         }
 
@@ -482,6 +495,8 @@ namespace Common.Entities.CopilotAdoption
                 new CsvColumn<LicenceOpportunityRow>("Document score", r => r.DocumentScore),
 
                 new CsvColumn<LicenceOpportunityRow>("Justification", r => r.Rationale),
+                new CsvColumn<LicenceOpportunityRow>("Microsoft guidance resources", r => CopilotAdoptionGuidanceCatalogue.TitlesForAction(CopilotAdoptionGuidanceCatalogue.UnlicensedActionCode)),
+                new CsvColumn<LicenceOpportunityRow>("Microsoft guidance URLs", r => CopilotAdoptionGuidanceCatalogue.UrlsForAction(CopilotAdoptionGuidanceCatalogue.UnlicensedActionCode)),
             };
         }
 
@@ -599,8 +614,16 @@ namespace Common.Entities.CopilotAdoption
                 new CsvColumn<CoworkReadinessRow>("Copilot adoption score (0-100)", r => r.AdoptionScore),
                 new CsvColumn<CoworkReadinessRow>("Copilot agents used", r => r.AgentsUsed),
 
-                new CsvColumn<CoworkReadinessRow>("Cowork interactions", r => r.CoworkInteractions),
-                new CsvColumn<CoworkReadinessRow>("Cowork active days", r => r.CoworkActiveDays),
+                new CsvColumn<CoworkReadinessRow>("Cowork usage-report total tasks", r => r.CoworkReportTotalTasks),
+                new CsvColumn<CoworkReadinessRow>("Cowork usage-report scheduled tasks", r => r.CoworkReportScheduledTasks),
+                new CsvColumn<CoworkReadinessRow>("Cowork usage-report user-initiated tasks", r => r.CoworkReportUserInitiatedTasks),
+                new CsvColumn<CoworkReadinessRow>("Cowork usage-report active days", r => r.CoworkReportActiveDays),
+                new CsvColumn<CoworkReadinessRow>("Cowork usage-report last activity", r => r.CoworkReportLastActivityDate),
+                new CsvColumn<CoworkReadinessRow>("Cowork automation ratio %", r => r.CoworkAutomationRatioPct),
+                new CsvColumn<CoworkReadinessRow>("Cowork retained in Microsoft report", r => r.CoworkReportRetainedUser),
+                new CsvColumn<CoworkReadinessRow>("Credits per Cowork task (shared credits, not Cowork-only)", r => r.CoworkCreditsPerTask),
+                new CsvColumn<CoworkReadinessRow>("Cowork audit interactions (not tasks)", r => r.CoworkInteractions),
+                new CsvColumn<CoworkReadinessRow>("Cowork audit active days", r => r.CoworkActiveDays),
                 new CsvColumn<CoworkReadinessRow>("Regular Cowork user", r => r.RegularCoworkUser),
                 new CsvColumn<CoworkReadinessRow>("Last Cowork use (UTC)", r => r.LastCoworkInteractionUtc),
 

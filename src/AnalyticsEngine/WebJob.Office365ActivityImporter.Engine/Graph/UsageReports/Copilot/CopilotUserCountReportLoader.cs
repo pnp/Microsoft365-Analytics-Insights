@@ -106,6 +106,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             try
             {
                 var reports = await _reportSource.LoadReportAsync(request);
+                ApplyLoadProvenance(importLog);
 
                 parsed = isTrend
                     ? CopilotUserCountReportParser.ParseTrend(reports)
@@ -165,6 +166,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
             _logger.LogInformation($"Copilot aggregate report {request}: parsed {parsed.Count} row(s), wrote {written} to SQL.");
             return written;
+        }
+
+        private void ApplyLoadProvenance(CopilotUsageReportImportLog importLog)
+        {
+            var provenance = _reportSource as ICopilotReportLoadProvenance;
+            if (provenance == null) return;
+            importLog.ReportVersion = provenance.LastSuccessfulVersion ?? importLog.ReportVersion;
+            importLog.ReportPeriod = provenance.LastSuccessfulPeriod ?? importLog.ReportPeriod;
         }
 
         /// <summary>
