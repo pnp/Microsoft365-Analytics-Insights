@@ -674,6 +674,69 @@ namespace Tests.UnitTests
             Assert.IsTrue(optional.Item2, "Element clicks exist.");
         }
 
+        [TestMethod]
+        public async Task StackedOverTimeSeries_AccountForEveryPageViewIncludingTheTail()
+        {
+            // A stacked chart is read as "this is the traffic". If the tail of the top-N list is
+            // dropped instead of banded, the stack is shorter than the real total and a week that
+            // only had tail traffic disappears entirely - so the chart shows a fall that did not
+            // happen. Summing every series back to the known page-view total is the guard.
+            var query = NewQuery();
+            var store = NewStore();
+
+            var overview = await store.GetOverviewAsync(
+                query,
+                new WebActivitySources { Readable = true, WebTraffic = true, AppInsightsConfigured = true });
+            var totalPageViews = overview.Kpis.PageViews;
+            Assert.AreEqual(11, totalPageViews, "Fixture sanity: the seeded traffic is 11 page views.");
+
+            var geography = await store.GetGeographyAsync(query);
+            Assert.AreEqual(
+                totalPageViews,
+                geography.CountryOverTime.Sum(p => p.Count),
+                "The country stack must account for unlocated and non-top-N page views, not drop them.");
+
+            var technology = await store.GetTechnologyAsync(query);
+            Assert.AreEqual(
+                totalPageViews,
+                technology.DeviceOverTime.Sum(p => p.Count),
+                "The device stack must account for unknown and non-top-N devices.");
+
+            var visits = await store.GetVisitsAsync(query);
+            Assert.AreEqual(
+                totalPageViews,
+                visits.SiteOverTime.Sum(p => p.Count),
+                "The site stack must account for hits with no web and for non-top-N sites.");
+        }
+
+        [TestMethod]
+        public async Task BouncePages_AreRankedByRateRatherThanByEntryVolume()
+        {
+            // The bounce list used to be the entry-page list re-sorted, which meant it could only
+            // ever rank pages that were ALREADY in the busiest N entry pages. The page an intranet
+            // owner needs to see is the opposite one: little traffic, but nearly everyone who lands
+            // on it leaves immediately.
+            // minimumViews: 1 because the fixture is deliberately tiny - the default floor of 5
+            // entries exists to keep real reports free of noise, not to be met by six visits.
+            var journeys = await NewStore().GetJourneysAsync(
+                WebActivityQuery.Create(28, DateTime.UtcNow, minimumViews: 1));
+
+            Assert.IsTrue(journeys.BouncePages.Count > 0, "The fixture seeds bounced entries.");
+            var rates = journeys.BouncePages.Select(p => p.BouncePct ?? 0).ToList();
+            CollectionAssert.AreEqual(
+                rates.OrderByDescending(r => r).ToList(),
+                rates,
+                "Bounce pages must come back ordered by rate, descending.");
+
+            foreach (var page in journeys.BouncePages)
+            {
+                Assert.IsTrue(page.Entries > 0, "A bounce rate needs entries to divide by.");
+                Assert.IsTrue(
+                    page.Bounces <= page.Entries,
+                    "A page's bounces and entries must come from the same rows, or the rate exceeds 100%.");
+            }
+        }
+
         #endregion
     }
 }

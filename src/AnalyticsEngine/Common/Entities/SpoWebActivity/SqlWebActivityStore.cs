@@ -97,12 +97,28 @@ namespace Common.Entities.SpoWebActivity
         /// acquisition, which surfaces as an unexplained failure rather than as a slow query.
         /// </para>
         /// <para>
-        /// Six is chosen against the per-query timeout: eleven queries in two waves is at most
+        /// Six is chosen against the per-query timeout: twelve queries in two waves is at most
         /// ~50 seconds even if every one of them times out, well inside the ~230s Azure App Service
-        /// request limit, while capping a single page load at six connections rather than thirteen.
+        /// request limit, while capping a single page load at six connections rather than fourteen.
+        /// </para>
+        /// <para>
+        /// The semaphore is static, so it is shared across concurrent requests too. That is the point
+        /// - it bounds the load this page can put on the database - but it means a waiter's deadline
+        /// is set by the queue, not by its own query, which is why <see cref="QueueTimeoutSeconds"/>
+        /// exists.
         /// </para>
         /// </remarks>
         internal const int MaxConcurrentQueries = 6;
+
+        /// <summary>
+        /// How long a query waits for one of the <see cref="MaxConcurrentQueries"/> slots.
+        /// </summary>
+        /// <remarks>
+        /// Sized so queueing plus execution still fits the App Service request limit: a waiter gives
+        /// up after this, and the section reports why, instead of the whole request dying with a
+        /// gateway timeout that tells an admin nothing about which query was slow.
+        /// </remarks>
+        internal const int QueueTimeoutSeconds = 60;
 
         private static readonly SemaphoreSlim QuerySlots = new SemaphoreSlim(MaxConcurrentQueries);
 
@@ -439,17 +455,18 @@ namespace Common.Entities.SpoWebActivity
             var depthTask = RunAsync<VisitDepthRow>("journeys-depth", WebActivitySql.VisitDepth, query);
             var entryTask = RunAsync<PageRow>("journeys-entry", WebActivitySql.EntryPages, query);
             var exitTask = RunAsync<PageRow>("journeys-exit", WebActivitySql.ExitPages, query);
+            var bounceTask = RunAsync<PageRow>("journeys-bounce", WebActivitySql.BouncePages, query);
             var transitionTask = RunAsync<TransitionRow>("journeys-transitions", WebActivitySql.Transitions, query);
             var clickTask = RunAsync<NamedCountRow>("journeys-clicks", WebActivitySql.ClickedElements, query);
             var clickCountTask = RunAsync<ClickCountRow>("journeys-click-count", WebActivitySql.ClickCount, query);
 
-            await Task.WhenAll(depthTask, entryTask, exitTask, transitionTask, clickTask, clickCountTask)
+            await Task.WhenAll(depthTask, entryTask, exitTask, bounceTask, transitionTask, clickTask, clickCountTask)
                 .ConfigureAwait(false);
 
             var model = new WebActivityJourneys { Window = window };
             model.Queries.AddRange(new[]
             {
-                depthTask.Result.Info, entryTask.Result.Info, exitTask.Result.Info,
+                depthTask.Result.Info, entryTask.Result.Info, exitTask.Result.Info, bounceTask.Result.Info,
                 transitionTask.Result.Info, clickTask.Result.Info, clickCountTask.Result.Info,
             });
 
@@ -477,16 +494,12 @@ namespace Common.Entities.SpoWebActivity
             model.EntryPages = entryTask.Result.Rows.Select(ToPageModel).ToList();
             model.ExitPages = exitTask.Result.Rows.Select(ToPageModel).ToList();
 
-            // Bounce pages are the entry pages re-ranked, not a separate query: an entry page's bounce
-            // rate must be its own bounces over its own entries, and computing the two from different
-            // row sets is how a rate over 100% gets shipped.
-            model.BouncePages = entryTask.Result.Rows
-                .Where(r => r.Entries >= query.MinimumViews && r.Bounces > 0)
-                .Select(ToPageModel)
-                .OrderByDescending(r => r.BouncePct ?? 0)
-                .ThenByDescending(r => r.Bounces)
-                .Take(query.Top)
-                .ToList();
+            // Ranked by SQL, not by re-sorting EntryPages. That list is truncated to the busiest N
+            // entry pages before it gets here, so re-ranking it by rate could never surface the
+            // low-volume landing page that nearly everyone bounces off - which is the only kind this
+            // panel exists to find. The rate is still each page's own bounces over its own entries,
+            // so it cannot exceed 100%.
+            model.BouncePages = bounceTask.Result.Rows.Select(ToPageModel).ToList();
 
             model.Transitions = transitionTask.Result.Rows
                 .Select(r => new WebActivityTransitionRow
@@ -1127,7 +1140,21 @@ namespace Common.Entities.SpoWebActivity
             var result = new QueryResult<T> { Info = info };
             var watch = Stopwatch.StartNew();
 
-            await QuerySlots.WaitAsync().ConfigureAwait(false);
+            // Bounded. An unbounded wait here is how a per-section failure becomes a whole-request
+            // one: the command timeout below only starts once a slot is held, so under a queue every
+            // waiter's real deadline is (queue depth / slots) x timeout, which overruns the App
+            // Service request limit long before any single query gives up. Failing to get a slot is
+            // reported like any other section error, so the rest of the page still renders.
+            if (!await QuerySlots.WaitAsync(QueueTimeoutSeconds * 1000).ConfigureAwait(false))
+            {
+                watch.Stop();
+                info.ElapsedMs = watch.ElapsedMilliseconds;
+                info.Error =
+                    "The server was already running as many report queries as it allows, and this one "
+                    + "did not get a turn within " + QueueTimeoutSeconds + " seconds. Try a shorter "
+                    + "reporting period, or retry when the database is less busy.";
+                return result;
+            }
 
             try
             {

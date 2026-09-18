@@ -3,11 +3,13 @@ using Common.Entities.Config;
 using Common.Entities.CopilotAdoption;
 using Common.Entities.SpoWebActivity;
 using System;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Runtime.Caching;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Http;
 
@@ -46,6 +48,12 @@ namespace Web.AnalyticsWeb.Controllers
         /// enough that tab-switching and a page reload are instant.
         /// </summary>
         private const int CacheSeconds = 60;
+
+        /// <summary>
+        /// Builds currently in progress, keyed by cache key, so concurrent cold callers share one.
+        /// </summary>
+        private static readonly ConcurrentDictionary<string, Lazy<Task<object>>> InFlight =
+            new ConcurrentDictionary<string, Lazy<Task<object>>>(StringComparer.Ordinal);
 
         private readonly IWebActivityStore _store;
         private readonly Func<WebActivitySources> _sourcesFactory;
@@ -337,7 +345,20 @@ namespace Web.AnalyticsWeb.Controllers
             return WebActivityQuery.Create(days, DateTime.UtcNow, top);
         }
 
-        /// <summary>Serves a section from the short-lived cache, or builds and caches it.</summary>
+        /// <summary>
+        /// Serves a section from the short-lived cache, or builds and caches it.
+        /// </summary>
+        /// <remarks>
+        /// Single-flight: concurrent callers that miss the same key share ONE build rather than each
+        /// starting their own batch of section queries. Without this, five admins opening the same
+        /// tab on a cold cache queue five times the work against a database that is, by assumption,
+        /// already slow - which is exactly when they would do it.
+        /// <para>
+        /// The shared build is deliberately NOT tied to any one caller's cancellation. The whole
+        /// point is that several requests await the same work, so the first one to disconnect must
+        /// not cancel it out from under the others.
+        /// </para>
+        /// </remarks>
         private async Task<IHttpActionResult> CachedAsync<T>(
             string section,
             WebActivityQuery query,
@@ -351,7 +372,22 @@ namespace Web.AnalyticsWeb.Controllers
                 return Ok(cached);
             }
 
-            var model = await build().ConfigureAwait(false);
+            var lazy = InFlight.GetOrAdd(
+                key,
+                _ => new Lazy<Task<object>>(
+                    () => Task.Run(async () => (object)await build().ConfigureAwait(false)),
+                    LazyThreadSafetyMode.ExecutionAndPublication));
+
+            T model;
+            try
+            {
+                model = (T)await lazy.Value.ConfigureAwait(false);
+            }
+            finally
+            {
+                Lazy<Task<object>> mine;
+                InFlight.TryRemove(key, out mine);
+            }
 
             // Cached even when individual sections errored. The per-section error is itself the
             // diagnostic, and re-running a query that just timed out on every reload only makes a

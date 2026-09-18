@@ -191,5 +191,35 @@ namespace Tests.UnitTests
             var model = WebActivityAvailability.Build(unreadable, Unreadable(), null, null, Now);
             StringAssert.Contains(model.Reasons[0], "configuration could not be read");
         }
+
+        [TestMethod]
+        public void ImportOff_WithHistoricalHits_StillReportsAndSaysTheDataHasStopped()
+        {
+            // None of the reporting queries is conditioned on the import toggle, so a tenant that
+            // collected hits and later switched the import off still gets populated charts. Marking
+            // the page unavailable put an "every tab will be empty" banner directly above real data.
+            var sources = AllOn();
+            sources.WebTraffic = false;
+
+            var model = WebActivityAvailability.Build(sources, Seen(Now.AddDays(-30)), true, true, Now);
+
+            Assert.IsTrue(model.Available, "Stored hits are still reportable once collection stops.");
+            StringAssert.Contains(model.Reasons[0], "no NEW SharePoint page views");
+            Assert.IsFalse(
+                model.Reasons.Any(r => r.Contains("every tab on this page will be empty")),
+                "That claim is false when there is data, and it sits right above the charts proving it.");
+        }
+
+        [TestMethod]
+        public void ImportOff_WithNoHitsAtAll_StillSaysEveryTabWillBeEmpty()
+        {
+            var sources = AllOn();
+            sources.WebTraffic = false;
+
+            var model = WebActivityAvailability.Build(sources, Seen(null), false, false, Now);
+
+            Assert.IsFalse(model.Available);
+            StringAssert.Contains(model.Reasons[0], "every tab on this page will be empty");
+        }
     }
 }

@@ -362,10 +362,22 @@ namespace Tests.UnitTests
         {
             var off = Healthy();
             off.WebTrafficAvailable = false;
+            off.PageViews = 0;
             var result = WebActivityScoring.Judgements(off);
             Assert.AreEqual(1, result.Count, "Nothing else can be said when nothing is being collected.");
             Assert.AreEqual("import-off", result[0].Key);
             StringAssert.Contains(result[0].Headline, "switched off");
+
+            // But an import switched off AFTER data was collected does not make that data
+            // meaningless - the queries still return it, and the page still renders it. Suppressing
+            // the rest of the judgements there left an admin looking at populated charts with no
+            // interpretation of them at all.
+            var offWithHistory = Healthy();
+            offWithHistory.WebTrafficAvailable = false;
+            var stillJudged = WebActivityScoring.Judgements(offWithHistory);
+            Assert.IsTrue(stillJudged.Count > 1, "Collected data is still worth judging.");
+            Assert.AreEqual("import-off", stillJudged[0].Key, "The stopped import is still the headline.");
+            StringAssert.Contains(stillJudged[0].Headline, "stop at the last collected date");
 
             // Same false toggle, different cause: when configuration could not be READ, every flag
             // defaults to false, and asserting the import is switched off sends an admin to the
@@ -373,11 +385,24 @@ namespace Tests.UnitTests
             var unreadable = Healthy();
             unreadable.WebTrafficAvailable = false;
             unreadable.ConfigurationReadable = false;
+            unreadable.PageViews = 0;
             var unreadableResult = WebActivityScoring.Judgements(unreadable);
             Assert.AreEqual(1, unreadableResult.Count);
             Assert.AreEqual("import-off", unreadableResult[0].Key);
             StringAssert.Contains(unreadableResult[0].Headline, "could not be read");
             Assert.IsFalse(unreadableResult[0].Headline.Contains("switched off"));
+
+            // ...and with data present it behaves like the switched-off case: the unreadable
+            // configuration leads, but the figures on screen are still interpreted. Its detail text
+            // already promises "any figures below came from data that is already in the database",
+            // so suppressing the judgements about those figures contradicted it.
+            var unreadableWithData = Healthy();
+            unreadableWithData.WebTrafficAvailable = false;
+            unreadableWithData.ConfigurationReadable = false;
+            var unreadableJudged = WebActivityScoring.Judgements(unreadableWithData);
+            Assert.IsTrue(unreadableJudged.Count > 1);
+            Assert.AreEqual("import-off", unreadableJudged[0].Key);
+            StringAssert.Contains(unreadableJudged[0].Headline, "could not be read");
 
             var empty = Healthy();
             empty.PageViews = 0;

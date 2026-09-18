@@ -419,24 +419,36 @@ namespace Common.Entities.SpoWebActivity
 
             if (!inputs.WebTrafficAvailable)
             {
+                // Historical hits are still reported when the toggle is off, so this must not claim
+                // nothing can be measured while populated charts sit underneath it, and must not
+                // suppress the judgements about the data that IS there.
+                var hasData = inputs.PageViews > 0;
+
                 judgements.Add(new WebActivityJudgement
                 {
                     Key = "import-off",
                     Tone = "warning",
                     Headline = inputs.ConfigurationReadable
-                        ? "The web-traffic import is switched off"
+                        ? (hasData
+                            ? "The web-traffic import is switched off, so these figures stop at the last collected date"
+                            : "The web-traffic import is switched off")
                         : "Application configuration could not be read",
                     Detail = inputs.ConfigurationReadable
-                        ? "Nothing on this page can be measured until the SharePoint page-view tracker is "
-                            + "collecting hits. Enable the web traffic import in the installer and deploy the "
-                            + "AI Tracker to the sites you want reported on."
+                        ? (hasData
+                            ? "Everything below was measured from page views already in the database. No new "
+                                + "hits are arriving, so the trend will not advance and recent weeks will look "
+                                + "emptier than the intranet really is. Enable the web traffic import in the "
+                                + "installer to resume collection."
+                            : "Nothing on this page can be measured until the SharePoint page-view tracker is "
+                                + "collecting hits. Enable the web traffic import in the installer and deploy the "
+                                + "AI Tracker to the sites you want reported on.")
                         : "The import toggles cannot be read, so whether the web-traffic import is on is "
                             + "unknown - it is NOT necessarily switched off. Any figures below came from data "
                             + "that is already in the database. Fix the configuration before changing anything "
                             + "in the installer.",
                 });
 
-                return judgements;
+                if (!hasData) return judgements;
             }
 
             if (inputs.PageViews == 0)

@@ -177,15 +177,40 @@ V AS (
         }
 
         /// <summary>
-        /// The title to show for a page.
+        /// The title to show for a page: the one carried by that page's most recent hit in the window.
         /// </summary>
         /// <remarks>
-        /// <c>MAX(page_title_id)</c> is the most recently introduced title lookup seen for that URL, so
-        /// a renamed page shows its current name rather than an old one. It is picked as part of an
-        /// aggregate that is already being computed, which is why it is used in preference to a
-        /// correlated "most frequent title" subquery that would re-seek <c>dbo.hits</c> per row.
+        /// <para>
+        /// This is a "max by" aggregate. The sort key (<c>hit_timestamp</c>) and the value
+        /// (<c>page_title_id</c>) are concatenated into one binary, <c>MAX</c> picks the pair with the
+        /// latest timestamp, and the value is sliced back out. It costs one aggregate over rows that
+        /// are already being grouped, rather than the per-row <c>OUTER APPLY</c> into <c>dbo.hits</c>
+        /// that the obvious "latest title" formulation needs.
+        /// </para>
+        /// <para>
+        /// <c>MAX(page_title_id)</c> is NOT equivalent and was the previous, wrong, implementation.
+        /// Lookup ids order by when a title string was first seen anywhere in the tenant, not by when
+        /// this URL used it: renaming a page to a title another page already introduced earlier gives
+        /// the new title a LOWER id, so <c>MAX</c> keeps returning the old name indefinitely.
+        /// </para>
+        /// <para>
+        /// The binary ordering is only chronological because <c>datetime</c>'s first four bytes are a
+        /// day count that is positive for any date after 1900, which every page hit is.
+        /// </para>
         /// </remarks>
-        public const string LatestTitleId = "MAX(h.page_title_id)";
+        public const string LatestTitleId =
+            "NULLIF(CAST(SUBSTRING(MAX("
+            + "CAST(h.hit_timestamp AS binary(8)) + CAST(ISNULL(h.page_title_id, -1) AS binary(4))"
+            + "), 9, 4) AS int), -1)";
+
+        /// <summary>
+        /// <see cref="LatestTitleId"/> for the <c>Ordered</c> CTEs, which alias the hit rows as
+        /// <c>o</c>. Those CTEs must project <c>hit_timestamp</c> for this to resolve.
+        /// </summary>
+        public const string LatestTitleIdOrdered =
+            "NULLIF(CAST(SUBSTRING(MAX("
+            + "CAST(o.hit_timestamp AS binary(8)) + CAST(ISNULL(o.page_title_id, -1) AS binary(4))"
+            + "), 9, 4) AS int), -1)";
 
         #endregion
 
@@ -372,7 +397,9 @@ OPTION (RECOMPILE);";
         /// </remarks>
         public static string BySite(bool rankByVisits)
         {
-            var order = rankByVisits ? "g.Visits DESC, g.PageViews DESC" : "g.PageViews DESC, g.Visits DESC";
+            var order = rankByVisits
+                ? "g.Visits DESC, g.PageViews DESC, g.web_id ASC"
+                : "g.PageViews DESC, g.Visits DESC, g.web_id ASC";
 
             return @"
 WITH" + HitWindowCte + @",
@@ -413,7 +440,20 @@ ORDER BY " + order + @"
 OPTION (RECOMPILE);";
         }
 
-        /// <summary>Weekly PAGE VIEWS for each of the busiest sites, for the stacked site-over-time chart.</summary>
+        /// <summary>
+        /// Weekly PAGE VIEWS for each of the busiest sites, for the stacked site-over-time chart.
+        /// </summary>
+        /// <remarks>
+        /// Sites outside the top N are rolled into "(other sites)" and hits with no web into
+        /// "(unknown site)", so the stack height is total page views for the week. An INNER JOIN to the
+        /// top-N list would silently drop the tail, and a stack that omits the tail reads as traffic
+        /// falling when only its distribution changed.
+        /// <para>
+        /// Banding is keyed on web_id, not on the title: SharePoint web titles are not unique, and
+        /// grouping by title merges two unrelated "Team Site" webs into a single series. The title is
+        /// resolved once per band for display, and disambiguated with the URL when it repeats.
+        /// </para>
+        /// </remarks>
         public const string SiteOverTime = @"
 WITH" + HitWindowCte + @",
 TopSites AS (
@@ -422,16 +462,31 @@ TopSites AS (
     WHERE h.web_id IS NOT NULL
     GROUP BY h.web_id
     ORDER BY COUNT_BIG(*) DESC, h.web_id ASC
+),
+TopNames AS (
+    SELECT t.web_id,
+           CAST(CASE
+                WHEN COUNT(*) OVER (PARTITION BY ISNULL(w.title, w.url_base)) > 1
+                THEN ISNULL(w.title, w.url_base) + ' (' + w.url_base + ')'
+                ELSE ISNULL(w.title, w.url_base)
+           END AS nvarchar(300)) AS Name
+    FROM TopSites AS t
+    INNER JOIN dbo.webs AS w ON w.id = t.web_id
+),
+Banded AS (
+    SELECT " + "DATEADD(DAY, -(DATEDIFF(DAY, 0, h.hit_timestamp) % 7), CAST(h.hit_timestamp AS date))" + @" AS WeekStart,
+           CAST(CASE
+                WHEN h.web_id IS NULL THEN '(unknown site)'
+                WHEN n.web_id IS NULL THEN '(other sites)'
+                ELSE n.Name
+           END AS nvarchar(300)) AS Name
+    FROM H AS h
+    LEFT JOIN TopNames AS n ON n.web_id = h.web_id
 )
-SELECT " + "DATEADD(DAY, -(DATEDIFF(DAY, 0, h.hit_timestamp) % 7), CAST(h.hit_timestamp AS date))" + @" AS WeekStart,
-       CAST(ISNULL(w.title, w.url_base) AS nvarchar(300)) AS Name,
-       COUNT_BIG(*) AS Count
-FROM H AS h
-INNER JOIN TopSites AS t ON t.web_id = h.web_id
-INNER JOIN dbo.webs AS w ON w.id = h.web_id
-GROUP BY " + "DATEADD(DAY, -(DATEDIFF(DAY, 0, h.hit_timestamp) % 7), CAST(h.hit_timestamp AS date))" + @",
-         CAST(ISNULL(w.title, w.url_base) AS nvarchar(300))
-ORDER BY WeekStart, Name
+SELECT b.WeekStart, b.Name, COUNT_BIG(*) AS Count
+FROM Banded AS b
+GROUP BY b.WeekStart, b.Name
+ORDER BY b.WeekStart, b.Name
 OPTION (RECOMPILE);";
 
         #endregion
@@ -491,7 +546,9 @@ OPTION (RECOMPILE);";
             string nameColumn,
             bool rankByVisits = false)
         {
-            var order = rankByVisits ? "g.Visits DESC, g.PageViews DESC" : "g.PageViews DESC, g.Visits DESC";
+            var order = rankByVisits
+                ? "g.Visits DESC, g.PageViews DESC, g.LookupId ASC"
+                : "g.PageViews DESC, g.Visits DESC, g.LookupId ASC";
 
             return @"
 WITH" + HitWindowCte + @",
@@ -546,7 +603,7 @@ OPTION (RECOMPILE);";
         public const string PageStats = @"
 WITH" + HitWindowCte + @",
 Ordered AS (
-    SELECT h.session_id, h.url_id, h.page_title_id, h.web_id, h.seconds_on_page, h.page_load_time,
+    SELECT h.session_id, h.url_id, h.page_title_id, h.web_id, h.seconds_on_page, h.page_load_time, h.hit_timestamp,
            ROW_NUMBER() OVER (PARTITION BY h.session_id ORDER BY h.hit_timestamp ASC,  h.id ASC)  AS FirstSeq,
            ROW_NUMBER() OVER (PARTITION BY h.session_id ORDER BY h.hit_timestamp DESC, h.id DESC) AS LastSeq,
            COUNT(*) OVER (PARTITION BY h.session_id)                                              AS VisitPages
@@ -567,7 +624,7 @@ SELECT TOP (@top)
        g.Bounces
 FROM (
     SELECT o.url_id,
-           MAX(o.page_title_id)                                                  AS TitleId,
+           " + LatestTitleIdOrdered + @"                                        AS TitleId,
            MAX(o.web_id)                                                         AS WebId,
            COUNT_BIG(*)                                                          AS PageViews,
            CAST(COUNT(DISTINCT o.session_id) AS bigint)                           AS UniquePageViews,
@@ -697,11 +754,31 @@ OPTION (RECOMPILE);";
         public static readonly string ExitPages = EndpointPages("LastSeq");
 
         /// <summary>
+        /// Entry pages ranked by bounce RATE rather than by volume.
+        /// </summary>
+        /// <remarks>
+        /// This has to be its own query rather than a re-sort of <see cref="EntryPages"/>. That list
+        /// is already truncated to the busiest N entry pages, so re-ranking it by rate can only ever
+        /// reorder pages that were popular anyway - and the pages worth surfacing here are precisely
+        /// the low-volume ones where nearly everyone who lands bounces. Ranking before the TOP is the
+        /// whole point.
+        /// <para>
+        /// <c>@minViews</c> keeps a page that was entered twice and bounced twice off the top of the
+        /// list; a 100% rate over a handful of visits is noise, not a finding.
+        /// </para>
+        /// </remarks>
+        public static readonly string BouncePages = EndpointPages(
+            "FirstSeq",
+            havingSql: "HAVING SUM(CASE WHEN o.FirstSeq = 1 THEN 1 ELSE 0 END) >= @minViews",
+            orderSql: "ORDER BY CAST(g.Bounces AS float) / NULLIF(g.Entries, 0) DESC, g.Entries DESC, g.url_id ASC");
+
+        /// <summary>
         /// Shared shape for the entry-page and exit-page leaderboards.
         /// </summary>
         /// <remarks>
-        /// <paramref name="sequenceColumn"/> is one of two compile-time constants from this file and
-        /// never comes from a request.
+        /// <paramref name="sequenceColumn"/>, <paramref name="havingSql"/> and
+        /// <paramref name="orderSql"/> are compile-time constants from this file and never come from
+        /// a request.
         ///
         /// <para>
         /// Note what <c>PageViews</c> means here: the rows are already filtered to the visit's first
@@ -711,12 +788,15 @@ OPTION (RECOMPILE);";
         /// reader to compare two numbers that count different things.
         /// </para>
         /// </remarks>
-        private static string EndpointPages(string sequenceColumn)
+        private static string EndpointPages(
+            string sequenceColumn,
+            string havingSql = "",
+            string orderSql = "ORDER BY g.PageViews DESC, g.url_id ASC")
         {
             return @"
 WITH" + HitWindowCte + @",
 Ordered AS (
-    SELECT h.session_id, h.url_id, h.page_title_id, h.web_id, h.seconds_on_page,
+    SELECT h.session_id, h.url_id, h.page_title_id, h.web_id, h.seconds_on_page, h.hit_timestamp,
            ROW_NUMBER() OVER (PARTITION BY h.session_id ORDER BY h.hit_timestamp ASC,  h.id ASC)  AS FirstSeq,
            ROW_NUMBER() OVER (PARTITION BY h.session_id ORDER BY h.hit_timestamp DESC, h.id DESC) AS LastSeq,
            COUNT(*) OVER (PARTITION BY h.session_id)                                              AS VisitPages
@@ -737,7 +817,7 @@ SELECT TOP (@top)
        g.Bounces
 FROM (
     SELECT o.url_id,
-           MAX(o.page_title_id) AS TitleId,
+           " + LatestTitleIdOrdered + @" AS TitleId,
            MAX(o.web_id)        AS WebId,
            COUNT_BIG(*)         AS PageViews,
            AVG(o.seconds_on_page) AS AverageSecondsOnPage,
@@ -747,11 +827,12 @@ FROM (
     FROM Ordered AS o
     WHERE o." + sequenceColumn + @" = 1
     GROUP BY o.url_id
+    " + havingSql + @"
 ) AS g
 INNER JOIN dbo.urls AS u ON u.id = g.url_id
 LEFT JOIN dbo.page_titles AS pt ON pt.id = g.TitleId
 LEFT JOIN dbo.webs AS w ON w.id = g.WebId
-ORDER BY g.PageViews DESC, g.url_id ASC
+" + orderSql + @"
 OPTION (RECOMPILE);";
         }
 
@@ -898,7 +979,14 @@ SELECT
     (SELECT COUNT(DISTINCT s.user_id) FROM H AS h INNER JOIN dbo.sessions AS s ON s.id = h.session_id) AS Visitors
 OPTION (RECOMPILE);";
 
-        /// <summary>Weekly PAGE VIEWS for each of the busiest countries.</summary>
+        /// <summary>
+        /// Weekly PAGE VIEWS for each of the busiest countries.
+        /// </summary>
+        /// <remarks>
+        /// Countries outside the top N are rolled into "(other countries)" and hits that could not be
+        /// located into "(unknown country)", so the stack sums to total page views for the week rather
+        /// than quietly dropping the tail.
+        /// </remarks>
         public const string CountryOverTime = @"
 WITH" + HitWindowCte + @",
 TopCountries AS (
@@ -907,16 +995,22 @@ TopCountries AS (
     WHERE h.country_id IS NOT NULL
     GROUP BY h.country_id
     ORDER BY COUNT_BIG(*) DESC, h.country_id ASC
+),
+Banded AS (
+    SELECT " + "DATEADD(DAY, -(DATEDIFF(DAY, 0, h.hit_timestamp) % 7), CAST(h.hit_timestamp AS date))" + @" AS WeekStart,
+           CAST(CASE
+                WHEN h.country_id IS NULL THEN '(unknown country)'
+                WHEN t.country_id IS NULL THEN '(other countries)'
+                ELSE ISNULL(c.country_name, '(unknown country)')
+           END AS nvarchar(250)) AS Name
+    FROM H AS h
+    LEFT JOIN TopCountries AS t ON t.country_id = h.country_id
+    LEFT JOIN dbo.countries AS c ON c.id = h.country_id
 )
-SELECT " + "DATEADD(DAY, -(DATEDIFF(DAY, 0, h.hit_timestamp) % 7), CAST(h.hit_timestamp AS date))" + @" AS WeekStart,
-       CAST(c.country_name AS nvarchar(250)) AS Name,
-       COUNT_BIG(*) AS Count
-FROM H AS h
-INNER JOIN TopCountries AS t ON t.country_id = h.country_id
-INNER JOIN dbo.countries AS c ON c.id = h.country_id
-GROUP BY " + "DATEADD(DAY, -(DATEDIFF(DAY, 0, h.hit_timestamp) % 7), CAST(h.hit_timestamp AS date))" + @",
-         CAST(c.country_name AS nvarchar(250))
-ORDER BY WeekStart, Name
+SELECT b.WeekStart, b.Name, COUNT_BIG(*) AS Count
+FROM Banded AS b
+GROUP BY b.WeekStart, b.Name
+ORDER BY b.WeekStart, b.Name
 OPTION (RECOMPILE);";
 
         #endregion
@@ -1100,12 +1194,20 @@ Context AS (
     ) AS ctx
 )
 SELECT TOP (@top)
-       CAST(ISNULL(w.title, w.url_base) AS nvarchar(300)) AS Name,
-       COUNT_BIG(*) AS Count
-FROM Context AS c
-INNER JOIN dbo.webs AS w ON w.id = c.web_id
-GROUP BY CAST(ISNULL(w.title, w.url_base) AS nvarchar(300))
-ORDER BY COUNT_BIG(*) DESC, CAST(ISNULL(w.title, w.url_base) AS nvarchar(300)) ASC
+       CAST(CASE
+            WHEN COUNT(*) OVER (PARTITION BY ISNULL(w.title, w.url_base)) > 1
+            THEN ISNULL(w.title, w.url_base) + ' (' + w.url_base + ')'
+            ELSE ISNULL(w.title, w.url_base)
+       END AS nvarchar(300)) AS Name,
+       Cnt AS Count
+FROM (
+    SELECT c.web_id, COUNT_BIG(*) AS Cnt
+    FROM Context AS c
+    WHERE c.web_id IS NOT NULL
+    GROUP BY c.web_id
+) AS g
+INNER JOIN dbo.webs AS w ON w.id = g.web_id
+ORDER BY Cnt DESC, g.web_id ASC
 OPTION (RECOMPILE);";
 
         #endregion

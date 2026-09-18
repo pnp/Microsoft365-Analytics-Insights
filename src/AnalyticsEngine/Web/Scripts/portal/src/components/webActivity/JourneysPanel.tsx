@@ -156,7 +156,7 @@ export default function JourneysPanel({
             + 'answered the question completely - which is fine - or a dead end that should be '
             + 'offering a next step.'
           }
-          query={queryFor(data.queries, 'journeys-entry')}
+          query={queryFor(data.queries, 'journeys-bounce')}
           isEmpty={data.bouncePages.length === 0}
           emptyMessage="No entry page had enough entries to rank by bounce rate."
         >

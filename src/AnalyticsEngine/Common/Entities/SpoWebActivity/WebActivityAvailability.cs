@@ -107,8 +107,16 @@ namespace Common.Entities.SpoWebActivity
         /// </summary>
         public bool CollectionStatusKnown { get; set; }
 
-        /// <summary>True when the page has something to report.</summary>
-        public bool Available => WebTrafficAvailable && HasAnyHits;
+        /// <summary>
+        /// True when the page has something to report.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately keyed on stored hits alone, NOT on <see cref="WebTrafficAvailable"/>. None of
+        /// the reporting queries is conditioned on the import toggle, so a tenant that collected hits
+        /// and later switched the import off still gets populated charts. Gating this on the toggle
+        /// produced a "nothing to report" banner directly above real data.
+        /// </remarks>
+        public bool Available => HasAnyHits;
 
         /// <summary>Admin-facing explanation of anything that is switched off or incomplete.</summary>
         public List<string> Reasons { get; set; } = new List<string>();
@@ -164,8 +172,14 @@ namespace Common.Entities.SpoWebActivity
             if (!sources.WebTraffic)
             {
                 model.Reasons.Add(
-                    "The web traffic import is switched off, so no SharePoint page views are collected and "
-                    + "every tab on this page will be empty. Enable 'Web traffic' in the installer.");
+                    lastHitUtc.HasValue
+                        ? "The web traffic import is switched off, so no NEW SharePoint page views are "
+                            + "being collected. Anything shown on this page came from hits already in the "
+                            + "database and will not advance past the last collected date. Enable 'Web "
+                            + "traffic' in the installer to resume collection."
+                        : "The web traffic import is switched off, so no SharePoint page views are "
+                            + "collected and every tab on this page will be empty. Enable 'Web traffic' in "
+                            + "the installer.");
             }
             else if (!sources.AppInsightsConfigured)
             {
