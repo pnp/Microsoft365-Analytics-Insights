@@ -211,10 +211,50 @@ describe('CoworkPanel', () => {
     expect(screen.getByText(/shared Copilot Credits pool, not Cowork-only spend/)).toBeTruthy();
   });
 
-  it('omits the per-user credit column when no per-user rows exist', async () => {
+  it('never gives the optional per-user credit import a column, even when it has rows', async () => {
+    // The Power Platform per-user credit import is optional and, on most tenants, not configured.
+    // A column would cost every tenant horizontal space for a figure most of them cannot populate,
+    // in a table already wider than the screen - so it lives in the expander instead.
+    const user = userEvent.setup();
+    fetchCowork.mockResolvedValue(page([row({ totalCopilotCredits: 197.8 })]));
+
+    render(
+      summary({
+        coworkCreditPosition: {
+          available: true,
+          snapshotUtc: null,
+          entitled: null,
+          consumed: null,
+          available_credits: null,
+          payAsYouGoConsumed: null,
+          status: null,
+          perUserCreditsAvailable: true,
+        },
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText('aisha.rahman@contoso.com')).toBeTruthy());
+
+    const header = within(screen.getByRole('table')).getAllByRole('columnheader');
+    expect(header.map((h) => h.textContent)).not.toContain('All Copilot Credits');
+
+    await user.click(screen.getByRole('button', { name: /Show the full assessment/ }));
+
+    expect(await screen.findByText('All Copilot Credits')).toBeTruthy();
+  });
+
+  it('omits the per-user credit figures entirely when no per-user rows exist', async () => {
+    const user = userEvent.setup();
     render(summary());
     await waitFor(() => expect(screen.getByText('aisha.rahman@contoso.com')).toBeTruthy());
 
+    expect(screen.queryByText('All Copilot Credits')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: /Show the full assessment/ }));
+
+    // The expander opened - so the absence below is a real absence, not an unopened panel.
+    expect(await screen.findByText('Justification')).toBeTruthy();
+    expect(screen.queryByText('Copilot Credits')).toBeNull();
     expect(screen.queryByText('All Copilot Credits')).toBeNull();
   });
 
@@ -274,6 +314,7 @@ describe('CoworkPanel', () => {
   });
 
   it('shows an unattributable credit as a dash, never as zero', async () => {
+    const user = userEvent.setup();
     fetchCowork.mockResolvedValue(page([row({ totalCopilotCredits: null })]));
 
     render(
@@ -293,9 +334,15 @@ describe('CoworkPanel', () => {
 
     await waitFor(() => expect(screen.getByText('aisha.rahman@contoso.com')).toBeTruthy());
 
+    await user.click(screen.getByRole('button', { name: /Show the full assessment/ }));
+
     // A zero here would read as "this person costs nothing", which is a different claim entirely.
-    const table = screen.getByRole('table');
-    expect(within(table).getByText('\u2014')).toBeTruthy();
+    const creditStat = (await screen.findByText('All Copilot Credits')).closest('div');
+    expect(creditStat).not.toBeNull();
+    expect(within(creditStat as HTMLElement).getByText('\u2014')).toBeTruthy();
+    expect(
+      within(creditStat as HTMLElement).getByText('not attributable to this person - not zero'),
+    ).toBeTruthy();
   });
 
   it('never renders the estimate without its assumptions', async () => {
