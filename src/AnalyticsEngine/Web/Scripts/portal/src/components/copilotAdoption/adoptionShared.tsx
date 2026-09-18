@@ -266,11 +266,16 @@ const useStyles = makeStyles({
    * tables is wider than the screen. Left as a normal block it would scroll away with the columns,
    * which is the exact problem the expander exists to solve, so it is given a bounded width and made
    * sticky: wherever the table is scrolled to, the detail is on screen.
+   *
+   * The width is measured against the table's own scrollport (`tableWrap` declares
+   * `container-type: inline-size`), NOT the viewport. A viewport-based bound over-measures by the
+   * width of the left navigation and the page padding, which left part of the panel clipped on a
+   * normal laptop - sticky pins the left edge, it does not shrink an over-wide element.
    */
   detailInner: {
     position: 'sticky',
     left: '0',
-    width: 'min(1040px, calc(100vw - 96px))',
+    width: 'min(1040px, 100cqw)',
     boxSizing: 'border-box',
     padding: '12px 14px 14px 34px',
     display: 'flex',

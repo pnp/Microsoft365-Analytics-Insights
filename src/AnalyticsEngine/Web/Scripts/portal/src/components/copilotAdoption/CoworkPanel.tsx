@@ -22,6 +22,7 @@ import type {
   CoworkBasis,
   CoworkFilters,
   CoworkReadinessPage,
+  CoworkReadinessRow,
   CoworkTier,
 } from '../../types/copilotAdoption';
 import Spinner from '../Spinner';
@@ -48,6 +49,24 @@ import InfoTip from '../shared/InfoTip';
 import CoworkQuadrant from './CoworkQuadrant';
 
 const PAGE_SIZE = 50;
+
+/**
+ * The scheduled / user-initiated split, naming only the halves Microsoft actually reported.
+ *
+ * These two columns are independently nullable and a blank one means "not reported", not "none".
+ * Coercing either to 0 would state a measurement Microsoft never made - the same conflation the
+ * per-user credit column goes out of its way to avoid.
+ */
+function taskSplitLabel(row: CoworkReadinessRow): string {
+  const parts: string[] = [];
+  if (row.coworkReportScheduledTasks !== null) {
+    parts.push(`${formatCount(row.coworkReportScheduledTasks)} scheduled`);
+  }
+  if (row.coworkReportUserInitiatedTasks !== null) {
+    parts.push(`${formatCount(row.coworkReportUserInitiatedTasks)} user-initiated`);
+  }
+  return parts.length > 0 ? parts.join(', ') : 'split not reported';
+}
 
 const SORT_OPTIONS = [
   { value: 'load:desc', label: 'Most coordination load' },
@@ -91,6 +110,10 @@ const useStyles = makeStyles({
   },
   tableWrap: {
     overflowX: 'auto',
+    // Makes this scrollport the container an expanded row's detail panel is sized against. Sizing
+    // that panel from the viewport instead over-measures by whatever the left navigation and page
+    // padding take, so part of it stayed clipped on a normal laptop.
+    containerType: 'inline-size',
   },
   muted: {
     color: tokens.colorNeutralForeground3,
@@ -962,26 +985,28 @@ export default function CoworkPanel({
                                   sub={`on ${formatCount(row.coworkActiveDays)} day(s) \u00b7 regular at ${options.coworkRegularMinActiveDays}`}
                                 />
                                 <DetailStat
-                                  label="Last Cowork use"
+                                  label="Last audit interaction"
                                   value={formatDate(row.lastCoworkInteractionUtc)}
                                   sub={row.basis === 'evidence' ? 'observed' : 'predicted verdict'}
                                 />
+                                {row.coworkReportLastActivityDate !== null && (
+                                  <DetailStat
+                                    label="Reported last activity"
+                                    value={formatDate(row.coworkReportLastActivityDate)}
+                                    sub={'from Microsoft\u2019s usage report'}
+                                  />
+                                )}
                                 {row.coworkReportTotalTasks !== null && (
                                   <DetailStat
                                     label="Reported tasks"
                                     value={formatCount(row.coworkReportTotalTasks)}
-                                    sub={`${formatCount(row.coworkReportScheduledTasks ?? 0)} scheduled, ${formatCount(row.coworkReportUserInitiatedTasks ?? 0)} user-initiated`}
+                                    sub={taskSplitLabel(row)}
                                   />
                                 )}
                                 {row.coworkReportActiveDays !== null && (
                                   <DetailStat
                                     label="Reported active days"
                                     value={formatCount(row.coworkReportActiveDays)}
-                                    sub={
-                                      row.coworkReportLastActivityDate
-                                        ? `last ${formatDate(row.coworkReportLastActivityDate)}`
-                                        : undefined
-                                    }
                                   />
                                 )}
                                 {row.coworkAutomationRatioPct !== null && (

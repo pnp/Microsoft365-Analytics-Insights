@@ -64,6 +64,10 @@ const useStyles = makeStyles({
   },
   tableWrap: {
     overflowX: 'auto',
+    // Makes this scrollport the container an expanded row's detail panel is sized against. Sizing
+    // that panel from the viewport instead over-measures by whatever the left navigation and page
+    // padding take, so part of it stayed clipped on a normal laptop.
+    containerType: 'inline-size',
   },
   muted: {
     color: tokens.colorNeutralForeground3,
@@ -575,11 +579,8 @@ export default function OpportunitiesPanel({
                               <DetailStat
                                 label="Qualified by"
                                 value={
-                                  row.unlicensedCopilotActiveDays >= options.opportunityProvenDemandMinActiveDays
-                                    ? 'Proven demand'
-                                    : row.recommended
-                                      ? 'Workload inferred'
-                                      : 'Not recommended'
+                                  row.qualificationTierLabel
+                                  || (row.recommended ? 'Recommended' : 'Not recommended')
                                 }
                                 sub={`recommend at ${options.opportunityRecommendScore}`}
                               />
