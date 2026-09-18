@@ -75,10 +75,6 @@ describe('detailRowsToCsv', () => {
     agentName: 'Contoso Helpdesk',
     harness: 'StandardOrCopilotChat',
     featureName: 'Generative answer',
-    channelId: null,
-    llmModel: 'gpt-4o',
-    toolInvoked: null,
-    knowledgeSources: null,
     billedCredits: 12.5,
     nonBilledCredits: 1,
     distinctUsers: 4,
@@ -109,7 +105,7 @@ describe('detailRowsToCsv', () => {
   });
 
   it('writes an absent dimension as an empty cell, not the word null', () => {
-    const csv = detailRowsToCsv([row({ toolInvoked: null, distinctUsers: null })]);
+    const csv = detailRowsToCsv([row({ featureName: null, distinctUsers: null })]);
     expect(csv).not.toContain('null');
   });
 

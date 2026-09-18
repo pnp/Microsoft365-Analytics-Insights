@@ -134,10 +134,6 @@ export const CREDIT_DIMENSIONS: { key: CreditDimension; label: string; hint: str
     label: 'Billing feature',
     hint: 'What was charged for - a generative answer, tenant graph grounding, an agent action.',
   },
-  { key: 'model', label: 'AI model', hint: 'The model that served the request, where Microsoft reported one.' },
-  { key: 'tool', label: 'Tool invoked', hint: 'The tool or connector the agent called.' },
-  { key: 'knowledge', label: 'Knowledge source', hint: 'The knowledge source the answer was grounded on.' },
-  { key: 'channel', label: 'Channel', hint: 'Where the agent was used from - Teams, a website, and so on.' },
 ];
 
 export const AZURE_DIMENSIONS: { key: AzureDimension; label: string }[] = [
@@ -147,6 +143,7 @@ export const AZURE_DIMENSIONS: { key: AzureDimension; label: string }[] = [
   { key: 'resource', label: 'Resource' },
   { key: 'resourcegroup', label: 'Resource group' },
   { key: 'subscription', label: 'Subscription' },
+  { key: 'tag', label: 'Tag value' },
 ];
 
 /**
@@ -181,10 +178,6 @@ export function detailRowsToCsv(rows: AgentCostDetailRow[]): string {
     'Environment ID',
     'Harness',
     'Billing feature',
-    'AI model',
-    'Tool invoked',
-    'Knowledge source',
-    'Channel',
     'Billed credits',
     'Non-billed credits',
     'Distinct users',
@@ -199,10 +192,6 @@ export function detailRowsToCsv(rows: AgentCostDetailRow[]): string {
       r.environmentId ?? '',
       harnessLabel(r.harness),
       r.featureName ?? '',
-      r.llmModel ?? '',
-      r.toolInvoked ?? '',
-      r.knowledgeSources ?? '',
-      r.channelId ?? '',
       r.billedCredits,
       r.nonBilledCredits ?? '',
       r.distinctUsers ?? '',

@@ -66,10 +66,6 @@ function filterQuery(filters: AgentCostFilters): URLSearchParams {
   if (filters.environmentId) qs.set('environmentId', filters.environmentId);
   if (filters.harness) qs.set('harness', filters.harness);
   if (filters.feature) qs.set('feature', filters.feature);
-  if (filters.model) qs.set('model', filters.model);
-  if (filters.tool) qs.set('tool', filters.tool);
-  if (filters.knowledge) qs.set('knowledge', filters.knowledge);
-  if (filters.channel) qs.set('channel', filters.channel);
   if (filters.search?.trim()) qs.set('search', filters.search.trim());
   return qs;
 }
