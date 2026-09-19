@@ -347,16 +347,6 @@ namespace Tests.UnitTests
                 "PowerPoint has no users at all, so there is no denominator and no bar.");
         }
 
-        [TestMethod]
-        public void CopilotTrendPlacesPeopleInTheWeekOfTheirLastActivity()
-        {
-            var rows = RunNamedWeeks(ReportsAPIController.CopilotWeeklyQuery());
-
-            Assert.AreEqual(1d, Week(rows, "Word", WeekB));
-            Assert.AreEqual(0d, Week(rows, "Word", WeekA), "Ada's Copilot activity was in week B.");
-            Assert.AreEqual(0d, Week(rows, "Excel", WeekB));
-        }
-
         #endregion
 
         #region Browser-only
@@ -406,7 +396,6 @@ namespace Tests.UnitTests
                 { "AppByDomain", ReportsAPIController.AppByDomainQuery() },
                 { "WebOnly", ReportsAPIController.WebOnlyQuery() },
                 { "CopilotAttachRate", ReportsAPIController.CopilotAttachRateQuery() },
-                { "CopilotWeekly", ReportsAPIController.CopilotWeeklyQuery() },
             };
 
             foreach (var query in queries)

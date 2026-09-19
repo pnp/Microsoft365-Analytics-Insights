@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Web.AnalyticsWeb.Models;
 
@@ -28,32 +29,33 @@ namespace Web.AnalyticsWeb.Controllers
     /// across the report dates in the period. That is not an invention here - it is exactly what the
     /// product's own profiling compile already does: <c>profiling.usp_UpsertM365Apps</c> selects
     /// <c>MAX(1 * word)</c> grouped by <c>user_id</c> over a <c>@StartDate</c>/<c>@EndDate</c> range
-    /// (<c>App.ControlPanel.Engine/SqlExtentions/Profiling-03-CreateSchema.sql</c>). These charts use
-    /// <c>COUNT(DISTINCT CASE WHEN bit = 1 ...)</c>, which is the same statement counted rather than
-    /// stored.
+    /// (<c>App.ControlPanel.Engine/SqlExtentions/Profiling-03-CreateSchema.sql</c>).
     /// </para>
     /// <para>
     /// Deliberately NOT the snapshot pattern used by <c>UsageCharts</c>. That one picks the latest
     /// settled report date in each week and filters on <c>last_activity_date</c>, because the tables it
     /// reads (<c>teams_user_activity_log</c> and friends) carry running COUNTS that would be
     /// double-counted if several report dates in a week were added together. Here the columns are
-    /// booleans and <c>COUNT(DISTINCT user_id)</c> is already idempotent across report dates, so the
-    /// extra machinery would buy nothing and would throw away every user whose single report date in a
-    /// week happened to be the unsettled one.
+    /// booleans, so collapsing a person's rows with <c>MAX</c> is already idempotent across report
+    /// dates and the extra machinery would buy nothing.
     /// </para>
     /// <para>
     /// <b>What is counted is a person, never an action.</b> The source has no volume - it cannot say
-    /// whether someone sent one mail or four hundred. Every figure in this area is therefore a
-    /// headcount, and the labels say "users" for that reason. Nothing here should ever be described as
-    /// "usage" in the sense of intensity.
+    /// whether someone sent one mail or four hundred. Every figure in this area is a headcount, which
+    /// is why the value labels read "People". Nothing here should ever be described as "usage" in the
+    /// sense of intensity.
     /// </para>
     /// <para>
-    /// <b>Scale.</b> At the ~200k-user tenant this product is designed against, this table grows by
-    /// ~200k rows a day (~73m a year), so a 6-month window touches ~36m rows. Every query below is a
-    /// single set-based pass with all aggregation in SQL - there is no per-user query anywhere - and
-    /// each one fans the row out with <c>CROSS APPLY (VALUES ...)</c> so that six apps are answered by
-    /// one read of the table rather than six. They all carry <c>OPTION (RECOMPILE)</c> so the real
-    /// window drives the plan rather than a cached plan from a different one.
+    /// <b>Scale, and why every query collapses per person first.</b> At the ~200k-user tenant this
+    /// product is designed against, this table grows by ~200k rows a day (~73m a year), so a 6-month
+    /// window touches ~36m rows. Every query below therefore aggregates to ONE ROW PER PERSON (or per
+    /// person per week) BEFORE fanning out with <c>CROSS APPLY (VALUES ...)</c>. The apply genuinely
+    /// does emit one row per listed value for every input row, so the order matters enormously:
+    /// measured on an 18m-row synthetic table over a 180-day window, running the app-on-platform
+    /// matrix as a fan-out over raw activity rows took 91s, and collapsing to one row per person first
+    /// took 18s for identical output. The other charts moved similarly (weekly app users 53s -> 11s),
+    /// which is the difference between fitting inside the per-chart timeout and not. All queries carry
+    /// <c>OPTION (RECOMPILE)</c> so the requested window drives the plan.
     /// </para>
     /// </remarks>
     public partial class ReportsAPIController
@@ -85,6 +87,41 @@ namespace Web.AnalyticsWeb.Controllers
 
         /// <summary>The label used where a sign-in address has no usable domain part.</summary>
         private const string NoDomainLabel = "(No domain)";
+
+        /// <summary>
+        /// Sentinel app name carrying each department's / domain's DISTINCT active headcount.
+        /// </summary>
+        /// <remarks>
+        /// It rides along as a seventh pseudo-app in the same aggregate so the matrix queries can rank
+        /// columns by real headcount without reading the activity data a second time. Filtered out
+        /// before the rows are returned. Cannot collide with a real column value because the app names
+        /// all come from <see cref="OfficeAppCatalogue"/>.
+        /// </remarks>
+        private const string AnyAppSentinel = "(Any app)";
+
+        /// <summary>
+        /// How many of this area's queries may be in flight at once, across all callers.
+        /// </summary>
+        /// <remarks>
+        /// The area has eleven charts and each opens its own <see cref="AnalyticsEntitiesContext"/>.
+        /// Started all at once they are eleven concurrent range aggregates over the same
+        /// tens-of-millions-of-rows index, and a handful of admins refreshing together would also take
+        /// a large share of the default 100-connection pool for up to <see cref="QueryTimeoutSecs"/>
+        /// seconds each. The sibling <c>UsageCharts</c> already declined that shape, running its series
+        /// sequentially for the same reason. Three keeps the page responsive while bounding what one
+        /// page load can do to the database.
+        /// </remarks>
+        private static readonly SemaphoreSlim OfficeAppsQueryGate = new SemaphoreSlim(3, 3);
+
+        /// <summary>
+        /// Longest a chart will wait for its turn at the gate before giving up.
+        /// </summary>
+        /// <remarks>
+        /// Waiting is not covered by the SQL command timeout, so without a bound a queue of callers
+        /// could push the whole HTTP request past the ~230s App Service limit and return a 500 rather
+        /// than a page with a per-chart message on it.
+        /// </remarks>
+        private static readonly TimeSpan OfficeAppsQueueTimeout = TimeSpan.FromSeconds(60);
 
         /// <summary>
         /// One Office app, and the columns that describe it in each of the two source tables.
@@ -156,179 +193,310 @@ namespace Web.AnalyticsWeb.Controllers
         /// </remarks>
         private static List<Task<ReportChart>> OfficeAppsCharts(DateTime from, List<DateTime> weekSpine)
         {
-            var copilotUsageImported = CopilotUsageReportsEnabled();
+            var config = new AppConfig();
+            var settings = config.ImportJobSettings ?? new ImportTaskSettings();
+            var copilotUsageImported = settings.GraphCopilotUsageReports;
+            var groupFiltered = !string.IsNullOrWhiteSpace(config.UserGroupsFilter);
 
-            var charts = new List<Task<ReportChart>>
+            return new List<Task<ReportChart>>
             {
                 // ---- Headline: what is used, and is it moving? -------------------------------
-                RunCategoryAsync("office-apps-popularity",
+                Gated(() => RunCategoryAsync("office-apps-popularity",
                     "Most used apps",
                     "People who used each app at least once in the period. Someone who uses both Word and Excel is counted in both, so these do not add up to your headcount.",
-                    "People", AppPopularityQuery(), from),
+                    "People", AppPopularityQuery(), from)),
 
-                RunGroupedTimeSeriesAsync("office-apps-trend",
+                Gated(() => RunGroupedTimeSeriesAsync("office-apps-trend",
                     "App users each week",
                     "Distinct people using each app, week by week. The current part-week is left off because the Microsoft usage report for it has not finished arriving.",
                     "People",
                     QueryNamedWeeksAsync(AppWeeklyQuery(), from),
-                    DisplaySql(AppWeeklyQuery(), from), weekSpine),
+                    DisplaySql(AppWeeklyQuery(), from), weekSpine)),
 
-                WithValueSuffix(RunCategoryAsync("office-apps-breadth",
+                Gated(() => WithValueSuffix(RunCategoryAsync("office-apps-breadth",
                     "How much of the suite people use",
                     "How many different Office apps each person used in the period. A workforce clustered on one or two apps has bought a suite and is using a product - that gap is usually the cheapest adoption win available.",
-                    "People", AppBreadthQuery(), from), null, showShare: true),
+                    "People", AppBreadthQuery(), from), null, showShare: true)),
 
                 // ---- Platforms: where the work happens ---------------------------------------
-                RunCategoryAsync("office-apps-platform-mix",
+                Gated(() => RunCategoryAsync("office-apps-platform-mix",
                     "Platforms people work on",
                     "People who connected from each platform at least once. Most people appear under more than one.",
-                    "People", PlatformPopularityQuery(), from),
+                    "People", PlatformPopularityQuery(), from)),
 
-                RunGroupedTimeSeriesAsync("office-apps-platform-trend",
+                Gated(() => RunGroupedTimeSeriesAsync("office-apps-platform-trend",
                     "Platform users each week",
                     "Distinct people on each platform, week by week. A rising web or mobile line against a flat desktop line is the shift to browser and phone working, and it changes what your endpoint and licensing assumptions should be.",
                     "People",
                     QueryNamedWeeksAsync(PlatformWeeklyQuery(), from),
-                    DisplaySql(PlatformWeeklyQuery(), from), weekSpine),
+                    DisplaySql(PlatformWeeklyQuery(), from), weekSpine)),
 
-                RunMatrixAsync("office-apps-platform-matrix",
+                Gated(() => RunMatrixAsync("office-apps-platform-matrix",
                     "Which apps are used on which platforms",
                     "People using each app on each platform. Shaded across each row, because Outlook dwarfs OneNote and a single shared scale would leave the smaller rows blank.",
                     "People", AppPlatformMatrixQuery(), from,
                     rowLabel: "App", columnLabel: "Platform",
                     rows: OfficeAppCatalogue.Select(a => a.Name).ToList(),
                     columns: OfficePlatformCatalogue.Select(p => p.Key).ToList(),
-                    shadeByRow: true),
+                    shadeByRow: true)),
 
                 // ---- The business cut ---------------------------------------------------------
-                RunMatrixAsync("office-apps-by-department",
+                Gated(() => RunMatrixAsync("office-apps-by-department",
                     "App use by department",
                     $"People using each app, in the {MatrixColumnLimit} departments with the most active people. Shaded across each row, so you are comparing departments within an app rather than apps against each other. Department comes from your directory; people with none are grouped as {NoDepartmentLabel}.",
                     "People", AppByDepartmentQuery(), from,
                     rowLabel: "App", columnLabel: "Department",
                     rows: OfficeAppCatalogue.Select(a => a.Name).ToList(),
                     columns: null,
-                    shadeByRow: true),
+                    shadeByRow: true)),
 
-                WithValueSuffix(RunCategoryAsync("office-apps-department-adoption",
-                    "Departments least likely to use the apps",
-                    $"Share of each department's people who used any Office app in the period, lowest first. Unlike the counts above this is a rate, so a big department cannot top it just for being big. Departments with fewer than {MinDepartmentSizeForRate} people are left out, because at that size the percentage says more about the size than the adoption.",
-                    "Adoption", DepartmentAdoptionRateQuery(), from), "%"),
+                DepartmentAdoptionChart(from, groupFiltered),
 
-                RunMatrixAsync("office-apps-by-domain",
+                Gated(() => RunMatrixAsync("office-apps-by-domain",
                     "App use by email domain",
                     $"People using each app, split by the domain of their sign-in address - useful where subsidiaries, brands or an unfinished migration share one tenant. Top {MatrixColumnLimit} domains by active people.",
                     "People", AppByDomainQuery(), from,
                     rowLabel: "App", columnLabel: "Domain",
                     rows: OfficeAppCatalogue.Select(a => a.Name).ToList(),
                     columns: null,
-                    shadeByRow: true),
+                    shadeByRow: true)),
 
-                RunCategoryAsync("office-apps-web-only",
+                Gated(() => RunCategoryAsync("office-apps-web-only",
                     "People who only ever use the browser version",
                     "People who used an app on the web and never on Windows, Mac or mobile in the period. Often unmanaged or personal devices, VDI users, or people who simply never had the desktop app installed - each of which needs a different response.",
-                    "People", WebOnlyQuery(), from),
+                    "People", WebOnlyQuery(), from)),
+
+                // ---- Copilot ------------------------------------------------------------------
+                CopilotAttachChart(from, copilotUsageImported),
             };
-
-            if (copilotUsageImported)
-            {
-                charts.Add(WithValueSuffix(RunCategoryAsync("office-apps-copilot-attach",
-                    "Copilot take-up inside each app",
-                    "Of the people who use an app, the share who used Copilot in that same app during the period. This is the question a Copilot business case turns on: not how many licences were bought, but whether Copilot reached people where they already work. A low bar against a tall bar in \"Most used apps\" is your largest untouched audience.",
-                    "Take-up", CopilotAttachRateQuery(), from), "%"));
-
-                charts.Add(RunGroupedTimeSeriesAsync("office-apps-copilot-trend",
-                    "Copilot users by app each week",
-                    "People whose most recent Copilot activity in each app fell in that week. Derived from the per-app last-activity dates on the Copilot usage report, so it shows the weeks someone was active rather than how much they did.",
-                    "People",
-                    QueryNamedWeeksAsync(CopilotWeeklyQuery(), from),
-                    DisplaySql(CopilotWeeklyQuery(), from), weekSpine));
-            }
-            else
-            {
-                charts.Add(Task.FromResult(new ReportChart
-                {
-                    Key = "office-apps-copilot-attach",
-                    Title = "Copilot take-up inside each app",
-                    Type = "bar",
-                    ValueLabel = "Take-up",
-                    Description = "Of the people who use an app, the share who used Copilot in that same app.",
-                    Categories = new List<ReportCategory>(),
-                    Sql = DisplaySql(CopilotAttachRateQuery(), from),
-                    Warning =
-                        "The Copilot usage report import is switched off, so there is nothing to compare app use against. "
-                        + "Enable 'Copilot usage reports (Graph)' in the installer to fill this chart in. The app and "
-                        + "platform charts above do not need it.",
-                }));
-            }
-
-            return charts;
         }
 
         /// <summary>
-        /// Whether the Graph Copilot usage-report import is on.
+        /// Share of each department's people who used any Office app.
         /// </summary>
         /// <remarks>
-        /// Read once per request rather than per chart so the two Copilot charts and the explanatory
-        /// warning can never disagree about whether the source exists.
+        /// Suppressed entirely when a user-groups filter is configured, and this is the important part.
+        /// The numerator comes from the activity import, which the loaders restrict to the configured
+        /// groups; the denominator comes from <c>dbo.users</c>, which the user-metadata import fills
+        /// from the whole directory. Divide one by the other on a group-filtered deployment and a
+        /// department where every single in-scope person uses Office can be reported at a few percent.
+        /// No correct denominator is available here, so the chart says so rather than printing a number
+        /// that is confidently wrong.
         /// </remarks>
-        private static bool CopilotUsageReportsEnabled()
+        private static Task<ReportChart> DepartmentAdoptionChart(DateTime from, bool groupFiltered)
         {
-            var settings = new AppConfig().ImportJobSettings ?? new ImportTaskSettings();
-            return settings.GraphCopilotUsageReports;
+            const string title = "Departments least likely to use the apps";
+
+            if (groupFiltered)
+            {
+                return Task.FromResult(new ReportChart
+                {
+                    Key = "office-apps-department-adoption",
+                    Title = title,
+                    Type = "bar",
+                    ValueLabel = "Adoption",
+                    Description = "Share of each department's people who used any Office app in the period.",
+                    Categories = new List<ReportCategory>(),
+                    Sql = DisplaySql(DepartmentAdoptionRateQuery(), from),
+                    Warning =
+                        "This deployment restricts the usage-report import to selected user groups, but directory "
+                        + "details are imported for everyone. The share of a department that uses Office would "
+                        + "therefore be divided by people the import was never asked to look at, understating every "
+                        + "department - so it is not shown. The counts in the other charts are unaffected.",
+                });
+            }
+
+            return Gated(() => WithValueSuffix(RunCategoryAsync("office-apps-department-adoption",
+                title,
+                $"Share of each department's people who used any Office app in the period, lowest first. Unlike the counts above this is a rate, so a big department cannot top it just for being big. Departments with fewer than {MinDepartmentSizeForRate} people are left out, because at that size the percentage says more about the size than the adoption.",
+                "Adoption", DepartmentAdoptionRateQuery(), from), "%"));
+        }
+
+        /// <summary>
+        /// Copilot take-up inside each app, or an explanation of why it cannot be shown.
+        /// </summary>
+        /// <remarks>
+        /// There are two different "no data" cases and they must not look alike. If the import is
+        /// switched off there is nothing to say. If it is switched on but no report rows landed in the
+        /// window - a failed or not-yet-run import, or a tenant whose reports are concealed - then
+        /// every app would otherwise be drawn at a confident 0%, which reads as "nobody uses Copilot"
+        /// rather than "we do not know". The existence check only runs when the rate is zero
+        /// everywhere, so the normal path pays nothing for it.
+        /// </remarks>
+        private static Task<ReportChart> CopilotAttachChart(DateTime from, bool copilotUsageImported)
+        {
+            const string title = "Copilot take-up inside each app";
+            const string description =
+                "Of the people who use an app, the share who used Copilot in that same app during the period. "
+                + "This is the question a Copilot business case turns on: not how many licences were bought, but "
+                + "whether Copilot reached people where they already work. A low bar against a tall bar in "
+                + "\"Most used apps\" is your largest untouched audience.";
+
+            if (!copilotUsageImported)
+            {
+                return Task.FromResult(new ReportChart
+                {
+                    Key = "office-apps-copilot-attach",
+                    Title = title,
+                    Type = "bar",
+                    ValueLabel = "Take-up",
+                    Description = description,
+                    Categories = new List<ReportCategory>(),
+                    Sql = DisplaySql(CopilotAttachRateQuery(), from),
+                    Warning =
+                        "The Copilot usage report import is switched off, so there is nothing to compare app use "
+                        + "against. Enable 'Copilot usage reports (Graph)' in the installer to fill this chart in. "
+                        + "The app and platform charts above do not need it.",
+                });
+            }
+
+            return Gated(async () =>
+            {
+                var chart = await WithValueSuffix(
+                    RunCategoryAsync("office-apps-copilot-attach", title, description,
+                        "Take-up", CopilotAttachRateQuery(), from), "%").ConfigureAwait(false);
+
+                if (chart.Error == null &&
+                    (chart.Categories == null || chart.Categories.All(c => c.Value <= 0)) &&
+                    !await AnyCopilotUsageRowsAsync(from).ConfigureAwait(false))
+                {
+                    chart.Warning =
+                        "The Copilot usage report import is switched on, but no Copilot usage report has landed for "
+                        + "this period yet, so take-up cannot be measured. That is not the same as nobody using "
+                        + "Copilot. Check the Copilot usage report import on the Service health page.";
+                }
+
+                return chart;
+            });
+        }
+
+        /// <summary>Whether any Copilot usage-report row exists in the window.</summary>
+        private static async Task<bool> AnyCopilotUsageRowsAsync(DateTime from)
+        {
+            const string sql =
+                "SELECT TOP (1) CAST(1 AS int) AS Value FROM dbo.copilot_usage_user_activity_log WHERE [date] >= @from;";
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.Database.CommandTimeout = QueryTimeoutSecs;
+                var rows = await db.Database
+                    .SqlQuery<int>(sql, new SqlParameter("@from", from))
+                    .ToListAsync()
+                    .ConfigureAwait(false);
+                return rows.Count > 0;
+            }
+        }
+
+        /// <summary>
+        /// Runs a chart's work only once a slot on <see cref="OfficeAppsQueryGate"/> is free.
+        /// </summary>
+        /// <remarks>
+        /// The factory is invoked after the wait, not before, so the query does not start until the
+        /// slot is held. A caller that waits too long gets a per-chart message rather than stalling
+        /// the whole request.
+        /// </remarks>
+        private static async Task<ReportChart> Gated(Func<Task<ReportChart>> chart)
+        {
+            if (!await OfficeAppsQueryGate.WaitAsync(OfficeAppsQueueTimeout).ConfigureAwait(false))
+            {
+                return new ReportChart
+                {
+                    Key = "office-apps-busy",
+                    Title = "Busy",
+                    Type = "bar",
+                    ValueLabel = "People",
+                    Categories = new List<ReportCategory>(),
+                    Error = "The database was too busy to build this chart. Refresh in a few seconds.",
+                };
+            }
+
+            try
+            {
+                return await chart().ConfigureAwait(false);
+            }
+            finally
+            {
+                OfficeAppsQueryGate.Release();
+            }
         }
 
         #region Query builders
 
+        /// <summary>App display name -> bit column on the activity table.</summary>
+        private static List<KeyValuePair<string, string>> AppColumns() =>
+            OfficeAppCatalogue.Select(a => new KeyValuePair<string, string>(a.Name, a.Column)).ToList();
+
+        /// <summary>Platform display name -> bit column.</summary>
+        private static List<KeyValuePair<string, string>> PlatformColumns() =>
+            OfficePlatformCatalogue.ToList();
+
+        /// <summary>App-on-platform alias (<c>Word_Windows</c>) -> cross bit column.</summary>
+        private static List<KeyValuePair<string, string>> CrossColumns() =>
+            (from app in OfficeAppCatalogue
+             from platform in OfficePlatformCatalogue
+             select new KeyValuePair<string, string>(
+                 app.Name + "_" + platform.Key, app.Column + "_" + platform.Value)).ToList();
+
         /// <summary>
-        /// A <c>CROSS APPLY (VALUES ...)</c> body that turns one activity row into one row per app.
+        /// The <c>MAX(1 * bit)</c> projections that collapse a person's report rows to one row.
         /// </summary>
         /// <remarks>
-        /// This shape is why the area costs one table read rather than six. Written as six correlated
-        /// subqueries - or six separate chart queries - a 36m-row window would be scanned six times;
-        /// fanning the row out in the apply lets a single pass answer every app at once, and the
-        /// <c>Used = 1</c> predicate discards the unset bits immediately so the expansion never
-        /// materialises for apps a person does not use.
+        /// <c>MAX(1 * bit)</c> is the idiom <c>profiling.usp_UpsertM365Apps</c> uses for exactly this,
+        /// and it is what makes "used at any point in the period" a single pass rather than a
+        /// <c>COUNT(DISTINCT)</c> over a fanned-out row set.
         /// </remarks>
-        private static string AppValuesClause(string alias, bool numbered)
+        private static string CollapseProjections(List<KeyValuePair<string, string>> columns, string alias)
+        {
+            return string.Join(",\r\n", columns.Select(c =>
+                $"           MAX(1 * {alias}.{c.Value}) AS {c.Key}"));
+        }
+
+        /// <summary>
+        /// A <c>CROSS APPLY (VALUES ...)</c> body over COLLAPSED per-person columns.
+        /// </summary>
+        /// <remarks>
+        /// The apply emits one row per listed label for every input row, so it is always applied to
+        /// the collapsed set (one row per person, or per person per week) rather than to raw activity
+        /// rows - see the type-level remarks for the measured cost of getting that order wrong.
+        /// </remarks>
+        private static string ValuesClause(List<string> labels, string source, bool numbered, string columnPrefix = "")
         {
             var builder = new StringBuilder();
-            for (var i = 0; i < OfficeAppCatalogue.Length; i++)
+            for (var i = 0; i < labels.Count; i++)
             {
-                var app = OfficeAppCatalogue[i];
                 var prefix = numbered ? (i + 1) + ", " : string.Empty;
                 builder.Append("        (").Append(prefix)
-                    .Append("N'").Append(app.Name).Append("', ")
-                    .Append(alias).Append(".").Append(app.Column).Append(")");
-                builder.Append(i == OfficeAppCatalogue.Length - 1 ? "\r\n" : ",\r\n");
+                    .Append("N'").Append(labels[i]).Append("', ")
+                    .Append(source).Append(".").Append(columnPrefix).Append(labels[i]).Append(")");
+                builder.Append(i == labels.Count - 1 ? "\r\n" : ",\r\n");
             }
             return builder.ToString();
         }
 
-        private static string PlatformValuesClause(string alias, bool numbered)
+        /// <summary>The per-person collapse CTE over a set of bit columns.</summary>
+        private static string PerUserCte(List<KeyValuePair<string, string>> columns)
         {
-            var builder = new StringBuilder();
-            for (var i = 0; i < OfficePlatformCatalogue.Length; i++)
-            {
-                var platform = OfficePlatformCatalogue[i];
-                var prefix = numbered ? (i + 1) + ", " : string.Empty;
-                builder.Append("        (").Append(prefix)
-                    .Append("N'").Append(platform.Key).Append("', ")
-                    .Append(alias).Append(".").Append(platform.Value).Append(")");
-                builder.Append(i == OfficePlatformCatalogue.Length - 1 ? "\r\n" : ",\r\n");
-            }
-            return builder.ToString();
+            return
+                "WITH PerUser AS (\r\n" +
+                "    SELECT a.user_id,\r\n" +
+                CollapseProjections(columns, "a") + "\r\n" +
+                "    FROM dbo.platform_user_activity_log AS a\r\n" +
+                "    WHERE a.[date] >= @from\r\n" +
+                "    GROUP BY a.user_id\r\n" +
+                ")\r\n";
         }
 
         /// <summary>People who used each app at least once in the window.</summary>
         internal static string AppPopularityQuery()
         {
             return
-                "SELECT app.Label, CAST(COUNT(DISTINCT a.user_id) AS float) AS Value\r\n" +
-                "FROM dbo.platform_user_activity_log AS a\r\n" +
-                "CROSS APPLY (VALUES\r\n" + AppValuesClause("a", numbered: false) +
+                PerUserCte(AppColumns()) +
+                "SELECT app.Label, CAST(SUM(app.Used) AS float) AS Value\r\n" +
+                "FROM PerUser AS p\r\n" +
+                "CROSS APPLY (VALUES\r\n" +
+                ValuesClause(OfficeAppCatalogue.Select(a => a.Name).ToList(), "p", numbered: false) +
                 ") AS app(Label, Used)\r\n" +
-                "WHERE a.[date] >= @from AND app.Used = 1\r\n" +
+                "WHERE app.Used = 1\r\n" +
                 "GROUP BY app.Label\r\n" +
                 "ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
@@ -338,45 +506,63 @@ namespace Web.AnalyticsWeb.Controllers
         internal static string PlatformPopularityQuery()
         {
             return
-                "SELECT platform.Label, CAST(COUNT(DISTINCT a.user_id) AS float) AS Value\r\n" +
-                "FROM dbo.platform_user_activity_log AS a\r\n" +
-                "CROSS APPLY (VALUES\r\n" + PlatformValuesClause("a", numbered: false) +
+                PerUserCte(PlatformColumns()) +
+                "SELECT platform.Label, CAST(SUM(platform.Used) AS float) AS Value\r\n" +
+                "FROM PerUser AS p\r\n" +
+                "CROSS APPLY (VALUES\r\n" +
+                ValuesClause(OfficePlatformCatalogue.Select(x => x.Key).ToList(), "p", numbered: false) +
                 ") AS platform(Label, Used)\r\n" +
-                "WHERE a.[date] >= @from AND platform.Used = 1\r\n" +
+                "WHERE platform.Used = 1\r\n" +
                 "GROUP BY platform.Label\r\n" +
                 "ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
         }
 
-        /// <summary>Distinct people per app per Monday-aligned week.</summary>
-        internal static string AppWeeklyQuery()
+        /// <summary>The per-person-per-week collapse CTE.</summary>
+        private static string PerUserWeekCte(List<KeyValuePair<string, string>> columns)
         {
             var week = WeekBucket("a.[date]");
             return
-                $"SELECT app.SeriesKey, app.SeriesName, {week} AS WeekStart,\r\n" +
-                "       CAST(COUNT(DISTINCT a.user_id) AS float) AS Value\r\n" +
-                "FROM dbo.platform_user_activity_log AS a\r\n" +
-                "CROSS APPLY (VALUES\r\n" + AppValuesClause("a", numbered: true) +
+                "WITH PerUserWeek AS (\r\n" +
+                $"    SELECT a.user_id, {week} AS WeekStart,\r\n" +
+                CollapseProjections(columns, "a") + "\r\n" +
+                "    FROM dbo.platform_user_activity_log AS a\r\n" +
+                "    WHERE a.[date] >= @from\r\n" +
+                $"    GROUP BY a.user_id, {week}\r\n" +
+                ")\r\n";
+        }
+
+        /// <summary>Distinct people per app per Monday-aligned week.</summary>
+        internal static string AppWeeklyQuery()
+        {
+            return
+                PerUserWeekCte(AppColumns()) +
+                "SELECT app.SeriesKey, app.SeriesName, p.WeekStart,\r\n" +
+                "       CAST(SUM(app.Used) AS float) AS Value\r\n" +
+                "FROM PerUserWeek AS p\r\n" +
+                "CROSS APPLY (VALUES\r\n" +
+                ValuesClause(OfficeAppCatalogue.Select(a => a.Name).ToList(), "p", numbered: true) +
                 ") AS app(SeriesKey, SeriesName, Used)\r\n" +
-                "WHERE a.[date] >= @from AND app.Used = 1\r\n" +
-                $"GROUP BY app.SeriesKey, app.SeriesName, {week}\r\n" +
-                "ORDER BY WeekStart\r\n" +
+                "WHERE app.Used = 1\r\n" +
+                "GROUP BY app.SeriesKey, app.SeriesName, p.WeekStart\r\n" +
+                "ORDER BY p.WeekStart\r\n" +
                 "OPTION (RECOMPILE);";
         }
 
         /// <summary>Distinct people per platform per Monday-aligned week.</summary>
         internal static string PlatformWeeklyQuery()
         {
-            var week = WeekBucket("a.[date]");
             return
-                $"SELECT platform.SeriesKey, platform.SeriesName, {week} AS WeekStart,\r\n" +
-                "       CAST(COUNT(DISTINCT a.user_id) AS float) AS Value\r\n" +
-                "FROM dbo.platform_user_activity_log AS a\r\n" +
-                "CROSS APPLY (VALUES\r\n" + PlatformValuesClause("a", numbered: true) +
+                PerUserWeekCte(PlatformColumns()) +
+                "SELECT platform.SeriesKey, platform.SeriesName, p.WeekStart,\r\n" +
+                "       CAST(SUM(platform.Used) AS float) AS Value\r\n" +
+                "FROM PerUserWeek AS p\r\n" +
+                "CROSS APPLY (VALUES\r\n" +
+                ValuesClause(OfficePlatformCatalogue.Select(x => x.Key).ToList(), "p", numbered: true) +
                 ") AS platform(SeriesKey, SeriesName, Used)\r\n" +
-                "WHERE a.[date] >= @from AND platform.Used = 1\r\n" +
-                $"GROUP BY platform.SeriesKey, platform.SeriesName, {week}\r\n" +
-                "ORDER BY WeekStart\r\n" +
+                "WHERE platform.Used = 1\r\n" +
+                "GROUP BY platform.SeriesKey, platform.SeriesName, p.WeekStart\r\n" +
+                "ORDER BY p.WeekStart\r\n" +
                 "OPTION (RECOMPILE);";
         }
 
@@ -384,11 +570,10 @@ namespace Web.AnalyticsWeb.Controllers
         /// How many distinct apps each person used, bucketed into "1 app", "2 apps", ...
         /// </summary>
         /// <remarks>
-        /// <c>MAX(1 * bit)</c> per app then summed is the same expression <c>usp_UpsertM365Apps</c>
-        /// uses to collapse a person's report dates down to "did they, at any point". People with a
-        /// row but no app bit set are excluded rather than shown as "0 apps": the report emits a row
-        /// for every licensed person whether or not they did anything, so a zero bucket would be
-        /// dominated by accounts that are simply dormant and would swamp the shape of the chart.
+        /// People with a row but no app bit set are excluded rather than shown as "0 apps": the report
+        /// emits a row for every licensed person whether or not they did anything, so a zero bucket
+        /// would be dominated by accounts that are simply dormant and would swamp the shape of the
+        /// chart.
         /// </remarks>
         internal static string AppBreadthQuery()
         {
@@ -414,72 +599,123 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>People using each app on each platform, from the 24 cross columns.</summary>
         internal static string AppPlatformMatrixQuery()
         {
-            var builder = new StringBuilder();
             var pairs = new List<string>();
             foreach (var app in OfficeAppCatalogue)
             {
                 foreach (var platform in OfficePlatformCatalogue)
                 {
-                    pairs.Add($"        (N'{app.Name}', N'{platform.Key}', a.{app.Column}_{platform.Value})");
+                    pairs.Add($"        (N'{app.Name}', N'{platform.Key}', p.{app.Name}_{platform.Key})");
                 }
             }
-            builder.Append(string.Join(",\r\n", pairs)).Append("\r\n");
 
             return
-                "SELECT combo.RowLabel, combo.ColumnLabel,\r\n" +
-                "       CAST(COUNT(DISTINCT a.user_id) AS float) AS Value\r\n" +
-                "FROM dbo.platform_user_activity_log AS a\r\n" +
-                "CROSS APPLY (VALUES\r\n" + builder +
+                PerUserCte(CrossColumns()) +
+                "SELECT combo.RowLabel, combo.ColumnLabel, CAST(SUM(combo.Used) AS float) AS Value\r\n" +
+                "FROM PerUser AS p\r\n" +
+                "CROSS APPLY (VALUES\r\n" + string.Join(",\r\n", pairs) + "\r\n" +
                 ") AS combo(RowLabel, ColumnLabel, Used)\r\n" +
-                "WHERE a.[date] >= @from AND combo.Used = 1\r\n" +
+                "WHERE combo.Used = 1\r\n" +
                 "GROUP BY combo.RowLabel, combo.ColumnLabel\r\n" +
                 "OPTION (RECOMPILE);";
         }
 
-        /// <summary>People using each app, by directory department, for the biggest departments.</summary>
+        /// <summary>
+        /// People using each app, split by a per-user dimension taken from the directory.
+        /// </summary>
         /// <remarks>
-        /// The top-N is chosen with a window function over the already-aggregated counts rather than
-        /// by a second CTE that re-reads the activity data. That is not a style preference: SQL Server
-        /// does not materialise a CTE, so referencing the join-heavy CTE twice made it run twice.
-        /// Measured at 18m rows, the two-reference shape of the sibling domain query cost 55.5 MILLION
-        /// logical reads and 53 seconds for a 30-day window, because the optimiser chose a nested-loops
-        /// seek into <c>dbo.users</c> and then did the whole thing again for the ranking pass.
-        /// Aggregating once and ranking the (tiny) result with <c>DENSE_RANK</c> reads the activity
-        /// data exactly once.
+        /// <para>
+        /// The activity data is read ONCE. The first draft referenced a join-heavy CTE twice - SQL
+        /// Server does not materialise a CTE, so it ran twice - and a 30-day domain query cost 55.5
+        /// million logical reads. Everything after <c>PerUserDimension</c> here is one row per person,
+        /// and the only CTE referenced more than once (<c>Counts</c>) has at most seven rows per
+        /// department.
+        /// </para>
+        /// <para>
+        /// Columns are ranked by DISTINCT active headcount, carried along as the
+        /// <see cref="AnyAppSentinel"/> pseudo-app in the same aggregate. Ranking on the sum of the
+        /// per-app counts instead would count a person once per app they use, so a small
+        /// many-app department could displace a larger single-app one from the grid - every cell shown
+        /// would still be correct, but the choice of which columns to show would not match the
+        /// "departments with the most active people" the chart promises.
+        /// </para>
         /// </remarks>
-        internal static string AppByDepartmentQuery()
+        private static string PerUserDimensionMatrix(string dimensionExpression, string extraJoin)
         {
+            var appNames = OfficeAppCatalogue.Select(a => a.Name).ToList();
+            var anyApp = string.Join(" OR ", appNames.Select(n => $"d.{n} = 1"));
+
             return
-                "WITH ActiveApp AS (\r\n" +
-                "    SELECT app.AppName, a.user_id\r\n" +
+                "WITH PerUser AS (\r\n" +
+                "    SELECT a.user_id,\r\n" +
+                CollapseProjections(AppColumns(), "a") + "\r\n" +
                 "    FROM dbo.platform_user_activity_log AS a\r\n" +
-                "    CROSS APPLY (VALUES\r\n" + AppValuesClause("a", numbered: false) +
-                "    ) AS app(AppName, Used)\r\n" +
-                "    WHERE a.[date] >= @from AND app.Used = 1\r\n" +
-                "    GROUP BY app.AppName, a.user_id\r\n" +
+                "    WHERE a.[date] >= @from\r\n" +
+                "    GROUP BY a.user_id\r\n" +
+                "),\r\n" +
+                "PerUserDimension AS (\r\n" +
+                "    SELECT p.user_id,\r\n" +
+                $"           {dimensionExpression} AS DimensionName,\r\n" +
+                string.Join(",\r\n", appNames.Select(n => $"           p.{n}")) + "\r\n" +
+                "    FROM PerUser AS p\r\n" +
+                "    INNER JOIN dbo.users AS u ON u.id = p.user_id\r\n" +
+                extraJoin +
                 "),\r\n" +
                 "Counts AS (\r\n" +
-                "    SELECT act.AppName,\r\n" +
-                $"           ISNULL(dep.[name], N'{NoDepartmentLabel}') AS DepartmentName,\r\n" +
-                "           COUNT(DISTINCT act.user_id) AS People\r\n" +
-                "    FROM ActiveApp AS act\r\n" +
-                "    INNER JOIN dbo.users AS u ON u.id = act.user_id\r\n" +
-                "    LEFT JOIN dbo.user_departments AS dep ON dep.id = u.department_id\r\n" +
-                $"    GROUP BY act.AppName, ISNULL(dep.[name], N'{NoDepartmentLabel}')\r\n" +
+                "    SELECT app.AppName, d.DimensionName, SUM(app.Used) AS People\r\n" +
+                "    FROM PerUserDimension AS d\r\n" +
+                "    CROSS APPLY (VALUES\r\n" +
+                ValuesClause(appNames, "d", numbered: false) +
+                $"      , (N'{AnyAppSentinel}', CASE WHEN {anyApp} THEN 1 ELSE 0 END)\r\n" +
+                "    ) AS app(AppName, Used)\r\n" +
+                "    WHERE app.Used = 1\r\n" +
+                "    GROUP BY app.AppName, d.DimensionName\r\n" +
+                "),\r\n" +
+                "WithTotals AS (\r\n" +
+                "    SELECT AppName, DimensionName, People,\r\n" +
+                $"           MAX(CASE WHEN AppName = N'{AnyAppSentinel}' THEN People END)\r\n" +
+                "               OVER (PARTITION BY DimensionName) AS ActivePeople\r\n" +
+                "    FROM Counts\r\n" +
                 "),\r\n" +
                 "Ranked AS (\r\n" +
-                "    SELECT AppName, DepartmentName, People,\r\n" +
-                "           DENSE_RANK() OVER (ORDER BY DepartmentTotal DESC, DepartmentName) AS DepartmentRank\r\n" +
-                "    FROM (\r\n" +
-                "        SELECT AppName, DepartmentName, People,\r\n" +
-                "               SUM(People) OVER (PARTITION BY DepartmentName) AS DepartmentTotal\r\n" +
-                "        FROM Counts\r\n" +
-                "    ) AS totals\r\n" +
+                "    SELECT AppName, DimensionName, People,\r\n" +
+                "           DENSE_RANK() OVER (ORDER BY ActivePeople DESC, DimensionName) AS DimensionRank\r\n" +
+                "    FROM WithTotals\r\n" +
                 ")\r\n" +
-                "SELECT AppName AS RowLabel, DepartmentName AS ColumnLabel, CAST(People AS float) AS Value\r\n" +
+                "SELECT AppName AS RowLabel, DimensionName AS ColumnLabel, CAST(People AS float) AS Value\r\n" +
                 "FROM Ranked\r\n" +
-                $"WHERE DepartmentRank <= {MatrixColumnLimit}\r\n" +
+                $"WHERE DimensionRank <= {MatrixColumnLimit} AND AppName <> N'{AnyAppSentinel}'\r\n" +
+                // Ordered by the same rank the WHERE selected on, so the column order the UI shows is
+                // the headcount order the SQL chose rather than a second, different ranking applied in
+                // C# over the returned cells.
+                "ORDER BY DimensionRank, AppName\r\n" +
                 "OPTION (RECOMPILE);";
+        }
+
+        /// <summary>People using each app, by directory department, for the biggest departments.</summary>
+        internal static string AppByDepartmentQuery()
+        {
+            return PerUserDimensionMatrix(
+                $"ISNULL(dep.[name], N'{NoDepartmentLabel}')",
+                "    LEFT JOIN dbo.user_departments AS dep ON dep.id = u.department_id\r\n");
+        }
+
+        /// <summary>
+        /// People using each app, by the domain part of their sign-in address.
+        /// </summary>
+        /// <remarks>
+        /// The domain is taken after the LAST <c>@</c>, matching
+        /// <c>CopilotUsageReportPolicy.DomainOf</c>, so an address that somehow contains more than one
+        /// is split the same way here as it is on the import side. <c>users.user_name</c> is written
+        /// lower-cased by the importer, so no further folding is applied.
+        /// </remarks>
+        internal static string AppByDomainQuery()
+        {
+            return PerUserDimensionMatrix(
+                "CASE WHEN CHARINDEX('@', u.user_name) > 0\r\n" +
+                "                THEN RIGHT(u.user_name, CHARINDEX('@', REVERSE(u.user_name)) - 1)\r\n" +
+                $"                ELSE N'{NoDomainLabel}'\r\n" +
+                "           END",
+                string.Empty);
         }
 
         /// <summary>
@@ -489,8 +725,8 @@ namespace Web.AnalyticsWeb.Controllers
         /// The denominator is every person in <c>dbo.users</c> carrying that department, NOT just the
         /// people who appear in the activity table. That distinction is the whole point of the chart:
         /// dividing active people by active people would return 100% for every department and say
-        /// nothing. It does mean the rate is only as good as the directory - a department full of
-        /// stale or unlicensed accounts will read low, which is itself usually worth knowing.
+        /// nothing. It is only valid when the activity import covers the same population as the
+        /// directory, which is why the caller suppresses the chart on a group-filtered deployment.
         /// </remarks>
         internal static string DepartmentAdoptionRateQuery()
         {
@@ -515,63 +751,10 @@ namespace Web.AnalyticsWeb.Controllers
                 "       CAST(ROUND(100.0 * ActivePeople / PeopleInDepartment, 1) AS float) AS Value\r\n" +
                 "FROM ByDepartment\r\n" +
                 $"WHERE PeopleInDepartment >= {MinDepartmentSizeForRate}\r\n" +
-                "ORDER BY Value ASC, PeopleInDepartment DESC\r\n" +
-                "OPTION (RECOMPILE);";
-        }
-
-        /// <summary>
-        /// People using each app, by the domain part of their sign-in address.
-        /// </summary>
-        /// <remarks>
-        /// The domain is taken after the LAST <c>@</c>, matching
-        /// <c>CopilotUsageReportPolicy.DomainOf</c>, so an address that somehow contains more than one
-        /// is split the same way here as it is on the import side. <c>users.user_name</c> is written
-        /// lower-cased by the importer, so no further folding is applied - doing it anyway would imply
-        /// the column is unreliable and would cost a scan-wide function call for nothing.
-        /// <para>
-        /// Aggregated once and then ranked with a window function, for the reason documented on
-        /// <see cref="AppByDepartmentQuery"/>: this query is where the two-reference CTE shape was
-        /// caught costing 55.5 million logical reads and 53 seconds at 18m rows.
-        /// </para>
-        /// </remarks>
-        internal static string AppByDomainQuery()
-        {
-            return
-                "WITH ActiveApp AS (\r\n" +
-                "    SELECT app.AppName, a.user_id\r\n" +
-                "    FROM dbo.platform_user_activity_log AS a\r\n" +
-                "    CROSS APPLY (VALUES\r\n" + AppValuesClause("a", numbered: false) +
-                "    ) AS app(AppName, Used)\r\n" +
-                "    WHERE a.[date] >= @from AND app.Used = 1\r\n" +
-                "    GROUP BY app.AppName, a.user_id\r\n" +
-                "),\r\n" +
-                "Counts AS (\r\n" +
-                "    SELECT act.AppName,\r\n" +
-                "           CASE WHEN CHARINDEX('@', u.user_name) > 0\r\n" +
-                "                THEN RIGHT(u.user_name, CHARINDEX('@', REVERSE(u.user_name)) - 1)\r\n" +
-                $"                ELSE N'{NoDomainLabel}'\r\n" +
-                "           END AS DomainName,\r\n" +
-                "           COUNT(DISTINCT act.user_id) AS People\r\n" +
-                "    FROM ActiveApp AS act\r\n" +
-                "    INNER JOIN dbo.users AS u ON u.id = act.user_id\r\n" +
-                "    GROUP BY act.AppName,\r\n" +
-                "             CASE WHEN CHARINDEX('@', u.user_name) > 0\r\n" +
-                "                  THEN RIGHT(u.user_name, CHARINDEX('@', REVERSE(u.user_name)) - 1)\r\n" +
-                $"                  ELSE N'{NoDomainLabel}'\r\n" +
-                "             END\r\n" +
-                "),\r\n" +
-                "Ranked AS (\r\n" +
-                "    SELECT AppName, DomainName, People,\r\n" +
-                "           DENSE_RANK() OVER (ORDER BY DomainTotal DESC, DomainName) AS DomainRank\r\n" +
-                "    FROM (\r\n" +
-                "        SELECT AppName, DomainName, People,\r\n" +
-                "               SUM(People) OVER (PARTITION BY DomainName) AS DomainTotal\r\n" +
-                "        FROM Counts\r\n" +
-                "    ) AS totals\r\n" +
-                ")\r\n" +
-                "SELECT AppName AS RowLabel, DomainName AS ColumnLabel, CAST(People AS float) AS Value\r\n" +
-                "FROM Ranked\r\n" +
-                $"WHERE DomainRank <= {MatrixColumnLimit}\r\n" +
+                // Ordered on the UNROUNDED ratio, then size, then name. Ordering on the rounded value
+                // alone leaves the cutoff between equal-looking departments to the plan, so which 25
+                // appear could change between runs for no visible reason.
+                "ORDER BY (100.0 * ActivePeople / PeopleInDepartment) ASC, PeopleInDepartment DESC, DepartmentName ASC\r\n" +
                 "OPTION (RECOMPILE);";
         }
 
@@ -585,33 +768,17 @@ namespace Web.AnalyticsWeb.Controllers
         /// </remarks>
         internal static string WebOnlyQuery()
         {
-            var selects = new List<string>();
-            foreach (var app in OfficeAppCatalogue)
-            {
-                foreach (var platform in OfficePlatformCatalogue)
-                {
-                    selects.Add(
-                        $"           MAX(1 * a.{app.Column}_{platform.Value}) AS {app.Name}_{platform.Key}");
-                }
-            }
-
             var cases = OfficeAppCatalogue.Select(app =>
             {
                 var others = OfficePlatformCatalogue
-                    .Where(p => p.Key != "Web")
-                    .Select(p => $"p.{app.Name}_{p.Key} = 0");
+                    .Where(pf => pf.Key != "Web")
+                    .Select(pf => $"p.{app.Name}_{pf.Key} = 0");
                 return $"        (N'{app.Name}', CASE WHEN p.{app.Name}_Web = 1 AND "
                        + string.Join(" AND ", others) + " THEN 1 ELSE 0 END)";
             });
 
             return
-                "WITH PerUser AS (\r\n" +
-                "    SELECT a.user_id,\r\n" +
-                string.Join(",\r\n", selects) + "\r\n" +
-                "    FROM dbo.platform_user_activity_log AS a\r\n" +
-                "    WHERE a.[date] >= @from\r\n" +
-                "    GROUP BY a.user_id\r\n" +
-                ")\r\n" +
+                PerUserCte(CrossColumns()) +
                 "SELECT webonly.Label, CAST(SUM(webonly.IsWebOnly) AS float) AS Value\r\n" +
                 "FROM PerUser AS p\r\n" +
                 "CROSS APPLY (VALUES\r\n" +
@@ -645,13 +812,14 @@ namespace Web.AnalyticsWeb.Controllers
             }
 
             return
-                "WITH AppUsers AS (\r\n" +
-                "    SELECT app.AppName, a.user_id\r\n" +
-                "    FROM dbo.platform_user_activity_log AS a\r\n" +
-                "    CROSS APPLY (VALUES\r\n" + AppValuesClause("a", numbered: false) +
+                PerUserCte(AppColumns()).TrimEnd('\r', '\n') + ",\r\n" +
+                "AppUsers AS (\r\n" +
+                "    SELECT app.AppName, p.user_id\r\n" +
+                "    FROM PerUser AS p\r\n" +
+                "    CROSS APPLY (VALUES\r\n" +
+                ValuesClause(OfficeAppCatalogue.Select(a => a.Name).ToList(), "p", numbered: false) +
                 "    ) AS app(AppName, Used)\r\n" +
-                "    WHERE a.[date] >= @from AND app.Used = 1\r\n" +
-                "    GROUP BY app.AppName, a.user_id\r\n" +
+                "    WHERE app.Used = 1\r\n" +
                 "),\r\n" +
                 "CopilotUsers AS (\r\n" +
                 "    SELECT copilot.AppName, r.user_id\r\n" +
@@ -668,40 +836,6 @@ namespace Web.AnalyticsWeb.Controllers
                 "    ON cu.AppName = au.AppName AND cu.user_id = au.user_id\r\n" +
                 "GROUP BY au.AppName\r\n" +
                 "ORDER BY Value DESC\r\n" +
-                "OPTION (RECOMPILE);";
-        }
-
-        /// <summary>
-        /// Distinct people with Copilot activity in each app, per Monday-aligned week.
-        /// </summary>
-        /// <remarks>
-        /// Bucketed on the per-app last-activity date rather than the report date, which is what makes
-        /// this a real weekly series. The report is emitted daily and the date is sticky, so a person
-        /// who used Copilot in Word on a Tuesday carries that Tuesday on every later snapshot until
-        /// they use it again: they are counted exactly once in that week by the <c>DISTINCT</c>, and
-        /// again in a later week only if they were genuinely active again. It cannot show a second
-        /// session in the same week, which is why the label counts people and not activity.
-        /// </remarks>
-        internal static string CopilotWeeklyQuery()
-        {
-            var copilotValues = new StringBuilder();
-            for (var i = 0; i < OfficeAppCatalogue.Length; i++)
-            {
-                var app = OfficeAppCatalogue[i];
-                copilotValues.Append($"        ({i + 1}, N'{app.Name}', r.{app.CopilotColumn})");
-                copilotValues.Append(i == OfficeAppCatalogue.Length - 1 ? "\r\n" : ",\r\n");
-            }
-
-            var week = WeekBucket("copilot.LastActivity");
-            return
-                $"SELECT copilot.SeriesKey, copilot.SeriesName, {week} AS WeekStart,\r\n" +
-                "       CAST(COUNT(DISTINCT r.user_id) AS float) AS Value\r\n" +
-                "FROM dbo.copilot_usage_user_activity_log AS r\r\n" +
-                "CROSS APPLY (VALUES\r\n" + copilotValues +
-                ") AS copilot(SeriesKey, SeriesName, LastActivity)\r\n" +
-                "WHERE r.[date] >= @from AND copilot.LastActivity >= @from\r\n" +
-                $"GROUP BY copilot.SeriesKey, copilot.SeriesName, {week}\r\n" +
-                "ORDER BY WeekStart\r\n" +
                 "OPTION (RECOMPILE);";
         }
 
@@ -735,8 +869,8 @@ namespace Web.AnalyticsWeb.Controllers
         /// nobody used visible as an empty row, which is usually the most interesting row on the grid.
         /// </param>
         /// <param name="columns">
-        /// Fixed column order, or null to rank columns by total descending - which is what the
-        /// department and domain matrices want, since their columns are discovered from the data.
+        /// Fixed column order, or null to derive it from the returned cells. The SQL has already chosen
+        /// WHICH columns come back, by distinct active headcount; this only puts them in order.
         /// </param>
         private static async Task<ReportChart> RunMatrixAsync(string key, string title, string description,
             string valueLabel, string body, DateTime from, string rowLabel, string columnLabel,
@@ -768,8 +902,8 @@ namespace Web.AnalyticsWeb.Controllers
                     RowLabel = rowLabel,
                     ColumnLabel = columnLabel,
                     ShadeByRow = shadeByRow,
-                    Rows = rows ?? RankLabels(result, r => r.RowLabel),
-                    Columns = columns ?? RankLabels(result, r => r.ColumnLabel),
+                    Rows = rows ?? DistinctInResultOrder(result, r => r.RowLabel),
+                    Columns = columns ?? DistinctInResultOrder(result, r => r.ColumnLabel),
                     Cells = result
                         .Select(r => new ReportMatrixCell
                         {
@@ -788,15 +922,24 @@ namespace Web.AnalyticsWeb.Controllers
             return chart;
         }
 
-        /// <summary>Distinct labels ordered by their total value, largest first, then by name.</summary>
-        private static List<string> RankLabels(List<MatrixRow> rows, Func<MatrixRow, string> selector)
+        /// <summary>Distinct labels in the order the query returned them.</summary>
+        /// <remarks>
+        /// Deliberately preserves the SQL's order rather than re-ranking here. The dimension matrices
+        /// already choose AND order their columns by distinct active headcount and return them
+        /// <c>ORDER BY DimensionRank</c>; re-ranking those same cells in C# would sort by the sum of
+        /// the per-app counts, which is a different measure - so the grid would be ordered by
+        /// something other than the figure its description says it is ordered by.
+        /// </remarks>
+        private static List<string> DistinctInResultOrder(List<MatrixRow> rows, Func<MatrixRow, string> selector)
         {
-            return rows
-                .GroupBy(selector)
-                .OrderByDescending(g => g.Sum(r => r.Value))
-                .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
-                .Select(g => g.Key)
-                .ToList();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var ordered = new List<string>();
+            foreach (var row in rows)
+            {
+                var label = selector(row);
+                if (label != null && seen.Add(label)) ordered.Add(label);
+            }
+            return ordered;
         }
 
         /// <summary>

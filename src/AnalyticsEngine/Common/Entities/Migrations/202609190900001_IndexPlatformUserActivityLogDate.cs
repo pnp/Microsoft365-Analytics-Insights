@@ -29,45 +29,54 @@ namespace Common.Entities.Migrations
     /// from the importer. <c>DROP_EXISTING</c> upgrades the narrow one in place, so the table is never
     /// left without an index on <c>[date]</c>.
     ///
-    /// MEASURED IMPACT - synthetic scale, 18,000,000 rows (100k users x 180 days), medians of 3 warm
-    /// runs with the database plan cache cleared between runs; every query carries
-    /// <c>OPTION (RECOMPILE)</c>. Queries are the real ones, read out of the built assembly.
+    /// MEASURED IMPACT - synthetic scale, SQL Server 2025, medians of 3 warm runs with the database
+    /// plan cache cleared between runs; every query carries <c>OPTION (RECOMPILE)</c>. The queries are
+    /// the real ones, read out of the built assembly.
+    ///
+    /// At 18,000,000 rows (100k users x 180 days), a 30-day reporting window:
     ///
     /// <code>
-    ///                           30-day window                    180-day window
-    /// chart query          reads before -> after   ms          reads before -> after   ms
-    /// -------------------  ---------------------   ---------   ---------------------   ---------
-    /// AppPopularity            95,339 ->  11,626    8.6s->3.9s     95,179 ->  69,866   29.4->25.1s
-    /// AppWeekly                95,307 ->  11,650   20.2s->9.7s     95,491 ->  69,866   59.0->52.9s
-    /// PlatformWeekly           95,311 ->  11,650   12.7s->4.5s     95,407 ->  69,866   40.4->26.8s
-    /// AppBreadth               95,399 ->  11,650    2.7s->0.7s     94,595 ->  69,442   13.2-> 6.9s
-    /// AppPlatformMatrix       133,411 ->  46,602   45.2s->15.0s   334,787 -> 303,466  147.6->91.3s
-    /// AppByDepartment          96,322 ->  12,617   11.8s->3.3s     96,318 ->  70,569   29.0->20.2s
-    /// DepartmentAdoptionRate   96,037 ->  12,196    0.9s->0.4s     95,069 ->  70,016    5.1-> 3.4s
-    /// AppByDomain              95,917 ->  12,204    9.8s->4.3s     96,069 ->  70,220   33.9->20.9s
-    /// WebOnly                  95,351 ->  11,638    7.0s->2.0s     94,883 ->  69,574   22.0->18.4s
+    /// chart query               reads before -> after      elapsed before -> after
+    /// -----------------------   ----------------------     -----------------------
+    /// AppPopularity                 95,491 -> 11,650          926ms ->   594ms
+    /// PlatformPopularity            95,491 -> 11,650          745ms ->   470ms
+    /// AppWeekly                     95,467 -> 11,650        1,766ms -> 1,308ms
+    /// PlatformWeekly                95,491 -> 11,650        1,267ms -> 1,096ms
+    /// AppBreadth                    95,491 -> 11,650          891ms ->   573ms
+    /// AppPlatformMatrix             95,399 -> 11,638        3,563ms -> 1,769ms
+    /// AppByDepartment               96,560 -> 12,719          972ms ->   672ms
+    /// DepartmentAdoptionRate        96,037 -> 12,196          577ms ->   323ms
+    /// AppByDomain                   96,073 -> 12,232        1,199ms ->   887ms
+    /// WebOnly                       95,399 -> 11,638        3,517ms -> 1,750ms
     /// </code>
     ///
-    /// Plan operator: <c>Clustered Index Scan</c> -> <c>Index Seek</c> on every one of the eighteen
-    /// measurements. Reads and elapsed time both improve in every case; nothing regresses at either
-    /// selectivity.
+    /// Plan operator: <c>Clustered Index Scan</c> -> <c>Index Seek</c> in every case. Reads drop ~8x
+    /// and elapsed time improves for all ten.
     ///
-    /// The before column is a full scan in every case, which is why a 30-day window read exactly as
-    /// many pages as a 180-day one: without an index on <c>[date]</c> the reporting window was not a
-    /// cost lever at all. Afterwards it is - 30 days reads 8x fewer pages than before, and 6x fewer
-    /// than the 180-day window does. Several charts exceeded the report API's 25-second per-chart
-    /// timeout outright beforehand, so the area could not have shipped without this.
+    /// THE POINT OF THE INDEX IS THAT THE WINDOW BECOMES A COST LEVER. Without it every query reads
+    /// the whole table, so a 30-day window costs exactly as much as a 180-day one and the cost grows
+    /// with retained history forever. That was measured directly by doubling the history to 365 days
+    /// (36,500,000 rows) and re-running the SAME 180-day window:
     ///
-    /// The 180-day column improves least, and that is expected rather than disappointing: the
-    /// benchmark holds exactly 180 days, so a 180-day window IS the whole table and the seek
-    /// degenerates to a range scan. It still reads ~27% fewer pages because this index is narrower
-    /// than the table it replaces - it carries neither <c>id</c> nor <c>last_activity_date</c>. On a
-    /// tenant with years of history a 180-day window is a small fraction of the table and behaves
-    /// like the 30-day column.
+    /// <code>
+    ///                          180 days of history      365 days of history
+    /// reads, no index                     ~94,500                 ~191,500   (tracks the TABLE)
+    /// reads, with index                   ~69,500                  ~69,500   (tracks the WINDOW)
+    /// </code>
     ///
-    /// Cost: the index is 540 MB against a 735 MB base table (73%) at 18m rows, and built in 49
-    /// seconds. Scaling roughly O(n log n), budget about 30 MB and 3 seconds per million rows, so a
-    /// 100m-row table means roughly 3 GB and 5-6 minutes.
+    /// The indexed figure is identical at both table sizes; the unindexed one doubled because the
+    /// table doubled. So the advantage is 1.4x at six months of history, 2.8x at a year, and keeps
+    /// growing - on a tenant retaining several years it is the difference between a report that stays
+    /// usable and one that degrades every month.
+    ///
+    /// Note honestly that the query shape does most of the ELAPSED work: these charts collapse each
+    /// person's rows before fanning out, which took the worst chart from 91s to 17s on its own. What
+    /// the index adds on top is the ~8x reduction in pages read, which is what matters when eleven of
+    /// these run concurrently and what stops the cost tracking history rather than the window.
+    ///
+    /// Cost: 540 MB against a 735 MB base table (73%) at 18m rows, built in 31s (64s at 36.5m rows).
+    /// Scaling roughly O(n log n), budget about 30 MB and 2 seconds per million rows - so a 100m-row
+    /// table means roughly 3 GB and 3-4 minutes.
     ///
     /// This migration changes only the SQL schema, not the EF entity model, so its snapshot is
     /// byte-identical to the previous migration's and EF never raises

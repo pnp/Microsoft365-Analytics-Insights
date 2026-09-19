@@ -182,4 +182,70 @@ describe('ReportsPage', () => {
     expect(await screen.findByText('Departments least likely to use the apps')).toBeInTheDocument();
     expect(screen.getByTitle('Field Operations: 40% Adoption')).toBeInTheDocument();
   });
+
+  /**
+   * A chart that explains why it is empty must not also print the generic "No data for this period."
+   * The two together read as a contradiction, and the generic line is the less true of the pair -
+   * "the Copilot import is switched off" and "no data in this period" are different facts.
+   */
+  it('shows only the explanation when a chart is empty for a stated reason', async () => {
+    mockAreas.mockResolvedValue({ ...NO_AREAS, officeApps: true });
+    mockArea.mockResolvedValue({
+      ...areaData,
+      area: 'office-apps',
+      charts: [
+        {
+          key: 'office-apps-copilot-attach',
+          title: 'Copilot take-up inside each app',
+          description: 'Share who used Copilot in that app.',
+          type: 'bar',
+          valueLabel: 'Take-up',
+          series: null,
+          categories: [],
+          matrix: null,
+          showShare: false,
+          valueSuffix: '%',
+          sql: 'SELECT 1',
+          error: null,
+          warning: 'The Copilot usage report import is switched off.',
+        },
+      ],
+    });
+
+    renderWithProvider(<ReportsPage />);
+
+    expect(await screen.findByText('The Copilot usage report import is switched off.')).toBeInTheDocument();
+    expect(screen.queryByText('No data for this period.')).not.toBeInTheDocument();
+  });
+
+  /** A warning alongside real data must still draw the data - e.g. one series of several failed. */
+  it('still renders the chart when a warning accompanies real data', async () => {
+    mockAreas.mockResolvedValue({ ...NO_AREAS, officeApps: true });
+    mockArea.mockResolvedValue({
+      ...areaData,
+      area: 'office-apps',
+      charts: [
+        {
+          key: 'office-apps-popularity',
+          title: 'Most used apps',
+          description: 'People per app.',
+          type: 'bar',
+          valueLabel: 'People',
+          series: null,
+          categories: [{ label: 'Excel', value: 12 }],
+          matrix: null,
+          showShare: false,
+          valueSuffix: null,
+          sql: 'SELECT 1',
+          error: null,
+          warning: 'One series could not be loaded.',
+        },
+      ],
+    });
+
+    renderWithProvider(<ReportsPage />);
+
+    expect(await screen.findByText('One series could not be loaded.')).toBeInTheDocument();
+    expect(screen.getByTitle('Excel: 12 People')).toBeInTheDocument();
+  });
 });

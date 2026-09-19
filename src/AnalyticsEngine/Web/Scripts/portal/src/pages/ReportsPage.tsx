@@ -18,7 +18,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowClockwise16Regular } from '@fluentui/react-icons';
 import { fetchReportAreas, fetchReportArea } from '../api/reportsApi';
-import type { ReportAreaData, ReportAreaKey, ReportAreas } from '../types/reports';
+import type { ReportAreaData, ReportAreaKey, ReportAreas, ReportChart } from '../types/reports';
 import Spinner from '../components/Spinner';
 import SqlPopover from '../components/SqlPopover';
 import TimeSeriesChart from '../components/charts/TimeSeriesChart';
@@ -271,6 +271,19 @@ export default function ReportsPage() {
   );
 }
 
+/**
+ * Whether a chart has anything to draw.
+ *
+ * A `timeseries` week with a null value means "unknown" rather than zero, so a series made entirely
+ * of nulls is not data.
+ */
+function chartHasData(chart: ReportChart): boolean {
+  if (chart.series?.some((s) => s.points.some((p) => p.value !== null))) return true;
+  if ((chart.categories?.length ?? 0) > 0) return true;
+  if ((chart.matrix?.cells.length ?? 0) > 0) return true;
+  return false;
+}
+
 /** Fetches and renders the charts for a single report area over the chosen window. */
 function ReportAreaView({
   area,
@@ -406,21 +419,31 @@ function ReportAreaView({
                     <MessageBarBody>{chart.warning}</MessageBarBody>
                   </MessageBar>
                 )}
-                {chart.type === 'timeseries' && chart.series ? (
-                  <TimeSeriesChart series={chart.series} valueLabel={chart.valueLabel} />
-                ) : chart.type === 'bar' && chart.categories ? (
-                  <CategoryBarChart
-                    categories={chart.categories}
-                    valueLabel={chart.valueLabel}
-                    showShare={chart.showShare}
-                    valueSuffix={chart.valueSuffix}
-                  />
-                ) : chart.type === 'matrix' && chart.matrix ? (
-                  <MatrixChart matrix={chart.matrix} valueLabel={chart.valueLabel} />
-                ) : chart.type === 'wordcloud' && chart.categories ? (
-                  <WordCloud categories={chart.categories} valueLabel={chart.valueLabel} />
-                ) : (
-                  <Text className={styles.muted}>No data for this period.</Text>
+                {/*
+                  A chart that explains why it is empty must not ALSO print the generic
+                  "No data for this period." beneath that explanation - the two together read as a
+                  contradiction, and the generic line is the less true of the pair. A warning
+                  alongside real data (e.g. one series of several failed) still renders both.
+                */}
+                {(!chart.warning || chartHasData(chart)) && (
+                  <>
+                    {chart.type === 'timeseries' && chart.series ? (
+                      <TimeSeriesChart series={chart.series} valueLabel={chart.valueLabel} />
+                    ) : chart.type === 'bar' && chart.categories ? (
+                      <CategoryBarChart
+                        categories={chart.categories}
+                        valueLabel={chart.valueLabel}
+                        showShare={chart.showShare}
+                        valueSuffix={chart.valueSuffix}
+                      />
+                    ) : chart.type === 'matrix' && chart.matrix ? (
+                      <MatrixChart matrix={chart.matrix} valueLabel={chart.valueLabel} />
+                    ) : chart.type === 'wordcloud' && chart.categories ? (
+                      <WordCloud categories={chart.categories} valueLabel={chart.valueLabel} />
+                    ) : (
+                      <Text className={styles.muted}>No data for this period.</Text>
+                    )}
+                  </>
                 )}
               </>
             )}

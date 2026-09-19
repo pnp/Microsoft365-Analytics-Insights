@@ -179,7 +179,6 @@ namespace Tests.UnitTests
             yield return Query("AppByDomain", ReportsAPIController.AppByDomainQuery());
             yield return Query("WebOnly", ReportsAPIController.WebOnlyQuery());
             yield return Query("CopilotAttachRate", ReportsAPIController.CopilotAttachRateQuery());
-            yield return Query("CopilotWeekly", ReportsAPIController.CopilotWeeklyQuery());
         }
 
         private static KeyValuePair<string, string> Query(string name, string sql) =>
@@ -221,32 +220,57 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// Nothing here may count an activity row as a unit of work.
+        /// Nothing here may count an activity row as a unit of work, and every query must collapse a
+        /// person's rows before it fans out.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// The source is one boolean per user per report date - it records THAT someone used an app,
-        /// never how much. A <c>COUNT(*)</c> over activity rows would therefore report "number of
-        /// daily report rows", which rises purely with how long the importer has been running and
-        /// reads convincingly like a usage figure. Counting distinct users is the only honest
-        /// aggregate, so it is asserted rather than left to review.
+        /// never how much. Counting activity rows would report "number of daily report rows", which
+        /// rises purely with how long the importer has been running and reads convincingly like a
+        /// usage figure.
+        /// </para>
+        /// <para>
+        /// The collapse is also the difference between the area working and timing out. Every query
+        /// aggregates to one row per person (or per person per week) with <c>MAX(1 * bit)</c> BEFORE
+        /// the <c>CROSS APPLY (VALUES ...)</c> fan-out. Measured on an 18m-row synthetic table, the
+        /// app-on-platform matrix took 91s fanning out first and 18s collapsing first, for identical
+        /// output - and the per-chart timeout is 25s. A future edit that reorders those two steps
+        /// would produce correct numbers and an unusable page, which is exactly the kind of regression
+        /// no other test would catch.
+        /// </para>
         /// </remarks>
         [TestMethod]
-        public void ActivityQueriesCountDistinctPeopleRatherThanReportRows()
+        public void ActivityQueriesCollapsePerPersonBeforeFanningOut()
         {
             foreach (var query in AllQueries())
             {
-                if (query.Key == "AppBreadth" || query.Key == "WebOnly" || query.Key == "DepartmentAdoptionRate" ||
-                    query.Key == "CopilotAttachRate")
+                if (query.Key == "DepartmentAdoptionRate")
                 {
-                    // These collapse to one row per person FIRST (GROUP BY user_id), so counting rows
-                    // after that is already counting people.
-                    StringAssert.Contains(query.Value, "user_id",
-                        $"{query.Key} must aggregate per person.");
+                    // This one never fans out: it asks a single "any app" question per person, so it
+                    // collapses with SELECT DISTINCT rather than MAX(1 * bit).
+                    StringAssert.Contains(query.Value, "SELECT DISTINCT a.user_id",
+                        "The adoption rate must reduce activity to one row per person.");
                     continue;
                 }
 
-                StringAssert.Contains(query.Value, "COUNT(DISTINCT",
-                    $"{query.Key} must count distinct people, not activity rows.");
+                StringAssert.Contains(query.Value, "MAX(1 * a.",
+                    $"{query.Key} must collapse each person's report rows with MAX(1 * bit) - the same "
+                    + "idiom profiling.usp_UpsertM365Apps uses.");
+                StringAssert.Contains(query.Value, "GROUP BY a.user_id",
+                    $"{query.Key} must group by user_id so the collapse happens before any fan-out.");
+
+                var collapseAt = query.Value.IndexOf("GROUP BY a.user_id", StringComparison.Ordinal);
+                var applyAt = query.Value.IndexOf("CROSS APPLY", StringComparison.Ordinal);
+                if (applyAt >= 0)
+                {
+                    Assert.IsTrue(collapseAt < applyAt,
+                        $"{query.Key} fans out before it collapses, which is the shape measured at 91s "
+                        + "against a 25s per-chart timeout.");
+                }
+
+                Assert.IsFalse(query.Value.Contains("COUNT(*) AS Value"),
+                    $"{query.Key} must not count rows as a value.");
             }
         }
 
@@ -267,7 +291,6 @@ namespace Tests.UnitTests
                 Query("AppByDomain", ReportsAPIController.AppByDomainQuery()),
                 Query("WebOnly", ReportsAPIController.WebOnlyQuery()),
                 Query("CopilotAttachRate", ReportsAPIController.CopilotAttachRateQuery()),
-                Query("CopilotWeekly", ReportsAPIController.CopilotWeeklyQuery()),
             })
             {
                 foreach (var app in ExpectedApps)
@@ -276,6 +299,54 @@ namespace Tests.UnitTests
                         $"{query.Key} is missing {app}, so that row/bar would silently disappear.");
                 }
             }
+        }
+
+        /// <summary>
+        /// The matrices choose their columns by DISTINCT active headcount, not by the sum of the
+        /// per-app counts.
+        /// </summary>
+        /// <remarks>
+        /// Summing the per-app counts counts a person once per app they use, so a 30-person department
+        /// where everyone uses six apps would outrank a 100-person department where everyone uses one -
+        /// pushing the larger department off a grid that promises "the departments with the most
+        /// active people". Every cell would still be a correct headcount, which is what makes this the
+        /// kind of defect that survives review: only the choice of which columns to show is wrong.
+        /// </remarks>
+        [TestMethod]
+        public void MatrixColumnsAreChosenByDistinctHeadcount()
+        {
+            foreach (var query in new[]
+            {
+                Query("AppByDepartment", ReportsAPIController.AppByDepartmentQuery()),
+                Query("AppByDomain", ReportsAPIController.AppByDomainQuery()),
+            })
+            {
+                StringAssert.Contains(query.Value, "(Any app)",
+                    $"{query.Key} must carry the distinct-headcount sentinel to rank on.");
+                StringAssert.Contains(query.Value, "DENSE_RANK() OVER (ORDER BY ActivePeople DESC",
+                    $"{query.Key} must rank columns on the distinct headcount, not on summed per-app counts.");
+                StringAssert.Contains(query.Value, "AppName <> N'(Any app)'",
+                    $"{query.Key} must filter the sentinel out of its results, or it becomes a fake app row.");
+            }
+        }
+
+        /// <summary>
+        /// The adoption ranking is deterministic, including where departments tie.
+        /// </summary>
+        /// <remarks>
+        /// Ordering on the ROUNDED percentage alone leaves the cutoff between equal-looking
+        /// departments to the query plan, so which 25 appear could change between runs for no visible
+        /// reason - and "which departments are worst" is exactly the output someone acts on.
+        /// </remarks>
+        [TestMethod]
+        public void DepartmentAdoptionRankingIsDeterministic()
+        {
+            var sql = ReportsAPIController.DepartmentAdoptionRateQuery();
+
+            StringAssert.Contains(sql, "ORDER BY (100.0 * ActivePeople / PeopleInDepartment) ASC",
+                "The ranking must use the unrounded ratio, not the rounded display value.");
+            StringAssert.Contains(sql, "DepartmentName ASC",
+                "A final name tiebreak is what makes the TOP(N) cutoff stable across runs.");
         }
 
         [TestMethod]
