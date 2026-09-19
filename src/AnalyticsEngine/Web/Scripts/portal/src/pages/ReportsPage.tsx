@@ -23,6 +23,7 @@ import Spinner from '../components/Spinner';
 import SqlPopover from '../components/SqlPopover';
 import TimeSeriesChart from '../components/charts/TimeSeriesChart';
 import CategoryBarChart from '../components/charts/CategoryBarChart';
+import MatrixChart from '../components/charts/MatrixChart';
 import WordCloud from '../components/charts/WordCloud';
 
 /** The report areas in display order, with the enabled-flag they map to and their friendly copy. */
@@ -30,6 +31,13 @@ const AREA_DEFS: { flag: keyof ReportAreas; key: ReportAreaKey; label: string; b
   { flag: 'copilot', key: 'copilot', label: 'Copilot', blurb: 'Microsoft 365 Copilot adoption and usage.' },
   { flag: 'copilot', key: 'copilot-agents', label: 'Copilot agents', blurb: 'Copilot agent popularity and usage.' },
   { flag: 'usage', key: 'usage', label: 'Microsoft 365 usage', blurb: 'Weekly active users across Microsoft 365 workloads.' },
+  {
+    flag: 'officeApps',
+    key: 'office-apps',
+    label: 'Office apps',
+    blurb:
+      'Which Office apps people use, on which platforms, in which departments, and how far Copilot has reached them. Every figure counts people, not actions - the Microsoft report behind it records who used an app, never how much.',
+  },
   { flag: 'spoAudit', key: 'spo-audit', label: 'SharePoint & OneDrive', blurb: 'File activity from the audit log.' },
   { flag: 'webTraffic', key: 'web-traffic', label: 'Website traffic', blurb: 'Page views and visitors from the page tracker.' },
   { flag: 'calls', key: 'calls', label: 'Teams calls', blurb: 'Teams call volume and duration.' },
@@ -337,7 +345,7 @@ function ReportAreaView({
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
         <Text size={200} className={styles.muted}>
           {blurb} Weeks from {fromLabel}
-          {area === 'usage'
+          {area === 'usage' || area === 'office-apps'
             ? '. Usage reports arrive a few days late, so the latest weeks appear once their report does.'
             : ' to now.'}
         </Text>
@@ -401,7 +409,14 @@ function ReportAreaView({
                 {chart.type === 'timeseries' && chart.series ? (
                   <TimeSeriesChart series={chart.series} valueLabel={chart.valueLabel} />
                 ) : chart.type === 'bar' && chart.categories ? (
-                  <CategoryBarChart categories={chart.categories} valueLabel={chart.valueLabel} />
+                  <CategoryBarChart
+                    categories={chart.categories}
+                    valueLabel={chart.valueLabel}
+                    showShare={chart.showShare}
+                    valueSuffix={chart.valueSuffix}
+                  />
+                ) : chart.type === 'matrix' && chart.matrix ? (
+                  <MatrixChart matrix={chart.matrix} valueLabel={chart.valueLabel} />
                 ) : chart.type === 'wordcloud' && chart.categories ? (
                   <WordCloud categories={chart.categories} valueLabel={chart.valueLabel} />
                 ) : (

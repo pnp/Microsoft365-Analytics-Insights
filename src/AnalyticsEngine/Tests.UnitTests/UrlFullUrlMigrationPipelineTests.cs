@@ -90,7 +90,7 @@ namespace Tests.UnitTests
         // DropUnreportedCopilotStudioCreditColumns then removes the four credit columns Microsoft's API
         // never populates (channel_id, llm_model, tool_invoked, knowledge_sources). It is a model change,
         // and as the chain head its snapshot is the one EF compares the live entity model against.
-        private const string LatestId = "202609171125117_DropUnreportedCopilotStudioCreditColumns";
+        private const string LatestId = "202609190900001_IndexPlatformUserActivityLogDate";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

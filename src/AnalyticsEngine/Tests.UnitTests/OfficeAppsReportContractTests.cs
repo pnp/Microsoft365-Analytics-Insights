@@ -1,0 +1,427 @@
+extern alias AnalyticsWeb;
+
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using ReportAreasModel = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportAreasModel;
+using ReportChart = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportChart;
+using ReportMatrix = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportMatrix;
+using ReportMatrixCell = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportMatrixCell;
+using ReportsAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.ReportsAPIController;
+
+namespace Tests.UnitTests
+{
+    /// <summary>
+    /// Guards the Office apps report area's wire contract and the shape of the SQL it generates.
+    /// </summary>
+    /// <remarks>
+    /// Two classes of defect are caught here, both of which compile cleanly and fail only in a
+    /// browser or only against a real database:
+    /// <list type="number">
+    /// <item>A model property with no <c>[JsonProperty]</c>. This web application configures no
+    /// camelCase contract resolver, so such a property serialises in PascalCase and the SPA reads
+    /// <c>undefined</c> - the exact defect <see cref="DlpApiContractTests"/> exists for, repeated
+    /// here for the new matrix models.</item>
+    /// <item>SQL that silently stops covering an app or a platform. Every query in the area is
+    /// generated from a single catalogue, so a column renamed in one place and not another would
+    /// otherwise produce a chart that is simply missing a row, with no error anywhere.</item>
+    /// </list>
+    /// </remarks>
+    [TestClass]
+    public class OfficeAppsReportContractTests
+    {
+        /// <summary>
+        /// The apps the area reports on. Hard-coded rather than read from the catalogue so that
+        /// dropping an app from the catalogue fails a test instead of quietly shrinking every chart.
+        /// </summary>
+        private static readonly string[] ExpectedApps =
+            { "Outlook", "Teams", "Word", "Excel", "PowerPoint", "OneNote" };
+
+        private static readonly string[] ExpectedPlatforms = { "Windows", "Mac", "Mobile", "Web" };
+
+        #region Wire contract
+
+        [TestMethod]
+        public void EveryReportModelPropertyDeclaresACamelCaseWireName()
+        {
+            foreach (var type in new[] { typeof(ReportAreasModel), typeof(ReportChart), typeof(ReportMatrix), typeof(ReportMatrixCell) })
+            {
+                foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                {
+                    var attribute = property.GetCustomAttribute<JsonPropertyAttribute>();
+
+                    Assert.IsNotNull(attribute,
+                        $"{type.Name}.{property.Name} has no [JsonProperty]. This app has no camelCase contract "
+                        + "resolver, so it would serialise in PascalCase and the SPA would read undefined.");
+
+                    Assert.IsFalse(string.IsNullOrWhiteSpace(attribute.PropertyName),
+                        $"{type.Name}.{property.Name} has an empty [JsonProperty] name.");
+
+                    Assert.IsTrue(char.IsLower(attribute.PropertyName[0]),
+                        $"{type.Name}.{property.Name} serialises as '{attribute.PropertyName}', which is not camelCase.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// <c>api/Reports/areas</c> must offer the new area, or the tab never appears however well the
+        /// endpoint behind it works.
+        /// </summary>
+        [TestMethod]
+        public void AreasResponseCarriesTheOfficeAppsFlag()
+        {
+            var areas = JObject.Parse(JsonConvert.SerializeObject(new ReportAreasModel { OfficeApps = true }));
+
+            Assert.IsNotNull(areas["officeApps"], "api/Reports/areas must expose 'officeApps'.");
+            Assert.IsTrue((bool)areas["officeApps"]);
+        }
+
+        /// <summary>
+        /// The matrix collections are rendered with <c>.map()</c>, so they must serialise as arrays on
+        /// a default-constructed instance rather than as null.
+        /// </summary>
+        [TestMethod]
+        public void MatrixSerialisesItsCollectionsAsArraysEvenWhenEmpty()
+        {
+            var matrix = JObject.Parse(JsonConvert.SerializeObject(new ReportMatrix()));
+
+            foreach (var field in new[] { "rows", "columns", "cells" })
+            {
+                Assert.IsNotNull(matrix[field], $"A matrix chart must expose '{field}'.");
+                Assert.AreEqual(JTokenType.Array, matrix[field].Type,
+                    $"'{field}' is rendered with .map() and must always be an array.");
+            }
+
+            foreach (var field in new[] { "rowLabel", "columnLabel", "shadeByRow" })
+            {
+                Assert.IsTrue(matrix.ContainsKey(field), $"A matrix chart must expose '{field}'.");
+            }
+        }
+
+        [TestMethod]
+        public void MatrixCellSerialisesTheFieldsTheGridReads()
+        {
+            var cell = JObject.Parse(JsonConvert.SerializeObject(
+                new ReportMatrixCell { Row = "Excel", Column = "Finance", Value = 42 }));
+
+            Assert.AreEqual("Excel", (string)cell["row"]);
+            Assert.AreEqual("Finance", (string)cell["column"]);
+            Assert.AreEqual(42d, (double)cell["value"]);
+        }
+
+        /// <summary>
+        /// The SPA's <c>types/reports.ts</c> is the other half of the contract, so it is read here - a
+        /// field renamed on one side without the other fails the build rather than the page.
+        /// </summary>
+        [TestMethod]
+        public void TheTypeScriptTypesDeclareTheSameFieldNames()
+        {
+            var typings = ReportsTypeScriptSource();
+
+            var expected = new[] { typeof(ReportAreasModel), typeof(ReportChart), typeof(ReportMatrix), typeof(ReportMatrixCell) }
+                .SelectMany(t => t.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                .Select(p => p.GetCustomAttribute<JsonPropertyAttribute>()?.PropertyName)
+                .Where(n => !string.IsNullOrEmpty(n))
+                .Distinct();
+
+            foreach (var field in expected)
+            {
+                StringAssert.Contains(typings, field + ":",
+                    $"types/reports.ts does not declare '{field}', so the SPA cannot read it.");
+            }
+
+            StringAssert.Contains(typings, "'matrix'",
+                "types/reports.ts must include 'matrix' in ReportChartType.");
+            StringAssert.Contains(typings, "'office-apps'",
+                "types/reports.ts must include 'office-apps' in ReportAreaKey or the route cannot be requested.");
+        }
+
+        /// <summary>
+        /// The page renders the new area, and does so through the matrix component.
+        /// </summary>
+        /// <remarks>
+        /// A route the API serves but the page never lists is invisible, which is precisely how a
+        /// completed endpoint can look like a missing feature.
+        /// </remarks>
+        [TestMethod]
+        public void TheReportsPageDeclaresTheAreaAndRendersMatrixCharts()
+        {
+            var page = PortalSource(Path.Combine("pages", "ReportsPage.tsx"));
+
+            StringAssert.Contains(page, "'office-apps'",
+                "ReportsPage.tsx must list the office-apps area or its tab never appears.");
+            StringAssert.Contains(page, "officeApps",
+                "ReportsPage.tsx must gate the tab on the officeApps availability flag.");
+            StringAssert.Contains(page, "MatrixChart",
+                "ReportsPage.tsx must render matrix charts or the department and domain grids show nothing.");
+        }
+
+        #endregion
+
+        #region Generated SQL
+
+        /// <summary>Every query the area can run, so a new one cannot escape these checks.</summary>
+        private static IEnumerable<KeyValuePair<string, string>> AllQueries()
+        {
+            yield return Query("AppPopularity", ReportsAPIController.AppPopularityQuery());
+            yield return Query("PlatformPopularity", ReportsAPIController.PlatformPopularityQuery());
+            yield return Query("AppWeekly", ReportsAPIController.AppWeeklyQuery());
+            yield return Query("PlatformWeekly", ReportsAPIController.PlatformWeeklyQuery());
+            yield return Query("AppBreadth", ReportsAPIController.AppBreadthQuery());
+            yield return Query("AppPlatformMatrix", ReportsAPIController.AppPlatformMatrixQuery());
+            yield return Query("AppByDepartment", ReportsAPIController.AppByDepartmentQuery());
+            yield return Query("DepartmentAdoptionRate", ReportsAPIController.DepartmentAdoptionRateQuery());
+            yield return Query("AppByDomain", ReportsAPIController.AppByDomainQuery());
+            yield return Query("WebOnly", ReportsAPIController.WebOnlyQuery());
+            yield return Query("CopilotAttachRate", ReportsAPIController.CopilotAttachRateQuery());
+            yield return Query("CopilotWeekly", ReportsAPIController.CopilotWeeklyQuery());
+        }
+
+        private static KeyValuePair<string, string> Query(string name, string sql) =>
+            new KeyValuePair<string, string>(name, sql);
+
+        /// <summary>
+        /// Every query is bounded by the requested window.
+        /// </summary>
+        /// <remarks>
+        /// An unbounded query against <c>platform_user_activity_log</c> is not a slow query, it is an
+        /// outage: the table gains a row per user per day, so at the ~200k-user tenant this product is
+        /// designed against it reaches tens of millions of rows within a year and a missing predicate
+        /// scans all of it on every page load.
+        /// </remarks>
+        [TestMethod]
+        public void EveryQueryIsBoundedByTheWindowParameter()
+        {
+            foreach (var query in AllQueries())
+            {
+                StringAssert.Contains(query.Value, "@from",
+                    $"{query.Key} does not reference @from, so it would read the whole table.");
+                StringAssert.Contains(query.Value, ">= @from",
+                    $"{query.Key} must bound its scan with '>= @from'.");
+            }
+        }
+
+        /// <summary>
+        /// The window is a real cost lever only if the plan is chosen for the window actually asked
+        /// for, so every query recompiles rather than reusing a plan built for a different one.
+        /// </summary>
+        [TestMethod]
+        public void EveryQueryRecompilesForTheWindowItWasGiven()
+        {
+            foreach (var query in AllQueries())
+            {
+                StringAssert.Contains(query.Value, "OPTION (RECOMPILE)",
+                    $"{query.Key} should recompile so a 1-month window does not inherit a 6-month plan.");
+            }
+        }
+
+        /// <summary>
+        /// Nothing here may count an activity row as a unit of work.
+        /// </summary>
+        /// <remarks>
+        /// The source is one boolean per user per report date - it records THAT someone used an app,
+        /// never how much. A <c>COUNT(*)</c> over activity rows would therefore report "number of
+        /// daily report rows", which rises purely with how long the importer has been running and
+        /// reads convincingly like a usage figure. Counting distinct users is the only honest
+        /// aggregate, so it is asserted rather than left to review.
+        /// </remarks>
+        [TestMethod]
+        public void ActivityQueriesCountDistinctPeopleRatherThanReportRows()
+        {
+            foreach (var query in AllQueries())
+            {
+                if (query.Key == "AppBreadth" || query.Key == "WebOnly" || query.Key == "DepartmentAdoptionRate" ||
+                    query.Key == "CopilotAttachRate")
+                {
+                    // These collapse to one row per person FIRST (GROUP BY user_id), so counting rows
+                    // after that is already counting people.
+                    StringAssert.Contains(query.Value, "user_id",
+                        $"{query.Key} must aggregate per person.");
+                    continue;
+                }
+
+                StringAssert.Contains(query.Value, "COUNT(DISTINCT",
+                    $"{query.Key} must count distinct people, not activity rows.");
+            }
+        }
+
+        /// <summary>Each app appears in every chart that claims to cover the suite.</summary>
+        [TestMethod]
+        public void AppQueriesCoverEveryAppInTheCatalogue()
+        {
+            CollectionAssert.AreEqual(ExpectedApps,
+                ReportsAPIController.OfficeAppCatalogue.Select(a => a.Name).ToArray(),
+                "The catalogue drives every chart in the area; changing it changes all of them.");
+
+            foreach (var query in new[]
+            {
+                Query("AppPopularity", ReportsAPIController.AppPopularityQuery()),
+                Query("AppWeekly", ReportsAPIController.AppWeeklyQuery()),
+                Query("AppPlatformMatrix", ReportsAPIController.AppPlatformMatrixQuery()),
+                Query("AppByDepartment", ReportsAPIController.AppByDepartmentQuery()),
+                Query("AppByDomain", ReportsAPIController.AppByDomainQuery()),
+                Query("WebOnly", ReportsAPIController.WebOnlyQuery()),
+                Query("CopilotAttachRate", ReportsAPIController.CopilotAttachRateQuery()),
+                Query("CopilotWeekly", ReportsAPIController.CopilotWeeklyQuery()),
+            })
+            {
+                foreach (var app in ExpectedApps)
+                {
+                    StringAssert.Contains(query.Value, "N'" + app + "'",
+                        $"{query.Key} is missing {app}, so that row/bar would silently disappear.");
+                }
+            }
+        }
+
+        [TestMethod]
+        public void PlatformQueriesCoverEveryPlatform()
+        {
+            CollectionAssert.AreEqual(ExpectedPlatforms,
+                ReportsAPIController.OfficePlatformCatalogue.Select(p => p.Key).ToArray());
+
+            foreach (var platform in ExpectedPlatforms)
+            {
+                StringAssert.Contains(ReportsAPIController.PlatformPopularityQuery(), "N'" + platform + "'");
+                StringAssert.Contains(ReportsAPIController.PlatformWeeklyQuery(), "N'" + platform + "'");
+                StringAssert.Contains(ReportsAPIController.AppPlatformMatrixQuery(), "N'" + platform + "'");
+            }
+        }
+
+        /// <summary>
+        /// The app-on-platform matrix reads the 24 dedicated cross columns, not the 6 app columns
+        /// ANDed with the 4 platform columns.
+        /// </summary>
+        /// <remarks>
+        /// The difference is real and would not show up as an error. "Used Word" AND "used a Mac" is
+        /// true for someone who uses Word on Windows and Teams on a Mac; only <c>word_mac</c> says
+        /// they used Word on the Mac.
+        /// </remarks>
+        [TestMethod]
+        public void AppPlatformMatrixUsesTheDedicatedCrossColumns()
+        {
+            var sql = ReportsAPIController.AppPlatformMatrixQuery();
+
+            foreach (var app in ReportsAPIController.OfficeAppCatalogue)
+            {
+                foreach (var platform in ReportsAPIController.OfficePlatformCatalogue)
+                {
+                    StringAssert.Contains(sql, $"a.{app.Column}_{platform.Value}",
+                        $"The matrix must read the {app.Column}_{platform.Value} column.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// The Copilot attach rate keeps non-Copilot people in its denominator.
+        /// </summary>
+        /// <remarks>
+        /// This is the single most corruptible figure in the area. An <c>INNER JOIN</c> would restrict
+        /// the calculation to people who already have a Copilot usage row and report something near
+        /// 100% for every app - a flattering number that answers a question nobody asked. The test
+        /// pins the join type because the mistake is one character wide and the output still looks
+        /// plausible.
+        /// </remarks>
+        [TestMethod]
+        public void CopilotAttachRateLeftJoinsSoAppUsersWithoutCopilotStillCount()
+        {
+            var sql = ReportsAPIController.CopilotAttachRateQuery();
+
+            StringAssert.Contains(sql, "LEFT JOIN CopilotUsers",
+                "An INNER JOIN here would report Copilot take-up among Copilot users, which is ~100% by construction.");
+            StringAssert.Contains(sql, "COUNT(cu.user_id) / COUNT(*)",
+                "The numerator must be matched Copilot rows and the denominator every app user.");
+        }
+
+        /// <summary>
+        /// The department rate divides by the whole department, not by the people already known to be
+        /// active - which would return 100% everywhere.
+        /// </summary>
+        [TestMethod]
+        public void DepartmentAdoptionRateDividesByTheWholeDirectoryDepartment()
+        {
+            var sql = ReportsAPIController.DepartmentAdoptionRateQuery();
+
+            StringAssert.Contains(sql, "FROM dbo.users AS u",
+                "The denominator must come from the directory, not from the activity table.");
+            StringAssert.Contains(sql, "LEFT JOIN ActiveUsers",
+                "Inactive people must stay in the denominator.");
+            StringAssert.Contains(sql, "COUNT(act.user_id)", "The numerator counts matched active people.");
+        }
+
+        /// <summary>
+        /// The domain split takes the part after the LAST '@', matching the importer's own
+        /// <c>CopilotUsageReportPolicy.DomainOf</c>, and never produces a NULL column heading.
+        /// </summary>
+        [TestMethod]
+        public void DomainQueryMatchesTheImporterSplitAndLabelsMissingDomains()
+        {
+            var sql = ReportsAPIController.AppByDomainQuery();
+
+            StringAssert.Contains(sql, "REVERSE(u.user_name)",
+                "The domain must be taken after the last '@', as CopilotUsageReportPolicy.DomainOf does.");
+            StringAssert.Contains(sql, "(No domain)",
+                "An address with no '@' must get a label rather than becoming a NULL column heading.");
+        }
+
+        /// <summary>People with no department are labelled rather than dropped by the join.</summary>
+        [TestMethod]
+        public void DepartmentQueriesLabelPeopleWithNoDepartment()
+        {
+            foreach (var sql in new[]
+            {
+                ReportsAPIController.AppByDepartmentQuery(),
+                ReportsAPIController.DepartmentAdoptionRateQuery(),
+            })
+            {
+                StringAssert.Contains(sql, "LEFT JOIN dbo.user_departments",
+                    "An INNER JOIN would silently drop everyone whose directory record has no department.");
+                StringAssert.Contains(sql, "(No department)");
+            }
+        }
+
+        /// <summary>
+        /// Web-only is decided after collapsing a person's whole window, not row by row.
+        /// </summary>
+        /// <remarks>
+        /// Tested per row, someone who used Excel in the browser in March and on Windows in May would
+        /// be counted as browser-only for every March row - overstating the figure that is supposed to
+        /// identify people with no desktop app at all.
+        /// </remarks>
+        [TestMethod]
+        public void WebOnlyCollapsesEachPersonBeforeDecidingTheyAreWebOnly()
+        {
+            var sql = ReportsAPIController.WebOnlyQuery();
+
+            StringAssert.Contains(sql, "GROUP BY a.user_id",
+                "Web-only must be decided over the person's whole window.");
+            StringAssert.Contains(sql, "MAX(1 * a.excel_web)");
+            StringAssert.Contains(sql, "p.Excel_Windows = 0 AND p.Excel_Mac = 0 AND p.Excel_Mobile = 0",
+                "Every non-web platform must be excluded, or 'web only' is not what is being counted.");
+        }
+
+        #endregion
+
+        private static string ReportsTypeScriptSource() =>
+            PortalSource(Path.Combine("types", "reports.ts"));
+
+        private static string PortalSource(string relativePath)
+        {
+            var directory = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
+            while (directory != null && !Directory.Exists(Path.Combine(directory.FullName, "Web")))
+            {
+                directory = directory.Parent;
+            }
+
+            Assert.IsNotNull(directory, "Could not locate the solution directory from the test output folder.");
+
+            var path = Path.Combine(directory.FullName, "Web", "Scripts", "portal", "src", relativePath);
+            Assert.IsTrue(File.Exists(path), "Expected portal source at " + path);
+            return File.ReadAllText(path);
+        }
+    }
+}

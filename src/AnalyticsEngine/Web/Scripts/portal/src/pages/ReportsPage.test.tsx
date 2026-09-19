@@ -20,6 +20,7 @@ const NO_AREAS: ReportAreas = {
   webTraffic: false,
   calls: false,
   emails: false,
+  officeApps: false,
 };
 
 const areaData: ReportAreaData = {
@@ -86,5 +87,99 @@ describe('ReportsPage', () => {
     expect(screen.queryByText(/No built-in report charts are available yet/)).not.toBeInTheDocument();
     expect(mockAvailability).not.toHaveBeenCalled();
     expect(mockArea).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The Office apps area rides on the same Graph usage-report import as "Microsoft 365 usage", so a
+   * deployment that imports usage reports gets both tabs and one that does not gets neither.
+   */
+  it('offers the Office apps tab only when the usage-report import is on', async () => {
+    mockAreas.mockResolvedValue({ ...NO_AREAS, officeApps: true });
+    renderWithProvider(<ReportsPage />);
+
+    expect(await screen.findByRole('tab', { name: 'Office apps' })).toBeInTheDocument();
+    await waitFor(() => expect(mockArea).toHaveBeenCalledWith('office-apps', 3, undefined));
+  });
+
+  it('hides the Office apps tab when that import is off', async () => {
+    mockAreas.mockResolvedValue({ ...NO_AREAS, copilot: true });
+    renderWithProvider(<ReportsPage />);
+
+    expect(await screen.findByRole('tab', { name: 'Copilot' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Office apps' })).not.toBeInTheDocument();
+  });
+
+  /**
+   * A matrix chart must reach MatrixChart rather than falling through to "No data for this period."
+   * - the fall-through branch is what every unrecognised chart type hits, so a missing case in the
+   * renderer looks exactly like an empty result set.
+   */
+  it('renders a matrix chart returned by the Office apps area', async () => {
+    mockAreas.mockResolvedValue({ ...NO_AREAS, officeApps: true });
+    mockArea.mockResolvedValue({
+      ...areaData,
+      area: 'office-apps',
+      charts: [
+        {
+          key: 'office-apps-by-department',
+          title: 'App use by department',
+          description: 'People using each app.',
+          type: 'matrix',
+          valueLabel: 'People',
+          series: null,
+          categories: null,
+          matrix: {
+            rowLabel: 'App',
+            columnLabel: 'Department',
+            rows: ['Excel'],
+            columns: ['Finance'],
+            cells: [{ row: 'Excel', column: 'Finance', value: 12 }],
+            shadeByRow: true,
+          },
+          showShare: false,
+          valueSuffix: null,
+          sql: 'SELECT 1',
+          error: null,
+          warning: null,
+        },
+      ],
+    });
+
+    renderWithProvider(<ReportsPage />);
+
+    expect(await screen.findByText('App use by department')).toBeInTheDocument();
+    expect(screen.getByTitle('Excel / Finance: 12 People')).toBeInTheDocument();
+    expect(screen.queryByText('No data for this period.')).not.toBeInTheDocument();
+  });
+
+  /** A percentage chart must print its unit, or 40 reads as forty people rather than 40%. */
+  it('appends the unit suffix on a percentage bar chart', async () => {
+    mockAreas.mockResolvedValue({ ...NO_AREAS, officeApps: true });
+    mockArea.mockResolvedValue({
+      ...areaData,
+      area: 'office-apps',
+      charts: [
+        {
+          key: 'office-apps-department-adoption',
+          title: 'Departments least likely to use the apps',
+          description: 'Share of each department.',
+          type: 'bar',
+          valueLabel: 'Adoption',
+          series: null,
+          categories: [{ label: 'Field Operations', value: 40 }],
+          matrix: null,
+          showShare: false,
+          valueSuffix: '%',
+          sql: 'SELECT 1',
+          error: null,
+          warning: null,
+        },
+      ],
+    });
+
+    renderWithProvider(<ReportsPage />);
+
+    expect(await screen.findByText('Departments least likely to use the apps')).toBeInTheDocument();
+    expect(screen.getByTitle('Field Operations: 40% Adoption')).toBeInTheDocument();
   });
 });
