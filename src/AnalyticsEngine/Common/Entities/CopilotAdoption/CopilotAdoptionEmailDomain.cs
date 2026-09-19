@@ -35,6 +35,13 @@ namespace Common.Entities.CopilotAdoption
         private const string ExternalMarker = "#EXT#";
 
         /// <summary>
+        /// Microsoft's own tenant suffix. Every tenant has one and it is never a customer's
+        /// organisation, so it is the one domain that answers "which tenant" rather than "which
+        /// company" - the same distinction that makes a guest's inviting tenant the wrong answer.
+        /// </summary>
+        private const string DefaultTenantSuffix = ".onmicrosoft.com";
+
+        /// <summary>
         /// The email domain for a user, lower-cased, or <c>null</c> when one cannot be derived.
         /// </summary>
         /// <param name="userPrincipalName">
@@ -59,10 +66,33 @@ namespace Common.Entities.CopilotAdoption
         /// <see cref="string.ToLowerInvariant"/> rather than <c>ToLower()</c> so the result does not
         /// change with the server's culture - under a Turkish locale <c>ToLower()</c> maps <c>I</c> to
         /// a dotless <c>ı</c> and would split a domain containing an upper-case I into two.</para>
+        /// <para><b>The tenant's own <c>*.onmicrosoft.com</c> suffix loses to the mail address.</b>
+        /// Some tenants pin every UPN to the default suffix and carry the real per-company domain on
+        /// <c>mail</c> instead. Taking the UPN there would put every subsidiary in one bucket named
+        /// after the tenant and silently defeat the comparison - the same mistake as attributing a
+        /// guest to the tenant that invited them. When <c>mail</c> yields nothing better, the default
+        /// suffix is still returned rather than dropping the person entirely.</para>
         /// </remarks>
         public static string From(string userPrincipalName, string mail = null)
         {
-            return FromSingle(userPrincipalName) ?? FromSingle(mail);
+            var fromUpn = FromSingle(userPrincipalName);
+
+            if (fromUpn == null) return FromSingle(mail);
+            if (!IsDefaultTenantDomain(fromUpn)) return fromUpn;
+
+            // The UPN only tells us which tenant this is. Prefer a mail domain that names a company.
+            var fromMail = FromSingle(mail);
+
+            return fromMail != null && !IsDefaultTenantDomain(fromMail) ? fromMail : fromUpn;
+        }
+
+        /// <summary>
+        /// Whether this is a Microsoft-issued tenant suffix rather than a customer's own domain.
+        /// </summary>
+        public static bool IsDefaultTenantDomain(string domain)
+        {
+            return domain != null
+                && domain.EndsWith(DefaultTenantSuffix, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -86,14 +116,6 @@ namespace Common.Entities.CopilotAdoption
         public static string Label(string domain)
         {
             return string.IsNullOrWhiteSpace(domain) ? NoDomainLabel : domain;
-        }
-
-        /// <summary>
-        /// The grouping key for a user, going straight from the UPN to the label in one step.
-        /// </summary>
-        public static string LabelFor(string userPrincipalName, string mail = null)
-        {
-            return Label(From(userPrincipalName, mail));
         }
 
         /// <summary>
@@ -129,17 +151,6 @@ namespace Common.Entities.CopilotAdoption
             }
 
             return trimmed.ToLowerInvariant();
-        }
-
-        /// <summary>
-        /// Whether a user with this UPN belongs to the given normalised domain.
-        /// </summary>
-        public static bool Matches(string userPrincipalName, string mail, string normalisedDomain)
-        {
-            if (string.IsNullOrWhiteSpace(normalisedDomain)) return true;
-
-            return string.Equals(
-                LabelFor(userPrincipalName, mail), normalisedDomain, StringComparison.OrdinalIgnoreCase);
         }
 
         private static string FromSingle(string address)

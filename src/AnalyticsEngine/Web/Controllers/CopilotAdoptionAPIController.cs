@@ -663,7 +663,7 @@ namespace Web.AnalyticsWeb.Controllers
                     CopilotAdoptionExports.LicensedUserColumns(
                         analysis.Summary.FiguresIncomplete,
                         WarningSummary(analysis.Summary))),
-                CsvSerialiser.FileName("copilot-licensed-users", analysis.Summary.GeneratedUtc));
+                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-licensed-users", emailDomain), analysis.Summary.GeneratedUtc));
         }
 
         /// <summary>
@@ -857,7 +857,7 @@ namespace Web.AnalyticsWeb.Controllers
                     CopilotAdoptionExports.LicenceOpportunityColumns(
                         analysis.Summary.FiguresIncomplete,
                         WarningSummary(analysis.Summary))),
-                CsvSerialiser.FileName("copilot-licence-opportunities", analysis.Summary.GeneratedUtc));
+                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-licence-opportunities", emailDomain), analysis.Summary.GeneratedUtc));
         }
 
         #endregion
@@ -945,7 +945,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             return CsvResponse(
                 CsvSerialiser.ToBytes(rows, CopilotAdoptionExports.CoworkReadinessColumns()),
-                CsvSerialiser.FileName("copilot-cowork-readiness", analysis.Summary.GeneratedUtc));
+                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-cowork-readiness", emailDomain), analysis.Summary.GeneratedUtc));
         }
 
         #endregion
@@ -1225,8 +1225,23 @@ namespace Web.AnalyticsWeb.Controllers
             };
         }
 
-        private static List<string> Distinct(IEnumerable<string> values)
+        /// <summary>
+        /// Folds the email-domain scope into a CSV file name.
+        /// </summary>
+        /// <remarks>
+        /// A spreadsheet outlives the screen it was exported from and gets forwarded without that
+        /// context, so a file describing one of several organisations in a tenant has to say which one
+        /// somewhere durable. The rows carry an "Email domain" column, but columns get reordered and
+        /// trimmed downstream; the file name survives. Same reasoning as the workbook's scope banner.
+        /// </remarks>
+        private static string ScopedFileNamePrefix(string prefix, string emailDomain)
         {
+            var scope = CopilotAdoptionEmailDomain.Normalise(emailDomain);
+
+            return string.IsNullOrWhiteSpace(scope) ? prefix : prefix + "-" + scope;
+        }
+
+        private static List<string> Distinct(IEnumerable<string> values)        {
             return values
                 .Where(v => !string.IsNullOrWhiteSpace(v))
                 .Select(v => v.Trim())

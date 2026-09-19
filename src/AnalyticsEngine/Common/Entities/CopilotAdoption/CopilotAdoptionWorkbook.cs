@@ -1757,6 +1757,20 @@ namespace Common.Entities.CopilotAdoption
                 + "users are ranked - including idle licences would put every one of them in the bottom cohort at zero "
                 + "and give every tenant an identical chart.");
 
+            AddMethod(sheet, "Email domain",
+                "The domain in each person's sign-in name (their user principal name), lower-cased. On a tenant "
+                + "assembled from acquisitions this is usually the closest thing the directory has to \"which "
+                + "company does this person work for\", which is why it is reported separately from department - a "
+                + "department spans every company in the tenant and averages the difference away.\n"
+                + "Invited guests are counted under their HOME organisation, not this tenant: Entra writes a guest "
+                + "as someone_contoso.com#EXT#@yourtenant.onmicrosoft.com, and the part after the final @ is the "
+                + "tenant that invited them, which is the same for every guest in the directory. Those rows are "
+                + "flagged External.\n"
+                + "If a sign-in name is on the tenant's own onmicrosoft.com suffix, the mail address is used "
+                + "instead where it names a real domain - that suffix identifies the tenant, not a company. "
+                + "Anyone whose domain cannot be worked out is grouped as \"(no domain)\" rather than dropped, so "
+                + "the breakdown still adds up to the seat count.");
+
             AddMethod(sheet, "Business case score",
                 "Unlicensed users score 0-100 on four weighted signals, weighted so evidence beats inference:\n"
                 // Written as the computation, not as a rounded product. Printing "64.3" at D90 would make
