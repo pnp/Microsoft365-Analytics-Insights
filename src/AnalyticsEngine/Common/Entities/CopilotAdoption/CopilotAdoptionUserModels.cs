@@ -126,6 +126,14 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("mail")]
         public string Mail { get; set; }
 
+        /// <summary>
+        /// The organisation this person belongs to, derived from the UPN by
+        /// <see cref="CopilotAdoptionEmailDomain"/>. See that class for why a guest is attributed to
+        /// their home domain rather than to the inviting tenant.
+        /// </summary>
+        [JsonProperty("emailDomain")]
+        public string EmailDomain { get; set; }
+
         [JsonProperty("department")]
         public string Department { get; set; }
 
@@ -387,6 +395,10 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("mail")]
         public string Mail { get; set; }
+
+        /// <summary>The organisation this candidate belongs to. See <see cref="CopilotAdoptionEmailDomain"/>.</summary>
+        [JsonProperty("emailDomain")]
+        public string EmailDomain { get; set; }
 
         [JsonProperty("department")]
         public string Department { get; set; }
