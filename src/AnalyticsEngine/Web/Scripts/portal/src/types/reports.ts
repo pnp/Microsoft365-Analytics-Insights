@@ -8,6 +8,11 @@ export interface ReportAreas {
   webTraffic: boolean;
   calls: boolean;
   emails: boolean;
+  /**
+   * Microsoft 365 apps (Word/Excel/PowerPoint/Outlook/OneNote/Teams) and their platforms.
+   * Gated by the same Graph usage-report import as `usage`.
+   */
+  officeApps: boolean;
 }
 
 /** One point of a weekly series: the (Monday) week start (ISO date) and its value. A null value
@@ -30,9 +35,34 @@ export interface ReportCategory {
   value: number;
 }
 
-export type ReportChartType = 'timeseries' | 'bar' | 'wordcloud';
+export type ReportChartType = 'timeseries' | 'bar' | 'wordcloud' | 'matrix';
 
-/** A single chart: a weekly `timeseries` (series set), or a `bar` / `wordcloud` (categories set). */
+/** One cell of a `matrix` chart. */
+export interface ReportMatrixCell {
+  row: string;
+  column: string;
+  value: number;
+}
+
+/**
+ * A two-dimensional categorical grid, e.g. app x department.
+ *
+ * `rows` and `columns` are sent explicitly rather than inferred from `cells` so the grid keeps the
+ * server's deliberate ordering and so an all-zero row still renders - an app nobody in a department
+ * uses is usually the point of looking.
+ */
+export interface ReportMatrix {
+  rowLabel: string;
+  columnLabel: string;
+  rows: string[];
+  columns: string[];
+  /** Populated cells only; an absent intersection is zero. */
+  cells: ReportMatrixCell[];
+  /** Shade each cell against its own row's maximum rather than the whole grid. */
+  shadeByRow: boolean;
+}
+
+/** A single chart: a weekly `timeseries` (series set), a `bar` / `wordcloud` (categories set), or a `matrix`. */
 export interface ReportChart {
   key: string;
   title: string;
@@ -41,6 +71,11 @@ export interface ReportChart {
   valueLabel: string;
   series: ReportSeries[] | null;
   categories: ReportCategory[] | null;
+  matrix: ReportMatrix | null;
+  /** Show each bar's share of the total. Only meaningful when the bars are parts of one whole. */
+  showShare: boolean;
+  /** Unit appended to rendered values, e.g. '%'. Null for a plain count. */
+  valueSuffix: string | null;
   sql: string;
   error: string | null;
   warning: string | null;
@@ -65,6 +100,7 @@ export type ReportAreaKey =
   | 'copilot'
   | 'copilot-agents'
   | 'usage'
+  | 'office-apps'
   | 'spo-audit'
   | 'web-traffic'
   | 'calls'
