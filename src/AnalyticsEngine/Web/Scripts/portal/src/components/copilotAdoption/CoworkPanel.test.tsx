@@ -414,3 +414,55 @@ describe('CoworkPanel', () => {
     expect(screen.queryByText(/a model, not a measurement/)).toBeNull();
   });
 });
+
+describe('CoworkPanel email-domain scope', () => {
+  beforeEach(() => {
+    fetchCowork.mockReset();
+    fetchCowork.mockResolvedValue(page([]));
+  });
+
+  it('asks the server for the domain the page is narrowed to', async () => {
+    renderWithProvider(
+      <CoworkPanel
+        windowDays={28}
+        summary={summary({})}
+        filterOptions={null}
+        options={summary({}).options}
+        emailDomain="fabrikam.com"
+      />,
+    );
+
+    await waitFor(() => expect(fetchCowork).toHaveBeenCalled());
+
+    const call = fetchCowork.mock.calls[0];
+    expect(call[0]).toBe(28);
+    expect((call[1] as { emailDomain: string }).emailDomain).toBe('fabrikam.com');
+  });
+
+  it('keeps the page-wide domain when the panel filters are cleared', async () => {
+    // The domain is not one of this panel's filters - it is the population the whole report is
+    // describing. Clearing it here would silently widen the list (and the spending-policy CSV built
+    // from the same state) back to the whole tenant while the page still named one organisation.
+    const user = userEvent.setup();
+
+    renderWithProvider(
+      <CoworkPanel
+        windowDays={28}
+        summary={summary({})}
+        filterOptions={null}
+        options={summary({}).options}
+        emailDomain="fabrikam.com"
+      />,
+    );
+
+    await screen.findByText('No Copilot seat holders match these filters.');
+    fetchCowork.mockClear();
+
+    await user.click(screen.getByRole('button', { name: 'Clear filters' }));
+
+    await waitFor(() => expect(fetchCowork).toHaveBeenCalled());
+    for (const call of fetchCowork.mock.calls) {
+      expect((call[1] as { emailDomain: string }).emailDomain).toBe('fabrikam.com');
+    }
+  });
+});

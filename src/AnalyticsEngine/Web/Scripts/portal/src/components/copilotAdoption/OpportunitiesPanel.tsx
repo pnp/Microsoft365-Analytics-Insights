@@ -132,6 +132,7 @@ const DEFAULT_FILTERS: OpportunityFilters = {
   search: '',
   department: '',
   country: '',
+  emailDomain: '',
   recommendedOnly: false,
   existingCopilotUsersOnly: false,
   sortBy: DEFAULT_SORT_BY,
@@ -152,6 +153,7 @@ export default function OpportunitiesPanel({
   options,
   guidanceLinks,
   seatLicenceTypeIds,
+  emailDomain,
 }: {
   windowDays: number;
   filterOptions: AdoptionFilterOptions | null;
@@ -159,6 +161,11 @@ export default function OpportunitiesPanel({
   options: CopilotAdoptionOptions;
   guidanceLinks?: AdoptionGuidanceLink[];
   seatLicenceTypeIds?: number[];
+  /**
+   * The page-wide email-domain filter, applied to this list too so it can never describe a
+   * different population from the rest of the report.
+   */
+  emailDomain?: string | null;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -178,7 +185,23 @@ export default function OpportunitiesPanel({
       ) * 10,
     ) / 10;
 
-  const [filters, setFilters] = useState<OpportunityFilters>(DEFAULT_FILTERS);
+  const [filters, setFilters] = useState<OpportunityFilters>({
+    ...DEFAULT_FILTERS,
+    emailDomain: emailDomain ?? '',
+  });
+
+  /**
+   * Resets the panel's own filters while KEEPING the page-wide email-domain scope.
+   *
+   * The domain is not one of this panel's filters - it is the population the whole report is
+   * describing, and the banner at the top of the page says so. Clearing it here would silently
+   * widen the list back to the whole tenant while the page still claimed to be showing one
+   * organisation, and the CSV export built from the same state would follow it.
+   */
+  const clearPanelFilters = () => {
+    setSearchDraft('');
+    setFilters({ ...DEFAULT_FILTERS, emailDomain: emailDomain ?? '' });
+  };
   const [searchDraft, setSearchDraft] = useState('');
   const [page, setPage] = useState(0);
   const [data, setData] = useState<LicenceOpportunityPage | null>(null);
@@ -354,7 +377,7 @@ export default function OpportunitiesPanel({
                   ? 'Clear the filters to see every candidate found in this period.'
                   : `${formatCount(data.total)} candidates were found in this period, but none of them match.`}
               </Text>
-              <Button size="small" onClick={() => { setSearchDraft(''); setFilters(DEFAULT_FILTERS); }}>
+              <Button size="small" onClick={clearPanelFilters}>
                 Clear filters
               </Button>
             </>

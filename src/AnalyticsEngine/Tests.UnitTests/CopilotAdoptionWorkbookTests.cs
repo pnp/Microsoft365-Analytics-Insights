@@ -249,6 +249,64 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Workbook_ComparesEmailDomainsOnceThereIsMoreThanOne()
+        {
+            // On the single-domain tenant the other tests use, this sheet is deliberately absent - a
+            // table comparing an organisation with itself is noise in a board pack.
+            CollectionAssert.DoesNotContain(
+                WorkbookSheetNames(CopilotAdoptionWorkbook.Build(SyntheticAnalysis())),
+                "Email domains");
+
+            var multiDomain = SyntheticAnalysis();
+            for (var i = 0; i < 20; i++)
+            {
+                multiDomain.LicensedUsers[i].UserPrincipalName = "user" + i + "@fabrikam.example";
+                multiDomain.LicensedUsers[i].EmailDomain = "fabrikam.example";
+            }
+
+            new CopilotAdoptionService(multiDomain.Summary.Options).FinaliseSummary(multiDomain);
+            var bytes = CopilotAdoptionWorkbook.Build(multiDomain);
+
+            CollectionAssert.Contains(WorkbookSheetNames(bytes), "Email domains");
+
+            var text = SheetText(bytes);
+            StringAssert.Contains(text, "Adoption by email domain");
+            StringAssert.Contains(text, "fabrikam.example");
+            StringAssert.Contains(text, "contoso.com");
+            StringAssert.Contains(text, "Licence candidates");
+        }
+
+        [TestMethod]
+        public void Workbook_SaysWhenItHasBeenNarrowedToOneEmailDomain()
+        {
+            // A spreadsheet outlives the screen it came from and gets forwarded without that context.
+            // A file narrowed to one of several organisations must say so on its own first sheet, or
+            // it gets quoted in a licence negotiation as the whole tenant's position.
+            var analysis = SyntheticAnalysis();
+            var service = new CopilotAdoptionService(analysis.Summary.Options);
+            service.FinaliseSummary(analysis);
+
+            var tenantText = SheetText(CopilotAdoptionWorkbook.Build(analysis));
+            StringAssert.Contains(tenantText, "Whole tenant");
+            Assert.IsFalse(tenantText.Contains("NARROWED TO ONE EMAIL DOMAIN"),
+                "An unnarrowed workbook must not carry a scope warning.");
+
+            var scoped = CopilotAdoptionScopeFilter.Apply(
+                analysis,
+                CopilotAdoptionScope.ForEmailDomain("contoso.com"),
+                service.FinaliseSummary);
+
+            var scopedText = SheetText(CopilotAdoptionWorkbook.Build(scoped));
+
+            StringAssert.Contains(scopedText, "NARROWED TO ONE EMAIL DOMAIN: contoso.com");
+            StringAssert.Contains(scopedText, "must not be quoted as a "
+                + "tenant-wide figure");
+            StringAssert.Contains(scopedText, "the agent inventory",
+                "The sections that stayed tenant-wide have to be named, not merely counted.");
+            StringAssert.Contains(scopedText, "Email domain contoso.com");
+        }
+
+        [TestMethod]
         public void Workbook_IncludesTheAccountabilityRollup()
         {
             var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
@@ -663,6 +721,10 @@ namespace Tests.UnitTests
                 analysis.UnlicensedUsers.Add(new UnlicensedUsageQueryRow
                 {
                     UserId = 900 + i,
+                    // The unlicensed query selects the UPN so this population can be grouped and
+                    // filtered by email domain like every other one.
+                    UserPrincipalName = "unlicensed" + i + "@contoso.com",
+                    EmailDomain = "contoso.com",
                     Department = departments[i % departments.Length],
                     Interactions = random.Next(1, 120),
                     ActiveDays = random.Next(1, 20),

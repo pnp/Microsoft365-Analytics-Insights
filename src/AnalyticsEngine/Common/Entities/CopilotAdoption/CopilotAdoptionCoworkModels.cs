@@ -19,6 +19,12 @@ namespace Common.Entities.CopilotAdoption
 
         public string Mail { get; set; }
 
+        /// <summary>
+        /// The organisation this person belongs to, derived once when the rows are loaded rather than
+        /// re-parsed from the UPN on every filtered request. See <see cref="CopilotAdoptionEmailDomain"/>.
+        /// </summary>
+        public string EmailDomain { get; set; }
+
         public string Department { get; set; }
 
         public string JobTitle { get; set; }
@@ -121,6 +127,10 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("mail")]
         public string Mail { get; set; }
+
+        /// <summary>The organisation this person belongs to. See <see cref="CopilotAdoptionEmailDomain"/>.</summary>
+        [JsonProperty("emailDomain")]
+        public string EmailDomain { get; set; }
 
         [JsonProperty("department")]
         public string Department { get; set; }
