@@ -11,10 +11,10 @@ namespace Common.Entities.Migrations
     /// Shape: <c>([date]) INCLUDE ([user_id], &lt;all 34 platform/app bit columns&gt;)</c>.
     ///
     /// Why now: the portal's new "Office apps" report area queries this table for the first time,
-    /// with eleven windowed aggregates on one page load (at most three of them running concurrently).
-    /// The table had no index on <c>[date]</c> at all in the shipped product (the installer's
-    /// profiling schema script creates one, but only when the optional profiling extension is
-    /// installed), so every one of those charts read the whole table.
+    /// with eleven windowed aggregates on one page load (run one at a time). The table had no index
+    /// on <c>[date]</c> at all in the shipped product (the installer's profiling schema script
+    /// creates one, but only when the optional profiling extension is installed), so every one of
+    /// those charts read the whole table.
     ///
     /// Why INCLUDE rather than a wider key: <c>[date]</c> is the only column that takes part in
     /// MATCHING - the predicate is a plain <c>[date] &gt;= @from</c> range. <c>user_id</c> and the bit

@@ -127,13 +127,19 @@ namespace Web.AnalyticsWeb.Controllers
         /// Longest a chart will wait for its turn at the gate before giving up.
         /// </summary>
         /// <remarks>
-        /// Waiting is not covered by the SQL command timeout, so without a bound a queue of callers
-        /// could push the whole HTTP request past the ~230s App Service limit and return a 500 rather
-        /// than a page with a per-chart message on it. Generous enough that a single page load never
-        /// hits it, but short enough that a pile-up of concurrent admins degrades to a per-chart
-        /// message instead of a dead request.
+        /// Sized from the arithmetic rather than picked. With a gate of one, the last chart of a page
+        /// waits for all the others: measured at ~18m rows that is 82.6s, so a normal page load never
+        /// comes close. The bound exists for a pile-up of concurrent admins, and 180s is the largest
+        /// value that still leaves room to run - 180s waiting plus a 25s query is 205s, inside the
+        /// ~230s App Service request limit. Without a bound a queue would push the request past that
+        /// limit and return a 500 instead of a page with a per-chart message on it.
+        /// <para>
+        /// The earlier 120s left only ~37s of headroom over the measured 82.6s, which a database
+        /// slower than the benchmark machine would have eaten - reporting "too busy" on a page that
+        /// was merely slow.
+        /// </para>
         /// </remarks>
-        private static readonly TimeSpan OfficeAppsQueueTimeout = TimeSpan.FromSeconds(120);
+        private static readonly TimeSpan OfficeAppsQueueTimeout = TimeSpan.FromSeconds(180);
 
         /// <summary>
         /// Longest reporting window this area offers, in months.
