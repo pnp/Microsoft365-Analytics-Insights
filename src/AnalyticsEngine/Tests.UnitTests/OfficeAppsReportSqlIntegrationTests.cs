@@ -396,6 +396,7 @@ namespace Tests.UnitTests
                 { "AppByDomain", ReportsAPIController.AppByDomainQuery() },
                 { "WebOnly", ReportsAPIController.WebOnlyQuery() },
                 { "CopilotAttachRate", ReportsAPIController.CopilotAttachRateQuery() },
+                { "CopilotDataPresence", ReportsAPIController.CopilotDataPresenceQuery() },
             };
 
             foreach (var query in queries)

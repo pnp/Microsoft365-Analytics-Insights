@@ -14,9 +14,8 @@
 
      This table is the sixth per-user Microsoft 365 usage-report table. The other five were indexed
      by 202608131030001_IndexUsageReportSnapshots; this one was left out because no shipped report
-     read it. The portal's new "Office apps" report area now does - twelve windowed aggregates that
-     run in parallel on one page load - and without an index on [date] every one of them was a full
-     table scan.
+     read it. The portal's new "Office apps" report area now does - eleven windowed aggregates on
+     one page load - and without an index on [date] every one of them read the whole table.
 
      [date] is the only column that takes part in MATCHING (the predicate is a plain [date] >= @from
      range); user_id and the bit columns are only returned and aggregated. That is exactly the case
@@ -25,9 +24,14 @@
    MEASURED IMPACT (synthetic scale: 18,000,000 rows = 100k users x 180 days; medians of 3 warm runs
    with the plan cache cleared; the real report queries, taken from the built assembly)
 
-     Before, every query was a Clustered Index Scan and the reporting window was NOT a cost lever -
-     a 30-day window read as many pages as a 180-day one. Several charts exceeded the report API's
-     25-second per-chart timeout outright. See the pull request for the full before/after table.
+     Without the index every query is a Clustered Index Scan, so the reporting window is NOT a cost
+     lever - a 30-day window reads as many pages as a 180-day one, and the cost grows with retained
+     history forever. With it, a 30-day window reads ~8x fewer pages (~95,500 -> ~11,700) and every
+     plan becomes an Index Seek.
+
+     Doubling the history to 365 days and re-running the SAME 180-day window shows what that is
+     worth: reads WITHOUT the index doubled with the table (~94,500 -> ~191,500), while reads WITH
+     it were identical at both sizes (~69,500). See the pull request for the full table.
 
    SAFETY
      * Idempotent / re-runnable: a database already carrying the covering index is skipped, and a

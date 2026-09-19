@@ -196,42 +196,53 @@ namespace Web.AnalyticsWeb.Controllers
             var config = new AppConfig();
             var settings = config.ImportJobSettings ?? new ImportTaskSettings();
             var copilotUsageImported = settings.GraphCopilotUsageReports;
-            var groupFiltered = !string.IsNullOrWhiteSpace(config.UserGroupsFilter);
+
+            // A filter of '*' matches every group, so it narrows nothing and the directory is still
+            // the right denominator. Treating any non-empty value as a narrowing would suppress the
+            // adoption chart on a deployment whose scope is in fact the whole tenant.
+            var groupFilter = new UserGroupsFilterModel(config.UserGroupsFilter);
+            var groupFiltered = groupFilter.Patterns.Count > 0 && !groupFilter.MatchesEverything;
 
             return new List<Task<ReportChart>>
             {
                 // ---- Headline: what is used, and is it moving? -------------------------------
-                Gated(() => RunCategoryAsync("office-apps-popularity",
+                Gated("office-apps-popularity", "Most used apps",
+                    () => RunCategoryAsync("office-apps-popularity",
                     "Most used apps",
                     "People who used each app at least once in the period. Someone who uses both Word and Excel is counted in both, so these do not add up to your headcount.",
                     "People", AppPopularityQuery(), from)),
 
-                Gated(() => RunGroupedTimeSeriesAsync("office-apps-trend",
+                Gated("office-apps-trend", "App users each week",
+                    () => RunGroupedTimeSeriesAsync("office-apps-trend",
                     "App users each week",
                     "Distinct people using each app, week by week. The current part-week is left off because the Microsoft usage report for it has not finished arriving.",
                     "People",
                     QueryNamedWeeksAsync(AppWeeklyQuery(), from),
                     DisplaySql(AppWeeklyQuery(), from), weekSpine)),
 
-                Gated(() => WithValueSuffix(RunCategoryAsync("office-apps-breadth",
+                Gated("office-apps-breadth", "How much of the suite people use",
+                    () => WithValueSuffix(RunCategoryAsync("office-apps-breadth",
                     "How much of the suite people use",
                     "How many different Office apps each person used in the period. A workforce clustered on one or two apps has bought a suite and is using a product - that gap is usually the cheapest adoption win available.",
                     "People", AppBreadthQuery(), from), null, showShare: true)),
 
                 // ---- Platforms: where the work happens ---------------------------------------
-                Gated(() => RunCategoryAsync("office-apps-platform-mix",
+                Gated("office-apps-platform-mix", "Platforms people work on",
+                    () => RunCategoryAsync("office-apps-platform-mix",
                     "Platforms people work on",
                     "People who connected from each platform at least once. Most people appear under more than one.",
                     "People", PlatformPopularityQuery(), from)),
 
-                Gated(() => RunGroupedTimeSeriesAsync("office-apps-platform-trend",
+                Gated("office-apps-platform-trend", "Platform users each week",
+                    () => RunGroupedTimeSeriesAsync("office-apps-platform-trend",
                     "Platform users each week",
                     "Distinct people on each platform, week by week. A rising web or mobile line against a flat desktop line is the shift to browser and phone working, and it changes what your endpoint and licensing assumptions should be.",
                     "People",
                     QueryNamedWeeksAsync(PlatformWeeklyQuery(), from),
                     DisplaySql(PlatformWeeklyQuery(), from), weekSpine)),
 
-                Gated(() => RunMatrixAsync("office-apps-platform-matrix",
+                Gated("office-apps-platform-matrix", "Which apps are used on which platforms",
+                    () => RunMatrixAsync("office-apps-platform-matrix",
                     "Which apps are used on which platforms",
                     "People using each app on each platform. Shaded across each row, because Outlook dwarfs OneNote and a single shared scale would leave the smaller rows blank.",
                     "People", AppPlatformMatrixQuery(), from,
@@ -241,7 +252,8 @@ namespace Web.AnalyticsWeb.Controllers
                     shadeByRow: true)),
 
                 // ---- The business cut ---------------------------------------------------------
-                Gated(() => RunMatrixAsync("office-apps-by-department",
+                Gated("office-apps-by-department", "App use by department",
+                    () => RunMatrixAsync("office-apps-by-department",
                     "App use by department",
                     $"People using each app, in the {MatrixColumnLimit} departments with the most active people. Shaded across each row, so you are comparing departments within an app rather than apps against each other. Department comes from your directory; people with none are grouped as {NoDepartmentLabel}.",
                     "People", AppByDepartmentQuery(), from,
@@ -252,7 +264,8 @@ namespace Web.AnalyticsWeb.Controllers
 
                 DepartmentAdoptionChart(from, groupFiltered),
 
-                Gated(() => RunMatrixAsync("office-apps-by-domain",
+                Gated("office-apps-by-domain", "App use by email domain",
+                    () => RunMatrixAsync("office-apps-by-domain",
                     "App use by email domain",
                     $"People using each app, split by the domain of their sign-in address - useful where subsidiaries, brands or an unfinished migration share one tenant. Top {MatrixColumnLimit} domains by active people.",
                     "People", AppByDomainQuery(), from,
@@ -261,7 +274,8 @@ namespace Web.AnalyticsWeb.Controllers
                     columns: null,
                     shadeByRow: true)),
 
-                Gated(() => RunCategoryAsync("office-apps-web-only",
+                Gated("office-apps-web-only", "People who only ever use the browser version",
+                    () => RunCategoryAsync("office-apps-web-only",
                     "People who only ever use the browser version",
                     "People who used an app on the web and never on Windows, Mac or mobile in the period. Often unmanaged or personal devices, VDI users, or people who simply never had the desktop app installed - each of which needs a different response.",
                     "People", WebOnlyQuery(), from)),
@@ -306,7 +320,8 @@ namespace Web.AnalyticsWeb.Controllers
                 });
             }
 
-            return Gated(() => WithValueSuffix(RunCategoryAsync("office-apps-department-adoption",
+            return Gated("office-apps-department-adoption", title,
+                () => WithValueSuffix(RunCategoryAsync("office-apps-department-adoption",
                 title,
                 $"Share of each department's people who used any Office app in the period, lowest first. Unlike the counts above this is a rate, so a big department cannot top it just for being big. Departments with fewer than {MinDepartmentSizeForRate} people are left out, because at that size the percentage says more about the size than the adoption.",
                 "Adoption", DepartmentAdoptionRateQuery(), from), "%"));
@@ -325,6 +340,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// </remarks>
         private static Task<ReportChart> CopilotAttachChart(DateTime from, bool copilotUsageImported)
         {
+            const string key = "office-apps-copilot-attach";
             const string title = "Copilot take-up inside each app";
             const string description =
                 "Of the people who use an app, the share who used Copilot in that same app during the period. "
@@ -336,7 +352,7 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 return Task.FromResult(new ReportChart
                 {
-                    Key = "office-apps-copilot-attach",
+                    Key = key,
                     Title = title,
                     Type = "bar",
                     ValueLabel = "Take-up",
@@ -350,16 +366,41 @@ namespace Web.AnalyticsWeb.Controllers
                 });
             }
 
-            return Gated(async () =>
+            return Gated(key, title, async () =>
             {
                 var chart = await WithValueSuffix(
-                    RunCategoryAsync("office-apps-copilot-attach", title, description,
+                    RunCategoryAsync(key, title, description,
                         "Take-up", CopilotAttachRateQuery(), from), "%").ConfigureAwait(false);
 
-                if (chart.Error == null &&
-                    (chart.Categories == null || chart.Categories.All(c => c.Value <= 0)) &&
-                    !await AnyCopilotUsageRowsAsync(from).ConfigureAwait(false))
+                if (chart.Error != null) return chart;
+
+                // A non-zero rate anywhere proves the report arrived, so there is nothing to check.
+                if (chart.Categories != null && chart.Categories.Any(c => c.Value > 0)) return chart;
+
+                // Otherwise "0% everywhere" and "no report arrived" are indistinguishable from this
+                // result alone, and the difference matters enormously to the reader. Resolve it, and
+                // if it cannot be resolved, say so rather than leaving a row of confident 0% bars.
+                bool anyRows;
+                try
                 {
+                    anyRows = await AnyCopilotUsageRowsAsync(from).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    chart.Categories = new List<ReportCategory>();
+                    chart.Warning =
+                        "Every app came back at 0% take-up, but whether a Copilot usage report actually arrived for "
+                        + "this period could not be confirmed (" + InnermostMessage(ex) + "), so the figures are not "
+                        + "shown. Refresh to try again.";
+                    return chart;
+                }
+
+                if (!anyRows)
+                {
+                    // Clearing the categories is the point: leaving them would draw a labelled 0% bar
+                    // per app beneath the warning, which reads as an authoritative measurement of
+                    // "nobody uses Copilot" - the exact false result this check exists to prevent.
+                    chart.Categories = new List<ReportCategory>();
                     chart.Warning =
                         "The Copilot usage report import is switched on, but no Copilot usage report has landed for "
                         + "this period yet, so take-up cannot be measured. That is not the same as nobody using "
@@ -370,17 +411,31 @@ namespace Web.AnalyticsWeb.Controllers
             });
         }
 
+        /// <summary>
+        /// Whether any Copilot usage-report row exists in the window.
+        /// </summary>
+        /// <remarks>
+        /// Exposed as a query builder like the chart queries so the same contract tests cover it -
+        /// it is a query this area runs against a customer database, and an untested one is exactly
+        /// how the area's "every query is windowed and recompiles" invariant quietly stops being true.
+        /// </remarks>
+        internal static string CopilotDataPresenceQuery()
+        {
+            return
+                "SELECT TOP (1) CAST(1 AS int) AS Value\r\n" +
+                "FROM dbo.copilot_usage_user_activity_log\r\n" +
+                "WHERE [date] >= @from\r\n" +
+                "OPTION (RECOMPILE);";
+        }
+
         /// <summary>Whether any Copilot usage-report row exists in the window.</summary>
         private static async Task<bool> AnyCopilotUsageRowsAsync(DateTime from)
         {
-            const string sql =
-                "SELECT TOP (1) CAST(1 AS int) AS Value FROM dbo.copilot_usage_user_activity_log WHERE [date] >= @from;";
-
             using (var db = new AnalyticsEntitiesContext())
             {
                 db.Database.CommandTimeout = QueryTimeoutSecs;
                 var rows = await db.Database
-                    .SqlQuery<int>(sql, new SqlParameter("@from", from))
+                    .SqlQuery<int>(CopilotDataPresenceQuery(), new SqlParameter("@from", from))
                     .ToListAsync()
                     .ConfigureAwait(false);
                 return rows.Count > 0;
@@ -393,16 +448,17 @@ namespace Web.AnalyticsWeb.Controllers
         /// <remarks>
         /// The factory is invoked after the wait, not before, so the query does not start until the
         /// slot is held. A caller that waits too long gets a per-chart message rather than stalling
-        /// the whole request.
+        /// the whole request - and that message keeps the chart's own key and title, because the SPA
+        /// uses the key as a React key and two timed-out charts sharing one would collide.
         /// </remarks>
-        private static async Task<ReportChart> Gated(Func<Task<ReportChart>> chart)
+        private static async Task<ReportChart> Gated(string key, string title, Func<Task<ReportChart>> chart)
         {
             if (!await OfficeAppsQueryGate.WaitAsync(OfficeAppsQueueTimeout).ConfigureAwait(false))
             {
                 return new ReportChart
                 {
-                    Key = "office-apps-busy",
-                    Title = "Busy",
+                    Key = key,
+                    Title = title,
                     Type = "bar",
                     ValueLabel = "People",
                     Categories = new List<ReportCategory>(),
@@ -800,14 +856,24 @@ namespace Web.AnalyticsWeb.Controllers
         /// Copilot row at all in the denominator - an <c>INNER JOIN</c> would quietly restrict the
         /// whole calculation to Copilot-licensed people and report something close to 100% for every
         /// app, which is the exact opposite of what the chart is asked to show.
+        /// <para>
+        /// BOTH sides collapse to one row per person before fanning out. The Copilot report is also
+        /// one row per user per snapshot date, so fanning it out first would expand every snapshot six
+        /// ways - the same mistake the activity side was measured making. Taking <c>MAX</c> of each
+        /// per-app last-activity date is the right collapse: the dates only move forwards, so the
+        /// latest one answers "did they use Copilot in this app during the window".
+        /// </para>
         /// </remarks>
         internal static string CopilotAttachRateQuery()
         {
+            var copilotCollapse = string.Join(",\r\n", OfficeAppCatalogue.Select(a =>
+                $"               MAX(r.{a.CopilotColumn}) AS {a.Name}"));
+
             var copilotValues = new StringBuilder();
             for (var i = 0; i < OfficeAppCatalogue.Length; i++)
             {
                 var app = OfficeAppCatalogue[i];
-                copilotValues.Append($"        (N'{app.Name}', r.{app.CopilotColumn})");
+                copilotValues.Append($"        (N'{app.Name}', c.{app.Name})");
                 copilotValues.Append(i == OfficeAppCatalogue.Length - 1 ? "\r\n" : ",\r\n");
             }
 
@@ -821,13 +887,19 @@ namespace Web.AnalyticsWeb.Controllers
                 "    ) AS app(AppName, Used)\r\n" +
                 "    WHERE app.Used = 1\r\n" +
                 "),\r\n" +
-                "CopilotUsers AS (\r\n" +
-                "    SELECT copilot.AppName, r.user_id\r\n" +
+                "PerCopilotUser AS (\r\n" +
+                "    SELECT r.user_id,\r\n" +
+                copilotCollapse + "\r\n" +
                 "    FROM dbo.copilot_usage_user_activity_log AS r\r\n" +
+                "    WHERE r.[date] >= @from\r\n" +
+                "    GROUP BY r.user_id\r\n" +
+                "),\r\n" +
+                "CopilotUsers AS (\r\n" +
+                "    SELECT copilot.AppName, c.user_id\r\n" +
+                "    FROM PerCopilotUser AS c\r\n" +
                 "    CROSS APPLY (VALUES\r\n" + copilotValues +
                 "    ) AS copilot(AppName, LastActivity)\r\n" +
-                "    WHERE r.[date] >= @from AND copilot.LastActivity >= @from\r\n" +
-                "    GROUP BY copilot.AppName, r.user_id\r\n" +
+                "    WHERE copilot.LastActivity >= @from\r\n" +
                 ")\r\n" +
                 "SELECT au.AppName AS Label,\r\n" +
                 "       CAST(ROUND(100.0 * COUNT(cu.user_id) / COUNT(*), 1) AS float) AS Value\r\n" +

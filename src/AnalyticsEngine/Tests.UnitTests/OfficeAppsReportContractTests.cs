@@ -179,6 +179,7 @@ namespace Tests.UnitTests
             yield return Query("AppByDomain", ReportsAPIController.AppByDomainQuery());
             yield return Query("WebOnly", ReportsAPIController.WebOnlyQuery());
             yield return Query("CopilotAttachRate", ReportsAPIController.CopilotAttachRateQuery());
+            yield return Query("CopilotDataPresence", ReportsAPIController.CopilotDataPresenceQuery());
         }
 
         private static KeyValuePair<string, string> Query(string name, string sql) =>
@@ -254,23 +255,39 @@ namespace Tests.UnitTests
                     continue;
                 }
 
-                StringAssert.Contains(query.Value, "MAX(1 * a.",
-                    $"{query.Key} must collapse each person's report rows with MAX(1 * bit) - the same "
-                    + "idiom profiling.usp_UpsertM365Apps uses.");
+                if (query.Key == "CopilotDataPresence") continue; // A TOP(1) existence probe; nothing to collapse.
+
                 StringAssert.Contains(query.Value, "GROUP BY a.user_id",
                     $"{query.Key} must group by user_id so the collapse happens before any fan-out.");
 
-                var collapseAt = query.Value.IndexOf("GROUP BY a.user_id", StringComparison.Ordinal);
-                var applyAt = query.Value.IndexOf("CROSS APPLY", StringComparison.Ordinal);
-                if (applyAt >= 0)
-                {
-                    Assert.IsTrue(collapseAt < applyAt,
-                        $"{query.Key} fans out before it collapses, which is the shape measured at 91s "
-                        + "against a 25s per-chart timeout.");
-                }
-
                 Assert.IsFalse(query.Value.Contains("COUNT(*) AS Value"),
                     $"{query.Key} must not count rows as a value.");
+
+                // EVERY fan-out, not just the first. The Copilot attach rate has two - one over the
+                // activity table and one over the Copilot report - and an earlier revision collapsed
+                // only the first, so a test that checked one CROSS APPLY passed while the other half
+                // still expanded every snapshot row six ways.
+                foreach (var apply in IndexesOf(query.Value, "CROSS APPLY"))
+                {
+                    var collapsedBefore = IndexesOf(query.Value, "GROUP BY")
+                        .Any(g => g < apply &&
+                                  query.Value.Substring(g, Math.Min(30, query.Value.Length - g)).Contains("user_id"));
+
+                    Assert.IsTrue(collapsedBefore,
+                        $"{query.Key} has a CROSS APPLY at offset {apply} with no per-person collapse before it. "
+                        + "Fanning out raw rows and deduplicating afterwards is the shape measured at 91s against "
+                        + "a 25s per-chart timeout.");
+                }
+            }
+        }
+
+        private static IEnumerable<int> IndexesOf(string haystack, string needle)
+        {
+            for (var i = haystack.IndexOf(needle, StringComparison.Ordinal);
+                 i >= 0;
+                 i = haystack.IndexOf(needle, i + 1, StringComparison.Ordinal))
+            {
+                yield return i;
             }
         }
 

@@ -11,10 +11,10 @@ namespace Common.Entities.Migrations
     /// Shape: <c>([date]) INCLUDE ([user_id], &lt;all 34 platform/app bit columns&gt;)</c>.
     ///
     /// Why now: the portal's new "Office apps" report area queries this table for the first time,
-    /// with twelve windowed aggregates that run in parallel on one page load. The table had no index
-    /// on <c>[date]</c> at all in the shipped product (the installer's profiling schema script
-    /// creates one, but only when the optional profiling extension is installed), so every one of
-    /// those charts was a full clustered-index scan.
+    /// with eleven windowed aggregates on one page load (at most three of them running concurrently).
+    /// The table had no index on <c>[date]</c> at all in the shipped product (the installer's
+    /// profiling schema script creates one, but only when the optional profiling extension is
+    /// installed), so every one of those charts read the whole table.
     ///
     /// Why INCLUDE rather than a wider key: <c>[date]</c> is the only column that takes part in
     /// MATCHING - the predicate is a plain <c>[date] &gt;= @from</c> range. <c>user_id</c> and the bit
@@ -71,8 +71,8 @@ namespace Common.Entities.Migrations
     ///
     /// Note honestly that the query shape does most of the ELAPSED work: these charts collapse each
     /// person's rows before fanning out, which took the worst chart from 91s to 17s on its own. What
-    /// the index adds on top is the ~8x reduction in pages read, which is what matters when eleven of
-    /// these run concurrently and what stops the cost tracking history rather than the window.
+    /// the index adds on top is the ~8x reduction in pages read, which is what matters when several
+    /// of these run concurrently and what stops the cost tracking history rather than the window.
     ///
     /// Cost: 540 MB against a 735 MB base table (73%) at 18m rows, built in 31s (64s at 36.5m rows).
     /// Scaling roughly O(n log n), budget about 30 MB and 2 seconds per million rows - so a 100m-row
