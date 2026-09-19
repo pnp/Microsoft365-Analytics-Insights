@@ -297,8 +297,7 @@ function ReportAreaView({
   blurb: string;
   topAgents: number;
   agentName: string;
-}) {
-  const styles = useStyles();
+}) {  const styles = useStyles();
 
   const [data, setData] = useState<ReportAreaData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -378,6 +377,20 @@ function ReportAreaView({
             This is the headline call volume only. For meeting size and length, time-of-day patterns,
             modalities, organiser concentration and call quality, see{' '}
             <Link href="#/insights/teams">Teams Explorer</Link>.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {/*
+        The server clamps the window for areas whose queries cannot finish over the longer one. Say
+        so rather than silently charting a different period from the one selected - an unexplained
+        mismatch between the control and the data is worse than the shorter window.
+      */}
+      {data.months < months && (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            Showing the last {data.months} months rather than {months}. This report reads one record
+            per person per day, so a longer window cannot be built in time on a large tenant.
           </MessageBarBody>
         </MessageBar>
       )}

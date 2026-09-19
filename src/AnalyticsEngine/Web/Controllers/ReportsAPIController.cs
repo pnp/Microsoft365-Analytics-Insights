@@ -159,6 +159,12 @@ namespace Web.AnalyticsWeb.Controllers
             if (months < 1) months = DefaultMonths;
             if (months > MaxMonths) months = MaxMonths;
 
+            // The Office apps charts read a table that gains a row per user per day, and two of them
+            // touch all 24 app-on-platform columns. Measured at the ~200k-user design point, a
+            // six-month window puts those two past the per-chart timeout while three months does not.
+            // Clamp rather than refuse, and report the window actually used so the UI can explain it.
+            if (area == "office-apps" && months > OfficeAppsMaxMonths) months = OfficeAppsMaxMonths;
+
             if (topAgents < 1) topAgents = 1;
             if (topAgents > 20) topAgents = 20;
 

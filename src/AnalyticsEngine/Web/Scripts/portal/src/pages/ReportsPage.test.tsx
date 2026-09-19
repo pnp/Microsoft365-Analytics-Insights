@@ -219,8 +219,7 @@ describe('ReportsPage', () => {
   });
 
   /** A warning alongside real data must still draw the data - e.g. one series of several failed. */
-  it('still renders the chart when a warning accompanies real data', async () => {
-    mockAreas.mockResolvedValue({ ...NO_AREAS, officeApps: true });
+  it('still renders the chart when a warning accompanies real data', async () => {    mockAreas.mockResolvedValue({ ...NO_AREAS, officeApps: true });
     mockArea.mockResolvedValue({
       ...areaData,
       area: 'office-apps',
@@ -247,5 +246,33 @@ describe('ReportsPage', () => {
 
     expect(await screen.findByText('One series could not be loaded.')).toBeInTheDocument();
     expect(screen.getByTitle('Excel: 12 People')).toBeInTheDocument();
+  });
+
+  /**
+   * The Office apps queries read one record per person per day, so the server caps their window
+   * below the six months the period control offers. Silently charting a different period from the
+   * one selected is worse than the shorter window itself.
+   */
+  it('says so when the server charted a shorter window than the one selected', async () => {
+    mockAreas.mockResolvedValue({ ...NO_AREAS, officeApps: true });
+    mockArea.mockResolvedValue({ ...areaData, area: 'office-apps', months: 3, charts: [] });
+
+    renderWithProvider(<ReportsPage />);
+
+    expect(await screen.findByRole('tab', { name: 'Office apps' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Reporting period'), { target: { value: '6' } });
+
+    expect(await screen.findByText(/Showing the last 3 months rather than 6/)).toBeInTheDocument();
+  });
+
+  it('stays quiet when the server used the window that was asked for', async () => {
+    mockAreas.mockResolvedValue({ ...NO_AREAS, officeApps: true });
+    mockArea.mockResolvedValue({ ...areaData, area: 'office-apps', months: 3, charts: [] });
+
+    renderWithProvider(<ReportsPage />);
+
+    expect(await screen.findByRole('tab', { name: 'Office apps' })).toBeInTheDocument();
+    await waitFor(() => expect(mockArea).toHaveBeenCalledWith('office-apps', 3, undefined));
+    expect(screen.queryByText(/Showing the last/)).not.toBeInTheDocument();
   });
 });

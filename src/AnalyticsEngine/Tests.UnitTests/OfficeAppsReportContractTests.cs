@@ -616,6 +616,27 @@ namespace Tests.UnitTests
 
         #endregion
 
+        /// <summary>
+        /// The area's window is capped below the six months the other areas offer.
+        /// </summary>
+        /// <remarks>
+        /// Measured, not cautious: this table gains a row per user per day, so at the ~200k-user
+        /// design point a six-month window is ~36m rows, where the two charts that read all 24
+        /// app-on-platform columns take 36.7s and 38.3s against a 25-second per-chart timeout. Three
+        /// months is ~18m rows, where they take 17.1s and 17.0s. Offering a window that returns a row
+        /// of error messages is worse than offering a shorter one that works.
+        /// </remarks>
+        [TestMethod]
+        public void TheAreaCapsItsReportingWindow()
+        {
+            Assert.AreEqual(3, ReportsAPIController.OfficeAppsMaxMonths,
+                "Raising this needs a fresh measurement at ~36m rows, not an assumption.");
+
+            var page = PortalSource(Path.Combine("pages", "ReportsPage.tsx"));
+            StringAssert.Contains(page, "data.months < months",
+                "The page must tell the reader when the window it charted is not the one they chose.");
+        }
+
         private static string ReportsTypeScriptSource() =>
             PortalSource(Path.Combine("types", "reports.ts"));
 

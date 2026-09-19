@@ -53,9 +53,15 @@ namespace Web.AnalyticsWeb.Controllers
     /// does emit one row per listed value for every input row, so the order matters enormously:
     /// measured on an 18m-row synthetic table over a 180-day window, running the app-on-platform
     /// matrix as a fan-out over raw activity rows took 91s, and collapsing to one row per person first
-    /// took 17s for identical output. The other charts moved similarly (weekly app users 53s -> 8s),
-    /// which is the difference between fitting inside the per-chart timeout and not. All queries carry
-    /// <c>OPTION (RECOMPILE)</c> so the requested window drives the plan.
+    /// took 17s for identical output. The other charts moved similarly (weekly app users 53s -> 8s).
+    /// All queries carry <c>OPTION (RECOMPILE)</c> so the requested window drives the plan.
+    /// </para>
+    /// <para>
+    /// That was still not enough on its own. At 36m rows - a six-month window at the design point -
+    /// the two charts that read all 24 app-on-platform columns take 36.7s and 38.3s, past the
+    /// 25-second per-chart timeout, and running charts concurrently only divides the same throughput
+    /// between them. So the queries run one at a time (<see cref="OfficeAppsQueryGate"/>) and the
+    /// window is capped at <see cref="OfficeAppsMaxMonths"/> months, where every chart completes.
     /// </para>
     /// </remarks>
     public partial class ReportsAPIController
@@ -103,15 +109,19 @@ namespace Web.AnalyticsWeb.Controllers
         /// How many of this area's queries may be in flight at once, across all callers.
         /// </summary>
         /// <remarks>
-        /// The area has eleven charts and each opens its own <see cref="AnalyticsEntitiesContext"/>.
-        /// Started all at once they are eleven concurrent range aggregates over the same
-        /// tens-of-millions-of-rows index, and a handful of admins refreshing together would also take
-        /// a large share of the default 100-connection pool for up to <see cref="QueryTimeoutSecs"/>
-        /// seconds each. The sibling <c>UsageCharts</c> already declined that shape, running its series
-        /// sequentially for the same reason. Three keeps the page responsive while bounding what one
-        /// page load can do to the database.
+        /// One, because concurrency buys nothing here and costs correctness. These queries are all
+        /// aggregates over the same table and saturate the same resources, so running them together
+        /// does not increase throughput - it divides it. Measured on an 18m-row synthetic table, the
+        /// app-on-platform matrix takes 17.1s alone, 33.6s with two in flight and 46.4s with three.
+        /// Total wall-clock is much the same either way, but the concurrent runs breach the
+        /// 25-second per-chart timeout and the serial one does not. A gate of three was tried first
+        /// and recreated exactly the timeout it was added to prevent.
+        /// <para>
+        /// Serialising also bounds what one page load can do to a customer's database, which the
+        /// sibling <c>UsageCharts</c> already decided for itself by running its series sequentially.
+        /// </para>
         /// </remarks>
-        private static readonly SemaphoreSlim OfficeAppsQueryGate = new SemaphoreSlim(3, 3);
+        private static readonly SemaphoreSlim OfficeAppsQueryGate = new SemaphoreSlim(1, 1);
 
         /// <summary>
         /// Longest a chart will wait for its turn at the gate before giving up.
@@ -119,9 +129,30 @@ namespace Web.AnalyticsWeb.Controllers
         /// <remarks>
         /// Waiting is not covered by the SQL command timeout, so without a bound a queue of callers
         /// could push the whole HTTP request past the ~230s App Service limit and return a 500 rather
-        /// than a page with a per-chart message on it.
+        /// than a page with a per-chart message on it. Generous enough that a single page load never
+        /// hits it, but short enough that a pile-up of concurrent admins degrades to a per-chart
+        /// message instead of a dead request.
         /// </remarks>
-        private static readonly TimeSpan OfficeAppsQueueTimeout = TimeSpan.FromSeconds(60);
+        private static readonly TimeSpan OfficeAppsQueueTimeout = TimeSpan.FromSeconds(120);
+
+        /// <summary>
+        /// Longest reporting window this area offers, in months.
+        /// </summary>
+        /// <remarks>
+        /// Shorter than the six months the other areas allow, and the reason is measured rather than
+        /// cautious. This table gains one row per user per day, so at the ~200k-user tenant this
+        /// product is designed against a six-month window is ~36m rows - and at that size the two
+        /// charts that read all 24 app-on-platform columns take 36.7s and 38.3s against a 25-second
+        /// per-chart timeout. Three months is ~18m rows, where the same charts take 17.1s and 17.0s
+        /// and every chart in the area completes.
+        /// <para>
+        /// Offering a window that cannot finish is worse than not offering it: the admin gets a row of
+        /// error messages with nothing to suggest a shorter period would have worked. The request is
+        /// clamped rather than refused, and <c>ReportAreaData.Months</c> reports what was actually
+        /// used so the UI can say so.
+        /// </para>
+        /// </remarks>
+        internal const int OfficeAppsMaxMonths = 3;
 
         /// <summary>
         /// One Office app, and the columns that describe it in each of the two source tables.
