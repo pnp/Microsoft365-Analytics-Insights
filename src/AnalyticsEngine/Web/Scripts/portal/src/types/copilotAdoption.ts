@@ -91,6 +91,33 @@ export interface AdoptionSegmentRow {
   averageAdoptionScore: number;
 }
 
+/**
+ * Adoption for one email domain - one of the organisations sharing this tenant.
+ *
+ * Richer than a plain segment because a domain is usually a whole company rather than a function
+ * within one. A domain with idle seats AND unlicensed Copilot Chat use is a seat-allocation problem
+ * inside one business; a domain with strong adoption and a queue of licence candidates is a
+ * business case. Neither is visible when the same people are split across departments that span
+ * every company in the tenant.
+ */
+export interface AdoptionDomainRow extends AdoptionSegmentRow {
+  /** Seats in this domain that look reclaimable, on the same confidence tiering as the headline. */
+  reclaimableSeats: number;
+  /** Audit interactions per licensed user, normalised to a month. Idle seats are in the denominator. */
+  interactionsPerLicensedUser: number;
+  /** People here using Copilot Chat in the window with no seat assigned. */
+  unlicensedActiveUsers: number;
+  /** People here the licence-opportunity ranking recommends buying a seat for. */
+  recommendedForLicence: number;
+  /** Seat holders here scored as prime Cowork candidates. */
+  coworkPrimeCandidates: number;
+  /**
+   * True when this domain is external guests rather than members of the tenant - a partner being
+   * collaborated with, not a part of the business that can be sent on a training course.
+   */
+  external: boolean;
+}
+
 /** Every threshold and weight the adoption maths used, echoed back so a figure can be traced to its rule. */
 export interface CopilotAdoptionOptions {
   guidanceCatalogueVersion?: string;
@@ -558,6 +585,23 @@ export interface CopilotAdoptionSummary {
   adoptionByDepartment: AdoptionSegmentRow[];
   habitByDepartment: AdoptionSegmentRow[];
   adoptionByCountry: AdoptionSegmentRow[];
+
+  /** Adoption by email domain - i.e. by the organisations that share this tenant. */
+  emailDomains: AdoptionDomainRow[];
+
+  /**
+   * The email domain every figure above describes, or null for the whole tenant. Echoed back by the
+   * server rather than assumed from the request, so the page can state which population it is
+   * showing - a dashboard silently scoped to one subsidiary is how a licence decision goes wrong.
+   */
+  scopedEmailDomain: string | null;
+
+  /**
+   * Sections that stayed tenant-wide while `scopedEmailDomain` is set, because they come from
+   * aggregate queries carrying no per-user identity. Values are the constants in
+   * {@link UNSCOPED_SECTIONS}; render each as a "tenant-wide" badge rather than hiding it.
+   */
+  unscopedSections: string[];
   accountabilityDimension: string | null;
   accountabilityDimensionLabel: string | null;
   accountabilityRollup: AccountabilityRollupRow[];
@@ -715,12 +759,32 @@ export interface LicenceOpportunityPage {
 
 /** Distinct values for the filter drop-downs, derived from the loaded analysis. */
 export interface AdoptionFilterOptions {
+  /**
+   * Every email domain present in any population - licensed, unlicensed, candidate or Cowork - so a
+   * domain that holds no seats at all is still selectable. That case is the interesting one: an
+   * acquired business using Copilot Chat without ever having been given a licence.
+   */
+  emailDomains?: string[];
   departments: string[];
   countries: string[];
   bands: { value: number; name: string }[];
   /** Cowork tiers, each carrying whether it rests on observed usage or on inference. */
   coworkTiers?: { value: string; name: string; basis: CoworkBasis }[];
 }
+
+/**
+ * Names of the sections the server leaves tenant-wide when the report is narrowed to one email
+ * domain. Kept in step with `CopilotAdoptionUnscopedSections` on the server.
+ */
+export const UNSCOPED_SECTIONS = {
+  usageByApp: 'usageByApp',
+  topResourceTypes: 'topResourceTypes',
+  weeklyTrend: 'weeklyTrend',
+  agents: 'agents',
+  purchasedSeats: 'purchasedSeats',
+  coworkCredits: 'coworkCredits',
+  periodMovement: 'periodMovement',
+} as const;
 
 /** Filter/sort state for the licensed-user list. */
 export interface LicensedUserFilters {
@@ -730,6 +794,13 @@ export interface LicensedUserFilters {
   actions: string[];
   department: string;
   country: string;
+  /**
+   * The email domain the list is narrowed to. Empty means the whole tenant.
+   *
+   * Held on the filter object rather than passed separately so the list, its CSV export and the
+   * summary above it can never drift apart about which population they describe.
+   */
+  emailDomain: string;
   reclaimEligibility: string;
   coworkOnly: boolean;
   disabledOnly: boolean;
@@ -742,6 +813,8 @@ export interface OpportunityFilters {
   search: string;
   department: string;
   country: string;
+  /** The email domain the list is narrowed to. Empty means the whole tenant. */
+  emailDomain: string;
   recommendedOnly: boolean;
   existingCopilotUsersOnly: boolean;
   sortBy: string;
@@ -909,6 +982,8 @@ export interface CoworkFilters {
   tiers: CoworkTier[];
   department: string;
   country: string;
+  /** The email domain the list is narrowed to. Empty means the whole tenant. */
+  emailDomain: string;
   recommendedOnly: boolean;
   coworkUsersOnly: boolean;
   sortBy: string;

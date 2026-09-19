@@ -101,6 +101,7 @@ const DEFAULT_FILTERS: LicensedUserFilters = {
   actions: [],
   department: '',
   country: '',
+  emailDomain: '',
   reclaimEligibility: '',
   coworkOnly: false,
   disabledOnly: false,
@@ -124,6 +125,7 @@ export default function LicensedUsersPanel({
   seatLicenceTypeIds,
   initialBands,
   initialAction,
+  emailDomain,
 }: {
   windowDays: number;
   filterOptions: AdoptionFilterOptions | null;
@@ -141,6 +143,11 @@ export default function LicensedUsersPanel({
    * that plan counted - not a similar-looking one they then have to reconstruct by hand.
    */
   initialAction?: string;
+  /**
+   * The page-wide email-domain filter. Applied to this list too, so the table can never describe a
+   * different population from the summary above it.
+   */
+  emailDomain?: string | null;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -149,6 +156,7 @@ export default function LicensedUsersPanel({
     ...DEFAULT_FILTERS,
     bands: initialBands ?? [],
     actions: initialAction ? [initialAction] : [],
+    emailDomain: emailDomain ?? '',
   });
   const [searchDraft, setSearchDraft] = useState('');
   const [page, setPage] = useState(0);

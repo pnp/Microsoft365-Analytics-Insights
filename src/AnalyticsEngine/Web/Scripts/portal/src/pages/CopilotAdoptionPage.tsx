@@ -54,6 +54,7 @@ import ActionPlan from '../components/copilotAdoption/ActionPlan';
 import AgentsPanel from '../components/copilotAdoption/AgentsPanel';
 import UnlicensedPanel from '../components/copilotAdoption/UnlicensedPanel';
 import ResourceTypesPanel from '../components/copilotAdoption/ResourceTypesPanel';
+import EmailDomainPanel from '../components/copilotAdoption/EmailDomainPanel';
 import { ConcentrationBar, CombinedSegmentTable } from '../components/copilotAdoption/CombinedViews';
 import InfoTip from '../components/shared/InfoTip';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
@@ -73,6 +74,30 @@ const COMPARISON_OPTIONS = [
   { value: 'previousPeriod', label: 'Previous closed period' },
   { value: 'samePeriodLastQuarter', label: 'Same period last quarter' },
 ];
+
+/** Plain-English names for the sections the server could not narrow to one email domain. */
+const UNSCOPED_SECTION_LABELS: Record<string, string> = {
+  usageByApp: 'Copilot use by app (licensed and unlicensed)',
+  topResourceTypes: 'the resource-type breakdown',
+  weeklyTrend: 'the weekly trend',
+  agents: 'the agent inventory',
+  purchasedSeats: 'purchased and unassigned seats',
+  coworkCredits: 'the Cowork credit balance',
+  periodMovement: 'period-on-period movement and targets',
+};
+
+/**
+ * Lists the tenant-wide sections in a sentence.
+ *
+ * Says which ones rather than a bare count, because "four sections are tenant-wide" leaves the
+ * reader to work out whether the chart in front of them is one of them.
+ */
+function describeUnscopedSections(sections: string[]): string {
+  const labels = sections.map((s) => UNSCOPED_SECTION_LABELS[s] ?? s);
+  if (labels.length === 0) return '';
+  if (labels.length === 1) return labels[0];
+  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+}
 
 const TREND_GAP_NOTE =
   'Gap = Audit.General import coverage could not be verified for that completed week; it is not treated as zero usage.';
@@ -206,6 +231,13 @@ export default function CopilotAdoptionPage() {
   const [availabilityError, setAvailabilityError] = useState<string | null>(null);
   const [windowDays, setWindowDays] = useState(28);
   const [comparisonMode, setComparisonMode] = useState('previousPeriod');
+  // The email domain every visual on the page is narrowed to, or null for the whole tenant.
+  //
+  // A page-wide filter rather than a per-panel one: a tenant carrying several verified domains is
+  // usually several companies, and "how is the business we acquired doing" is a question about the
+  // whole report, not about one table. The server re-scores the cached analysis for the domain, so
+  // the figures are recomputed rather than merely hidden.
+  const [emailDomain, setEmailDomain] = useState<string | null>(null);
   const [tab, setTab] = useState<AdoptionTab>('executive');
   // Set when the user drills through from the enablement plan, so the licensed-user list they land
   // on is pre-filtered to exactly the group the plan counted. Cleared when they choose a tab
@@ -217,7 +249,7 @@ export default function CopilotAdoptionPage() {
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [filterOptions, setFilterOptions] = useState<AdoptionFilterOptions | null>(null);
   const [sql, setSql] = useState<Record<string, string> | null>(null);
-  const lastSummaryWindow = useRef<number | null>(null);
+  const lastSummaryScope = useRef<string | null>(null);
   const [interventionMessage, setInterventionMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -244,19 +276,21 @@ export default function CopilotAdoptionPage() {
 
     let cancelled = false;
     const controller = new AbortController();
-    if (lastSummaryWindow.current !== windowDays) {
-      // Clear the previous period's summary immediately. Leaving it in place kept the Excel button enabled
-      // against a stale analysis while its URL already pointed at the new period, so a click could sit
-      // waiting out a whole cold run - which is the request length the platform kills.
+    // Keyed on the WHOLE scope, not just the period. Leaving a stale summary in place while a new
+    // scope loads kept the Excel button pointing at one population and enabled against another -
+    // and if the new request then failed, the page went on rendering the previous organisation's
+    // figures underneath a heading naming the newly selected one.
+    const scopeKey = `${windowDays}::${comparisonMode}::${emailDomain ?? ''}`;
+    if (lastSummaryScope.current !== scopeKey) {
       setSummary(null);
     }
     setSummaryLoading(true);
     setSummaryError(null);
 
-    fetchAdoptionSummary(windowDays, undefined, controller.signal, comparisonMode)
+    fetchAdoptionSummary(windowDays, undefined, controller.signal, comparisonMode, emailDomain)
       .then((s) => {
         if (!cancelled) {
-          lastSummaryWindow.current = windowDays;
+          lastSummaryScope.current = scopeKey;
           setSummary(s);
         }
       })
@@ -270,6 +304,9 @@ export default function CopilotAdoptionPage() {
 
     // The filter lists and the SQL come from the same cached analysis, so these are cheap follow-ups
     // rather than extra work. Their failure is not worth surfacing - the page works without them.
+    //
+    // Deliberately NOT narrowed by emailDomain: this is the list the domain filter is chosen FROM,
+    // so narrowing it would leave the current selection as the only option and strand the user on it.
     fetchAdoptionFilters(windowDays, undefined, controller.signal)
       .then((f) => {
         if (!cancelled) setFilterOptions(f);
@@ -289,7 +326,7 @@ export default function CopilotAdoptionPage() {
       // changed or the page unmounted.
       controller.abort();
     };
-  }, [availability, windowDays, comparisonMode]);
+  }, [availability, windowDays, comparisonMode, emailDomain]);
 
   const onTabSelect: SelectTabEventHandler = (_e: unknown, data: { value: unknown }) => {
     setDrillAction(undefined);
@@ -313,15 +350,22 @@ export default function CopilotAdoptionPage() {
 
   const startIntervention = (code: string) => {
     setInterventionMessage(null);
-    createInterventionFromAction(windowDays, {
-      actionCode: code,
-      interventionType: 'briefing',
-      status: 'planned',
-      owner: 'Unassigned',
-      intendedOutcome: 'Record the intended outcome before running this enablement action.',
-      intendedReinvestmentType: 'other',
-      intendedReinvestmentDescription: 'State where this cohort should reinvest saved capacity.',
-    })
+    // The domain matters: the action count the user clicked is the SCOPED count, so the frozen
+    // cohort has to contain exactly the people that count described, not the whole tenant.
+    createInterventionFromAction(
+      windowDays,
+      {
+        actionCode: code,
+        interventionType: 'briefing',
+        status: 'planned',
+        owner: 'Unassigned',
+        intendedOutcome: 'Record the intended outcome before running this enablement action.',
+        intendedReinvestmentType: 'other',
+        intendedReinvestmentDescription: 'State where this cohort should reinvest saved capacity.',
+      },
+      undefined,
+      emailDomain,
+    )
       .then((intervention) => {
         setInterventionMessage(
           `Intervention ${intervention.interventionId} created with frozen cohort ${intervention.cohortId} (${formatCount(
@@ -377,6 +421,28 @@ export default function CopilotAdoptionPage() {
               </Select>
             </>
           )}
+
+          {/* Only offered once more than one domain exists. On a single-domain tenant the control
+              would be a drop-down with exactly one real choice, which reads as a missing feature. */}
+          {availability?.available && (filterOptions?.emailDomains?.length ?? 0) > 1 && (
+            <>
+              <Text size={200} className={styles.muted}>
+                Email domain
+              </Text>
+              <Select
+                value={emailDomain ?? ''}
+                onChange={(_e: unknown, d: { value: string }) => setEmailDomain(d.value || null)}
+                aria-label="Email domain"
+              >
+                <option value="">All domains</option>
+                {(filterOptions?.emailDomains ?? []).map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </Select>
+            </>
+          )}
           {availability?.available && (
             <Tooltip
               relationship="description"
@@ -393,7 +459,7 @@ export default function CopilotAdoptionPage() {
                 appearance="primary"
                 icon={<ArrowDownload16Regular />}
                 as="a"
-                href={summary ? workbookExportUrl(windowDays, undefined, comparisonMode) : undefined}
+                href={summary ? workbookExportUrl(windowDays, undefined, comparisonMode, emailDomain) : undefined}
                 disabled={!summary}
               >
                 Excel report
@@ -497,11 +563,35 @@ export default function CopilotAdoptionPage() {
                 </MessageBar>
               )}
 
+              {/* Stated on screen, every time. A dashboard silently showing one subsidiary is the
+                  fastest way to get a licence decision wrong, and the domain drop-down is easy to
+                  miss once the page has scrolled. */}
+              {summary.scopedEmailDomain && (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    <strong>Showing {summary.scopedEmailDomain} only.</strong> Every figure below describes
+                    the people on that email domain, not the whole tenant.
+                    {(summary.unscopedSections?.length ?? 0) > 0 && (
+                      <>
+                        {' '}
+                        {describeUnscopedSections(summary.unscopedSections ?? [])} stay tenant-wide, because
+                        they come from totals that carry no per-person detail to narrow.                      </>
+                    )}{' '}
+                    <Link onClick={() => setEmailDomain(null)}>Show all domains</Link>
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
               {tab === 'executive' &&
-                (summary.licensedUsers === 0 && !summary.figuresIncomplete ? (
+                (summary.licensedUsers === 0 && !summary.figuresIncomplete && !summary.scopedEmailDomain ? (
                   // Only a GENUINE zero means "nothing set up yet". When the licence queries timed out the
                   // count also degrades to zero, and showing the first-run screen then tells a tenant with
                   // thousands of seats that it has none at all.
+                  //
+                  // A domain filter is the same trap one level down: an acquired business using Copilot
+                  // Chat with no seats of its own is precisely what this view exists to find, and telling
+                  // the reader who just went looking for it that "licence data has not been imported" is
+                  // both wrong and the opposite of the finding.
                   <FirstRunState summary={summary} />
                 ) : (
                   <ExecutiveTab
@@ -511,20 +601,31 @@ export default function CopilotAdoptionPage() {
                     onShowOpportunityDetails={showOpportunityDetails}
                     onCreateIntervention={startIntervention}
                     interventionMessage={interventionMessage}
+                    selectedEmailDomain={emailDomain}
+                    onSelectEmailDomain={setEmailDomain}
                   />
                 ))}
 
-              {tab === 'analyst' && <AnalystTab summary={summary} sql={sql} onDrillToAction={drillToAction} />}
+              {tab === 'analyst' && (
+                <AnalystTab
+                  summary={summary}
+                  sql={sql}
+                  onDrillToAction={drillToAction}
+                  selectedEmailDomain={emailDomain}
+                  onSelectEmailDomain={setEmailDomain}
+                />
+              )}
 
               {tab === 'licensed' && (
                 <LicensedUsersPanel
-                  key={drillAction ?? 'all'}
+                  key={`${drillAction ?? 'all'}::${emailDomain ?? 'all'}`}
                   windowDays={windowDays}
                   filterOptions={filterOptions}
                   actionPlan={summary.actionPlan}
                   options={summary.options}
                   dataSources={summary.dataSources}
                   initialAction={drillAction}
+                  emailDomain={emailDomain}
                 />
               )}
 
@@ -549,19 +650,23 @@ export default function CopilotAdoptionPage() {
 
               {tab === 'cowork' && (
                 <CoworkPanel
+                  key={emailDomain ?? 'all'}
                   windowDays={windowDays}
                   summary={summary}
                   filterOptions={filterOptions}
                   options={summary.options}
+                  emailDomain={emailDomain}
                 />
               )}
 
               {tab === 'opportunities' && (
                 <OpportunitiesPanel
+                  key={emailDomain ?? 'all'}
                   windowDays={windowDays}
                   filterOptions={filterOptions}
                   options={summary.options}
                   guidanceLinks={summary.guidanceLinks}
+                  emailDomain={emailDomain}
                 />
               )}
 
@@ -643,6 +748,8 @@ function ExecutiveTab({
   onShowOpportunityDetails,
   onCreateIntervention,
   interventionMessage,
+  selectedEmailDomain,
+  onSelectEmailDomain,
 }: {
   summary: CopilotAdoptionSummary;
   onDrillToAction?: (code: string) => void;
@@ -650,6 +757,8 @@ function ExecutiveTab({
   onShowOpportunityDetails: () => void;
   onCreateIntervention?: (code: string) => void;
   interventionMessage?: string | null;
+  selectedEmailDomain?: string | null;
+  onSelectEmailDomain?: (domain: string | null) => void;
 }) {
   const styles = useStyles();
   const o = summary.options;
@@ -812,6 +921,43 @@ function ExecutiveTab({
         </Card>
       </div>
 
+      {/* Only shown on a multi-domain tenant. On a single-domain one it is a table comparing an
+          organisation with itself, which is noise on the board-pack view.
+
+          Read defensively because during a rolling deploy the SPA can be newer than the API that
+          answers it, and a missing array would take the whole page down rather than hide one card. */}
+      {(summary.emailDomains?.length ?? 0) > 1 && (
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                Adoption by email domain
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                The organisations sharing this tenant, compared side by side. Worst adoption first. Use
+                Filter on a row to narrow the whole report to that organisation.
+              </Text>
+            </div>
+            <InfoTip
+              title="Adoption by email domain"
+              content={{
+                what: 'Copilot adoption for each email domain in the tenant - in practice, for each of the organisations sharing it.',
+                how: `The domain is taken from each person's sign-in name. A domain needs at least ${o.minSeatsPerSegment} people, licensed or unlicensed, to appear. Invited guests are counted under their own home domain rather than this tenant's, and flagged External.`,
+                source:
+                  'Worth reading alongside the department table rather than instead of it: on a tenant built by acquisition a department spans every company, so its average hides exactly the difference this table shows.',
+              }}
+            />
+          </div>
+          <div className={styles.cardBody}>
+            <EmailDomainPanel
+              summary={summary}
+              selectedDomain={selectedEmailDomain}
+              onSelectDomain={onSelectEmailDomain}
+            />
+          </div>
+        </Card>
+      )}
+
       <div className={styles.sectionHead}>
         <Text weight="semibold" size={500}>
           <span className={styles.sectionIndex}>3.</span> What we are doing about it
@@ -920,12 +1066,16 @@ function AnalystTab({
   onDrillToAction,
   onCreateIntervention,
   interventionMessage,
+  selectedEmailDomain,
+  onSelectEmailDomain,
 }: {
   summary: CopilotAdoptionSummary;
   sql: Record<string, string> | null;
   onDrillToAction?: (code: string) => void;
   onCreateIntervention?: (code: string) => void;
   interventionMessage?: string | null;
+  selectedEmailDomain?: string | null;
+  onSelectEmailDomain?: (domain: string | null) => void;
 }) {
   const styles = useStyles();
   const kpis = buildKpis(summary);
@@ -1187,6 +1337,39 @@ function AnalystTab({
           <SegmentTable rows={summary.adoptionByDepartment} segmentLabel="Department" bands={bandThresholds} />
         </div>
       </Card>
+
+      {(summary.emailDomains?.length ?? 0) > 1 && (
+        <Card>
+          <div className={styles.cardHead}>
+            <div>
+              <Text weight="semibold" size={400}>
+                Adoption by email domain
+              </Text>
+              <Text size={200} block className={styles.muted}>
+                Each row is one of the organisations sharing this tenant. Idle seats next to unlicensed Chat
+                use is a seat-allocation problem; strong adoption next to a queue of candidates is a business
+                case. Use Filter to narrow the whole report to one organisation.
+              </Text>
+            </div>
+            <InfoTip
+              title="Adoption by email domain"
+              content={{
+                what: 'Adoption, reclaim, unlicensed demand and licence candidates for each email domain in the tenant.',
+                how: `The domain is taken from each person's sign-in name; people whose sign-in name has no domain are grouped as "(no domain)". A domain needs at least ${o.minSeatsPerSegment} people, licensed or unlicensed, to appear. Domains with no seats at all are listed last and show a dash rather than 0% adoption, because they were never offered a licence to ignore.`,
+                source:
+                  'Invited guests are attributed to their own home organisation rather than to this tenant, using the domain Entra encodes in a guest UPN, and are flagged External.',
+              }}
+            />
+          </div>
+          <div className={styles.cardBody}>
+            <EmailDomainPanel
+              summary={summary}
+              selectedDomain={selectedEmailDomain}
+              onSelectDomain={onSelectEmailDomain}
+            />
+          </div>
+        </Card>
+      )}
 
       {summary.opportunityByDepartment.length > 0 && (
         <Card>

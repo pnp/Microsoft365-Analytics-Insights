@@ -43,6 +43,7 @@ namespace Common.Entities.CopilotAdoption
                 WriteEngagementSheet(workbook, summary);
                 WriteTrendSheet(workbook, summary);
                 WriteDepartmentSheet(workbook, summary);
+                WriteEmailDomainSheet(workbook, summary);
                 WriteAgentSheet(workbook, summary);
                 WriteUnlicensedSheet(workbook, summary);
                 WriteActionPlanSheet(workbook, summary);
@@ -244,10 +245,36 @@ namespace Common.Entities.CopilotAdoption
             var sheet = workbook.AddSheet("Report");
             sheet.SetColumnWidths(42, 34, 60);
 
-            sheet.AddTitle("Microsoft 365 Copilot - adoption report");
+            sheet.AddTitle(string.IsNullOrWhiteSpace(summary.ScopedEmailDomain)
+                ? "Microsoft 365 Copilot - adoption report"
+                : "Microsoft 365 Copilot - adoption report for " + summary.ScopedEmailDomain);
             sheet.AddBlankRow();
 
+            // A spreadsheet outlives the screen it was exported from and gets forwarded without that
+            // context. A file narrowed to one of several organisations in a tenant has to say so on its
+            // own first sheet, or it will be read - and quoted in a licence negotiation - as the whole
+            // tenant's position.
+            if (!string.IsNullOrWhiteSpace(summary.ScopedEmailDomain))
+            {
+                sheet.AddRow(XlsxCell.Wrapped(
+                    "NARROWED TO ONE EMAIL DOMAIN: " + summary.ScopedEmailDomain + ". Every figure in this "
+                    + "workbook describes the people on that domain only, and must not be quoted as a "
+                    + "tenant-wide figure."
+                    + (summary.UnscopedSections.Count > 0
+                        ? " The following sections could not be narrowed and remain TENANT-WIDE, because they "
+                          + "come from totals that carry no per-person detail: "
+                          + DescribeUnscopedSections(summary.UnscopedSections) + "."
+                        : string.Empty)));
+                sheet.AddBlankRow();
+            }
+
             sheet.AddHeaderRow("Property", "Value", "Notes");
+            AddMeta(sheet, "Population", string.IsNullOrWhiteSpace(summary.ScopedEmailDomain)
+                    ? "Whole tenant"
+                    : "Email domain " + summary.ScopedEmailDomain,
+                string.IsNullOrWhiteSpace(summary.ScopedEmailDomain)
+                    ? "Every Copilot seat holder the analysis could see."
+                    : "Only the people whose sign-in name is on this domain. Sections listed as tenant-wide above are the exception.");
             AddMeta(sheet, "Generated (UTC)", summary.GeneratedUtc,
                 "Take a snapshot before an enablement programme and another afterwards; the two files are directly comparable.");
             AddMeta(sheet, "Period covered", $"{summary.WindowDays} days",
@@ -426,7 +453,10 @@ namespace Common.Entities.CopilotAdoption
                 summary.ScoredUsers < summary.LicensedUsers
                     ? "FEWER THAN THE SEAT COUNT. Every rate below is of these users, not of the whole tenant, "
                       + "and must not be quoted as a tenant-wide figure."
-                    : "Every licensed user was analysed, so the rates below are tenant-wide.");
+                    : string.IsNullOrWhiteSpace(summary.ScopedEmailDomain)
+                        ? "Every licensed user was analysed, so the rates below are tenant-wide."
+                        : "Every licensed user on " + summary.ScopedEmailDomain + " was analysed. The rates below "
+                          + "describe that domain, NOT the whole tenant.");
             AddMeta(sheet, "Active this period", summary.ActiveUsers,
                 "Used Copilot at least once. A deliberately low bar - one interaction counts the same as fifty.");
             AddMeta(sheet, "Habitual users", summary.HabitualUsers,
@@ -775,6 +805,121 @@ namespace Common.Entities.CopilotAdoption
             }
 
             if (chart.Series.Count > 0) sheet.AddChart(chart);
+        }
+
+        #endregion
+
+        #region Email domains
+
+        /// <summary>
+        /// Plain-English names for the sections that stay tenant-wide when the report is narrowed to
+        /// one email domain, so the Report sheet can name them rather than quote internal codes.
+        /// </summary>
+        private static string DescribeUnscopedSections(IEnumerable<string> sections)
+        {
+            var labels = (sections ?? Enumerable.Empty<string>())
+                .Select(UnscopedSectionLabel)
+                .Where(l => !string.IsNullOrWhiteSpace(l))
+                .ToList();
+
+            if (labels.Count == 0) return string.Empty;
+            if (labels.Count == 1) return labels[0];
+
+            return string.Join(", ", labels.Take(labels.Count - 1)) + " and " + labels[labels.Count - 1];
+        }
+
+        private static string UnscopedSectionLabel(string section)
+        {
+            switch (section)
+            {
+                case CopilotAdoptionUnscopedSections.UsageByApp: return "Copilot use by app";
+                case CopilotAdoptionUnscopedSections.TopResourceTypes: return "the resource-type breakdown";
+                case CopilotAdoptionUnscopedSections.WeeklyTrend: return "the weekly trend";
+                case CopilotAdoptionUnscopedSections.Agents: return "the agent inventory";
+                case CopilotAdoptionUnscopedSections.PurchasedSeats: return "purchased and unassigned seats";
+                case CopilotAdoptionUnscopedSections.CoworkCredits: return "the Cowork credit balance";
+                case CopilotAdoptionUnscopedSections.PeriodMovement: return "period-on-period movement and targets";
+                default: return section;
+            }
+        }
+
+        /// <summary>
+        /// Adoption by email domain - i.e. by the organisations sharing this tenant.
+        /// </summary>
+        /// <remarks>
+        /// Its own sheet rather than a block on the department sheet, because it answers a different
+        /// question. A tenant assembled from acquisitions has domains that adopt Copilot very
+        /// differently, and department cuts across all of them - a "Finance" row that averages four
+        /// companies hides exactly the variation this sheet exists to show.
+        /// </remarks>
+        private static void WriteEmailDomainSheet(XlsxWriter workbook, CopilotAdoptionSummary summary)
+        {
+            var domains = summary.EmailDomains ?? new List<AdoptionDomainRow>();
+
+            // One domain is the normal case - a tenant with a single verified domain - and a sheet
+            // comparing an organisation with itself is noise. Two is where the comparison starts.
+            if (domains.Count < 2) return;
+
+            var sheet = workbook.AddSheet("Email domains");
+            sheet.SetColumnWidths(34, 10, 10, 10, 12, 16, 12, 14, 18, 16, 16, 10);
+
+            sheet.AddTitle("Adoption by email domain");
+            sheet.AddBlankRow();
+            sheet.AddRow(XlsxCell.Wrapped(
+                "Each row is one of the organisations sharing this tenant, identified by the domain in its "
+                + "users' sign-in names. On a tenant built by acquisition this is usually the split that "
+                + "matters: enablement, training budget and licence ownership follow the company rather than "
+                + "the org chart, and a department row that averages four companies hides the difference. "
+                + $"Domains with fewer than {summary.Options.MinSeatsPerSegment} people in total are omitted. "
+                + "Worst adoption first; domains with no seats at all are listed last, because they have no "
+                + "adoption rate to rank on - those are the acquired businesses using Copilot Chat without "
+                + "ever having been given a licence."));
+            sheet.AddBlankRow();
+            sheet.AddRow(XlsxCell.Wrapped(
+                "Guests are attributed to their HOME organisation, not to this tenant, so an invited "
+                + "partner appears under its own domain and is flagged External. Interactions per licence "
+                + "divides by every licence including idle ones, and is normalised to a month."));
+            sheet.AddBlankRow();
+
+            sheet.AddHeaderRow("Email domain", "Seats", "Active", "Habitual", "Never used", "Adoption rate %",
+                "Avg. score", "Reclaimable", "Interactions per licence", "Unlicensed users",
+                "Licence candidates", "External");
+
+            var first = sheet.CurrentRow + 1;
+            foreach (var row in domains)
+            {
+                sheet.AddRow(row.Segment, row.LicensedUsers, row.ActiveUsers, row.HabitualUsers,
+                    row.NeverUsedUsers, row.AdoptionRatePct, row.AverageAdoptionScore, row.ReclaimableSeats,
+                    row.InteractionsPerLicensedUser, row.UnlicensedActiveUsers, row.RecommendedForLicence,
+                    row.External ? "Yes" : "No");
+            }
+            var last = sheet.CurrentRow;
+
+            var chart = new XlsxChart
+            {
+                Type = XlsxChartType.Bar,
+                Title = "Adoption rate by email domain",
+                CategoryRange = sheet.RangeReference(first, 1, last, 1),
+                AnchorCell = "N3",
+                ShowDataLabels = true,
+                ShowLegend = false,
+            };
+            chart.AddSeries("Adoption rate %", sheet.RangeReference(first, 6, last, 6));
+            sheet.AddChart(chart);
+
+            if (summary.CoworkReadinessAvailable && domains.Any(d => d.CoworkPrimeCandidates > 0))
+            {
+                sheet.AddBlankRow();
+                sheet.AddRow(XlsxCell.Wrapped(
+                    "Cowork prime candidates per domain - seat holders who carry enough coordination load to "
+                    + "benefit, and enough Copilot fluency to succeed with it."));
+                sheet.AddHeaderRow("Email domain", "Seats", "Prime candidates");
+
+                foreach (var row in domains)
+                {
+                    sheet.AddRow(row.Segment, row.LicensedUsers, row.CoworkPrimeCandidates);
+                }
+            }
         }
 
         #endregion
