@@ -53,7 +53,7 @@ namespace Web.AnalyticsWeb.Controllers
     /// does emit one row per listed value for every input row, so the order matters enormously:
     /// measured on an 18m-row synthetic table over a 180-day window, running the app-on-platform
     /// matrix as a fan-out over raw activity rows took 91s, and collapsing to one row per person first
-    /// took 18s for identical output. The other charts moved similarly (weekly app users 53s -> 11s),
+    /// took 17s for identical output. The other charts moved similarly (weekly app users 53s -> 8s),
     /// which is the difference between fitting inside the per-chart timeout and not. All queries carry
     /// <c>OPTION (RECOMPILE)</c> so the requested window drives the plan.
     /// </para>

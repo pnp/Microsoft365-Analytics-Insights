@@ -235,7 +235,7 @@ namespace Tests.UnitTests
         /// The collapse is also the difference between the area working and timing out. Every query
         /// aggregates to one row per person (or per person per week) with <c>MAX(1 * bit)</c> BEFORE
         /// the <c>CROSS APPLY (VALUES ...)</c> fan-out. Measured on an 18m-row synthetic table, the
-        /// app-on-platform matrix took 91s fanning out first and 18s collapsing first, for identical
+        /// app-on-platform matrix took 91s fanning out first and 17s collapsing first, for identical
         /// output - and the per-chart timeout is 25s. A future edit that reorders those two steps
         /// would produce correct numbers and an unusable page, which is exactly the kind of regression
         /// no other test would catch.
@@ -263,22 +263,118 @@ namespace Tests.UnitTests
                 Assert.IsFalse(query.Value.Contains("COUNT(*) AS Value"),
                     $"{query.Key} must not count rows as a value.");
 
-                // EVERY fan-out, not just the first. The Copilot attach rate has two - one over the
-                // activity table and one over the Copilot report - and an earlier revision collapsed
-                // only the first, so a test that checked one CROSS APPLY passed while the other half
-                // still expanded every snapshot row six ways.
+                // EVERY fan-out, not just the first, and each one checked against ITS OWN source.
+                //
+                // The Copilot attach rate has two applies - one over the activity table and one over
+                // the Copilot report - and an earlier revision collapsed only the first. A weaker
+                // version of this test (any earlier "GROUP BY ... user_id" anywhere in the query)
+                // passed that revision, because the activity-side collapse near the top of the query
+                // "covered" the Copilot-side apply hundreds of characters later. So the check is
+                // bound to the rowset each apply actually reads.
                 foreach (var apply in IndexesOf(query.Value, "CROSS APPLY"))
                 {
-                    var collapsedBefore = IndexesOf(query.Value, "GROUP BY")
-                        .Any(g => g < apply &&
-                                  query.Value.Substring(g, Math.Min(30, query.Value.Length - g)).Contains("user_id"));
+                    var source = SourceFeeding(query.Value, apply);
 
-                    Assert.IsTrue(collapsedBefore,
-                        $"{query.Key} has a CROSS APPLY at offset {apply} with no per-person collapse before it. "
-                        + "Fanning out raw rows and deduplicating afterwards is the shape measured at 91s against "
-                        + "a 25s per-chart timeout.");
+                    Assert.IsFalse(source.StartsWith("dbo.", StringComparison.OrdinalIgnoreCase),
+                        $"{query.Key} fans out directly over base table {source}. Fanning out raw rows and "
+                        + "deduplicating afterwards is the shape measured at 91s against a 25s per-chart "
+                        + "timeout - the apply must read an already-collapsed CTE.");
+
+                    var body = CteBody(query.Value, source);
+                    Assert.IsNotNull(body, $"{query.Key}: could not find the CTE '{source}' feeding a CROSS APPLY.");
+                    Assert.IsTrue(IsOneRowPerPerson(query.Value, source, new HashSet<string>(StringComparer.Ordinal)),
+                        $"{query.Key}: the CTE '{source}' feeding a CROSS APPLY is not one row per person. "
+                        + "Fanning out before collapsing is the shape measured at 91s against a 25s timeout.");
                 }
             }
+        }
+
+        /// <summary>
+        /// The collapse check must reject a fan-out over a base table even when an unrelated
+        /// per-person collapse appears earlier in the same query.
+        /// </summary>
+        /// <remarks>
+        /// This pins the check itself, because a weaker version of it silently did not work. That
+        /// version asked only whether ANY <c>GROUP BY ... user_id</c> appeared earlier in the string,
+        /// so the activity-side collapse near the top of the Copilot attach query "covered" the
+        /// Copilot-side fan-out hundreds of characters later - and the revision that genuinely fanned
+        /// out every usage-report snapshot row six ways passed. The SQL below is that revision's
+        /// shape, reduced to the part that matters.
+        /// </remarks>
+        [TestMethod]
+        public void TheCollapseCheckRejectsAFanOutOverABaseTable()
+        {
+            const string halfCollapsed =
+                "WITH PerUser AS (\r\n" +
+                "    SELECT a.user_id, MAX(1 * a.word) AS Word\r\n" +
+                "    FROM dbo.platform_user_activity_log AS a\r\n" +
+                "    WHERE a.[date] >= @from\r\n" +
+                "    GROUP BY a.user_id\r\n" +
+                "),\r\n" +
+                "AppUsers AS (\r\n" +
+                "    SELECT app.AppName, p.user_id\r\n" +
+                "    FROM PerUser AS p\r\n" +
+                "    CROSS APPLY (VALUES (N'Word', p.Word)) AS app(AppName, Used)\r\n" +
+                "    WHERE app.Used = 1\r\n" +
+                "),\r\n" +
+                "CopilotUsers AS (\r\n" +
+                "    SELECT copilot.AppName, r.user_id\r\n" +
+                "    FROM dbo.copilot_usage_user_activity_log AS r\r\n" +
+                "    CROSS APPLY (VALUES (N'Word', r.word_last_activity_date)) AS copilot(AppName, LastActivity)\r\n" +
+                "    WHERE r.[date] >= @from\r\n" +
+                "    GROUP BY copilot.AppName, r.user_id\r\n" +
+                ")\r\n" +
+                "SELECT 1;";
+
+            var fanOutSources = IndexesOf(halfCollapsed, "CROSS APPLY")
+                .Select(i => SourceFeeding(halfCollapsed, i))
+                .ToList();
+
+            CollectionAssert.AreEqual(
+                new[] { "PerUser", "dbo.copilot_usage_user_activity_log" }, fanOutSources.ToArray(),
+                "Each apply must be attributed to the rowset it actually reads.");
+
+            Assert.IsTrue(
+                fanOutSources.Any(s => s.StartsWith("dbo.", StringComparison.OrdinalIgnoreCase)),
+                "The half-collapsed shape must be rejected, or the check does not deliver the guarantee "
+                + "it is written for.");
+
+            // ...and the shipped queries must all pass the same check, which the test above asserts.
+            foreach (var source in IndexesOf(ReportsAPIController.CopilotAttachRateQuery(), "CROSS APPLY")
+                         .Select(i => SourceFeeding(ReportsAPIController.CopilotAttachRateQuery(), i)))
+            {
+                Assert.IsFalse(source.StartsWith("dbo.", StringComparison.OrdinalIgnoreCase),
+                    $"The shipped Copilot attach query still fans out over {source}.");
+            }
+        }
+
+        /// <summary>
+        /// Whether a CTE yields one row per person: either it collapses with
+        /// <c>GROUP BY ... user_id</c>, or it is a row-preserving projection over one that does.
+        /// </summary>
+        /// <remarks>
+        /// The chain has to be followed rather than checked one level deep. The department and domain
+        /// matrices fan out over <c>PerUserDimension</c>, which contains no <c>GROUP BY</c> of its
+        /// own - it simply joins the already-collapsed <c>PerUser</c> to the directory, one row in,
+        /// one row out. Requiring the immediate CTE to collapse would reject that correct shape.
+        /// </remarks>
+        private static bool IsOneRowPerPerson(string sql, string cte, HashSet<string> visited)
+        {
+            if (!visited.Add(cte)) return false;
+
+            var body = CteBody(sql, cte);
+            if (body == null) return false;
+
+            if (body.IndexOf("GROUP BY", StringComparison.OrdinalIgnoreCase) >= 0 && body.Contains("user_id"))
+            {
+                return true;
+            }
+
+            // Not a collapse itself, so it only qualifies if everything it reads does.
+            var sources = IndexesOf(body, "FROM ").Select(i => SourceFeeding(body, i + 5)).ToList();
+            return sources.Count > 0
+                   && sources.All(s => !s.StartsWith("dbo.", StringComparison.OrdinalIgnoreCase)
+                                       && IsOneRowPerPerson(sql, s, visited));
         }
 
         private static IEnumerable<int> IndexesOf(string haystack, string needle)
@@ -289,6 +385,32 @@ namespace Tests.UnitTests
             {
                 yield return i;
             }
+        }
+
+        /// <summary>The table or CTE named by the nearest <c>FROM</c> before <paramref name="position"/>.</summary>
+        private static string SourceFeeding(string sql, int position)
+        {
+            var from = sql.LastIndexOf("FROM ", position, StringComparison.OrdinalIgnoreCase);
+            Assert.IsTrue(from >= 0, "A CROSS APPLY with no preceding FROM is not valid SQL.");
+            return sql.Substring(from + 5).Split(new[] { ' ', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)[0];
+        }
+
+        /// <summary>
+        /// The body of the named CTE, found by matching parentheses from its <c>&lt;name&gt; AS (</c>.
+        /// </summary>
+        private static string CteBody(string sql, string name)
+        {
+            var header = sql.IndexOf(name + " AS (", StringComparison.Ordinal);
+            if (header < 0) return null;
+
+            var open = sql.IndexOf('(', header);
+            var depth = 0;
+            for (var i = open; i < sql.Length; i++)
+            {
+                if (sql[i] == '(') depth++;
+                else if (sql[i] == ')' && --depth == 0) return sql.Substring(open + 1, i - open - 1);
+            }
+            return null;
         }
 
         /// <summary>Each app appears in every chart that claims to cover the suite.</summary>
