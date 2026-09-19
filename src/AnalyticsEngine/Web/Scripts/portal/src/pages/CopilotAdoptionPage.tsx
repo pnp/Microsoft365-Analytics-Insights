@@ -2244,6 +2244,25 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 chart. Percentiles rather than fixed counts, so a 50-licence tenant and a 50,000-licence one are
                 directly comparable.
               </Text>
+              <Text>
+                <strong>Email domain</strong> is the domain in each person&apos;s sign-in name, lower-cased. On a
+                tenant assembled from acquisitions it is the closest thing the directory has to &quot;which company
+                does this person work for&quot;, which is why it is reported separately from department - a
+                department spans every company in the tenant and averages exactly that difference away. Invited
+                guests are counted under their <em>home</em> organisation rather than this tenant, because the part
+                after the final @ of a guest sign-in name is the tenant that invited them and is identical for
+                every guest in the directory; those rows are flagged External. Where a sign-in name sits on the
+                tenant&apos;s own onmicrosoft.com suffix, the mail address is used instead if it names a real
+                domain - that suffix identifies the tenant, not a company. Anyone whose domain cannot be worked
+                out is grouped as &quot;(no domain)&quot; rather than dropped, so the breakdown still adds up to
+                the seat count.
+              </Text>
+              <Text>
+                <strong>Filtering by email domain</strong> re-calculates every figure on this page for that
+                domain&apos;s people - it does not simply hide rows. A few sections cannot be narrowed because they
+                come from totals that carry no per-person detail; those stay tenant-wide and are named in the
+                banner at the top of the page whenever a filter is active.
+              </Text>
             </div>
           </AccordionPanel>
         </AccordionItem>

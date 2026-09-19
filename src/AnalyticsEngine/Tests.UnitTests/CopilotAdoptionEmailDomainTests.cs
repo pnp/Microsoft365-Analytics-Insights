@@ -117,6 +117,39 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Domain_PrefersTheMailDomainOverTheTenantsOwnOnmicrosoftSuffix()
+        {
+            // Some tenants pin every UPN to the default suffix and carry the real per-company domain
+            // on mail. Taking the UPN there would put every subsidiary in one bucket named after the
+            // tenant and silently defeat the whole comparison.
+            Assert.AreEqual(
+                "contoso.com",
+                CopilotAdoptionEmailDomain.From("alice@fabrikamgroup.onmicrosoft.com", "alice@contoso.com"));
+
+            // Still returned when mail offers nothing better, rather than dropping the person.
+            Assert.AreEqual(
+                "fabrikamgroup.onmicrosoft.com",
+                CopilotAdoptionEmailDomain.From("alice@fabrikamgroup.onmicrosoft.com", null));
+            Assert.AreEqual(
+                "fabrikamgroup.onmicrosoft.com",
+                CopilotAdoptionEmailDomain.From("alice@fabrikamgroup.onmicrosoft.com", "alice@fabrikamgroup.onmicrosoft.com"));
+
+            Assert.IsTrue(CopilotAdoptionEmailDomain.IsDefaultTenantDomain("contoso.onmicrosoft.com"));
+            Assert.IsFalse(CopilotAdoptionEmailDomain.IsDefaultTenantDomain("contoso.com"));
+            Assert.IsFalse(CopilotAdoptionEmailDomain.IsDefaultTenantDomain(null));
+        }
+
+        [TestMethod]
+        public void Domain_OfARealDomainIsNeverOverriddenByMail()
+        {
+            // The rule above must not weaken the general case: a sign-in domain that names a company
+            // always wins, or a vanity mail domain would split one organisation in two.
+            Assert.AreEqual(
+                "contoso.com",
+                CopilotAdoptionEmailDomain.From("alice@contoso.com", "alice@marketing-brand.example"));
+        }
+
+        [TestMethod]
         public void Label_NamesTheMissingBucket_SoSeatsNeverVanishFromTheBreakdown()
         {
             Assert.AreEqual(CopilotAdoptionEmailDomain.NoDomainLabel, CopilotAdoptionEmailDomain.Label(null));
@@ -314,12 +347,25 @@ namespace Tests.UnitTests
             var assignedBySkuBefore = analysis.Summary.SeatLicenceTypes.Select(l => l.AssignedUsers).ToList();
             var warningsBefore = analysis.Summary.Warnings.Count;
 
+            // The Cowork path rebuilds CoworkReadiness from the shared signal rows and writes fluency
+            // back onto them, so it is the most likely place for a scoped run to corrupt the cache.
+            Assert.IsTrue(analysis.Summary.CoworkReadinessAvailable, "The fixture must exercise the Cowork path.");
+            var coworkBefore = analysis.CoworkReadiness.Count;
+            var coworkScoredBefore = analysis.Summary.CoworkScoredUsers;
+            var fluencyBefore = analysis.CoworkSignals.Select(s => s.AdoptionScore).ToList();
+
             Narrow(analysis, "fabrikam.com", service);
 
             Assert.AreEqual(licensedBefore, analysis.Summary.LicensedUsers);
             Assert.AreEqual(activeBefore, analysis.Summary.ActiveUsers);
             Assert.AreEqual(rowsBefore, analysis.LicensedUsers.Count);
             Assert.AreEqual(warningsBefore, analysis.Summary.Warnings.Count);
+            Assert.AreEqual(coworkBefore, analysis.CoworkReadiness.Count);
+            Assert.AreEqual(coworkScoredBefore, analysis.Summary.CoworkScoredUsers);
+            CollectionAssert.AreEqual(
+                fluencyBefore,
+                analysis.CoworkSignals.Select(s => s.AdoptionScore).ToList(),
+                "Re-scoring a subset must not rewrite the fluency carried on the shared signal rows.");
             CollectionAssert.AreEqual(
                 idleBySkuBefore,
                 analysis.Summary.SeatLicenceTypes.Select(l => l.AssignedIdleUsers).ToList(),
@@ -622,6 +668,25 @@ namespace Tests.UnitTests
                 Candidate("noah@fabrikam.com", recommended: false),
                 Candidate("olive@contoso.com", recommended: true),
             });
+
+            // Populated so the scoping tests actually execute FinaliseCowork - which REBUILDS
+            // CoworkReadiness from these signals and writes fluency back onto them. Without signals
+            // that method takes its empty early-exit and the whole Cowork path goes untested, which
+            // is precisely where a scoped re-scoring would corrupt the shared cached analysis.
+            analysis.CoworkSignals.AddRange(analysis.LicensedUsers.Select(u => new CoworkReadinessSignalRow
+            {
+                UserId = u.UserId,
+                UserPrincipalName = u.UserPrincipalName,
+                EmailDomain = u.EmailDomain,
+                AccountEnabled = true,
+                CoworkInteractions = u.AdoptionScore > 50 ? 12 : 0,
+                CoworkActiveDays = u.AdoptionScore > 50 ? 5 : 0,
+                TeamsMessages = 300,
+                TeamsMeetings = 20,
+                EmailsSent = 120,
+                EmailsRead = 400,
+                FilesViewedOrEdited = 80,
+            }));
 
             return analysis;
         }
