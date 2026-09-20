@@ -185,6 +185,11 @@ export interface CopilotAdoptionOptions {
   accountabilityDimension: string;
   maxLicensedUsersScored: number;
   maxOpportunityCandidates: number;
+  /**
+   * Rows per per-user sheet in the Excel export. Optional because the portal never reads it - it is
+   * carried here only so this type still describes the payload the API returns.
+   */
+  maxWorkbookUserRows?: number;
   maxAgents: number;
   maxUnlicensedUsersScored: number;
   maxCoworkUsersScored: number;
