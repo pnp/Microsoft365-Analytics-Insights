@@ -119,6 +119,7 @@ function applyLicensedUserFilters(params: URLSearchParams, filters: LicensedUser
   if (filters.actions.length > 0) params.set('actions', filters.actions.join(','));
   if (filters.department) params.set('department', filters.department);
   if (filters.country) params.set('country', filters.country);
+  if (filters.emailDomain) params.set('emailDomain', filters.emailDomain);
   if (filters.reclaimEligibility) params.set('reclaimEligibility', filters.reclaimEligibility);
   if (filters.coworkOnly) params.set('coworkOnly', 'true');
   if (filters.disabledOnly) params.set('disabledOnly', 'true');
@@ -132,6 +133,7 @@ function applyOpportunityFilters(params: URLSearchParams, filters: OpportunityFi
   if (filters.search.trim()) params.set('search', filters.search.trim());
   if (filters.department) params.set('department', filters.department);
   if (filters.country) params.set('country', filters.country);
+  if (filters.emailDomain) params.set('emailDomain', filters.emailDomain);
   if (filters.recommendedOnly) params.set('recommendedOnly', 'true');
   if (filters.existingCopilotUsersOnly) params.set('existingCopilotUsersOnly', 'true');
   params.set('sortBy', filters.sortBy);
@@ -145,6 +147,7 @@ function applyCoworkFilters(params: URLSearchParams, filters: CoworkFilters): UR
   if (filters.tiers.length > 0) params.set('tiers', filters.tiers.join(','));
   if (filters.department) params.set('department', filters.department);
   if (filters.country) params.set('country', filters.country);
+  if (filters.emailDomain) params.set('emailDomain', filters.emailDomain);
   if (filters.recommendedOnly) params.set('recommendedOnly', 'true');
   if (filters.coworkUsersOnly) params.set('coworkUsersOnly', 'true');
   params.set('sortBy', filters.sortBy);
@@ -161,9 +164,11 @@ export function fetchAdoptionSummary(
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
   comparisonMode = 'previousPeriod',
+  emailDomain?: string | null,
 ): Promise<CopilotAdoptionSummary> {
   const params = scopeParams(windowDays, seatLicenceTypeIds);
   params.set('comparisonMode', comparisonMode);
+  if (emailDomain) params.set('emailDomain', emailDomain);
   return getJson<CopilotAdoptionSummary>(
     `/summary?${params}`,
     'the Copilot adoption summary',
@@ -171,6 +176,13 @@ export function fetchAdoptionSummary(
   );
 }
 
+/**
+ * The filter drop-down options.
+ *
+ * Deliberately NOT narrowed by the current email-domain filter: this is the list that filter is
+ * chosen from, so narrowing it would leave the selected domain as the only option and make the
+ * filter impossible to change.
+ */
 export function fetchAdoptionFilters(
   windowDays: number,
   seatLicenceTypeIds?: number[],
@@ -359,9 +371,11 @@ export function workbookExportUrl(
   windowDays: number,
   seatLicenceTypeIds?: number[],
   comparisonMode = 'previousPeriod',
+  emailDomain?: string | null,
 ): string {
   const params = scopeParams(windowDays, seatLicenceTypeIds);
   params.set('comparisonMode', comparisonMode);
+  if (emailDomain) params.set('emailDomain', emailDomain);
   return `${baseUrl()}/export/workbook?${params}`;
 }
 
@@ -374,9 +388,12 @@ export function createInterventionFromAction(
   windowDays: number,
   request: CopilotAdoptionCreateInterventionRequest,
   seatLicenceTypeIds?: number[],
+  emailDomain?: string | null,
 ): Promise<CopilotAdoptionIntervention> {
+  const params = scopeParams(windowDays, seatLicenceTypeIds);
+  if (emailDomain) params.set('emailDomain', emailDomain);
   return postJson<CopilotAdoptionIntervention>(
-    `/interventions/from-action?${scopeParams(windowDays, seatLicenceTypeIds)}`,
+    `/interventions/from-action?${params}`,
     request,
     'the Copilot adoption intervention',
   );

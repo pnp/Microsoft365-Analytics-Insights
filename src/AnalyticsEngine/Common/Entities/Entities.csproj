@@ -100,10 +100,12 @@
     <Compile Include="CopilotAdoption\CopilotAdoptionCoworkModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionDiagnostics.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionDigestRenderer.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionEmailDomain.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionExports.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionGuidanceCatalogue.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionOptions.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionPeriodModels.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionScope.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionScoring.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionService.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionSql.cs" />

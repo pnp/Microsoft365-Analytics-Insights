@@ -1892,6 +1892,11 @@ namespace Common.Entities.CopilotAdoption
 
             if (rows != null)
             {
+                foreach (var row in rows)
+                {
+                    row.EmailDomain = CopilotAdoptionEmailDomain.From(row.UserPrincipalName);
+                }
+
                 analysis.UnlicensedUsers = rows;
                 summary.Unlicensed.Truncated = rows.Count >= _options.MaxUnlicensedUsersScored;
 
@@ -2418,6 +2423,11 @@ namespace Common.Entities.CopilotAdoption
                 return;
             }
 
+            foreach (var row in rows)
+            {
+                row.EmailDomain = CopilotAdoptionEmailDomain.From(row.UserPrincipalName, row.Mail);
+            }
+
             if (!includeM365)
             {
                 output.Warnings.Add(
@@ -2546,12 +2556,20 @@ namespace Common.Entities.CopilotAdoption
         /// Turns the scored rows into the headline figures and breakdown charts. Pure - no database -
         /// so the whole executive view can be unit-tested from hand-written user rows.
         /// </summary>
-        public void FinaliseSummary(CopilotAdoptionAnalysis analysis)
-        {
+        public void FinaliseSummary(CopilotAdoptionAnalysis analysis)        {
             if (analysis == null) throw new ArgumentNullException(nameof(analysis));
 
             var summary = analysis.Summary;
             var users = analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>();
+
+            // Everything raised up to this point describes a DATA SOURCE - a failed query, a capped
+            // result set, a missing import - and stays true of any subset of the population. Everything
+            // this method adds describes the population itself. Splitting them here is what lets a
+            // domain-scoped view inherit the first set and recompute the second for its own numbers,
+            // instead of either losing "the audit import is behind" or quoting the tenant-wide count of
+            // report-sourced users next to one subsidiary's figures.
+            summary.SourceWarnings = new List<string>(summary.Warnings);
+
             SummarisePurchasedSeatCapacity(summary);
             summary.GuidanceCatalogueVersion = CopilotAdoptionGuidanceCatalogue.Version;
             summary.GuidanceLinks = CopilotAdoptionGuidanceCatalogue.All.ToList();
@@ -2663,7 +2681,7 @@ namespace Common.Entities.CopilotAdoption
                 : 0;
 
             summary.ReclaimSeatsHeldBackForWindowMismatch = heldBackForWindowMismatch;
-            summary.ReclaimableSeats = reclaimCandidates.Count - heldBackForWindowMismatch;
+            summary.ReclaimableSeats = users.Count(u => CountsAsReclaimableSeat(u, summary.UsageReportWindowMismatch));
             summary.ReclaimSeatsFromActiveBands = reclaimCandidates.Count(u => !IsIdleBand(u.Band));
             summary.ReclaimSeatsHeldBackForReview = users.Count(u =>
                 IsIdleBand(u.Band)
@@ -2756,6 +2774,118 @@ namespace Common.Entities.CopilotAdoption
                 .OrderByDescending(c => c.Value)
                 .Take(_options.TopSegments)
                 .ToList();
+
+            // Last, because it reads the licensed, unlicensed, opportunity and Cowork populations
+            // together - the point of the domain view is that those four answer one question per
+            // organisation rather than four separate ones.
+            summary.EmailDomains = BuildEmailDomains(analysis);
+        }
+
+        /// <summary>
+        /// Adoption per email domain - i.e. per organisation sharing this tenant.
+        /// </summary>
+        /// <remarks>
+        /// <para>Four populations, one row each. A domain with idle seats <i>and</i> unlicensed Chat use
+        /// is a seat-allocation problem inside one company; a domain with strong adoption and a queue of
+        /// licence candidates is a business case. Neither is visible when the same people are split
+        /// across departments that span every company in the tenant.</para>
+        /// <para>Unlike the department breakdown this keeps a row for a domain that has <b>no seats at
+        /// all</b> but does have unlicensed users or licence candidates, because that is the single most
+        /// actionable thing this view can find: an acquired business that was never given Copilot and is
+        /// using Chat anyway. The same <see cref="CopilotAdoptionOptions.MinSeatsPerSegment"/> floor is
+        /// applied to the combined population so one person in a domain is still not a data point.</para>
+        /// </remarks>
+        private List<AdoptionDomainRow> BuildEmailDomains(CopilotAdoptionAnalysis analysis)
+        {
+            var licensed = (analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>())
+                .GroupBy(u => CopilotAdoptionEmailDomain.Label(u.EmailDomain), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+            var unlicensed = (analysis.UnlicensedUsers ?? new List<UnlicensedUsageQueryRow>())
+                .GroupBy(u => CopilotAdoptionEmailDomain.Label(u.EmailDomain), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+            var candidates = (analysis.Opportunities ?? new List<LicenceOpportunityRow>())
+                .Where(o => o.Recommended)
+                .GroupBy(o => CopilotAdoptionEmailDomain.Label(o.EmailDomain), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+
+            var cowork = (analysis.CoworkReadiness ?? new List<CoworkReadinessRow>())
+                .Where(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.PrimeCandidate)
+                .GroupBy(r => CopilotAdoptionEmailDomain.Label(r.EmailDomain), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+
+            var rows = new List<AdoptionDomainRow>();
+
+            foreach (var domain in licensed.Keys
+                .Concat(unlicensed.Keys)
+                .Concat(candidates.Keys)
+                .Concat(cowork.Keys)
+                .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                List<LicensedUserAdoptionRow> seats;
+                licensed.TryGetValue(domain, out seats);
+                seats = seats ?? new List<LicensedUserAdoptionRow>();
+
+                List<UnlicensedUsageQueryRow> chat;
+                unlicensed.TryGetValue(domain, out chat);
+                chat = chat ?? new List<UnlicensedUsageQueryRow>();
+
+                int recommended;
+                candidates.TryGetValue(domain, out recommended);
+
+                int primeCandidates;
+                cowork.TryGetValue(domain, out primeCandidates);
+
+                if (seats.Count + chat.Count < _options.MinSeatsPerSegment) continue;
+
+                var row = CopilotAdoptionScoring.Summarise(domain, seats);
+
+                rows.Add(new AdoptionDomainRow
+                {
+                    Segment = row.Segment,
+                    LicensedUsers = row.LicensedUsers,
+                    ActiveUsers = row.ActiveUsers,
+                    HabitualUsers = row.HabitualUsers,
+                    NeverUsedUsers = row.NeverUsedUsers,
+                    AdoptionRatePct = row.AdoptionRatePct,
+                    AverageAdoptionScore = row.AverageAdoptionScore,
+
+                    ReclaimableSeats = seats.Count(u =>
+                        CountsAsReclaimableSeat(u, analysis.Summary.UsageReportWindowMismatch)),
+
+                    // Per seat held, not per active seat, so this is comparable with the unlicensed
+                    // column on the same row. Report-sourced rows carry Microsoft prompt counts rather
+                    // than audit interactions, so they stay in the denominator but never the numerator.
+                    InteractionsPerLicensedUser = PerUserPerMonth(
+                        seats.Where(u => !IsUsageReportSourced(u)).Sum(u => (double)u.Interactions),
+                        seats.Count),
+
+                    UnlicensedActiveUsers = chat.Count,
+                    RecommendedForLicence = recommended,
+                    CoworkPrimeCandidates = primeCandidates,
+
+                    // Guests are attributed to their home organisation, so an all-guest domain is a
+                    // partner rather than part of this business. Judged on the seat holders when there
+                    // are any, because they are the population every other column describes.
+                    External = seats.Count > 0
+                        ? seats.All(u => CopilotAdoptionEmailDomain.IsExternalGuest(u.UserPrincipalName))
+                        : chat.Count > 0 && chat.All(u => CopilotAdoptionEmailDomain.IsExternalGuest(u.UserPrincipalName)),
+                });
+            }
+
+            // Worst adoption first - the reading order of an enablement plan - but a domain with no
+            // seats at all has no adoption rate to rank on, so those sort by how much unlicensed use
+            // they represent instead. Ties break on size, so a large mediocre org outranks a tiny
+            // terrible one.
+            return rows
+                .OrderBy(r => r.LicensedUsers == 0 ? 1 : 0)
+                .ThenBy(r => r.LicensedUsers == 0 ? 0 : r.AdoptionRatePct)
+                .ThenByDescending(r => r.LicensedUsers)
+                .ThenByDescending(r => r.UnlicensedActiveUsers)
+                .ThenBy(r => r.Segment, StringComparer.OrdinalIgnoreCase)
+                .Take(_options.TopSegments)
+                .ToList();
         }
 
 
@@ -2765,15 +2895,34 @@ namespace Common.Entities.CopilotAdoption
             {
                 licence.AssignedIdleUsers = users.Count(user =>
                     UserHasLicence(user, licence)
-                    && (IsReclaimTier(user, CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain)
-                        || IsReclaimTier(user, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable))
-                    && !(summary.UsageReportWindowMismatch
-                         && IsUsageReportSourced(user)
-                         && IsReclaimTier(user, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable)));
+                    && CountsAsReclaimableSeat(user, summary.UsageReportWindowMismatch));
             }
         }
 
-        private static bool UserHasLicence(LicensedUserAdoptionRow user, LicenceTypeClassification licence)
+        /// <summary>
+        /// Whether this seat counts towards a reclaim total.
+        /// </summary>
+        /// <remarks>
+        /// The single definition of "reclaimable", used by the headline, by the per-SKU idle counts and
+        /// by the per-domain breakdown - because a licence conversation goes badly when the table under
+        /// the headline adds up to a different number from the headline.
+        /// <para>Certain and Probable only; Review and Excluded are parked. The window-mismatch
+        /// hold-back applies to PROBABLE alone: probable is an inference from an absence of recorded
+        /// use, and an absence measured over Microsoft's report period rather than the selected one is
+        /// not evidence about the selected one. Certain is not an inference at all - the account is
+        /// disabled - so a report-period technicality must never remove a disabled seat.</para>
+        /// </remarks>
+        private static bool CountsAsReclaimableSeat(LicensedUserAdoptionRow user, bool usageReportWindowMismatch)
+        {
+            var certain = IsReclaimTier(user, CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain);
+            var probable = IsReclaimTier(user, CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable);
+
+            if (!certain && !probable) return false;
+
+            return !(usageReportWindowMismatch && probable && IsUsageReportSourced(user));
+        }
+
+        internal static bool UserHasLicence(LicensedUserAdoptionRow user, LicenceTypeClassification licence)
         {
             return user.SeatLicenceTypeIds != null && user.SeatLicenceTypeIds.Contains(licence.Id);
         }
