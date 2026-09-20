@@ -116,6 +116,100 @@ namespace Tests.UnitTests
                 Assert.AreEqual(sku.Members, sku.Includes(1, 1) ? 1 : 0);
         }
 
+        /// <summary>
+        /// The demo tenant must span several email domains.
+        ///
+        /// <para>It used to sit entirely on one, which meant the dataset anyone would reach for to look
+        /// at or demonstrate the Copilot Adoption email-domain table and filter was the one dataset that
+        /// could never show either of them - both correctly hide themselves below two domains, so the
+        /// feature simply looked missing.</para>
+        /// </summary>
+        [TestMethod]
+        public void DemoPopulation_SpansSeveralEmailDomains()
+        {
+            var options = DemoOptions.Parse(new[] { "--preview", "--users", "4000" }, new DateTime(2026, 9, 1));
+            var population = new DemoPopulation(options);
+
+            var byDomain = new Dictionary<string, int>(StringComparer.Ordinal);
+            for (int id = 1; id <= options.Users; id++)
+            {
+                var domain = CopilotAdoptionEmailDomain.From(population.User(id).Upn);
+                byDomain[domain] = byDomain.TryGetValue(domain, out var n) ? n + 1 : 1;
+            }
+
+            CollectionAssert.AreEquivalent(
+                DemoPopulation.Domains,
+                byDomain.Keys.ToArray(),
+                "Every configured domain must actually be populated, and no other domain may appear.");
+
+            Assert.IsTrue(byDomain.Count > 1,
+                "A single-domain demo tenant cannot exercise the email-domain table or filter at all.");
+
+            // Each one has to clear the minimum-seats-per-segment bar, or it is filtered out of the
+            // table and the demo is back to showing one row.
+            var minimum = CopilotAdoptionOptions.Default.MinSeatsPerSegment;
+            foreach (var pair in byDomain)
+            {
+                Assert.IsTrue(pair.Value >= minimum,
+                    $"'{pair.Key}' has {pair.Value} users, below the {minimum}-user floor a segment needs to be shown.");
+            }
+
+            Assert.AreEqual(DemoPopulation.PrimaryDomain, byDomain.OrderByDescending(p => p.Value).First().Key,
+                "The parent organisation should still be the largest population.");
+        }
+
+        /// <summary>
+        /// Domain is drawn conditionally on the cohort so the acquired businesses skew towards the idle
+        /// end - that is what gives the demo a story worth looking at rather than four identical rows.
+        /// This asserts the skew exists AND that it did not disturb the cohort mix itself, which is the
+        /// thing that would have made it a data bug rather than a presentation choice.
+        /// </summary>
+        [TestMethod]
+        public void DemoDomains_SkewTowardsIdleWithoutChangingTheCohortMix()
+        {
+            var options = DemoOptions.Parse(new[] { "--preview", "--users", "4000" }, new DateTime(2026, 9, 1));
+            var population = new DemoPopulation(options);
+
+            var cohorts = new Dictionary<string, int>(StringComparer.Ordinal);
+            int primaryIdle = 0, primaryTotal = 0, acquiredIdle = 0, acquiredTotal = 0;
+
+            for (int id = 1; id <= options.Users; id++)
+            {
+                var user = population.User(id);
+                var key = user.Cohort.ToString();
+                cohorts[key] = cohorts.TryGetValue(key, out var n) ? n + 1 : 1;
+
+                var idle = user.Cohort == DemoCohort.Zero || user.Cohort == DemoCohort.Inactive;
+                if (user.Domain == DemoPopulation.PrimaryDomain)
+                {
+                    primaryTotal++;
+                    if (idle) primaryIdle++;
+                }
+                else
+                {
+                    acquiredTotal++;
+                    if (idle) acquiredIdle++;
+                }
+            }
+
+            Assert.IsTrue(primaryTotal > 0 && acquiredTotal > 0);
+            Assert.IsTrue(
+                (double)acquiredIdle / acquiredTotal > (double)primaryIdle / primaryTotal,
+                "The acquired domains should carry proportionally more idle seats than the parent, "
+                + "or the email-domain table has nothing to show.");
+
+            // The mix is what DemoOptions promised; conditioning domain on cohort must not have moved it.
+            var expected = options.Mix;
+            var order = new[] { DemoCohort.High, DemoCohort.Moderate, DemoCohort.Low, DemoCohort.Zero, DemoCohort.Inactive };
+            for (int i = 0; i < expected.Length; i++)
+            {
+                cohorts.TryGetValue(order[i].ToString(), out var actual);
+                var actualPct = actual * 100.0 / options.Users;
+                Assert.IsTrue(Math.Abs(actualPct - expected[i]) <= 3,
+                    $"{order[i]} is {actualPct:F1}% but the configured mix asks for {expected[i]}%.");
+            }
+        }
+
         [TestMethod]
         public void OfficeHours_RespectEverySeedLocaleAndSeasonWithoutUtcWeekendLeakage()
         {

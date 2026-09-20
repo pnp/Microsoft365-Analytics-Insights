@@ -25,6 +25,13 @@ namespace Tests.FakeDataGen.Demo
         public Dictionary<string, long> Rows { get; } = new Dictionary<string, long>(StringComparer.Ordinal);
         public Dictionary<string, int> Cohorts { get; } = new Dictionary<string, int>(StringComparer.Ordinal);
         public Dictionary<string, int> AdoptionBands { get; } = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Users per email domain. Reported so whoever generates a demo database can see at a glance
+        /// that the tenant is multi-domain - which is what makes the Copilot Adoption email-domain
+        /// table and filter appear, since both correctly hide themselves below two domains.
+        /// </summary>
+        public Dictionary<string, int> EmailDomains { get; } = new Dictionary<string, int>(StringComparer.Ordinal);
         public Dictionary<string, int> CurrentSkuMembers { get; } = new Dictionary<string, int>(StringComparer.Ordinal);
         public int CompletedProfileWeeks { get; set; }
     }
@@ -100,6 +107,7 @@ namespace Tests.FakeDataGen.Demo
                 foreach (var sku in _population.Skus)
                     if (sku.Includes(id, _options.Users)) _sink.Write(DemoTables.Assignments, id, sku.Id);
                 Increment(summary.Cohorts, user.Cohort.ToString());
+                Increment(summary.EmailDomains, user.Domain);
             }
             foreach (var sku in _population.Skus) summary.CurrentSkuMembers.Add(sku.PartNumber, sku.Members);
             _sink.Flush();
