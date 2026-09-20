@@ -1,4 +1,4 @@
-using Common.Entities.Copilot;
+﻿using Common.Entities.Copilot;
 using Common.Entities.Xlsx;
 using Newtonsoft.Json;
 using System;
@@ -39,8 +39,7 @@ namespace Common.Entities.CopilotAdoption
     {
         /// <summary>
         /// Rows of a per-user list written to the workbook before it is truncated, when the analysis
-        /// does not carry its own <see cref="CopilotAdoptionOptions.MaxWorkbookUserRows"/> - which is
-        /// the case for the cohort-comparison workbook, whose input has no options.
+        /// does not carry its own <see cref="CopilotAdoptionOptions.MaxWorkbookUserRows"/>.
         /// </summary>
         public const int DefaultMaxUserRows = 20000;
 
@@ -62,8 +61,6 @@ namespace Common.Entities.CopilotAdoption
 
                 WriteReportSheet(workbook, summary);
                 WriteHeadlineSheet(workbook, summary);
-                WriteMovementSheet(workbook, summary);
-                WriteTargetsSheet(workbook, summary);
                 WriteFunnelSheet(workbook, summary);
                 WriteEngagementSheet(workbook, summary);
                 WriteTrendSheet(workbook, summary);
@@ -78,22 +75,9 @@ namespace Common.Entities.CopilotAdoption
                 WriteOpportunitiesSheet(workbook, analysis);
                 WriteMethodSheet(workbook, summary);
                 WriteSnapshotFactsSheet(workbook, summary);
+                WriteRunDiagnosticsSheet(workbook, summary);
                 WriteSettingsSheet(workbook, summary);
 
-                return workbook.ToArray();
-            }
-        }
-
-        public static byte[] Build(CopilotAdoptionCohortComparison comparison)
-        {
-            if (comparison == null) throw new ArgumentNullException(nameof(comparison));
-
-            using (var workbook = new XlsxWriter())
-            {
-                WriteCohortReportSheet(workbook, comparison);
-                WriteCohortTransitionSheet(workbook, comparison);
-                WriteCohortActivationSheet(workbook, comparison);
-                WriteCohortUsersSheet(workbook, comparison);
                 return workbook.ToArray();
             }
         }
@@ -109,155 +93,6 @@ namespace Common.Entities.CopilotAdoption
                 "copilot-adoption-{0}d-{1:yyyy-MM-dd}.xlsx",
                 windowDays,
                 generated);
-        }
-
-        public static string CohortFileName(CopilotAdoptionPeriodComparisonGate gate)
-        {
-            var left = gate?.Left?.PeriodEnd ?? DateTime.UtcNow.Date;
-            var right = gate?.Right?.PeriodEnd ?? DateTime.UtcNow.Date;
-
-            return string.Format(
-                CultureInfo.InvariantCulture,
-                "copilot-adoption-cohorts-{0:yyyy-MM-dd}-to-{1:yyyy-MM-dd}.xlsx",
-                left,
-                right);
-        }
-
-        private static void WriteCohortReportSheet(XlsxWriter workbook, CopilotAdoptionCohortComparison comparison)
-        {
-            var sheet = workbook.AddSheet("Report");
-            sheet.SetColumnWidths(38, 34, 70);
-            sheet.AddTitle("Microsoft 365 Copilot - cohort progression");
-            sheet.AddBlankRow();
-            sheet.AddHeaderRow("Property", "Value", "Notes");
-            AddMeta(sheet, "Product build", BuildConstants.BuildLabel, BuildLabelNote);
-            AddMeta(sheet, "Earlier period end", comparison.Gate.Left?.PeriodEnd, "The closed period the cohort starts from.");
-            AddMeta(sheet, "Current period end", comparison.Gate.Right?.PeriodEnd, "The closed period the cohort is measured against.");
-            AddMeta(sheet, "Period length", comparison.Gate.Left?.PeriodDays ?? comparison.Gate.Right?.PeriodDays ?? 0, "Both periods must have the same length.");
-            AddMeta(sheet, "Options comparable", YesNo(comparison.Gate.OptionsComparable), comparison.Gate.Message);
-            AddMeta(sheet, "Earlier population", comparison.Summary.EarlierPopulation, "Every transition except Newly assigned partitions this population.");
-            AddMeta(sheet, "Current population", comparison.Summary.CurrentPopulation, "Current period seat holders.");
-            AddMeta(sheet, "Integrity check", YesNo(comparison.Summary.TransitionsSumToEarlierPopulation),
-                "Retained + Reactivated + Lapsed + Reclaimed + Still at risk must equal the earlier population.");
-            AddMeta(sheet, "Activation window", $"{comparison.Activation.ActivationWindowDays} days",
-                "Defaults to the reclaim grace-period concept so a seat is not both too new and failed.");
-            AddMeta(sheet, "Activation caveat", string.Empty, comparison.Activation.Caveat);
-            AddMeta(sheet, "Reclaim caveat", string.Empty, comparison.Summary.ReclaimCaveat);
-            sheet.FreezeTopRows(1);
-        }
-
-        private static void WriteCohortTransitionSheet(XlsxWriter workbook, CopilotAdoptionCohortComparison comparison)
-        {
-            var sheet = workbook.AddSheet("Cohort transitions");
-            sheet.SetColumnWidths(28, 14, 18, 70, 22, 22, 18);
-            sheet.AddTitle("Cohort transitions");
-            sheet.AddBlankRow();
-            sheet.AddHeaderRow("Transition", "Users", "% of earlier", "Definition");
-            var first = sheet.CurrentRow + 1;
-            foreach (var transition in comparison.Transitions)
-            {
-                sheet.AddRow(transition.Label, transition.Users, transition.ShareOfEarlierPopulationPct, XlsxCell.Wrapped(transition.Description));
-            }
-            var last = sheet.CurrentRow;
-            if (last >= first)
-            {
-                var chart = new XlsxChart
-                {
-                    Type = XlsxChartType.Column,
-                    Title = "Cohort transitions",
-                    CategoryRange = sheet.RangeReference(first, 1, last, 1),
-                    AnchorCell = "F3",
-                    ShowDataLabels = true,
-                    ShowLegend = false,
-                };
-                chart.AddSeries("Users", sheet.RangeReference(first, 2, last, 2));
-                sheet.AddChart(chart);
-            }
-
-            sheet.AddBlankRow();
-            sheet.AddHeaderRow("From band", "To band", "Transition", "Users");
-            foreach (var flow in comparison.Flows)
-            {
-                sheet.AddRow(flow.FromBand, flow.ToBand, flow.Transition, flow.Users);
-            }
-            sheet.FreezeTopRows(3);
-        }
-
-        private static void WriteCohortActivationSheet(XlsxWriter workbook, CopilotAdoptionCohortComparison comparison)
-        {
-            var a = comparison.Activation;
-            var sheet = workbook.AddSheet("Activation");
-            sheet.SetColumnWidths(36, 16, 18, 24, 24, 18);
-            sheet.AddTitle("Time to first use and activation");
-            sheet.AddBlankRow();
-            sheet.AddHeaderRow("Measure", "Value", "Notes");
-            AddMeta(sheet, "Known seat-start users", a.KnownSeatStartUsers, "Rows with a real seat_first_observed_utc inside the stored history.");
-            AddMeta(sheet, "Seat date unknown", a.SeatDateUnknownUsers, "Excluded from time-to-first-use. Account age is not substituted.");
-            AddMeta(sheet, "Assigned before history", a.AssignedBeforeHistoryUsers, "Excluded because first use may predate the retained history.");
-            AddMeta(sheet, "New seats assigned in period", a.NewSeatsAssignedInPeriod, "Denominator for activation rate.");
-            AddMeta(sheet, $"Activated within {a.ActivationWindowDays} days", a.ActivatedWithinWindow, "Seats that reached first use inside the configured window.");
-            AddMeta(sheet, "Activation rate %", a.ActivationRatePct, "New seats activated within the configured window.");
-            AddMeta(sheet, "Never activated", a.NeverActivatedUsers, "Known seat date, outside the activation window, and no first use.");
-            AddMeta(sheet, "Too new to judge", a.TooNewToJudgeUsers, "Known seat date but still inside the activation window.");
-            AddMeta(sheet, "Median days to first use", a.MedianDaysToFirstUse.HasValue ? (object)a.MedianDaysToFirstUse.Value : "-", "Median, not a mean.");
-
-            sheet.AddBlankRow();
-            sheet.AddHeaderRow("Distribution", "Users", "% of activated");
-            var distFirst = sheet.CurrentRow + 1;
-            foreach (var bucket in a.Distribution)
-            {
-                sheet.AddRow(bucket.Label, bucket.Users, bucket.SharePct);
-            }
-            var distLast = sheet.CurrentRow;
-            if (distLast >= distFirst)
-            {
-                var chart = new XlsxChart
-                {
-                    Type = XlsxChartType.Column,
-                    Title = "Days to first use",
-                    CategoryRange = sheet.RangeReference(distFirst, 1, distLast, 1),
-                    AnchorCell = "E4",
-                    ShowDataLabels = true,
-                    ShowLegend = false,
-                };
-                chart.AddSeries("Users", sheet.RangeReference(distFirst, 2, distLast, 2));
-                sheet.AddChart(chart);
-            }
-
-            sheet.AddBlankRow();
-            sheet.AddHeaderRow("Department", "New seats", "Activated in window", "Activation rate %", "Never activated", "Seat date unknown");
-            foreach (var segment in a.ByDepartment)
-            {
-                sheet.AddRow(segment.Segment, segment.NewSeatsAssignedInPeriod, segment.ActivatedWithinWindow,
-                    segment.ActivationRatePct, segment.NeverActivatedUsers, segment.SeatDateUnknownUsers);
-            }
-            sheet.FreezeTopRows(3);
-        }
-
-        private static void WriteCohortUsersSheet(XlsxWriter workbook, CopilotAdoptionCohortComparison comparison)
-        {
-            var rows = comparison.Rows ?? new List<CopilotAdoptionCohortUserRow>();
-            if (rows.Count == 0) return;
-
-            var sheet = workbook.AddSheet("Cohort users");
-            sheet.SetColumnWidths(34, 24, 20, 24, 18, 18, 18, 34, 18, 18, 18, 60);
-            sheet.AddTitle(rows.Count > DefaultMaxUserRows ? "Cohort users - TRUNCATED" : "Cohort users");
-            if (rows.Count > DefaultMaxUserRows)
-            {
-                sheet.AddRow(XlsxCell.Wrapped($"This sheet lists the first {DefaultMaxUserRows:N0} of {rows.Count:N0} cohort rows. Use the API drill-through for the full population."));
-            }
-            sheet.AddBlankRow();
-            sheet.AddHeaderRow("User", "Department", "Job title", "Manager", "Transition", "From band", "To band",
-                "Reclaim interpretation", "Seat first observed", "First use", "Days to first use", "Activation state");
-            var headerRow = sheet.CurrentRow;
-            foreach (var row in rows.Take(DefaultMaxUserRows))
-            {
-                sheet.AddRow(row.UserPrincipalName, row.Department, row.JobTitle, row.ManagerUserPrincipalName,
-                    row.TransitionLabel, row.FromBand, row.ToBand, XlsxCell.Wrapped(row.ReclaimInterpretation),
-                    row.SeatFirstObservedUtc, row.FirstInteractionUtc, row.DaysToFirstUse, row.ActivationState);
-            }
-            sheet.FreezeTopRows(headerRow);
-            sheet.AddAutoFilter(headerRow, sheet.CurrentRow, 1, 12);
         }
 
         #region Report metadata
@@ -376,7 +211,10 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Agent minimum users", o.AgentMinUsers, "Users an agent needs before its use counts as adoption.");
             AddMeta(sheet, "New-seat activation window", $"{o.ActivationWindowDays} days", "Days from first observed seat assignment to first use for activation-rate reporting.");
 
-            if (summary.Warnings.Count > 0)
+            // Null-tolerant like WarningSummary below, not because the summary is built that way but
+            // because a workbook that throws on an unexpected null reaches the customer as "Excel found
+            // unreadable content" with no clue why.
+            if ((summary.Warnings?.Count ?? 0) > 0)
             {
                 sheet.AddBlankRow();
                 sheet.AddHeaderRow("Warnings affecting these figures", string.Empty, string.Empty);
@@ -387,63 +225,6 @@ namespace Common.Entities.CopilotAdoption
             }
 
             sheet.FreezeTopRows(1);
-        }
-
-
-        private static void WriteMovementSheet(XlsxWriter workbook, CopilotAdoptionSummary summary)
-        {
-            var sheet = workbook.AddSheet("Period movement");
-            sheet.SetColumnWidths(30, 18, 18, 18, 18, 18, 70);
-            sheet.AddTitle("Closed-period movement");
-            sheet.AddBlankRow();
-            var movement = summary.PeriodMovement;
-            if (movement == null || !movement.Available || !movement.Comparable)
-            {
-                sheet.AddHeaderRow("Status", "Message");
-                sheet.AddRow(movement == null ? "Not available" : "Not comparable", XlsxCell.Wrapped(movement?.Message ?? "No movement was calculated."));
-                return;
-            }
-
-            sheet.AddHeaderRow("Measure", "Current", "Prior", "Change", "Current seats", "Seat change", "Comparison");
-            foreach (var delta in movement.Deltas)
-            {
-                sheet.AddRow(
-                    delta.Label,
-                    delta.CurrentValue,
-                    delta.PriorValue,
-                    delta.Change,
-                    delta.DenominatorCurrent.HasValue ? (object)delta.DenominatorCurrent.Value : string.Empty,
-                    delta.DenominatorChange.HasValue ? (object)delta.DenominatorChange.Value : string.Empty,
-                    XlsxCell.Wrapped(movement.Message));
-            }
-            sheet.FreezeTopRows(3);
-        }
-
-        private static void WriteTargetsSheet(XlsxWriter workbook, CopilotAdoptionSummary summary)
-        {
-            var sheet = workbook.AddSheet("Targets");
-            sheet.SetColumnWidths(28, 16, 28, 18, 18, 18, 18, 24, 70);
-            sheet.AddTitle("Customer-defined adoption targets");
-            sheet.AddBlankRow();
-            sheet.AddHeaderRow("Metric", "Scope", "Owner", "Baseline", "Current", "Target", "Progress %", "Target date", "Status");
-            foreach (var target in summary.Targets ?? new List<CopilotAdoptionTarget>())
-            {
-                sheet.AddRow(
-                    target.Label ?? target.Metric,
-                    target.ScopeType == "tenant" ? "Tenant" : $"{target.ScopeType}: {target.ScopeValue}",
-                    target.Owner,
-                    target.BaselineValue,
-                    target.CurrentValue.HasValue ? (object)target.CurrentValue.Value : string.Empty,
-                    target.TargetValue,
-                    target.ProgressPct.HasValue ? (object)target.ProgressPct.Value : string.Empty,
-                    target.TargetDate,
-                    XlsxCell.Wrapped(target.Message));
-            }
-            if ((summary.Targets ?? new List<CopilotAdoptionTarget>()).Count == 0)
-            {
-                sheet.AddRow("No targets", string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, "Create internal targets in the portal; no external benchmark is built in.");
-            }
-            sheet.FreezeTopRows(3);
         }
 
         private static void AddMeta(XlsxSheet sheet, string name, object value, string notes)
@@ -888,7 +669,6 @@ namespace Common.Entities.CopilotAdoption
                 case CopilotAdoptionUnscopedSections.Agents: return "the agent inventory";
                 case CopilotAdoptionUnscopedSections.PurchasedSeats: return "purchased and unassigned seats";
                 case CopilotAdoptionUnscopedSections.CoworkCredits: return "the Cowork credit balance";
-                case CopilotAdoptionUnscopedSections.PeriodMovement: return "period-on-period movement and targets";
                 default: return section;
             }
         }
@@ -1957,14 +1737,39 @@ namespace Common.Entities.CopilotAdoption
                 + "Where both sources cover the same licensed user, the Licensed users sheet shows both figures side by side "
                 + "with their source and window. Do not average or silently reconcile them into one number.");
 
-            AddMethod(sheet, "Comparing two snapshots",
-                "These figures are only comparable between two runs if both used the same thresholds, the same "
-                + "period length and the same product build. All three are recorded - the thresholds in full on "
-                + "the Settings sheet, the build and the period on the Report sheet. Check them before "
-                + "subtracting one file from another, because the tuning is adjustable and 'adoption went up' "
-                + "must not turn out to mean 'the bar moved' or 'the product started counting it differently'.\n"
-                + "The Snapshot facts sheet exists for exactly this: every scalar figure keyed by a stable name "
-                + "and sorted by it, so the comparison can be done with a lookup rather than by eye.");
+            AddMethod(sheet, "Comparing two exports",
+                "Comparison lives in these files, not in the product. There is no stored history, no saved "
+                + "baseline and no period-on-period view in the portal: to compare, export this workbook "
+                + "twice on different dates and diff the two files.\n"
+                + "Diff the 'Snapshot facts' sheet. Every scalar figure in the report appears there as a "
+                + "stable key and a value, the same keys in the same ordinal order in every export, with no "
+                + "conditional rows - so the two files line up row for row and the comparison is a key "
+                + "lookup rather than a hunt across sheets. A figure that is not known is left blank, never "
+                + "written as zero, so 'we could not measure this' and 'this was zero' stay distinguishable.\n"
+                + "Do not diff 'Run diagnostics'. That sheet carries the timings of the run that produced "
+                + "the file, and its rows depend on which steps reported rather than on the report's "
+                + "definition - so its keys legitimately differ between two exports. Read it to EXPLAIN a "
+                + "difference (a step that degraded is why a figure can fall without adoption falling), "
+                + "never to find one.\n"
+                + "For the comparison to be fair, four things must match between the two files: the product "
+                + "build (Report sheet, 'Product build'), every threshold and option (Settings sheet), "
+                + "the reporting period length (Report sheet), and the population the file covers - a "
+                + "workbook narrowed to one email domain says so at the top of the Report sheet, and "
+                + "diffing it against a tenant-wide one reads as a collapse in every headcount. The "
+                + "tuning is adjustable and the product changes, so check all four before subtracting - "
+                + "otherwise 'adoption went up' can turn out to mean 'the bar moved' or 'the product "
+                + "started counting it differently'. If they differ, re-export the older period under "
+                + "the current build and settings instead of comparing across the change.\n"
+                + "Rates carry their own denominator. Every percentage on Snapshot facts has the count it "
+                + "was taken over on the same sheet - scoredUsers, licensedUsers, activeUsers - so a rate "
+                + "that rose because the denominator shrank (reclaiming idle seats does exactly that) can "
+                + "be told apart from one that rose because more people used Copilot. Always diff the "
+                + "counts alongside the rate.\n"
+                + "Per-user movement is a diff of the 'Licensed users' sheet on 'User principal name'. "
+                + "That sheet carries the same columns as the CSV export, so the two never disagree - but "
+                + "it stops at the workbook row cap (maxWorkbookUserRows on the Settings sheet), so on a "
+                + "tenant with more seats than that, use the per-user CSV export for the full population "
+                + "instead.");
 
             AddMethod(sheet, "Licence classification",
                 "Microsoft ships Copilot-branded SKUs that are not a Microsoft 365 Copilot licence (Copilot Studio, "
@@ -2088,27 +1893,61 @@ namespace Common.Entities.CopilotAdoption
                 sheet.AddRow(fact.Key, fact.Value, XlsxCell.Wrapped(fact.Label));
             }
 
-            // Run diagnostics: durations and a failed flag only, no tenant data by construction. Here
-            // rather than on a sheet of their own because they answer a comparison question - "was the
-            // later snapshot produced by a report that was already degrading?" - and a step that timed
-            // out is why a figure fell without adoption falling.
-            var diagnostics = summary.Diagnostics;
-            if (diagnostics != null)
-            {
-                sheet.AddBlankRow();
-                sheet.AddHeaderRow("Run diagnostics", "Value", "Notes");
-                sheet.AddRow("diagnostics.totalMs", diagnostics.TotalMs,
-                    XlsxCell.Wrapped("Wall-clock time for the whole analysis."));
+            sheet.FreezeTopRows(headerRow);
+        }
 
-                foreach (var step in diagnostics.Steps ?? new List<CopilotAdoptionStepTiming>())
-                {
-                    sheet.AddRow(
-                        "diagnostics.step." + step.Step,
-                        step.DurationMs,
-                        XlsxCell.Wrapped(step.Failed
-                            ? "DEGRADED - this step did not complete, so anything derived from it is incomplete."
-                            : "Milliseconds."));
-                }
+        /// <summary>
+        /// Run timings: how long the analysis took and which steps degraded.
+        ///
+        /// <para>Deliberately NOT on the Snapshot facts sheet, although it started there. These rows are
+        /// the one part of the file whose KEYS depend on the run rather than on the model:
+        /// <c>diagnostics.step.&lt;name&gt;</c> exists only for the steps that actually reported, and the
+        /// whole block only exists when diagnostics were collected at all. Mixed into Snapshot facts they
+        /// would break the single property that sheet is built on - that two exports carry the same keys
+        /// in the same order - and a lookup written against one file would silently resolve to the
+        /// neighbouring row in the other.</para>
+        ///
+        /// <para>They are still worth exporting, because they answer a comparison question: "was the
+        /// later snapshot produced by a report that was already degrading?" A step that timed out is why
+        /// a figure can fall without adoption falling. Durations and a failed flag only - no tenant data
+        /// by construction.</para>
+        /// </summary>
+        private static void WriteRunDiagnosticsSheet(XlsxWriter workbook, CopilotAdoptionSummary summary)
+        {
+            var sheet = workbook.AddSheet("Run diagnostics");
+            sheet.SetColumnWidths(46, 26, 74);
+
+            sheet.AddTitle("Run diagnostics - how this analysis performed");
+            sheet.AddRow(XlsxCell.Wrapped(
+                "Timings for the run that produced this file, so a figure that moved because the report "
+                + "was degrading can be told apart from one that moved because adoption did. Unlike "
+                + "'Snapshot facts', the rows here depend on which steps reported, so this sheet is NOT "
+                + "the one to diff - use it to explain a difference, not to find one."));
+            sheet.AddBlankRow();
+            sheet.AddHeaderRow("Key", "Value", "Notes");
+
+            var headerRow = sheet.CurrentRow;
+            var diagnostics = summary.Diagnostics;
+
+            if (diagnostics == null)
+            {
+                sheet.AddRow("diagnostics", string.Empty,
+                    XlsxCell.Wrapped("No run diagnostics were collected for this analysis."));
+                sheet.FreezeTopRows(headerRow);
+                return;
+            }
+
+            sheet.AddRow("diagnostics.totalMs", diagnostics.TotalMs,
+                XlsxCell.Wrapped("Wall-clock time for the whole analysis."));
+
+            foreach (var step in diagnostics.Steps ?? new List<CopilotAdoptionStepTiming>())
+            {
+                sheet.AddRow(
+                    "diagnostics.step." + step.Step,
+                    step.DurationMs,
+                    XlsxCell.Wrapped(step.Failed
+                        ? "DEGRADED - this step did not complete, so anything derived from it is incomplete."
+                        : "Milliseconds."));
             }
 
             sheet.FreezeTopRows(headerRow);
@@ -2204,14 +2043,22 @@ namespace Common.Entities.CopilotAdoption
                 {
                     facts.Add(new ScalarFact { Key = key, Value = ScalarCell(value), Label = property.Name });
                 }
-                else if (value is ICollection collection)
+                else if (typeof(ICollection).IsAssignableFrom(type))
                 {
                     // The count, not the contents. A list that emptied between two snapshots is a real
                     // finding and would otherwise be invisible here.
+                    //
+                    // Keyed off the PROPERTY TYPE, never off the runtime value. Testing `value is
+                    // ICollection` would silently drop the row whenever the list happened to be null,
+                    // which is the one thing this sheet must never do: a row that appears in one export
+                    // and not the other shifts every row below it and misaligns the diff the whole sheet
+                    // exists for. A null list is written blank - unknown, not zero - exactly like a null
+                    // scalar.
+                    var collection = value as ICollection;
                     facts.Add(new ScalarFact
                     {
                         Key = key + ".count",
-                        Value = collection.Count,
+                        Value = collection == null ? (object)string.Empty : collection.Count,
                         Label = property.Name + " (row count)",
                     });
                 }

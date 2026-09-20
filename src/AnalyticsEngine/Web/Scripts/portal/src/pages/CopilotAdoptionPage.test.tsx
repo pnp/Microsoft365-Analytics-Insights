@@ -8,7 +8,6 @@ import {
   fetchAdoptionSql,
   fetchAdoptionSummary,
   fetchLicensedUsers,
-  createInterventionFromAction,
 } from '../api/copilotAdoptionApi';
 import { AdoptionBand, CopilotResourceTypeKind, type CopilotAdoptionOptions, type CopilotAdoptionSummary } from '../types/copilotAdoption';
 
@@ -19,7 +18,6 @@ vi.mock('../api/copilotAdoptionApi', async (importOriginal) => ({
   fetchAdoptionSql: vi.fn(),
   fetchAdoptionSummary: vi.fn(),
   fetchLicensedUsers: vi.fn(),
-  createInterventionFromAction: vi.fn(),
 }));
 
 const options: CopilotAdoptionOptions = {
@@ -342,7 +340,6 @@ describe('CopilotAdoptionPage email-domain filter', () => {
         28,
         undefined,
         expect.anything(),
-        'previousPeriod',
         'fabrikam.com',
       ),
     );
@@ -378,7 +375,6 @@ describe('CopilotAdoptionPage email-domain filter', () => {
         28,
         undefined,
         expect.anything(),
-        'previousPeriod',
         null,
       ),
     );
@@ -437,30 +433,15 @@ describe('CopilotAdoptionPage domain-scope regressions', () => {
     expect(await screen.findByText('No Copilot licences found')).toBeVisible();
   });
 
-  it('freezes an intervention cohort against the domain the count was shown for', async () => {
-    // The action count clicked is the SCOPED count, so the persisted cohort has to contain exactly
-    // the people that count described - not every matching user in the tenant.
-    vi.mocked(createInterventionFromAction).mockResolvedValue({
-      interventionId: 1,
-      cohortId: 2,
-      memberCount: 40,
-    } as Awaited<ReturnType<typeof createInterventionFromAction>>);
-
+  it('offers no in-product period comparison, because comparison is done by diffing two exports', async () => {
+    // Comparison was removed from the product: there is no stored history to compare against, so a
+    // "Compare" control would promise something the server cannot answer. The Excel export is the
+    // comparison surface.
     await renderPage();
+    await screen.findByLabelText('Reporting period');
 
-    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({ scopedEmailDomain: 'fabrikam.com' }));
-    fireEvent.change(await screen.findByLabelText('Email domain'), {
-      target: { value: 'fabrikam.com' },
-    });
-    await screen.findByText(/Showing fabrikam.com only/);
-
-    fireEvent.click((await screen.findAllByRole('button', { name: 'Start intervention' }))[0]);
-
-    await waitFor(() => expect(vi.mocked(createInterventionFromAction)).toHaveBeenCalled());
-
-    const call = vi.mocked(createInterventionFromAction).mock.calls[0];
-    expect(call[0]).toBe(28);
-    expect(call[1]).toEqual(expect.objectContaining({ actionCode: expect.any(String) }));
-    expect(call[3]).toBe('fabrikam.com');
+    expect(screen.queryByLabelText('Comparison period')).toBeNull();
+    expect(screen.queryByText('Compare')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Start intervention' })).toBeNull();
   });
 });
