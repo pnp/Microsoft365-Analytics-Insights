@@ -542,6 +542,43 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("accountabilityDimension")]
         public string AccountabilityDimension { get; set; } = CopilotAdoptionAccountabilityDimensions.DirectManager;
 
+        /// <summary>
+        /// Rows of a per-user list written to the Excel workbook before it is truncated.
+        ///
+        /// <para>Separate from <see cref="MaxLicensedUsersScored"/>, which caps what is <i>analysed</i>:
+        /// this caps only what is <i>written to a sheet</i>. Every aggregate in the workbook still
+        /// covers the whole scored population, and the sheets say so when they truncate.</para>
+        ///
+        /// <para>The default stays at 20,000 because the workbook is assembled in memory before it is
+        /// streamed, and the per-user sheets are wide. Raising it is a supported and occasionally
+        /// necessary thing to do - a tenant that wants the whole population in one file rather than in
+        /// the CSV exports - but it costs memory and file size roughly linearly, so it is a deliberate
+        /// decision rather than a default. Clamped by <see cref="WorkbookUserRows"/> so a mis-typed
+        /// value cannot ask for a negative or an Excel-breaking number of rows.</para>
+        /// </summary>
+        [JsonProperty("maxWorkbookUserRows")]
+        public int MaxWorkbookUserRows { get; set; } = CopilotAdoptionWorkbook.DefaultMaxUserRows;
+
+        /// <summary>
+        /// <see cref="MaxWorkbookUserRows"/> clamped to something a worksheet can actually hold.
+        ///
+        /// <para>A value of zero or less means "unset", which falls back to the default rather than
+        /// writing an empty sheet.</para>
+        ///
+        /// <para>Not serialised: it is derived from <see cref="MaxWorkbookUserRows"/>, which is the
+        /// setting. Exposing it as well would put a second, PascalCase row in the API payload for a
+        /// figure that is not independently configurable.</para>
+        /// </summary>
+        [JsonIgnore]
+        public int WorkbookUserRows
+        {
+            get
+            {
+                if (MaxWorkbookUserRows <= 0) return CopilotAdoptionWorkbook.DefaultMaxUserRows;
+                return Math.Min(MaxWorkbookUserRows, CopilotAdoptionWorkbook.MaxSupportedUserRows);
+            }
+        }
+
         public static CopilotAdoptionOptions Default => new CopilotAdoptionOptions();
     }
 

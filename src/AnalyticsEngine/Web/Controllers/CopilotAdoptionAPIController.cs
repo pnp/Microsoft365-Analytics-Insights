@@ -958,8 +958,14 @@ namespace Web.AnalyticsWeb.Controllers
         ///
         /// Exists for the point-in-time snapshot. A screenshot of this page cannot be compared with
         /// another screenshot six months later: the numbers cannot be subtracted and nobody can tell
-        /// what period or thresholds either was run with. The workbook records both, so two files taken
-        /// before and after an enablement programme are comparable and the comparison is checkable.
+        /// what period, thresholds or product build either was run with. The workbook records all
+        /// three, so two files taken before and after an enablement programme are comparable and the
+        /// comparison is checkable.
+        ///
+        /// <para>Two sheets make that comparison mechanical rather than manual: "Snapshot facts"
+        /// carries every scalar figure as a stable key/value row and "Settings" carries every tuning
+        /// option the same way, both sorted by key so a lookup against the other file always resolves.
+        /// The per-user sheets carry the same columns as the CSV exports, from the same definitions.</para>
         ///
         /// Built from the same cached analysis that renders the page, so the two can never disagree.
         /// </summary>
