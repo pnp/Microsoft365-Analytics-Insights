@@ -229,6 +229,9 @@
     <Compile Include="Controllers\InstallLogAPIController.cs" />
     <Compile Include="Controllers\ProfilingStatusAPIController.cs" />
     <Compile Include="Controllers\ReportsAPIController.cs" />
+    <Compile Include="Controllers\ReportsAPIController.OfficeApps.cs">
+      <DependentUpon>ReportsAPIController.cs</DependentUpon>
+    </Compile>
     <Compile Include="Controllers\CallRecordWebhookController.cs" />
     <Compile Include="Controllers\HomeController.cs" />
     <Compile Include="Controllers\SiteTokenAPIController.cs" />

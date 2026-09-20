@@ -20,6 +20,7 @@ const NO_AREAS: ReportAreas = {
   webTraffic: false,
   calls: false,
   emails: false,
+  officeApps: false,
 };
 
 const areaData: ReportAreaData = {
@@ -86,5 +87,192 @@ describe('ReportsPage', () => {
     expect(screen.queryByText(/No built-in report charts are available yet/)).not.toBeInTheDocument();
     expect(mockAvailability).not.toHaveBeenCalled();
     expect(mockArea).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The Office apps area rides on the same Graph usage-report import as "Microsoft 365 usage", so a
+   * deployment that imports usage reports gets both tabs and one that does not gets neither.
+   */
+  it('offers the Office apps tab only when the usage-report import is on', async () => {
+    mockAreas.mockResolvedValue({ ...NO_AREAS, officeApps: true });
+    renderWithProvider(<ReportsPage />);
+
+    expect(await screen.findByRole('tab', { name: 'Office apps' })).toBeInTheDocument();
+    await waitFor(() => expect(mockArea).toHaveBeenCalledWith('office-apps', 3, undefined));
+  });
+
+  it('hides the Office apps tab when that import is off', async () => {
+    mockAreas.mockResolvedValue({ ...NO_AREAS, copilot: true });
+    renderWithProvider(<ReportsPage />);
+
+    expect(await screen.findByRole('tab', { name: 'Copilot' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Office apps' })).not.toBeInTheDocument();
+  });
+
+  /**
+   * A matrix chart must reach MatrixChart rather than falling through to "No data for this period."
+   * - the fall-through branch is what every unrecognised chart type hits, so a missing case in the
+   * renderer looks exactly like an empty result set.
+   */
+  it('renders a matrix chart returned by the Office apps area', async () => {
+    mockAreas.mockResolvedValue({ ...NO_AREAS, officeApps: true });
+    mockArea.mockResolvedValue({
+      ...areaData,
+      area: 'office-apps',
+      charts: [
+        {
+          key: 'office-apps-by-department',
+          title: 'App use by department',
+          description: 'People using each app.',
+          type: 'matrix',
+          valueLabel: 'People',
+          series: null,
+          categories: null,
+          matrix: {
+            rowLabel: 'App',
+            columnLabel: 'Department',
+            rows: ['Excel'],
+            columns: ['Finance'],
+            cells: [{ row: 'Excel', column: 'Finance', value: 12 }],
+            shadeByRow: true,
+          },
+          showShare: false,
+          valueSuffix: null,
+          sql: 'SELECT 1',
+          error: null,
+          warning: null,
+        },
+      ],
+    });
+
+    renderWithProvider(<ReportsPage />);
+
+    expect(await screen.findByText('App use by department')).toBeInTheDocument();
+    expect(screen.getByTitle('Excel / Finance: 12 People')).toBeInTheDocument();
+    expect(screen.queryByText('No data for this period.')).not.toBeInTheDocument();
+  });
+
+  /** A percentage chart must print its unit, or 40 reads as forty people rather than 40%. */
+  it('appends the unit suffix on a percentage bar chart', async () => {
+    mockAreas.mockResolvedValue({ ...NO_AREAS, officeApps: true });
+    mockArea.mockResolvedValue({
+      ...areaData,
+      area: 'office-apps',
+      charts: [
+        {
+          key: 'office-apps-department-adoption',
+          title: 'Departments least likely to use the apps',
+          description: 'Share of each department.',
+          type: 'bar',
+          valueLabel: 'Adoption',
+          series: null,
+          categories: [{ label: 'Field Operations', value: 40 }],
+          matrix: null,
+          showShare: false,
+          valueSuffix: '%',
+          sql: 'SELECT 1',
+          error: null,
+          warning: null,
+        },
+      ],
+    });
+
+    renderWithProvider(<ReportsPage />);
+
+    expect(await screen.findByText('Departments least likely to use the apps')).toBeInTheDocument();
+    expect(screen.getByTitle('Field Operations: 40% Adoption')).toBeInTheDocument();
+  });
+
+  /**
+   * A chart that explains why it is empty must not also print the generic "No data for this period."
+   * The two together read as a contradiction, and the generic line is the less true of the pair -
+   * "the Copilot import is switched off" and "no data in this period" are different facts.
+   */
+  it('shows only the explanation when a chart is empty for a stated reason', async () => {
+    mockAreas.mockResolvedValue({ ...NO_AREAS, officeApps: true });
+    mockArea.mockResolvedValue({
+      ...areaData,
+      area: 'office-apps',
+      charts: [
+        {
+          key: 'office-apps-copilot-attach',
+          title: 'Copilot take-up inside each app',
+          description: 'Share who used Copilot in that app.',
+          type: 'bar',
+          valueLabel: 'Take-up',
+          series: null,
+          categories: [],
+          matrix: null,
+          showShare: false,
+          valueSuffix: '%',
+          sql: 'SELECT 1',
+          error: null,
+          warning: 'The Copilot usage report import is switched off.',
+        },
+      ],
+    });
+
+    renderWithProvider(<ReportsPage />);
+
+    expect(await screen.findByText('The Copilot usage report import is switched off.')).toBeInTheDocument();
+    expect(screen.queryByText('No data for this period.')).not.toBeInTheDocument();
+  });
+
+  /** A warning alongside real data must still draw the data - e.g. one series of several failed. */
+  it('still renders the chart when a warning accompanies real data', async () => {    mockAreas.mockResolvedValue({ ...NO_AREAS, officeApps: true });
+    mockArea.mockResolvedValue({
+      ...areaData,
+      area: 'office-apps',
+      charts: [
+        {
+          key: 'office-apps-popularity',
+          title: 'Most used apps',
+          description: 'People per app.',
+          type: 'bar',
+          valueLabel: 'People',
+          series: null,
+          categories: [{ label: 'Excel', value: 12 }],
+          matrix: null,
+          showShare: false,
+          valueSuffix: null,
+          sql: 'SELECT 1',
+          error: null,
+          warning: 'One series could not be loaded.',
+        },
+      ],
+    });
+
+    renderWithProvider(<ReportsPage />);
+
+    expect(await screen.findByText('One series could not be loaded.')).toBeInTheDocument();
+    expect(screen.getByTitle('Excel: 12 People')).toBeInTheDocument();
+  });
+
+  /**
+   * The Office apps queries read one record per person per day, so the server caps their window
+   * below the six months the period control offers. Silently charting a different period from the
+   * one selected is worse than the shorter window itself.
+   */
+  it('says so when the server charted a shorter window than the one selected', async () => {
+    mockAreas.mockResolvedValue({ ...NO_AREAS, officeApps: true });
+    mockArea.mockResolvedValue({ ...areaData, area: 'office-apps', months: 3, charts: [] });
+
+    renderWithProvider(<ReportsPage />);
+
+    expect(await screen.findByRole('tab', { name: 'Office apps' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Reporting period'), { target: { value: '6' } });
+
+    expect(await screen.findByText(/Showing the last 3 months rather than 6/)).toBeInTheDocument();
+  });
+
+  it('stays quiet when the server used the window that was asked for', async () => {
+    mockAreas.mockResolvedValue({ ...NO_AREAS, officeApps: true });
+    mockArea.mockResolvedValue({ ...areaData, area: 'office-apps', months: 3, charts: [] });
+
+    renderWithProvider(<ReportsPage />);
+
+    expect(await screen.findByRole('tab', { name: 'Office apps' })).toBeInTheDocument();
+    await waitFor(() => expect(mockArea).toHaveBeenCalledWith('office-apps', 3, undefined));
+    expect(screen.queryByText(/Showing the last/)).not.toBeInTheDocument();
   });
 });

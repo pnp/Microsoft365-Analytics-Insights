@@ -68,6 +68,13 @@ type CategoryBarChartProps = {
    * values do not sum to anything meaningful), so it is off by default.
    */
   showShare?: boolean;
+  /**
+   * Unit appended to the printed value, e.g. "%".
+   *
+   * Needed because a bar chart of percentages is otherwise indistinguishable from a bar chart of
+   * counts: "62" against a department reads as sixty-two people unless it says 62%.
+   */
+  valueSuffix?: string | null;
 };
 
 /**
@@ -77,13 +84,14 @@ type CategoryBarChartProps = {
  * colour - flat rectangles read as functional, and these charts end up in board packs. The gradient
  * stays within one hue so it never changes which category a colour identifies.
  */
-export default function CategoryBarChart({ categories, valueLabel, showShare }: CategoryBarChartProps) {
+export default function CategoryBarChart({ categories, valueLabel, showShare, valueSuffix }: CategoryBarChartProps) {
   const styles = useStyles();
 
   if (categories.length === 0) {
     return <div className={styles.empty}>No data for this period.</div>;
   }
 
+  const suffix = valueSuffix ?? '';
   const max = Math.max(...categories.map((c) => c.value), 1);
   const total = categories.reduce((sum, c) => sum + c.value, 0);
 
@@ -94,7 +102,11 @@ export default function CategoryBarChart({ categories, valueLabel, showShare }: 
         const share = total > 0 ? (c.value / total) * 100 : 0;
 
         return (
-          <div className={styles.row} key={c.label} title={`${c.label}: ${formatValue(c.value)} ${valueLabel}`}>
+          <div
+            className={styles.row}
+            key={c.label}
+            title={`${c.label}: ${formatValue(c.value)}${suffix} ${valueLabel}`}
+          >
             <Text size={200} className={styles.label}>
               {c.label}
             </Text>
@@ -114,6 +126,7 @@ export default function CategoryBarChart({ categories, valueLabel, showShare }: 
             </div>
             <Text size={200} weight="semibold" className={styles.value}>
               {formatValue(c.value)}
+              {suffix}
             </Text>
           </div>
         );
