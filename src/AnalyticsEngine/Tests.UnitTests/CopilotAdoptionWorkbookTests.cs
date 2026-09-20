@@ -2,12 +2,15 @@ using Common.Entities.Copilot;
 using Common.Entities.CopilotAdoption;
 using Common.Entities.Xlsx;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.IO.Packaging;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Xml.Linq;
 
@@ -214,12 +217,237 @@ namespace Tests.UnitTests
                 "Report", "Headline figures", "Adoption funnel", "Engagement", "Weekly trend",
                 "Departments and apps", "Agents", "Unlicensed usage", "Enablement plan",
                 "Licensed users", "Licence opportunities", "How this is calculated",
+                "Snapshot facts", "Settings",
             })
             {
                 CollectionAssert.Contains(sheetNames, expected,
                     $"The workbook is meant to be the whole report; '{expected}' is missing.");
             }
         }
+
+        #endregion
+
+        #region Snapshot comparability
+
+        /// <summary>
+        /// The build that produced the file has to be on the file.
+        ///
+        /// Two snapshots exist to be subtracted. A figure can move because adoption moved or because the
+        /// product changed how it counts, and without the build on the file those two are
+        /// indistinguishable - which is how an enablement programme ends up credited with a bug fix.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_RecordsTheBuildItWasGeneratedBy()
+        {
+            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
+
+            StringAssert.Contains(text, "Product build",
+                "The Report sheet must name the build that produced the snapshot.");
+            StringAssert.Contains(text, Common.Entities.BuildConstants.BuildLabel,
+                "The build label itself must be written, not just its heading.");
+        }
+
+        /// <summary>
+        /// The cohort workbook is compared across time exactly like the main one, so it carries the
+        /// same stamp. It was the easier of the two to forget: it has its own Report sheet.
+        /// </summary>
+        [TestMethod]
+        public void CohortWorkbook_RecordsTheBuildItWasGeneratedBy()
+        {
+            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticCohortComparison()));
+
+            StringAssert.Contains(text, "Product build");
+            StringAssert.Contains(text, Common.Entities.BuildConstants.BuildLabel);
+        }
+
+        /// <summary>
+        /// Every scalar measure in the analysis must reach the Snapshot facts sheet.
+        ///
+        /// Reflected rather than listed, because a hand-written expectation is precisely what failed
+        /// before: twenty-four measures - among them every Cowork usage-report metric - existed in the
+        /// summary for months without ever reaching the workbook, and no test noticed because no test
+        /// knew they existed. This one cannot be out of date.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_SnapshotFactsCarryEveryScalarSummaryMetric()
+        {
+            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
+
+            var missing = ExpectedFactKeys(typeof(CopilotAdoptionSummary))
+                .Where(key => text.IndexOf(key, StringComparison.Ordinal) < 0)
+                .ToList();
+
+            Assert.AreEqual(0, missing.Count,
+                "Every scalar figure must reach the Snapshot facts sheet so two snapshots can be diffed. "
+                + "Missing: " + string.Join(", ", missing));
+        }
+
+        /// <summary>
+        /// Every tuning option must reach the Settings sheet, for the same reason: "were both files
+        /// scored by the same rules?" has to be answerable by lookup, not by reading prose.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_SettingsSheetCarriesEveryOption()
+        {
+            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
+
+            var missing = ExpectedFactKeys(typeof(CopilotAdoptionOptions))
+                .Where(key => text.IndexOf(key, StringComparison.Ordinal) < 0)
+                .ToList();
+
+            Assert.AreEqual(0, missing.Count,
+                "Every option must reach the Settings sheet. Missing: " + string.Join(", ", missing));
+        }
+
+        /// <summary>
+        /// The facts sheet is sorted and unconditional so a lookup against the other snapshot always
+        /// resolves. A run that emitted keys in reflection order would shift rows between files and
+        /// quietly break every formula written against it.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_SnapshotFactKeysAreSortedAndUnique()
+        {
+            var keys = SheetCells(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()), "Snapshot facts")
+                .Where(c => ExpectedFactKeys(typeof(CopilotAdoptionSummary)).Contains(c))
+                .ToList();
+
+            CollectionAssert.AllItemsAreUnique(keys, "A key written twice makes a lookup ambiguous.");
+            CollectionAssert.AreEqual(
+                keys.OrderBy(k => k, StringComparer.Ordinal).ToList(),
+                keys,
+                "Snapshot fact keys must be in a stable sort order, or two files will not line up.");
+        }
+
+        /// <summary>
+        /// A null must never be written as a zero. Across this report a null means "not reported" or
+        /// "not attributable", and in a file built for comparison a zero reads as a measured decline.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_SnapshotFactsLeaveUnknownValuesEmptyRatherThanZero()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.CoworkReportRetentionPct = null;
+
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Snapshot facts");
+            var index = cells.IndexOf("coworkReportRetentionPct");
+
+            Assert.AreNotEqual(-1, index, "The key is missing from the Snapshot facts sheet.");
+            Assert.AreNotEqual("0", cells.ElementAtOrDefault(index + 1),
+                "An unreported measure must be blank, never zero - zero would read as a measured fall to nothing.");
+        }
+
+        #endregion
+
+        #region Per-user sheet parity
+
+        /// <summary>
+        /// Every column of the CSV export must also be in the corresponding workbook sheet.
+        ///
+        /// The workbook used to declare its own headers while the CSV declared its own, and the two
+        /// drifted: the Licensed users sheet ended up missing twenty-eight columns the CSV already had,
+        /// including the reclaim eligibility that a headline figure on the first sheet is counted from.
+        /// The email-domain change is the clean example - it added a column to all three CSVs and to
+        /// none of the sheets, and nothing failed. Both now come from one definition, and this test is
+        /// what keeps it that way.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_PerUserSheetsCarryEveryCsvColumn()
+        {
+            var bytes = CopilotAdoptionWorkbook.Build(SyntheticAnalysis());
+
+            AssertSheetHasColumns(bytes, "Licensed users",
+                CopilotAdoptionExports.LicensedUserColumns().Select(c => c.Header));
+            AssertSheetHasColumns(bytes, "Licence opportunities",
+                CopilotAdoptionExports.LicenceOpportunityColumns().Select(c => c.Header));
+            AssertSheetHasColumns(bytes, "Cowork readiness",
+                CopilotAdoptionExports.CoworkReadinessColumns().Select(c => c.Header));
+        }
+
+        /// <summary>
+        /// The governance columns specifically. These are the ones an admin exports the workbook for -
+        /// the reclaim verdict per person, and who excluded a seat from reclaim - and they were the
+        /// most damaging of the twenty-eight omissions, because the Report sheet counts them in a
+        /// headline while the per-user sheet could not say which people they were.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_LicensedUsersCarryTheReclaimVerdictPerPerson()
+        {
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()), "Licensed users");
+
+            foreach (var expected in new[]
+            {
+                "Reclaim eligibility", "Reclaim eligibility reason", "Reclaim excluded by",
+                "Email domain", "Country", "Copilot licences", "Too new to judge",
+                "Frequency score", "Depth score", "Breadth score",
+            })
+            {
+                CollectionAssert.Contains(cells, expected,
+                    $"'{expected}' is counted in a headline figure but absent from the per-user sheet.");
+            }
+        }
+
+        /// <summary>
+        /// Dates must stay dates. Written as text they sort alphabetically under the auto-filter, which
+        /// puts 2026-01 after 2025-12 but also puts every "-" placeholder in the middle of the range.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_PerUserDatesAreWrittenAsDatesNotText()
+        {
+            var bytes = CopilotAdoptionWorkbook.Build(SyntheticAnalysis());
+
+            var dateStyled = SheetCellElements(bytes, "Licensed users")
+                .Any(c => (string)c.Attribute("t") == null && (string)c.Attribute("s") != null);
+
+            Assert.IsTrue(dateStyled,
+                "At least one cell on the Licensed users sheet must be a styled numeric (a date), "
+                + "not a string - otherwise the sheet cannot be sorted chronologically.");
+        }
+
+        #endregion
+
+        #region Row cap
+
+        /// <summary>
+        /// The row cap comes from options rather than from a constant, so a tenant that wants its whole
+        /// population in one file can have it without a rebuild. Asserted in both directions: the cap
+        /// must bite, and it must say that it did.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_RespectsAConfiguredRowCap()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.Options.MaxWorkbookUserRows = 2;
+
+            var text = SheetText(CopilotAdoptionWorkbook.Build(analysis));
+            Assert.IsTrue(analysis.LicensedUsers.Count > 2, "The fixture must have more rows than the cap to prove anything.");
+            StringAssert.Contains(text, "Licensed users - TRUNCATED",
+                "A sheet that stops at a cap must say so where it cannot be missed.");
+
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Licensed users");
+            var listed = analysis.LicensedUsers.Count(u => cells.Contains(u.UserPrincipalName));
+            Assert.AreEqual(2, listed, "The configured cap must actually limit the rows written.");
+        }
+
+        /// <summary>
+        /// A cap of zero means "unset", not "write nothing". A blank or mistyped configuration value
+        /// must not silently produce an empty sheet in a file someone is about to quote from.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_TreatsAnUnsetRowCapAsTheDefault()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.Options.MaxWorkbookUserRows = 0;
+
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Licensed users");
+            var listed = analysis.LicensedUsers.Count(u => cells.Contains(u.UserPrincipalName));
+
+            Assert.AreEqual(analysis.LicensedUsers.Count, listed,
+                "An unset cap must fall back to the default, not write an empty sheet.");
+        }
+
+        #endregion
+
+        #region Presentation
 
         [TestMethod]
         public void CohortWorkbook_CarriesTransitionsActivationAndDrillRows()
@@ -578,6 +806,82 @@ namespace Tests.UnitTests
 
         #region Helpers
 
+        /// <summary>
+        /// The keys the reflection-driven sheets are expected to write for a type: the serialised name
+        /// of every readable, non-ignored property, with collections keyed by their row count.
+        ///
+        /// Mirrors the writer deliberately rather than sharing code with it. A test that called the
+        /// production flattener would pass even if that flattener skipped half the model, which is the
+        /// failure this is here to catch.
+        /// </summary>
+        private static List<string> ExpectedFactKeys(Type type)
+        {
+            var keys = new List<string>();
+
+            foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (!property.CanRead || property.GetIndexParameters().Length > 0) continue;
+                if (property.GetCustomAttribute<JsonIgnoreAttribute>() != null) continue;
+
+                var name = property.GetCustomAttribute<JsonPropertyAttribute>()?.PropertyName ?? property.Name;
+                var propertyType = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+
+                if (propertyType.IsPrimitive || propertyType.IsEnum || propertyType == typeof(string)
+                    || propertyType == typeof(decimal) || propertyType == typeof(DateTime))
+                {
+                    keys.Add(name);
+                }
+                else if (typeof(ICollection).IsAssignableFrom(propertyType))
+                {
+                    keys.Add(name + ".count");
+                }
+            }
+
+            return keys;
+        }
+
+        private static void AssertSheetHasColumns(byte[] bytes, string sheetName, IEnumerable<string> headers)
+        {
+            var cells = SheetCells(bytes, sheetName);
+
+            var missing = headers.Where(h => !cells.Contains(h)).ToList();
+
+            Assert.AreEqual(0, missing.Count,
+                $"The '{sheetName}' sheet must carry every column its CSV export does, or the workbook is "
+                + "a lesser snapshot than the CSV it sits beside. Missing: " + string.Join(", ", missing));
+        }
+
+        /// <summary>The decoded text of every cell on one named sheet, in document order.</summary>
+        private static List<string> SheetCells(byte[] bytes, string sheetName)
+        {
+            return SheetCellElements(bytes, sheetName)
+                .Select(c => string.Concat(c.Descendants().Where(d => !d.HasElements).Select(d => d.Value)))
+                .ToList();
+        }
+
+        /// <summary>
+        /// The raw <c>c</c> elements of one named sheet. Sheets are written as
+        /// <c>xl/worksheets/sheetN.xml</c> in the same order they appear in <c>xl/workbook.xml</c>.
+        /// </summary>
+        private static List<XElement> SheetCellElements(byte[] bytes, string sheetName)
+        {
+            var index = WorkbookSheetNames(bytes).IndexOf(sheetName);
+            Assert.AreNotEqual(-1, index, $"Sheet '{sheetName}' is missing from the workbook.");
+
+            using (var stream = new MemoryStream(bytes))
+            using (var zip = new ZipArchive(stream, ZipArchiveMode.Read))
+            {
+                var entry = zip.GetEntry("xl/worksheets/sheet" + (index + 1) + ".xml");
+                Assert.IsNotNull(entry, $"The worksheet part for '{sheetName}' is missing.");
+
+                using (var part = entry.Open())
+                {
+                    XNamespace ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+                    return XDocument.Load(part).Descendants(ns + "c").ToList();
+                }
+            }
+        }
+
         private static List<string> WorkbookSheetNames(byte[] bytes)
         {
             using (var stream = new MemoryStream(bytes))
@@ -796,6 +1100,44 @@ namespace Tests.UnitTests
             }
             summary.WeeklyTrend.Add(users);
             summary.WeeklyVolumeTrend.Add(volume);
+
+            // Cowork readiness signals. Without these the Cowork sheet is never written, so until now
+            // no test built it at all - the sheet with the widest per-user table in the workbook was
+            // the one sheet nothing exercised.
+            for (var i = 0; i < 30; i++)
+            {
+                var usesCowork = i % 5 == 0;
+
+                analysis.CoworkSignals.Add(new CoworkReadinessSignalRow
+                {
+                    UserId = i,
+                    UserPrincipalName = "user" + i + "@contoso.com",
+                    Mail = "user" + i + "@contoso.com",
+                    EmailDomain = "contoso.com",
+                    Department = departments[i % departments.Length],
+                    JobTitle = "Analyst",
+                    ManagerUserPrincipalName = "manager@contoso.com",
+                    Country = "Ruritania",
+                    OfficeLocation = GreekDepartment,
+                    CompanyName = "Contoso",
+                    AccountEnabled = true,
+                    CoworkInteractions = usesCowork ? random.Next(5, 60) : 0,
+                    CoworkActiveDays = usesCowork ? random.Next(1, 12) : 0,
+                    LastCoworkInteractionUtc = usesCowork ? Now.AddDays(-random.Next(1, 14)) : (DateTime?)null,
+                    CoworkReportTotalTasks = usesCowork ? random.Next(2, 40) : (int?)null,
+                    CoworkReportScheduledTasks = usesCowork ? random.Next(0, 20) : (int?)null,
+                    CoworkReportUserInitiatedTasks = usesCowork ? random.Next(0, 20) : (int?)null,
+                    CoworkReportActiveDays = usesCowork ? random.Next(1, 12) : (int?)null,
+                    CoworkReportLastActivityDate = usesCowork ? Now.AddDays(-random.Next(1, 10)) : (DateTime?)null,
+                    CoworkReportRetainedUser = usesCowork ? (i % 10 == 0) : (bool?)null,
+                    TeamsMessages = random.Next(40, 600),
+                    TeamsMeetings = random.Next(1, 30),
+                    EmailsSent = random.Next(10, 200),
+                    EmailsRead = random.Next(40, 700),
+                    FilesViewedOrEdited = random.Next(5, 250),
+                    LastM365ActivityUtc = Now.AddDays(-random.Next(1, 20)),
+                });
+            }
 
             new CopilotAdoptionService().FinaliseSummary(analysis);
             return analysis;

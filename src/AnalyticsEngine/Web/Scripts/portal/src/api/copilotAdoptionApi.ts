@@ -366,6 +366,10 @@ export function coworkExportUrl(
  * cached analysis the screen is rendered from. Its purpose is the point-in-time snapshot: run it
  * before an enablement programme starts and again afterwards, and the two files are directly
  * comparable in a way a screenshot never is.
+ *
+ * The file records the period, every threshold and the product build that produced it, and carries
+ * a machine-readable "Snapshot facts" sheet so the two can be diffed with a formula rather than by
+ * eye.
  */
 export function workbookExportUrl(
   windowDays: number,
