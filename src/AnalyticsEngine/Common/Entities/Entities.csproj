@@ -117,6 +117,14 @@
     <Compile Include="CopilotAdoption\CopilotLicenceClassifier.cs" />
     <Compile Include="CopilotAdoption\CopilotLicenceModels.cs" />
     <Compile Include="CopilotAdoption\CsvSerialiser.cs" />
+    <Compile Include="SpoWebActivity\SqlWebActivityStore.cs" />
+    <Compile Include="SpoWebActivity\WebActivityAvailability.cs" />
+    <Compile Include="SpoWebActivity\WebActivityExports.cs" />
+    <Compile Include="SpoWebActivity\WebActivityModels.cs" />
+    <Compile Include="SpoWebActivity\WebActivityQuery.cs" />
+    <Compile Include="SpoWebActivity\WebActivityRows.cs" />
+    <Compile Include="SpoWebActivity\WebActivityScoring.cs" />
+    <Compile Include="SpoWebActivity\WebActivitySql.cs" />
     <Compile Include="TeamsExplorer\SqlTeamsExplorerStore.cs" />
     <Compile Include="TeamsExplorer\TeamsExplorerAvailability.cs" />
     <Compile Include="TeamsExplorer\TeamsExplorerExports.cs" />
