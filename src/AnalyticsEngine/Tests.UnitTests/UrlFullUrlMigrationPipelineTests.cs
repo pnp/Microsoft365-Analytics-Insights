@@ -89,8 +89,18 @@ namespace Tests.UnitTests
         // model, so its snapshot is freshly scaffolded.
         // DropUnreportedCopilotStudioCreditColumns then removes the four credit columns Microsoft's API
         // never populates (channel_id, llm_model, tool_invoked, knowledge_sources). It is a model change,
-        // and as the chain head its snapshot is the one EF compares the live entity model against.
-        private const string LatestId = "202609190900001_IndexPlatformUserActivityLogDate";
+        // so its snapshot is freshly scaffolded.
+        // IndexPlatformUserActivityLogDate then adds the covering IX_date index that the portal's Office
+        // apps report area needs. Raw-SQL, and reuses the DropUnreportedCopilotStudioCreditColumns model
+        // snapshot verbatim.
+        // DropCopilotAdoptionPeriodTables then REMOVES the seven Copilot Adoption closed-period tables
+        // added above (period_run, user_period, targets, cohort, cohort_member, intervention,
+        // digest_run), because comparison over time was taken out of the product - two exported Excel
+        // workbooks are diffed instead. It is raw-SQL and reuses the IndexPlatformUserActivityLogDate
+        // snapshot verbatim: none of those tables was ever exposed as a DbSet, so removing them does not
+        // touch the entity model. As the chain head its snapshot is the one EF compares the live entity
+        // model against.
+        private const string LatestId = "202609201430001_DropCopilotAdoptionPeriodTables";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).
