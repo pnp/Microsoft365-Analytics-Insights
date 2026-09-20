@@ -69,16 +69,6 @@ namespace Tests.FakeDataGen.Demo
             // Page metadata/comments/likes arrive as AppInsights custom events under WebTraffic,
             // not through the SharePoint management audit or Graph usage-report import.
             if (_options.Includes(DemoArea.Web)) WritePageDimensions();
-            if (_options.Includes(DemoArea.Web))
-            {
-                WriteNames(DemoTables.ClickTitles, new[] { "Contoso guidance", "Contoso project workspace", "Contoso learning" });
-                WriteNames(DemoTables.ClickClasses, new[] { "contoso-navigation-link", "contoso-quick-link", "contoso-learning-card" });
-                WriteNames(DemoTables.SearchTerms, new[]
-                {
-                    "Contoso travel policy", "Contoso onboarding", "Contoso project planning",
-                    "Contoso customer workshop", "Καλημέρα κόσμε"
-                });
-            }
             if (_options.Includes(DemoArea.Engage))
                 for (int department = 0; department < _members.Length; department++)
                     _sink.Write(DemoTables.EngageGroups, department + 1,
@@ -181,16 +171,19 @@ namespace Tests.FakeDataGen.Demo
         {
             WriteNames(DemoTables.PageFields, new[] { "Title", "ContosoDepartment", "ContosoTopic", "ContentType" });
             for (int department = 0; department < _members.Length; department++)
-                for (int page = 0; page < 3; page++)
+            {
+                int site = department + 1;
+                for (int page = 0; page < DemoWebCatalogue.PagesPerSite; page++)
                 {
-                    int url = department * 3 + page + 1;
-                    _sink.Write(DemoTables.PageMetadata, url, 1,
-                        page == 2 ? "Καλημέρα κόσμε" : page == 0 ? "Welcome" : "Working together", null, _options.Start);
+                    var kind = DemoWebCatalogue.SiteKinds[page];
+                    int url = DemoWebCatalogue.SiteUrlId(site, kind);
+                    _sink.Write(DemoTables.PageMetadata, url, 1, DemoWebCatalogue.Title(kind, site), null, _options.Start);
                     _sink.Write(DemoTables.PageMetadata, url, 2, SeedDataCatalogue.Departments[department], null, _options.Start);
                     _sink.Write(DemoTables.PageMetadata, url, 3, KeywordNames[(department + page) % KeywordNames.Length],
                         DemoRandom.Id(_options.Seed, 1003, (department + page) % KeywordNames.Length + 1), _options.Start);
                     _sink.Write(DemoTables.PageMetadata, url, 4, "Site Page", null, _options.Start);
                 }
+            }
         }
 
         private void PrepareCallPartners()
@@ -222,7 +215,6 @@ namespace Tests.FakeDataGen.Demo
             }
             if (_options.Includes(DemoArea.SentEmail) && activity.Sent > 0) WriteEmail(user, day, activity);
             if (_options.Includes(DemoArea.Web) && activity.SharePointFiles > 0) WritePageActivity(user, day, activity);
-            if (_options.Includes(DemoArea.Web) && activity.SharePointFiles > 0) WriteWebActivity(user, day, activity);
             var date = _options.Start.AddDays(day);
             if (date > _options.ReportEnd) return;
             if (_options.Includes(DemoArea.OneDrive) && activity.OneDriveFiles > 0)
@@ -309,7 +301,7 @@ namespace Tests.FakeDataGen.Demo
         private void WritePageActivity(DemoUser user, int day, DemoDay activity)
         {
             int page = day % Math.Min(3, activity.SharePointFiles);
-            int url = user.Department * 3 + page + 1;
+            int url = DemoWebCatalogue.SiteUrlId(user.Department + 1, DemoWebCatalogue.SiteKinds[page]);
             var time = Timestamp(user, day, 1040);
             if ((_likedPages & (1 << page)) == 0)
             {
@@ -328,18 +320,6 @@ namespace Tests.FakeDataGen.Demo
                 _sink.Write(DemoTables.PageComments, reply, "Contoso follow-up: adding a worked example.",
                     1, 0.8, comment, user.Id, url, time.AddSeconds(20), reply);
             }
-        }
-
-        private void WriteWebActivity(DemoUser user, int day, DemoDay activity)
-        {
-            int session = (user.Id - 1) * _options.Days + day + 1;
-            // Reuse the base navigation path and timestamp, not an unrelated second set of sessions/hits.
-            var start = _calendar.Timestamp(user.Zone, day, DemoRandom.Value(_options.Seed, user.Id, day, 90));
-            int element = 1 + (int)(Random(user, day, 1052) % 3);
-            _sink.Write(DemoTables.Clicks, user.Department * 3 + 2, element, element,
-                checked((session - 1) * 3 + 1), start.AddSeconds(5));
-            if (Random(user, day, 1050) % 3 == 0)
-                _sink.Write(DemoTables.Searches, session, 1 + (int)(Random(user, day, 1051) % 5), start.AddSeconds(7));
         }
 
         public void WriteSummaries()

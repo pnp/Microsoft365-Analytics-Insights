@@ -5,6 +5,7 @@ import {
   DataTrending20Regular,
   DataUsage20Regular,
   DocumentBulletList20Regular,
+  Globe20Regular,
   Home20Regular,
   Money20Regular,
   PeopleCommunity20Regular,
@@ -23,6 +24,7 @@ const InsightsOverviewPage = lazyWithReload(() => import('./pages/InsightsOvervi
 const ReportsPage = lazyWithReload(() => import('./pages/ReportsPage'));
 const CopilotAdoptionPage = lazyWithReload(() => import('./pages/CopilotAdoptionPage'));
 const TeamsExplorerPage = lazyWithReload(() => import('./pages/TeamsExplorerPage'));
+const WebActivityPage = lazyWithReload(() => import('./pages/WebActivityPage'));
 const AgentCostsPage = lazyWithReload(() => import('./pages/AgentCostsPage'));
 const LicenceActivityPage = lazyWithReload(() => import('./pages/LicenceActivityPage'));
 const DlpPage = lazyWithReload(() => import('./pages/DlpPage'));
@@ -99,6 +101,15 @@ export const ROUTES: PortalRoute[] = [
     // someone to the wrong one.
     icon: <PeopleCommunity20Regular />,
     element: <TeamsExplorerPage />,
+  },
+  {
+    area: 'insights',
+    path: '/insights/web-activity',
+    label: 'Web activity',
+    // A globe rather than a chart: this page is about the intranet as a web site - who browses it
+    // and from where - and ChartMultiple already marks the generic "Reports" page next to it.
+    icon: <Globe20Regular />,
+    element: <WebActivityPage />,
   },
   {
     area: 'insights',

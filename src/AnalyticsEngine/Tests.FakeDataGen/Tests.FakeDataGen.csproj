@@ -65,6 +65,8 @@
     <Compile Include="Demo\DemoPopulation.cs" />
     <Compile Include="Demo\DemoPortalReadiness.cs" />
     <Compile Include="Demo\DemoTables.cs" />
+    <Compile Include="Demo\DemoWebCatalogue.cs" />
+    <Compile Include="Demo\DemoWebActivityGenerator.cs" />
     <Compile Include="Demo\DemoCollaborationTables.cs" />
     <Compile Include="Demo\DemoCollaborationGenerator.cs" />
     <Compile Include="Demo\DemoPowerPlatformTables.cs" />

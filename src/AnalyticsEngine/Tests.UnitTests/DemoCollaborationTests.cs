@@ -23,7 +23,18 @@ namespace Tests.UnitTests
             { DemoTables.EmailAddresses, DemoTables.SentEmails, DemoTables.EmailRecipients };
         private static readonly DemoTable[] PageTables =
             { DemoTables.PageFields, DemoTables.PageMetadata, DemoTables.PageComments, DemoTables.PageLikes };
-        private static readonly DemoTable[] WebTables =
+
+        /// <summary>
+        /// Tables the collaboration generator no longer owns.
+        /// </summary>
+        /// <remarks>
+        /// Sessions, hits, searches and element clicks moved to <c>DemoWebActivityGenerator</c>, which
+        /// walks a real navigation model rather than emitting a fixed three-page path. They are
+        /// asserted against the full generator in
+        /// <see cref="Collaboration_WebClicksAndSearchesJoinTheBaseNavigationPath"/>, because a click
+        /// can only be checked against the hit it belongs to.
+        /// </remarks>
+        private static readonly DemoTable[] WebFactTables =
             { DemoTables.ClickTitles, DemoTables.ClickClasses, DemoTables.Clicks, DemoTables.SearchTerms, DemoTables.Searches };
         private static readonly DemoTable[] OneDriveTables = { DemoTables.OneDriveStorage };
         private static readonly DemoTable[] EngageTables = { DemoTables.EngageGroups, DemoTables.EngageGroupActivity };
@@ -38,7 +49,7 @@ namespace Tests.UnitTests
             var options = Options();
             var first = Generate(options);
             var second = Generate(options);
-            var expected = TeamsTables.Concat(EmailTables).Concat(PageTables).Concat(WebTables)
+            var expected = TeamsTables.Concat(EmailTables).Concat(PageTables)
                 .Concat(OneDriveTables).Concat(EngageTables).Concat(new[] { DemoTables.Languages }).ToArray();
             CollectionAssert.AreEquivalent(expected.Select(t => t.Name).ToArray(), first.Rows.Keys.Select(t => t.Name).ToArray());
             foreach (var table in expected)
@@ -67,7 +78,7 @@ namespace Tests.UnitTests
                 ["teams"] = TeamsTables.Concat(new[] { DemoTables.Languages }).ToArray(),
                 ["sent-email"] = EmailTables,
                 ["sharepoint"] = new DemoTable[0],
-                ["web"] = WebTables.Concat(PageTables).Concat(new[] { DemoTables.Languages }).ToArray(),
+                ["web"] = PageTables.Concat(new[] { DemoTables.Languages }).ToArray(),
                 ["onedrive"] = OneDriveTables,
                 ["engage"] = EngageTables,
                 ["copilot-history"] = new[] { DemoTables.Keywords, DemoTables.Languages }
@@ -99,7 +110,7 @@ namespace Tests.UnitTests
                 DemoTables.CallRecords, DemoTables.CallSessions, DemoTables.CallFeedback, DemoTables.CallFailures,
                 DemoTables.ChannelStats, DemoTables.ChannelKeywords, DemoTables.ChannelLanguages, DemoTables.ChannelReactions,
                 DemoTables.SentEmails, DemoTables.EmailRecipients, DemoTables.PageComments, DemoTables.PageLikes,
-                DemoTables.Clicks, DemoTables.Searches, DemoTables.OneDriveStorage, DemoTables.EngageGroupActivity
+                DemoTables.OneDriveStorage, DemoTables.EngageGroupActivity
             })
                 Assert.AreEqual(0, capture.For(table).Count, table.Name);
         }
@@ -267,8 +278,15 @@ namespace Tests.UnitTests
             var capture = new Capture();
             new DemoGenerator(options).Generate(capture, new DemoSummary(), null);
             Assert.IsTrue(DemoTables.Hits.SupplyIdentity, "Clicks require the base generator's logical hit ids.");
+
+            foreach (var table in WebFactTables)
+                Assert.IsTrue(capture.For(table).Count > 0, table.Name + ": the web area must fill its own facts.");
+
             var hits = capture.For(DemoTables.Hits).ToDictionary(r => (int)capture.Value(DemoTables.Hits, r, "id"));
             var sessions = capture.For(DemoTables.Sessions).ToDictionary(r => (int)r[0]);
+            var terms = new HashSet<int>(capture.For(DemoTables.SearchTerms).Select(r => (int)r[0]));
+            var urls = new HashSet<int>(capture.For(DemoTables.Urls).Select(r => (int)r[0]));
+
             foreach (var click in capture.For(DemoTables.Clicks))
             {
                 var hit = hits[(int)click[3]];
@@ -276,17 +294,114 @@ namespace Tests.UnitTests
                 Assert.IsTrue((DateTime)click[4] > hitTime);
                 Assert.IsTrue(((DateTime)click[4] - hitTime).TotalSeconds
                     < (double)capture.Value(DemoTables.Hits, hit, "seconds_on_page"));
-                int session = (int)capture.Value(DemoTables.Hits, hit, "session_id");
-                Assert.IsTrue(sessions.ContainsKey(session));
-                Assert.AreEqual((session - 1) * 3 + 1, (int)click[3], "Representative click joins the first hit.");
+                Assert.IsTrue(sessions.ContainsKey((int)capture.Value(DemoTables.Hits, hit, "session_id")));
+                Assert.AreEqual(capture.Value(DemoTables.Hits, hit, "url_id"), click[0],
+                    "A click belongs to the page it was recorded on.");
             }
+
+            // A search is what put the visitor on the results page, so it must sit just BEFORE a hit
+            // in the same visit. If it landed after the visit's last hit, every search would look
+            // like a dead end and the report's search-effectiveness measure would be meaningless.
+            var hitsBySession = capture.For(DemoTables.Hits)
+                .GroupBy(r => (int)capture.Value(DemoTables.Hits, r, "session_id"))
+                .ToDictionary(g => g.Key, g => g.Select(r => (DateTime)capture.Value(DemoTables.Hits, r, "hit_timestamp"))
+                    .OrderBy(t => t).ToList());
+
+            int searchesFollowedByAPageView = 0;
             foreach (var search in capture.For(DemoTables.Searches))
             {
                 int session = (int)search[0];
                 Assert.IsTrue(sessions.ContainsKey(session));
-                var hit = hits[(session - 1) * 3 + 1];
-                Assert.AreEqual(((DateTime)capture.Value(DemoTables.Hits, hit, "hit_timestamp")).Date, ((DateTime)search[2]).Date);
+                Assert.IsTrue(terms.Contains((int)search[1]));
+                var when = (DateTime)search[2];
+                var sessionHits = hitsBySession[session];
+                Assert.IsTrue(when >= sessionHits[0].AddMinutes(-1) && when <= sessionHits[sessionHits.Count - 1],
+                    "A search happens inside the visit it belongs to.");
+                if (sessionHits.Any(t => t > when.AddSeconds(Common.Entities.SpoWebActivity.WebActivitySql.SearchDeadEndGraceSeconds)))
+                    searchesFollowedByAPageView++;
             }
+
+            Assert.IsTrue(searchesFollowedByAPageView > 0, "Some searches must lead somewhere...");
+            Assert.IsTrue(searchesFollowedByAPageView < capture.For(DemoTables.Searches).Count,
+                "...and some must not, or the report's dead-end measure has nothing to find.");
+
+            foreach (var hit in capture.For(DemoTables.Hits))
+            {
+                Assert.IsTrue(urls.Contains((int)capture.Value(DemoTables.Hits, hit, "url_id")));
+                Assert.AreEqual(capture.Value(DemoTables.Hits, hit, "url_id"),
+                    capture.Value(DemoTables.Hits, hit, "page_title_id"),
+                    "Every page has exactly one title, so the two ids are the same.");
+            }
+        }
+
+        [TestMethod]
+        public void Collaboration_WebNavigationHasTheShapeTheActivityReportMeasures()
+        {
+            var capture = new Capture();
+            new DemoGenerator(Options("web")).Generate(capture, new DemoSummary(), null);
+
+            var bySession = capture.For(DemoTables.Hits)
+                .GroupBy(r => (int)capture.Value(DemoTables.Hits, r, "session_id"))
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.OrderBy(r => (DateTime)capture.Value(DemoTables.Hits, r, "hit_timestamp"))
+                          .ThenBy(r => (int)capture.Value(DemoTables.Hits, r, "id"))
+                          .ToList());
+
+            Assert.IsTrue(bySession.Count > 0);
+
+            // Bounce rate is a headline figure on the report, so the demo has to contain both kinds of
+            // visit. A generator that always emitted the same depth made it a constant.
+            Assert.IsTrue(bySession.Values.Any(v => v.Count == 1), "Single-page visits (bounces).");
+            Assert.IsTrue(bySession.Values.Any(v => v.Count > 2), "Multi-page visits.");
+
+            var entries = bySession.Values
+                .Select(v => (int)capture.Value(DemoTables.Hits, v[0], "url_id")).Distinct().Count();
+            var exits = bySession.Values
+                .Select(v => (int)capture.Value(DemoTables.Hits, v[v.Count - 1], "url_id")).Distinct().Count();
+            Assert.IsTrue(entries > 1, "Entry pages must vary or the entry-page table is one row.");
+            Assert.IsTrue(exits > 1, "Exit pages must vary or the exit-page table is one row.");
+
+            var steps = bySession.Values
+                .SelectMany(v => v.Zip(v.Skip(1), (a, b) =>
+                    (int)capture.Value(DemoTables.Hits, a, "url_id") + "->"
+                    + (int)capture.Value(DemoTables.Hits, b, "url_id")))
+                .Distinct().Count();
+            Assert.IsTrue(steps > 5, "Journeys must branch, or the transitions table shows one route.");
+
+            var loads = capture.For(DemoTables.Hits)
+                .Select(r => (double)capture.Value(DemoTables.Hits, r, "page_load_time")).ToList();
+            Assert.IsTrue(loads.Max() > 3.0, "A genuinely slow page, for the slowest-pages table.");
+            Assert.IsTrue(loads.Min() < 1.5, "And fast pages, so the distribution has a shape.");
+
+            var dwell = capture.For(DemoTables.Hits)
+                .Select(r => (double)capture.Value(DemoTables.Hits, r, "seconds_on_page")).Distinct().Count();
+            Assert.IsTrue(dwell > 20, "Dwell time must vary; a constant column proves nothing.");
+
+            // Mobile share, unresolved locations and multiple browser versions are each a panel on the
+            // report, and each is empty if the generator only ever emits one value.
+            var devices = capture.For(DemoTables.Devices).ToDictionary(r => (int)r[0], r => (string)r[1]);
+            var deviceIds = capture.For(DemoTables.Hits)
+                .Select(r => (int)capture.Value(DemoTables.Hits, r, "device_id")).Distinct().ToList();
+            Assert.IsTrue(deviceIds.Any(id => DemoWebCatalogue.IsMobile(devices[id])), "Some mobile traffic.");
+            Assert.IsTrue(deviceIds.Any(id => !DemoWebCatalogue.IsMobile(devices[id])), "And some desktop traffic.");
+
+            Assert.IsTrue(capture.For(DemoTables.Hits)
+                .Any(r => capture.Value(DemoTables.Hits, r, "city_id") == null),
+                "Some page views have no resolved location, as real geo-IP does.");
+            Assert.IsTrue(capture.For(DemoTables.Hits)
+                .Any(r => capture.Value(DemoTables.Hits, r, "location_province_id") != null),
+                "And most do, so the regions panel is not empty.");
+
+            Assert.IsTrue(capture.For(DemoTables.Hits)
+                .Select(r => (int)capture.Value(DemoTables.Hits, r, "agent_id")).Distinct().Count() > 2,
+                "Several browser versions, so the browser table can show an old build.");
+
+            var pageViews = capture.For(DemoTables.Hits)
+                .GroupBy(r => (int)capture.Value(DemoTables.Hits, r, "url_id"))
+                .ToDictionary(g => g.Key, g => g.Count());
+            Assert.IsTrue(pageViews.Values.Max() > pageViews.Values.Min() * 10,
+                "Traffic must be concentrated, so the quiet-page list has candidates.");
         }
 
         [TestMethod]
