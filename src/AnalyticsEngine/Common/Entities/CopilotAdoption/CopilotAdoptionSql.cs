@@ -1515,6 +1515,10 @@ namespace Common.Entities.CopilotAdoption
                 "\r\n" +
                 "SELECT TOP (@maxRows)\r\n" +
                 "       t.user_id AS UserId,\r\n" +
+                // Carried so this population can be grouped and filtered by email domain like the
+                // licensed one. The users join below already exists for the department lookup, so this
+                // column is free.
+                "       u.user_name AS UserPrincipalName,\r\n" +
                 "       ISNULL(NULLIF(LTRIM(RTRIM(dept.name)), ''), '') AS Department,\r\n" +
                 "       t.Interactions AS Interactions,\r\n" +
                 "       ISNULL(d.ActiveDays, 0) AS ActiveDays,\r\n" +

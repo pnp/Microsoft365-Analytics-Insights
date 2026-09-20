@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { screen, waitFor, fireEvent } from '@testing-library/react';
+import { screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { renderWithProvider } from '../test/renderWithProvider';
 import CopilotAdoptionPage from './CopilotAdoptionPage';
 import {
@@ -8,6 +8,7 @@ import {
   fetchAdoptionSql,
   fetchAdoptionSummary,
   fetchLicensedUsers,
+  createInterventionFromAction,
 } from '../api/copilotAdoptionApi';
 import { AdoptionBand, CopilotResourceTypeKind, type CopilotAdoptionOptions, type CopilotAdoptionSummary } from '../types/copilotAdoption';
 
@@ -18,6 +19,7 @@ vi.mock('../api/copilotAdoptionApi', async (importOriginal) => ({
   fetchAdoptionSql: vi.fn(),
   fetchAdoptionSummary: vi.fn(),
   fetchLicensedUsers: vi.fn(),
+  createInterventionFromAction: vi.fn(),
 }));
 
 const options: CopilotAdoptionOptions = {
@@ -174,6 +176,12 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
       { segment: 'Finance', licensedUsers: 30, activeUsers: 10, habitualUsers: 3, neverUsedUsers: 15, adoptionRatePct: 33.3, averageAdoptionScore: 22 },
     ],
     adoptionByCountry: [{ segment: 'United Kingdom', licensedUsers: 120, activeUsers: 72, habitualUsers: 36, neverUsedUsers: 30, adoptionRatePct: 60, averageAdoptionScore: 42 }],
+    emailDomains: [
+      { segment: 'fabrikam.com', licensedUsers: 40, activeUsers: 4, habitualUsers: 1, neverUsedUsers: 30, adoptionRatePct: 10, averageAdoptionScore: 9, reclaimableSeats: 28, interactionsPerLicensedUser: 1.1, unlicensedActiveUsers: 12, recommendedForLicence: 7, coworkPrimeCandidates: 0, external: false },
+      { segment: 'contoso.com', licensedUsers: 80, activeUsers: 68, habitualUsers: 35, neverUsedUsers: 0, adoptionRatePct: 85, averageAdoptionScore: 58, reclaimableSeats: 4, interactionsPerLicensedUser: 22.5, unlicensedActiveUsers: 2, recommendedForLicence: 2, coworkPrimeCandidates: 0, external: false },
+    ],
+    scopedEmailDomain: null,
+    unscopedSections: [],
     usageByApp: [{ label: 'Teams', value: 1200 }, { label: 'Word', value: 400 }],
     opportunityByDepartment: [{ label: 'Finance', value: 6 }, { label: 'Sales', value: 3 }],
     weeklyTrend: [{ name: 'Active users', points: [{ weekStart: '2026-01-05T00:00:00Z', value: 72 }] }],
@@ -204,6 +212,7 @@ beforeEach(() => {
   });
   vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary());
   vi.mocked(fetchAdoptionFilters).mockResolvedValue({
+    emailDomains: ['contoso.com', 'fabrikam.com'],
     departments: ['Finance', 'Sales'],
     countries: ['United Kingdom'],
     bands: [{ value: AdoptionBand.Developing, name: 'Developing' }],
@@ -288,5 +297,170 @@ describe('CopilotAdoptionPage view split', () => {
     expect(await screen.findByText('No Copilot licences found')).toBeVisible();
     expect(screen.getByText(/Licence data has not been imported yet/)).toBeVisible();
     expect(screen.queryByRole('button', { name: 'SQL' })).not.toBeInTheDocument();
+  });
+});
+
+
+describe('CopilotAdoptionPage email-domain filter', () => {
+  it('compares the organisations sharing the tenant on the executive view', async () => {
+    await renderPage();
+
+    const card = (await screen.findByText('Adoption by email domain')).closest('div')?.parentElement
+      ?.parentElement as HTMLElement;
+
+    // Scoped to the card: the domain names also appear in the filter drop-down above it.
+    expect(within(card).getByText('fabrikam.com')).toBeVisible();
+    expect(within(card).getByText('contoso.com')).toBeVisible();
+    expect(within(card).getByText('Licence candidates')).toBeVisible();
+  });
+
+  it('offers the domain filter only when the tenant actually has more than one domain', async () => {
+    // On a single-domain tenant a drop-down with one real choice reads as a missing feature.
+    vi.mocked(fetchAdoptionFilters).mockResolvedValue({
+      emailDomains: ['contoso.com'],
+      departments: [],
+      countries: [],
+      bands: [],
+    });
+
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+
+    expect(screen.queryByLabelText('Email domain')).not.toBeInTheDocument();
+  });
+
+  it('re-requests every figure from the server when a domain is chosen', async () => {
+    // The point of the feature: the numbers are RECOMPUTED for the domain, not merely hidden. If
+    // this ever became a client-side filter the headline KPIs would keep describing the tenant.
+    await renderPage();
+
+    const picker = await screen.findByLabelText('Email domain');
+    fireEvent.change(picker, { target: { value: 'fabrikam.com' } });
+
+    await waitFor(() =>
+      expect(vi.mocked(fetchAdoptionSummary)).toHaveBeenCalledWith(
+        28,
+        undefined,
+        expect.anything(),
+        'previousPeriod',
+        'fabrikam.com',
+      ),
+    );
+  });
+
+  it('says on screen which population every figure describes, and names what stayed tenant-wide', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(
+      summary({
+        scopedEmailDomain: 'fabrikam.com',
+        unscopedSections: ['usageByApp', 'weeklyTrend', 'agents'],
+      }),
+    );
+
+    await renderPage();
+
+    expect(await screen.findByText(/Showing fabrikam.com only/)).toBeVisible();
+    expect(
+      screen.getByText(
+        /Copilot use by app \(licensed and unlicensed\), the weekly trend and the agent inventory stay tenant-wide/,
+      ),
+    ).toBeVisible();
+  });
+
+  it('lets the reader get back to the whole tenant from the banner', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({ scopedEmailDomain: 'fabrikam.com' }));
+
+    await renderPage();
+
+    fireEvent.click(await screen.findByText('Show all domains'));
+
+    await waitFor(() =>
+      expect(vi.mocked(fetchAdoptionSummary)).toHaveBeenLastCalledWith(
+        28,
+        undefined,
+        expect.anything(),
+        'previousPeriod',
+        null,
+      ),
+    );
+  });
+
+  it('never shows the scope banner for a tenant-wide report', async () => {
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+
+    expect(screen.queryByText(/Showing .* only/)).not.toBeInTheDocument();
+  });
+
+  it('survives a server that does not send the domain fields at all', async () => {
+    // During a rolling deploy the SPA can be newer than the API answering it. A missing array must
+    // hide one card, not take the whole page down.
+    const older = summary();
+    delete (older as Partial<CopilotAdoptionSummary>).emailDomains;
+    delete (older as Partial<CopilotAdoptionSummary>).unscopedSections;
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(older);
+
+    await renderPage();
+
+    expect((await screen.findAllByText('Where we stand'))[0]).toBeVisible();
+    expect(screen.queryByText('Adoption by email domain')).not.toBeInTheDocument();
+  });
+});
+describe('CopilotAdoptionPage domain-scope regressions', () => {
+  it('does not mistake an unlicensed organisation for an unconfigured tenant', async () => {
+    // A domain with unlicensed Copilot Chat users but no seats of its own is exactly what this view
+    // exists to find. Telling the reader who just went looking for it that "licence data has not
+    // been imported" is both wrong and the opposite of the finding.
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(
+      summary({
+        scopedEmailDomain: 'northwind.example',
+        licensedUsers: 0,
+        scoredUsers: 0,
+        activeUsers: 0,
+        unlicensedActiveUsers: 14,
+        recommendedForLicence: 9,
+      }),
+    );
+
+    await renderPage();
+
+    expect(await screen.findByText(/Showing northwind.example only/)).toBeVisible();
+    expect(screen.queryByText('No Copilot licences found')).not.toBeInTheDocument();
+  });
+
+  it('still shows the first-run screen for a genuinely unconfigured tenant', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(
+      summary({ scopedEmailDomain: null, licensedUsers: 0, scoredUsers: 0, activeUsers: 0 }),
+    );
+
+    await renderPage();
+
+    expect(await screen.findByText('No Copilot licences found')).toBeVisible();
+  });
+
+  it('freezes an intervention cohort against the domain the count was shown for', async () => {
+    // The action count clicked is the SCOPED count, so the persisted cohort has to contain exactly
+    // the people that count described - not every matching user in the tenant.
+    vi.mocked(createInterventionFromAction).mockResolvedValue({
+      interventionId: 1,
+      cohortId: 2,
+      memberCount: 40,
+    } as Awaited<ReturnType<typeof createInterventionFromAction>>);
+
+    await renderPage();
+
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({ scopedEmailDomain: 'fabrikam.com' }));
+    fireEvent.change(await screen.findByLabelText('Email domain'), {
+      target: { value: 'fabrikam.com' },
+    });
+    await screen.findByText(/Showing fabrikam.com only/);
+
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Start intervention' }))[0]);
+
+    await waitFor(() => expect(vi.mocked(createInterventionFromAction)).toHaveBeenCalled());
+
+    const call = vi.mocked(createInterventionFromAction).mock.calls[0];
+    expect(call[0]).toBe(28);
+    expect(call[1]).toEqual(expect.objectContaining({ actionCode: expect.any(String) }));
+    expect(call[3]).toBe('fabrikam.com');
   });
 });
