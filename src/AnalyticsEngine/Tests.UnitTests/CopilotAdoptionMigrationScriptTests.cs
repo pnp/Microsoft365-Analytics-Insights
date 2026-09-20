@@ -28,6 +28,79 @@ namespace Tests.UnitTests
         private const string DigestId = "202609171030001_CopilotAdoptionDigest";
         private const string DigestPredecessorId = "202609171020002_CopilotAdoptionInterventions";
         private const string TargetsPredecessorId = "202609170940001_CoworkUsageReportTables";
+        private const string DropPeriodTablesId = "202609201430001_DropCopilotAdoptionPeriodTables";
+        private const string DropPeriodTablesPredecessorId = "202609190900001_IndexPlatformUserActivityLogDate";
+
+        [TestMethod]
+        public void DropPeriodTablesManualScript_ReplaysTheMigrationVerbatimAndCopiesPredecessorSnapshot()
+        {
+            var manual = ReadManualScript(DropPeriodTablesId);
+
+            StringAssert.Contains(manual, DropCopilotAdoptionPeriodTables.Up_Sql);
+            StringAssert.Contains(manual, $"IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory\r\n                        WHERE MigrationId = N'{DropPeriodTablesPredecessorId}')");
+            StringAssert.Contains(manual, $"SELECT N'{DropPeriodTablesId}', ContextKey, Model, ProductVersion");
+            StringAssert.Contains(manual, $"WHERE MigrationId = N'{DropPeriodTablesPredecessorId}';");
+        }
+
+        /// <summary>
+        /// The drop is destructive, so the script has to warn plainly, and it must drop children before
+        /// parents or the cascading foreign keys to <c>copilot_adoption_cohort</c> and <c>dbo.users</c>
+        /// block the drop half way through and leave the chain unstamped.
+        /// </summary>
+        [TestMethod]
+        public void DropPeriodTablesManualScript_WarnsItIsDestructiveAndDropsChildrenFirst()
+        {
+            var manual = ReadManualScript(DropPeriodTablesId);
+
+            StringAssert.Contains(manual, "DESTRUCTIVE AND IRREVERSIBLE",
+                "A script that deletes customer history has to say so where a DBA will read it.");
+
+            var order = new[]
+            {
+                "copilot_adoption_intervention",
+                "copilot_adoption_cohort_member",
+                "copilot_adoption_cohort",
+            };
+
+            var positions = new int[order.Length];
+            for (var i = 0; i < order.Length; i++)
+            {
+                positions[i] = manual.IndexOf("(N'" + order[i] + "')", StringComparison.Ordinal);
+                Assert.IsTrue(positions[i] > 0, $"{order[i]} is not in the drop list.");
+            }
+
+            Assert.IsTrue(positions[0] < positions[2] && positions[1] < positions[2],
+                "Both children of copilot_adoption_cohort must be dropped before the parent.");
+        }
+
+        /// <summary>
+        /// Same rule as every other manual script: the stamp guard may check SCHEMA, never DATA STATE.
+        /// Here "schema" means the tables are gone - a guard that refused to stamp because some row
+        /// count was unexpected is the shape that has previously stranded a customer's upgrade chain.
+        /// </summary>
+        [TestMethod]
+        public void DropPeriodTablesManualScript_VerifiesSchemaOnlyBeforeStamping()
+        {
+            var manual = ReadManualScript(DropPeriodTablesId);
+            var stampAt = manual.IndexOf("INSERT INTO dbo.__MigrationHistory", StringComparison.Ordinal);
+            Assert.IsTrue(stampAt > 0, "No __MigrationHistory stamp found.");
+            var preStamp = Normalise(manual.Substring(0, stampAt));
+
+            foreach (var table in new[]
+            {
+                "copilot_adoption_period_run",
+                "copilot_adoption_user_period",
+                "copilot_adoption_targets",
+                "copilot_adoption_cohort",
+                "copilot_adoption_cohort_member",
+                "copilot_adoption_intervention",
+                "copilot_adoption_digest_run",
+            })
+            {
+                StringAssert.Contains(preStamp, $"OBJECT_ID(N'dbo.{table}', N'U') IS NOT NULL",
+                    $"The stamp guard must confirm dbo.{table} is actually gone before recording the migration.");
+            }
+        }
 
         [TestMethod]
         public void ReclaimInputsManualScript_ReplaysTheMigrationVerbatim()

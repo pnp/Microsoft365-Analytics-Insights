@@ -78,12 +78,6 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>The Cowork credit balance. Entitlement and consumption are tenant-level.</summary>
         public const string CoworkCredits = "coworkCredits";
-
-        /// <summary>
-        /// Movement against the previous period and progress against targets. Both are computed from
-        /// published period facts, which are stored tenant-wide.
-        /// </summary>
-        public const string PeriodMovement = "periodMovement";
     }
 
     /// <summary>
@@ -287,8 +281,6 @@ namespace Common.Entities.CopilotAdoption
             scoped.TopResourceTypes = tenant.TopResourceTypes;
             scoped.WeeklyTrend = tenant.WeeklyTrend;
             scoped.WeeklyVolumeTrend = tenant.WeeklyVolumeTrend;
-            scoped.PeriodMovement = tenant.PeriodMovement;
-            scoped.Targets = tenant.Targets;
             scoped.CoworkCreditPosition = tenant.CoworkCreditPosition;
 
             // Taken whole rather than half-narrowed. The scoring pass recomputes the two agent-USER
@@ -306,7 +298,6 @@ namespace Common.Entities.CopilotAdoption
                 CopilotAdoptionUnscopedSections.Agents,
                 CopilotAdoptionUnscopedSections.PurchasedSeats,
                 CopilotAdoptionUnscopedSections.CoworkCredits,
-                CopilotAdoptionUnscopedSections.PeriodMovement,
             };
 
             // The unlicensed population's app breakdown is the same kind of SQL aggregate as the
