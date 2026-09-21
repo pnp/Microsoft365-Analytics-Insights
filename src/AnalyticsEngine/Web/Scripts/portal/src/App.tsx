@@ -19,6 +19,7 @@ import { SignOut20Regular } from '@fluentui/react-icons';
 import { AppToaster } from './components/toast';
 import Spinner from './components/Spinner';
 import { AREAS, DEFAULT_PATH, ROUTES, areaForPath, groupedRoutesForArea } from './navigation';
+import { PRODUCT_NAME, REPOSITORY_URL, buildLabel } from './product';
 
 const useStyles = makeStyles({
   header: {
@@ -66,6 +67,12 @@ const useStyles = makeStyles({
     maxWidth: '1120px',
     marginInline: 'auto',
   },
+  // Paper only - see the `data-print` contract in index.css, which repeats this on every printed
+  // page. A printed report gets forwarded and re-read months later, so it has to name the product
+  // that produced it, where that product lives, and the build the figures came out of.
+  printFooter: {
+    display: 'none',
+  },
 });
 
 /**
@@ -105,12 +112,17 @@ function currentRoutePath(committedPath: string): string {
  *
  * Routing and navigation are both driven from the route table in ./navigation, so the two cannot
  * drift and adding a page means adding one entry there.
+ *
+ * The shell is marked up for print with `data-print` attributes (see the `@media print` block in
+ * index.css): the brand bar, area switcher and nav rail are dropped, and the layout wrappers are
+ * flattened so the page itself gets the whole sheet instead of a 1120px column beside a menu.
  */
 export default function App() {
   const styles = useStyles();
   const location = useLocation();
   const navigate = useNavigate();
   const [navOpen, setNavOpen] = useState(true);
+  const build = buildLabel();
 
   const currentArea = areaForPath(location.pathname);
   const navGroups = groupedRoutesForArea(currentArea);
@@ -138,7 +150,7 @@ export default function App() {
   return (
     <>
       <AppToaster />
-      <header className={styles.header}>
+      <header className={styles.header} data-print="hide">
         <Text size={400} className={styles.brand}>
           Microsoft 365 Advanced Analytics
         </Text>
@@ -155,7 +167,7 @@ export default function App() {
         </Button>
       </header>
 
-      <div className={styles.areaBar}>
+      <div className={styles.areaBar} data-print="hide">
         <Tooltip content={navOpen ? 'Collapse navigation' : 'Expand navigation'} relationship="label">
           <Hamburger onClick={() => setNavOpen(!navOpen)} />
         </Tooltip>
@@ -168,11 +180,12 @@ export default function App() {
         </TabList>
       </div>
 
-      <div className={styles.layout}>
+      <div className={styles.layout} data-print="content">
         <NavDrawer
           open={navOpen}
           type="inline"
           className={styles.nav}
+          data-print="hide"
           selectedValue={location.pathname}
           onNavItemSelect={(_event: unknown, data: { value: unknown }) => goTo(String(data.value))}
           aria-label={`${AREAS.find((a) => a.id === currentArea)?.label} navigation`}
@@ -191,8 +204,8 @@ export default function App() {
           </NavDrawerBody>
         </NavDrawer>
 
-        <main className={styles.content}>
-          <div className={styles.contentInner}>
+        <main className={styles.content} data-print="content">
+          <div className={styles.contentInner} data-print="content">
             <Suspense
               fallback={
                 <div style={{ textAlign: 'center', padding: '32px' }}>
@@ -210,6 +223,16 @@ export default function App() {
             </Suspense>
           </div>
         </main>
+      </div>
+
+      {/* Repeated at the foot of every printed page - see the `data-print` contract in index.css.
+          The repository URL is a real link so it stays clickable in a PDF, and is shown in full
+          rather than as link text, because on paper the href is not recoverable. */}
+      <div className={styles.printFooter} data-print="footer">
+        {PRODUCT_NAME}
+        {build && ` \u00b7 ${build}`}
+        {' \u00b7 '}
+        <a href={REPOSITORY_URL}>{REPOSITORY_URL}</a>
       </div>
     </>
   );

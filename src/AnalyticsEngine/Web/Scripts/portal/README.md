@@ -105,6 +105,39 @@ auth cookie, so a token in the request body would be ignored.
 | _(none - origin-relative)_ | `api/TeamsExplorer` | Teams Explorer: source availability, and one endpoint per tab (`/overview`, `/adoption`, `/meetings`, `/collaboration`, `/conversations`, `/people`) plus `/export/{section}` CSVs. |
 | _(none - origin-relative)_ | `api/WebActivity` | SharePoint web activity: source availability, and one endpoint per tab (`/overview`, `/visits`, `/pages`, `/journeys`, `/geography`, `/search`, `/technology`) plus `/export/{section}` CSVs. |
 
+`window.o365AnalyticsBuildLabel` is not an endpoint: it is the running build's label
+(`Common.Entities.BuildConstants.BuildLabel`), substituted into `index.html` by
+`HomeController.InjectBuildLabel` when it serves the page. The SPA prints it in the footer of a
+printed report, which has to exist *before* `window.print()` runs - so it cannot be fetched; and
+`api/SystemStatus`, which carries the same label elsewhere, `COUNT(*)`s whole tables and is far too
+expensive to call on every page just to name a version. `npm run dev` serves `index.html` straight
+from disk, so the placeholder survives; the SPA reads that, and `DEV_BUILD`, as "unknown build" and
+prints no version rather than a fake one.
+
+## Printing
+
+Every page prints without the app shell. The report keeps the whole sheet, each numbered section of
+a report starts a new page, and a footer naming the product, build and repository repeats at the
+foot of every page.
+
+This is a contract between components and the `@media print` block in `src/index.css`, expressed as
+`data-print` attributes (class names are Griffel-generated and cannot be targeted from a
+stylesheet):
+
+| Attribute | Meaning |
+| --- | --- |
+| `data-print="hide"` | Chrome the reader cannot use on paper - nav, tabs, filter controls, buttons. |
+| `data-print="content"` | A layout wrapper, flattened so it imposes no width limit, gutter or viewport-height floor. |
+| `data-print="flow"` | A flex/grid stack of sections, returned to block flow so page breaks take effect. |
+| `data-print="page-break"` | Starts a new sheet, and keeps its own content with it. |
+| `data-print="keep-with-next"` | Never left stranded at the foot of a page with its content overleaf. |
+| `data-print="only"` | Rendered on paper only. |
+| `data-print="footer"` | Repeated at the foot of every printed page. |
+
+`src/printStyles.test.ts` asserts the stylesheet half - Vitest runs with `css: false`, so a
+component test can prove an attribute is present but never that it does anything. It also fails on
+any `data-print` value the stylesheet has never heard of.
+
 ## Local development
 
 ```bash

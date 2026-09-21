@@ -26,6 +26,8 @@ declare global {
     o365AnalyticsHealthAPI: string;
     /** Endpoint for the "is there a newer release?" check. */
     o365AnalyticsUpdateCheckAPI: string;
+    /** The running build's label, substituted into index.html by HomeController. */
+    o365AnalyticsBuildLabel: string;
   }
 }
 

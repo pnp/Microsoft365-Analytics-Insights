@@ -56,6 +56,8 @@ import ResourceTypesPanel from '../components/copilotAdoption/ResourceTypesPanel
 import EmailDomainPanel from '../components/copilotAdoption/EmailDomainPanel';
 import { ConcentrationBar, CombinedSegmentTable } from '../components/copilotAdoption/CombinedViews';
 import InfoTip from '../components/shared/InfoTip';
+import PrintButton from '../components/shared/PrintButton';
+import DismissibleWarnings from '../components/shared/DismissibleWarnings';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
 import type { KpiDefinition } from '../components/shared/KpiGrid';
@@ -68,6 +70,24 @@ const WINDOW_OPTIONS = [
 ];
 
 type AdoptionTab = 'executive' | 'analyst' | 'licensed' | 'cowork' | 'unlicensed' | 'agents' | 'opportunities' | 'method';
+
+/**
+ * The tab strip, in order.
+ *
+ * Single source of truth so the strip and the print caption cannot drift: the caption names the
+ * view on a printout, where the tab strip itself is hidden and the reader has no other way to tell
+ * which of the eight views the sheet in their hand is.
+ */
+const TAB_LABELS: Record<AdoptionTab, string> = {
+  executive: 'Executive view',
+  analyst: 'Analyst view',
+  licensed: 'Licensed users',
+  cowork: 'Cowork',
+  unlicensed: 'Unlicensed usage',
+  agents: 'Agents',
+  opportunities: 'Licence opportunities',
+  method: 'How this is calculated',
+};
 
 /** Plain-English names for the sections the server could not narrow to one email domain. */
 const UNSCOPED_SECTION_LABELS: Record<string, string> = {
@@ -120,6 +140,14 @@ const useStyles = makeStyles({
   intro: {
     marginTop: '8px',
     maxWidth: '780px',
+  },
+  // Paper only - see the `data-print` contract in index.css. The filter controls and the tab strip
+  // are both hidden when printing, which would otherwise leave a printout that does not say which
+  // view, which period or which email domain it is a report of.
+  printScope: {
+    display: 'none',
+    marginTop: '8px',
+    color: tokens.colorNeutralForeground2,
   },
   subTabs: {
     marginTop: '16px',
@@ -203,6 +231,28 @@ const useStyles = makeStyles({
     textAlign: 'left',
   },
 });
+
+/**
+ * The numbered heading that opens each act of a view ("1. Where we stand").
+ *
+ * One component rather than seven copies of the markup, because each heading also carries the page
+ * break that makes the printed report readable: every act starts a fresh sheet, and no heading is
+ * left stranded at the foot of a page with its content overleaf. Act 1 deliberately does not break
+ * - it belongs with the KPI tiles on the report's front page.
+ */
+function SectionHead({ index, title, blurb }: { index: number; title: string; blurb: string }) {
+  const styles = useStyles();
+  return (
+    <div className={styles.sectionHead} data-print={index === 1 ? 'keep-with-next' : 'page-break'}>
+      <Text weight="semibold" size={500}>
+        <span className={styles.sectionIndex}>{index}.</span> {title}
+      </Text>
+      <Text size={200} className={styles.muted}>
+        {blurb}
+      </Text>
+    </div>
+  );
+}
 
 /**
  * The Copilot Adoption area.
@@ -350,7 +400,7 @@ export default function CopilotAdoptionPage() {
             department lead or attached to a licence request.
           </Body1>
         </div>
-        <div className={styles.controls}>
+        <div className={styles.controls} data-print="hide">
           <Text size={200} className={styles.muted}>
             Period
           </Text>
@@ -388,6 +438,11 @@ export default function CopilotAdoptionPage() {
             </>
           )}
           {availability?.available && (
+            <PrintButton
+              tooltip={`Prints the ${TAB_LABELS[tab]} as it is on screen, without the navigation around it. The other tabs are not included - use the Excel report for the whole analysis.`}
+            />
+          )}
+          {availability?.available && (
             <Tooltip
               relationship="description"
               content={
@@ -413,6 +468,20 @@ export default function CopilotAdoptionPage() {
         </div>
       </div>
 
+      {availability?.available && (
+        <div className={styles.printScope} data-print="only">
+          <Text size={200}>
+            {TAB_LABELS[tab]}
+            {' \u00b7 '}
+            {WINDOW_OPTIONS.find((o) => o.value === windowDays)?.label ?? `Last ${windowDays} days`}
+            {summary && ` (${formatDate(summary.fromUtc)} to ${formatDate(summary.toUtc)})`}
+            {' \u00b7 '}
+            {emailDomain ?? 'All email domains'}
+            {summary && ` \u00b7 Generated ${formatDate(summary.generatedUtc)}`}
+          </Text>
+        </div>
+      )}
+
       {availabilityError && (
         <MessageBar intent="error" style={{ marginTop: '16px' }}>
           <MessageBarBody>{availabilityError}</MessageBarBody>
@@ -435,27 +504,16 @@ export default function CopilotAdoptionPage() {
       {availability?.available && (
         <>
           {availability.messages.length > 0 && (
-            <MessageBar intent="warning" style={{ marginTop: '16px' }}>
-              <MessageBarBody>
-                <ul style={{ margin: 0, paddingInlineStart: '20px' }}>
-                  {availability.messages.map((m) => (
-                    <li key={m}>{m}</li>
-                  ))}
-                </ul>
-              </MessageBarBody>
-            </MessageBar>
+            <DismissibleWarnings messages={availability.messages} style={{ marginTop: '16px' }} />
           )}
 
-          <div className={styles.subTabs}>
+          <div className={styles.subTabs} data-print="hide">
             <TabList selectedValue={tab} onTabSelect={onTabSelect}>
-              <Tab value="executive">Executive view</Tab>
-              <Tab value="analyst">Analyst view</Tab>
-              <Tab value="licensed">Licensed users</Tab>
-              <Tab value="cowork">Cowork</Tab>
-              <Tab value="unlicensed">Unlicensed usage</Tab>
-              <Tab value="agents">Agents</Tab>
-              <Tab value="opportunities">Licence opportunities</Tab>
-              <Tab value="method">How this is calculated</Tab>
+              {(Object.keys(TAB_LABELS) as AdoptionTab[]).map((value) => (
+                <Tab key={value} value={value}>
+                  {TAB_LABELS[value]}
+                </Tab>
+              ))}
             </TabList>
           </div>
 
@@ -472,7 +530,7 @@ export default function CopilotAdoptionPage() {
           )}
 
           {!summaryLoading && summary && (
-            <div className={styles.stack}>
+            <div className={styles.stack} data-print="flow">
               {summary.figuresIncomplete && (
                 <MessageBar intent="error">
                   <MessageBarBody>
@@ -489,17 +547,7 @@ export default function CopilotAdoptionPage() {
                 </MessageBar>
               )}
 
-              {summary.warnings.length > 0 && (
-                <MessageBar intent="warning">
-                  <MessageBarBody>
-                    <ul style={{ margin: 0, paddingInlineStart: '20px' }}>
-                      {summary.warnings.map((w) => (
-                        <li key={w}>{w}</li>
-                      ))}
-                    </ul>
-                  </MessageBarBody>
-                </MessageBar>
-              )}
+              {summary.warnings.length > 0 && <DismissibleWarnings messages={summary.warnings} />}
 
               {/* Stated on screen, every time. A dashboard silently showing one subsidiary is the
                   fastest way to get a licence decision wrong, and the domain drop-down is easy to
@@ -699,14 +747,11 @@ function ExecutiveTab({
     <>
       <KpiGrid items={kpis} />
 
-      <div className={styles.sectionHead}>
-        <Text weight="semibold" size={500}>
-          <span className={styles.sectionIndex}>1.</span> Where we stand
-        </Text>
-        <Text size={200} className={styles.muted}>
-          Seats, adoption, habit, reclaim confidence and reassignment opportunity without the diagnostics.
-        </Text>
-      </div>
+      <SectionHead
+        index={1}
+        title="Where we stand"
+        blurb="Seats, adoption, habit, reclaim confidence and reassignment opportunity without the diagnostics."
+      />
 
       <div className={styles.twoUp}>
         <Card>
@@ -792,14 +837,11 @@ function ExecutiveTab({
         </Card>
       </div>
 
-      <div className={styles.sectionHead}>
-        <Text weight="semibold" size={500}>
-          <span className={styles.sectionIndex}>2.</span> Where it is working and failing
-        </Text>
-        <Text size={200} className={styles.muted}>
-          The departments to start with, and the funnel stage where value drops out.
-        </Text>
-      </div>
+      <SectionHead
+        index={2}
+        title="Where it is working and failing"
+        blurb="The departments to start with, and the funnel stage where value drops out."
+      />
 
       <div className={styles.twoUp}>
         <Card>
@@ -890,14 +932,11 @@ function ExecutiveTab({
         </Card>
       )}
 
-      <div className={styles.sectionHead}>
-        <Text weight="semibold" size={500}>
-          <span className={styles.sectionIndex}>3.</span> What we are doing about it
-        </Text>
-        <Text size={200} className={styles.muted}>
-          The enablement workload, with each row drilling through to the exact users counted.
-        </Text>
-      </div>
+      <SectionHead
+        index={3}
+        title="What we are doing about it"
+        blurb="The enablement workload, with each row drilling through to the exact users counted."
+      />
 
       <Card>
         <div className={styles.cardHead}>
@@ -1036,14 +1075,11 @@ function AnalystTab({
       <KpiGrid items={kpis} />
 
 
-      <div className={styles.sectionHead}>
-        <Text weight="semibold" size={500}>
-          <span className={styles.sectionIndex}>1.</span> Where you stand
-        </Text>
-        <Text size={200} className={styles.muted}>
-          The headline position: how many licences are earning their keep, and where the drop-off is.
-        </Text>
-      </div>
+      <SectionHead
+        index={1}
+        title="Where you stand"
+        blurb="The headline position: how many licences are earning their keep, and where the drop-off is."
+      />
 
       <Card>
         <div className={styles.cardHead}>
@@ -1126,14 +1162,11 @@ function AnalystTab({
         </div>
       </Card>
 
-      <div className={styles.sectionHead}>
-        <Text weight="semibold" size={500}>
-          <span className={styles.sectionIndex}>2.</span> What to do next
-        </Text>
-        <Text size={200} className={styles.muted}>
-          The work this creates, how big each job is, and which departments to start with.
-        </Text>
-      </div>
+      <SectionHead
+        index={2}
+        title="What to do next"
+        blurb="The work this creates, how big each job is, and which departments to start with."
+      />
 
       <Card>
         <div className={styles.cardHead}>
@@ -1308,14 +1341,11 @@ function AnalystTab({
         </Card>
       )}
 
-      <div className={styles.sectionHead}>
-        <Text weight="semibold" size={500}>
-          <span className={styles.sectionIndex}>3.</span> How Copilot is being used
-        </Text>
-        <Text size={200} className={styles.muted}>
-          The evidence behind those recommendations: how often, how deeply, in which apps, and by whom.
-        </Text>
-      </div>
+      <SectionHead
+        index={3}
+        title="How Copilot is being used"
+        blurb="The evidence behind those recommendations: how often, how deeply, in which apps, and by whom."
+      />
 
       <Card>
         <div className={styles.cardHead}>
@@ -1578,14 +1608,11 @@ function AnalystTab({
         </Card>
       )}
 
-      <div className={styles.sectionHead}>
-        <Text weight="semibold" size={500}>
-          <span className={styles.sectionIndex}>4.</span> Trend and wider reach
-        </Text>
-        <Text size={200} className={styles.muted}>
-          Whether it is moving in the right direction, and what is happening beyond the licensed population.
-        </Text>
-      </div>
+      <SectionHead
+        index={4}
+        title="Trend and wider reach"
+        blurb="Whether it is moving in the right direction, and what is happening beyond the licensed population."
+      />
 
       {summary.weeklyTrend.length > 0 && (
         <Card>

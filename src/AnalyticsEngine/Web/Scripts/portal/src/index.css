@@ -8,3 +8,158 @@ body {
 #root {
   min-height: 100vh;
 }
+
+/*
+ * Print layout.
+ *
+ * On screen the app is a shell: a brand bar, an area switcher, a nav rail and a report centred in
+ * a fixed-width column. On paper none of that is usable - the reader cannot click a nav item - and
+ * all of it costs width, so a printed report came out as a narrow strip with a third of the page
+ * given over to a menu. These rules strip the chrome and give the report the whole sheet.
+ *
+ * Driven by `data-print` attributes rather than class names because the app styles itself with
+ * Griffel (`makeStyles`), whose class names are generated and so cannot be targeted from here. The
+ * attributes are the contract between a component and this stylesheet, and they are what the
+ * component tests assert on.
+ *
+ * `!important` throughout for the same reason: Griffel injects its rules into <head> at runtime,
+ * which is after this stylesheet, and its selectors have the same specificity as these - so
+ * without it source order would hand the win to the screen styles this block exists to undo.
+ *
+ *   data-print="hide"     - chrome the reader cannot use on paper (nav, tabs, filter controls,
+ *                           buttons). Removed from the printed output entirely.
+ *   data-print="content"  - a layout wrapper between the page root and the report. Flattened so it
+ *                           contributes no width limit, gutter or viewport-height floor.
+ *   data-print="only"     - rendered on paper only. Used for the scope caption that replaces the
+ *                           filter controls, so a printout still says what it is a report of.
+ *   data-print="flow"     - a flex or grid stack of report sections, returned to normal block flow
+ *                           so the page breaks below actually take effect.
+ *   data-print="page-break"
+ *                         - starts a new sheet, and keeps its own content with it.
+ *   data-print="keep-with-next"
+ *                         - never left stranded at the foot of a page with its content overleaf.
+ *   data-print="footer"   - repeated at the foot of every printed page.
+ */
+@media print {
+  @page {
+    /* Sides and top are slightly tighter than the usual browser default of half an inch, which
+       buys back most of a KPI column on A4 without running into a printer's unprintable edge. The
+       bottom is deeper on purpose: it is the strip the running footer sits in. */
+    margin: 10mm 10mm 16mm;
+  }
+
+  html,
+  body {
+    /* The app's off-white page colour is wasted ink on paper. */
+    background-color: #ffffff;
+  }
+
+  #root,
+  #root > * {
+    /* #root and FluentProvider are both floored at 100vh so the shell fills the window. On paper
+       that floor becomes a full page of whitespace before the report starts. */
+    min-height: 0 !important;
+  }
+
+  [data-print='hide'] {
+    display: none !important;
+  }
+
+  /* Fluent renders tooltips, popovers, menus and toasts through a portal appended to <body>,
+     outside the app root. That matters more than it sounds: clicking Print leaves the pointer on
+     the button, so the button's own tooltip is open at the exact moment the page is captured and
+     printed over the report every time. Hiding everything outside #root gets all of them without
+     depending on Fluent's internal class names; the role selector catches a tooltip that a future
+     `mountNode` puts inside the app instead. */
+  body > *:not(#root),
+  [role='tooltip'] {
+    display: none !important;
+  }
+
+  /* Page breaks only take effect in normal block flow - fragmentation inside a flex or grid
+     container is unreliable across browsers, and the report's sections are flex items of a column
+     stack. So the stack becomes block flow when printing, with a margin standing in for its gap. */
+  [data-print='flow'] {
+    display: block !important;
+  }
+
+  [data-print='flow'] > * {
+    margin-bottom: 16px !important;
+  }
+
+  /* Each numbered act of the report starts its own sheet. Without this a heading landed at the
+     foot of one page with everything it introduces overleaf, which reads as an empty section.
+     The legacy `page-break-*` aliases are kept alongside the modern properties because Safari
+     still only implements the old ones, and a print stylesheet that silently no-ops on one
+     browser is indistinguishable from not having written it. */
+  [data-print='page-break'] {
+    page-break-before: always;
+    break-before: page;
+  }
+
+  /* No heading is printed as the last thing on a page. Applies to the first act too, which does
+     not start a new sheet - it belongs with the KPI tiles on the report's front page. */
+  [data-print='page-break'],
+  [data-print='keep-with-next'] {
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+
+  [data-print='content'] {
+    display: block !important;
+    max-width: none !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  [data-print='only'] {
+    display: block !important;
+  }
+
+  /* The running footer: product, build and repository at the foot of every page.
+     `position: fixed` is what makes a browser repeat an element on each printed page. Such an
+     element is laid out inside the page area, so at `bottom: 0` the report would flow underneath
+     it - hence the deeper bottom @page margin above and the negative offset that puts the footer
+     down into it. (Chromium and WebKit repeat it on every page; Firefox prints it on the first
+     only, which is a smaller footer, not a broken layout.) */
+  [data-print='footer'] {
+    display: block !important;
+    position: fixed;
+    bottom: -11mm;
+    left: 0;
+    right: 0;
+    padding-top: 2mm;
+    border-top: 0.3mm solid #c8c6c4;
+    font-size: 8pt;
+    line-height: 10pt;
+    color: #605e5c;
+  }
+
+  * {
+    /* Browsers drop background colours when printing. In this report colour carries meaning - the
+       adoption band of a segment, the accent on a KPI card, every chart fill - so a monochrome
+       printout is not merely plainer, it is unreadable. */
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Keep a card, a chart or a table row whole rather than splitting it over a page break. Tables
+     themselves are deliberately left breakable: the user lists run to hundreds of rows, and a
+     table that cannot break would simply overflow the sheet and lose everything past the first
+     page. Repeating the header row on each page is what makes a broken table readable. */
+  .fui-Card,
+  svg {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  tr {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+}
