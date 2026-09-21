@@ -14,10 +14,6 @@ const useStyles = makeStyles({
     margin: 0,
     paddingInlineStart: '20px',
   },
-  // Paper only - see the `data-print` contract in index.css.
-  printOnly: {
-    display: 'none',
-  },
 });
 
 /**
@@ -36,8 +32,13 @@ const useStyles = makeStyles({
  * - The dismissal is keyed on the warnings themselves, not on the bar. A different warning - a new
  *   problem, or a different one after changing the period or the email domain - is a warning the
  *   reader has not seen, so it shows itself again rather than inheriting the old dismissal.
- * - Printing ignores the dismissal entirely. A printed report is read away from the screen by
- *   people who cannot check what it left out, so its caveats travel with it.
+ * - Dismissing applies to the printout too. It briefly did not, on the reasoning that a printed
+ *   report is read away from the screen by people who cannot check what it left out - but that
+ *   makes the control lie: someone who puts the warnings away and prints has said what they want
+ *   on the page, and getting them anyway reads as a bug. Leaving the bar up is how you print it.
+ *
+ * Errors are deliberately NOT routed through here. A bar saying the figures themselves are wrong
+ * is not a caveat the reader gets to decide about.
  */
 export default function DismissibleWarnings({
   messages,
@@ -53,7 +54,22 @@ export default function DismissibleWarnings({
 
   const key = messages.join('\u0000');
 
-  const bar = (
+  if (dismissedKey === key) {
+    return (
+      <Button
+        appearance="subtle"
+        size="small"
+        icon={<Warning16Regular />}
+        style={style}
+        data-print="hide"
+        onClick={() => setDismissedKey(null)}
+      >
+        {messages.length === 1 ? 'Show 1 data warning' : `Show ${messages.length} data warnings`}
+      </Button>
+    );
+  }
+
+  return (
     <MessageBar intent="warning" style={style}>
       <MessageBarBody>
         <ul className={styles.list}>
@@ -75,25 +91,5 @@ export default function DismissibleWarnings({
         }
       />
     </MessageBar>
-  );
-
-  if (dismissedKey !== key) return bar;
-
-  return (
-    <>
-      <Button
-        appearance="subtle"
-        size="small"
-        icon={<Warning16Regular />}
-        style={style}
-        data-print="hide"
-        onClick={() => setDismissedKey(null)}
-      >
-        {messages.length === 1 ? 'Show 1 data warning' : `Show ${messages.length} data warnings`}
-      </Button>
-      <div className={styles.printOnly} data-print="only">
-        {bar}
-      </div>
-    </>
   );
 }

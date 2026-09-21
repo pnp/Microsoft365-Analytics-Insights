@@ -581,8 +581,9 @@ describe('CopilotAdoptionPage printing', () => {
  * that is not going to fix them today they are also the same orange block above the report on
  * every visit, which is how readers learn to skim past everything at the top of the page.
  *
- * So the bar can be put away - but never lost, never silently inherited by a different warning,
- * and never dropped from a printout that will be read away from the screen.
+ * So the bar can be put away - but never lost, and never silently inherited by a different
+ * warning. Dismissing applies to the printout too: the control would otherwise lie to someone who
+ * put the warnings away and then printed.
  */
 describe('CopilotAdoptionPage data warnings', () => {
   const WARNINGS = [
@@ -599,11 +600,9 @@ describe('CopilotAdoptionPage data warnings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Hide these warnings' }));
 
     // Gone from the screen, but the count is still on offer: a reader must never be unaware that
-    // there are caveats, only free to stop looking at them. Checked by position rather than by
-    // computed visibility, because the only remaining copy is the print-only one.
+    // there are caveats, only free to stop looking at them.
     await waitFor(() => expect(screen.getByRole('button', { name: /Show 2 data warnings/ })).toBeVisible());
-    const onScreen = screen.queryAllByText(WARNINGS[0]).filter((n) => !n.closest('[data-print="only"]'));
-    expect(onScreen).toHaveLength(0);
+    expect(screen.queryByText(WARNINGS[0])).not.toBeInTheDocument();
   });
 
   it('brings them straight back', async () => {
@@ -638,9 +637,11 @@ describe('CopilotAdoptionPage data warnings', () => {
     expect(screen.queryByRole('button', { name: /Show 1 data warning/ })).not.toBeInTheDocument();
   });
 
-  it('keeps the warnings on the printout even when they are hidden on screen', async () => {
-    // A printed report is read by people who cannot check what it left out, so its caveats travel
-    // with it regardless of what the person who printed it chose to look at.
+  it('leaves them off the printout too, because the reader said to put them away', async () => {
+    // This deliberately reversed: the bar used to survive on paper on the reasoning that a printed
+    // report is read by people who cannot check what it left out. But that makes the control lie -
+    // someone who hides the warnings and prints has said what they want on the page. Leaving the
+    // bar up is how you print it.
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({ warnings: WARNINGS }));
     await renderPage();
     await screen.findByText(WARNINGS[0]);
@@ -648,9 +649,9 @@ describe('CopilotAdoptionPage data warnings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Hide these warnings' }));
     await screen.findByRole('button', { name: /Show 2 data warnings/ });
 
-    const printed = [...document.querySelectorAll('[data-print="only"]')].map((n) => n.textContent ?? '');
-    expect(printed.some((text) => text.includes(WARNINGS[0]))).toBe(true);
-    // ...and the button that hid them is not itself printed.
+    // Nothing left anywhere in the document - not on screen, and not in a print-only copy.
+    expect(document.body.textContent).not.toContain(WARNINGS[0]);
+    // ...and the button that replaced them is itself chrome, so the printout carries neither.
     expect(screen.getByRole('button', { name: /Show 2 data warnings/ })).toHaveAttribute('data-print', 'hide');
   });
 });
