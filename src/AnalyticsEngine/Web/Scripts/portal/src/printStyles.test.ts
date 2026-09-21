@@ -151,6 +151,22 @@ describe('print stylesheet', () => {
     expect(main).toMatch(/getElementById\(['"]root['"]\)/);
   });
 
+  it('repeats the product, build and repository at the foot of every page', () => {
+    // `position: fixed` is what makes a browser repeat an element on each printed page; without it
+    // the footer appears once, at the end of the last page.
+    const declarations = printDeclarationsFor("[data-print='footer']");
+    expect(declarations).toMatch(/position:\s*fixed/);
+    expect(declarations).toMatch(/display:\s*block\s*!important/);
+
+    // A fixed element is laid out inside the page area, so the report would flow underneath it
+    // unless the bottom @page margin reserves a strip and the footer is offset down into it. Both
+    // halves, together, or the footer silently overprints the last rows on every page.
+    expect(declarations).toMatch(/bottom:\s*-\d+(\.\d+)?mm/);
+    const pageMargin = printDeclarationsFor('@page').match(/margin:\s*([^;]+)/)?.[1] ?? '';
+    const bottomMargin = pageMargin.trim().split(/\s+/).pop() ?? '';
+    expect(Number.parseFloat(bottomMargin)).toBeGreaterThan(12);
+  });
+
   it('has a rule for every data-print value the components use', () => {
     // The drift guard: an attribute the stylesheet has never heard of is dead markup, and reads in
     // review as though printing has been handled when it has not.

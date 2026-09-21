@@ -19,6 +19,7 @@ import { SignOut20Regular } from '@fluentui/react-icons';
 import { AppToaster } from './components/toast';
 import Spinner from './components/Spinner';
 import { AREAS, DEFAULT_PATH, ROUTES, areaForPath, groupedRoutesForArea } from './navigation';
+import { PRODUCT_NAME, REPOSITORY_URL, buildLabel } from './product';
 
 const useStyles = makeStyles({
   header: {
@@ -65,6 +66,12 @@ const useStyles = makeStyles({
   contentInner: {
     maxWidth: '1120px',
     marginInline: 'auto',
+  },
+  // Paper only - see the `data-print` contract in index.css, which repeats this on every printed
+  // page. A printed report gets forwarded and re-read months later, so it has to name the product
+  // that produced it, where that product lives, and the build the figures came out of.
+  printFooter: {
+    display: 'none',
   },
 });
 
@@ -115,6 +122,7 @@ export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
   const [navOpen, setNavOpen] = useState(true);
+  const build = buildLabel();
 
   const currentArea = areaForPath(location.pathname);
   const navGroups = groupedRoutesForArea(currentArea);
@@ -215,6 +223,16 @@ export default function App() {
             </Suspense>
           </div>
         </main>
+      </div>
+
+      {/* Repeated at the foot of every printed page - see the `data-print` contract in index.css.
+          The repository URL is a real link so it stays clickable in a PDF, and is shown in full
+          rather than as link text, because on paper the href is not recoverable. */}
+      <div className={styles.printFooter} data-print="footer">
+        {PRODUCT_NAME}
+        {build && ` \u00b7 ${build}`}
+        {' \u00b7 '}
+        <a href={REPOSITORY_URL}>{REPOSITORY_URL}</a>
       </div>
     </>
   );

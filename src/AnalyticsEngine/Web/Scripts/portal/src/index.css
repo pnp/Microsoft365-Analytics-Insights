@@ -38,12 +38,14 @@ body {
  *                         - starts a new sheet, and keeps its own content with it.
  *   data-print="keep-with-next"
  *                         - never left stranded at the foot of a page with its content overleaf.
+ *   data-print="footer"   - repeated at the foot of every printed page.
  */
 @media print {
   @page {
-    /* Slightly tighter than the usual browser default of half an inch, which buys back most of a
-       KPI column on A4 without running into a printer's unprintable edge. */
-    margin: 10mm;
+    /* Sides and top are slightly tighter than the usual browser default of half an inch, which
+       buys back most of a KPI column on A4 without running into a printer's unprintable edge. The
+       bottom is deeper on purpose: it is the strip the running footer sits in. */
+    margin: 10mm 10mm 16mm;
   }
 
   html,
@@ -113,6 +115,25 @@ body {
 
   [data-print='only'] {
     display: block !important;
+  }
+
+  /* The running footer: product, build and repository at the foot of every page.
+     `position: fixed` is what makes a browser repeat an element on each printed page. Such an
+     element is laid out inside the page area, so at `bottom: 0` the report would flow underneath
+     it - hence the deeper bottom @page margin above and the negative offset that puts the footer
+     down into it. (Chromium and WebKit repeat it on every page; Firefox prints it on the first
+     only, which is a smaller footer, not a broken layout.) */
+  [data-print='footer'] {
+    display: block !important;
+    position: fixed;
+    bottom: -11mm;
+    left: 0;
+    right: 0;
+    padding-top: 2mm;
+    border-top: 0.3mm solid #c8c6c4;
+    font-size: 8pt;
+    line-height: 10pt;
+    color: #605e5c;
   }
 
   * {

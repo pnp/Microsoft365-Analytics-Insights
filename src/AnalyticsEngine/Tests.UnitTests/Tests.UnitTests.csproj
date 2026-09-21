@@ -308,6 +308,7 @@
     <Compile Include="PowerPlatformAuditEventManagerTests.cs" />
     <Compile Include="PowerPlatformAdminActivityRecordParseTests.cs" />
     <Compile Include="ProfilingStoredProcedureTests.cs" />
+    <Compile Include="PortalBuildLabelTests.cs" />
     <Compile Include="CopilotAdoptionCoworkTests.cs" />
     <Compile Include="CopilotAdoptionEmailDomainTests.cs" />
     <Compile Include="CopilotAdoptionSqlIntegrationTests.cs" />

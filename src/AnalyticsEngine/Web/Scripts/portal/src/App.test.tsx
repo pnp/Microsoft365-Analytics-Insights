@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { useEffect } from 'react';
 import { screen, within, fireEvent, waitFor, configure, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -258,5 +258,54 @@ describe('Printing the app shell', () => {
     expect(
       screen.getByText(/No built-in report charts are available yet/).closest('[data-print="hide"]'),
     ).toBeNull();
+  });
+});
+
+/**
+ * The printed footer.
+ *
+ * A printed report leaves the screen: it gets forwarded, filed, and re-read months later in a
+ * licence discussion by people who were not there when it was produced. Without the product name,
+ * the repository and the build, there is no way to tell what generated the numbers or whether a
+ * figure that now looks wrong came from a version since fixed.
+ */
+describe('Printed footer', () => {
+  const footer = () => document.querySelector('[data-print="footer"]');
+
+  afterEach(() => {
+    delete (window as Partial<Window>).o365AnalyticsBuildLabel;
+  });
+
+  it('names the product, the build and the repository', async () => {
+    window.o365AnalyticsBuildLabel = 'Build 1841';
+    renderAt('/insights/reports');
+    await screen.findByLabelText('Insights navigation');
+
+    expect(footer()?.textContent).toContain('Microsoft 365 Advanced Analytics');
+    expect(footer()?.textContent).toContain('Build 1841');
+    // Spelled out in full, not hidden behind link text: on paper an href is not recoverable. It is
+    // still a real link, so it stays clickable in a PDF.
+    const repo = footer()?.querySelector('a');
+    expect(repo?.textContent).toBe('https://github.com/pnp/Microsoft365-Analytics-Insights');
+    expect(repo).toHaveAttribute('href', 'https://github.com/pnp/Microsoft365-Analytics-Insights');
+  });
+
+  it('says nothing about the version when this is not a released build', async () => {
+    // Better an unversioned footer than one asserting "DEV_BUILD", which reads as a real label and
+    // sends the reader looking for a release that does not exist.
+    window.o365AnalyticsBuildLabel = 'DEV_BUILD';
+    renderAt('/insights/reports');
+    await screen.findByLabelText('Insights navigation');
+
+    expect(footer()?.textContent).toContain('Microsoft 365 Advanced Analytics');
+    expect(footer()?.textContent).not.toContain('DEV_BUILD');
+  });
+
+  it('never shows on screen, and is not inside anything the printout hides', async () => {
+    renderAt('/insights/reports');
+    await screen.findByLabelText('Insights navigation');
+
+    expect(screen.queryByText(/Microsoft 365 Advanced Analytics · /)).not.toBeInTheDocument();
+    expect(footer()?.closest('[data-print="hide"]')).toBeNull();
   });
 });
