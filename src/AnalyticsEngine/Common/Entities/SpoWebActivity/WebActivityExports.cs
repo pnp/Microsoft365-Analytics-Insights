@@ -20,7 +20,7 @@ namespace Common.Entities.SpoWebActivity
         public static readonly string[] Sections =
         {
             "pages", "quiet-pages", "slow-pages", "entry-pages", "exit-pages",
-            "transitions", "search-terms", "technology",
+            "transitions", "flows", "search-terms", "technology",
         };
 
         /// <summary>True when <paramref name="section"/> names a real export.</summary>
@@ -198,6 +198,7 @@ namespace Common.Entities.SpoWebActivity
                 case "entry-pages": return "web-activity-entry-pages";
                 case "exit-pages": return "web-activity-exit-pages";
                 case "transitions": return "web-activity-page-journeys";
+                case "flows": return "web-activity-page-flows";
                 case "search-terms": return "web-activity-search-terms";
                 case "technology": return "web-activity-technology";
                 default: return "web-activity-pages";
