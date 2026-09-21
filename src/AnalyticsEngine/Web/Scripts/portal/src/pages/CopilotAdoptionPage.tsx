@@ -1020,6 +1020,17 @@ function AnalystTab({
     developing: o.developingScore,
   };
 
+  // Readiness for Cowork, from the readiness assessment rather than from Cowork usage. This is the
+  // gauge that must survive: the Cowork ADOPTION percentage below is suppressed whenever the Cowork
+  // spending-policy scope is unknown - which is the normal case, because nothing in the import can
+  // see that scope - so gating the whole Cowork slot on it removed Cowork from this card entirely on
+  // most tenants. Readiness has no such denominator: it is a share of the seat holders this tool
+  // actually scored, so it is always answerable when the readiness step ran.
+  const coworkReadinessPct =
+    summary.coworkReadinessAvailable && summary.coworkScoredUsers > 0
+      ? (summary.coworkRecommendedForPolicy / summary.coworkScoredUsers) * 100
+      : null;
+
   return (
     <>
       <KpiGrid items={kpis} />
@@ -1041,17 +1052,17 @@ function AnalystTab({
               Where you stand
             </Text>
             <Text size={200} block className={styles.muted}>
-              The two rates that decide whether the licences are earning their keep, against the scale this tool
+              The rates that decide whether the licences are earning their keep, against the scale this tool
               judges them on.
             </Text>
           </div>
           <InfoTip
             title="Where you stand"
             content={{
-              what: 'Adoption rate is the share of licensed users who touched Copilot at all. Habit rate is the share for whom it is a routine part of the working week.',
-              how: `The coloured arc is the judgement scale, not a smooth gradient - a continuous ramp would imply the difference between 41% and 43% means something, and it does not. On this scale ${describeBands()}. Habit is measured at an engagement score of ${o.establishedScore} or more.`,
+              what: 'Adoption rate is the share of licensed users who touched Copilot at all. Habit rate is the share for whom it is a routine part of the working week. Readiness for Cowork is the share of the seat holders scored on the Cowork tab who are ready to be added to a Cowork spending policy - already using Cowork, or prime candidates for it.',
+              how: `The coloured arc is the judgement scale, not a smooth gradient - a continuous ramp would imply the difference between 41% and 43% means something, and it does not. On this scale ${describeBands()}. Habit is measured at an engagement score of ${o.establishedScore} or more. Readiness needs a coordination load of ${o.coworkLoadMinScore} and a Copilot fluency of ${o.coworkFluencyMinScore}, and disabled accounts are excluded because scoping a policy to them grants nothing.`,
               source:
-                'The gap between the two gauges is the finding. Adoption at 100% with a habit rate near zero means everyone opened it once - which is exactly the situation a renewal conversation needs to surface, and which a single adoption figure conceals.',
+                'The gap between the adoption and habit gauges is the finding. Adoption at 100% with a habit rate near zero means everyone opened it once - which is exactly the situation a renewal conversation needs to surface, and which a single adoption figure conceals. Readiness is a PREDICTION for people not yet using Cowork; the separate Cowork adoption gauge, shown only where Microsoft tells us the spending-policy scope, is the measured one.',
             }}
           />
         </div>
@@ -1073,6 +1084,15 @@ function AnalystTab({
               value={summary.coworkAdoptionPct}
               label="Cowork adoption"
               sublabel={`${formatCount(summary.coworkUsers)} eligible users have used Cowork`}
+            />
+          )}
+          {coworkReadinessPct !== null && (
+            <GaugeRing
+              value={coworkReadinessPct}
+              label="Readiness for Cowork"
+              sublabel={`${formatCount(summary.coworkRecommendedForPolicy)} of ${formatCount(
+                summary.coworkScoredUsers,
+              )} scored seat holders are ready to be scoped for Cowork`}
             />
           )}
         </div>

@@ -273,6 +273,39 @@ describe('CopilotAdoptionPage view split', () => {
     expect(filters?.actions).toEqual(['coach']);
   });
 
+  it('keeps readiness for Cowork on the analyst gauges when the adoption percentage is unavailable', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      // Cowork eligibility is a spending-policy scope nothing in the import can see, so the adoption
+      // percentage is suppressed on most tenants. That must not take the readiness gauge with it -
+      // readiness is a share of the seat holders this tool scored, and needs no such denominator.
+      coworkDetected: true,
+      coworkAdoptionPct: null,
+      coworkReadinessAvailable: true,
+      coworkScoredUsers: 80,
+      coworkRecommendedForPolicy: 60,
+    }));
+
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+    fireEvent.click(screen.getByRole('tab', { name: 'Analyst view' }));
+
+    expect(await screen.findByRole('tab', { name: 'Analyst view', selected: true })).toBeVisible();
+    expect(screen.getByRole('img', { name: 'Readiness for Cowork: 75%' })).toBeVisible();
+    expect(
+      screen.getByText('60 of 80 scored seat holders are ready to be scoped for Cowork'),
+    ).toBeVisible();
+    expect(screen.queryByText('Cowork adoption')).not.toBeInTheDocument();
+  });
+
+  it('shows no readiness gauge at all when Cowork readiness could not be assessed', async () => {
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+    fireEvent.click(screen.getByRole('tab', { name: 'Analyst view' }));
+
+    expect(await screen.findByRole('tab', { name: 'Analyst view', selected: true })).toBeVisible();
+    expect(screen.queryByText('Readiness for Cowork')).not.toBeInTheDocument();
+  });
+
   it('uses the designed executive empty state instead of an empty grid of diagnostics', async () => {
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
       licensedUsers: 0,
