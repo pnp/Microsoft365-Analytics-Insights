@@ -302,6 +302,58 @@ namespace Common.Entities.CopilotAdoption
         public int OpportunityUsers { get; set; }
     }
 
+    /// <summary>
+    /// Adoption for one email domain: one of the organisations that share this tenant.
+    ///
+    /// <para>Richer than a plain <see cref="AdoptionSegmentRow"/> because a domain is usually a whole
+    /// company rather than a function within one, so the question being asked of it is different. The
+    /// interesting comparison is not only "is this org using its seats" but "is it using them while
+    /// also running unlicensed Copilot Chat, and does it have people who should be bought seats" - the
+    /// three together say whether an acquired business needs training, more licences, or fewer.</para>
+    /// </summary>
+    public class AdoptionDomainRow : AdoptionSegmentRow
+    {
+        /// <summary>
+        /// Copilot seats in this domain that look reclaimable, on the same confidence tiering the
+        /// headline reclaim figure uses.
+        /// </summary>
+        [JsonProperty("reclaimableSeats")]
+        public int ReclaimableSeats { get; set; }
+
+        /// <summary>
+        /// Audit interactions per licensed user, normalised to a month so the column does not change
+        /// meaning with the reporting period. Report-sourced rows are excluded from the numerator for
+        /// the same reason they are everywhere else: Microsoft prompt counts and audit interactions are
+        /// different units.
+        /// </summary>
+        [JsonProperty("interactionsPerLicensedUser")]
+        public double InteractionsPerLicensedUser { get; set; }
+
+        /// <summary>People in this domain using Copilot Chat in the window with no seat assigned.</summary>
+        [JsonProperty("unlicensedActiveUsers")]
+        public int UnlicensedActiveUsers { get; set; }
+
+        /// <summary>People in this domain the licence-opportunity ranking recommends buying a seat for.</summary>
+        [JsonProperty("recommendedForLicence")]
+        public int RecommendedForLicence { get; set; }
+
+        /// <summary>
+        /// Seat holders in this domain scored as prime Cowork candidates. Zero on a tenant whose Cowork
+        /// readiness analysis did not run, which is why the panel reads
+        /// <see cref="CopilotAdoptionSummary.CoworkReadinessAvailable"/> before showing the column.
+        /// </summary>
+        [JsonProperty("coworkPrimeCandidates")]
+        public int CoworkPrimeCandidates { get; set; }
+
+        /// <summary>
+        /// True when the seats in this domain belong to external guests rather than to members of the
+        /// tenant. Worth flagging because it changes what the row means: a guest domain is a partner
+        /// being collaborated with, not a part of the business that can be sent on a training course.
+        /// </summary>
+        [JsonProperty("external")]
+        public bool External { get; set; }
+    }
+
     /// <summary>Which underlying imports actually supplied data, so no headline number is silently wrong.</summary>
     public class AdoptionDataSources
     {
@@ -735,6 +787,46 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("adoptionByCountry")]
         public List<AdoptionSegmentRow> AdoptionByCountry { get; set; } = new List<AdoptionSegmentRow>();
 
+        /// <summary>
+        /// Adoption by email domain - i.e. by the organisations that share this tenant.
+        ///
+        /// <para>A tenant assembled from acquisitions carries several verified domains, and they adopt
+        /// Copilot very differently: the company that ran the rollout is not the one whose seats were
+        /// handed out during a migration. Department cuts across all of them and hides exactly that
+        /// difference, which is why this is a dimension in its own right rather than another
+        /// <c>adoptionBy...</c> segment list.</para>
+        ///
+        /// <para>Worst adoption first, then largest, like every other breakdown here - the reading
+        /// order of an enablement plan.</para>
+        /// </summary>
+        [JsonProperty("emailDomains")]
+        public List<AdoptionDomainRow> EmailDomains { get; set; } = new List<AdoptionDomainRow>();
+
+        /// <summary>
+        /// The email domain this whole summary was narrowed to, or <c>null</c> for the whole tenant.
+        /// </summary>
+        /// <remarks>
+        /// Echoed back rather than assumed from the request, so the page can state on screen which
+        /// population every figure describes. A dashboard that is silently showing one subsidiary is
+        /// the fastest way to get a licence decision wrong.
+        /// </remarks>
+        [JsonProperty("scopedEmailDomain")]
+        public string ScopedEmailDomain { get; set; }
+
+        /// <summary>
+        /// Sections that stayed tenant-wide when <see cref="ScopedEmailDomain"/> is set, because they
+        /// come from aggregate queries that carry no per-user identity to filter on.
+        /// </summary>
+        /// <remarks>
+        /// Published rather than silently dropped or silently left unfiltered. Both of those are worse:
+        /// dropping loses real information, and leaving a tenant-wide chart unlabelled next to a scoped
+        /// one invites the reader to compare two different populations. Naming them lets the UI badge
+        /// each one, which is the only honest option. Values are compile-time constants from
+        /// <see cref="CopilotAdoptionUnscopedSections"/> - never anything derived from tenant data.
+        /// </remarks>
+        [JsonProperty("unscopedSections")]
+        public List<string> UnscopedSections { get; set; } = new List<string>();
+
         /// <summary>The configured accountability dimension used for <see cref="AccountabilityRollup"/>.</summary>
         [JsonProperty("accountabilityDimension")]
         public string AccountabilityDimension { get; set; } = CopilotAdoptionAccountabilityDimensions.DirectManager;
@@ -806,14 +898,6 @@ namespace Common.Entities.CopilotAdoption
 
         #endregion
 
-        /// <summary>Closed-period movement for the headline figures. Never compares the current partial period.</summary>
-        [JsonProperty("periodMovement")]
-        public CopilotAdoptionPeriodMovement PeriodMovement { get; set; } = new CopilotAdoptionPeriodMovement();
-
-        /// <summary>Customer-defined internal goals evaluated against their frozen baseline.</summary>
-        [JsonProperty("targets")]
-        public List<CopilotAdoptionTarget> Targets { get; set; } = new List<CopilotAdoptionTarget>();
-
         /// <summary>The tuning actually used, echoed back so every figure can be traced to its rule.</summary>
         [JsonProperty("options")]
         public CopilotAdoptionOptions Options { get; set; }
@@ -825,6 +909,23 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         [JsonProperty("warnings")]
         public List<string> Warnings { get; set; } = new List<string>();
+
+        /// <summary>
+        /// The warnings that were already present when scoring began - i.e. the ones about data
+        /// sources, failed queries and capped result sets rather than about the population.
+        /// </summary>
+        /// <remarks>
+        /// Snapshotted by <c>CopilotAdoptionService.FinaliseSummary</c> so a domain-scoped view can
+        /// inherit exactly those and then raise its own population warnings for its own numbers.
+        /// Without the split a scoped summary either loses "the audit import is behind" (which is still
+        /// true of the subset) or repeats "N users were scored from the usage report" with the
+        /// tenant-wide N next to the scoped one.
+        ///
+        /// Not serialised: it is a build-time detail of how a scoped summary is assembled, and the UI
+        /// only ever renders <see cref="Warnings"/>.
+        /// </remarks>
+        [JsonIgnore]
+        public List<string> SourceWarnings { get; set; } = new List<string>();
 
         /// <summary>
         /// True when a query the headline figures are DERIVED FROM failed, so the adoption numbers below

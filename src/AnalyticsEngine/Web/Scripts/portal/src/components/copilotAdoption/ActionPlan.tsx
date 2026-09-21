@@ -1,5 +1,4 @@
-import { makeStyles, tokens, Text, Badge, Button } from '@fluentui/react-components';
-import type { MouseEvent } from 'react';
+import { makeStyles, tokens, Text, Badge } from '@fluentui/react-components';
 import type { AdoptionActionSummary } from '../../types/copilotAdoption';
 import { formatCount, formatPct } from '../shared/KpiGrid';
 
@@ -28,7 +27,7 @@ const useStyles = makeStyles({
   },
   row: {
     display: 'grid',
-    gridTemplateColumns: 'minmax(140px, 170px) minmax(60px, auto) 1fr auto',
+    gridTemplateColumns: 'minmax(140px, 170px) minmax(60px, auto) 1fr',
     gap: '12px',
     alignItems: 'start',
   },
@@ -90,9 +89,6 @@ const useStyles = makeStyles({
       outlineColor: tokens.colorStrokeFocus2,
     },
   },
-  actionButton: {
-    whiteSpace: 'nowrap',
-  },
   drill: {
     color: tokens.colorBrandForegroundLink,
     whiteSpace: 'nowrap',
@@ -122,11 +118,9 @@ export default function ActionPlan({
   actions,
   showCounts = true,
   onSelect,
-  onCreateIntervention,
 }: {
   actions: AdoptionActionSummary[];
   showCounts?: boolean;
-  onCreateIntervention?: (code: string) => void;
   /**
    * Drill-through. Without it the plan states "76 people need coaching" and then leaves the reader
    * to rebuild that exact group by hand from the filters on another tab - which is both tedious and
@@ -204,19 +198,6 @@ export default function ActionPlan({
                 </>
               )}
             </Text>
-            {onCreateIntervention && (
-              <Button
-                size="small"
-                appearance="secondary"
-                className={styles.actionButton}
-                onClick={(e: MouseEvent<HTMLButtonElement>) => {
-                  e.stopPropagation();
-                  onCreateIntervention(a.code);
-                }}
-              >
-                Start intervention
-              </Button>
-            )}
           </div>
         );
       })}

@@ -1,4 +1,4 @@
-using Common.Entities;
+﻿using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.CopilotAdoption;
 using DataUtils;
@@ -184,15 +184,54 @@ namespace Web.AnalyticsWeb.Controllers
             return await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, FirstResponseBudget, cancellationToken);
         }
 
-        private async Task<CopilotAdoptionAnalysis> TryGetEnrichedAnalysisAsync(
-            int windowDays, string seatLicenceTypeIds, string comparisonMode, TimeSpan budget, CancellationToken cancellationToken)
+        /// <summary>
+        /// The analysis with its row collections narrowed to one email domain, for the list, paging and
+        /// export endpoints.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately the cheap half of the scope filter: these endpoints read rows and data-source
+        /// warnings, never the aggregate figures, so there is no reason to re-score the population on
+        /// every page of a table. The summary endpoint uses <see cref="TryGetScopedSummaryAsync"/>,
+        /// which does.
+        /// </remarks>
+        private async Task<CopilotAdoptionAnalysis> TryGetScopedRowsAsync(
+            int windowDays, string seatLicenceTypeIds, string emailDomain, TimeSpan budget, CancellationToken cancellationToken)
         {
             var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, budget, cancellationToken);
             if (analysis == null) return null;
 
-            await new CopilotAdoptionService(analysis.Summary.Options)
-                .EnrichProgressAsync(analysis, comparisonMode, cancellationToken);
-            return analysis;
+            return CopilotAdoptionScopeFilter.FilterRows(
+                analysis, CopilotAdoptionScope.ForEmailDomain(emailDomain));
+        }
+
+        private async Task<CopilotAdoptionAnalysis> TryGetScopedRowsAsync(
+            int windowDays, string seatLicenceTypeIds, string emailDomain, CancellationToken cancellationToken)
+        {
+            return await TryGetScopedRowsAsync(
+                windowDays, seatLicenceTypeIds, emailDomain, FirstResponseBudget, cancellationToken);
+        }
+
+        /// <summary>
+        /// The analysis with every aggregate recomputed for one email domain.
+        /// </summary>
+        /// <remarks>
+        /// The heavy SQL stays cached tenant-wide and shared - narrowing re-scores the loaded rows in
+        /// memory instead of re-querying per domain, which would multiply the load on a database the
+        /// importer is already sharing. Sections that cannot be narrowed are carried across and named
+        /// in <see cref="CopilotAdoptionSummary.UnscopedSections"/> so the page can label them.
+        /// </remarks>
+        private async Task<CopilotAdoptionAnalysis> TryGetScopedSummaryAsync(
+            int windowDays, string seatLicenceTypeIds, string emailDomain,
+            TimeSpan budget, CancellationToken cancellationToken)
+        {
+            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, budget, cancellationToken);
+            if (analysis == null) return null;
+
+            var scope = CopilotAdoptionScope.ForEmailDomain(emailDomain);
+            if (!scope.IsNarrowed) return analysis;
+
+            var service = new CopilotAdoptionService(analysis.Summary.Options);
+            return CopilotAdoptionScopeFilter.Apply(analysis, scope, service.FinaliseSummary);
         }
 
         /// <summary>
@@ -267,52 +306,19 @@ namespace Web.AnalyticsWeb.Controllers
         #region Summary and licence types
 
         /// <summary>The executive view: headline figures, the adoption funnel and the breakdown charts.</summary>
-        // GET: api/CopilotAdoption/summary?windowDays=28
+        // GET: api/CopilotAdoption/summary?windowDays=28&emailDomain=contoso.com
         [HttpGet]
         [Route("summary")]
         public async Task<IHttpActionResult> Summary(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
-            string comparisonMode = CopilotAdoptionComparisonModes.PreviousPeriod,
+            string emailDomain = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetEnrichedAnalysisAsync(windowDays, seatLicenceTypeIds, comparisonMode, FirstResponseBudget, cancellationToken);
+            var analysis = await TryGetScopedSummaryAsync(
+                windowDays, seatLicenceTypeIds, emailDomain, FirstResponseBudget, cancellationToken);
             if (analysis == null) return StillBuilding();
             return Ok(analysis.Summary);
-        }
-
-        [HttpGet]
-        [Route("targets")]
-        public async Task<IHttpActionResult> Targets(
-            int windowDays = 28,
-            string comparisonMode = CopilotAdoptionComparisonModes.PreviousPeriod,
-            CancellationToken cancellationToken = default(CancellationToken))
-        {
-            var analysis = await TryGetEnrichedAnalysisAsync(windowDays, null, comparisonMode, FirstResponseBudget, cancellationToken);
-            if (analysis == null) return StillBuilding();
-            return Ok(analysis.Summary.Targets);
-        }
-
-        [HttpPost]
-        [Route("targets")]
-        public async Task<IHttpActionResult> CreateTarget(CopilotAdoptionCreateTargetRequest request, CancellationToken cancellationToken = default(CancellationToken))
-        {
-            if (request == null) return BadRequest("Target details are required.");
-            try
-            {
-                request.CreatedBy = request.CreatedBy ?? User?.Identity?.Name;
-                var target = await new CopilotAdoptionService(CopilotAdoptionOptions.Default)
-                    .CreateTargetAsync(request, cancellationToken);
-                return Ok(target);
-            }
-            catch (ArgumentException ex)
-            {
-                return BadRequest(ex.Message);
-            }
-            catch (InvalidOperationException ex)
-            {
-                return BadRequest(ex.Message);
-            }
         }
 
         /// <summary>
@@ -350,9 +356,14 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         /// <summary>
-        /// The distinct departments and countries present in the analysis, for the filter drop-downs.
-        /// Derived from the already-loaded result rather than from another query.
+        /// The distinct email domains, departments and countries present in the analysis, for the
+        /// filter drop-downs. Derived from the already-loaded result rather than from another query.
         /// </summary>
+        /// <remarks>
+        /// Deliberately NOT narrowed by the current scope: this is the list the domain filter itself is
+        /// chosen from, so narrowing it would leave the selected domain as the only option and make the
+        /// filter impossible to change.
+        /// </remarks>
         // GET: api/CopilotAdoption/filters
         [HttpGet]
         [Route("filters")]
@@ -366,6 +377,13 @@ namespace Web.AnalyticsWeb.Controllers
 
             return Ok(new
             {
+                // Every population, so a domain that holds no seats at all - an acquired business
+                // using Copilot Chat without ever having been licensed - is still selectable.
+                emailDomains = Distinct(
+                    analysis.LicensedUsers.Select(u => CopilotAdoptionEmailDomain.Label(u.EmailDomain))
+                        .Concat(analysis.Opportunities.Select(o => CopilotAdoptionEmailDomain.Label(o.EmailDomain)))
+                        .Concat(analysis.CoworkReadiness.Select(c => CopilotAdoptionEmailDomain.Label(c.EmailDomain)))
+                        .Concat(analysis.UnlicensedUsers.Select(u => CopilotAdoptionEmailDomain.Label(u.EmailDomain)))),
                 departments = Distinct(
                     analysis.LicensedUsers.Select(u => u.Department)
                         .Concat(analysis.Opportunities.Select(o => o.Department))
@@ -393,116 +411,6 @@ namespace Web.AnalyticsWeb.Controllers
 
         #endregion
 
-
-        #region Cohorts and interventions
-
-        [HttpGet]
-        [Route("cohorts")]
-        public async Task<IHttpActionResult> Cohorts(CancellationToken cancellationToken = default(CancellationToken))
-        {
-            var service = new CopilotAdoptionService();
-            return Ok(await service.GetCohortsAsync(cancellationToken));
-        }
-
-        [HttpPost]
-        [Route("cohorts/from-action")]
-        public async Task<IHttpActionResult> CreateCohortFromAction(
-            [FromBody] CopilotAdoptionCreateCohortRequest request,
-            int windowDays = 28,
-            string seatLicenceTypeIds = null,
-            CancellationToken cancellationToken = default(CancellationToken))
-        {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
-            if (analysis == null) return StatusCode(HttpStatusCode.ServiceUnavailable);
-            request = request ?? new CopilotAdoptionCreateCohortRequest();
-            request.CreatedBy = CurrentUserName();
-            var service = new CopilotAdoptionService(analysis.Summary.Options);
-            return Ok(await service.CreateCohortFromActionAsync(analysis, request, cancellationToken));
-        }
-
-        [HttpPost]
-        [Route("interventions/from-action")]
-        public async Task<IHttpActionResult> CreateInterventionFromAction(
-            [FromBody] CopilotAdoptionCreateInterventionRequest request,
-            int windowDays = 28,
-            string seatLicenceTypeIds = null,
-            CancellationToken cancellationToken = default(CancellationToken))
-        {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
-            if (analysis == null) return StatusCode(HttpStatusCode.ServiceUnavailable);
-            request = request ?? new CopilotAdoptionCreateInterventionRequest();
-            request.CreatedBy = CurrentUserName();
-            var service = new CopilotAdoptionService(analysis.Summary.Options);
-            return Ok(await service.CreateInterventionFromActionAsync(analysis, request, cancellationToken));
-        }
-
-        [HttpGet]
-        [Route("cohorts/{cohortId:int}/members")]
-        public async Task<IHttpActionResult> CohortMembers(int cohortId, CancellationToken cancellationToken = default(CancellationToken))
-        {
-            var service = new CopilotAdoptionService();
-            return Ok(await service.GetCohortMembersAsync(cohortId, cancellationToken));
-        }
-
-        [HttpGet]
-        [Route("cohorts/{cohortId:int}/members/export")]
-        public async Task<HttpResponseMessage> ExportCohortMembers(int cohortId, CancellationToken cancellationToken = default(CancellationToken))
-        {
-            var service = new CopilotAdoptionService();
-            var members = await service.GetCohortMembersAsync(cohortId, cancellationToken);
-            return CsvResponse(
-                CsvSerialiser.ToBytes(
-                    members,
-                    new[]
-                    {
-                        new CsvColumn<CopilotAdoptionCohortMember>("User principal name", r => r.UserPrincipalName),
-                        new CsvColumn<CopilotAdoptionCohortMember>("Email", r => r.Mail),
-                        new CsvColumn<CopilotAdoptionCohortMember>("Department", r => r.Department),
-                        new CsvColumn<CopilotAdoptionCohortMember>("Baseline band", r => r.BaselineBandName),
-                        new CsvColumn<CopilotAdoptionCohortMember>("Baseline score", r => r.BaselineScore),
-                        new CsvColumn<CopilotAdoptionCohortMember>("Baseline active days", r => r.BaselineActiveDays),
-                        new CsvColumn<CopilotAdoptionCohortMember>("Hold-out control", r => r.HoldoutControl),
-                    }),
-                CsvSerialiser.FileName("copilot-adoption-cohort-" + cohortId, DateTime.UtcNow));
-        }
-
-        [HttpPost]
-        [Route("cohorts/{cohortId:int}/close")]
-        public async Task<IHttpActionResult> CloseCohort(int cohortId, CancellationToken cancellationToken = default(CancellationToken))
-        {
-            var service = new CopilotAdoptionService();
-            await service.CloseCohortAsync(cohortId, CurrentUserName(), cancellationToken);
-            return Ok(await service.GetCohortAsync(cohortId, cancellationToken));
-        }
-
-        [HttpGet]
-        [Route("interventions")]
-        public async Task<IHttpActionResult> Interventions(CancellationToken cancellationToken = default(CancellationToken))
-        {
-            var service = new CopilotAdoptionService();
-            return Ok(await service.GetInterventionsAsync(cancellationToken));
-        }
-
-        [HttpGet]
-        [Route("interventions/{interventionId:int}/outcome")]
-        public async Task<IHttpActionResult> InterventionOutcome(
-            int interventionId,
-            DateTime? followupPeriodEnd = null,
-            CancellationToken cancellationToken = default(CancellationToken))
-        {
-            var service = new CopilotAdoptionService();
-            var outcome = await service.MeasureInterventionAsync(interventionId, followupPeriodEnd, cancellationToken);
-            if (outcome == null) return NotFound();
-            return Ok(outcome);
-        }
-
-        private string CurrentUserName()
-        {
-            return User?.Identity?.Name ?? "unknown";
-        }
-
-        #endregion
-
         #region Licensed users
 
         /// <summary>
@@ -520,6 +428,7 @@ namespace Web.AnalyticsWeb.Controllers
             string actions = null,
             string department = null,
             string country = null,
+            string emailDomain = null,
             string reclaimEligibility = null,
             bool coworkOnly = false,
             bool disabledOnly = false,
@@ -531,7 +440,7 @@ namespace Web.AnalyticsWeb.Controllers
             int take = DefaultTake,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            var analysis = await TryGetScopedRowsAsync(windowDays, seatLicenceTypeIds, emailDomain, cancellationToken);
             if (analysis == null) return StillBuilding();
 
             var query = BuildLicensedUserQuery(
@@ -564,6 +473,7 @@ namespace Web.AnalyticsWeb.Controllers
             string actions = null,
             string department = null,
             string country = null,
+            string emailDomain = null,
             string reclaimEligibility = null,
             bool coworkOnly = false,
             bool disabledOnly = false,
@@ -577,8 +487,8 @@ namespace Web.AnalyticsWeb.Controllers
             // would just render the JSON body as the "file". So an export WAITS - but only up to
             // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
             // download instead of an answer.
-            var analysis = await TryGetAnalysisAsync(
-                windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+            var analysis = await TryGetScopedRowsAsync(
+                windowDays, seatLicenceTypeIds, emailDomain, ExportWaitBudget, cancellationToken);
             if (analysis == null) return ExportNotReadyResponse();
 
             var query = BuildLicensedUserQuery(
@@ -592,7 +502,7 @@ namespace Web.AnalyticsWeb.Controllers
                     CopilotAdoptionExports.LicensedUserColumns(
                         analysis.Summary.FiguresIncomplete,
                         WarningSummary(analysis.Summary))),
-                CsvSerialiser.FileName("copilot-licensed-users", analysis.Summary.GeneratedUtc));
+                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-licensed-users", emailDomain), analysis.Summary.GeneratedUtc));
         }
 
         /// <summary>
@@ -619,95 +529,6 @@ namespace Web.AnalyticsWeb.Controllers
 
         #endregion
 
-        #region Published period cohorts
-
-        // GET: api/CopilotAdoption/period-cohorts?leftPeriodEnd=2026-06-30&rightPeriodEnd=2026-09-30&periodDays=28
-        [HttpGet]
-        [Route("period-cohorts")]
-        public async Task<IHttpActionResult> PeriodCohorts(
-            DateTime leftPeriodEnd,
-            DateTime rightPeriodEnd,
-            int periodDays = 28,
-            CancellationToken cancellationToken = default(CancellationToken))
-        {
-            var service = new CopilotAdoptionService(
-                CopilotAdoptionOptions.Default,
-                DefaultAnalyticsDbContextFactory.Instance,
-                maxConcurrentSteps: 1);
-            var comparison = await service.ComparePublishedPeriodCohortsAsync(
-                leftPeriodEnd,
-                rightPeriodEnd,
-                NormaliseWindowDays(periodDays),
-                cancellationToken);
-            return Ok(comparison);
-        }
-
-        // GET: api/CopilotAdoption/period-cohorts/users?leftPeriodEnd=...&rightPeriodEnd=...&transition=reactivated
-        [HttpGet]
-        [Route("period-cohorts/users")]
-        public async Task<IHttpActionResult> PeriodCohortUsers(
-            DateTime leftPeriodEnd,
-            DateTime rightPeriodEnd,
-            int periodDays = 28,
-            string transition = null,
-            string fromBand = null,
-            string toBand = null,
-            string department = null,
-            string activationState = null,
-            int skip = 0,
-            int take = DefaultTake,
-            CancellationToken cancellationToken = default(CancellationToken))
-        {
-            var service = new CopilotAdoptionService(
-                CopilotAdoptionOptions.Default,
-                DefaultAnalyticsDbContextFactory.Instance,
-                maxConcurrentSteps: 1);
-            var page = await service.ReadPublishedPeriodCohortUsersAsync(
-                leftPeriodEnd,
-                rightPeriodEnd,
-                NormaliseWindowDays(periodDays),
-                transition,
-                fromBand,
-                toBand,
-                department,
-                activationState,
-                skip,
-                take,
-                cancellationToken);
-            return Ok(page);
-        }
-
-        // GET: api/CopilotAdoption/period-cohorts/export/workbook?leftPeriodEnd=...&rightPeriodEnd=...
-        [HttpGet]
-        [Route("period-cohorts/export/workbook")]
-        public async Task<HttpResponseMessage> ExportPeriodCohortWorkbook(
-            DateTime leftPeriodEnd,
-            DateTime rightPeriodEnd,
-            int periodDays = 28,
-            CancellationToken cancellationToken = default(CancellationToken))
-        {
-            var service = new CopilotAdoptionService(
-                CopilotAdoptionOptions.Default,
-                DefaultAnalyticsDbContextFactory.Instance,
-                maxConcurrentSteps: 1);
-            var comparison = await service.ComparePublishedPeriodCohortsAsync(
-                leftPeriodEnd,
-                rightPeriodEnd,
-                NormaliseWindowDays(periodDays),
-                cancellationToken);
-            var response = Request.CreateResponse(HttpStatusCode.OK);
-            response.Content = new ByteArrayContent(CopilotAdoptionWorkbook.Build(comparison));
-            response.Content.Headers.ContentType = new MediaTypeHeaderValue(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-            response.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment")
-            {
-                FileName = CopilotAdoptionWorkbook.CohortFileName(comparison.Gate),
-            };
-            return response;
-        }
-
-        #endregion
-
         #region Licence opportunities
 
         /// <summary>
@@ -722,6 +543,7 @@ namespace Web.AnalyticsWeb.Controllers
             string search = null,
             string department = null,
             string country = null,
+            string emailDomain = null,
             bool recommendedOnly = false,
             bool existingCopilotUsersOnly = false,
             double? minScore = null,
@@ -731,7 +553,7 @@ namespace Web.AnalyticsWeb.Controllers
             int take = DefaultTake,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            var analysis = await TryGetScopedRowsAsync(windowDays, seatLicenceTypeIds, emailDomain, cancellationToken);
             if (analysis == null) return StillBuilding();
 
             var query = BuildOpportunityQuery(
@@ -758,6 +580,7 @@ namespace Web.AnalyticsWeb.Controllers
             string search = null,
             string department = null,
             string country = null,
+            string emailDomain = null,
             bool recommendedOnly = false,
             bool existingCopilotUsersOnly = false,
             double? minScore = null,
@@ -769,8 +592,8 @@ namespace Web.AnalyticsWeb.Controllers
             // would just render the JSON body as the "file". So an export WAITS - but only up to
             // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
             // download instead of an answer.
-            var analysis = await TryGetAnalysisAsync(
-                windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+            var analysis = await TryGetScopedRowsAsync(
+                windowDays, seatLicenceTypeIds, emailDomain, ExportWaitBudget, cancellationToken);
             if (analysis == null) return ExportNotReadyResponse();
 
             var query = BuildOpportunityQuery(
@@ -784,7 +607,7 @@ namespace Web.AnalyticsWeb.Controllers
                     CopilotAdoptionExports.LicenceOpportunityColumns(
                         analysis.Summary.FiguresIncomplete,
                         WarningSummary(analysis.Summary))),
-                CsvSerialiser.FileName("copilot-licence-opportunities", analysis.Summary.GeneratedUtc));
+                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-licence-opportunities", emailDomain), analysis.Summary.GeneratedUtc));
         }
 
         #endregion
@@ -805,6 +628,7 @@ namespace Web.AnalyticsWeb.Controllers
             string tiers = null,
             string department = null,
             string country = null,
+            string emailDomain = null,
             bool recommendedOnly = false,
             bool coworkUsersOnly = false,
             double? minLoad = null,
@@ -815,7 +639,7 @@ namespace Web.AnalyticsWeb.Controllers
             int take = DefaultTake,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
+            var analysis = await TryGetScopedRowsAsync(windowDays, seatLicenceTypeIds, emailDomain, cancellationToken);
             if (analysis == null) return StillBuilding();
 
             var query = BuildCoworkQuery(
@@ -849,6 +673,7 @@ namespace Web.AnalyticsWeb.Controllers
             string tiers = null,
             string department = null,
             string country = null,
+            string emailDomain = null,
             bool recommendedOnly = false,
             bool coworkUsersOnly = false,
             double? minLoad = null,
@@ -858,8 +683,8 @@ namespace Web.AnalyticsWeb.Controllers
             CancellationToken cancellationToken = default(CancellationToken))
         {
             // Exports are <a href> downloads, not fetch() calls - see ExportOpportunities.
-            var analysis = await TryGetAnalysisAsync(
-                windowDays, seatLicenceTypeIds, ExportWaitBudget, cancellationToken);
+            var analysis = await TryGetScopedRowsAsync(
+                windowDays, seatLicenceTypeIds, emailDomain, ExportWaitBudget, cancellationToken);
             if (analysis == null) return ExportNotReadyResponse();
 
             var query = BuildCoworkQuery(
@@ -870,7 +695,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             return CsvResponse(
                 CsvSerialiser.ToBytes(rows, CopilotAdoptionExports.CoworkReadinessColumns()),
-                CsvSerialiser.FileName("copilot-cowork-readiness", analysis.Summary.GeneratedUtc));
+                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-cowork-readiness", emailDomain), analysis.Summary.GeneratedUtc));
         }
 
         #endregion
@@ -883,8 +708,14 @@ namespace Web.AnalyticsWeb.Controllers
         ///
         /// Exists for the point-in-time snapshot. A screenshot of this page cannot be compared with
         /// another screenshot six months later: the numbers cannot be subtracted and nobody can tell
-        /// what period or thresholds either was run with. The workbook records both, so two files taken
-        /// before and after an enablement programme are comparable and the comparison is checkable.
+        /// what period, thresholds or product build either was run with. The workbook records all
+        /// three, so two files taken before and after an enablement programme are comparable and the
+        /// comparison is checkable.
+        ///
+        /// <para>Two sheets make that comparison mechanical rather than manual: "Snapshot facts"
+        /// carries every scalar figure as a stable key/value row and "Settings" carries every tuning
+        /// option the same way, both sorted by key so a lookup against the other file always resolves.
+        /// The per-user sheets carry the same columns as the CSV exports, from the same definitions.</para>
         ///
         /// Built from the same cached analysis that renders the page, so the two can never disagree.
         /// </summary>
@@ -894,15 +725,15 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<HttpResponseMessage> ExportWorkbook(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
-            string comparisonMode = CopilotAdoptionComparisonModes.PreviousPeriod,
+            string emailDomain = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
             // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
             // would just render the JSON body as the "file". So an export WAITS - but only up to
             // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
             // download instead of an answer.
-            var analysis = await TryGetEnrichedAnalysisAsync(
-                windowDays, seatLicenceTypeIds, comparisonMode, ExportWaitBudget, cancellationToken);
+            var analysis = await TryGetScopedSummaryAsync(
+                windowDays, seatLicenceTypeIds, emailDomain, ExportWaitBudget, cancellationToken);
             if (analysis == null) return ExportNotReadyResponse();
 
             byte[] bytes;
@@ -1149,8 +980,23 @@ namespace Web.AnalyticsWeb.Controllers
             };
         }
 
-        private static List<string> Distinct(IEnumerable<string> values)
+        /// <summary>
+        /// Folds the email-domain scope into a CSV file name.
+        /// </summary>
+        /// <remarks>
+        /// A spreadsheet outlives the screen it was exported from and gets forwarded without that
+        /// context, so a file describing one of several organisations in a tenant has to say which one
+        /// somewhere durable. The rows carry an "Email domain" column, but columns get reordered and
+        /// trimmed downstream; the file name survives. Same reasoning as the workbook's scope banner.
+        /// </remarks>
+        private static string ScopedFileNamePrefix(string prefix, string emailDomain)
         {
+            var scope = CopilotAdoptionEmailDomain.Normalise(emailDomain);
+
+            return string.IsNullOrWhiteSpace(scope) ? prefix : prefix + "-" + scope;
+        }
+
+        private static List<string> Distinct(IEnumerable<string> values)        {
             return values
                 .Where(v => !string.IsNullOrWhiteSpace(v))
                 .Select(v => v.Trim())

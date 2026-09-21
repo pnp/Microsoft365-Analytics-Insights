@@ -361,10 +361,6 @@ namespace WebJob.Office365ActivityImporter
                 // others. The phase handles its own errors and cadence gating.
                 await tasks.ImportAgentCosts();
 
-                // Optional monthly aggregate Copilot Adoption digest. It is deliberately after imports and
-                // repairs so the closed-period snapshot is based on the freshest complete data available.
-                await tasks.SendCopilotAdoptionDigest();
-
 #if DEBUG
                 runAgain = false; // Debug only runs once; release runs forever. 
 #endif

@@ -127,15 +127,6 @@ namespace Web.AnalyticsWeb.Models.Health
         /// <summary>Errors from the most recent import of each Graph Copilot usage report, if any.</summary>
         [JsonProperty("copilotUsageReportErrors")]
         public List<string> CopilotUsageReportErrors { get; set; } = new List<string>();
-        /// <summary>Latest scheduled aggregate Copilot Adoption digest status, if the digest table exists.</summary>
-        [JsonProperty("copilotAdoptionDigestStatus")]
-        public string CopilotAdoptionDigestStatus { get; set; }
-        [JsonProperty("copilotAdoptionDigestPeriodEnd")]
-        public DateTime? CopilotAdoptionDigestPeriodEnd { get; set; }
-        [JsonProperty("copilotAdoptionDigestLastUpdatedUtc")]
-        public DateTime? CopilotAdoptionDigestLastUpdatedUtc { get; set; }
-        [JsonProperty("copilotAdoptionDigestError")]
-        public string CopilotAdoptionDigestError { get; set; }
         /// <summary>Set when the cheap DMV counts / DB size couldn't be read (e.g. no VIEW DATABASE STATE).</summary>
         [JsonProperty("countsError")]
         public string CountsError { get; set; }

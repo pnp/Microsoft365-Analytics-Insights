@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\WebApplications\Microsoft.WebApplication.targets" />
   <PropertyGroup>
@@ -205,6 +205,12 @@
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoTables.cs">
       <Link>DemoGenerator\DemoTables.cs</Link>
     </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoWebCatalogue.cs">
+      <Link>DemoGenerator\DemoWebCatalogue.cs</Link>
+    </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoWebActivityGenerator.cs">
+      <Link>DemoGenerator\DemoWebActivityGenerator.cs</Link>
+    </Compile>
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoCollaborationTables.cs">
       <Link>DemoGenerator\DemoCollaborationTables.cs</Link>
     </Compile>
@@ -278,11 +284,18 @@
     <Compile Include="DlpCopilotTests.cs" />
     <Compile Include="DlpApiContractTests.cs" />
     <Compile Include="DlpApiSqlIntegrationTests.cs" />
+    <Compile Include="OfficeAppsReportContractTests.cs" />
+    <Compile Include="OfficeAppsReportSqlIntegrationTests.cs" />
+    <Compile Include="IndexPlatformUserActivityLogDateMigrationTests.cs" />
     <Compile Include="TeamsExplorerApiContractTests.cs" />
     <Compile Include="TeamsExplorerAvailabilityTests.cs" />
     <Compile Include="TeamsExplorerIndexMigrationTests.cs" />
     <Compile Include="TeamsExplorerScoringTests.cs" />
     <Compile Include="TeamsExplorerSqlIntegrationTests.cs" />
+    <Compile Include="WebActivityApiContractTests.cs" />
+    <Compile Include="WebActivityScoringTests.cs" />
+    <Compile Include="WebActivityAvailabilityTests.cs" />
+    <Compile Include="WebActivitySqlIntegrationTests.cs" />
     <Compile Include="CopilotInteractionHistoryTests.cs" />
     <Compile Include="FakeLoaderClasses\FakeCopilotEventAdaptor.cs" />
     <Compile Include="FakeLoaderClasses\InMemoryCopilotUsagePersistenceManager.cs" />
@@ -296,7 +309,7 @@
     <Compile Include="PowerPlatformAdminActivityRecordParseTests.cs" />
     <Compile Include="ProfilingStoredProcedureTests.cs" />
     <Compile Include="CopilotAdoptionCoworkTests.cs" />
-    <Compile Include="CopilotAdoptionDigestTests.cs" />
+    <Compile Include="CopilotAdoptionEmailDomainTests.cs" />
     <Compile Include="CopilotAdoptionSqlIntegrationTests.cs" />
     <Compile Include="CopilotAdoptionSynchronizationContextTests.cs" />
     <Compile Include="CopilotAdoptionTelemetryTests.cs" />

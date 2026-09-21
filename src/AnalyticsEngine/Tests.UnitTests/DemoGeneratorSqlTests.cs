@@ -43,7 +43,8 @@ JOIN dbo.audit_events a ON a.id=c.event_id WHERE a.user_id<>c.user_id OR a.time_
                     Assert.AreEqual(0L, Scalar(connection, @"SELECT COUNT_BIG(*) FROM dbo.audit_events
 WHERE DATEDIFF(day,'19000101',time_stamp)%7 IN (5,6);"));
                     Assert.AreEqual(1L, Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.user_state_or_province WHERE name=N'Αττική';"));
-                    Assert.AreEqual(13L, Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.urls WHERE full_url LIKE N'%Καλημέρα%';"));
+                    Assert.AreEqual((long)DemoWebCatalogue.UnicodeUrlCount,
+                        Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.urls WHERE full_url LIKE N'%Καλημέρα%';"));
                     Assert.AreEqual(0L, Scalar(connection, @"SELECT COUNT_BIG(*) FROM (
 SELECT user_id,license_type_id FROM dbo.user_license_type_lookups GROUP BY user_id,license_type_id HAVING COUNT_BIG(*)>1) d;"));
 

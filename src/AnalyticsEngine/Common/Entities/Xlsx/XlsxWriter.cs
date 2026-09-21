@@ -70,13 +70,13 @@ namespace Common.Entities.Xlsx
         {
             if (output == null) throw new ArgumentNullException(nameof(output));
 
-            List<KeyValuePair<string, string>> package = BuildPackage();
+            List<KeyValuePair<string, Func<string>>> package = BuildPackage();
 
             // leaveOpen: true - see the summary. The archive's own Dispose still flushes the central
             // directory; it just does not touch the caller's stream afterwards.
             using (var zip = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
             {
-                foreach (KeyValuePair<string, string> part in package)
+                foreach (KeyValuePair<string, Func<string>> part in package)
                 {
                     ZipArchiveEntry entry = zip.CreateEntry(part.Key, CompressionLevel.Optimal);
                     using (Stream entryStream = entry.Open())
@@ -84,7 +84,9 @@ namespace Common.Entities.Xlsx
                     // inside an OPC part upsets stricter readers.
                     using (var writer = new StreamWriter(entryStream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
                     {
-                        writer.Write(part.Value);
+                        // Rendered here and deliberately not held: one part's XML at a time, so a large
+                        // per-user sheet is collectable as soon as it has been compressed.
+                        writer.Write(part.Value());
                     }
                 }
             }
@@ -239,26 +241,31 @@ namespace Common.Entities.Xlsx
         /// take <c>rId1..rIdN</c>, styles the next id. Charts and drawings are numbered globally /
         /// per-sheet as they are discovered.
         /// </summary>
-        private List<KeyValuePair<string, string>> BuildPackage()
+        private List<KeyValuePair<string, Func<string>>> BuildPackage()
         {
-            var parts = new List<KeyValuePair<string, string>>();
+            var parts = new List<KeyValuePair<string, Func<string>>>();
             var overrides = new List<KeyValuePair<string, string>>();
 
-            void AddPart(string path, string content) => parts.Add(new KeyValuePair<string, string>(path, content));
+            // Content is produced by a delegate rather than eagerly, so a worksheet's XML exists only
+            // while it is being written and becomes garbage immediately afterwards. Holding every part
+            // as a materialised string at once made peak memory a multiple of the finished file - and on
+            // a large tenant the per-user sheets are by far the biggest parts in the package, in a web
+            // process that has a history of losing its AppDomain on this very report.
+            void AddPart(string path, Func<string> content) => parts.Add(new KeyValuePair<string, Func<string>>(path, content));
             void AddOverride(string partName, string contentType) => overrides.Add(new KeyValuePair<string, string>(partName, contentType));
 
             // Fixed package plumbing.
-            AddPart("_rels/.rels", BuildRootRels());
-            AddPart("docProps/core.xml", BuildCoreProps());
-            AddPart("docProps/app.xml", BuildAppProps());
+            AddPart("_rels/.rels", BuildRootRels);
+            AddPart("docProps/core.xml", BuildCoreProps);
+            AddPart("docProps/app.xml", BuildAppProps);
             AddOverride("/docProps/core.xml", "application/vnd.openxmlformats-package.core-properties+xml");
             AddOverride("/docProps/app.xml", "application/vnd.openxmlformats-officedocument.extended-properties+xml");
 
-            AddPart("xl/styles.xml", XlsxStyles.BuildStylesXml());
+            AddPart("xl/styles.xml", XlsxStyles.BuildStylesXml);
             AddOverride("/xl/styles.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml");
 
-            AddPart("xl/workbook.xml", BuildWorkbookXml());
-            AddPart("xl/_rels/workbook.xml.rels", BuildWorkbookRels());
+            AddPart("xl/workbook.xml", BuildWorkbookXml);
+            AddPart("xl/_rels/workbook.xml.rels", BuildWorkbookRels);
             AddOverride("/xl/workbook.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml");
 
             int drawingCounter = 0;
@@ -277,8 +284,8 @@ namespace Common.Entities.Xlsx
                     drawingFileIndex = ++drawingCounter;
                 }
 
-                string worksheetXml = sheet.BuildWorksheetXml(isFirst, hasCharts, "rId1");
-                AddPart("xl/worksheets/sheet" + sheetFileIndex + ".xml", worksheetXml);
+                AddPart("xl/worksheets/sheet" + sheetFileIndex + ".xml",
+                    () => sheet.BuildWorksheetXml(isFirst, hasCharts, "rId1"));
                 AddOverride("/xl/worksheets/sheet" + sheetFileIndex + ".xml",
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml");
 
@@ -292,27 +299,29 @@ namespace Common.Entities.Xlsx
                     int chartFileIndex = ++chartCounter;
                     chartFileIndices.Add(chartFileIndex);
 
-                    Func<string, List<object>> resolver = r => ResolveRange(r, sheet);
-                    string chartXml = chart.BuildChartXml(resolver);
-                    AddPart("xl/charts/chart" + chartFileIndex + ".xml", chartXml);
+                    XlsxChart captured = chart;
+                    AddPart("xl/charts/chart" + chartFileIndex + ".xml",
+                        () => captured.BuildChartXml(r => ResolveRange(r, sheet)));
                     AddOverride("/xl/charts/chart" + chartFileIndex + ".xml",
                         "application/vnd.openxmlformats-officedocument.drawingml.chart+xml");
                 }
 
+                int capturedDrawingIndex = drawingFileIndex;
                 AddPart("xl/worksheets/_rels/sheet" + sheetFileIndex + ".xml.rels",
-                    BuildWorksheetRels(drawingFileIndex));
+                    () => BuildWorksheetRels(capturedDrawingIndex));
 
                 AddPart("xl/drawings/drawing" + drawingFileIndex + ".xml",
-                    XlsxChart.BuildDrawingXml(sheet.Charts));
+                    () => XlsxChart.BuildDrawingXml(sheet.Charts));
                 AddOverride("/xl/drawings/drawing" + drawingFileIndex + ".xml",
                     "application/vnd.openxmlformats-officedocument.drawing+xml");
 
                 AddPart("xl/drawings/_rels/drawing" + drawingFileIndex + ".xml.rels",
-                    BuildDrawingRels(chartFileIndices));
+                    () => BuildDrawingRels(chartFileIndices));
             }
 
             // Content types first so the manifest can enumerate every override gathered above.
-            parts.Insert(0, new KeyValuePair<string, string>("[Content_Types].xml", BuildContentTypes(overrides)));
+            parts.Insert(0, new KeyValuePair<string, Func<string>>(
+                "[Content_Types].xml", () => BuildContentTypes(overrides)));
             return parts;
         }
 

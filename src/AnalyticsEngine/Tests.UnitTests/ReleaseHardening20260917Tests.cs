@@ -1,4 +1,4 @@
-using Common.Entities.CopilotAdoption;
+﻿using Common.Entities.CopilotAdoption;
 using Common.Entities.Entities.UsageReports;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -241,98 +241,6 @@ namespace Tests.UnitTests
                 Options());
 
             StringAssert.Contains(scored.Rationale, "audit reconciliation");
-        }
-    }
-
-    /// <summary>
-    /// Seat assignment dates arrive with #277. Until then the period publisher writes
-    /// seat_first_observed_utc as NULL for every row, so the activation denominator is always zero.
-    /// </summary>
-    [TestClass]
-    public class ActivationRateSuppressionTests
-    {
-        private static CopilotAdoptionCohortUserRow Row(string transition, string activationState, string department = "Sales")
-        {
-            return new CopilotAdoptionCohortUserRow
-            {
-                Transition = transition,
-                ActivationState = activationState,
-                Department = department,
-            };
-        }
-
-        /// <summary>
-        /// With no known seat date anywhere, the rate is not measurable. Publishing 0 asserted a failed
-        /// onboarding programme - a number an admin would act on - where the honest answer is "unknown".
-        /// </summary>
-        [TestMethod]
-        public void ActivationRate_IsNull_WhenNoSeatDateIsKnown()
-        {
-            var rows = new List<CopilotAdoptionCohortUserRow>
-            {
-                Row(CopilotAdoptionCohortTransitions.NewlyAssigned, "seatDateUnknown"),
-                Row(CopilotAdoptionCohortTransitions.NewlyAssigned, "seatDateUnknown"),
-            };
-
-            var activation = CopilotAdoptionService.BuildActivationSummary(rows, 30);
-
-            Assert.IsNull(activation.ActivationRatePct,
-                "Unknown must not render as 0% - this is the production state until seat dates land.");
-            Assert.AreEqual(2, activation.SeatDateUnknownUsers, "The reason must still be reported.");
-
-            foreach (var segment in activation.ByDepartment)
-            {
-                Assert.IsNull(segment.ActivationRatePct,
-                    "A department whose seats all have unknown dates must suppress its rate too.");
-            }
-        }
-
-        /// <summary>
-        /// The other direction: a real denominator must still produce a real rate, or the fix would have
-        /// suppressed the feature rather than made it honest.
-        /// </summary>
-        [TestMethod]
-        public void ActivationRate_IsStillCalculated_WhenSeatDatesAreKnown()
-        {
-            var rows = new List<CopilotAdoptionCohortUserRow>
-            {
-                Row(CopilotAdoptionCohortTransitions.NewlyAssigned, "activatedWithinWindow"),
-                Row(CopilotAdoptionCohortTransitions.NewlyAssigned, "neverActivated"),
-            };
-
-            var activation = CopilotAdoptionService.BuildActivationSummary(rows, 30);
-
-            Assert.AreEqual(2, activation.NewSeatsAssignedInPeriod);
-            Assert.AreEqual(50d, activation.ActivationRatePct);
-        }
-
-        /// <summary>
-        /// Departments whose rate is unknown must not be ranked as though they were worse than a measured
-        /// 0%. LINQ orders nulls first by default, which would have put the unmeasurable department at the
-        /// top of a list an admin reads top-down looking for problems.
-        /// </summary>
-        [TestMethod]
-        public void DepartmentsWithAnUnknownRate_SortAfterMeasuredOnes()
-        {
-            var rows = new List<CopilotAdoptionCohortUserRow>
-            {
-                // Measured department: one new seat with a known date, never activated -> 0%.
-                Row(CopilotAdoptionCohortTransitions.NewlyAssigned, "neverActivated", "Measured"),
-                // Unknown department: same NeverActivatedUsers count, but no known seat date.
-                Row(CopilotAdoptionCohortTransitions.NewlyAssigned, "seatDateUnknown", "Unknown"),
-                Row("existing", "neverActivated", "Unknown"),
-            };
-
-            var activation = CopilotAdoptionService.BuildActivationSummary(rows, 30);
-
-            var measured = activation.ByDepartment.Single(s => s.Segment == "Measured");
-            var unknown = activation.ByDepartment.Single(s => s.Segment == "Unknown");
-
-            Assert.AreEqual(0d, measured.ActivationRatePct);
-            Assert.IsNull(unknown.ActivationRatePct);
-            Assert.IsTrue(
-                activation.ByDepartment.IndexOf(measured) < activation.ByDepartment.IndexOf(unknown),
-                "A measured 0% is a worse result than an unmeasurable one and must rank first.");
         }
     }
 

@@ -35,6 +35,90 @@ namespace Web.AnalyticsWeb.Models
         /// <summary>Sent emails (mailbox import).</summary>
         [JsonProperty("emails")]
         public bool Emails { get; set; }
+
+        /// <summary>
+        /// Microsoft 365 apps (Word/Excel/PowerPoint/Outlook/OneNote/Teams) and the platforms they
+        /// are used on, from the Graph <c>getM365AppUserDetail</c> report.
+        /// </summary>
+        /// <remarks>
+        /// Gated by the SAME import as <see cref="Usage"/> (<c>GraphUsageReports</c>) because both
+        /// are fed by the Graph usage-report loaders. The Copilot overlay charts in this area need
+        /// the separate Copilot usage-report import as well, which is reported per-chart rather than
+        /// hiding the whole area - the app and platform charts are useful without it.
+        /// </remarks>
+        [JsonProperty("officeApps")]
+        public bool OfficeApps { get; set; }
+    }
+
+    /// <summary>One cell of a <c>matrix</c> chart: a row, a column and the value where they meet.</summary>
+    public class ReportMatrixCell
+    {
+        [JsonProperty("row")]
+        public string Row { get; set; }
+
+        [JsonProperty("column")]
+        public string Column { get; set; }
+
+        [JsonProperty("value")]
+        public double Value { get; set; }
+    }
+
+    /// <summary>
+    /// A two-dimensional categorical chart - "which app, in which department" - rendered as a
+    /// shaded grid.
+    /// </summary>
+    /// <remarks>
+    /// This exists because the questions this report area answers are genuinely 2-D, and flattening
+    /// them into a bar chart destroys the finding. "Excel is the most used app" and "Excel is the
+    /// most used app <em>in Finance, but barely used in Field Operations</em>" are different
+    /// statements, and only the second one tells an adoption analyst where to go. Encoding the
+    /// second dimension as a combined "Finance - Excel" bar label technically fits a bar chart, but
+    /// with 6 apps and 20 departments that is 120 bars in one ranked list, which no reader can
+    /// scan by either dimension.
+    /// <para>
+    /// <see cref="Rows"/> and <see cref="Columns"/> are sent explicitly rather than inferred from
+    /// <see cref="Cells"/> so the grid keeps a deliberate order (apps in a fixed order, departments
+    /// ranked by size) and so a row or column that is genuinely all-zero still renders. Inferring
+    /// them from the cells would silently drop exactly the empty row an analyst is looking for.
+    /// </para>
+    /// </remarks>
+    public class ReportMatrix
+    {
+        /// <summary>What the rows are, e.g. "App". Used as the grid's corner heading.</summary>
+        [JsonProperty("rowLabel")]
+        public string RowLabel { get; set; }
+
+        /// <summary>What the columns are, e.g. "Department".</summary>
+        [JsonProperty("columnLabel")]
+        public string ColumnLabel { get; set; }
+
+        /// <summary>Row headings, in display order.</summary>
+        [JsonProperty("rows")]
+        public List<string> Rows { get; set; } = new List<string>();
+
+        /// <summary>Column headings, in display order.</summary>
+        [JsonProperty("columns")]
+        public List<string> Columns { get; set; } = new List<string>();
+
+        /// <summary>
+        /// The populated cells. Cells absent from this list are rendered as zero, so a sparse
+        /// matrix does not have to send a value for every intersection.
+        /// </summary>
+        [JsonProperty("cells")]
+        public List<ReportMatrixCell> Cells { get; set; } = new List<ReportMatrixCell>();
+
+        /// <summary>
+        /// When true the UI shades each cell against the maximum of its OWN ROW rather than the
+        /// whole grid.
+        /// </summary>
+        /// <remarks>
+        /// Needed whenever the rows have wildly different magnitudes. Outlook is used by nearly
+        /// everyone and OneNote by a small minority, so shading the whole grid on one scale leaves
+        /// the entire OneNote row blank and hides which departments use OneNote most - which is the
+        /// only thing that row is there to say.
+        /// </remarks>
+        [JsonProperty("shadeByRow")]
+        public bool ShadeByRow { get; set; }
     }
 
     /// <summary>
@@ -93,7 +177,7 @@ namespace Web.AnalyticsWeb.Models
         [JsonProperty("description")]
         public string Description { get; set; }
 
-        /// <summary><c>timeseries</c> or <c>bar</c>.</summary>
+        /// <summary><c>timeseries</c>, <c>bar</c>, <c>wordcloud</c> or <c>matrix</c>.</summary>
         [JsonProperty("type")]
         public string Type { get; set; }
 
@@ -108,6 +192,29 @@ namespace Web.AnalyticsWeb.Models
         /// <summary>The bars for a <c>bar</c> chart; null for a time-series chart.</summary>
         [JsonProperty("categories")]
         public List<ReportCategory> Categories { get; set; }
+
+        /// <summary>The grid for a <c>matrix</c> chart; null for every other type.</summary>
+        [JsonProperty("matrix")]
+        public ReportMatrix Matrix { get; set; }
+
+        /// <summary>
+        /// For a <c>bar</c> chart, whether each bar's share of the total is meaningful and should be
+        /// shown next to it.
+        /// </summary>
+        /// <remarks>
+        /// Off by default because it is only true when the bars are parts of one whole. "Users per
+        /// app" bars are NOT: a person who uses both Word and Excel is counted in both, so the bars
+        /// sum to more than the number of people and a share would be nonsense. Rates (adoption %
+        /// by department) are not parts of a whole either.
+        /// </remarks>
+        [JsonProperty("showShare")]
+        public bool ShowShare { get; set; }
+
+        /// <summary>
+        /// Unit suffix appended to each value when rendered, e.g. "%". Null for a plain count.
+        /// </summary>
+        [JsonProperty("valueSuffix")]
+        public string ValueSuffix { get; set; }
 
         /// <summary>The SQL that produced this chart, for the admin to copy and run.</summary>
         [JsonProperty("sql")]

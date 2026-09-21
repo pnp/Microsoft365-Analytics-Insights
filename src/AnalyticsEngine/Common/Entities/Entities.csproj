@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
@@ -99,11 +99,11 @@
     <Compile Include="CopilotAdoption\CopilotAdoptionConcentrationModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionCoworkModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionDiagnostics.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionDigestRenderer.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionEmailDomain.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionExports.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionGuidanceCatalogue.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionOptions.cs" />
-    <Compile Include="CopilotAdoption\CopilotAdoptionPeriodModels.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionScope.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionScoring.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionService.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionSql.cs" />
@@ -115,6 +115,14 @@
     <Compile Include="CopilotAdoption\CopilotLicenceClassifier.cs" />
     <Compile Include="CopilotAdoption\CopilotLicenceModels.cs" />
     <Compile Include="CopilotAdoption\CsvSerialiser.cs" />
+    <Compile Include="SpoWebActivity\SqlWebActivityStore.cs" />
+    <Compile Include="SpoWebActivity\WebActivityAvailability.cs" />
+    <Compile Include="SpoWebActivity\WebActivityExports.cs" />
+    <Compile Include="SpoWebActivity\WebActivityModels.cs" />
+    <Compile Include="SpoWebActivity\WebActivityQuery.cs" />
+    <Compile Include="SpoWebActivity\WebActivityRows.cs" />
+    <Compile Include="SpoWebActivity\WebActivityScoring.cs" />
+    <Compile Include="SpoWebActivity\WebActivitySql.cs" />
     <Compile Include="TeamsExplorer\SqlTeamsExplorerStore.cs" />
     <Compile Include="TeamsExplorer\TeamsExplorerAvailability.cs" />
     <Compile Include="TeamsExplorer\TeamsExplorerExports.cs" />
@@ -487,6 +495,14 @@
     <Compile Include="Migrations\202609171120001_AzureCostTagColumns.Designer.cs">
       <DependentUpon>202609171120001_AzureCostTagColumns.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202609201430001_DropCopilotAdoptionPeriodTables.cs" />
+    <Compile Include="Migrations\202609201430001_DropCopilotAdoptionPeriodTables.Designer.cs">
+      <DependentUpon>202609201430001_DropCopilotAdoptionPeriodTables.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Migrations\202609190900001_IndexPlatformUserActivityLogDate.cs" />
+    <Compile Include="Migrations\202609190900001_IndexPlatformUserActivityLogDate.Designer.cs">
+      <DependentUpon>202609190900001_IndexPlatformUserActivityLogDate.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609171125117_DropUnreportedCopilotStudioCreditColumns.cs" />
     <Compile Include="Migrations\202609171125117_DropUnreportedCopilotStudioCreditColumns.Designer.cs">
       <DependentUpon>202609171125117_DropUnreportedCopilotStudioCreditColumns.cs</DependentUpon>
@@ -749,6 +765,12 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609171120001_AzureCostTagColumns.resx">
       <DependentUpon>202609171120001_AzureCostTagColumns.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609201430001_DropCopilotAdoptionPeriodTables.resx">
+      <DependentUpon>202609201430001_DropCopilotAdoptionPeriodTables.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609190900001_IndexPlatformUserActivityLogDate.resx">
+      <DependentUpon>202609190900001_IndexPlatformUserActivityLogDate.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609171125117_DropUnreportedCopilotStudioCreditColumns.resx">
       <DependentUpon>202609171125117_DropUnreportedCopilotStudioCreditColumns.cs</DependentUpon>

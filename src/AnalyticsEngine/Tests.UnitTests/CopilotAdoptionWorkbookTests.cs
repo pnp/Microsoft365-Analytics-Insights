@@ -1,13 +1,16 @@
-using Common.Entities.Copilot;
+﻿using Common.Entities.Copilot;
 using Common.Entities.CopilotAdoption;
 using Common.Entities.Xlsx;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.IO.Packaging;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Xml.Linq;
 
@@ -214,6 +217,7 @@ namespace Tests.UnitTests
                 "Report", "Headline figures", "Adoption funnel", "Engagement", "Weekly trend",
                 "Departments and apps", "Agents", "Unlicensed usage", "Enablement plan",
                 "Licensed users", "Licence opportunities", "How this is calculated",
+                "Snapshot facts", "Settings",
             })
             {
                 CollectionAssert.Contains(sheetNames, expected,
@@ -221,18 +225,331 @@ namespace Tests.UnitTests
             }
         }
 
-        [TestMethod]
-        public void CohortWorkbook_CarriesTransitionsActivationAndDrillRows()
-        {
-            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticCohortComparison()));
+        #endregion
 
-            StringAssert.Contains(text, "Cohort transitions");
-            StringAssert.Contains(text, "Reactivated");
-            StringAssert.Contains(text, "Time to first use and activation");
-            StringAssert.Contains(text, "Seat date unknown");
-            StringAssert.Contains(text, "new.active@contoso.com");
-            StringAssert.Contains(text, "Account age is not substituted");
+        #region Snapshot comparability
+
+        /// <summary>
+        /// The build that produced the file has to be on the file.
+        ///
+        /// Two snapshots exist to be subtracted. A figure can move because adoption moved or because the
+        /// product changed how it counts, and without the build on the file those two are
+        /// indistinguishable - which is how an enablement programme ends up credited with a bug fix.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_RecordsTheBuildItWasGeneratedBy()
+        {
+            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
+
+            StringAssert.Contains(text, "Product build",
+                "The Report sheet must name the build that produced the snapshot.");
+            StringAssert.Contains(text, Common.Entities.BuildConstants.BuildLabel,
+                "The build label itself must be written, not just its heading.");
         }
+
+        /// <summary>
+        /// Comparison lives in the files, so two exports taken on different dates have to line up
+        /// row for row on the Snapshot facts sheet - same keys, same order, nothing conditional.
+        ///
+        /// This is the test that replaces the in-product period comparison. There is no stored
+        /// history any more: an admin who wants to know what moved exports the workbook twice and
+        /// diffs the two files by key. That only works if the key list is a function of the MODEL and
+        /// not of the DATA - the moment a row appears only when a figure is non-null, the two files
+        /// stop aligning and every lookup written against them silently returns the wrong row.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_TwoSnapshotsFromDifferentDatesDiffByKeyLookup()
+        {
+            // Deliberately different in date, population and - critically - in which figures are
+            // measurable at all. The later snapshot has no Cowork retention figure and no usage
+            // report, which is exactly the case that would tempt a writer into omitting rows.
+            var earlier = SyntheticAnalysis();
+
+            var later = SyntheticAnalysis();
+            later.Summary.GeneratedUtc = Now.AddDays(90);
+            later.Summary.FromUtc = Now.AddDays(90 - later.Summary.WindowDays);
+            later.Summary.ToUtc = Now.AddDays(90);
+            later.Summary.CoworkReportRetentionPct = null;
+            later.Summary.DataSources.CopilotUsageReportAvailable = false;
+            later.Summary.ScoredUsers = earlier.Summary.ScoredUsers + 25;
+            later.Summary.AdoptionRatePct = earlier.Summary.AdoptionRatePct + 6.5;
+
+            // Run diagnostics are the one part of the file whose keys legitimately vary with the run -
+            // a step only appears if it reported. They live on their own sheet for exactly this reason,
+            // and this is the case that proves they stay off Snapshot facts: two runs that timed
+            // different steps must still produce identical Snapshot fact keys.
+            earlier.Summary.Diagnostics = null;
+            later.Summary.Diagnostics = new CopilotAdoptionDiagnostics
+            {
+                TotalMs = 1234,
+                Steps = new List<CopilotAdoptionStepTiming>
+                {
+                    new CopilotAdoptionStepTiming { Step = CopilotAdoptionSteps.LicensedUsers, DurationMs = 900 },
+                    new CopilotAdoptionStepTiming { Step = CopilotAdoptionSteps.CoworkReadiness, DurationMs = 334, Failed = true },
+                },
+            };
+
+            var earlierFacts = SnapshotFactKeys(CopilotAdoptionWorkbook.Build(earlier));
+            var laterFacts = SnapshotFactKeys(CopilotAdoptionWorkbook.Build(later));
+
+            CollectionAssert.AreEqual(earlierFacts, laterFacts,
+                "Two exports must carry the same Snapshot fact keys in the same order, whatever the data "
+                + "says. A key that appears in one file and not the other cannot be diffed by lookup.");
+
+            // The WHOLE key column, not just the cells that happen to match a reflected summary
+            // property. Filtering by the expected key list is exactly the blind spot that let the run
+            // diagnostics sit on this sheet emitting run-dependent rows: they were discarded by the
+            // filter, so the assertion above could never have seen them. Any row anywhere on the sheet
+            // that appears in one export and not the other shifts every row below it.
+            var earlierColumnA = SheetKeyColumn(CopilotAdoptionWorkbook.Build(earlier));
+            var laterColumnA = SheetKeyColumn(CopilotAdoptionWorkbook.Build(later));
+
+            CollectionAssert.AreEqual(earlierColumnA, laterColumnA,
+                "Every row of the Snapshot facts sheet must be identical between two exports, not just the "
+                + "reflected metric rows. Run diagnostics were the original offender - their keys depend on "
+                + "which steps reported, so they live on their own sheet now.");
+
+            Assert.IsFalse(earlierColumnA.Concat(laterColumnA).Any(c => c.StartsWith("diagnostics", StringComparison.Ordinal)),
+                "Run diagnostics are run-dependent and belong on their own sheet, not on the sheet built to be diffed.");
+
+            // They must still be IN the file - moving them off Snapshot facts must not lose them.
+            var diagnosticCells = SheetCells(CopilotAdoptionWorkbook.Build(later), "Run diagnostics");
+            CollectionAssert.Contains(diagnosticCells, "diagnostics.step." + CopilotAdoptionSteps.CoworkReadiness,
+                "The run diagnostics must still be exported, just not on the sheet built for diffing.");
+
+            // A null list must still produce its .count row, blank rather than absent. An absent row is
+            // the same row-shift bug in a different disguise.
+            var nulledCollections = SyntheticAnalysis();
+            nulledCollections.Summary.Warnings = null;
+            CollectionAssert.AreEqual(
+                earlierColumnA,
+                SheetKeyColumn(CopilotAdoptionWorkbook.Build(nulledCollections)),
+                "A null collection must still write its '.count' key with a blank value. Dropping the row "
+                + "instead shifts every row below it and misaligns the diff.");
+
+            // And the row order is the one a diff can rely on, not reflection order.
+            CollectionAssert.AreEqual(
+                earlierFacts.OrderBy(k => k, StringComparer.Ordinal).ToList(),
+                earlierFacts,
+                "Snapshot fact keys must be ordinally sorted so the two files align row for row.");
+
+            // The comparison must be answerable from the files alone. Nothing on either sheet may
+            // point at server-side state that no longer exists.
+            var earlierText = SheetText(CopilotAdoptionWorkbook.Build(earlier));
+            foreach (var goneFromTheProduct in new[] { "Period movement", "Closed-period movement", "Cohort transitions" })
+            {
+                Assert.IsFalse(earlierText.Contains(goneFromTheProduct),
+                    $"'{goneFromTheProduct}' describes stored period history, which the product no longer keeps.");
+            }
+        }
+
+        /// <summary>
+        /// Both files must agree on the rules and the build, and the workbook has to say so - the
+        /// reader doing the diff has no product UI to consult.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_ExplainsHowToCompareTwoExports()
+        {
+            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
+
+            StringAssert.Contains(text, "Comparing two exports",
+                "The method sheet must tell the reader how a comparison is done now that the product does not do one.");
+            StringAssert.Contains(text, "Snapshot facts",
+                "It must name the sheet to diff.");
+            StringAssert.Contains(text, "Settings",
+                "It must say the settings have to match for the comparison to be fair.");
+            StringAssert.Contains(text, "Product build",
+                "It must say the build has to match for the comparison to be fair.");
+        }
+
+        /// <summary>
+        /// Every scalar measure in the analysis must reach the Snapshot facts sheet.
+        ///
+        /// Reflected rather than listed, because a hand-written expectation is precisely what failed
+        /// before: twenty-four measures - among them every Cowork usage-report metric - existed in the
+        /// summary for months without ever reaching the workbook, and no test noticed because no test
+        /// knew they existed. This one cannot be out of date.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_SnapshotFactsCarryEveryScalarSummaryMetric()
+        {
+            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
+
+            var missing = ExpectedFactKeys(typeof(CopilotAdoptionSummary))
+                .Where(key => text.IndexOf(key, StringComparison.Ordinal) < 0)
+                .ToList();
+
+            Assert.AreEqual(0, missing.Count,
+                "Every scalar figure must reach the Snapshot facts sheet so two snapshots can be diffed. "
+                + "Missing: " + string.Join(", ", missing));
+        }
+
+        /// <summary>
+        /// Every tuning option must reach the Settings sheet, for the same reason: "were both files
+        /// scored by the same rules?" has to be answerable by lookup, not by reading prose.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_SettingsSheetCarriesEveryOption()
+        {
+            var text = SheetText(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()));
+
+            var missing = ExpectedFactKeys(typeof(CopilotAdoptionOptions))
+                .Where(key => text.IndexOf(key, StringComparison.Ordinal) < 0)
+                .ToList();
+
+            Assert.AreEqual(0, missing.Count,
+                "Every option must reach the Settings sheet. Missing: " + string.Join(", ", missing));
+        }
+
+        /// <summary>
+        /// The facts sheet is sorted and unconditional so a lookup against the other snapshot always
+        /// resolves. A run that emitted keys in reflection order would shift rows between files and
+        /// quietly break every formula written against it.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_SnapshotFactKeysAreSortedAndUnique()
+        {
+            var keys = SheetCells(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()), "Snapshot facts")
+                .Where(c => ExpectedFactKeys(typeof(CopilotAdoptionSummary)).Contains(c))
+                .ToList();
+
+            CollectionAssert.AllItemsAreUnique(keys, "A key written twice makes a lookup ambiguous.");
+            CollectionAssert.AreEqual(
+                keys.OrderBy(k => k, StringComparer.Ordinal).ToList(),
+                keys,
+                "Snapshot fact keys must be in a stable sort order, or two files will not line up.");
+        }
+
+        /// <summary>
+        /// A null must never be written as a zero. Across this report a null means "not reported" or
+        /// "not attributable", and in a file built for comparison a zero reads as a measured decline.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_SnapshotFactsLeaveUnknownValuesEmptyRatherThanZero()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.CoworkReportRetentionPct = null;
+
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Snapshot facts");
+            var index = cells.IndexOf("coworkReportRetentionPct");
+
+            Assert.AreNotEqual(-1, index, "The key is missing from the Snapshot facts sheet.");
+            Assert.AreNotEqual("0", cells.ElementAtOrDefault(index + 1),
+                "An unreported measure must be blank, never zero - zero would read as a measured fall to nothing.");
+        }
+
+        #endregion
+
+        #region Per-user sheet parity
+
+        /// <summary>
+        /// Every column of the CSV export must also be in the corresponding workbook sheet.
+        ///
+        /// The workbook used to declare its own headers while the CSV declared its own, and the two
+        /// drifted: the Licensed users sheet ended up missing twenty-eight columns the CSV already had,
+        /// including the reclaim eligibility that a headline figure on the first sheet is counted from.
+        /// The email-domain change is the clean example - it added a column to all three CSVs and to
+        /// none of the sheets, and nothing failed. Both now come from one definition, and this test is
+        /// what keeps it that way.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_PerUserSheetsCarryEveryCsvColumn()
+        {
+            var bytes = CopilotAdoptionWorkbook.Build(SyntheticAnalysis());
+
+            AssertSheetHasColumns(bytes, "Licensed users",
+                CopilotAdoptionExports.LicensedUserColumns().Select(c => c.Header));
+            AssertSheetHasColumns(bytes, "Licence opportunities",
+                CopilotAdoptionExports.LicenceOpportunityColumns().Select(c => c.Header));
+            AssertSheetHasColumns(bytes, "Cowork readiness",
+                CopilotAdoptionExports.CoworkReadinessColumns().Select(c => c.Header));
+        }
+
+        /// <summary>
+        /// The governance columns specifically. These are the ones an admin exports the workbook for -
+        /// the reclaim verdict per person, and who excluded a seat from reclaim - and they were the
+        /// most damaging of the twenty-eight omissions, because the Report sheet counts them in a
+        /// headline while the per-user sheet could not say which people they were.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_LicensedUsersCarryTheReclaimVerdictPerPerson()
+        {
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()), "Licensed users");
+
+            foreach (var expected in new[]
+            {
+                "Reclaim eligibility", "Reclaim eligibility reason", "Reclaim excluded by",
+                "Email domain", "Country", "Copilot licences", "Too new to judge",
+                "Frequency score", "Depth score", "Breadth score",
+            })
+            {
+                CollectionAssert.Contains(cells, expected,
+                    $"'{expected}' is counted in a headline figure but absent from the per-user sheet.");
+            }
+        }
+
+        /// <summary>
+        /// Dates must stay dates. Written as text they sort alphabetically under the auto-filter, which
+        /// puts 2026-01 after 2025-12 but also puts every "-" placeholder in the middle of the range.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_PerUserDatesAreWrittenAsDatesNotText()
+        {
+            var bytes = CopilotAdoptionWorkbook.Build(SyntheticAnalysis());
+
+            var dateStyled = SheetCellElements(bytes, "Licensed users")
+                .Any(c => (string)c.Attribute("t") == null && (string)c.Attribute("s") != null);
+
+            Assert.IsTrue(dateStyled,
+                "At least one cell on the Licensed users sheet must be a styled numeric (a date), "
+                + "not a string - otherwise the sheet cannot be sorted chronologically.");
+        }
+
+        #endregion
+
+        #region Row cap
+
+        /// <summary>
+        /// The row cap comes from options rather than from a constant, so a tenant that wants its whole
+        /// population in one file can have it without a rebuild. Asserted in both directions: the cap
+        /// must bite, and it must say that it did.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_RespectsAConfiguredRowCap()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.Options.MaxWorkbookUserRows = 2;
+
+            var text = SheetText(CopilotAdoptionWorkbook.Build(analysis));
+            Assert.IsTrue(analysis.LicensedUsers.Count > 2, "The fixture must have more rows than the cap to prove anything.");
+            StringAssert.Contains(text, "Licensed users - TRUNCATED",
+                "A sheet that stops at a cap must say so where it cannot be missed.");
+
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Licensed users");
+            var listed = analysis.LicensedUsers.Count(u => cells.Contains(u.UserPrincipalName));
+            Assert.AreEqual(2, listed, "The configured cap must actually limit the rows written.");
+        }
+
+        /// <summary>
+        /// A cap of zero means "unset", not "write nothing". A blank or mistyped configuration value
+        /// must not silently produce an empty sheet in a file someone is about to quote from.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_TreatsAnUnsetRowCapAsTheDefault()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.Options.MaxWorkbookUserRows = 0;
+
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Licensed users");
+            var listed = analysis.LicensedUsers.Count(u => cells.Contains(u.UserPrincipalName));
+
+            Assert.AreEqual(analysis.LicensedUsers.Count, listed,
+                "An unset cap must fall back to the default, not write an empty sheet.");
+        }
+
+        #endregion
+
+        #region Presentation
 
         [TestMethod]
         public void Workbook_SurvivesGreekAndAmpersandsInTenantText()
@@ -246,6 +563,64 @@ namespace Tests.UnitTests
                 "Non-Latin department names must survive the export verbatim.");
             StringAssert.Contains(text, AmpersandDepartment,
                 "An ampersand and angle brackets must be escaped on write and decode back to the original.");
+        }
+
+        [TestMethod]
+        public void Workbook_ComparesEmailDomainsOnceThereIsMoreThanOne()
+        {
+            // On the single-domain tenant the other tests use, this sheet is deliberately absent - a
+            // table comparing an organisation with itself is noise in a board pack.
+            CollectionAssert.DoesNotContain(
+                WorkbookSheetNames(CopilotAdoptionWorkbook.Build(SyntheticAnalysis())),
+                "Email domains");
+
+            var multiDomain = SyntheticAnalysis();
+            for (var i = 0; i < 20; i++)
+            {
+                multiDomain.LicensedUsers[i].UserPrincipalName = "user" + i + "@fabrikam.example";
+                multiDomain.LicensedUsers[i].EmailDomain = "fabrikam.example";
+            }
+
+            new CopilotAdoptionService(multiDomain.Summary.Options).FinaliseSummary(multiDomain);
+            var bytes = CopilotAdoptionWorkbook.Build(multiDomain);
+
+            CollectionAssert.Contains(WorkbookSheetNames(bytes), "Email domains");
+
+            var text = SheetText(bytes);
+            StringAssert.Contains(text, "Adoption by email domain");
+            StringAssert.Contains(text, "fabrikam.example");
+            StringAssert.Contains(text, "contoso.com");
+            StringAssert.Contains(text, "Licence candidates");
+        }
+
+        [TestMethod]
+        public void Workbook_SaysWhenItHasBeenNarrowedToOneEmailDomain()
+        {
+            // A spreadsheet outlives the screen it came from and gets forwarded without that context.
+            // A file narrowed to one of several organisations must say so on its own first sheet, or
+            // it gets quoted in a licence negotiation as the whole tenant's position.
+            var analysis = SyntheticAnalysis();
+            var service = new CopilotAdoptionService(analysis.Summary.Options);
+            service.FinaliseSummary(analysis);
+
+            var tenantText = SheetText(CopilotAdoptionWorkbook.Build(analysis));
+            StringAssert.Contains(tenantText, "Whole tenant");
+            Assert.IsFalse(tenantText.Contains("NARROWED TO ONE EMAIL DOMAIN"),
+                "An unnarrowed workbook must not carry a scope warning.");
+
+            var scoped = CopilotAdoptionScopeFilter.Apply(
+                analysis,
+                CopilotAdoptionScope.ForEmailDomain("contoso.com"),
+                service.FinaliseSummary);
+
+            var scopedText = SheetText(CopilotAdoptionWorkbook.Build(scoped));
+
+            StringAssert.Contains(scopedText, "NARROWED TO ONE EMAIL DOMAIN: contoso.com");
+            StringAssert.Contains(scopedText, "must not be quoted as a "
+                + "tenant-wide figure");
+            StringAssert.Contains(scopedText, "the agent inventory",
+                "The sections that stayed tenant-wide have to be named, not merely counted.");
+            StringAssert.Contains(scopedText, "Email domain contoso.com");
         }
 
         [TestMethod]
@@ -520,6 +895,110 @@ namespace Tests.UnitTests
 
         #region Helpers
 
+        /// <summary>
+        /// The keys the reflection-driven sheets are expected to write for a type: the serialised name
+        /// of every readable, non-ignored property, with collections keyed by their row count.
+        ///
+        /// Mirrors the writer deliberately rather than sharing code with it. A test that called the
+        /// production flattener would pass even if that flattener skipped half the model, which is the
+        /// failure this is here to catch.
+        /// </summary>
+        private static List<string> ExpectedFactKeys(Type type)
+        {
+            var keys = new List<string>();
+
+            foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (!property.CanRead || property.GetIndexParameters().Length > 0) continue;
+                if (property.GetCustomAttribute<JsonIgnoreAttribute>() != null) continue;
+
+                var name = property.GetCustomAttribute<JsonPropertyAttribute>()?.PropertyName ?? property.Name;
+                var propertyType = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+
+                if (propertyType.IsPrimitive || propertyType.IsEnum || propertyType == typeof(string)
+                    || propertyType == typeof(decimal) || propertyType == typeof(DateTime))
+                {
+                    keys.Add(name);
+                }
+                else if (typeof(ICollection).IsAssignableFrom(propertyType))
+                {
+                    keys.Add(name + ".count");
+                }
+            }
+
+            return keys;
+        }
+
+        private static void AssertSheetHasColumns(byte[] bytes, string sheetName, IEnumerable<string> headers)
+        {
+            var cells = SheetCells(bytes, sheetName);
+
+            var missing = headers.Where(h => !cells.Contains(h)).ToList();
+
+            Assert.AreEqual(0, missing.Count,
+                $"The '{sheetName}' sheet must carry every column its CSV export does, or the workbook is "
+                + "a lesser snapshot than the CSV it sits beside. Missing: " + string.Join(", ", missing));
+        }
+
+        /// <summary>
+        /// Column A of the <c>Snapshot facts</c> sheet, every row of it.
+        ///
+        /// <para>Deliberately NOT filtered to the reflected key list. Filtering is what hid the run
+        /// diagnostics: they were on this sheet emitting rows whose keys depended on which steps
+        /// reported, and every assertion written against a filtered view discarded them before it
+        /// could notice. Any row that appears in one export and not the other shifts every row below
+        /// it, so the assertion has to see all of them.</para>
+        /// </summary>
+        private static List<string> SheetKeyColumn(byte[] bytes)
+        {
+            return SheetCellElements(bytes, "Snapshot facts")
+                .Where(c => ((string)c.Attribute("r") ?? string.Empty).StartsWith("A", StringComparison.Ordinal))
+                .Select(c => string.Concat(c.Descendants().Where(d => !d.HasElements).Select(d => d.Value)))
+                .ToList();
+        }
+
+        /// <summary>
+        /// The Snapshot fact KEYS only, in sheet order. The keys are whatever the reflection over
+        /// <see cref="CopilotAdoptionSummary"/> produces, so this filters the sheet's cells down to
+        /// them rather than assuming a column layout.
+        /// </summary>
+        private static List<string> SnapshotFactKeys(byte[] bytes)
+        {
+            var expected = new HashSet<string>(ExpectedFactKeys(typeof(CopilotAdoptionSummary)), StringComparer.Ordinal);
+            return SheetCells(bytes, "Snapshot facts").Where(expected.Contains).ToList();
+        }
+
+        /// <summary>The decoded text of every cell on one named sheet, in document order.</summary>
+        private static List<string> SheetCells(byte[] bytes, string sheetName)
+        {
+            return SheetCellElements(bytes, sheetName)
+                .Select(c => string.Concat(c.Descendants().Where(d => !d.HasElements).Select(d => d.Value)))
+                .ToList();
+        }
+
+        /// <summary>
+        /// The raw <c>c</c> elements of one named sheet. Sheets are written as
+        /// <c>xl/worksheets/sheetN.xml</c> in the same order they appear in <c>xl/workbook.xml</c>.
+        /// </summary>
+        private static List<XElement> SheetCellElements(byte[] bytes, string sheetName)
+        {
+            var index = WorkbookSheetNames(bytes).IndexOf(sheetName);
+            Assert.AreNotEqual(-1, index, $"Sheet '{sheetName}' is missing from the workbook.");
+
+            using (var stream = new MemoryStream(bytes))
+            using (var zip = new ZipArchive(stream, ZipArchiveMode.Read))
+            {
+                var entry = zip.GetEntry("xl/worksheets/sheet" + (index + 1) + ".xml");
+                Assert.IsNotNull(entry, $"The worksheet part for '{sheetName}' is missing.");
+
+                using (var part = entry.Open())
+                {
+                    XNamespace ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+                    return XDocument.Load(part).Descendants(ns + "c").ToList();
+                }
+            }
+        }
+
         private static List<string> WorkbookSheetNames(byte[] bytes)
         {
             using (var stream = new MemoryStream(bytes))
@@ -663,6 +1142,10 @@ namespace Tests.UnitTests
                 analysis.UnlicensedUsers.Add(new UnlicensedUsageQueryRow
                 {
                     UserId = 900 + i,
+                    // The unlicensed query selects the UPN so this population can be grouped and
+                    // filtered by email domain like every other one.
+                    UserPrincipalName = "unlicensed" + i + "@contoso.com",
+                    EmailDomain = "contoso.com",
                     Department = departments[i % departments.Length],
                     Interactions = random.Next(1, 120),
                     ActiveDays = random.Next(1, 20),
@@ -735,77 +1218,46 @@ namespace Tests.UnitTests
             summary.WeeklyTrend.Add(users);
             summary.WeeklyVolumeTrend.Add(volume);
 
+            // Cowork readiness signals. Without these the Cowork sheet is never written, so until now
+            // no test built it at all - the sheet with the widest per-user table in the workbook was
+            // the one sheet nothing exercised.
+            for (var i = 0; i < 30; i++)
+            {
+                var usesCowork = i % 5 == 0;
+
+                analysis.CoworkSignals.Add(new CoworkReadinessSignalRow
+                {
+                    UserId = i,
+                    UserPrincipalName = "user" + i + "@contoso.com",
+                    Mail = "user" + i + "@contoso.com",
+                    EmailDomain = "contoso.com",
+                    Department = departments[i % departments.Length],
+                    JobTitle = "Analyst",
+                    ManagerUserPrincipalName = "manager@contoso.com",
+                    Country = "Ruritania",
+                    OfficeLocation = GreekDepartment,
+                    CompanyName = "Contoso",
+                    AccountEnabled = true,
+                    CoworkInteractions = usesCowork ? random.Next(5, 60) : 0,
+                    CoworkActiveDays = usesCowork ? random.Next(1, 12) : 0,
+                    LastCoworkInteractionUtc = usesCowork ? Now.AddDays(-random.Next(1, 14)) : (DateTime?)null,
+                    CoworkReportTotalTasks = usesCowork ? random.Next(2, 40) : (int?)null,
+                    CoworkReportScheduledTasks = usesCowork ? random.Next(0, 20) : (int?)null,
+                    CoworkReportUserInitiatedTasks = usesCowork ? random.Next(0, 20) : (int?)null,
+                    CoworkReportActiveDays = usesCowork ? random.Next(1, 12) : (int?)null,
+                    CoworkReportLastActivityDate = usesCowork ? Now.AddDays(-random.Next(1, 10)) : (DateTime?)null,
+                    CoworkReportRetainedUser = usesCowork ? (i % 10 == 0) : (bool?)null,
+                    TeamsMessages = random.Next(40, 600),
+                    TeamsMeetings = random.Next(1, 30),
+                    EmailsSent = random.Next(10, 200),
+                    EmailsRead = random.Next(40, 700),
+                    FilesViewedOrEdited = random.Next(5, 250),
+                    LastM365ActivityUtc = Now.AddDays(-random.Next(1, 20)),
+                });
+            }
+
             new CopilotAdoptionService().FinaliseSummary(analysis);
             return analysis;
-        }
-
-        private static CopilotAdoptionCohortComparison SyntheticCohortComparison()
-        {
-            return new CopilotAdoptionCohortComparison
-            {
-                Gate = new CopilotAdoptionPeriodComparisonGate
-                {
-                    Left = new CopilotAdoptionPeriodRun { PeriodEnd = Now.AddDays(-28), PeriodDays = 28 },
-                    Right = new CopilotAdoptionPeriodRun { PeriodEnd = Now, PeriodDays = 28 },
-                    OptionsComparable = true,
-                    Message = "Comparable synthetic periods.",
-                },
-                Summary = new CopilotAdoptionCohortSummary
-                {
-                    EarlierPopulation = 3,
-                    CurrentPopulation = 3,
-                    NewlyAssigned = 1,
-                    EarlierPopulationTransitionTotal = 3,
-                    TransitionsSumToEarlierPopulation = true,
-                    ReclaimCaveat = "Synthetic reclaim caveat.",
-                },
-                Transitions = new List<CopilotAdoptionCohortTransitionSummary>
-                {
-                    new CopilotAdoptionCohortTransitionSummary { Code = CopilotAdoptionCohortTransitions.Retained, Label = "Retained", Users = 1, ShareOfEarlierPopulationPct = 33.3, Description = "Active in both." },
-                    new CopilotAdoptionCohortTransitionSummary { Code = CopilotAdoptionCohortTransitions.Reactivated, Label = "Reactivated", Users = 1, ShareOfEarlierPopulationPct = 33.3, Description = "Inactive then active." },
-                    new CopilotAdoptionCohortTransitionSummary { Code = CopilotAdoptionCohortTransitions.Reclaimed, Label = "Reclaimed / reassigned", Users = 1, ShareOfEarlierPopulationPct = 33.3, Description = "Seat removed." },
-                },
-                Flows = new List<CopilotAdoptionCohortFlowSummary>
-                {
-                    new CopilotAdoptionCohortFlowSummary { FromBand = "Never used", ToBand = "Active", Transition = CopilotAdoptionCohortTransitions.Reactivated, Users = 1 },
-                },
-                Activation = new CopilotAdoptionActivationSummary
-                {
-                    ActivationWindowDays = 30,
-                    KnownSeatStartUsers = 2,
-                    SeatDateUnknownUsers = 1,
-                    AssignedBeforeHistoryUsers = 1,
-                    NewSeatsAssignedInPeriod = 1,
-                    ActivatedWithinWindow = 1,
-                    ActivationRatePct = 100,
-                    MedianDaysToFirstUse = 5,
-                    Caveat = "Time-to-first-use uses seat_first_observed_utc only. Rows with unknown seat dates are counted separately and excluded; Account age is not substituted for seat assignment.",
-                    Distribution = new List<CopilotAdoptionActivationDistributionBucket>
-                    {
-                        new CopilotAdoptionActivationDistributionBucket { Label = "0-7 days", Users = 1, SharePct = 100 },
-                    },
-                    ByDepartment = new List<CopilotAdoptionActivationSegment>
-                    {
-                        new CopilotAdoptionActivationSegment { Segment = GreekDepartment, NewSeatsAssignedInPeriod = 1, ActivatedWithinWindow = 1, ActivationRatePct = 100, SeatDateUnknownUsers = 1 },
-                    },
-                },
-                Rows = new List<CopilotAdoptionCohortUserRow>
-                {
-                    new CopilotAdoptionCohortUserRow
-                    {
-                        UserPrincipalName = "new.active@contoso.com",
-                        Department = GreekDepartment,
-                        Transition = CopilotAdoptionCohortTransitions.NewlyAssigned,
-                        TransitionLabel = "Newly assigned",
-                        FromBand = "No seat",
-                        ToBand = "Active",
-                        SeatFirstObservedUtc = Now.AddDays(-5),
-                        FirstInteractionUtc = Now,
-                        DaysToFirstUse = 5,
-                        ActivationState = "activatedWithinWindow",
-                    },
-                },
-            };
         }
 
         #endregion
