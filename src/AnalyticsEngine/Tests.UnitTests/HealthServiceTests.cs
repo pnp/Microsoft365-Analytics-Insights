@@ -1,4 +1,4 @@
-extern alias AnalyticsWeb;
+﻿extern alias AnalyticsWeb;
 
 using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
 using AnalyticsWeb::Web.AnalyticsWeb.Models.Health;
@@ -330,32 +330,6 @@ namespace Tests.UnitTests
             CollectionAssert.AreEqual(new[] { "ReportA: 403 Forbidden" }, section.CopilotUsageReportErrors);
             Assert.AreEqual(HealthStatusNames.Degraded, section.Status);
             Assert.IsTrue(section.Reasons.Any(r => r.Contains("ReportA: 403 Forbidden")));
-        }
-
-        [TestMethod]
-        public async Task Data_FailedCopilotAdoptionDigest_IsVisibleInHealth()
-        {
-            var source = new FakeHealthDataSource
-            {
-                CountsResult = new DatabaseCountsResult
-                {
-                    CopilotAdoptionDigest = new CopilotAdoptionDigestHealthRow
-                    {
-                        Status = "Failed",
-                        PeriodEnd = new DateTime(2026, 9, 16),
-                        UpdatedUtc = new DateTime(2026, 9, 17, 1, 2, 3, DateTimeKind.Utc),
-                        Error = "synthetic generation failure"
-                    }
-                }
-            };
-            var service = Build(source, new InMemoryHealthCache());
-
-            var section = await service.LoadDataAsync();
-
-            Assert.AreEqual("Failed", section.CopilotAdoptionDigestStatus);
-            Assert.AreEqual(HealthStatusNames.Degraded, section.Status);
-            Assert.IsTrue(section.Reasons.Any(r => r.Contains("Scheduled Copilot Adoption digest failed")
-                && r.Contains("synthetic generation failure")));
         }
 
         [TestMethod]

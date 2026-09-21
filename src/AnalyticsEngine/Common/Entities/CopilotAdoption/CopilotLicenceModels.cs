@@ -49,5 +49,25 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("isCopilotSeat")]
         public bool IsCopilotSeat { get; set; }
+
+        /// <summary>
+        /// A copy, so a narrowed view can recompute the per-SKU assigned and idle counts without
+        /// writing them back into the cached tenant-wide analysis every other caller is reading.
+        /// </summary>
+        public LicenceTypeClassification Clone()
+        {
+            return new LicenceTypeClassification
+            {
+                Id = Id,
+                Name = Name,
+                SkuPartNumber = SkuPartNumber,
+                AssignedUsers = AssignedUsers,
+                PurchasedUnits = PurchasedUnits,
+                UnassignedUnits = UnassignedUnits,
+                AssignedIdleUsers = AssignedIdleUsers,
+                PurchasedUnitsRefreshedUtc = PurchasedUnitsRefreshedUtc,
+                IsCopilotSeat = IsCopilotSeat,
+            };
+        }
     }
 }

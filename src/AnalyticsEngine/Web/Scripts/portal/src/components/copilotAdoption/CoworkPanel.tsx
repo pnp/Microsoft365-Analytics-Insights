@@ -229,6 +229,7 @@ const DEFAULT_FILTERS: CoworkFilters = {
   tiers: [],
   department: '',
   country: '',
+  emailDomain: '',
   recommendedOnly: false,
   coworkUsersOnly: false,
   sortBy: 'load',
@@ -276,17 +277,38 @@ export default function CoworkPanel({
   filterOptions,
   options,
   seatLicenceTypeIds,
+  emailDomain,
 }: {
   windowDays: number;
   summary: CopilotAdoptionSummary;
   filterOptions: AdoptionFilterOptions | null;
   options: CopilotAdoptionOptions;
   seatLicenceTypeIds?: number[];
+  /**
+   * The page-wide email-domain filter, applied to this list too so it can never describe a
+   * different population from the rest of the report.
+   */
+  emailDomain?: string | null;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
 
-  const [filters, setFilters] = useState<CoworkFilters>(DEFAULT_FILTERS);
+  const [filters, setFilters] = useState<CoworkFilters>({ ...DEFAULT_FILTERS, emailDomain: emailDomain ?? '' });
+
+  /**
+   * Resets the panel's own filters while KEEPING the page-wide email-domain scope.
+   *
+   * The domain is not one of this panel's filters - it is the population the whole report is
+   * describing, and the banner at the top of the page says so. Clearing it here would silently
+   * widen the list back to the whole tenant while the page still claimed to be showing one
+   * organisation, and the spending-policy CSV built from the same state would follow it - which on
+   * this tab means handing an admin a list of people to grant Cowork to who are not in the
+   * organisation they were looking at.
+   */
+  const clearPanelFilters = () => {
+    setSearchDraft('');
+    setFilters({ ...DEFAULT_FILTERS, emailDomain: emailDomain ?? '' });
+  };
   const [searchDraft, setSearchDraft] = useState('');
   const [page, setPage] = useState(0);
   const [data, setData] = useState<CoworkReadinessPage | null>(null);
@@ -749,10 +771,7 @@ export default function CoworkPanel({
             </Text>
             <Button
               size="small"
-              onClick={() => {
-                setSearchDraft('');
-                setFilters(DEFAULT_FILTERS);
-              }}
+              onClick={clearPanelFilters}
             >
               Clear filters
             </Button>

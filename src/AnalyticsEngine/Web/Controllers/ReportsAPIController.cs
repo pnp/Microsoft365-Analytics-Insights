@@ -1,4 +1,4 @@
-﻿using Common.Entities;
+using Common.Entities;
 using Common.Entities.Config;
 using System;
 using System.Collections.Generic;
@@ -34,7 +34,7 @@ namespace Web.AnalyticsWeb.Controllers
     /// </summary>
     [Authorize]
     [Route("api/Reports")]
-    public class ReportsAPIController  : ControllerBase
+    public partial class ReportsAPIController  : ControllerBase
     {
         // A single slow weekly scan would otherwise run until Azure App Service kills the HTTP
         // request (~230s) -> 500. Cap each query so it degrades to a per-chart error instead.
@@ -97,6 +97,11 @@ namespace Web.AnalyticsWeb.Controllers
                 WebTraffic = s.WebTraffic,
                 Calls = s.Calls,
                 Emails = s.SentEmails,
+                // Same import as Usage: both are fed by the Graph usage-report loaders, and
+                // getM365AppUserDetail is one of them. The Copilot overlay charts inside this area
+                // need GraphCopilotUsageReports as well, but that is decided per-chart so the app
+                // and platform charts still appear without it.
+                OfficeApps = s.GraphUsageReports,
             });
         }
 
@@ -138,6 +143,11 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("emails")]
         public Task<IActionResult> Emails(int months = DefaultMonths) => AreaAsync("emails", months);
 
+        // GET: api/Reports/office-apps?months=3
+        [HttpGet]
+        [Route("office-apps")]
+        public Task<IActionResult> OfficeApps(int months = DefaultMonths) => AreaAsync("office-apps", months);
+
         /// <summary>
         /// Builds (or serves from cache) the charts for one area over the requested window.
         /// </summary>
@@ -149,6 +159,12 @@ namespace Web.AnalyticsWeb.Controllers
         {
             if (months < 1) months = DefaultMonths;
             if (months > MaxMonths) months = MaxMonths;
+
+            // The Office apps charts read a table that gains a row per user per day, and two of them
+            // touch all 24 app-on-platform columns. Measured at the ~200k-user design point, a
+            // six-month window puts those two past the per-chart timeout while three months does not.
+            // Clamp rather than refuse, and report the window actually used so the UI can explain it.
+            if (area == "office-apps" && months > OfficeAppsMaxMonths) months = OfficeAppsMaxMonths;
 
             if (topAgents < 1) topAgents = 1;
             if (topAgents > 20) topAgents = 20;
@@ -176,7 +192,7 @@ namespace Web.AnalyticsWeb.Controllers
             // Usage reports arrive a couple of days late, so the current week is always incomplete;
             // plotting it would draw a sharp fall to zero. UsageCharts trims further from the end
             // when the settled report for a week has not reached every workload yet.
-            var lastMonday = area == "usage"
+            var lastMonday = area == "usage" || area == "office-apps"
                 ? MondayOf(today).AddDays(-7)
                 : MondayOf(today);
             var weekSpine = WeekSpine(firstMonday, lastMonday);
@@ -214,6 +230,9 @@ namespace Web.AnalyticsWeb.Controllers
                     break;
                 case "emails":
                     chartTasks = EmailsCharts(firstMonday, weekSpine);
+                    break;
+                case "office-apps":
+                    chartTasks = OfficeAppsCharts(firstMonday, weekSpine);
                     break;
                 default:
                     return NotFound();

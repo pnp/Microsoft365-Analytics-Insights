@@ -43,13 +43,14 @@ describe('copilotAdoptionApi query building', () => {
     expect([...query.keys()].some((k) => /cost|currency|price/i.test(k))).toBe(false);
   });
 
-  it('keeps the workbook export on the same scope, with no cost parameters', () => {
-    const query = new URL(workbookExportUrl(90, [2], 'previousClosedPeriod'), 'https://contoso.example')
-      .searchParams;
+  it('keeps the workbook export on the same scope, with no cost or comparison parameters', () => {
+    const query = new URL(workbookExportUrl(90, [2]), 'https://contoso.example').searchParams;
 
     expect(query.get('windowDays')).toBe('90');
     expect(query.get('seatLicenceTypeIds')).toBe('2');
-    expect(query.get('comparisonMode')).toBe('previousClosedPeriod');
+    // Comparison is done by diffing two exported workbooks, so the export takes no comparison
+    // parameter and the server stores no period to compare against.
+    expect(query.get('comparisonMode')).toBeNull();
     expect([...query.keys()].some((k) => /cost|currency|price/i.test(k))).toBe(false);
   });
 });

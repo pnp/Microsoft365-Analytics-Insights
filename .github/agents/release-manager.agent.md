@@ -1,6 +1,6 @@
 ---
 name: release-manager
-description: Runs this project's release process end to end - verifies the dev..main diff, writes a technical developer-focused release PR, and (only with explicit permission) merges it, verifies every release asset/manual migration script, and updates the stable GitHub release with admin-friendly level-300 notes. Use for "new release", "cut a release", "stable release", "release notes", "what's in the next release", or "update the release notes".
+description: Runs this project's release process end to end - verifies the dev..main diff, writes a technical developer-focused release PR, and (only with explicit permission) merges it, verifies every release asset/manual migration script, updates the stable GitHub release with admin-friendly level-300 notes, and forward-ports the release into the long-lived `net10` .NET 10 PoC branch. Use for "new release", "cut a release", "stable release", "release notes", "what's in the next release", "update the release notes", or "sync net10".
 ---
 
 # Release Manager
@@ -33,6 +33,7 @@ Never reuse one body unchanged for both audiences.
   - Assets: `AITrackerInstaller.zip`, `AppInsightsImporter.zip`, `ControlPanelApp.zip`, `Office365ActivityImporter.zip`, `Website.zip`.
   - Releases with migrations must also carry each matching `<migrationid>.manual.sql` as a downloadable asset.
 - **Every merge to `dev` cuts its own test build.** Merging three PRs makes three draft prereleases; only the last contains everything. Offer to delete the superseded drafts.
+- **`net10` is a long-lived mirror of the stable release**, not a feature branch. It is the .NET 10 / ASP.NET Core port PoC, and its whole value depends on tracking `main`. As `net10.yml` puts it: *"`net10` rots when `main` moves, not when someone commits here."* **A release is not finished until `main` has been forward-ported into `net10`** — see *Sync the `net10` PoC branch* below.
 - `main` is protected: required checks `test_dotnet (Release)`, `test_aitracker`, `gitleaks`, plus one approving review. The PR build/test workflows only trigger on the **`ready_for_review`** event — a PR opened directly as non-draft never fires them. If required checks are missing, toggle the PR draft → ready (`gh pr ready <n> --undo` then `gh pr ready <n>`). Occasionally a job hangs as a zombie (`in_progress` on a completed run); re-run just that job with `gh run rerun <run-id> --job <job-id>`.
 
 ## Method
@@ -102,7 +103,40 @@ The auto-generated "What's Changed" list is not acceptable as final notes. Prepa
 6. Replace the generated release text with the admin notes (`gh release edit <tag> --notes-file ...`), then read the release back to confirm the update stuck.
 7. Close the issues the release brought into `main`, each with a comment naming the build number and summarising what shipped. Leave partially-addressed issues open with a comment stating precisely what remains and why.
 8. Offer to delete superseded draft prereleases. **Never publish a draft** without being asked — the `PUBLISH_RELEASES` gate is deliberate.
-9. Report: build number, draft/published state, standard asset verification, manual SQL asset verification, issues closed, and anything still open.
+9. **Forward-port the release into `net10`** — see the next section. The release is not done until this is either completed or explicitly deferred by the user.
+10. Report: build number, draft/published state, standard asset verification, manual SQL asset verification, issues closed, `net10` sync state, and anything still open.
+
+### 6. Sync the `net10` PoC branch
+
+`net10` is the .NET 10 / ASP.NET Core port. It is a **long-lived mirror of the stable release**, so every stable release must be forward-ported into it. A parallel branch nobody syncs is worse than no branch, and the merge is cheap only while the divergence is small — which is why `net10.yml` runs a `drift_check` job on every trigger and on a Monday schedule.
+
+**Direction is one-way: `main` → `net10`, never the reverse.** Nothing on `net10` may ever reach `ci.yml`, the release pipeline or the customer zips.
+
+```powershell
+git fetch origin --prune
+git --no-pager rev-list --left-right --count origin/main...origin/net10   # left = main commits missing from net10
+git switch net10; git pull --ff-only
+git merge origin/main -m "Merge stable build <n> (origin/main) into net10"
+```
+
+The commit-message convention is literally `Merge stable build <n> (origin/main) into net10`, matching the existing history.
+
+**"Where applicable" is the whole difficulty.** `net10` has deliberately deleted the .NET Framework configuration machinery, so a clean textual merge can still be semantically wrong. Expect, and resolve rather than blindly accept:
+
+- **The silent one — `ConfigurationManager.AppSettings`.** On `net10` configuration comes from `appsettings.json` via `AnalyticsConfig.AppSettings` (`Common/Entities/Config/AnalyticsConfig.cs`). Code merged from `main` that calls `ConfigurationManager.AppSettings.Get(...)` **compiles cleanly and silently reads nothing** — every such call site merged in from `main` must be ported to `AnalyticsConfig.AppSettings`. `Tests.UnitTests/ConfigurationSourceTests.cs` guards this with `Assert.AreEqual(0, ConfigurationManager.AppSettings.Count, "An App.config has reappeared. Settings must come from appsettings.json only.")`. **Grep the merged diff for `ConfigurationManager` before you commit** — this has already shipped a silently-dead setting into `net10` once.
+- **Config/transform files.** `App.config`, `Web.config`, `*.Template.config`, `App.Debug/Release.config` transforms, binding redirects and `packages.config` do not exist on `net10`. A `main` change that only edits those (e.g. a binding-redirect alignment) is usually a legitimate **no-op** on `net10` — record it as deliberately dropped rather than reconstructing it.
+- **Project files.** `net10` uses SDK-style projects; `.csproj` conflicts are normal. New source files added on `main` still need registering where `net10`'s project files enumerate them.
+- **Web.** `main` is System.Web/WebForms-era; `net10` is ASP.NET Core with TestServer-based fake APIs. Controller/startup/static-asset changes rarely merge verbatim.
+- **Portal (`Web/Scripts/portal`) and SQL/migrations** are framework-neutral and normally merge clean — a portal-only or migration-only release should be a trivial sync.
+
+Then verify and report:
+
+1. Build and test locally if the merge needed hand-resolution.
+2. Push (**with permission**) and watch the **`net10 build`** workflow (`net10.yml`, job `drift_check` plus the build/test jobs). Never add `net10` to `ci.yml` or `tests.yml` — that would rename the required checks and block PRs on `dev`/`main`, the exact failure seen in issue #270.
+3. Confirm `git rev-list --left-right --count origin/main...origin/net10` shows **0 on the left**.
+4. In your final report, state the divergence before and after, every hunk you resolved by hand, and every `main` change you deliberately dropped as not-applicable with the reason.
+
+If the merge is large or conflicted enough to need real porting work, **stop and report** rather than guessing: an unreviewed semantic mismerge here is invisible until someone runs the PoC.
 
 ## Useful commands
 
@@ -113,4 +147,9 @@ gh release list --repo pnp/Microsoft365-Analytics-Insights --limit 5
 gh release view <tag> --repo pnp/Microsoft365-Analytics-Insights --json name,isDraft,isPrerelease,targetCommitish,assets
 gh release upload <tag> <migrationid>.manual.sql --repo pnp/Microsoft365-Analytics-Insights
 gh release edit <tag> --repo pnp/Microsoft365-Analytics-Insights --notes-file <file>
+
+# net10 forward-port
+git --no-pager rev-list --left-right --count origin/main...origin/net10   # left = main commits missing from net10
+git --no-pager diff origin/main origin/net10 --stat -- src/AnalyticsEngine/Common/Entities/Config
+gh run list --repo pnp/Microsoft365-Analytics-Insights --workflow net10.yml --limit 5
 ```

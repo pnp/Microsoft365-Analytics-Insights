@@ -65,6 +65,7 @@ namespace Common.Entities.CopilotAdoption
         public const string ActiveDays = "activeDays";
         public const string LastUse = "lastUse";
         public const string Department = "department";
+        public const string EmailDomain = "emailDomain";
         public const string Cowork = "cowork";
 
         // Added so every column in the on-screen table can be sorted by clicking its header. A column
@@ -244,6 +245,9 @@ namespace Common.Entities.CopilotAdoption
                     return OrderThenUpn(rows, r => (r.LastInteractionUtc ?? DateTime.MinValue).Ticks, q.SortDescending);
                 case LicensedUserSortFields.Department:
                     return Order(rows, r => r.Department ?? string.Empty, q.SortDescending);
+
+                case LicensedUserSortFields.EmailDomain:
+                    return Order(rows, r => CopilotAdoptionEmailDomain.Label(r.EmailDomain), q.SortDescending);
                 case LicensedUserSortFields.Cowork:
                     return OrderThenUpn(rows, r => (double)r.CoworkInteractions, q.SortDescending);
                 case LicensedUserSortFields.Band:
@@ -291,6 +295,7 @@ namespace Common.Entities.CopilotAdoption
             {
                 new CsvColumn<LicensedUserAdoptionRow>("User principal name", r => r.UserPrincipalName),
                 new CsvColumn<LicensedUserAdoptionRow>("Email", r => r.Mail),
+                new CsvColumn<LicensedUserAdoptionRow>("Email domain", r => r.EmailDomain),
                 new CsvColumn<LicensedUserAdoptionRow>("Department", r => r.Department),
                 new CsvColumn<LicensedUserAdoptionRow>("Job title", r => r.JobTitle),
                 new CsvColumn<LicensedUserAdoptionRow>("Manager", r => r.ManagerUserPrincipalName),
@@ -462,6 +467,7 @@ namespace Common.Entities.CopilotAdoption
             {
                 new CsvColumn<LicenceOpportunityRow>("User principal name", r => r.UserPrincipalName),
                 new CsvColumn<LicenceOpportunityRow>("Email", r => r.Mail),
+                new CsvColumn<LicenceOpportunityRow>("Email domain", r => r.EmailDomain),
                 new CsvColumn<LicenceOpportunityRow>("Department", r => r.Department),
                 new CsvColumn<LicenceOpportunityRow>("Job title", r => r.JobTitle),
                 new CsvColumn<LicenceOpportunityRow>("Manager", r => r.ManagerUserPrincipalName),
@@ -595,6 +601,7 @@ namespace Common.Entities.CopilotAdoption
             {
                 new CsvColumn<CoworkReadinessRow>("User principal name", r => r.UserPrincipalName),
                 new CsvColumn<CoworkReadinessRow>("Email", r => r.Mail),
+                new CsvColumn<CoworkReadinessRow>("Email domain", r => r.EmailDomain),
                 new CsvColumn<CoworkReadinessRow>("Department", r => r.Department),
                 new CsvColumn<CoworkReadinessRow>("Job title", r => r.JobTitle),
                 new CsvColumn<CoworkReadinessRow>("Manager", r => r.ManagerUserPrincipalName),

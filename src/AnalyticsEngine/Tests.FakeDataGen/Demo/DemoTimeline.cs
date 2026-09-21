@@ -60,23 +60,31 @@ namespace Tests.FakeDataGen.Demo
                 if (IsOnLeave(user.Id, d)) continue;
                 if (Random(d, 20) % 100 >= chance && day.CopilotTurns == 0) continue;
                 int strength = cohort == DemoCohort.High ? 3 : cohort == DemoCohort.Moderate ? 2 : 1;
+                // The leading department tier is intentionally workload-heavy so the demo exercises
+                // both axes of the Cowork quadrant instead of placing every department below the load bar.
+                bool leadingDepartment = _user.Department % 3 == 0;
+                if (leadingDepartment) strength = Math.Min(4, strength + 1);
                 if (Random(d, 21) % 100 < 85)
                 {
-                    day.Messages = strength == 3 ? 70 + (int)(Random(d, 22) % 70)
+                    day.Messages = strength >= 4 ? 110 + (int)(Random(d, 22) % 90)
+                        : strength == 3 ? 70 + (int)(Random(d, 22) % 70)
                         : strength == 2 ? 20 + (int)(Random(d, 22) % 40) : 2 + (int)(Random(d, 22) % 9);
-                    day.Meetings = strength == 3 ? 3 + (int)(Random(d, 23) % 4)
+                    day.Meetings = strength >= 4 ? 5 + (int)(Random(d, 23) % 5)
+                        : strength == 3 ? 3 + (int)(Random(d, 23) % 4)
                         : strength == 2 ? 1 + (int)(Random(d, 23) % 3) : (int)(Random(d, 23) % 2);
                 }
                 if (Random(d, 24) % 100 < 92)
                 {
-                    day.Sent = strength == 3 ? 30 + (int)(Random(d, 25) % 40)
+                    day.Sent = strength >= 4 ? 55 + (int)(Random(d, 25) % 55)
+                        : strength == 3 ? 30 + (int)(Random(d, 25) % 40)
                         : strength == 2 ? 10 + (int)(Random(d, 25) % 18) : 1 + (int)(Random(d, 25) % 5);
                     day.Read = day.Sent * 2 + (int)(Random(d, 26) % 12);
                     day.Received = day.Read + day.Sent;
                 }
                 if (Random(d, 27) % 100 < 80)
                 {
-                    day.SharePointFiles = strength == 3 ? 25 + (int)(Random(d, 28) % 40)
+                    day.SharePointFiles = strength >= 4 ? 45 + (int)(Random(d, 28) % 55)
+                        : strength == 3 ? 25 + (int)(Random(d, 28) % 40)
                         : strength == 2 ? 8 + (int)(Random(d, 28) % 15) : 1 + (int)(Random(d, 28) % 5);
                     day.OneDriveFiles = day.SharePointFiles / 2 + 1;
                 }

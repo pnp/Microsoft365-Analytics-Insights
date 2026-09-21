@@ -1,4 +1,4 @@
-﻿extern alias AnalyticsWeb;
+extern alias AnalyticsWeb;
 
 using Common.Entities.CopilotAdoption;
 using UnitTests.FakeLoaderClasses;
@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -2743,10 +2744,19 @@ namespace Tests.UnitTests
 
             var propertyNames = json.Properties().Select(p => p.Name).ToList();
 
-            Assert.AreEqual(
-                typeof(CopilotAdoptionOptions).GetProperties().Length - 1,
-                propertyNames.Count,
-                "Every tuning property except the static Default must be serialised.");
+            // Counted from the model rather than against a magic offset, so the guard keeps its meaning
+            // as properties are added: every public instance property that is not explicitly ignored
+            // must appear. A derived value (WorkbookUserRows, which only clamps another option) carries
+            // [JsonIgnore] precisely so it does not become a second, PascalCase row in the payload.
+            var expected = typeof(CopilotAdoptionOptions)
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Where(p => p.GetCustomAttribute<Newtonsoft.Json.JsonIgnoreAttribute>() == null)
+                .ToList();
+
+            CollectionAssert.AreEquivalent(
+                expected.Select(p => p.GetCustomAttribute<Newtonsoft.Json.JsonPropertyAttribute>()?.PropertyName ?? p.Name).ToList(),
+                propertyNames,
+                "Every tuning property must be serialised, and nothing else should appear.");
 
             foreach (var name in propertyNames)
             {

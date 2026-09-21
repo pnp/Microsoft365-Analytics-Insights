@@ -251,13 +251,6 @@ namespace Common.Entities.Config
                     : AzureCostImportSettings.DefaultIntervalHours,
                 GroupBy = AzureCostImportSettings.ParseList(AnalyticsConfig.AppSettings.Get("AzureCostGroupBy")),
             };
-
-            this.CopilotAdoptionDigestRecipients = ParseDelimitedList(AnalyticsConfig.AppSettings.Get("CopilotAdoptionDigestRecipients"));
-            this.CopilotAdoptionDigestSenderUserId = (AnalyticsConfig.AppSettings.Get("CopilotAdoptionDigestSenderUserId") ?? string.Empty).Trim();
-            this.CopilotAdoptionDigestIntervalHours = int.TryParse(AnalyticsConfig.AppSettings.Get("CopilotAdoptionDigestIntervalHours"), out var digestIntervalHours)
-                && digestIntervalHours > 0
-                ? digestIntervalHours
-                : DefaultCopilotAdoptionDigestIntervalHours;
         }
 
         /// <summary>
@@ -644,46 +637,6 @@ namespace Common.Entities.Config
         /// <see cref="AzureCostImportSettings.IsConfigured"/> false, and the import declines to run.
         /// </summary>
         public AzureCostImportSettings AzureCostImport { get; set; } = new AzureCostImportSettings();
-
-        #endregion
-
-        #region Copilot Adoption digest
-
-        /// <summary>Default digest cadence: approximately monthly.</summary>
-        public const int DefaultCopilotAdoptionDigestIntervalHours = 24 * 30;
-
-        /// <summary>
-        /// Mail recipients for the aggregate Copilot Adoption digest. Empty by default, so an upgraded
-        /// deployment sends nothing until an administrator deliberately configures it.
-        /// </summary>
-        public List<string> CopilotAdoptionDigestRecipients { get; set; } = new List<string>();
-
-        /// <summary>
-        /// User id / UPN of the mailbox used to send the digest via Microsoft Graph sendMail.
-        /// Must be configured explicitly; there is no default sender.
-        /// </summary>
-        public string CopilotAdoptionDigestSenderUserId { get; set; } = string.Empty;
-
-        /// <summary>
-        /// Minimum hours between digest sends. Defaults to monthly; override with
-        /// <c>CopilotAdoptionDigestIntervalHours</c>. Values less than 1 fall back to the default.
-        /// </summary>
-        public int CopilotAdoptionDigestIntervalHours { get; set; } = DefaultCopilotAdoptionDigestIntervalHours;
-
-        public bool CopilotAdoptionDigestConfigured =>
-            CopilotAdoptionDigestRecipients != null
-            && CopilotAdoptionDigestRecipients.Count > 0
-            && !string.IsNullOrWhiteSpace(CopilotAdoptionDigestSenderUserId);
-
-        private static List<string> ParseDelimitedList(string raw)
-        {
-            if (string.IsNullOrWhiteSpace(raw)) return new List<string>();
-            return raw.Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(v => v.Trim())
-                .Where(v => !string.IsNullOrWhiteSpace(v))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
 
         #endregion
     }

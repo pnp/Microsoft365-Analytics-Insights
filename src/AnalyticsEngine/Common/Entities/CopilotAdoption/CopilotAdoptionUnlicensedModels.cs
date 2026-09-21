@@ -8,6 +8,16 @@ namespace Common.Entities.CopilotAdoption
     public class UnlicensedUsageQueryRow
     {
         public int UserId { get; set; }
+
+        /// <summary>
+        /// Selected purely so this population can be grouped and filtered by email domain like every
+        /// other one. Nothing displays it: an unlicensed user is reported as a count, never by name.
+        /// </summary>
+        public string UserPrincipalName { get; set; }
+
+        /// <summary>The organisation this person belongs to. See <see cref="CopilotAdoptionEmailDomain"/>.</summary>
+        public string EmailDomain { get; set; }
+
         public string Department { get; set; }
         public long Interactions { get; set; }
         public int ActiveDays { get; set; }
