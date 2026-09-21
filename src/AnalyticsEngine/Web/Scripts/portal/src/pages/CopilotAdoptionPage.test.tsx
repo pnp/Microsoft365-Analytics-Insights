@@ -654,3 +654,57 @@ describe('CopilotAdoptionPage data warnings', () => {
     expect(screen.getByRole('button', { name: /Show 2 data warnings/ })).toHaveAttribute('data-print', 'hide');
   });
 });
+
+/**
+ * Page breaks.
+ *
+ * A printed act used to be split from the thing it introduces: the heading landed at the foot of
+ * one page and every card it announces started on the next, so the sheet ended with a title and
+ * nothing under it. Each act now starts its own sheet.
+ */
+describe('CopilotAdoptionPage page breaks', () => {
+  /** The numbered act headings, in document order, with the break each one carries. */
+  const acts = () =>
+    [...document.querySelectorAll('[data-print="page-break"], [data-print="keep-with-next"]')].map((n) => ({
+      print: n.getAttribute('data-print'),
+      text: (n.querySelector('span')?.textContent ?? '') + (n.textContent ?? ''),
+    }));
+
+  it('starts every act after the first on a new sheet', async () => {
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+
+    // The executive view is three acts. The first keeps with what follows but does not break: it
+    // belongs with the KPI tiles on the report's front page, which would otherwise print alone.
+    expect(acts().map((a) => a.print)).toEqual(['keep-with-next', 'page-break', 'page-break']);
+    expect(acts()[0].text).toContain('Where we stand');
+    expect(acts()[2].text).toContain('What we are doing about it');
+  });
+
+  it('does the same for the four acts of the analyst view', async () => {
+    await renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: 'Analyst view' }));
+    await screen.findByRole('tab', { name: 'Analyst view', selected: true });
+
+    await waitFor(() =>
+      expect(acts().map((a) => a.print)).toEqual([
+        'keep-with-next',
+        'page-break',
+        'page-break',
+        'page-break',
+      ]),
+    );
+  });
+
+  it('puts those headings in block flow, without which the break does nothing', async () => {
+    // Fragmentation inside a flex container is unreliable across browsers, and the acts are flex
+    // items of a column stack - so `break-before` on them is ignored unless the stack itself is
+    // returned to block flow for printing. The two halves only work together, hence one assertion.
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+
+    for (const heading of document.querySelectorAll('[data-print="page-break"]')) {
+      expect(heading.parentElement).toHaveAttribute('data-print', 'flow');
+    }
+  });
+});

@@ -233,6 +233,28 @@ const useStyles = makeStyles({
 });
 
 /**
+ * The numbered heading that opens each act of a view ("1. Where we stand").
+ *
+ * One component rather than seven copies of the markup, because each heading also carries the page
+ * break that makes the printed report readable: every act starts a fresh sheet, and no heading is
+ * left stranded at the foot of a page with its content overleaf. Act 1 deliberately does not break
+ * - it belongs with the KPI tiles on the report's front page.
+ */
+function SectionHead({ index, title, blurb }: { index: number; title: string; blurb: string }) {
+  const styles = useStyles();
+  return (
+    <div className={styles.sectionHead} data-print={index === 1 ? 'keep-with-next' : 'page-break'}>
+      <Text weight="semibold" size={500}>
+        <span className={styles.sectionIndex}>{index}.</span> {title}
+      </Text>
+      <Text size={200} className={styles.muted}>
+        {blurb}
+      </Text>
+    </div>
+  );
+}
+
+/**
  * The Copilot Adoption area.
  *
  * Answers the two questions that decide Copilot spend: which licensed users are not getting value
@@ -508,7 +530,7 @@ export default function CopilotAdoptionPage() {
           )}
 
           {!summaryLoading && summary && (
-            <div className={styles.stack}>
+            <div className={styles.stack} data-print="flow">
               {summary.figuresIncomplete && (
                 <MessageBar intent="error">
                   <MessageBarBody>
@@ -725,14 +747,11 @@ function ExecutiveTab({
     <>
       <KpiGrid items={kpis} />
 
-      <div className={styles.sectionHead}>
-        <Text weight="semibold" size={500}>
-          <span className={styles.sectionIndex}>1.</span> Where we stand
-        </Text>
-        <Text size={200} className={styles.muted}>
-          Seats, adoption, habit, reclaim confidence and reassignment opportunity without the diagnostics.
-        </Text>
-      </div>
+      <SectionHead
+        index={1}
+        title="Where we stand"
+        blurb="Seats, adoption, habit, reclaim confidence and reassignment opportunity without the diagnostics."
+      />
 
       <div className={styles.twoUp}>
         <Card>
@@ -818,14 +837,11 @@ function ExecutiveTab({
         </Card>
       </div>
 
-      <div className={styles.sectionHead}>
-        <Text weight="semibold" size={500}>
-          <span className={styles.sectionIndex}>2.</span> Where it is working and failing
-        </Text>
-        <Text size={200} className={styles.muted}>
-          The departments to start with, and the funnel stage where value drops out.
-        </Text>
-      </div>
+      <SectionHead
+        index={2}
+        title="Where it is working and failing"
+        blurb="The departments to start with, and the funnel stage where value drops out."
+      />
 
       <div className={styles.twoUp}>
         <Card>
@@ -916,14 +932,11 @@ function ExecutiveTab({
         </Card>
       )}
 
-      <div className={styles.sectionHead}>
-        <Text weight="semibold" size={500}>
-          <span className={styles.sectionIndex}>3.</span> What we are doing about it
-        </Text>
-        <Text size={200} className={styles.muted}>
-          The enablement workload, with each row drilling through to the exact users counted.
-        </Text>
-      </div>
+      <SectionHead
+        index={3}
+        title="What we are doing about it"
+        blurb="The enablement workload, with each row drilling through to the exact users counted."
+      />
 
       <Card>
         <div className={styles.cardHead}>
@@ -1062,14 +1075,11 @@ function AnalystTab({
       <KpiGrid items={kpis} />
 
 
-      <div className={styles.sectionHead}>
-        <Text weight="semibold" size={500}>
-          <span className={styles.sectionIndex}>1.</span> Where you stand
-        </Text>
-        <Text size={200} className={styles.muted}>
-          The headline position: how many licences are earning their keep, and where the drop-off is.
-        </Text>
-      </div>
+      <SectionHead
+        index={1}
+        title="Where you stand"
+        blurb="The headline position: how many licences are earning their keep, and where the drop-off is."
+      />
 
       <Card>
         <div className={styles.cardHead}>
@@ -1152,14 +1162,11 @@ function AnalystTab({
         </div>
       </Card>
 
-      <div className={styles.sectionHead}>
-        <Text weight="semibold" size={500}>
-          <span className={styles.sectionIndex}>2.</span> What to do next
-        </Text>
-        <Text size={200} className={styles.muted}>
-          The work this creates, how big each job is, and which departments to start with.
-        </Text>
-      </div>
+      <SectionHead
+        index={2}
+        title="What to do next"
+        blurb="The work this creates, how big each job is, and which departments to start with."
+      />
 
       <Card>
         <div className={styles.cardHead}>
@@ -1334,14 +1341,11 @@ function AnalystTab({
         </Card>
       )}
 
-      <div className={styles.sectionHead}>
-        <Text weight="semibold" size={500}>
-          <span className={styles.sectionIndex}>3.</span> How Copilot is being used
-        </Text>
-        <Text size={200} className={styles.muted}>
-          The evidence behind those recommendations: how often, how deeply, in which apps, and by whom.
-        </Text>
-      </div>
+      <SectionHead
+        index={3}
+        title="How Copilot is being used"
+        blurb="The evidence behind those recommendations: how often, how deeply, in which apps, and by whom."
+      />
 
       <Card>
         <div className={styles.cardHead}>
@@ -1604,14 +1608,11 @@ function AnalystTab({
         </Card>
       )}
 
-      <div className={styles.sectionHead}>
-        <Text weight="semibold" size={500}>
-          <span className={styles.sectionIndex}>4.</span> Trend and wider reach
-        </Text>
-        <Text size={200} className={styles.muted}>
-          Whether it is moving in the right direction, and what is happening beyond the licensed population.
-        </Text>
-      </div>
+      <SectionHead
+        index={4}
+        title="Trend and wider reach"
+        blurb="Whether it is moving in the right direction, and what is happening beyond the licensed population."
+      />
 
       {summary.weeklyTrend.length > 0 && (
         <Card>

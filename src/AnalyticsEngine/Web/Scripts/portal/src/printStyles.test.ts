@@ -111,7 +111,44 @@ describe('print stylesheet', () => {
     // The user lists run to hundreds of rows. A table told not to break would overflow the sheet
     // and lose everything past the first page, so it is the rows that are kept whole.
     expect(printDeclarationsFor('thead')).toMatch(/display:\s*table-header-group/);
-    expect(printDeclarationsFor('tr')).toMatch(/break-inside:\s*avoid/);
+    expect(printDeclarationsFor('tr')).toMatch(/[^-]break-inside:\s*avoid/);
+    expect(printDeclarationsFor('tr')).toMatch(/page-break-inside:\s*avoid/);
+  });
+
+  it('starts each act of the report on a new sheet, and never strands a heading', () => {
+    // The legacy `page-break-*` aliases matter: Safari still only implements those, and a print
+    // stylesheet that silently no-ops on one browser looks exactly like one nobody wrote.
+    expect(printDeclarationsFor("[data-print='page-break']")).toMatch(/break-before:\s*page/);
+    expect(printDeclarationsFor("[data-print='page-break']")).toMatch(/page-break-before:\s*always/);
+    expect(printDeclarationsFor("[data-print='page-break']")).toMatch(/[^-]break-after:\s*avoid/);
+    // Act 1 does not start a sheet of its own - it belongs with the KPI tiles on the front page -
+    // but it must still not be the last thing printed on that page.
+    expect(printDeclarationsFor("[data-print='keep-with-next']")).toMatch(/[^-]break-after:\s*avoid/);
+    expect(printDeclarationsFor("[data-print='keep-with-next']")).not.toMatch(/break-before:\s*page/);
+  });
+
+  it('returns the section stack to block flow, without which those breaks do nothing', () => {
+    // Fragmentation inside a flex or grid container is unreliable across browsers, and the report's
+    // sections are flex items of a column stack, so `break-before` on them is simply ignored.
+    expect(printDeclarationsFor("[data-print='flow']")).toMatch(/display:\s*block\s*!important/);
+    // The stack spaced itself with `gap`, which block flow does not have.
+    expect(printDeclarationsFor("[data-print='flow'] > *")).toMatch(/margin-bottom:\s*16px/);
+  });
+
+  it('does not print an open tooltip over the report', () => {
+    // Fluent portals tooltips, popovers, menus and toasts to <body>, outside the app root. Clicking
+    // Print leaves the pointer on the button, so its tooltip is open at the moment the page is
+    // captured: without this the printout carried a tooltip over the top of the report every time.
+    const declarations =
+      printDeclarationsFor('body > *:not(#root)') + printDeclarationsFor("[role='tooltip']");
+    expect(declarations).toMatch(/display:\s*none\s*!important/);
+  });
+
+  it('hides the overlays by the id the app actually mounts on', () => {
+    // `body > *:not(#root)` is only "everything except the app" for as long as the app mounts on
+    // #root. Renaming it would print an empty page - the app itself would be the thing hidden.
+    const main = readFileSync(join(SRC_DIR, 'main.tsx'), 'utf8');
+    expect(main).toMatch(/getElementById\(['"]root['"]\)/);
   });
 
   it('has a rule for every data-print value the components use', () => {

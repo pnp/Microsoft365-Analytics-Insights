@@ -32,6 +32,12 @@ body {
  *                           contributes no width limit, gutter or viewport-height floor.
  *   data-print="only"     - rendered on paper only. Used for the scope caption that replaces the
  *                           filter controls, so a printout still says what it is a report of.
+ *   data-print="flow"     - a flex or grid stack of report sections, returned to normal block flow
+ *                           so the page breaks below actually take effect.
+ *   data-print="page-break"
+ *                         - starts a new sheet, and keeps its own content with it.
+ *   data-print="keep-with-next"
+ *                         - never left stranded at the foot of a page with its content overleaf.
  */
 @media print {
   @page {
@@ -55,6 +61,46 @@ body {
 
   [data-print='hide'] {
     display: none !important;
+  }
+
+  /* Fluent renders tooltips, popovers, menus and toasts through a portal appended to <body>,
+     outside the app root. That matters more than it sounds: clicking Print leaves the pointer on
+     the button, so the button's own tooltip is open at the exact moment the page is captured and
+     printed over the report every time. Hiding everything outside #root gets all of them without
+     depending on Fluent's internal class names; the role selector catches a tooltip that a future
+     `mountNode` puts inside the app instead. */
+  body > *:not(#root),
+  [role='tooltip'] {
+    display: none !important;
+  }
+
+  /* Page breaks only take effect in normal block flow - fragmentation inside a flex or grid
+     container is unreliable across browsers, and the report's sections are flex items of a column
+     stack. So the stack becomes block flow when printing, with a margin standing in for its gap. */
+  [data-print='flow'] {
+    display: block !important;
+  }
+
+  [data-print='flow'] > * {
+    margin-bottom: 16px !important;
+  }
+
+  /* Each numbered act of the report starts its own sheet. Without this a heading landed at the
+     foot of one page with everything it introduces overleaf, which reads as an empty section.
+     The legacy `page-break-*` aliases are kept alongside the modern properties because Safari
+     still only implements the old ones, and a print stylesheet that silently no-ops on one
+     browser is indistinguishable from not having written it. */
+  [data-print='page-break'] {
+    page-break-before: always;
+    break-before: page;
+  }
+
+  /* No heading is printed as the last thing on a page. Applies to the first act too, which does
+     not start a new sheet - it belongs with the KPI tiles on the report's front page. */
+  [data-print='page-break'],
+  [data-print='keep-with-next'] {
+    page-break-after: avoid;
+    break-after: avoid;
   }
 
   [data-print='content'] {
@@ -83,6 +129,7 @@ body {
      page. Repeating the header row on each page is what makes a broken table readable. */
   .fui-Card,
   svg {
+    page-break-inside: avoid;
     break-inside: avoid;
   }
 
@@ -91,6 +138,7 @@ body {
   }
 
   tr {
+    page-break-inside: avoid;
     break-inside: avoid;
   }
 }
