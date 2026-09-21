@@ -56,6 +56,8 @@ import ResourceTypesPanel from '../components/copilotAdoption/ResourceTypesPanel
 import EmailDomainPanel from '../components/copilotAdoption/EmailDomainPanel';
 import { ConcentrationBar, CombinedSegmentTable } from '../components/copilotAdoption/CombinedViews';
 import InfoTip from '../components/shared/InfoTip';
+import PrintButton from '../components/shared/PrintButton';
+import DismissibleWarnings from '../components/shared/DismissibleWarnings';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
 import type { KpiDefinition } from '../components/shared/KpiGrid';
@@ -68,6 +70,24 @@ const WINDOW_OPTIONS = [
 ];
 
 type AdoptionTab = 'executive' | 'analyst' | 'licensed' | 'cowork' | 'unlicensed' | 'agents' | 'opportunities' | 'method';
+
+/**
+ * The tab strip, in order.
+ *
+ * Single source of truth so the strip and the print caption cannot drift: the caption names the
+ * view on a printout, where the tab strip itself is hidden and the reader has no other way to tell
+ * which of the eight views the sheet in their hand is.
+ */
+const TAB_LABELS: Record<AdoptionTab, string> = {
+  executive: 'Executive view',
+  analyst: 'Analyst view',
+  licensed: 'Licensed users',
+  cowork: 'Cowork',
+  unlicensed: 'Unlicensed usage',
+  agents: 'Agents',
+  opportunities: 'Licence opportunities',
+  method: 'How this is calculated',
+};
 
 /** Plain-English names for the sections the server could not narrow to one email domain. */
 const UNSCOPED_SECTION_LABELS: Record<string, string> = {
@@ -120,6 +140,14 @@ const useStyles = makeStyles({
   intro: {
     marginTop: '8px',
     maxWidth: '780px',
+  },
+  // Paper only - see the `data-print` contract in index.css. The filter controls and the tab strip
+  // are both hidden when printing, which would otherwise leave a printout that does not say which
+  // view, which period or which email domain it is a report of.
+  printScope: {
+    display: 'none',
+    marginTop: '8px',
+    color: tokens.colorNeutralForeground2,
   },
   subTabs: {
     marginTop: '16px',
@@ -350,7 +378,7 @@ export default function CopilotAdoptionPage() {
             department lead or attached to a licence request.
           </Body1>
         </div>
-        <div className={styles.controls}>
+        <div className={styles.controls} data-print="hide">
           <Text size={200} className={styles.muted}>
             Period
           </Text>
@@ -388,6 +416,11 @@ export default function CopilotAdoptionPage() {
             </>
           )}
           {availability?.available && (
+            <PrintButton
+              tooltip={`Prints the ${TAB_LABELS[tab]} as it is on screen, without the navigation around it. The other tabs are not included - use the Excel report for the whole analysis.`}
+            />
+          )}
+          {availability?.available && (
             <Tooltip
               relationship="description"
               content={
@@ -413,6 +446,20 @@ export default function CopilotAdoptionPage() {
         </div>
       </div>
 
+      {availability?.available && (
+        <div className={styles.printScope} data-print="only">
+          <Text size={200}>
+            {TAB_LABELS[tab]}
+            {' \u00b7 '}
+            {WINDOW_OPTIONS.find((o) => o.value === windowDays)?.label ?? `Last ${windowDays} days`}
+            {summary && ` (${formatDate(summary.fromUtc)} to ${formatDate(summary.toUtc)})`}
+            {' \u00b7 '}
+            {emailDomain ?? 'All email domains'}
+            {summary && ` \u00b7 Generated ${formatDate(summary.generatedUtc)}`}
+          </Text>
+        </div>
+      )}
+
       {availabilityError && (
         <MessageBar intent="error" style={{ marginTop: '16px' }}>
           <MessageBarBody>{availabilityError}</MessageBarBody>
@@ -435,27 +482,16 @@ export default function CopilotAdoptionPage() {
       {availability?.available && (
         <>
           {availability.messages.length > 0 && (
-            <MessageBar intent="warning" style={{ marginTop: '16px' }}>
-              <MessageBarBody>
-                <ul style={{ margin: 0, paddingInlineStart: '20px' }}>
-                  {availability.messages.map((m) => (
-                    <li key={m}>{m}</li>
-                  ))}
-                </ul>
-              </MessageBarBody>
-            </MessageBar>
+            <DismissibleWarnings messages={availability.messages} style={{ marginTop: '16px' }} />
           )}
 
-          <div className={styles.subTabs}>
+          <div className={styles.subTabs} data-print="hide">
             <TabList selectedValue={tab} onTabSelect={onTabSelect}>
-              <Tab value="executive">Executive view</Tab>
-              <Tab value="analyst">Analyst view</Tab>
-              <Tab value="licensed">Licensed users</Tab>
-              <Tab value="cowork">Cowork</Tab>
-              <Tab value="unlicensed">Unlicensed usage</Tab>
-              <Tab value="agents">Agents</Tab>
-              <Tab value="opportunities">Licence opportunities</Tab>
-              <Tab value="method">How this is calculated</Tab>
+              {(Object.keys(TAB_LABELS) as AdoptionTab[]).map((value) => (
+                <Tab key={value} value={value}>
+                  {TAB_LABELS[value]}
+                </Tab>
+              ))}
             </TabList>
           </div>
 
@@ -489,17 +525,7 @@ export default function CopilotAdoptionPage() {
                 </MessageBar>
               )}
 
-              {summary.warnings.length > 0 && (
-                <MessageBar intent="warning">
-                  <MessageBarBody>
-                    <ul style={{ margin: 0, paddingInlineStart: '20px' }}>
-                      {summary.warnings.map((w) => (
-                        <li key={w}>{w}</li>
-                      ))}
-                    </ul>
-                  </MessageBarBody>
-                </MessageBar>
-              )}
+              {summary.warnings.length > 0 && <DismissibleWarnings messages={summary.warnings} />}
 
               {/* Stated on screen, every time. A dashboard silently showing one subsidiary is the
                   fastest way to get a licence decision wrong, and the domain drop-down is easy to

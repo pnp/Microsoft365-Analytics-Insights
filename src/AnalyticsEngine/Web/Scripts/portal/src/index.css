@@ -8,3 +8,89 @@ body {
 #root {
   min-height: 100vh;
 }
+
+/*
+ * Print layout.
+ *
+ * On screen the app is a shell: a brand bar, an area switcher, a nav rail and a report centred in
+ * a fixed-width column. On paper none of that is usable - the reader cannot click a nav item - and
+ * all of it costs width, so a printed report came out as a narrow strip with a third of the page
+ * given over to a menu. These rules strip the chrome and give the report the whole sheet.
+ *
+ * Driven by `data-print` attributes rather than class names because the app styles itself with
+ * Griffel (`makeStyles`), whose class names are generated and so cannot be targeted from here. The
+ * attributes are the contract between a component and this stylesheet, and they are what the
+ * component tests assert on.
+ *
+ * `!important` throughout for the same reason: Griffel injects its rules into <head> at runtime,
+ * which is after this stylesheet, and its selectors have the same specificity as these - so
+ * without it source order would hand the win to the screen styles this block exists to undo.
+ *
+ *   data-print="hide"     - chrome the reader cannot use on paper (nav, tabs, filter controls,
+ *                           buttons). Removed from the printed output entirely.
+ *   data-print="content"  - a layout wrapper between the page root and the report. Flattened so it
+ *                           contributes no width limit, gutter or viewport-height floor.
+ *   data-print="only"     - rendered on paper only. Used for the scope caption that replaces the
+ *                           filter controls, so a printout still says what it is a report of.
+ */
+@media print {
+  @page {
+    /* Slightly tighter than the usual browser default of half an inch, which buys back most of a
+       KPI column on A4 without running into a printer's unprintable edge. */
+    margin: 10mm;
+  }
+
+  html,
+  body {
+    /* The app's off-white page colour is wasted ink on paper. */
+    background-color: #ffffff;
+  }
+
+  #root,
+  #root > * {
+    /* #root and FluentProvider are both floored at 100vh so the shell fills the window. On paper
+       that floor becomes a full page of whitespace before the report starts. */
+    min-height: 0 !important;
+  }
+
+  [data-print='hide'] {
+    display: none !important;
+  }
+
+  [data-print='content'] {
+    display: block !important;
+    max-width: none !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  [data-print='only'] {
+    display: block !important;
+  }
+
+  * {
+    /* Browsers drop background colours when printing. In this report colour carries meaning - the
+       adoption band of a segment, the accent on a KPI card, every chart fill - so a monochrome
+       printout is not merely plainer, it is unreadable. */
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Keep a card, a chart or a table row whole rather than splitting it over a page break. Tables
+     themselves are deliberately left breakable: the user lists run to hundreds of rows, and a
+     table that cannot break would simply overflow the sheet and lose everything past the first
+     page. Repeating the header row on each page is what makes a broken table readable. */
+  .fui-Card,
+  svg {
+    break-inside: avoid;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  tr {
+    break-inside: avoid;
+  }
+}

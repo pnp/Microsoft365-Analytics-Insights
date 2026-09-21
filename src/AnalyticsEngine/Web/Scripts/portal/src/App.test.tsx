@@ -218,3 +218,45 @@ describe('History entries', () => {
     expect(await screen.findByLabelText('Administration navigation')).toBeVisible();
   });
 });
+
+/**
+ * The app shell is chrome, and chrome does not print.
+ *
+ * A printed page used to carry the brand bar, the area switcher and the nav rail, with the report
+ * squeezed into the third of the sheet they left over. What makes that not happen is the
+ * `data-print` contract with the `@media print` block in index.css (proved by printStyles.test.ts)
+ * - so these assert the shell's half of it, on the real shell rather than a stand-in.
+ */
+describe('Printing the app shell', () => {
+  it('marks the brand bar, the area switcher and the nav rail as print-hidden', async () => {
+    renderAt('/insights/reports');
+    await screen.findByLabelText('Insights navigation');
+
+    expect(screen.getByRole('banner')).toHaveAttribute('data-print', 'hide');
+    expect(screen.getByRole('tab', { name: 'Insights' }).closest('[data-print="hide"]')).not.toBeNull();
+    expect(screen.getByLabelText('Insights navigation')).toHaveAttribute('data-print', 'hide');
+  });
+
+  it('flattens the layout wrappers around the page so the report gets the whole sheet', async () => {
+    renderAt('/insights/reports');
+    await screen.findByLabelText('Insights navigation');
+
+    // <main> is the page's own container; it and the wrappers above it are what impose the 24px
+    // gutter, the 1120px column and the viewport-height floor that make a printout a narrow strip.
+    const main = screen.getByRole('main');
+    expect(main).toHaveAttribute('data-print', 'content');
+    expect(main.parentElement).toHaveAttribute('data-print', 'content');
+    expect(main.firstElementChild).toHaveAttribute('data-print', 'content');
+  });
+
+  it('never hides the page itself along with the chrome', async () => {
+    // The whole shell is marked up in one place, so the way to break this is to put a `hide` on a
+    // wrapper that also contains the page.
+    renderAt('/insights/reports');
+
+    expect(await screen.findByText(/No built-in report charts are available yet/)).toBeVisible();
+    expect(
+      screen.getByText(/No built-in report charts are available yet/).closest('[data-print="hide"]'),
+    ).toBeNull();
+  });
+});

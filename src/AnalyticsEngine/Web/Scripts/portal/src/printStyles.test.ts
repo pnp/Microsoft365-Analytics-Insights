@@ -1,0 +1,128 @@
+import { describe, it, expect } from 'vitest';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+/**
+ * The print stylesheet contract.
+ *
+ * Printing is split across two files that cannot see each other: components mark themselves up
+ * with `data-print` attributes, and the `@media print` block in index.css decides what those
+ * attributes mean. Vitest runs with `css: false`, so a component test can prove the attribute is
+ * there but never that it does anything - and nobody proof-reads a printout on every change. That
+ * gap is what these tests close.
+ *
+ * Asserted against the stylesheet text rather than the CSSOM because jsdom's CSS parser is
+ * incomplete (notably around `@page` and `print-color-adjust`) and silently drops what it does not
+ * understand, which would turn a missing rule into a passing test.
+ */
+
+// Resolved from the working directory rather than import.meta.url: Vite rewrites module URLs to
+// its own scheme, so fileURLToPath on them fails. Vitest runs from the package root (where
+// vitest.config.ts lives), which makes this stable.
+const SRC_DIR = join(process.cwd(), 'src');
+const CSS_PATH = join(SRC_DIR, 'index.css');
+
+/** index.css with comments removed and quotes normalised, so selectors compare by meaning. */
+function stylesheet(): string {
+  return readFileSync(CSS_PATH, 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/"/g, "'");
+}
+
+/** The body of the `@media print` block, found by brace matching rather than a greedy regex. */
+function printBlock(): string {
+  const css = stylesheet();
+  const at = css.indexOf('@media print');
+  if (at < 0) throw new Error('index.css has no @media print block.');
+
+  const open = css.indexOf('{', at);
+  let depth = 0;
+  for (let i = open; i < css.length; i++) {
+    if (css[i] === '{') depth += 1;
+    else if (css[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return css.slice(open + 1, i);
+    }
+  }
+  throw new Error('index.css has an unterminated @media print block.');
+}
+
+/**
+ * Every declaration that applies to `selector` when printing.
+ *
+ * Selectors are matched against each comma-separated part of a rule's prelude, so a rule shared by
+ * several selectors counts for all of them - that is how the stylesheet is actually written.
+ */
+function printDeclarationsFor(selector: string): string {
+  const matched = [...printBlock().matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter((rule) =>
+    rule[1].split(',').some((part) => part.trim() === selector),
+  );
+  return matched.map((rule) => rule[2].replace(/\s+/g, ' ').trim()).join(' ');
+}
+
+/** Every `data-print` value the components actually use. */
+function attributeValuesUsedInComponents(): Set<string> {
+  const values = new Set<string>();
+  for (const entry of readdirSync(SRC_DIR, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile() || !/\.tsx?$/.test(entry.name) || entry.name.endsWith('.test.tsx')) continue;
+    const source = readFileSync(join(entry.parentPath, entry.name), 'utf8');
+    for (const match of source.matchAll(/data-print=['"]([a-z-]+)['"]/g)) values.add(match[1]);
+  }
+  return values;
+}
+
+describe('print stylesheet', () => {
+  it('removes anything marked as chrome from the printed page', () => {
+    // `!important` is not optional here: Griffel injects the app's own styles into <head> at
+    // runtime, so they come after this stylesheet at equal specificity and would otherwise win.
+    expect(printDeclarationsFor("[data-print='hide']")).toMatch(/display:\s*none\s*!important/);
+  });
+
+  it('gives the report the whole sheet by flattening the layout wrappers', () => {
+    // The screen shell centres the page in a 1120px column inside a 24px gutter, beside a nav
+    // rail, under a shell floored at the viewport height. On paper each of those only makes the
+    // report narrower or pushes it down the page.
+    const declarations = printDeclarationsFor("[data-print='content']");
+    expect(declarations).toMatch(/max-width:\s*none\s*!important/);
+    expect(declarations).toMatch(/padding:\s*0\s*!important/);
+    expect(declarations).toMatch(/margin:\s*0\s*!important/);
+    expect(declarations).toMatch(/min-height:\s*0\s*!important/);
+    expect(declarations).toMatch(/display:\s*block\s*!important/);
+  });
+
+  it('reveals the print-only caption that says what the printout is a report of', () => {
+    expect(printDeclarationsFor("[data-print='only']")).toMatch(/display:\s*block\s*!important/);
+  });
+
+  it('drops the viewport-height floor so the report does not start on page two', () => {
+    const declarations = printDeclarationsFor('#root') + printDeclarationsFor('#root > *');
+    expect(declarations).toMatch(/min-height:\s*0\s*!important/);
+  });
+
+  it('keeps colour, because colour is what the bands and chart series mean', () => {
+    // Browsers strip background colours when printing. In this report that is not a cosmetic loss:
+    // the adoption band of a segment and the series in every chart are colour alone.
+    const declarations = printDeclarationsFor('*');
+    expect(declarations).toMatch(/[^-]print-color-adjust:\s*exact/);
+    expect(declarations).toMatch(/-webkit-print-color-adjust:\s*exact/);
+  });
+
+  it('repeats table headers across pages instead of forbidding tables to break', () => {
+    // The user lists run to hundreds of rows. A table told not to break would overflow the sheet
+    // and lose everything past the first page, so it is the rows that are kept whole.
+    expect(printDeclarationsFor('thead')).toMatch(/display:\s*table-header-group/);
+    expect(printDeclarationsFor('tr')).toMatch(/break-inside:\s*avoid/);
+  });
+
+  it('has a rule for every data-print value the components use', () => {
+    // The drift guard: an attribute the stylesheet has never heard of is dead markup, and reads in
+    // review as though printing has been handled when it has not.
+    const used = attributeValuesUsedInComponents();
+    expect(used.size).toBeGreaterThan(0);
+
+    for (const value of used) {
+      expect(printDeclarationsFor(`[data-print='${value}']`), `No @media print rule for data-print="${value}"`)
+        .not.toBe('');
+    }
+  });
+});

@@ -478,3 +478,179 @@ describe('CopilotAdoptionPage domain-scope regressions', () => {
     expect(screen.queryByRole('button', { name: 'Start intervention' })).toBeNull();
   });
 });
+
+/**
+ * Printing.
+ *
+ * The printed report used to be whatever the screen happened to be: a menu down the left, a brand
+ * bar across the top and the report itself squeezed into the remaining third of the sheet. The fix
+ * is a `data-print` contract between the components and the `@media print` block in index.css
+ * (the stylesheet half is proved by printStyles.test.ts). What these tests assert is the half the
+ * components own: the chrome is marked as chrome, the report is not, and nothing the printout
+ * needs in order to be identifiable disappears along with the controls.
+ */
+describe('CopilotAdoptionPage printing', () => {
+  it('prints the report when the Print button is used', async () => {
+    const print = vi.spyOn(window, 'print').mockImplementation(() => {});
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }));
+
+    expect(print).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks the app-level chrome, the filter controls and the tab strip as print-hidden', async () => {
+    await renderPage();
+
+    // The Print button itself has to go too: a printed page carrying a button to print it is the
+    // giveaway that the printout is a screenshot of an app rather than a report.
+    expect(screen.getByRole('button', { name: 'Print' }).closest('[data-print="hide"]')).not.toBeNull();
+    expect(screen.getByLabelText('Reporting period').closest('[data-print="hide"]')).not.toBeNull();
+    expect(screen.getByRole('button', { name: /Excel report/ }).closest('[data-print="hide"]')).not.toBeNull();
+    expect(screen.getByRole('tab', { name: 'Executive view' }).closest('[data-print="hide"]')).not.toBeNull();
+  });
+
+  it('keeps the report itself out of the print-hidden chrome', async () => {
+    // The obvious way to get this wrong is to hide a container that also holds the report. The
+    // title and the figures have to survive - they are the printout.
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+
+    expect(screen.getByText('Copilot Adoption').closest('[data-print="hide"]')).toBeNull();
+    expect(screen.getAllByText('Where we stand')[0].closest('[data-print="hide"]')).toBeNull();
+  });
+
+  it('replaces the hidden controls with a caption naming the view, period and scope', async () => {
+    // With the tab strip and the filter controls gone, a printed sheet would otherwise say only
+    // "Copilot Adoption" - and which of eight views, over which of four periods, for which domain
+    // is not something a reader can reconstruct from the figures.
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+
+    const caption = document.querySelector('[data-print="only"]');
+    expect(caption).not.toBeNull();
+    expect(caption?.textContent).toContain('Executive view');
+    expect(caption?.textContent).toContain('Last 28 days');
+    expect(caption?.textContent).toContain('All email domains');
+    // Dated, because a printout outlives the period it describes.
+    expect(caption?.textContent).toContain('Generated');
+  });
+
+  it('follows the tab and the domain the reader actually chose', async () => {
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Analyst view' }));
+    expect(await screen.findByRole('tab', { name: 'Analyst view', selected: true })).toBeVisible();
+    fireEvent.change(await screen.findByLabelText('Email domain'), { target: { value: 'fabrikam.com' } });
+
+    await waitFor(() => {
+      const caption = document.querySelector('[data-print="only"]');
+      expect(caption?.textContent).toContain('Analyst view');
+      expect(caption?.textContent).toContain('fabrikam.com');
+    });
+  });
+
+  it('names every tab the same way in the strip and in the caption', async () => {
+    // The caption is the only thing naming the view on paper, so a tab renamed in one place but
+    // not the other would silently mislabel every printout of it.
+    await renderPage();
+
+    // Fluent renders an unselected tab's label twice: a visible span, plus a second, CSS-hidden
+    // one reserving the width of the bold selected state. So textContent reads "AgentsAgents",
+    // while the first span holds the label - and is what getByRole's accessible-name matching
+    // sees, the hidden twin being excluded from the accessible name.
+    const tabLabel = (tab: HTMLElement) => (tab.querySelector('span')?.textContent ?? '').trim();
+
+    const labels = screen.getAllByRole('tab').map(tabLabel);
+    expect(labels.length).toBe(8);
+
+    for (const label of labels) {
+      fireEvent.click(screen.getByRole('tab', { name: label }));
+      await waitFor(() =>
+        expect(document.querySelector('[data-print="only"]')?.textContent).toContain(label),
+      );
+    }
+  });
+});
+
+/**
+ * Dismissible data warnings.
+ *
+ * The bar carries caveats about the data behind the report - an import that has not run, a Graph
+ * permission that was never granted. They are true, they are worth saying once, and on a tenant
+ * that is not going to fix them today they are also the same orange block above the report on
+ * every visit, which is how readers learn to skim past everything at the top of the page.
+ *
+ * So the bar can be put away - but never lost, never silently inherited by a different warning,
+ * and never dropped from a printout that will be read away from the screen.
+ */
+describe('CopilotAdoptionPage data warnings', () => {
+  const WARNINGS = [
+    'Purchased and unassigned Copilot seats are unknown because Graph subscribedSkus has not been imported.',
+    'The first-party Cowork usage report is not available.',
+  ];
+
+  it('shows the warnings, and lets the reader put them away', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({ warnings: WARNINGS }));
+    await renderPage();
+
+    expect(await screen.findByText(WARNINGS[0])).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide these warnings' }));
+
+    // Gone from the screen, but the count is still on offer: a reader must never be unaware that
+    // there are caveats, only free to stop looking at them. Checked by position rather than by
+    // computed visibility, because the only remaining copy is the print-only one.
+    await waitFor(() => expect(screen.getByRole('button', { name: /Show 2 data warnings/ })).toBeVisible());
+    const onScreen = screen.queryAllByText(WARNINGS[0]).filter((n) => !n.closest('[data-print="only"]'));
+    expect(onScreen).toHaveLength(0);
+  });
+
+  it('brings them straight back', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({ warnings: WARNINGS }));
+    await renderPage();
+    await screen.findByText(WARNINGS[0]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide these warnings' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Show 2 data warnings/ }));
+
+    expect(await screen.findByText(WARNINGS[0])).toBeVisible();
+    expect(screen.queryByRole('button', { name: /Show 2 data warnings/ })).not.toBeInTheDocument();
+  });
+
+  it('shows itself again when the warnings are not the ones that were dismissed', async () => {
+    // The dismissal is keyed on the warnings, not on the bar. Otherwise putting away "Cowork is
+    // not imported" would also swallow a brand-new problem that appears after changing the scope -
+    // which is exactly the moment a new warning is most likely and most worth reading.
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({ warnings: WARNINGS }));
+    await renderPage();
+    await screen.findByText(WARNINGS[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Hide these warnings' }));
+    await screen.findByRole('button', { name: /Show 2 data warnings/ });
+
+    const different = 'Copilot audit events stop three days before the end of the period.';
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(
+      summary({ scopedEmailDomain: 'fabrikam.com', warnings: [different] }),
+    );
+    fireEvent.change(await screen.findByLabelText('Email domain'), { target: { value: 'fabrikam.com' } });
+
+    expect(await screen.findByText(different)).toBeVisible();
+    expect(screen.queryByRole('button', { name: /Show 1 data warning/ })).not.toBeInTheDocument();
+  });
+
+  it('keeps the warnings on the printout even when they are hidden on screen', async () => {
+    // A printed report is read by people who cannot check what it left out, so its caveats travel
+    // with it regardless of what the person who printed it chose to look at.
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({ warnings: WARNINGS }));
+    await renderPage();
+    await screen.findByText(WARNINGS[0]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide these warnings' }));
+    await screen.findByRole('button', { name: /Show 2 data warnings/ });
+
+    const printed = [...document.querySelectorAll('[data-print="only"]')].map((n) => n.textContent ?? '');
+    expect(printed.some((text) => text.includes(WARNINGS[0]))).toBe(true);
+    // ...and the button that hid them is not itself printed.
+    expect(screen.getByRole('button', { name: /Show 2 data warnings/ })).toHaveAttribute('data-print', 'hide');
+  });
+});
