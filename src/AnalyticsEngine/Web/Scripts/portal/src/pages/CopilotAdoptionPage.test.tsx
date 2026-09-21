@@ -501,12 +501,19 @@ describe('CopilotAdoptionPage printing', () => {
 
   it('marks the app-level chrome, the filter controls and the tab strip as print-hidden', async () => {
     await renderPage();
+    // Waits for the loaded state on purpose. Without it this asserted against the loading state by
+    // accident, and then read the Excel button's role from it: Fluent renders that button as
+    // `<a role="button" aria-disabled>` while there is no summary to export, and as a plain
+    // `<a href>` - role `link`, not `button` - once there is. It passed locally and failed in CI
+    // purely on which side of that swap the machine happened to be.
+    await screen.findAllByText('Where we stand');
 
     // The Print button itself has to go too: a printed page carrying a button to print it is the
     // giveaway that the printout is a screenshot of an app rather than a report.
     expect(screen.getByRole('button', { name: 'Print' }).closest('[data-print="hide"]')).not.toBeNull();
     expect(screen.getByLabelText('Reporting period').closest('[data-print="hide"]')).not.toBeNull();
-    expect(screen.getByRole('button', { name: /Excel report/ }).closest('[data-print="hide"]')).not.toBeNull();
+    // By text, not by role, so this stays true either side of that swap.
+    expect(screen.getByText('Excel report').closest('[data-print="hide"]')).not.toBeNull();
     expect(screen.getByRole('tab', { name: 'Executive view' }).closest('[data-print="hide"]')).not.toBeNull();
   });
 
