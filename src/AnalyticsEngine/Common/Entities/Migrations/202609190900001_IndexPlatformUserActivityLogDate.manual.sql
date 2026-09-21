@@ -36,6 +36,9 @@
    SAFETY
      * Idempotent / re-runnable: a database already carrying the covering index is skipped, and a
        missing table or column is skipped rather than erroring.
+     * The __MigrationHistory stamp at the end verifies the index SHAPE (key column plus INCLUDE list),
+       not just that something named IX_date exists, so a failed widening that leaves the profiling
+       extension's narrow index behind is not recorded as a successful apply.
      * DROP_EXISTING is used when the narrow index is present, so the table is never left without an
        index on [date].
      * Attempts ONLINE (non-blocking) on Enterprise / Azure SQL DB / MI and falls back to OFFLINE.
@@ -185,10 +188,28 @@ RAISERROR(@msg, 0, 1) WITH NOWAIT;
 IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory
                WHERE MigrationId = N'202609190900001_IndexPlatformUserActivityLogDate')
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM sys.indexes
-                   WHERE object_id = OBJECT_ID(N'dbo.platform_user_activity_log')
-                     AND name = N'IX_date')
-        RAISERROR('IndexPlatformUserActivityLogDate: NOT stamped - IX_date is missing from dbo.platform_user_activity_log, so the index build did not complete. Re-run this script, or run the installer to reconcile.', 16, 1);
+    -- Checks the SHAPE, not just the name. CREATE INDEX ... WITH (DROP_EXISTING = ON) is atomic, so a
+    -- widening that fails leaves the installer profiling extension's key-only IX_date in place. A guard
+    -- that only asked whether something called IX_date exists would accept that survivor and stamp the
+    -- migration as applied, after which EF never retries and the Office apps report keeps paying for the
+    -- key lookups this index exists to remove. These are the same three probes the body uses to decide
+    -- the index is already current, so a correctly built index passes them by construction.
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes AS i
+                   JOIN sys.index_columns AS ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+                   JOIN sys.columns AS c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                   WHERE i.object_id = OBJECT_ID(N'dbo.platform_user_activity_log') AND i.name = N'IX_date'
+                     AND ic.key_ordinal = 1 AND c.name = N'date')
+       OR NOT EXISTS (SELECT 1 FROM sys.indexes AS i
+                      JOIN sys.index_columns AS ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+                      JOIN sys.columns AS c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                      WHERE i.object_id = OBJECT_ID(N'dbo.platform_user_activity_log') AND i.name = N'IX_date'
+                        AND ic.is_included_column = 1 AND c.name = N'user_id')
+       OR NOT EXISTS (SELECT 1 FROM sys.indexes AS i
+                      JOIN sys.index_columns AS ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+                      JOIN sys.columns AS c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                      WHERE i.object_id = OBJECT_ID(N'dbo.platform_user_activity_log') AND i.name = N'IX_date'
+                        AND ic.is_included_column = 1 AND c.name = N'onenote_web')
+        RAISERROR('IndexPlatformUserActivityLogDate: NOT stamped - IX_date on dbo.platform_user_activity_log is missing, or is still the narrow key-only shape the profiling extension creates, so the index build did not complete. Re-run this script, or run the installer to reconcile.', 16, 1);
     ELSE IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory
                         WHERE MigrationId = N'202609171125117_DropUnreportedCopilotStudioCreditColumns')
         RAISERROR('IndexPlatformUserActivityLogDate: the index was created, but prerequisite migration 202609171125117_DropUnreportedCopilotStudioCreditColumns is missing from __MigrationHistory, so it was NOT stamped. Upgrade to the previous release first, or run the installer to reconcile.', 16, 1);

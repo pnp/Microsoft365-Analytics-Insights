@@ -62,9 +62,37 @@
 
    RUN ORDER
      The manual upgrade scripts form a strict chain: run them in migration-id order. This one's
-     immediate predecessor is 202609190900001_IndexPlatformUserActivityLogDate, and the stamp below
-     hard-fails if that row is not already present in __MigrationHistory.
+     immediate predecessor is 202609190900001_IndexPlatformUserActivityLogDate. That row is checked
+     TWICE: once in the PRE-FLIGHT below, which stops the script with SET NOEXEC ON before a single
+     table is dropped, and again next to the __MigrationHistory stamp at the end.
    ===================================================================================================== */
+
+/* =====================================================================================================
+   PRE-FLIGHT - runs BEFORE a single table is dropped.
+
+   This script DROPS TABLES and a drop is not reversible. A severity-16 RAISERROR does not stop sqlcmd
+   or SSMS - they abandon the failing batch and carry on - so a predecessor check that lives only next
+   to the __MigrationHistory stamp at the end comes far too late: by then the tables are already gone.
+   That is the exact defect 202609101000001_RetireUnusedAuditYammerStreamTables was corrected for, and
+   the same rule applies here. SET NOEXEC ON turns the check into a real stop; SET NOEXEC OFF at the
+   very end of the script restores the session.
+
+   The second clause lets an already-upgraded database re-run the script cleanly: once this migration
+   is stamped the predecessor check is moot, and a no-op re-run must not be turned into an error.
+   ===================================================================================================== */
+IF OBJECT_ID(N'dbo.__MigrationHistory', N'U') IS NULL
+BEGIN
+    RAISERROR('DropCopilotAdoptionPeriodTables: dbo.__MigrationHistory does not exist - this does not look like an Analytics database. Nothing has been changed.', 16, 1) WITH NOWAIT;
+    SET NOEXEC ON;
+END
+
+IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609190900001_IndexPlatformUserActivityLogDate')
+   AND NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202609201430001_DropCopilotAdoptionPeriodTables')
+BEGIN
+    RAISERROR('DropCopilotAdoptionPeriodTables: prerequisite migration 202609190900001_IndexPlatformUserActivityLogDate is not stamped in __MigrationHistory. Run the manual scripts in migration-id order. NOTHING HAS BEEN DROPPED.', 16, 1) WITH NOWAIT;
+    SET NOEXEC ON;
+END
+GO
 
 SET NOCOUNT ON;
 
@@ -168,3 +196,10 @@ BEGIN
 END
 ELSE
     RAISERROR('DropCopilotAdoptionPeriodTables: already recorded in __MigrationHistory, nothing to do.', 0, 1) WITH NOWAIT;
+
+GO
+
+-- Restore the session. SET statements still execute under NOEXEC, so this is reached even when the
+-- pre-flight above turned NOEXEC on and skipped everything in between.
+SET NOEXEC OFF;
+GO
