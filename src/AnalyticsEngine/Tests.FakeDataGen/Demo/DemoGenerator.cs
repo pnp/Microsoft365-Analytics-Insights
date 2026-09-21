@@ -181,8 +181,20 @@ namespace Tests.FakeDataGen.Demo
             _web.WriteClientDimensions();
             if (_options.Includes(DemoArea.Web)) _web.WriteSearchAndClickDimensions();
             _sink.Write(DemoTables.ResourceNames, 1, "Contoso knowledge – Καλημέρα κόσμε");
+            _sink.Write(DemoTables.ResourceNames, 2, "Contoso planning workbook");
+            _sink.Write(DemoTables.ResourceNames, 3, "Contoso customer message");
+            _sink.Write(DemoTables.ResourceNames, 4, "Contoso project page");
+            _sink.Write(DemoTables.ResourceNames, 5, "Contoso delivery list");
             _sink.Write(DemoTables.ResourceSites, 1, "https://contoso.sharepoint.com/sites/demo-01");
-            _sink.Write(DemoTables.ResourceTypes, 1, "SharePoint");
+            _sink.Write(DemoTables.ResourceSites, 2, "https://contoso.sharepoint.com/sites/demo-02");
+            _sink.Write(DemoTables.ResourceSites, 3, "https://outlook.office365.com/owa");
+            _sink.Write(DemoTables.ResourceSites, 4, "https://contoso.example/knowledge");
+            _sink.Write(DemoTables.ResourceSites, 5, "https://contoso.sharepoint.com/sites/demo-03");
+            _sink.Write(DemoTables.ResourceTypes, 1, "File");
+            _sink.Write(DemoTables.ResourceTypes, 2, "Email");
+            _sink.Write(DemoTables.ResourceTypes, 3, "Message");
+            _sink.Write(DemoTables.ResourceTypes, 4, "WebPage");
+            _sink.Write(DemoTables.ResourceTypes, 5, "ListItem");
             _sink.Write(DemoTables.InteractionTypes, 1, "userPrompt");
             _sink.Write(DemoTables.InteractionTypes, 2, "aiResponse");
             for (int i = 0; i < DemoTimeline.Hosts.Length; i++)
@@ -423,7 +435,10 @@ namespace Tests.FakeDataGen.Demo
                     _sink.Write(DemoTables.Chats, id, DemoTimeline.Hosts[host], agent == 0 ? (object)null : agent,
                         thread, user.Profile.UsageLocation, DemoOptions.FormatVersion, user.Id, time);
                     if (agent > 0 && agent != 5 && slot == 0)
-                        _sink.Write(DemoTables.Resources, id, 1, 1, 1);
+                    {
+                        int resource = 1 + (int)(DemoRandom.Value(_options.Seed, user.Id, dayIndex, 60) % 5);
+                        _sink.Write(DemoTables.Resources, id, resource, resource, resource);
+                    }
                     if (slot == 0 && user.Id % 3 != 0)
                         _sink.Write(DemoTables.CopilotEventModels, id, 1 + user.Id % 2);
                     if (slot == 0 && agent > 0 && user.Id % 2 == 0)

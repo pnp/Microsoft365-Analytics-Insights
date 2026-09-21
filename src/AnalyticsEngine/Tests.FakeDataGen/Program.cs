@@ -9,16 +9,12 @@ using Tests.FakeDataGen.Copilot;
 using Tests.FakeDataGen.Demo;
 using Tests.FakeDataGen.Dlp;
 using Tests.FakeDataGen.Office365;
-using Tests.FakeDataGen.StressTests;
-using Tests.FakeDataGen.StressTests.LoadTest;
 
 namespace Tests.FakeDataGen
 {
     /// <summary>
-    /// Console host that exposes two related capabilities behind one menu:
-    ///   - Data generation: insert realistic-looking rows for manual / UI testing.
-    ///   - Stress testing: drive the importer + SQL commit paths under load.
-    /// Both modes accept an optional SQL connection string as the first argument.
+    /// Console host for synthetic data generation used by manual and UI testing.
+    /// The optional SQL connection string is accepted as the first argument.
     /// </summary>
     internal class Program
     {
@@ -34,35 +30,6 @@ namespace Tests.FakeDataGen
             foreach (var area in DemoAreas.Catalogue)
                 items.Add(new MenuItem(area.Title + " (existing or new DB)", MenuCategory.DataGeneration,
                     ctx => DemoInteractive.RunArea(area, ctx.ConnectionString)));
-            items.AddRange(new[]
-            {
-            new MenuItem("Generate fake Copilot activity", MenuCategory.LegacyGeneration,
-                ctx => RunCopilotActivityGenerator(ctx.RequireConnectionString())),
-            new MenuItem("Generate fake O365 audit activity", MenuCategory.LegacyGeneration,
-                ctx => RunOffice365ActivityGenerator(ctx.RequireConnectionString())),
-            new MenuItem("Generate combined profiling data (O365 + Copilot)", MenuCategory.LegacyGeneration,
-                ctx => RunCombinedActivityGenerator(ctx.RequireConnectionString())),
-            new MenuItem("Generate fake Copilot prompt history (AI interaction history)", MenuCategory.LegacyGeneration,
-                ctx => RunCopilotInteractionHistoryGenerator(ctx.RequireConnectionString())),
-            new MenuItem("Generate fake DLP policy activity (Copilot + tenant-wide)", MenuCategory.LegacyGeneration,
-                ctx => RunDlpActivityGenerator(ctx.RequireConnectionString())),
-
-            // Stress tests
-            new MenuItem("ActivityAPI import stress test", MenuCategory.StressTest,
-                ctx => RunStressTest(new ActivityAPIStressTest(), ctx)),
-            new MenuItem("ActivityAPI import stress test (DB-backed, COLD+WARM)", MenuCategory.StressTest,
-                ctx => RunStressTest(new ActivityApiDbStressTest(), ctx)),
-            new MenuItem("Copilot event import stress test", MenuCategory.StressTest,
-                ctx => RunStressTest(new CopilotStressTest(), ctx)),
-            new MenuItem("Copilot Adoption page performance test (read-only, before/after)", MenuCategory.StressTest,
-                ctx => RunStressTest(new CopilotAdoptionPerfTest(), ctx)),
-            new MenuItem("Power Platform event import stress test", MenuCategory.StressTest,
-                ctx => RunStressTest(new PowerPlatformStressTest(), ctx)),
-            new MenuItem("Sent email importer stress test", MenuCategory.StressTest,
-                ctx => RunStressTest(new SentEmailImporterStressTest(), ctx)),
-            new MenuItem("User activity data stress test (profiling SQL inputs)", MenuCategory.StressTest,
-                ctx => RunStressTest(new UserActivityStressTest(), ctx)),
-            });
             return items;
         }
 
@@ -86,22 +53,7 @@ namespace Tests.FakeDataGen
                 return;
             }
 
-            // Non-interactive load-test mode (issue #161 / PR #162). Usage:
-            //   Tests.FakeDataGen.exe loadtest "<SQL Connection String>" [targetItemsPerArea] [csvPath]
-            if (args.Length >= 2 && args[0].Equals("loadtest", StringComparison.OrdinalIgnoreCase))
-            {
-                RunLoadTest(args);
-                return;
-            }
-
-            // Pull optional flags out first so they aren't mistaken for connection-string fragments.
-            //   Tests.FakeDataGen.exe "<SQL Connection String>" --run copilot
-            // A non-empty --run launches that stress test non-interactively (env-var config) and exits with
-            // code 0/1, so baseline-vs-optimised perf runs can be scripted and compared repeatably.
-            var argList = new List<string>(args);
-            string directRun = TakeOptionValue(argList, "--run");
-
-            string connectionString = argList.Count > 0 ? string.Join(" ", argList) : null;
+            string connectionString = args.Length > 0 ? string.Join(" ", args) : null;
             if (!string.IsNullOrEmpty(connectionString))
             {
                 DisplayConnectionInfo(connectionString);
@@ -110,17 +62,11 @@ namespace Tests.FakeDataGen
             {
                 Console.WriteLine("No SQL connection string provided.");
                 Console.WriteLine("The full demo and individual activity menus can create a new LocalDB database.");
-                Console.WriteLine("Existing-database appends and legacy generators need a startup connection string.");
-                Console.WriteLine("Usage: Tests.FakeDataGen.exe \"<SQL Connection String>\" [--run <copilot|copilotadoption|activityapi|activityapidb|powerplatform|sentemail|useractivity>]");
+                Console.WriteLine("Existing-database appends need a startup connection string.");
+                Console.WriteLine("Usage: Tests.FakeDataGen.exe \"<SQL Connection String>\"");
                 Console.WriteLine("Safe one-command demo: Tests.FakeDataGen.exe demo --help (or pick it from the menu below)");
             }
             Console.WriteLine();
-
-            if (!string.IsNullOrEmpty(directRun))
-            {
-                Environment.ExitCode = RunTestDirect(directRun, new RunContext(connectionString)) ? 0 : 1;
-                return;
-            }
 
             var ctx = new RunContext(connectionString);
 
@@ -172,33 +118,10 @@ namespace Tests.FakeDataGen
             }
         }
 
-        private static void RunLoadTest(string[] args)
-        {
-            string connectionString = args[1];
-            int targetItems = 100000;
-            if (args.Length >= 3 && int.TryParse(args[2], out var ti) && ti > 0) targetItems = ti;
-            int reps = 3;
-            if (args.Length >= 4 && int.TryParse(args[3], out var rp) && rp > 0) reps = rp;
-            string csvPath = args.Length >= 5
-                ? args[4]
-                : System.IO.Path.Combine(Environment.CurrentDirectory, "loadtest-results.csv");
-            string areas = args.Length >= 6 ? args[5] : null;
-
-            DisplayConnectionInfo(connectionString);
-
-            // Bring schema (EF migrations + custom SQL scripts) up to date before importing.
-            Console.WriteLine("Ensuring database schema is up to date (DatabaseUpgrader.CheckDbUpgraded)...");
-            var initInfo = new DatabaseUpgradeInfo { ConnectionString = connectionString };
-            DatabaseUpgrader.CheckDbUpgraded(initInfo, msg => Console.WriteLine($"[DB] {msg}"));
-            Console.WriteLine("Schema ready.");
-
-            new LoadTestSuite(connectionString, csvPath, targetItems, reps, areas).Run();
-        }
-
         private static void PrintBanner()
         {
             Console.WriteLine("===========================================================");
-            Console.WriteLine("  Microsoft 365 Analytics - Fake Data & Stress Testing");
+            Console.WriteLine("  Microsoft 365 Analytics - Synthetic Data Generator");
             Console.WriteLine("===========================================================");
             Console.WriteLine();
         }
@@ -209,21 +132,6 @@ namespace Tests.FakeDataGen
             Console.WriteLine("DATA GENERATION");
             int index = 1;
             foreach (var item in MenuItems.Where(m => m.Category == MenuCategory.DataGeneration))
-            {
-                Console.WriteLine($"  {index}. {item.Title}");
-                index++;
-            }
-
-            Console.WriteLine();
-            Console.WriteLine("LEGACY GENERATORS (existing DB only)");
-            foreach (var item in MenuItems.Where(m => m.Category == MenuCategory.LegacyGeneration))
-            {
-                Console.WriteLine($"  {index}. {item.Title}");
-                index++;
-            }
-            Console.WriteLine();
-            Console.WriteLine("STRESS TESTS");
-            foreach (var item in MenuItems.Where(m => m.Category == MenuCategory.StressTest))
             {
                 Console.WriteLine($"  {index}. {item.Title}");
                 index++;
@@ -250,93 +158,6 @@ namespace Tests.FakeDataGen
             {
                 Console.WriteLine($"Warning: Could not parse connection string details: {ex.Message}");
             }
-        }
-
-        private static void RunStressTest(BaseStressTest test, RunContext ctx)
-        {
-            test.ConnectionString = ctx.ConnectionString;
-            if (test.RequiresDatabase)
-            {
-                ctx.EnsureDbUpgraded();
-            }
-            test.Run();
-        }
-
-        /// <summary>
-        /// Stress tests that can be launched non-interactively via <c>--run &lt;name&gt;</c>. Keyed by a short
-        /// stable name so scripted perf comparisons don't depend on menu ordering.
-        /// </summary>
-        private static readonly Dictionary<string, Func<BaseStressTest>> DirectRunnableTests =
-            new Dictionary<string, Func<BaseStressTest>>(StringComparer.OrdinalIgnoreCase)
-            {
-                { "copilot", () => new CopilotStressTest() },
-                { "copilotadoption", () => new CopilotAdoptionPerfTest() },
-                { "activityapi", () => new ActivityAPIStressTest() },
-                { "activityapidb", () => new ActivityApiDbStressTest() },
-                { "powerplatform", () => new PowerPlatformStressTest() },
-                { "sentemail", () => new SentEmailImporterStressTest() },
-                { "useractivity", () => new UserActivityStressTest() },
-            };
-
-        /// <summary>
-        /// Runs a single stress test non-interactively (config via environment variables) and returns whether
-        /// it succeeded, so the host can set its process exit code. Used for scripted before/after perf runs.
-        /// </summary>
-        private static bool RunTestDirect(string name, RunContext ctx)
-        {
-            if (!DirectRunnableTests.TryGetValue(name.Trim(), out var factory))
-            {
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine($"Unknown --run test '{name}'. Known: {string.Join(", ", DirectRunnableTests.Keys)}");
-                Console.ResetColor();
-                return false;
-            }
-
-            var test = factory();
-            test.NonInteractive = true;
-            test.ConnectionString = ctx.ConnectionString;
-
-            try
-            {
-                if (test.RequiresDatabase)
-                {
-                    ctx.EnsureDbUpgraded();
-                }
-                test.Run();
-            }
-            catch (Exception ex)
-            {
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine($"\nERROR: {ex.Message}");
-                Console.WriteLine($"Stack Trace:\n{ex.StackTrace}");
-                Console.ResetColor();
-                return false;
-            }
-
-            return test.LastResult != null && test.LastResult.Success;
-        }
-
-        /// <summary>
-        /// Removes <paramref name="optionName"/> and its following value from <paramref name="argList"/> and
-        /// returns that value (null if the option is absent). Lets flags coexist with a space-containing
-        /// connection string passed as the remaining args.
-        /// </summary>
-        private static string TakeOptionValue(List<string> argList, string optionName)
-        {
-            int idx = argList.FindIndex(a => string.Equals(a, optionName, StringComparison.OrdinalIgnoreCase));
-            if (idx < 0)
-            {
-                return null;
-            }
-
-            string value = null;
-            if (idx + 1 < argList.Count)
-            {
-                value = argList[idx + 1];
-                argList.RemoveAt(idx + 1);
-            }
-            argList.RemoveAt(idx);
-            return value;
         }
 
         private static void RunCopilotActivityGenerator(string connectionString)
@@ -596,9 +417,7 @@ namespace Tests.FakeDataGen
 
         private enum MenuCategory
         {
-            DataGeneration,
-            LegacyGeneration,
-            StressTest
+            DataGeneration
         }
 
         private class MenuItem
@@ -627,10 +446,8 @@ namespace Tests.FakeDataGen
             }
 
             /// <summary>
-            /// Used by data generators that have nowhere to write without a connection string.
-            /// Also guarantees the database is on the latest schema before the caller starts
-            /// inserting rows, so consumers never see "missing column / table / proc" errors.
-            /// Throws a clear exception that is caught by the menu loop.
+            /// Used by legacy data generators that require an existing database connection.
+            /// Also guarantees the database is on the latest schema before inserting rows.
             /// </summary>
             public string RequireConnectionString()
             {
@@ -645,10 +462,8 @@ namespace Tests.FakeDataGen
 
             /// <summary>
             /// Runs <see cref="DatabaseUpgrader.CheckDbUpgraded"/> exactly once per process
-            /// against the configured connection string, so EF migrations + the custom SQL
-            /// scripts under <c>App.ControlPanel.Engine\SqlExtentions</c> (profiling schema,
-            /// stored procedures, etc.) are applied before any data generator or stress test
-            /// touches the database. No-op when no connection string was supplied.
+            /// against the configured connection string before a legacy generator touches the database.
+            /// No-op when no connection string was supplied.
             /// </summary>
             public void EnsureDbUpgraded()
             {
