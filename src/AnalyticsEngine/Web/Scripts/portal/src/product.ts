@@ -35,3 +35,27 @@ export function buildLabel(): string | null {
   if (!label || NOT_A_RELEASE.includes(label)) return null;
   return label;
 }
+
+/** What the footer says in place of a build number when the pipeline never stamped one. */
+export const DEVELOPMENT_BUILD_TEXT = 'development build';
+
+/**
+ * How the printed footer names the build, for the parenthesis after the product name -
+ * "Microsoft 365 Advanced Analytics (build 1836)".
+ *
+ * Always returns something. The footer used to drop the whole segment for an unstamped build, so a
+ * report printed from a developer's machine or an unreleased test deployment named no build at all
+ * and read, on paper, exactly like one printed from a release - which is the case where knowing the
+ * build matters most. Saying "development build" is the same admission, made out loud.
+ *
+ * The pipeline stamps "Build 1836" (`BuildLabel` in ci.yml), which is lower-cased here so it reads
+ * as part of the line rather than as a second title. A label in any other shape still gets the word
+ * "build" in front of it, so the parenthesis never leaves a bare number to be guessed at.
+ */
+export function printedBuildText(): string {
+  const label = buildLabel();
+  if (!label) return DEVELOPMENT_BUILD_TEXT;
+
+  const withoutPrefix = label.replace(/^build\b\s*/i, '').trim();
+  return withoutPrefix ? `build ${withoutPrefix}` : DEVELOPMENT_BUILD_TEXT;
+}

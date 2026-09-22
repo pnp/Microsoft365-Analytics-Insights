@@ -19,7 +19,7 @@ import { SignOut20Regular } from '@fluentui/react-icons';
 import { AppToaster } from './components/toast';
 import Spinner from './components/Spinner';
 import { AREAS, DEFAULT_PATH, ROUTES, areaForPath, groupedRoutesForArea } from './navigation';
-import { PRODUCT_NAME, REPOSITORY_URL, buildLabel } from './product';
+import { PRODUCT_NAME, REPOSITORY_URL, printedBuildText } from './product';
 
 const useStyles = makeStyles({
   header: {
@@ -118,7 +118,7 @@ export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
   const [navOpen, setNavOpen] = useState(true);
-  const build = buildLabel();
+  const build = printedBuildText();
 
   const currentArea = areaForPath(location.pathname);
   const navGroups = groupedRoutesForArea(currentArea);
@@ -238,9 +238,7 @@ export default function App() {
         <tfoot data-print="footer">
           <tr>
             <td>
-              {PRODUCT_NAME}
-              {build && ` \u00b7 ${build}`}
-              {' \u00b7 '}
+              {`${PRODUCT_NAME} (${build}) \u00b7 `}
               <a href={REPOSITORY_URL}>{REPOSITORY_URL}</a>
             </td>
           </tr>

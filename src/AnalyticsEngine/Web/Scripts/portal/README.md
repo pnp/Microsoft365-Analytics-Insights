@@ -106,13 +106,17 @@ auth cookie, so a token in the request body would be ignored.
 | _(none - origin-relative)_ | `api/WebActivity` | SharePoint web activity: source availability, and one endpoint per tab (`/overview`, `/visits`, `/pages`, `/journeys`, `/geography`, `/search`, `/technology`) plus `/export/{section}` CSVs. |
 
 `window.o365AnalyticsBuildLabel` is not an endpoint: it is the running build's label
-(`Common.Entities.BuildConstants.BuildLabel`), substituted into `index.html` by
-`HomeController.InjectBuildLabel` when it serves the page. The SPA prints it in the footer of a
-printed report, which has to exist *before* `window.print()` runs - so it cannot be fetched; and
-`api/SystemStatus`, which carries the same label elsewhere, `COUNT(*)`s whole tables and is far too
-expensive to call on every page just to name a version. `npm run dev` serves `index.html` straight
-from disk, so the placeholder survives; the SPA reads that, and `DEV_BUILD`, as "unknown build" and
-prints no version rather than a fake one.
+(`Common.Entities.BuildConstants.BuildLabel`, stamped as `Build <number>` by ci.yml), substituted
+into `index.html` by `HomeController.InjectBuildLabel` when it serves the page. The SPA prints it in
+the footer of a printed report, which has to exist *before* `window.print()` runs - so it cannot be
+fetched; and `api/SystemStatus`, which carries the same label elsewhere, `COUNT(*)`s whole tables
+and is far too expensive to call on every page just to name a version.
+
+The footer reads `Microsoft 365 Advanced Analytics (build 1836) · https://github.com/...`, and the
+parenthesis is never empty. `npm run dev` serves `index.html` straight from disk, so the placeholder
+survives; the SPA reads that, and `DEV_BUILD`, as an unstamped build and prints
+`(development build)`. It prints neither a fake version nor - as it once did - nothing at all, which
+made a report run off a developer's machine indistinguishable on paper from one off a release.
 
 ## Printing
 
