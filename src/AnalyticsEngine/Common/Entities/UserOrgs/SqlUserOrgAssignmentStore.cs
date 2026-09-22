@@ -226,6 +226,42 @@ ORDER BY t.name;";
             IReadOnlyCollection<string> upns,
             CancellationToken cancellationToken = default(CancellationToken))
         {
+            return await ProbeUpnsAsync(
+                "SELECT p.upn FROM #user_org_upn_probe p WHERE EXISTS (SELECT 1 FROM dbo.users u WHERE u.user_name = p.upn);",
+                null,
+                upns,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        public async Task<IReadOnlyCollection<string>> FindAssignedUpnsAsync(
+            int orgTypeId,
+            IReadOnlyCollection<string> upns,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            return await ProbeUpnsAsync(
+                @"SELECT p.upn
+                  FROM #user_org_upn_probe p
+                  JOIN dbo.users u ON u.user_name = p.upn
+                  JOIN dbo.user_org_assignments a ON a.user_id = u.id AND a.org_type_id = @orgTypeId;",
+                cmd => cmd.Parameters.Add("@orgTypeId", SqlDbType.Int).Value = orgTypeId,
+                upns,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Bulk-copies a set of UPNs into a temp table and runs a caller-supplied query against it.
+        /// </summary>
+        /// <remarks>
+        /// A table-valued batch rather than an IN clause: a full-file preflight carries every UPN in
+        /// the upload and SQL Server caps a statement at 2,100 parameters, so an IN clause would fail
+        /// on exactly the large file this is most useful for.
+        /// </remarks>
+        private async Task<IReadOnlyCollection<string>> ProbeUpnsAsync(
+            string sql,
+            Action<SqlCommand> addParameters,
+            IReadOnlyCollection<string> upns,
+            CancellationToken cancellationToken)
+        {
             var found = new List<string>();
             if (upns == null || upns.Count == 0)
             {
@@ -254,17 +290,25 @@ ORDER BY t.name;";
                 using (var bulkCopy = new SqlBulkCopy(connection))
                 {
                     bulkCopy.DestinationTableName = "#user_org_upn_probe";
+                    bulkCopy.BatchSize = 10000;
                     bulkCopy.BulkCopyTimeout = CommandTimeoutSeconds;
                     bulkCopy.ColumnMappings.Add("upn", "upn");
                     await bulkCopy.WriteToServerAsync(table, cancellationToken).ConfigureAwait(false);
                 }
 
-                using (var cmd = Command(connection, "SELECT p.upn FROM #user_org_upn_probe p WHERE EXISTS (SELECT 1 FROM dbo.users u WHERE u.user_name = p.upn);"))
-                using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+                using (var cmd = Command(connection, sql))
                 {
-                    while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    if (addParameters != null)
                     {
-                        found.Add(reader.GetString(0));
+                        addParameters(cmd);
+                    }
+
+                    using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                        {
+                            found.Add(reader.GetString(0));
+                        }
                     }
                 }
             }

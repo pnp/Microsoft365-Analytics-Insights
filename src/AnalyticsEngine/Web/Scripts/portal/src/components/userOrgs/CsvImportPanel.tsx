@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Badge,
   Button,
+  Checkbox,
   Field,
   MessageBar,
   MessageBarBody,
@@ -62,6 +63,10 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<UserOrgImportJob | null>(null);
 
+  // Re-armed whenever the file or the mode changes, so a confirmation can never carry over to a
+  // different file or a different blast radius.
+  const [confirmedClear, setConfirmedClear] = useState(false);
+
   const running = job !== null && (job.status === 'pending' || job.status === 'running');
 
   // Poll while the import is in flight. setTimeout-after-settle rather than setInterval: an interval
@@ -107,11 +112,12 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
     setPreview(null);
     setError(null);
     setJob(null);
+    setConfirmedClear(false);
     if (!chosen) return;
 
     setBusy(true);
     try {
-      setPreview(await previewCsv(chosen));
+      setPreview(await previewCsv(orgType.id, chosen));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'The file could not be read.');
     } finally {
@@ -185,7 +191,13 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
       {preview && !job && (
         <>
           <Field label="What should happen to users who are not in the file?">
-            <RadioGroup value={mode} onChange={(_e, d) => setMode(d.value as UserOrgImportMode)}>
+            <RadioGroup
+              value={mode}
+              onChange={(_e, d) => {
+                setMode(d.value as UserOrgImportMode);
+                setConfirmedClear(false);
+              }}
+            >
               <Radio value="merge" label="Merge - leave them exactly as they are" />
               <Radio
                 value="replace"
@@ -194,19 +206,44 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
             </RadioGroup>
           </Field>
 
-          {mode === 'replace' && orgType.assignedUserCount > 0 && (
+          {mode === 'replace' && preview.wouldClearCount > 0 && (
             <MessageBar intent="warning">
               <MessageBarBody>
-                <strong>This will clear values.</strong> {orgType.assignedUserCount.toLocaleString()} user
-                {orgType.assignedUserCount === 1 ? ' has' : 's have'} a {orgType.name} value today. Anyone
-                not given a value by this file will lose theirs.
+                <strong>
+                  This will clear {preview.wouldClearCount.toLocaleString()} user
+                  {preview.wouldClearCount === 1 ? "'s" : "s'"} {orgType.name} value.
+                </strong>{' '}
+                The file keeps {(preview.currentlyAssignedCount - preview.wouldClearCount).toLocaleString()} of the{' '}
+                {preview.currentlyAssignedCount.toLocaleString()} users who have one today. Anyone it does not
+                cover loses theirs.
+                {preview.unknownUpnCount > 0 && (
+                  <>
+                    {' '}
+                    {preview.unknownUpnCount.toLocaleString()} row
+                    {preview.unknownUpnCount === 1 ? '' : 's'} in the file match no user at all — if that is
+                    unexpected, check the file before continuing.
+                  </>
+                )}
+                <Checkbox
+                  checked={confirmedClear}
+                  onChange={(_e, d) => setConfirmedClear(d.checked === true)}
+                  label="I understand, clear the users this file does not cover"
+                />
               </MessageBarBody>
             </MessageBar>
           )}
 
           <div>
-            <Button appearance="primary" onClick={startImport} disabled={busy || preview.rows.length === 0}>
-              Import {preview.moreRowsExist ? 'the whole file' : `${preview.rows.length} row(s)`}
+            <Button
+              appearance="primary"
+              onClick={startImport}
+              disabled={
+                busy ||
+                preview.rows.length === 0 ||
+                (mode === 'replace' && preview.wouldClearCount > 0 && !confirmedClear)
+              }
+            >
+              Import {preview.totalRows.toLocaleString()} row{preview.totalRows === 1 ? '' : 's'}
             </Button>
           </div>
         </>

@@ -183,6 +183,34 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         /// <summary>Whether more rows exist beyond the sample shown.</summary>
         [JsonProperty("moreRowsExist")]
         public bool MoreRowsExist { get; set; }
+
+        /// <summary>Usable rows in the whole file, not just the sample.</summary>
+        [JsonProperty("totalRows")]
+        public int TotalRows { get; set; }
+
+        /// <summary>Rows in the whole file whose user principal name matches nobody.</summary>
+        [JsonProperty("unknownUpnCount")]
+        public int UnknownUpnCount { get; set; }
+
+        /// <summary>
+        /// How many users could lose their value if this file were imported with Replace.
+        /// </summary>
+        /// <remarks>
+        /// The number that actually matters before a destructive import, and it cannot be judged from a
+        /// ten-row sample. A complete, correctly formatted file that happens to cover half the tenant
+        /// is a successful wipe of the other half, and nothing about the first ten rows would hint at
+        /// it.
+        /// </remarks>
+        [JsonProperty("wouldClearCount")]
+        public int WouldClearCount { get; set; }
+
+        /// <summary>How many users hold a value for this org type today.</summary>
+        [JsonProperty("currentlyAssignedCount")]
+        public int CurrentlyAssignedCount { get; set; }
+
+        /// <summary>How many existing users the file gives a value to.</summary>
+        [JsonProperty("matchedUserCount")]
+        public int MatchedUserCount { get; set; }
     }
 
     public class UserOrgCsvPreviewRowModel

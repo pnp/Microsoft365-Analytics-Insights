@@ -97,6 +97,21 @@ namespace Common.Entities.UserOrgs
         Task<IReadOnlyCollection<string>> FindExistingUpnsAsync(
             IReadOnlyCollection<string> upns,
             CancellationToken cancellationToken = default(CancellationToken));
+
+        /// <summary>
+        /// The subset of <paramref name="upns"/> whose users <b>currently hold a value</b> for
+        /// <paramref name="orgTypeId"/>.
+        /// </summary>
+        /// <remarks>
+        /// Needed to answer "how many users would this Replace clear?" honestly. Counting the users a
+        /// file covers is not the same question: a file can cover a large population that is almost
+        /// entirely disjoint from the one currently assigned, and subtracting one from the other then
+        /// reports zero at precisely the moment the import is about to wipe everybody.
+        /// </remarks>
+        Task<IReadOnlyCollection<string>> FindAssignedUpnsAsync(
+            int orgTypeId,
+            IReadOnlyCollection<string> upns,
+            CancellationToken cancellationToken = default(CancellationToken));
     }
 
     /// <summary>

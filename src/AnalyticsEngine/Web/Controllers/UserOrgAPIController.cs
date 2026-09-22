@@ -159,7 +159,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// </summary>
         [HttpPost]
         [Route("preview-csv")]
-        public async Task<IHttpActionResult> PreviewCsv(CancellationToken cancellationToken)
+        public async Task<IHttpActionResult> PreviewCsv(int orgTypeId, CancellationToken cancellationToken)
         {
             var forged = RejectIfNotXhr();
             if (forged != null) return forged;
@@ -169,7 +169,8 @@ namespace Web.AnalyticsWeb.Controllers
 
             using (upload.File)
             {
-                return await RunAsync(svc => svc.PreviewAsync(upload.File.Content, upload.File.FileName, cancellationToken)).ConfigureAwait(false);
+                return await RunAsync(svc => svc.PreviewAsync(
+                    upload.File.Content, upload.File.FileName, orgTypeId, cancellationToken)).ConfigureAwait(false);
             }
         }
 

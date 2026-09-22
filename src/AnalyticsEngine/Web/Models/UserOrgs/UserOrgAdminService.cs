@@ -275,17 +275,21 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         #region CSV
 
         /// <summary>
-        /// Parses the first few rows of an upload and says which of them match a real user.
+        /// Parses an upload and reports both a readable sample and the blast radius of importing it.
         /// </summary>
         /// <remarks>
-        /// Persists nothing. The point is to let an admin see that (say) their export used the wrong
-        /// column or a stale UPN format <b>before</b> they run a Replace that would clear everybody.
+        /// The whole file is parsed and every user principal name in it resolved, not just the ten rows
+        /// shown. That is the point: a ten-row sample cannot tell an administrator that a complete,
+        /// correctly formatted export happens to cover only half the tenant - and with Replace, the
+        /// half it omits loses its values. Persists nothing.
         /// </remarks>
-        public async Task<UserOrgCsvPreviewModel> PreviewAsync(Stream content, string fileName, CancellationToken cancellationToken)
+        public async Task<UserOrgCsvPreviewModel> PreviewAsync(
+            Stream content,
+            string fileName,
+            int orgTypeId,
+            CancellationToken cancellationToken)
         {
-            // Read one more than shown so "there are more rows" is known without reading a 200,000-row
-            // file into memory just to preview ten of them.
-            var parsed = UserOrgCsvParser.Parse(content, PreviewRowCount + 1);
+            var parsed = UserOrgCsvParser.Parse(content);
 
             var preview = new UserOrgCsvPreviewModel
             {
@@ -294,15 +298,73 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 HeaderDetected = parsed.HeaderDetected,
                 UpnColumnName = parsed.UpnColumnName,
                 OrgColumnName = parsed.OrgColumnName,
-                MoreRowsExist = parsed.Rows.Count > PreviewRowCount || parsed.Truncated,
+                MoreRowsExist = parsed.Rows.Count > PreviewRowCount,
+                TotalRows = parsed.Rows.Count,
             };
 
-            var shown = parsed.Rows.Take(PreviewRowCount).ToList();
+            if (parsed.UnterminatedQuote)
+            {
+                preview.Problems = new List<UserOrgCsvProblemModel>
+                {
+                    new UserOrgCsvProblemModel
+                    {
+                        LineNumber = 0,
+                        Reason = "the file has a quotation mark that is never closed, so it cannot be read as rows",
+                    },
+                };
+                preview.Rows = new List<UserOrgCsvPreviewRowModel>();
+                return preview;
+            }
+
             var existing = await _users
-                .FindExistingUpnsAsync(shown.Select(r => r.Upn).ToList(), cancellationToken)
+                .FindExistingUpnsAsync(parsed.Rows.Select(r => r.Upn).ToList(), cancellationToken)
                 .ConfigureAwait(false);
             var existingSet = new HashSet<string>(existing, StringComparer.OrdinalIgnoreCase);
 
+            var matchedWithValue = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var unknown = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var row in parsed.Rows)
+            {
+                if (!existingSet.Contains(row.Upn))
+                {
+                    unknown.Add(row.Upn);
+                }
+                else if (row.OrgValue != null)
+                {
+                    matchedWithValue.Add(row.Upn);
+                }
+                else
+                {
+                    // A later blank line for the same person is a deliberate clear, so they stop
+                    // counting as "kept".
+                    matchedWithValue.Remove(row.Upn);
+                }
+            }
+
+            preview.UnknownUpnCount = unknown.Count;
+
+            var summaries = await _types.GetSummariesAsync(cancellationToken).ConfigureAwait(false);
+            var summary = summaries.FirstOrDefault(s => s.Type != null && s.Type.Id == orgTypeId);
+            preview.CurrentlyAssignedCount = summary == null ? 0 : summary.AssignedUserCount;
+
+            // The users this file keeps: currently assigned AND given a value by the file. Counting the
+            // users the file covers is a different question and gives the wrong answer exactly when it
+            // matters - a file covering a large population that barely overlaps the assigned one would
+            // subtract to zero and suppress the warning at the moment it is about to wipe everybody.
+            var keptCount = 0;
+            if (matchedWithValue.Count > 0 && preview.CurrentlyAssignedCount > 0)
+            {
+                var kept = await _users
+                    .FindAssignedUpnsAsync(orgTypeId, matchedWithValue.ToList(), cancellationToken)
+                    .ConfigureAwait(false);
+                keptCount = kept.Count;
+            }
+
+            preview.WouldClearCount = Math.Max(0, preview.CurrentlyAssignedCount - keptCount);
+            preview.MatchedUserCount = matchedWithValue.Count;
+
+            var shown = parsed.Rows.Take(PreviewRowCount).ToList();
             preview.Rows = shown.Select(r => new UserOrgCsvPreviewRowModel
             {
                 LineNumber = r.LineNumber,

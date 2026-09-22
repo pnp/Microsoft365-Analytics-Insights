@@ -192,15 +192,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 return await LoadUsersPageByPage(_orgSelection).ConfigureAwait(false);
             }
-            catch (GraphHttpException ex) when (!_orgSelection.IsEmpty)
+            catch (GraphHttpException ex)
             {
-                if (_lastLoadUsedStoredToken)
+                if (_lastLoadUsedStoredToken && IsTokenRejection(ex))
                 {
+                    // Graph will not accept the stored token: expired, or minted for a different query.
+                    // Discard it and re-read everything under the SAME selection.
+                    //
+                    // Without this the token is never cleared, so every later cycle sends it, gets the
+                    // same rejection, and the import quietly does nothing - permanently. That is
+                    // reachable simply by turning the last organisation type off, which snaps the cache
+                    // key back to one that has not been written since before the feature was enabled.
                     _logger.LogWarning(
-                        $"User import - Microsoft Graph rejected the request (HTTP {(int)ex.StatusCode}) while a stored "
-                        + "delta token was in use. Discarding the token and re-reading every user once, keeping the "
-                        + "configured organisation attributes. If the attributes themselves are the problem, the retry "
-                        + "will say so.");
+                        $"User import - Microsoft Graph rejected the stored delta token (HTTP {(int)ex.StatusCode}). "
+                        + "Discarding it and re-reading every user once. This cycle will take longer than usual.");
 
                     await _deltaValueProvider.ClearDeltaToken().ConfigureAwait(false);
 
@@ -208,14 +213,42 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     {
                         return await LoadUsersPageByPage(_orgSelection).ConfigureAwait(false);
                     }
-                    catch (GraphHttpException retryEx)
+                    catch (GraphHttpException retryEx) when (!_orgSelection.IsEmpty)
                     {
+                        // Rejected again with no token in play, so the selection is what is left.
                         return await FallBackWithoutOrgAttributes(retryEx).ConfigureAwait(false);
                     }
                 }
 
-                return await FallBackWithoutOrgAttributes(ex).ConfigureAwait(false);
+                if (!_orgSelection.IsEmpty)
+                {
+                    return await FallBackWithoutOrgAttributes(ex).ConfigureAwait(false);
+                }
+
+                // No organisation attributes, and not a token Graph refused: a transient failure with
+                // nothing to fall back to. Returning an empty result is precisely what this method did
+                // before this feature existed - no delta link was reached, so no token is committed and
+                // the next cycle simply tries again.
+                _logger.LogWarning(
+                    $"User import - reading users from Graph failed with HTTP {(int)ex.StatusCode}. No delta token "
+                    + "will be committed, so the next cycle retries.");
+                return new List<GraphUser>();
             }
+        }
+
+        /// <summary>
+        /// Whether Graph is refusing the delta token itself rather than failing for another reason.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately narrow. Discarding the token costs a full re-enumeration of the tenant, which on
+        /// a 200,000-user tenant is expensive, so a transient 503 or an exhausted throttle budget must
+        /// not trigger it. Graph answers a token it will not accept with 400 (commonly
+        /// <c>resyncRequired</c>) or 410 Gone.
+        /// </remarks>
+        private static bool IsTokenRejection(GraphHttpException ex)
+        {
+            return ex.StatusCode == System.Net.HttpStatusCode.BadRequest
+                || ex.StatusCode == System.Net.HttpStatusCode.Gone;
         }
 
         /// <summary>
@@ -287,15 +320,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     _hasPendingDeltaToken = true;
                     return Task.CompletedTask;
                 },
-                // Strict ONLY while org attributes are in play. LoadAllPagesPlusDeltaWithThrottleRetries
-                // otherwise swallows a non-transient HTTP failure, logs a warning and returns the rows
-                // gathered so far - so a 400 from an unrecognised $select property would come back as an
-                // empty user list rather than an exception, the fallback above would never run, and the
-                // import would quietly do nothing every cycle with only a warning to show for it.
+                // Strict when the answer can be acted on: with org attributes in play (so the fallback
+                // can drop them) or with a stored token (so a token Graph refuses can be discarded).
+                // LoadAllPagesPlusDeltaWithThrottleRetries otherwise swallows a non-transient HTTP
+                // failure, logs a warning and returns the rows gathered so far - so a 400 came back as
+                // an empty user list, nothing could react to it, and the import quietly did nothing
+                // every cycle. A token Graph has rejected is never retried out of that state.
                 //
-                // Left lenient when there are no org attributes, which is the behaviour every existing
-                // deployment has today: this code path must not change for them.
-                throwOnHttpError: !orgSelection.IsEmpty);
+                // Left lenient for the one case with no recourse - no org attributes and no token -
+                // which is the behaviour every existing deployment has today.
+                throwOnHttpError: !orgSelection.IsEmpty || _lastLoadUsedStoredToken);
 
             if (string.IsNullOrEmpty(usersQueryDelta))
             {

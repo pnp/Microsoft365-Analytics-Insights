@@ -729,6 +729,65 @@ DELETE FROM dbo.users;");
         }
 
         [TestMethod]
+        public async Task FindAssignedUpns_ReportsOnlyUsersWhoHoldAValueForThatType()
+        {
+            // The Replace preflight depends on this. Counting the users a file COVERS instead gives the
+            // wrong answer precisely when it matters: a file covering a large population that barely
+            // overlaps the assigned one would subtract to zero and suppress the warning at the moment
+            // it is about to wipe everybody.
+            var assigned = AddUser("assigned@contoso.com");
+            AddUser("exists-but-unassigned@contoso.com");
+            var otherType = AddUser("other-type@contoso.com");
+
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var second = await _types.CreateAsync(CsvType("Other"));
+
+            await _assignments.MergeAsync(new[]
+            {
+                new UserOrgAssignmentUpdate(assigned, typeId, "Retail"),
+                new UserOrgAssignmentUpdate(otherType, second, "Elsewhere"),
+            });
+
+            var lookup = UserOrgStores.CreateUserLookup(_db.ConnectionString);
+
+            var found = await lookup.FindAssignedUpnsAsync(typeId, new[]
+            {
+                "assigned@contoso.com",
+                "exists-but-unassigned@contoso.com",
+                "other-type@contoso.com",
+                "ghost@contoso.com",
+            });
+
+            CollectionAssert.AreEqual(
+                new[] { "assigned@contoso.com" },
+                found.ToArray(),
+                "Only a user who holds a value for THIS org type counts as kept.");
+        }
+
+        [TestMethod]
+        public async Task FindAssignedUpns_MatchesCaseInsensitively()
+        {
+            var userId = AddUser("Person@Contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(userId, typeId, "Retail") });
+
+            var lookup = UserOrgStores.CreateUserLookup(_db.ConnectionString);
+            var found = await lookup.FindAssignedUpnsAsync(typeId, new[] { "person@contoso.com" });
+
+            Assert.AreEqual(1, found.Count);
+        }
+
+        [TestMethod]
+        public async Task FindAssignedUpns_HandlesAnEmptyRequest()
+        {
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var lookup = UserOrgStores.CreateUserLookup(_db.ConnectionString);
+
+            Assert.AreEqual(0, (await lookup.FindAssignedUpnsAsync(typeId, new string[0])).Count);
+            Assert.AreEqual(0, (await lookup.FindAssignedUpnsAsync(typeId, null)).Count);
+        }
+
+        [TestMethod]
         public async Task QueueingASecondJobForTheSameTypeIsRefusedAtomically()
         {
             // The check and the insert happen in one transaction holding a range lock, because the

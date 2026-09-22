@@ -95,9 +95,9 @@ function fileBody(file: File): RequestInit {
   return { method: 'POST', headers: { Accept: 'application/json' }, body: form };
 }
 
-/** Parses the first rows of a file. Persists nothing. */
-export function previewCsv(file: File): Promise<UserOrgCsvPreview> {
-  return send<UserOrgCsvPreview>(`${baseUrl()}/preview-csv`, fileBody(file));
+/** Parses the whole file and reports the blast radius of importing it. Persists nothing. */
+export function previewCsv(orgTypeId: number, file: File): Promise<UserOrgCsvPreview> {
+  return send<UserOrgCsvPreview>(`${baseUrl()}/preview-csv?orgTypeId=${orgTypeId}`, fileBody(file));
 }
 
 /** Stages a file and queues the background import. */

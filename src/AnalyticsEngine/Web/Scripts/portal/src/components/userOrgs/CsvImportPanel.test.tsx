@@ -45,6 +45,11 @@ function preview(over: Partial<UserOrgCsvPreview> = {}): UserOrgCsvPreview {
     ],
     problems: [],
     moreRowsExist: false,
+    totalRows: 3,
+    unknownUpnCount: 1,
+    wouldClearCount: 0,
+    currentlyAssignedCount: 1200,
+    matchedUserCount: 1,
     ...over,
   };
 }
@@ -118,18 +123,63 @@ describe('CsvImportPanel', () => {
   });
 
   it('defaults to merge and only warns about clearing when replace is chosen', async () => {
-    previewCsv.mockResolvedValue(preview());
+    previewCsv.mockResolvedValue(preview({ wouldClearCount: 1199 }));
     renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
 
     await chooseFile();
     await waitFor(() => expect(screen.getByLabelText(/Merge/)).toBeChecked());
-    expect(screen.queryByText(/This will clear values/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/This will clear/i)).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByLabelText(/Replace/));
 
-    // Quantified, not abstract: the admin is told how many people are about to be affected.
-    expect(screen.getByText(/This will clear values/i)).toBeInTheDocument();
-    expect(screen.getByText(/1,200 user/)).toBeInTheDocument();
+    // Quantified from the whole file, not from the ten-row sample: the number that matters is how
+    // many people lose their value, and a sample cannot reveal it.
+    expect(screen.getByText(/This will clear/i)).toBeInTheDocument();
+    expect(screen.getByText(/1,199 users'/)).toBeInTheDocument();
+  });
+
+  it('blocks a destructive replace until it is explicitly confirmed', async () => {
+    previewCsv.mockResolvedValue(preview({ wouldClearCount: 1199 }));
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+
+    await chooseFile();
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Import/ })).toBeEnabled());
+    await userEvent.click(screen.getByLabelText(/Replace/));
+
+    expect(screen.getByRole('button', { name: /^Import/ })).toBeDisabled();
+
+    await userEvent.click(screen.getByLabelText(/I understand/));
+
+    expect(screen.getByRole('button', { name: /^Import/ })).toBeEnabled();
+  });
+
+  it('re-arms the confirmation when the mode changes back and forth', async () => {
+    // A confirmation must never carry over to a different blast radius.
+    previewCsv.mockResolvedValue(preview({ wouldClearCount: 1199 }));
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+
+    await chooseFile();
+    await waitFor(() => expect(screen.getByLabelText(/Replace/)).toBeInTheDocument());
+    await userEvent.click(screen.getByLabelText(/Replace/));
+    await userEvent.click(screen.getByLabelText(/I understand/));
+    expect(screen.getByRole('button', { name: /^Import/ })).toBeEnabled();
+
+    await userEvent.click(screen.getByLabelText(/Merge/));
+    await userEvent.click(screen.getByLabelText(/Replace/));
+
+    expect(screen.getByRole('button', { name: /^Import/ })).toBeDisabled();
+  });
+
+  it('does not demand confirmation when a replace would clear nobody', async () => {
+    previewCsv.mockResolvedValue(preview({ wouldClearCount: 0 }));
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+
+    await chooseFile();
+    await waitFor(() => expect(screen.getByLabelText(/Replace/)).toBeInTheDocument());
+    await userEvent.click(screen.getByLabelText(/Replace/));
+
+    expect(screen.queryByText(/This will clear/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Import/ })).toBeEnabled();
   });
 
   it('reports unusable rows without blocking the import', async () => {

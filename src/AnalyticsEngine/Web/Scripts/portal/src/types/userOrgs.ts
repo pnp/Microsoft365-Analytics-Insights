@@ -94,6 +94,19 @@ export interface UserOrgCsvPreview {
   rows: UserOrgCsvPreviewRow[];
   problems: UserOrgCsvProblem[];
   moreRowsExist: boolean;
+  /** Usable rows in the whole file, not just the sample. */
+  totalRows: number;
+  /** Rows in the whole file whose UPN matches nobody. */
+  unknownUpnCount: number;
+  /**
+   * How many users could lose their value if this file were imported with Replace. The number that
+   * actually matters before a destructive import, and one a ten-row sample cannot reveal.
+   */
+  wouldClearCount: number;
+  /** How many users hold a value for this org type today. */
+  currentlyAssignedCount: number;
+  /** How many existing users the file gives a value to. */
+  matchedUserCount: number;
 }
 
 export interface UserOrgImportQueued {
