@@ -7,12 +7,20 @@
 
 import { formatDateParts, formatNumber, type TFunction } from '../../i18n';
 import type { LicenceActivitySku } from '../../types/licenceActivity';
+import { translateActive } from '../../i18n/runtime';
 
-/** A licence name can be absent in storage; use an actual identifier rather than invent a product. */
+/**
+ * A licence name can be absent in storage; use an actual identifier rather than invent a product.
+ *
+ * The first two branches return tenant data verbatim - a real SKU name or SKU id, which is the
+ * same string in every language. Only the last is the product's own wording, so only the last is
+ * translated. It resolves through `translateActive` rather than a hook because this is a plain
+ * function used from sort comparators and filters as well as from JSX.
+ */
 export function licenceName(sku: LicenceActivitySku): string {
   if (sku.name?.trim()) return sku.name;
   if (sku.skuId?.trim()) return sku.skuId;
-  return `Licence ${sku.licenceTypeId}`;
+  return translateActive('licenceActivity.licenceFallbackName', { id: sku.licenceTypeId });
 }
 
 /** An em dash, for an unknown value in a dense table cell where the word "Unknown" is too heavy. */
@@ -31,10 +39,16 @@ export function formatMaybeCount(value: number | null | undefined, unknown: stri
   return value == null ? unknown : formatCount(value);
 }
 
-/** A percentage to one decimal place, dropping a trailing ".0" (e.g. 12 -> "12%", 12.34 -> "12.3%"). */
+/**
+ * A percentage to one decimal place, dropping a trailing ".0" (e.g. 12 -> "12%", 12.34 -> "12.3%").
+ *
+ * The digits go through `formatNumber`, so a Spanish reader gets "12,3 %" rather than "12.3%".
+ * `toFixed` would always produce a full stop, which in Spanish is the thousands separator.
+ */
 export function formatPct(value: number): string {
   const rounded = Math.round(value * 10) / 10;
-  return `${rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1)}%`;
+  const digits = rounded % 1 === 0 ? 0 : 1;
+  return `${formatNumber(rounded, { minimumFractionDigits: digits, maximumFractionDigits: digits })}%`;
 }
 
 /**

@@ -9,9 +9,8 @@ import type { reports as en } from '../en/reports';
 const reports: Record<keyof typeof en, string> = {
   // Encabezado e introducción de página
   'reports.title': 'Informes',
-  'reports.intro.beforeLicenceActivity': 'Vista rápida e integrada de la tendencia de uso de Microsoft 365. Los gráficos de informes solo aparecen cuando se están importando sus datos. Para asignaciones de licencias y actividad, abra',
+  'reports.intro.licenceActivity': 'Vista rápida e integrada de la tendencia de uso de Microsoft 365. Los gráficos de informes solo aparecen cuando se están importando sus datos. Abra {link} en la navegación de Insights para ver las asignaciones de licencias y la actividad.',
   'reports.intro.licenceActivityLink': 'Actividad de licencias',
-  'reports.intro.afterLicenceActivity': 'en la navegación de Insights.',
   'reports.empty.noImports': 'Aún no hay gráficos de informes integrados disponibles porque no hay importaciones de datos habilitadas. Habilite una o varias importaciones (Copilot, informes de uso, actividad de SharePoint, tráfico del sitio web, llamadas de Teams o correos electrónicos) en el instalador para verlos.',
   'reports.loading.reports': 'Cargando informes...',
   'reports.error.loadAreas': 'No se han podido cargar las áreas de informes.',
@@ -52,7 +51,7 @@ const reports: Record<keyof typeof en, string> = {
   'reports.error.loadReport': 'No se ha podido cargar el informe.',
   'reports.areaHeader.usageLag': '{blurb} Semanas desde {from}. Los informes de uso llegan con unos días de retraso, por lo que las semanas más recientes aparecen cuando llega su informe.',
   'reports.areaHeader.toNow': '{blurb} Semanas desde {from} hasta ahora.',
-  'reports.callsInfo.beforeTeamsExplorer': 'Este es solo el volumen principal de llamadas. Para ver el tamaño y la duración de las reuniones, los patrones por hora del día, las modalidades, la concentración por organizador y la calidad de las llamadas, consulte',
+  'reports.callsInfo.teamsExplorer': 'Este es solo el volumen principal de llamadas. Consulte {link} para ver el tamaño y la duración de las reuniones, los patrones por hora del día, las modalidades, la concentración por organizador y la calidad de las llamadas.',
   'reports.callsInfo.teamsExplorerLink': 'Explorador de Teams',
   'reports.clampedWindow': 'Se muestran los últimos {current} meses en lugar de {selected}. Este informe lee un registro por persona y día, por lo que no se puede generar una ventana más larga a tiempo en un inquilino grande.',
   'reports.promptInsights.notConfigured': 'Los datos de solicitudes (frases comunes, sentimiento semanal e idioma de las solicitudes) no se muestran porque Azure AI Language no está configurado. Esos tres gráficos se crean a partir del enriquecimiento cognitivo del historial de solicitudes de Copilot, así que sin él siempre estarían vacíos. Añada un punto de conexión y una clave de Cognitive Services en el instalador y vuelva a ejecutar la importación del historial de interacciones de Copilot para habilitarlos.',

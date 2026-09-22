@@ -257,7 +257,7 @@ export default function UsersTable({
             <th className={table.th}>
               <Tooltip relationship="description" content={t(BAND_METHOD_KEY)}>
                 <span style={{ borderBottom: `1px dotted ${tokens.colorNeutralForeground4}`, cursor: 'help' }}>
-                  {workloadLabel} activity
+                  {t('licenceActivity.users.workloadActivity', { workload: workloadLabel })}
                 </span>
               </Tooltip>
             </th>

@@ -69,7 +69,7 @@ export function sentimentLamp(value: number): Lamp {
  */
 export function formatSentiment(value: number | null | undefined, t?: TFunction): string {
   if (value === null || value === undefined) return '\u2014';
-  return `${value.toFixed(2)} (${(t ?? translateActive)(SENTIMENT_LABEL_KEYS[sentimentLabel(value)])})`;
+  return `${formatNumber(value, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${(t ?? translateActive)(SENTIMENT_LABEL_KEYS[sentimentLabel(value)])})`;
 }
 
 /** Explains the sentiment scale wherever it is shown. */

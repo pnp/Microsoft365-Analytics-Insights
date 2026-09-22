@@ -4,7 +4,9 @@
  * Every key here must have a Spanish counterpart in `../es/licenceActivity.ts`; the type of that module
  * makes a missing one a build failure.
  */
-export const licenceActivity = {
+export const licenceActivity = {
+  'licenceActivity.users.workloadActivity': '{workload} activity',
+  'licenceActivity.licenceFallbackName': 'Licence {id}',
   // Shared vocabulary
   'licenceActivity.common.unknown': 'Unknown',
   'licenceActivity.common.notMeasured': 'Not measured',

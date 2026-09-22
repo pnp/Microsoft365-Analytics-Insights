@@ -22,6 +22,7 @@ import { setActiveLanguage } from './runtime';
 import {
   catalogFailed,
   catalogFor,
+  clearCatalogFailure,
   EN_CATALOG,
   isCatalogLoaded,
   loadCatalog,
@@ -88,6 +89,8 @@ export function I18nProvider({
   );
   // Bumped when a catalog fetch settles, to re-render with text that was not available before.
   const [catalogRevision, setCatalogRevision] = useState(0);
+  // Bumped by every explicit language choice, so re-picking a language that failed retries it.
+  const [attempt, setAttempt] = useState(0);
 
   /**
    * The language actually in use.
@@ -123,23 +126,39 @@ export function I18nProvider({
     }
   }, [language]);
 
+  /**
+   * Fetch the catalog for the language the reader asked for.
+   *
+   * Keyed on `requested`, deliberately, not on the effective `language`. After a failed fetch the
+   * effective language is English, whose catalog is always loaded - so keying on it would mean the
+   * effect never ran again and the reader could never get back to the language they wanted. The
+   * `attempt` counter is what lets re-picking the same language retry: `setRequestedLanguage` with
+   * an unchanged value bails out of rendering entirely.
+   */
   useEffect(() => {
-    if (isCatalogLoaded(language)) return;
+    if (isCatalogLoaded(requested)) return;
     let cancelled = false;
-    void loadCatalog(language).then(() => {
+    // Resolves rather than rejects on failure, so this fires either way - which is what flips the
+    // effective language to English when the fetch could not be made.
+    void loadCatalog(requested).then(() => {
       if (!cancelled) setCatalogRevision((revision) => revision + 1);
     });
     return () => {
       cancelled = true;
     };
-  }, [language]);
+  }, [requested, attempt]);
 
   const setLanguage = useCallback((next: Language) => {
-    // State first: storage can throw on a browser with site data blocked (the property getter
-    // itself does), and a language change must not be lost to a failed attempt to remember it.
+    // Choosing a language from the menu is an explicit "try again" for one that failed before.
+    clearCatalogFailure(next);
     setRequestedLanguage(next);
-    setActiveLanguage(next);
+    setAttempt((value) => value + 1);
+    // Storage last, and its failure is swallowed: on a browser with site data blocked, reading or
+    // writing localStorage throws, and a language change must not be lost to that.
     storeLanguage(browserStorage(), next);
+    // Deliberately no imperative setActiveLanguage() here. The render triggered above sets it from
+    // the *effective* language, so a language whose catalog is not loaded cannot leave the
+    // formatters in one language while the text is in another.
   }, []);
 
   const value = useMemo<I18nContextValue>(() => {

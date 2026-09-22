@@ -81,9 +81,12 @@ export {
   EN_CATALOG,
   EN_MODULES,
   CATALOG_MODULE_NAMES,
+  catalogFailed,
   catalogFor,
+  clearCatalogFailure,
   isCatalogLoaded,
   loadCatalog,
+  markCatalogFailed,
   resetLoadedCatalogs,
   type TranslationKey,
 } from './catalog';

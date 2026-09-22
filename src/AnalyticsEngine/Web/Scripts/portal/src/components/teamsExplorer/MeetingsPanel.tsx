@@ -19,7 +19,7 @@ import DonutChart from '../charts/DonutChart';
 import HeatmapChart from '../charts/HeatmapChart';
 import { seriesColor } from '../charts/chartCommon';
 import type { TeamsMeetings } from '../../types/teamsExplorer';
-import { useT } from '../../i18n';
+import { useT, useTNode } from '../../i18n';
 import {
   SectionCard,
   WindowNote,
@@ -60,6 +60,7 @@ export default function MeetingsPanel({
   const styles = useStyles();
   const shared = useTeamsStyles();
   const t = useT();
+  const tNode = useTNode();
   const { kpis, quality } = data;
 
   const workingHours = t('teamsExplorer.meetings.workingHoursUtc', {
@@ -181,9 +182,9 @@ export default function MeetingsPanel({
       <div>
         <MessageBar intent="warning">
           <MessageBarBody>
-            {t('teamsExplorer.meetings.callsImportOff.beforePermission')}{' '}
-            <strong>{CALL_RECORDS_READ_ALL}</strong>{' '}
-            {t('teamsExplorer.meetings.callsImportOff.afterPermission')}
+            {tNode('teamsExplorer.meetings.callsImportOff.permission', {
+              permission: <strong>{CALL_RECORDS_READ_ALL}</strong>,
+            })}
           </MessageBarBody>
         </MessageBar>
       </div>

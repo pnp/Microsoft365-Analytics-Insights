@@ -172,6 +172,34 @@ const NOT_PROSE = [
  */
 export function looksLikeText(raw: string): boolean {
   const value = raw.trim();
+  if (!isPossiblyText(value)) return false;
+
+  // A lone identifier in camelCase, kebab-case or snake_case: a prop value, key or css token.
+  // Applied only here, not in `looksLikeUserFacingText`: this predicate is used by the catch-all
+  // rule, which sees every literal in the file and would otherwise be unusable.
+  if (/^[a-z][a-zA-Z0-9]*$/.test(value)) return false;
+  if (/^[a-z0-9]+(?:[-_][a-z0-9]+)+$/.test(value)) return false;
+
+  return true;
+}
+
+/**
+ * The same question, asked where the AST has already proved the string is shown to a reader -
+ * a JSX child, a prop that is rendered, a value interpolated into a translated sentence.
+ *
+ * Deliberately stricter than `looksLikeText`, by dropping its identifier exclusions. Those exist
+ * so the catch-all rule can look at every literal in a file without drowning in prop values and
+ * CSS tokens; once the position is known to be text, they only hide real defects. `activity`,
+ * `interactions` and `analysed` are ordinary English words that happen to be lower-case, and all
+ * three were live in this portal - rendered beside a translated label, or interpolated into a
+ * Spanish sentence.
+ */
+export function looksLikeUserFacingText(raw: string): boolean {
+  return isPossiblyText(raw.trim());
+}
+
+/** The checks both predicates share: it has letters, and is not a URL, colour or CSS length. */
+function isPossiblyText(value: string): boolean {
   if (value.length < 2) return false;
   if (!HAS_WORD.test(value)) return false;
   if (CATALOG_KEYS.has(value)) return false;
@@ -179,9 +207,6 @@ export function looksLikeText(raw: string): boolean {
 
   // Module specifiers, URLs, routes, data URIs and CSS/asset paths.
   if (/^(?:https?:|mailto:|data:|\/|\.{1,2}\/|#\/)/.test(value)) return false;
-  // A lone identifier in camelCase, kebab-case or snake_case: a prop value, key or css token.
-  if (/^[a-z][a-zA-Z0-9]*$/.test(value)) return false;
-  if (/^[a-z0-9]+(?:[-_][a-z0-9]+)+$/.test(value)) return false;
   // A CSS dimension, colour or font stack.
   if (/^[\d.]+(?:px|%|em|rem|vh|vw|fr|s|ms)$/.test(value)) return false;
   if (/^#[0-9a-fA-F]{3,8}$/.test(value)) return false;
@@ -329,33 +354,51 @@ export function findHardcodedStrings(sourceText: string, fileName: string): Find
   const visit = (node: ts.Node): void => {
     // 1. Text written directly between JSX tags.
     if (ts.isJsxText(node)) {
-      if (looksLikeText(node.text)) report(node, 'jsx-text', node.text);
+      if (looksLikeUserFacingText(node.text)) report(node, 'jsx-text', node.text);
       return;
     }
 
-    // 2. A user-facing attribute given a literal.
+    // 2. A user-facing attribute given text.
+    //
+    // The whole expression is walked, not just a bare literal or template. Text reaches these
+    // props in more shapes than that: `axes={['Frequency', 'Depth', 'Breadth']}` renders three
+    // words on a chart, `aria-label={'Hide warnings'}` is a braced literal, and a ternary picks
+    // between two of them. Inspecting only the direct initializer missed all three.
     if (ts.isJsxAttribute(node)) {
       const name = attributeName(node);
       const initializer = node.initializer;
       if (initializer && USER_FACING_ATTRIBUTES.has(name)) {
-        if (ts.isStringLiteral(initializer) && looksLikeText(initializer.text)) {
-          report(initializer, 'jsx-attribute', initializer.text, name);
-        } else if (
-          ts.isJsxExpression(initializer) &&
-          initializer.expression &&
-          ts.isTemplateLiteral(initializer.expression) &&
-          !isTranslationKeyArgument(initializer.expression) &&
-          looksLikeText(templateText(initializer.expression))
-        ) {
-          report(
-            initializer.expression,
-            'jsx-attribute',
-            templateText(initializer.expression),
-            name,
-          );
+        if (ts.isStringLiteral(initializer)) {
+          if (looksLikeUserFacingText(initializer.text)) {
+            report(initializer, 'jsx-attribute', initializer.text, name);
+          }
+        } else if (ts.isJsxExpression(initializer) && initializer.expression) {
+          const walk = (expression: ts.Node): void => {
+            if (isTranslationKeyArgument(expression)) return;
+            // Nested JSX has its own rules - descending into it would report an enum value such
+            // as `appearance="filled"` on a Badge inside a `header={...}` slot.
+            if (
+              ts.isJsxElement(expression) ||
+              ts.isJsxSelfClosingElement(expression) ||
+              ts.isJsxFragment(expression)
+            ) {
+              return;
+            }
+            if (ts.isStringLiteral(expression) && looksLikeUserFacingText(expression.text)) {
+              report(expression, 'jsx-attribute', expression.text, name);
+              return;
+            }
+            if (ts.isTemplateLiteral(expression)) {
+              const text = templateText(expression);
+              if (looksLikeUserFacingText(text)) report(expression, 'jsx-attribute', text, name);
+              // Still descend: a template's holes can contain literals of their own.
+            }
+            ts.forEachChild(expression, walk);
+          };
+          walk(initializer.expression);
         }
       }
-      // Fall through, so an expression attribute's own subtree is still walked.
+      // Fall through, so an expression attribute's own subtree is still walked by later rules.
     }
 
     // 3. A literal rendered through an expression container: {'Yes'} or {`${n} users`}.
@@ -373,21 +416,24 @@ export function findHardcodedStrings(sourceText: string, fileName: string): Find
       const name = propertyName(node);
       const value = node.initializer;
       if (name && USER_FACING_PROPERTIES.has(name) && !isTranslationKeyArgument(value)) {
-        if (ts.isStringLiteral(value) && looksLikeText(value.text)) {
+        if (ts.isStringLiteral(value) && looksLikeUserFacingText(value.text)) {
           report(value, 'object-property', value.text, name);
-        } else if (ts.isTemplateLiteral(value) && looksLikeText(templateText(value))) {
+        } else if (ts.isTemplateLiteral(value) && looksLikeUserFacingText(templateText(value))) {
           report(value, 'object-property', templateText(value), name);
         }
       }
     }
 
     // 5. A toast, which is text with no JSX anywhere near it.
+    //
+    // Only the first argument: the second is a Fluent `ToastIntent` enum ('success', 'error'),
+    // which is machinery and not text.
     if (ts.isCallExpression(node) && NOTIFICATION_CALLEES.has(calleeName(node))) {
-      for (const argument of node.arguments) {
-        if (isTranslationKeyArgument(argument)) continue;
-        if (ts.isStringLiteral(argument) && looksLikeText(argument.text)) {
+      const argument = node.arguments[0];
+      if (argument && !isTranslationKeyArgument(argument)) {
+        if (ts.isStringLiteral(argument) && looksLikeUserFacingText(argument.text)) {
           report(argument, 'notification', argument.text, calleeName(node));
-        } else if (ts.isTemplateLiteral(argument) && looksLikeText(templateText(argument))) {
+        } else if (ts.isTemplateLiteral(argument) && looksLikeUserFacingText(templateText(argument))) {
           report(argument, 'notification', templateText(argument), calleeName(node));
         }
       }

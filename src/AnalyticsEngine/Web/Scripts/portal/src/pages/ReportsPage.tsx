@@ -25,7 +25,7 @@ import TimeSeriesChart from '../components/charts/TimeSeriesChart';
 import CategoryBarChart from '../components/charts/CategoryBarChart';
 import MatrixChart from '../components/charts/MatrixChart';
 import WordCloud from '../components/charts/WordCloud';
-import { formatDateParts, formatNumber, useT, type TranslationKey } from '../i18n';
+import { formatDateParts, formatNumber, useT, useTNode, type TranslationKey } from '../i18n';
 
 /** The report areas in display order, with the enabled-flag they map to and their friendly copy. */
 const AREA_DEFS: { flag: keyof ReportAreas; key: ReportAreaKey; labelKey: TranslationKey; blurbKey: TranslationKey }[] = [
@@ -102,6 +102,7 @@ const useStyles = makeStyles({
 export default function ReportsPage() {
   const styles = useStyles();
   const t = useT();
+  const tNode = useTNode();
 
   const [areas, setAreas] = useState<ReportAreas | null>(null);
   const [areasError, setAreasError] = useState<string | null>(null);
@@ -156,9 +157,9 @@ export default function ReportsPage() {
         <div>
           <Title3>{t('reports.title')}</Title3>
           <Body1 block className={styles.intro}>
-            {t('reports.intro.beforeLicenceActivity')}{' '}
-            <Link href="#/insights/licence-activity">{t('reports.intro.licenceActivityLink')}</Link>{' '}
-            {t('reports.intro.afterLicenceActivity')}
+            {tNode('reports.intro.licenceActivity', {
+              link: <Link href="#/insights/licence-activity">{t('reports.intro.licenceActivityLink')}</Link>,
+            })}
           </Body1>
         </div>
         {enabledAreas.length > 0 && (
@@ -299,6 +300,7 @@ function ReportAreaView({
 }) {
   const styles = useStyles();
   const t = useT();
+  const tNode = useTNode();
 
   const [data, setData] = useState<ReportAreaData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -374,8 +376,9 @@ function ReportAreaView({
       {area === 'calls' && (
         <MessageBar intent="info">
           <MessageBarBody>
-            {t('reports.callsInfo.beforeTeamsExplorer')}{' '}
-            <Link href="#/insights/teams">{t('reports.callsInfo.teamsExplorerLink')}</Link>.
+            {tNode('reports.callsInfo.teamsExplorer', {
+              link: <Link href="#/insights/teams">{t('reports.callsInfo.teamsExplorerLink')}</Link>,
+            })}
           </MessageBarBody>
         </MessageBar>
       )}

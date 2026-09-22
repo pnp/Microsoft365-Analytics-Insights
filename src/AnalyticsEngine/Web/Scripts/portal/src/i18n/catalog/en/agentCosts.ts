@@ -131,9 +131,8 @@ export const agentCosts = {
 
   // Per-person spend
   'agentCosts.users.title': 'Who is spending the credits',
-  'agentCosts.users.descriptionBeforeStrong': 'Billed Copilot Studio credits per person, reported by Microsoft. Nothing here is estimated or shared out - but it comes from a different Microsoft report than the per-agent figures above, so the two totals will not always match exactly.',
+  'agentCosts.users.description': 'Billed Copilot Studio credits per person, reported by Microsoft. Nothing here is estimated or shared out - but it comes from a different Microsoft report than the per-agent figures above, so the two totals will not always match exactly. {strong} - Microsoft\u0027s per-person report does not carry those dimensions, so this panel always shows everyone (narrowed only by environment). Azure spend is not included: Azure bills by resource and never records who caused a charge.',
   'agentCosts.users.descriptionStrong': 'The agent, feature, model, tool and channel filters do not apply here',
-  'agentCosts.users.descriptionAfterStrong': '- Microsoft\u0027s per-person report does not carry those dimensions, so this panel always shows everyone (narrowed only by environment). Azure spend is not included: Azure bills by resource and never records who caused a charge.',
   'agentCosts.users.empty.importOff': 'The Copilot Studio credit import is switched off.',
   'agentCosts.users.empty.noUsage': 'No per-person credit usage in this period.',
   'agentCosts.users.empty.noFigures': 'No per-person figures yet. Microsoft added these to the Power Platform licensing API in July 2026, so a tenant whose API does not offer them will only ever show the per-agent view above.',

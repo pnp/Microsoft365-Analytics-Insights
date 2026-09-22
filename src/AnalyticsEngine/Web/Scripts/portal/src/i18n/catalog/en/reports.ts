@@ -7,9 +7,8 @@
 export const reports = {
   // Page header and introduction
   'reports.title': 'Reports',
-  'reports.intro.beforeLicenceActivity': 'A quick, built-in view of how your Microsoft 365 usage is trending. The report charts appear only when their data is being imported. For licence assignments and activity, open',
+  'reports.intro.licenceActivity': 'A quick, built-in view of how your Microsoft 365 usage is trending. The report charts appear only when their data is being imported. For licence assignments and activity, open {link} in the Insights navigation.',
   'reports.intro.licenceActivityLink': 'Licence activity',
-  'reports.intro.afterLicenceActivity': 'in the Insights navigation.',
   'reports.empty.noImports': 'No built-in report charts are available yet because no data imports are enabled. Enable one or more imports (Copilot, usage reports, SharePoint activity, website traffic, Teams calls or emails) in the installer to see them.',
   'reports.loading.reports': 'Loading reports...',
   'reports.error.loadAreas': 'Failed to load report areas.',
@@ -50,7 +49,7 @@ export const reports = {
   'reports.error.loadReport': 'Failed to load the report.',
   'reports.areaHeader.usageLag': '{blurb} Weeks from {from}. Usage reports arrive a few days late, so the latest weeks appear once their report does.',
   'reports.areaHeader.toNow': '{blurb} Weeks from {from} to now.',
-  'reports.callsInfo.beforeTeamsExplorer': 'This is the headline call volume only. For meeting size and length, time-of-day patterns, modalities, organiser concentration and call quality, see',
+  'reports.callsInfo.teamsExplorer': 'This is the headline call volume only. For meeting size and length, time-of-day patterns, modalities, organiser concentration and call quality, see {link}.',
   'reports.callsInfo.teamsExplorerLink': 'Teams Explorer',
   'reports.clampedWindow': 'Showing the last {current} months rather than {selected}. This report reads one record per person per day, so a longer window cannot be built in time on a large tenant.',
   'reports.promptInsights.notConfigured': 'Prompt insights (common prompt phrases, weekly prompt sentiment and prompt language) are not shown because Azure AI Language is not configured. Those three charts are built from cognitive enrichment of Copilot prompt history, so without it they would always be empty. Add a Cognitive Services endpoint and key in the installer, then re-run the Copilot interaction history import, to enable them.',

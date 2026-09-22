@@ -16,7 +16,7 @@ import CategoryBarChart from '../charts/CategoryBarChart';
 import TimeSeriesChart from '../charts/TimeSeriesChart';
 import SentimentLight from '../shared/SentimentLight';
 import type { TeamsConversations } from '../../types/teamsExplorer';
-import { useT } from '../../i18n';
+import { useT, useTNode } from '../../i18n';
 import {
   SectionCard,
   WindowNote,
@@ -51,15 +51,16 @@ export default function ConversationsPanel({ data }: { data: TeamsConversations 
   const styles = useStyles();
   const shared = useTeamsStyles();
   const t = useT();
+  const tNode = useTNode();
   const sentimentScaleNoteText = sentimentScaleNote(t);
 
   if (!data.cognitiveAvailable) {
     return (
       <MessageBar intent="warning">
         <MessageBarBody>
-          {t('teamsExplorer.conversations.cognitiveOff.beforeEndpoint')}{' '}
-          <strong>{COGNITIVE_ENDPOINT}</strong>{' '}
-          {t('teamsExplorer.conversations.cognitiveOff.afterEndpoint')}
+          {tNode('teamsExplorer.conversations.cognitiveOff.endpoint', {
+            endpoint: <strong>{COGNITIVE_ENDPOINT}</strong>,
+          })}
         </MessageBarBody>
       </MessageBar>
     );

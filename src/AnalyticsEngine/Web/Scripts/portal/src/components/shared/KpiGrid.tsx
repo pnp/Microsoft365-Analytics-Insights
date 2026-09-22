@@ -111,10 +111,16 @@ export function formatCount(value: number): string {
   return formatNumber(Math.round(value));
 }
 
-/** Formats a percentage to one decimal place, dropping a trailing ".0". */
+/**
+ * Formats a percentage to one decimal place, dropping a trailing ".0".
+ *
+ * The digits go through `formatNumber`, so a Spanish reader gets "12,3%" rather than "12.3%" -
+ * `toFixed` always produces a full stop, which in Spanish is the thousands separator.
+ */
 export function formatPct(value: number): string {
   const rounded = Math.round(value * 10) / 10;
-  return `${rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1)}%`;
+  const digits = rounded % 1 === 0 ? 0 : 1;
+  return `${formatNumber(rounded, { minimumFractionDigits: digits, maximumFractionDigits: digits })}%`;
 }
 
 /** A UTC ISO date as a short date in the reader's language, or a dash when absent. */

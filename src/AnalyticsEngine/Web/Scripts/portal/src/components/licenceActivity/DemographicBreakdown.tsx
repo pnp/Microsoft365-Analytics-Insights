@@ -2,7 +2,7 @@ import { memo, useMemo } from 'react';
 import { makeStyles, tokens, Card, Text, MessageBar, MessageBarBody } from '@fluentui/react-components';
 import type { LicenceActivityDemographic, LicenceActivityDistribution } from '../../types/licenceActivity';
 import { WORKLOADS } from '../../types/licenceActivity';
-import { useT } from '../../i18n';
+import { compareStrings, useT } from '../../i18n';
 import { formatCount } from './format';
 import { useLaTableStyles } from './tableStyles';
 import { MiniDistribution, BandLegend } from './MiniDistribution';
@@ -59,7 +59,7 @@ function DemographicBreakdown({ title, segmentLabel, rows, truncated }: Demograp
   const t = useT();
 
   const sorted = useMemo(
-    () => [...rows].sort((a, b) => b.assignedUsers - a.assignedUsers || a.name.localeCompare(b.name)),
+    () => [...rows].sort((a, b) => b.assignedUsers - a.assignedUsers || compareStrings(a.name, b.name)),
     [rows],
   );
   const shown = sorted.slice(0, MAX_ROWS);

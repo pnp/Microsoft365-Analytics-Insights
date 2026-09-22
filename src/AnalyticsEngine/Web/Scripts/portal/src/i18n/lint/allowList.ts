@@ -101,6 +101,8 @@ export const ALLOWED_LITERALS = new Set<string>([
   'Cognitive Services',
   'OpenAI',
   'Webhook',
+  // A database object named in prose, so an admin can find it. Identical in every language.
+  'sys_configs',
 
   // Symbols, punctuation and units that carry no language.
   '\u2014',

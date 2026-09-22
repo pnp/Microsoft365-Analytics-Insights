@@ -1335,7 +1335,7 @@ function AnalystTab({
           </div>
           <div className={styles.cardBody}>
             {summary.usageByApp.length > 0 ? (
-              <TreemapChart categories={summary.usageByApp} valueLabel="interactions" />
+              <TreemapChart categories={summary.usageByApp} valueLabel={t('copilotAdoption.page.interactions')} />
             ) : (
               <Text className={styles.muted}>{t('copilotAdoption.page.noPerAppBreakdownAvailableNeedsCopilotAuditImport')}</Text>
             )}

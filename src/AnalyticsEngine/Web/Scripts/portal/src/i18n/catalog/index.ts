@@ -148,6 +148,7 @@ export function loadCatalog(language: Language): Promise<Catalog> {
   const promise = loader()
     .then((catalog) => {
       loaded.set(language, catalog);
+      failed.delete(language);
       return catalog;
     })
     .catch((error: unknown) => {
@@ -179,6 +180,18 @@ export function catalogFailed(language: Language): boolean {
   return failed.has(language);
 }
 
+/**
+ * Forgets a previous failure, so the next `loadCatalog` tries again.
+ *
+ * Without this a single transient failure - an offline moment, a stale `index.html` after a
+ * redeploy - would lock the reader out of that language for the rest of the session, because the
+ * provider falls back to English and then never asks for it again. Picking the language from the
+ * menu is an explicit "try again", and must behave like one.
+ */
+export function clearCatalogFailure(language: Language): void {
+  failed.delete(language);
+}
+
 /** The catalog to render with now. Falls back to English until the language has loaded. */
 export function catalogFor(language: Language): Catalog {
   return loaded.get(language) ?? EN_CATALOG;
@@ -190,4 +203,14 @@ export function resetLoadedCatalogs(): void {
   loaded.set('en', EN_CATALOG);
   inFlight.clear();
   failed.clear();
+}
+
+/**
+ * Test-only: pretend a language's chunk could not be fetched.
+ *
+ * The failure path is worth testing and cannot be reached otherwise - the imports are static
+ * enough for Vite to split them, which is exactly what makes them hard to make fail on demand.
+ */
+export function markCatalogFailed(language: Language): void {
+  failed.add(language);
 }

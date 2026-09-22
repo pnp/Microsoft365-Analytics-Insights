@@ -6,13 +6,17 @@ import { renderWithProvider } from '../test/renderWithProvider';
 import {
   LANGUAGE_STORAGE_KEY,
   LanguageSwitcher,
+  activeLocale,
   browserLanguages,
+  catalogFailed,
+  clearCatalogFailure,
   detectLanguage,
   formatNumber,
   interpolate,
   interpolateNodes,
   isCatalogLoaded,
   loadCatalog,
+  markCatalogFailed as markCatalogFailedForTest,
   matchLanguage,
   plural,
   setActiveLanguage,
@@ -152,6 +156,38 @@ describe('Formatting figures for the chosen language', () => {
     setActiveLanguage('es');
     expect(formatNumber(12.5, { minimumFractionDigits: 1 })).toBe('12,5');
   });
+
+  /**
+   * Percentages are built by hand rather than with `Intl.NumberFormat`'s `style: 'percent'`, so
+   * they are invisible to the locale-formatting check - a `.toFixed(1)` contains no locale call.
+   * They are also the most-shown figure on several pages, and `12.3%` reads as twelve point three
+   * in English and as a thousands-separated number in Spanish.
+   */
+  it('formats a percentage with the Spanish decimal comma', async () => {
+    const { formatPct: kpiPct } = await import('../components/shared/KpiGrid');
+    const { formatPct: licencePct } = await import('../components/licenceActivity/format');
+
+    setActiveLanguage('en');
+    expect(kpiPct(12.34)).toBe('12.3%');
+    expect(licencePct(12.34)).toBe('12.3%');
+    expect(kpiPct(12)).toBe('12%');
+
+    setActiveLanguage('es');
+    expect(kpiPct(12.34)).toBe('12,3%');
+    expect(licencePct(12.34)).toBe('12,3%');
+    // A whole number still has no decimal separator to get wrong.
+    expect(kpiPct(12)).toBe('12%');
+  });
+
+  it('formats a sentiment score with the Spanish decimal comma', async () => {
+    const { formatSentiment } = await import('../components/shared/SentimentLight');
+
+    setActiveLanguage('en');
+    expect(formatSentiment(0.75)).toContain('0.75');
+
+    setActiveLanguage('es');
+    expect(formatSentiment(0.75)).toContain('0,75');
+  });
 });
 
 function Sample() {
@@ -245,5 +281,57 @@ describe('Fetching a language', () => {
     // so this is the language-switch and slow-network path.
     renderWithProvider(<Sample />, { language: 'de' as never });
     expect(screen.getByTestId('sample')).toHaveTextContent('Sign out');
+  });
+
+  /**
+   * A chunk fetch can fail for reasons that pass: an offline moment, or a stale `index.html` still
+   * asking for a file the redeploy replaced. When it does, the whole language has to fall back -
+   * not just the text. English prose under `<html lang="es-ES">` with Spanish thousands separators
+   * is worse than honest English, because a screen reader then reads English with Spanish
+   * phonetics and every number is grouped the wrong way round.
+   *
+   * And it must be recoverable. Marking the language failed and then never asking again would lock
+   * the reader out of it for the rest of the session over one transient error - so choosing it
+   * from the menu has to count as "try again".
+   */
+  it('falls the whole language back to English when its catalog cannot be fetched', () => {
+    expect(catalogFailed('es')).toBe(false);
+    markCatalogFailedForTest('es');
+    try {
+      renderWithProvider(<Sample />, { language: 'es' });
+      expect(screen.getByTestId('sample')).toHaveTextContent('Sign out');
+      expect(activeLocale()).toBe('en-GB');
+    } finally {
+      clearCatalogFailure('es');
+      setActiveLanguage('en');
+    }
+  });
+
+  it('lets the reader try the language again by picking it from the menu', async () => {
+    const user = userEvent.setup();
+    markCatalogFailedForTest('es');
+    try {
+      renderWithProvider(
+        <>
+          <LanguageSwitcher />
+          <Sample />
+        </>,
+        { language: 'es' },
+      );
+
+      // Fell back, so the picker shows English and the text is English.
+      expect(screen.getByTestId('sample')).toHaveTextContent('Sign out');
+
+      await user.click(screen.getByRole('button', { name: /Language: English/ }));
+      await user.click(await screen.findByRole('menuitemradio', { name: 'Espa\u00f1ol' }));
+
+      await waitFor(() =>
+        expect(screen.getByTestId('sample')).toHaveTextContent('Cerrar sesi\u00f3n'),
+      );
+      expect(catalogFailed('es')).toBe(false);
+    } finally {
+      clearCatalogFailure('es');
+      setActiveLanguage('en');
+    }
   });
 });

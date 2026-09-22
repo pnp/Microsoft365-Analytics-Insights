@@ -17,7 +17,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowClockwise16Regular, ArrowDownload16Regular } from '@fluentui/react-icons';
 
-import { useT, type TFunction, type TranslationKey } from '../i18n';
+import { useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
 import {
   fetchAllDetailRows,
   fetchAvailability,
@@ -151,6 +151,7 @@ function labelFor(dimension: CreditDimension, value: string | null | undefined, 
 export default function AgentCostsPage() {
   const styles = useStyles();
   const t = useT();
+  const tNode = useTNode();
 
   const [days, setDays] = useState(30);
   const [availability, setAvailability] = useState<AgentCostAvailability | null>(null);
@@ -867,9 +868,9 @@ export default function AgentCostsPage() {
                 <Text weight="semibold">{t('agentCosts.users.title')}</Text>
                 <div>
                   <Text className={styles.muted} size={200}>
-                    {t('agentCosts.users.descriptionBeforeStrong')}{' '}
-                    <strong>{t('agentCosts.users.descriptionStrong')}</strong>{' '}
-                    {t('agentCosts.users.descriptionAfterStrong')}
+                    {tNode('agentCosts.users.description', {
+                      strong: <strong>{t('agentCosts.users.descriptionStrong')}</strong>,
+                    })}
                   </Text>
                 </div>
               </div>

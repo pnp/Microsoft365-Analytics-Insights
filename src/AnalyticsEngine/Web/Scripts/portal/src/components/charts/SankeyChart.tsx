@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
-import { useT } from '../../i18n';
+import { compareStrings, useT } from '../../i18n';
 import { formatValue, seriesColor } from './chartCommon';
 
 const useStyles = makeStyles({
@@ -120,7 +120,7 @@ export default function SankeyChart({ flows, valueLabel, height = 420, caption }
 
     const build = (totals: Map<string, { label: string; value: number }>): Map<string, Node> => {
       const entries = [...totals.entries()].sort(
-        (a, b) => b[1].value - a[1].value || a[1].label.localeCompare(b[1].label) || a[0].localeCompare(b[0]),
+        (a, b) => b[1].value - a[1].value || compareStrings(a[1].label, b[1].label) || compareStrings(a[0], b[0]),
       );
       const sum = entries.reduce((s, [, v]) => s + v.value, 0);
       const gaps = NODE_GAP * Math.max(0, entries.length - 1);

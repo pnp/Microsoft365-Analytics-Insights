@@ -6,7 +6,9 @@ import type { licenceActivity as en } from '../en/licenceActivity';
  * Typed against the English module, so a key added there without a translation here fails the
  * build rather than reaching a customer as English text inside a Spanish page.
  */
-const licenceActivity: Record<keyof typeof en, string> = {
+const licenceActivity: Record<keyof typeof en, string> = {
+  'licenceActivity.users.workloadActivity': 'Actividad de {workload}',
+  'licenceActivity.licenceFallbackName': 'Licencia {id}',
   // Shared vocabulary
   'licenceActivity.common.unknown': 'Desconocido',
   'licenceActivity.common.notMeasured': 'No medido',

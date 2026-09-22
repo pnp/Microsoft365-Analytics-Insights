@@ -133,9 +133,8 @@ const agentCosts: Record<keyof typeof en, string> = {
 
   // Gasto por persona
   'agentCosts.users.title': 'Quién consume los créditos',
-  'agentCosts.users.descriptionBeforeStrong': 'Créditos de Copilot Studio facturados por persona, según Microsoft. Aquí no hay estimaciones ni reparto proporcional, pero procede de un informe de Microsoft distinto del de las cifras por agente anteriores, por lo que los dos totales no siempre coincidirán exactamente.',
+  'agentCosts.users.description': 'Créditos de Copilot Studio facturados por persona, según Microsoft. Aquí no hay estimaciones ni reparto proporcional, pero procede de un informe de Microsoft distinto del de las cifras por agente anteriores, por lo que los dos totales no siempre coincidirán exactamente. {strong}: el informe por persona de Microsoft no incluye esas dimensiones, por lo que este panel siempre muestra a todos (solo acotado por entorno). No se incluye el gasto de Azure: Azure factura por recurso y nunca registra quién provocó un cargo.',
   'agentCosts.users.descriptionStrong': 'Los filtros de agente, característica, modelo, herramienta y canal no se aplican aquí',
-  'agentCosts.users.descriptionAfterStrong': ': el informe por persona de Microsoft no incluye esas dimensiones, por lo que este panel siempre muestra a todos (solo acotado por entorno). No se incluye el gasto de Azure: Azure factura por recurso y nunca registra quién provocó un cargo.',
   'agentCosts.users.empty.importOff': 'La importación de créditos de Copilot Studio está desactivada.',
   'agentCosts.users.empty.noUsage': 'No hay consumo de créditos por persona en este periodo.',
   'agentCosts.users.empty.noFigures': 'Aún no hay cifras por persona. Microsoft las agregó a la API de licencias de Power Platform en julio de 2026, por lo que un inquilino cuya API no las ofrezca solo mostrará la vista por agente anterior.',

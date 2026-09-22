@@ -191,6 +191,13 @@ sentence. `plural(count, oneKey, otherKey)` picks between two real keys — Engl
 the same one/other split, so a runtime plural engine would buy nothing and would hide both forms
 from the compiler.
 
+Outside a component — in a thrown error, a chart callback, an exporter — use `translateActive()`
+from `src/i18n/runtime`, which resolves in whatever language is currently in force. That is how the
+API layer's error messages are translated: `src/api/*.ts` throws `Error`s whose `message` the pages
+render directly, and an English failure message on a Spanish page is what a reader sees at the
+moment something has already gone wrong. Import it from `../i18n/runtime`, not from `../i18n` —
+the package index re-exports `LanguageSwitcher`, which would pull Fluent UI into the API chunk.
+
 Text that came out of the customer's tenant — user and display names, departments, site and team
 names, file names, URLs, agent and SKU names — is **never** translated. Only the product's own
 wording is.
@@ -234,14 +241,25 @@ cached.
 2. **`npx vitest run src/i18n`** — catches what the type system cannot see:
    - `hardcodedStrings.test.ts` parses every page and component with the TypeScript AST and fails
      on any string a user could read that is not a catalog key, listing file, line and text. It
-     covers JSX text, user-facing props (`label`, `title`, `aria-label`, `content`, …), rendered
-     expressions, the `label`/`title`/`what`/`how` properties of the constant tables this portal
-     keeps most of its text in, and toasts.
+     covers JSX text, user-facing props (`label`, `title`, `aria-label`, `content`, `blurb`,
+     `sublabel`, …), rendered expressions, the `label`/`title`/`what`/`how` properties of the
+     constant tables this portal keeps most of its text in, toasts, **English passed as a *value*
+     to `t()`** (which would land inside a translated sentence), and — as a catch-all — **any
+     phrase of three words or more wherever it is written**, which is what catches a sentence
+     assembled inside a helper and returned as a string.
    - `catalog.test.ts` fails on a key claimed by two modules, a key not namespaced to its module, a
-     `{placeholder}` present in one language and not the other, an empty translation, a sentence
-     chopped into fragments that no translator can reassemble, an HTML entity that would be shown
-     to the reader verbatim, and English pasted into the Spanish catalog to satisfy the compiler —
-     which is the realistic way a half-Spanish page ships while every other check is green.
+     `{placeholder}` present in one language and not the other, an empty translation in either
+     language, a sentence chopped into fragments that no translator can reassemble, an HTML entity
+     that would be shown to the reader verbatim, and English pasted into the Spanish catalog to
+     satisfy the compiler — which is the realistic way a half-Spanish page ships while every other
+     check is green.
+   - `placeholders.test.ts` fails when a call site does not supply a `{placeholder}` the string
+     needs (it would render as literal `{count}`) or supplies one the string does not have (it is
+     silently dropped, so a figure vanishes from the sentence).
+   - `localeFormatting.test.ts` fails on any `toLocaleString()` / `toLocaleDateString(undefined, …)`
+     / `new Intl.*(undefined, …)` outside `locale.ts`. That class is invisible to every other
+     check, because such a call contains no string at all — and three of them survived the initial
+     conversion in a module twelve components import from.
 
 `src/i18n/lint/allowList.ts` is the only escape hatch, and is for text that reads *identically* in
 both languages: Microsoft product names Microsoft itself does not translate (Copilot, Teams,
