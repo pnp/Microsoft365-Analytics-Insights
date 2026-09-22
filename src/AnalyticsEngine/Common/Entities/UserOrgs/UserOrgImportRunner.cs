@@ -133,6 +133,37 @@ namespace Common.Entities.UserOrgs
                 {
                     applied = await _jobs.ApplyAsync(jobId, cancellationToken).ConfigureAwait(false);
                 }
+                catch (UserOrgJobSupersededException)
+                {
+                    // Not a failure: this job was correctly declined because a later import for the
+                    // same org type replaced it. Nothing was changed, and the replacement already
+                    // carries the verdict, so recording anything here would write over it.
+                    heartbeatStop.Cancel();
+                    await SwallowAsync(heartbeat).ConfigureAwait(false);
+
+                    return await _jobs.GetJobAsync(jobId, cancellationToken).ConfigureAwait(false);
+                }
+                catch (UserOrgValidationException ex)
+                {
+                    // A refusal the admin can act on - currently only an unconfirmed destructive
+                    // replace, which the apply transaction re-tests because the web request's answer
+                    // can be stale by the time the worker runs. Nothing was changed, and the message
+                    // is written for an IT admin, so it is shown as-is rather than hidden behind the
+                    // generic failure text.
+                    heartbeatStop.Cancel();
+                    await SwallowAsync(heartbeat).ConfigureAwait(false);
+
+                    try
+                    {
+                        await _jobs.CompleteJobAsync(jobId, UserOrgImportStatus.Failed, ex.Message, CancellationToken.None)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception)
+                    {
+                    }
+
+                    throw;
+                }
                 catch (Exception)
                 {
                     heartbeatStop.Cancel();

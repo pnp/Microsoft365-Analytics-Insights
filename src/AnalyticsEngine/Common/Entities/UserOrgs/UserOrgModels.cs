@@ -182,7 +182,33 @@ namespace Common.Entities.UserOrgs
 
         public int RowsInvalid { get; set; }
 
+        /// <summary>
+        /// Whether the administrator acknowledged how many users a Replace would clear.
+        /// </summary>
+        /// <remarks>
+        /// Carried on the job because the destructive delete happens later, in the background
+        /// worker's transaction, and that is the only place the question can be answered without the
+        /// answer going stale. Another administrator's import can queue, run and finish between the
+        /// web request's check and this one.
+        /// </remarks>
+        public bool ConfirmClear { get; set; }
+
         public string ErrorMessage { get; set; }
+    }
+
+    /// <summary>
+    /// Thrown when a job is no longer the one that should run - it was overtaken by a later import
+    /// for the same org type after it stopped reporting progress.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from a failure on purpose. Nothing went wrong and nothing was changed, so the admin
+    /// must not be shown an error about an import that was correctly declined.
+    /// </remarks>
+    public sealed class UserOrgJobSupersededException : Exception
+    {
+        public UserOrgJobSupersededException(string message, Exception inner) : base(message, inner)
+        {
+        }
     }
 
     /// <summary>

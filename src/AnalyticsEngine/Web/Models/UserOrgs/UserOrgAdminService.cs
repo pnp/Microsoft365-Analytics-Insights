@@ -324,13 +324,18 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             var existingSet = new HashSet<string>(existing, StringComparer.OrdinalIgnoreCase);
 
             var matchedWithValue = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var unknown = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // Counted per ROW, not per distinct UPN. The portal subtracts this from the file's row
+            // count to say "X of Y rows match a user", so a file repeating the same unmatched UPN
+            // across several rows would otherwise overstate matches - and it would err in the one
+            // direction that matters, making a file with a problem look fine.
+            var unknownRows = 0;
 
             foreach (var row in parsed.Rows)
             {
                 if (!existingSet.Contains(row.Upn))
                 {
-                    unknown.Add(row.Upn);
+                    unknownRows++;
                 }
                 else if (row.OrgValue != null)
                 {
@@ -344,7 +349,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 }
             }
 
-            preview.UnknownUpnCount = unknown.Count;
+            preview.UnknownUpnCount = unknownRows;
 
             var summaries = await _types.GetSummariesAsync(cancellationToken).ConfigureAwait(false);
             var summary = summaries.FirstOrDefault(s => s.Type != null && s.Type.Id == orgTypeId);
@@ -465,6 +470,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                     FileName = fileName,
                     StartedBy = startedBy,
                     RowsInvalid = parsed.Problems.Count,
+                    ConfirmClear = confirmClear,
                 },
                 parsed.Rows,
                 cancellationToken).ConfigureAwait(false);

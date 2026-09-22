@@ -61,6 +61,23 @@ SET NOCOUNT ON;
 
 DECLARE @valuesCreated INT = 0, @cleared INT = 0, @applied INT = 0;
 
+-- 0. Drop anything whose org type is no longer sourced the way the caller believed when it built
+--    this batch. A user-metadata cycle reads its org types at the start and can then spend many
+--    minutes loading 200,000 users from Graph; an administrator who switches a type to CSV, or
+--    disables it, during that window would otherwise have their change quietly undone by values
+--    read from the attribute they just stopped using - and a later CSV Merge never touches users
+--    the file does not mention, so those values would then survive indefinitely. Evaluated inside
+--    the merge transaction, so the answer cannot go stale between the check and the write.
+IF @expectedSourceKind IS NOT NULL
+BEGIN
+    DELETE u
+    FROM " + TempTableName + @" u
+    WHERE NOT EXISTS (SELECT 1 FROM dbo.user_org_types t
+                      WHERE t.id = u.org_type_id
+                        AND t.source_kind = @expectedSourceKind
+                        AND t.is_enabled = 1);
+END
+
 -- 1. Register any org value we have not seen before. Matching uses the database collation, which is
 --    case-insensitive, so this agrees with UX_user_org_values_type_name rather than fighting it.
 INSERT INTO dbo.user_org_values (org_type_id, name)
@@ -104,6 +121,7 @@ SELECT @applied AS applied, @cleared AS cleared, @valuesCreated AS values_create
 
         public async Task<UserOrgMergeResult> MergeAsync(
             IReadOnlyList<UserOrgAssignmentUpdate> updates,
+            UserOrgSourceKind? expectedSourceKind = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
             int duplicatesCollapsed;
@@ -143,13 +161,18 @@ SELECT @applied AS applied, @cleared AS cleared, @valuesCreated AS values_create
                 using (var tx = connection.BeginTransaction())
                 {
                     using (var cmd = Command(connection, MergeSql, tx))
-                    using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
                     {
-                        if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                        cmd.Parameters.Add("@expectedSourceKind", SqlDbType.TinyInt).Value =
+                            expectedSourceKind.HasValue ? (object)(byte)expectedSourceKind.Value : DBNull.Value;
+
+                        using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
                         {
-                            result.Applied = reader.GetInt32(0);
-                            result.Cleared = reader.GetInt32(1);
-                            result.ValuesCreated = reader.GetInt32(2);
+                            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                            {
+                                result.Applied = reader.GetInt32(0);
+                                result.Cleared = reader.GetInt32(1);
+                                result.ValuesCreated = reader.GetInt32(2);
+                            }
                         }
                     }
 

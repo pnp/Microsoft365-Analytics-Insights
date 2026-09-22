@@ -317,6 +317,7 @@ CREATE TABLE [dbo].[user_org_import_jobs] (
     [rows_cleared] int NOT NULL CONSTRAINT [DF_user_org_import_jobs_rows_cleared] DEFAULT (0),
     [rows_unknown_upn] int NOT NULL CONSTRAINT [DF_user_org_import_jobs_rows_unknown_upn] DEFAULT (0),
     [rows_invalid] int NOT NULL CONSTRAINT [DF_user_org_import_jobs_rows_invalid] DEFAULT (0),
+    [confirm_clear] bit NOT NULL CONSTRAINT [DF_user_org_import_jobs_confirm_clear] DEFAULT (0),
     [error_message] nvarchar(2000) NULL,
     CONSTRAINT [PK_user_org_import_jobs] PRIMARY KEY CLUSTERED ([id] ASC),
     CONSTRAINT [FK_user_org_import_jobs_type] FOREIGN KEY ([org_type_id])

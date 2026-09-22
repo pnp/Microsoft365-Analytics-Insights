@@ -138,7 +138,9 @@ namespace Common.Entities.UserOrgs
             // One round trip, three result sets: the types, their counts, and the latest import per
             // type. Counting inside the type query would make it a correlated subquery per row, and the
             // assignment table is the largest of the three.
-            const string sql = @"
+            // The job columns come from the job store so the two lists cannot drift: a hand-written
+            // copy here is exactly how a newly added column turns into a null-read inside ReadJob.
+            var sql = @"
 SELECT id, name, source_kind, entra_attribute_name, is_enabled, created_utc, modified_utc
 FROM dbo.user_org_types
 ORDER BY name;
@@ -148,9 +150,7 @@ SELECT t.id,
        (SELECT COUNT_BIG(*) FROM dbo.user_org_values v WHERE v.org_type_id = t.id) AS distinct_values
 FROM dbo.user_org_types t;
 
-SELECT j.id, j.org_type_id, j.mode, j.status, j.file_name, j.started_by, j.queued_utc, j.started_utc,
-       j.finished_utc, j.heartbeat_utc, j.rows_total, j.rows_applied, j.rows_cleared,
-       j.rows_unknown_upn, j.rows_invalid, j.error_message
+SELECT " + SqlUserOrgImportJobStore.JobColumnsFor("j") + @"
 FROM dbo.user_org_import_jobs j
 JOIN (SELECT org_type_id, MAX(id) AS id FROM dbo.user_org_import_jobs GROUP BY org_type_id) latest
   ON latest.id = j.id;";

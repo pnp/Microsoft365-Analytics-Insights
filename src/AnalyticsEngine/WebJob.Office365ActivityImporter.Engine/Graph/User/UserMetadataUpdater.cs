@@ -586,7 +586,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     return;
                 }
 
-                var result = await _orgAssignmentStore.MergeAsync(updates);
+                // The expected source kind is passed so the merge can drop anything whose org type has
+                // been switched away from Entra, or disabled, since this cycle read its configuration.
+                // That read happened before 200,000 users were loaded from Graph, which is minutes of
+                // window in which an admin can change it - and undoing their change would leave values
+                // no later import ever corrects.
+                var result = await _orgAssignmentStore.MergeAsync(updates, UserOrgSourceKind.EntraAttribute);
 
                 _logger.LogInformation(
                     $"User import - user organisations: {result.Applied.ToString("N0")} assignment(s) set, "

@@ -482,7 +482,7 @@ namespace Tests.UnitTests
 
             public List<UserOrgAssignmentUpdate> LastUpdates { get; private set; } = new List<UserOrgAssignmentUpdate>();
 
-            public Task<UserOrgMergeResult> MergeAsync(IReadOnlyList<UserOrgAssignmentUpdate> updates, CancellationToken cancellationToken = default(CancellationToken))
+            public Task<UserOrgMergeResult> MergeAsync(IReadOnlyList<UserOrgAssignmentUpdate> updates, UserOrgSourceKind? expectedSourceKind = null, CancellationToken cancellationToken = default(CancellationToken))
             {
                 MergeCalls++;
                 LastUpdates = updates.ToList();

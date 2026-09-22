@@ -17,9 +17,28 @@ namespace Common.Entities.UserOrgs
     /// </remarks>
     internal sealed class SqlUserOrgImportJobStore : SqlUserOrgStoreBase, IUserOrgImportJobStore
     {
-        private const string JobColumns =
+        /// <summary>
+        /// The job columns, in the order <see cref="ReadJob"/> reads them.
+        /// </summary>
+        /// <remarks>
+        /// Shared rather than written out again wherever a job is selected. A second hand-written
+        /// list drifts the moment a column is added, and it fails as a null-read deep inside
+        /// <see cref="ReadJob"/> rather than anywhere near the query that is actually wrong.
+        /// </remarks>
+        internal const string JobColumns =
             "id, org_type_id, mode, status, file_name, started_by, queued_utc, started_utc, finished_utc, "
-            + "heartbeat_utc, rows_total, rows_applied, rows_cleared, rows_unknown_upn, rows_invalid, error_message";
+            + "heartbeat_utc, rows_total, rows_applied, rows_cleared, rows_unknown_upn, rows_invalid, confirm_clear, error_message";
+
+        /// <summary>The same columns, qualified with a table alias for a query that needs one.</summary>
+        internal static string JobColumnsFor(string alias)
+        {
+            var columns = JobColumns.Split(',');
+            for (var i = 0; i < columns.Length; i++)
+            {
+                columns[i] = alias + "." + columns[i].Trim();
+            }
+            return string.Join(", ", columns);
+        }
 
         public SqlUserOrgImportJobStore(string connectionString) : base(connectionString)
         {
@@ -37,6 +56,16 @@ namespace Common.Entities.UserOrgs
 
             const string insertJobSql = @"
 SET NOCOUNT ON;
+
+-- The org type must still be CSV-sourced. It is checked in the caller too, but that happens before
+-- a file of up to half a million rows is parsed, so an admin switching the type to Entra in the
+-- meantime would otherwise have a CSV import land on it afterwards. Re-checked here because this
+-- is inside the transaction that admits the job.
+IF NOT EXISTS (SELECT 1 FROM dbo.user_org_types WHERE id = @orgTypeId AND source_kind = 2)
+BEGIN
+    RAISERROR('USERORG_NOT_CSV_SOURCED', 16, 1);
+    RETURN;
+END
 
 -- The active-job check happens HERE, inside the transaction and holding a range lock, rather than in
 -- the caller. Checking first and inserting afterwards left a window wide enough to drive a lorry
@@ -77,9 +106,9 @@ FROM dbo.user_org_import_staging s
 WHERE EXISTS (SELECT 1 FROM @superseded x WHERE x.id = s.job_id);
 
 INSERT INTO dbo.user_org_import_jobs
-    (org_type_id, mode, status, file_name, started_by, queued_utc, rows_total, rows_invalid)
+    (org_type_id, mode, status, file_name, started_by, queued_utc, rows_total, rows_invalid, confirm_clear)
 OUTPUT INSERTED.id
-VALUES (@orgTypeId, @mode, @status, @fileName, @startedBy, SYSUTCDATETIME(), @rowsTotal, @rowsInvalid);";
+VALUES (@orgTypeId, @mode, @status, @fileName, @startedBy, SYSUTCDATETIME(), @rowsTotal, @rowsInvalid, @confirmClear);";
 
             using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
             using (var tx = connection.BeginTransaction())
@@ -94,6 +123,7 @@ VALUES (@orgTypeId, @mode, @status, @fileName, @startedBy, SYSUTCDATETIME(), @ro
                     cmd.Parameters.Add("@startedBy", SqlDbType.NVarChar, 256).Value = job.StartedBy ?? string.Empty;
                     cmd.Parameters.Add("@rowsTotal", SqlDbType.Int).Value = rows == null ? 0 : rows.Count;
                     cmd.Parameters.Add("@rowsInvalid", SqlDbType.Int).Value = job.RowsInvalid;
+                    cmd.Parameters.Add("@confirmClear", SqlDbType.Bit).Value = job.ConfirmClear;
                     cmd.Parameters.Add("@pendingStaleSecs", SqlDbType.Int).Value =
                         (int)UserOrgImportRunner.StalePendingThreshold.TotalSeconds;
                     cmd.Parameters.Add("@runningStaleSecs", SqlDbType.Int).Value =
@@ -111,6 +141,12 @@ VALUES (@orgTypeId, @mode, @status, @fileName, @startedBy, SYSUTCDATETIME(), @ro
                         throw new UserOrgValidationException(
                             "An import for this organisation type is already in progress. Wait for it to finish "
                             + "before starting another.", ex);
+                    }
+                    catch (SqlException ex) when (ex.Message.IndexOf("USERORG_NOT_CSV_SOURCED", StringComparison.Ordinal) >= 0)
+                    {
+                        throw new UserOrgValidationException(
+                            "That organisation type no longer takes its values from a CSV file - it was changed "
+                            + "while this file was being read. Reload the page and check the configuration.", ex);
                     }
 
                     if (id == null || id == DBNull.Value)
@@ -233,7 +269,25 @@ WHERE id = @id AND status = 1;";
                 using (var cmd = Command(connection, ApplySql, tx))
                 {
                     cmd.Parameters.Add("@jobId", SqlDbType.Int).Value = jobId;
-                    await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+                    try
+                    {
+                        await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (SqlException ex) when (ex.Message.IndexOf("USERORG_JOB_NOT_RUNNABLE", StringComparison.Ordinal) >= 0)
+                    {
+                        throw new UserOrgJobSupersededException(
+                            "This import was overtaken by a later one for the same organisation type, so it was not applied.",
+                            ex);
+                    }
+                    catch (SqlException ex) when (ex.Message.IndexOf("USERORG_UNCONFIRMED_CLEAR", StringComparison.Ordinal) >= 0)
+                    {
+                        throw new UserOrgValidationException(
+                            "This replace would clear users the file does not cover, and it was not confirmed. "
+                            + "The organisation values have not been changed. Preview the file again - another "
+                            + "import may have run since - and confirm before continuing, or use Merge.",
+                            ex);
+                    }
                 }
 
                 UserOrgImportJob job;
@@ -294,12 +348,22 @@ DELETE FROM dbo.user_org_import_staging WHERE job_id = @id;";
         internal const string ApplySql = @"
 SET NOCOUNT ON;
 
-DECLARE @orgTypeId INT, @mode TINYINT;
-SELECT @orgTypeId = org_type_id, @mode = mode FROM dbo.user_org_import_jobs WHERE id = @jobId;
+DECLARE @orgTypeId INT, @mode TINYINT, @confirmClear BIT;
+
+-- UPDLOCK, and the status test, are the fence. A worker that stopped reporting progress can have
+-- been superseded (see CreateJobWithRowsAsync) while it was still alive - a long pause, a stalled
+-- connection - and its staged rows deleted underneath it. Applying anyway would be catastrophic:
+-- a Replace with no staged rows matches nobody, so it would DELETE every assignment for the org
+-- type, and if that commits after the replacement's own apply it silently empties a type the
+-- portal is simultaneously reporting as freshly imported. The lock also serialises this against a
+-- concurrent CreateJobWithRowsAsync, so the two cannot interleave on the same org type.
+SELECT @orgTypeId = org_type_id, @mode = mode, @confirmClear = confirm_clear
+FROM dbo.user_org_import_jobs WITH (UPDLOCK)
+WHERE id = @jobId AND status = 2;
 
 IF @orgTypeId IS NULL
 BEGIN
-    RAISERROR('The import job no longer exists.', 16, 1);
+    RAISERROR('USERORG_JOB_NOT_RUNNABLE', 16, 1);
     RETURN;
 END
 
@@ -325,6 +389,23 @@ WHERE latest.rn = 1;
 
 DECLARE @matched INT = (SELECT COUNT(*) FROM #user_org_matched);
 DECLARE @unknown INT = CASE WHEN @distinctUpns > @matched THEN @distinctUpns - @matched ELSE 0 END;
+
+-- The Replace confirmation is re-tested HERE, inside the transaction that does the deleting, using
+-- the DELETE's own predicate so the two cannot disagree. The web request checked it as well, but
+-- another administrator's import can queue, run and finish between that check and this one - and
+-- then a Replace the admin was told would clear nobody clears everybody. Placed before the first
+-- write so the refusal leaves the database untouched even without the caller's rollback.
+IF @mode = 1 AND @confirmClear = 0
+   AND EXISTS (SELECT 1
+               FROM dbo.user_org_assignments a
+               WHERE a.org_type_id = @orgTypeId
+                 AND NOT EXISTS (SELECT 1 FROM #user_org_matched m
+                                 WHERE m.user_id = a.user_id AND m.org_value IS NOT NULL))
+BEGIN
+    DROP TABLE #user_org_matched;
+    RAISERROR('USERORG_UNCONFIRMED_CLEAR', 16, 1);
+    RETURN;
+END
 
 -- Register any value we have not seen for this org type before.
 INSERT INTO dbo.user_org_values (org_type_id, name)
@@ -428,7 +509,8 @@ DROP TABLE #user_org_matched;";
                 RowsCleared = reader.GetInt32(12),
                 RowsUnknownUpn = reader.GetInt32(13),
                 RowsInvalid = reader.GetInt32(14),
-                ErrorMessage = ReadString(reader, 15),
+                ConfirmClear = reader.GetBoolean(15),
+                ErrorMessage = ReadString(reader, 16),
             };
         }
 

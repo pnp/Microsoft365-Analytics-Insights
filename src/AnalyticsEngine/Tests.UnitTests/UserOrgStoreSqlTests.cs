@@ -561,6 +561,11 @@ DELETE FROM dbo.users;");
 
         private async Task<int> QueueJob(int typeId, UserOrgImportMode mode, params UserOrgStagedRow[] rows)
         {
+            return await QueueJob(typeId, mode, true, rows);
+        }
+
+        private async Task<int> QueueJob(int typeId, UserOrgImportMode mode, bool confirmClear, params UserOrgStagedRow[] rows)
+        {
             return await _jobs.CreateJobWithRowsAsync(
                 new UserOrgImportJob
                 {
@@ -568,8 +573,153 @@ DELETE FROM dbo.users;");
                     Mode = mode,
                     StartedBy = "admin@contoso.com",
                     FileName = "orgs.csv",
+                    ConfirmClear = confirmClear,
                 },
                 rows);
+        }
+
+        [TestMethod]
+        public async Task Apply_RefusesAJobThatWasSupersededWhileItWasStillAlive()
+        {
+            // The worst thing this feature can do. A worker that went quiet - a long pause, a stalled
+            // connection - can be superseded and have its staged rows deleted underneath it. Applying
+            // anyway means a Replace matches nobody, so it DELETES every assignment for the org type;
+            // and if that commits after the replacement's own apply, it silently empties a type the
+            // portal is reporting as freshly imported.
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, typeId, "Keep me") });
+
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Replace, new UserOrgStagedRow(1, "a@contoso.com", "New"));
+            await _jobs.TryClaimJobAsync(jobId);
+
+            // Superseded mid-flight, exactly as CreateJobWithRowsAsync would do it.
+            Execute($"UPDATE dbo.user_org_import_jobs SET status = 4 WHERE id = {jobId}");
+            Execute($"DELETE FROM dbo.user_org_import_staging WHERE job_id = {jobId}");
+
+            try
+            {
+                await _jobs.ApplyAsync(jobId);
+                Assert.Fail("A superseded job must not apply.");
+            }
+            catch (UserOrgJobSupersededException)
+            {
+            }
+
+            Assert.AreEqual(
+                "Keep me",
+                (await _assignments.GetForUserAsync(user)).Single().Value,
+                "A superseded Replace with no staged rows would otherwise wipe the whole org type.");
+        }
+
+        [TestMethod]
+        public async Task Apply_RefusesAnUnconfirmedReplaceThatWouldClearSomeone()
+        {
+            // The web request checks this too, but its answer can be minutes old by the time the
+            // worker runs, and another admin's import can queue, run and finish in between. Only the
+            // apply transaction can answer it authoritatively.
+            var kept = AddUser("kept@contoso.com");
+            var lost = AddUser("lost@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            await _assignments.MergeAsync(new[]
+            {
+                new UserOrgAssignmentUpdate(kept, typeId, "Retail"),
+                new UserOrgAssignmentUpdate(lost, typeId, "Wholesale"),
+            });
+
+            var jobId = await QueueJob(
+                typeId, UserOrgImportMode.Replace, false, new UserOrgStagedRow(1, "kept@contoso.com", "Retail"));
+            await _jobs.TryClaimJobAsync(jobId);
+
+            try
+            {
+                await _jobs.ApplyAsync(jobId);
+                Assert.Fail("An unconfirmed destructive replace must be refused.");
+            }
+            catch (UserOrgValidationException ex)
+            {
+                StringAssert.Contains(ex.Message, "not confirmed");
+            }
+
+            Assert.AreEqual(2, Count($"SELECT COUNT(*) FROM dbo.user_org_assignments WHERE org_type_id = {typeId}"),
+                "The refusal must leave the database exactly as it was.");
+        }
+
+        [TestMethod]
+        public async Task Apply_AllowsAnUnconfirmedReplaceThatClearsNobody()
+        {
+            // The gate is about the blast radius, not about the mode. A Replace that covers everybody
+            // is not destructive and must not need a confirmation the admin was never shown.
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, typeId, "Retail") });
+
+            var jobId = await QueueJob(
+                typeId, UserOrgImportMode.Replace, false, new UserOrgStagedRow(1, "a@contoso.com", "Wholesale"));
+            await _jobs.TryClaimJobAsync(jobId);
+
+            await _jobs.ApplyAsync(jobId);
+
+            Assert.AreEqual("Wholesale", (await _assignments.GetForUserAsync(user)).Single().Value);
+        }
+
+        [TestMethod]
+        public async Task QueueingIsRefusedIfTheTypeStoppedBeingCsvSourcedWhileTheFileWasRead()
+        {
+            // The caller checks the source before parsing a file that may run to half a million rows.
+            // An admin switching the type to Entra in that window would otherwise get a CSV import
+            // landing on a type that no longer takes one.
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            Execute(
+                "UPDATE dbo.user_org_types SET source_kind = 1, entra_attribute_name = 'extensionAttribute1' "
+                + $"WHERE id = {typeId}");
+
+            try
+            {
+                await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", "X"));
+                Assert.Fail("A CSV import must not be queued against a type that is no longer CSV-sourced.");
+            }
+            catch (UserOrgValidationException ex)
+            {
+                StringAssert.Contains(ex.Message, "no longer takes its values from a CSV file");
+            }
+        }
+
+        [TestMethod]
+        public async Task Merge_SkipsTypesThatChangedSourceWhileTheImportWasRunning()
+        {
+            // A user-metadata cycle reads its org types, then spends minutes loading 200,000 users
+            // from Graph. An admin who switches a type to CSV in that window has their change undone
+            // if the merge writes anyway - and a later CSV Merge never touches users the file does not
+            // mention, so those values would then survive indefinitely.
+            var user = AddUser("a@contoso.com");
+            var entraType = await _types.CreateAsync(new UserOrgType
+            {
+                Name = "Cost Centre",
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "extensionAttribute1",
+                IsEnabled = true,
+            });
+
+            Execute($"UPDATE dbo.user_org_types SET source_kind = 2, entra_attribute_name = NULL WHERE id = {entraType}");
+
+            var result = await _assignments.MergeAsync(
+                new[] { new UserOrgAssignmentUpdate(user, entraType, "From Entra") },
+                UserOrgSourceKind.EntraAttribute);
+
+            Assert.AreEqual(0, result.Applied);
+            Assert.AreEqual(0, (await _assignments.GetForUserAsync(user)).Count);
+        }
+
+        [TestMethod]
+        public async Task Merge_WithoutAnExpectedSourceStillWritesEverything()
+        {
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+
+            var result = await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, typeId, "Retail") });
+
+            Assert.AreEqual(1, result.Applied);
         }
 
         [TestMethod]
