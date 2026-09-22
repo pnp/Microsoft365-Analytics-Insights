@@ -35,6 +35,7 @@ import {
   fetchWebActivityTechnology,
   fetchWebActivityVisits,
 } from '../api/webActivityApi';
+import { useT, type TranslationKey } from '../i18n';
 import type {
   WebActivityAvailability,
   WebActivityExportSection,
@@ -48,12 +49,12 @@ import type {
 } from '../types/webActivity';
 
 /** The windows the API accepts. Anything else is snapped server-side, so these must agree with it. */
-const WINDOWS = [
-  { days: 7, label: 'Last 7 days' },
-  { days: 28, label: 'Last 28 days' },
-  { days: 90, label: 'Last 90 days' },
-  { days: 180, label: 'Last 180 days' },
-  { days: 365, label: 'Last 365 days' },
+const WINDOWS: { days: number; labelKey: TranslationKey }[] = [
+  { days: 7, labelKey: 'webActivity.page.window.last7Days' },
+  { days: 28, labelKey: 'webActivity.page.window.last28Days' },
+  { days: 90, labelKey: 'webActivity.page.window.last90Days' },
+  { days: 180, labelKey: 'webActivity.page.window.last180Days' },
+  { days: 365, labelKey: 'webActivity.page.window.last365Days' },
 ];
 
 /** A tab's payload together with the (period, refresh) it was loaded for. */
@@ -61,14 +62,14 @@ type Cached<T> = { key: string; data: T } | null;
 
 type TabKey = 'overview' | 'visits' | 'pages' | 'journeys' | 'geography' | 'search' | 'technology';
 
-const TABS: { key: TabKey; label: string }[] = [
-  { key: 'overview', label: 'Overview' },
-  { key: 'visits', label: 'Visits' },
-  { key: 'pages', label: 'Page views' },
-  { key: 'journeys', label: 'Journeys' },
-  { key: 'geography', label: 'Geographics' },
-  { key: 'search', label: 'Web searches' },
-  { key: 'technology', label: 'Technology' },
+const TABS: { key: TabKey; labelKey: TranslationKey }[] = [
+  { key: 'overview', labelKey: 'webActivity.page.tab.overview' },
+  { key: 'visits', labelKey: 'webActivity.page.tab.visits' },
+  { key: 'pages', labelKey: 'webActivity.page.tab.pages' },
+  { key: 'journeys', labelKey: 'webActivity.page.tab.journeys' },
+  { key: 'geography', labelKey: 'webActivity.page.tab.geography' },
+  { key: 'search', labelKey: 'webActivity.page.tab.search' },
+  { key: 'technology', labelKey: 'webActivity.page.tab.technology' },
 ];
 
 const useStyles = makeStyles({
@@ -109,6 +110,7 @@ const useStyles = makeStyles({
  */
 export default function WebActivityPage() {
   const styles = useStyles();
+  const t = useT();
 
   const [days, setDays] = useState(28);
   const [selectedTab, setSelectedTab] = useState<TabKey>('overview');
@@ -160,7 +162,7 @@ export default function WebActivityPage() {
       .catch((e: unknown) => {
         if (controller.signal.aborted) return;
         setAvailabilityError(
-          e instanceof Error ? e.message : 'Failed to load the web traffic data sources.',
+          e instanceof Error ? e.message : t('webActivity.page.availabilityLoadFailed'),
         );
       });
 
@@ -229,7 +231,7 @@ export default function WebActivityPage() {
     request
       .catch((e: unknown) => {
         if (controller.signal.aborted) return;
-        setError(e instanceof Error ? e.message : 'Failed to load this section.');
+        setError(e instanceof Error ? e.message : t('webActivity.page.sectionLoadFailed'));
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
@@ -256,14 +258,14 @@ export default function WebActivityPage() {
       setExporting(true);
       try {
         await downloadWebActivityExport(section, days);
-        toast.success('Export downloaded');
+        toast.success(t('webActivity.page.exportDownloaded'));
       } catch (e: unknown) {
-        toast.error(e instanceof Error ? e.message : 'The export failed.');
+        toast.error(e instanceof Error ? e.message : t('webActivity.page.exportFailed'));
       } finally {
         setExporting(false);
       }
     },
-    [days],
+    [days, t],
   );
 
   const hasData =
@@ -279,11 +281,9 @@ export default function WebActivityPage() {
     <div>
       <div className={styles.header}>
         <div>
-          <Title3>SharePoint web activity</Title3>
+          <Title3>{t('webActivity.page.title')}</Title3>
           <Body1 block className={styles.intro}>
-            What people actually do on the intranet: who visits and how often, which pages earn their
-            keep, where visitors arrive and give up, what they search for when navigation fails, and
-            how fast the whole thing feels. Every figure carries its definition and the SQL behind it.
+            {t('webActivity.page.intro')}
           </Body1>
         </div>
 
@@ -291,11 +291,11 @@ export default function WebActivityPage() {
           <Select
             value={String(days)}
             onChange={(_: any, d: any) => setDays(Number(d.value))}
-            aria-label="Reporting period"
+            aria-label={t('webActivity.page.reportingPeriodAria')}
           >
             {WINDOWS.map((w) => (
               <option key={w.days} value={w.days}>
-                {w.label}
+                {t(w.labelKey)}
               </option>
             ))}
           </Select>
@@ -305,7 +305,7 @@ export default function WebActivityPage() {
             onClick={() => setReloadToken((n) => n + 1)}
             disabled={loading}
           >
-            Refresh
+            {t('webActivity.page.refresh')}
           </Button>
         </div>
       </div>
@@ -325,8 +325,8 @@ export default function WebActivityPage() {
         >
           <MessageBarBody>
             {availability.collectionStatusKnown
-              ? 'No SharePoint page views have been collected, so this page has nothing to report. The details above say exactly what to enable or deploy.'
-              : 'Whether any page views have been collected could not be determined - the check against the page-hit table failed. This is not evidence that the tracker is broken, so do not redeploy it on the strength of this message; the details above say where to look first.'}
+              ? t('webActivity.page.noPageViews')
+              : t('webActivity.page.collectionUnknown')}
           </MessageBarBody>
         </MessageBar>
       )}
@@ -335,11 +335,11 @@ export default function WebActivityPage() {
         className={styles.tabs}
         selectedValue={selectedTab}
         onTabSelect={onTabSelect}
-        aria-label="Web activity sections"
+        aria-label={t('webActivity.page.sectionsAria')}
       >
         {TABS.map((tab) => (
           <Tab key={tab.key} value={tab.key}>
-            {tab.label}
+            {t(tab.labelKey)}
           </Tab>
         ))}
       </TabList>
@@ -351,7 +351,7 @@ export default function WebActivityPage() {
           </MessageBar>
         )}
 
-        {loading && !hasData && <Spinner label="Loading web activity..." />}
+        {loading && !hasData && <Spinner label={t('webActivity.page.loading')} />}
 
         {selectedTab === 'overview' && overviewData && (
           <OverviewPanel
@@ -405,9 +405,7 @@ export default function WebActivityPage() {
       </div>
 
       <Text size={200} className={styles.muted} style={{ marginTop: '20px', display: 'block' }}>
-        This page replaces the Power BI web-traffic report. It reads the page-hit tables directly
-        rather than the legacy reporting views, so it reflects what the SharePoint tracker actually
-        collected. Hour-of-day and day-of-week figures are UTC.
+        {t('webActivity.page.footer')}
       </Text>
     </div>
   );

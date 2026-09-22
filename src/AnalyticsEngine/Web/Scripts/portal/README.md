@@ -106,13 +106,17 @@ auth cookie, so a token in the request body would be ignored.
 | _(none - origin-relative)_ | `api/WebActivity` | SharePoint web activity: source availability, and one endpoint per tab (`/overview`, `/visits`, `/pages`, `/journeys`, `/geography`, `/search`, `/technology`) plus `/export/{section}` CSVs. |
 
 `window.o365AnalyticsBuildLabel` is not an endpoint: it is the running build's label
-(`Common.Entities.BuildConstants.BuildLabel`), substituted into `index.html` by
-`HomeController.InjectBuildLabel` when it serves the page. The SPA prints it in the footer of a
-printed report, which has to exist *before* `window.print()` runs - so it cannot be fetched; and
-`api/SystemStatus`, which carries the same label elsewhere, `COUNT(*)`s whole tables and is far too
-expensive to call on every page just to name a version. `npm run dev` serves `index.html` straight
-from disk, so the placeholder survives; the SPA reads that, and `DEV_BUILD`, as "unknown build" and
-prints no version rather than a fake one.
+(`Common.Entities.BuildConstants.BuildLabel`, stamped as `Build <number>` by ci.yml), substituted
+into `index.html` by `HomeController.InjectBuildLabel` when it serves the page. The SPA prints it in
+the footer of a printed report, which has to exist *before* `window.print()` runs - so it cannot be
+fetched; and `api/SystemStatus`, which carries the same label elsewhere, `COUNT(*)`s whole tables
+and is far too expensive to call on every page just to name a version.
+
+The footer reads `Microsoft 365 Advanced Analytics (build 1836) · https://github.com/...`, and the
+parenthesis is never empty. `npm run dev` serves `index.html` straight from disk, so the placeholder
+survives; the SPA reads that, and `DEV_BUILD`, as an unstamped build and prints
+`(development build)`. It prints neither a fake version nor - as it once did - nothing at all, which
+made a report run off a developer's machine indistinguishable on paper from one off a release.
 
 ## Printing
 
@@ -132,11 +136,169 @@ stylesheet):
 | `data-print="page-break"` | Starts a new sheet, and keeps its own content with it. |
 | `data-print="keep-with-next"` | Never left stranded at the foot of a page with its content overleaf. |
 | `data-print="only"` | Rendered on paper only. |
-| `data-print="footer"` | Repeated at the foot of every printed page. |
+| `data-print="shell"` | The layout table that carries the running footer. Block flow on screen. |
+| `data-print="footer"` | The `<tfoot>` repeated at the foot of every printed page. |
+
+The footer is a real `<tfoot>` inside a layout `<table>` wrapping the report, and that is load-bearing.
+A running footer must repeat on every page *and* have room reserved for it; `position: fixed` gives
+only the first, so it overprints the last line of a full page, and Chromium mis-resolves the negative
+`bottom` meant to lift it into the page margin - it lands the footer across the *top* of each sheet.
+A table section is the only construct that does both, the same mechanism that repeats a long report
+table's header row. On screen `src/index.css` flattens the table back to block flow and hides the
+footer, so it costs nothing there.
 
 `src/printStyles.test.ts` asserts the stylesheet half - Vitest runs with `css: false`, so a
 component test can prove an attribute is present but never that it does anything. It also fails on
 any `data-print` value the stylesheet has never heard of.
+
+## Languages
+
+The portal ships in **English (en-GB)** and **Spanish (es-ES)**.
+
+It opens in the visitor's own language with nothing to configure: an earlier explicit choice wins,
+then the browser's `navigator.languages`, then English. Matching is on the primary subtag, so
+`es-MX` and `es-419` get Spanish rather than falling back to English because the region is not
+Spain. The picker is a globe in the brand bar — in the header rather than on a settings page,
+because somebody who has landed on a portal in a language they cannot read also cannot navigate to
+a settings page to fix it. The choice is kept in `localStorage`, and a browser with site data
+blocked degrades to detection instead of throwing.
+
+### How it works
+
+| File | Role |
+| --- | --- |
+| `src/i18n/index.ts` | The public API. Import from here, not from the files behind it. |
+| `src/i18n/catalog/en/<area>.ts` | English text for one area, as a flat `as const` object of dotted keys. |
+| `src/i18n/catalog/es/<area>.ts` | The Spanish counterpart, typed `Record<keyof typeof en, string>`. |
+| `src/i18n/catalog/index.ts` | Merges the modules, derives `TranslationKey`, and fetches non-English catalogs. |
+| `src/i18n/I18nProvider.tsx` | Context, `useT()`/`useTNode()`, and `<html lang>`. |
+| `src/i18n/locale.ts` | Locale-aware `formatNumber` / `formatDateParts` / `compareStrings`. |
+| `src/i18n/lint/` | The untranslated-text check and its allow-list. |
+
+```tsx
+import { useT } from '../../i18n';
+
+export default function Panel() {
+  const t = useT();
+  return <Text>{t('health.title')}</Text>;
+}
+```
+
+`t()` takes a `TranslationKey`, so a typo or a renamed key is a build error rather than a key name
+appearing on screen. `{placeholder}` markers are substituted from the second argument; `useTNode()`
+does the same but accepts elements, so a sentence containing a link stays one translatable
+sentence. `plural(count, oneKey, otherKey)` picks between two real keys — English and Spanish share
+the same one/other split, so a runtime plural engine would buy nothing and would hide both forms
+from the compiler.
+
+Outside a component — in a thrown error, a chart callback, an exporter — use `translateActive()`
+from `src/i18n/runtime`, which resolves in whatever language is currently in force. That is how the
+API layer's error messages are translated: `src/api/*.ts` throws `Error`s whose `message` the pages
+render directly, and an English failure message on a Spanish page is what a reader sees at the
+moment something has already gone wrong. Import it from `../i18n/runtime`, not from `../i18n` —
+the package index re-exports `LanguageSwitcher`, which would pull Fluent UI into the API chunk.
+
+Text that came out of the customer's tenant — user and display names, departments, site and team
+names, file names, URLs, agent and SKU names — is **never** translated. Only the product's own
+wording is.
+
+Numbers and dates must go through `formatNumber` / `formatDateParts` rather than a bare
+`toLocaleString()`. This is correctness, not polish: `1,234` is one thousand two hundred and
+thirty-four in English and **one point two three four** in Spanish.
+
+### Only the language you read is downloaded
+
+English is bundled — it is the source language and the runtime fallback. Every other language is a
+separate chunk (one per language, not one per module: `Promise.all` over many chunks rejects if any
+single request fails, which would drop a whole language over one proxy hiccup) that `main.tsx`
+fetches for the language it detects, before the first render, so a Spanish reader never sees an
+English flash and an English reader never downloads Spanish. A fetch that does fail falls the
+*whole* language back to English — text, locale and `<html lang>` together — and picking the
+language again retries it.
+
+Measured on the production build (gzipped, eagerly-loaded chunks):
+
+| | eager |
+| --- | --- |
+| before this feature | 178 kB |
+| English reader | 275 kB |
+| Spanish reader | 275 kB + 86 kB in one chunk |
+
+**The point of the split is the third language, not the second.** Bundling every language would
+make each new one a permanent download for every user, which turns "should we support Norwegian?"
+into a question about page weight. This way it costs existing readers nothing.
+
+The English catalog is the +94 kB: text that used to live inside each page's lazily-loaded chunk
+now sits in the eager bundle. Moving it back — one catalog module per route, loaded with the page —
+is possible but would mean each page registering its own catalog at runtime, and a page that forgot
+would render raw keys. That trade (a guaranteed-correct 94 kB against a silently-breakable saving)
+was not worth taking on an authenticated internal admin portal whose assets are content-hashed and
+cached.
+
+### Two checks stop a half-translated portal shipping
+
+1. **`npm run lint` (`tsc --noEmit`)** — each Spanish module is typed against its English
+   counterpart, so an English key with no Spanish translation is a *compile error*:
+   `Property '"health.title"' is missing in type ... src/i18n/catalog/es/health.ts`.
+   The production build runs the same type-check, so an untranslated string cannot be built.
+
+2. **`npx vitest run src/i18n`** — catches what the type system cannot see:
+   - `hardcodedStrings.test.ts` parses every page and component with the TypeScript AST and fails
+     on any string a user could read that is not a catalog key, listing file, line and text. It
+     covers JSX text, user-facing props (`label`, `title`, `aria-label`, `content`, `blurb`,
+     `sublabel`, …), rendered expressions, the `label`/`title`/`what`/`how` properties of the
+     constant tables this portal keeps most of its text in, toasts, **English passed as a *value*
+     to `t()`** (which would land inside a translated sentence), and — as a catch-all — **any
+     phrase of three words or more wherever it is written**, which is what catches a sentence
+     assembled inside a helper and returned as a string.
+   - `catalog.test.ts` runs against **every language in `LANGUAGES`**, and fails on a key claimed
+     by two modules, a key not namespaced to its module, a language whose modules do not line up
+     with English module-for-module, a `{placeholder}` present in one language and not the other,
+     an empty translation, a sentence chopped into fragments that no translator can reassemble, an
+     HTML entity that would be shown to the reader verbatim, and English pasted into a translated
+     catalog to satisfy the compiler — which is the realistic way a half-translated page ships
+     while every other check is green.
+   - `placeholders.test.ts` fails when a call site does not supply a `{placeholder}` the string
+     needs (it would render as literal `{count}`) or supplies one the string does not have (it is
+     silently dropped, so a figure vanishes from the sentence). It resolves `t(plural(…))` to both
+     of its keys, because that is the shape most likely to carry a placeholder.
+   - `localeFormatting.test.ts` fails on any `toLocaleString()` / `toLocaleDateString(undefined, …)`
+     / `new Intl.*(undefined, …)` outside `locale.ts`. That class is invisible to every other
+     check, because such a call contains no string at all — and three of them survived the initial
+     conversion in a module twelve components import from.
+
+`src/i18n/lint/allowList.ts` is the only escape hatch, and is for text that reads *identically* in
+both languages: Microsoft product names Microsoft itself does not translate (Copilot, Teams,
+SharePoint, Power BI…), technical identifiers (SQL, CSV, GUID, UPN, DLP), units and symbols. An
+ordinary English word added there defeats the whole mechanism, so additions are expected to be
+challenged in review — and the `release-manager` agent reads every change to it in a release diff.
+
+Both checks run in CI on every pull request. `tests.yml` builds the solution (which runs
+`npm run build`, and therefore `tsc`) and then runs `npm run test` in this directory, inside the
+`test_dotnet (Release)` job — a required status check on `dev` and `main`. A branch that leaves a
+string untranslated cannot be merged.
+
+### Adding a language
+
+1. Add it to `LANGUAGES` in `src/i18n/languages.ts` with a region-qualified locale and its name in
+   its own language, and extend the `Language` union.
+2. Copy `src/i18n/catalog/es/` to `src/i18n/catalog/<id>/`, including its `index.ts`, and translate.
+3. Add one line to `LOADERS` in `src/i18n/catalog/index.ts`: `import('./<id>')`. Write the path
+   literally — Vite has to see it to split the chunk.
+4. Register it in `MODULES` in `src/test/catalogModules.ts`, so the per-module checks cover it.
+   `catalog.test.ts` runs its whole suite against every language in `LANGUAGES` and fails if one is
+   missing from that list, so this cannot be forgotten silently.
+
+`npm run lint` then lists every key still missing, and will not go green until the new language is
+complete. A language with more than two plural categories (Polish, Arabic, Russian) needs a real
+plural selector in `plural.ts` first — that is a deliberate deferral, not an oversight.
+
+### Adding a string
+
+Put it in the catalog module for its area, translate it in every language, and render it with
+`t()`. Existing component tests assert **English** wording and `renderWithProvider` pins the
+language to English, so a test failing after a translation change means the English text changed —
+restore the English rather than editing the test.
 
 ## Local development
 

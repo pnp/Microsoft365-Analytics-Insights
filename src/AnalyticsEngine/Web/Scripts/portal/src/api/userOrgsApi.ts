@@ -1,4 +1,5 @@
 import { apiFetch } from './http';
+import { translateActive } from '../i18n/runtime';
 import type {
   UserOrgAttributeCatalogue,
   UserOrgCsvPreview,
@@ -20,7 +21,7 @@ const baseUrl = (): string => `${window.location.origin}/api/UserOrg`;
  * useful part, and this page is almost entirely about getting a configuration right.
  */
 async function toError(response: Response): Promise<Error> {
-  let message = `Request failed (${response.status})`;
+  let message = translateActive('errors.userOrgs.requestFailed', { status: response.status });
   try {
     const body = await response.json();
     if (body && typeof body.message === 'string' && body.message.length > 0) {

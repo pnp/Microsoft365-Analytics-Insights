@@ -137,6 +137,18 @@ namespace DataUtils.Sql
                 // Not parseable as a SQL connection string - not ours to reason about.
                 return false;
             }
+            catch (FormatException)
+            {
+                // A numeric keyword with a non-numeric value, e.g. "Connection Timeout=12x". Reached when
+                // a half-typed connection string is evaluated live, as the installer's database-upgrade
+                // form does on every keystroke, so it must not escape.
+                return false;
+            }
+            catch (OverflowException)
+            {
+                // Same, for a numeric keyword whose value does not fit, e.g. "Connection Timeout=12000000000".
+                return false;
+            }
 
             // Explicit credentials of any kind mean "leave this connection alone".
             if (!string.IsNullOrWhiteSpace(builder.UserID)) return false;

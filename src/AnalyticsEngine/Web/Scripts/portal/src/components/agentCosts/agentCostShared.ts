@@ -1,3 +1,4 @@
+import { formatDateParts, formatNumber, translateActive, type TFunction, type TranslationKey } from '../../i18n';
 import type { AgentCostDetailRow, AzureDimension, CreditDimension } from '../../types/agentCosts';
 
 /** Shown for a dimension the billing API did not report for a row. */
@@ -16,9 +17,9 @@ export const DASH = '\u2014';
 export function formatCredits(value: number | null | undefined): string {
   if (value == null) return DASH;
   if (value === 0) return '0';
-  if (Math.abs(value) >= 1000) return value.toLocaleString(undefined, { maximumFractionDigits: 0 });
-  if (Math.abs(value) >= 1) return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
-  return value.toLocaleString(undefined, { maximumFractionDigits: 6 });
+  if (Math.abs(value) >= 1000) return formatNumber(value, { maximumFractionDigits: 0 });
+  if (Math.abs(value) >= 1) return formatNumber(value, { maximumFractionDigits: 2 });
+  return formatNumber(value, { maximumFractionDigits: 6 });
 }
 
 /**
@@ -35,7 +36,7 @@ export function formatMoney(value: number | null | undefined, currency: string |
   // Up to six decimal places for sub-unit amounts, matching the decimal(18,6) the column is stored as.
   // Azure meters are priced in millionths of a currency unit, so capping at two (or four) would render a
   // real charge as "0.00" - the same failure the column width was chosen to avoid.
-  const amount = value.toLocaleString(undefined, {
+  const amount = formatNumber(value, {
     minimumFractionDigits: 2,
     maximumFractionDigits: value !== 0 && Math.abs(value) < 0.01 ? 6 : 2,
   });
@@ -44,7 +45,7 @@ export function formatMoney(value: number | null | undefined, currency: string |
 }
 
 export function formatCount(value: number | null | undefined): string {
-  return value == null ? DASH : Math.round(value).toLocaleString();
+  return value == null ? DASH : formatNumber(Math.round(value));
 }
 
 /**
@@ -58,10 +59,16 @@ export function formatCount(value: number | null | undefined): string {
 export function formatQuantity(value: number | null | undefined): string {
   if (value == null) return DASH;
   if (value === 0) return '0';
-  if (Math.abs(value) >= 1000) return value.toLocaleString(undefined, { maximumFractionDigits: 0 });
-  if (Math.abs(value) >= 1) return value.toLocaleString(undefined, { maximumFractionDigits: 3 });
-  return value.toLocaleString(undefined, { maximumFractionDigits: 6 });
+  if (Math.abs(value) >= 1000) return formatNumber(value, { maximumFractionDigits: 0 });
+  if (Math.abs(value) >= 1) return formatNumber(value, { maximumFractionDigits: 3 });
+  return formatNumber(value, { maximumFractionDigits: 6 });
 }
+
+const HARNESS_LABEL_KEYS: Record<string, TranslationKey> = {
+  StandardOrCopilotChat: 'agentCosts.harness.standardOrCopilotChat',
+  Unknown: 'agentCosts.harness.unrecognisedFeature',
+  NotAssessed: 'agentCosts.harness.noFeatureReported',
+};
 
 /**
  * A display label for a stored harness value.
@@ -70,19 +77,11 @@ export function formatQuantity(value: number | null | undefined): string {
  * "StandardOrCopilotChat" in a report is a leaked enum. `NotAssessed` and `Unknown` are deliberately
  * worded so they read as "we could not tell", never as a harness in their own right.
  */
-export function harnessLabel(value: string | null | undefined): string {
-  switch (value) {
-    case 'GitHubCopilot':
-      return 'GitHub Copilot';
-    case 'StandardOrCopilotChat':
-      return 'Standard / Copilot Chat';
-    case 'Unknown':
-      return 'Unrecognised feature';
-    case 'NotAssessed':
-      return 'No feature reported';
-    default:
-      return value || NOT_REPORTED;
-  }
+export function harnessLabel(value: string | null | undefined, t: TFunction = translateActive): string {
+  const key = value ? HARNESS_LABEL_KEYS[value] : undefined;
+  if (key) return (t ?? translateActive)(key);
+  if (value === 'GitHubCopilot') return 'GitHub Copilot';
+  return value || t('agentCosts.state.notReported');
 }
 
 /** A UTC ISO date as a short date. Rendered in UTC - the underlying grain is a UTC usage day. */
@@ -90,14 +89,14 @@ export function formatDay(iso: string | null | undefined): string {
   if (!iso) return DASH;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return DASH;
-  return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  return formatDateParts(date, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 }
 
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return DASH;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return DASH;
-  return date.toLocaleString(undefined, {
+  return formatDateParts(date, {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
@@ -121,29 +120,37 @@ export function windowOfDays(days: number, now: Date = new Date()): { from: stri
 }
 
 /** Human labels for the credit pivot. */
-export const CREDIT_DIMENSIONS: { key: CreditDimension; label: string; hint: string }[] = [
-  { key: 'agent', label: 'Agent', hint: 'Which agent the credits were billed against.' },
-  { key: 'environment', label: 'Environment', hint: 'The Power Platform environment the agent lives in.' },
+export const CREDIT_DIMENSIONS: { key: CreditDimension; labelKey: TranslationKey; hintKey: TranslationKey }[] = [
+  {
+    key: 'agent',
+    labelKey: 'agentCosts.dimension.credit.agent.label',
+    hintKey: 'agentCosts.dimension.credit.agent.hint',
+  },
+  {
+    key: 'environment',
+    labelKey: 'agentCosts.dimension.credit.environment.label',
+    hintKey: 'agentCosts.dimension.credit.environment.hint',
+  },
   {
     key: 'harness',
-    label: 'Harness',
-    hint: 'Standard / Copilot Chat or GitHub Copilot. Inferred from the billing feature, because Microsoft does not report it directly.',
+    labelKey: 'agentCosts.dimension.credit.harness.label',
+    hintKey: 'agentCosts.dimension.credit.harness.hint',
   },
   {
     key: 'feature',
-    label: 'Billing feature',
-    hint: 'What was charged for - a generative answer, tenant graph grounding, an agent action.',
+    labelKey: 'agentCosts.dimension.credit.feature.label',
+    hintKey: 'agentCosts.dimension.credit.feature.hint',
   },
 ];
 
-export const AZURE_DIMENSIONS: { key: AzureDimension; label: string }[] = [
-  { key: 'meter', label: 'Meter' },
-  { key: 'service', label: 'Service' },
-  { key: 'category', label: 'Meter category' },
-  { key: 'resource', label: 'Resource' },
-  { key: 'resourcegroup', label: 'Resource group' },
-  { key: 'subscription', label: 'Subscription' },
-  { key: 'tag', label: 'Tag value' },
+export const AZURE_DIMENSIONS: { key: AzureDimension; labelKey: TranslationKey }[] = [
+  { key: 'meter', labelKey: 'agentCosts.dimension.azure.meter' },
+  { key: 'service', labelKey: 'agentCosts.dimension.azure.service' },
+  { key: 'category', labelKey: 'agentCosts.dimension.azure.category' },
+  { key: 'resource', labelKey: 'agentCosts.dimension.azure.resource' },
+  { key: 'resourcegroup', labelKey: 'agentCosts.dimension.azure.resourceGroup' },
+  { key: 'subscription', labelKey: 'agentCosts.dimension.azure.subscription' },
+  { key: 'tag', labelKey: 'agentCosts.dimension.azure.tag' },
 ];
 
 /**
@@ -169,7 +176,7 @@ function csvCell(value: string | number | null | undefined): string {
  * Exported client-side from the rows already fetched, so it always matches exactly what the admin can
  * see - there is no second query that could return different figures than the table they are looking at.
  */
-export function detailRowsToCsv(rows: AgentCostDetailRow[]): string {
+export function detailRowsToCsv(rows: AgentCostDetailRow[], t?: TFunction): string {
   const header = [
     'Usage date',
     'Agent',
@@ -190,7 +197,7 @@ export function detailRowsToCsv(rows: AgentCostDetailRow[]): string {
       r.agentId ?? '',
       r.environmentName ?? '',
       r.environmentId ?? '',
-      harnessLabel(r.harness),
+      harnessLabel(r.harness, t),
       r.featureName ?? '',
       r.billedCredits,
       r.nonBilledCredits ?? '',

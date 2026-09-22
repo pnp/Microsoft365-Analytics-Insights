@@ -37,6 +37,8 @@ import {
   useRowExpansion,
 } from './adoptionShared';
 import { formatCount, formatDate } from '../shared/KpiGrid';
+import { useT, useTNode } from '../../i18n';
+import { opportunityRationale, opportunityTierLabel } from './serverText';
 
 const PAGE_SIZE = 50;
 
@@ -169,6 +171,8 @@ export default function OpportunitiesPanel({
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
+  const t = useT();
+  const tNode = useTNode();
 
   // Mirrors CopilotAdoptionScoring.OpportunityCopilotTargetForWindow. The Copilot component is the only
   // one of the four that is a raw total rather than a per-active-day average, so it is scaled from its
@@ -228,7 +232,7 @@ export default function OpportunitiesPanel({
       })
       .catch((e: any) => {
         if (cancelled || controller.signal.aborted) return;
-        setError(e instanceof Error ? e.message : 'Failed to load licence opportunities.');
+        setError(e instanceof Error ? e.message : t('copilotAdoptionUsers.opportunities.loadError'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -240,7 +244,7 @@ export default function OpportunitiesPanel({
       // a bare `cancelled` flag would only suppress the state update and leave the loop running.
       controller.abort();
     };
-  }, [windowDays, filters, page, seatLicenceTypeIds, reloadKey]);
+  }, [windowDays, filters, page, seatLicenceTypeIds, reloadKey, t]);
 
   /**
    * Applies a column-header sort. The effect above already resets the page whenever `filters`
@@ -277,23 +281,23 @@ export default function OpportunitiesPanel({
         <Input
           className={styles.grow}
           value={searchDraft}
-          placeholder="Search name, email, department, job title or manager"
-          aria-label="Search licence candidates"
+          placeholder={t('copilotAdoptionUsers.common.searchPlaceholder')}
+          aria-label={t('copilotAdoptionUsers.opportunities.searchAria')}
           onChange={(_e: any, d: any) => setSearchDraft(d.value)}
           onKeyDown={(e: any) => {
             if (e.key === 'Enter') setFilters((f) => ({ ...f, search: searchDraft }));
           }}
         />
         <Button size="small" onClick={() => setFilters((f) => ({ ...f, search: searchDraft }))}>
-          Search
+          {t('copilotAdoptionUsers.common.search')}
         </Button>
 
         <Select
           value={filters.department}
-          aria-label="Filter candidates by department"
+          aria-label={t('copilotAdoptionUsers.opportunities.filterDepartmentAria')}
           onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, department: d.value }))}
         >
-          <option value="">All departments</option>
+          <option value="">{t('copilotAdoptionUsers.common.allDepartments')}</option>
           {(filterOptions?.departments ?? []).map((dept) => (
             <option key={dept} value={dept}>
               {dept}
@@ -302,16 +306,16 @@ export default function OpportunitiesPanel({
         </Select>
 
         <Checkbox
-          label="Recommended only"
+          label={t('copilotAdoptionUsers.opportunities.recommendedOnly')}
           checked={filters.recommendedOnly}
           onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, recommendedOnly: !!d.checked }))}
         />
         <Tooltip
-          content="People already using Copilot Chat without a licence - proven demand, not an inference."
+          content={t('copilotAdoptionUsers.opportunities.alreadyUsingTooltip')}
           relationship="description"
         >
           <Checkbox
-            label="Already using Copilot"
+            label={t('copilotAdoptionUsers.opportunities.alreadyUsingFilter')}
             checked={filters.existingCopilotUsersOnly}
             onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, existingCopilotUsersOnly: !!d.checked }))}
           />
@@ -325,10 +329,10 @@ export default function OpportunitiesPanel({
           icon={<ArrowClockwise16Regular />}
           onClick={() => setReloadKey((k) => k + 1)}
         >
-          Refresh
+          {t('copilotAdoptionUsers.common.refresh')}
         </Button>
         <Button size="small" icon={<ArrowDownload16Regular />} as="a" href={exportUrl}>
-          Export CSV
+          {t('copilotAdoptionUsers.common.exportCsv')}
         </Button>
       </div>
 
@@ -350,7 +354,7 @@ export default function OpportunitiesPanel({
 
       {unlicensedGuidance.length > 0 && (
         <div className={styles.guidance}>
-          <Text size={200}>Microsoft&apos;s guidance for this kind of user:</Text>
+          <Text size={200}>{t('copilotAdoptionUsers.opportunities.guidanceIntro')}</Text>
           {unlicensedGuidance.map((link) => (
             <a key={link.url} className={styles.guidanceLink} href={link.url} target="_blank" rel="noreferrer">
               {link.title}
@@ -361,7 +365,7 @@ export default function OpportunitiesPanel({
 
       {loading && (
         <div style={{ textAlign: 'center', padding: '28px' }}>
-          <Spinner size={56} label="Ranking candidates..." />
+          <Spinner size={56} label={t('copilotAdoptionUsers.opportunities.loading')} />
         </div>
       )}
 
@@ -370,47 +374,45 @@ export default function OpportunitiesPanel({
           {filtersActive ? (
             <>
               <Text weight="semibold" block>
-                No licence candidates match these filters.
+                {t('copilotAdoptionUsers.opportunities.noMatches')}
               </Text>
               <Text size={200} block className={styles.muted}>
                 {data.total === 0
-                  ? 'Clear the filters to see every candidate found in this period.'
-                  : `${formatCount(data.total)} candidates were found in this period, but none of them match.`}
+                  ? t('copilotAdoptionUsers.opportunities.clearFiltersNoCandidates')
+                  : t('copilotAdoptionUsers.opportunities.candidatesFoundNoMatches', { count: formatCount(data.total) })}
               </Text>
               <Button size="small" onClick={clearPanelFilters}>
-                Clear filters
+                {t('copilotAdoptionUsers.opportunities.clearFilters')}
               </Button>
             </>
           ) : (
             <>
               <Text weight="semibold" block>
-                Nobody in this tenant qualifies as a licence candidate for the selected period.
+                {t('copilotAdoptionUsers.opportunities.noneQualified')}
               </Text>
               <Text size={200} block className={styles.muted}>
-                A user is listed here when <strong>all</strong> of the following are true. This is a
-                shortlist for a paying seat, not a directory listing, so users with no recorded activity
-                at all are deliberately left out - there is no business case to make for them.
+                {tNode('copilotAdoptionUsers.opportunities.emptyIntro', {
+                  count: <strong>{t('copilotAdoptionUsers.opportunities.emptyIntroAll')}</strong>,
+                })}
               </Text>
               <ul className={styles.emptyList}>
                 <li>
-                  <Text size={200}>They hold none of the SKUs classified as a Copilot licence.</Text>
+                  <Text size={200}>{t('copilotAdoptionUsers.opportunities.emptySkuRequirement')}</Text>
                 </li>
                 <li>
-                  <Text size={200}>Their Entra ID account is enabled - a disabled account cannot use a seat.</Text>
+                  <Text size={200}>{t('copilotAdoptionUsers.opportunities.emptyEnabledRequirement')}</Text>
                 </li>
                 <li>
                   <Text size={200}>
-                    They show up in this period in <strong>either</strong> the Copilot audit log (they used
-                    Copilot Chat without a licence) <strong>or</strong> the Microsoft 365 usage reports for
-                    Teams, Outlook, SharePoint or OneDrive.
+                    {tNode('copilotAdoptionUsers.opportunities.emptyActivity', {
+                      either: <strong>{t('copilotAdoptionUsers.opportunities.emptyActivityEither')}</strong>,
+                      or: <strong>{t('copilotAdoptionUsers.opportunities.emptyActivityOr')}</strong>,
+                    })}
                   </Text>
                 </li>
               </ul>
               <Text size={200} block className={styles.muted}>
-                An empty list almost always means the third point: the Microsoft 365 usage reports have not
-                been imported, so there is nothing to rank. Turn on the usage-report import in the installer
-                and check the Health page, then widen the period at the top of this page. Small test tenants
-                legitimately produce an empty list because hardly anyone is active in them.
+                {t('copilotAdoptionUsers.opportunities.emptyUsageReportsMissing')}
               </Text>
             </>
           )}
@@ -422,65 +424,79 @@ export default function OpportunitiesPanel({
           <table className={table.table}>
             <thead>
               <tr>
-                <SortableTh label="user" sortKey="upn" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} className={table.stickyLeft}>
-                  User
+                <SortableTh label={t('copilotAdoptionUsers.common.userSortLabel')} sortKey="upn" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} className={table.stickyLeft}>
+                  {t('copilotAdoptionUsers.common.user')}
                 </SortableTh>
-                <SortableTh label="department" sortKey="department" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
-                  Department
+                <SortableTh label={t('copilotAdoptionUsers.common.departmentSortLabel')} sortKey="department" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
+                  {t('copilotAdoptionUsers.common.department')}
                 </SortableTh>
                 <SortableTh
-                  label="business case score"
+                  label={t('copilotAdoptionUsers.opportunities.businessCaseLabel')}
                   sortKey="score"
                   activeKey={filters.sortBy}
                   descending={filters.sortDesc}
                   onSort={applySort}
                   defaultDescending
-                  infoTitle="Business case score"
+                  infoTitle={t('copilotAdoptionUsers.opportunities.businessCaseTitle')}
                   info={{
-                    what: `How strong the case for giving this person a Copilot licence is, from 0 to 100. Someone is counted in the "recommended for a licence" headline if they already use Copilot on at least ${options.opportunityProvenDemandMinActiveDays} distinct days without a licence (proven demand), or if this score reaches ${options.opportunityRecommendScore} (workload inferred). Expand a row to see which route applied; the CSV export carries it as a "Qualified by" column.`,
-                    how: `Four weighted signals, weighted so evidence beats inference. Already using Copilot Chat without a licence is worth ${options.opportunityUnlicensedCopilotWeight} points because it proves demand for Copilot itself; Teams collaboration is worth ${options.opportunityCollaborationWeight}, email ${options.opportunityEmailWeight} and document work ${options.opportunityDocumentWeight}, and those three only infer it from general Microsoft 365 activity. Each signal is a ratio against its own target and is capped at 1, so no single very heavy workload can carry someone over the line on its own. Proven demand has to qualify independently because the Copilot weight sits below the score bar, so recurrent unlicensed use could otherwise never clear it while general busyness could.`,
-                    formula:
-                      `copilot     = min(1, unlicensedCopilotInteractions / (${opportunityCopilotTargetExpression}))\n` +
-                      `collab      = min(1, (teamsMessages + teamsMeetings) / ${options.opportunityCollaborationTarget})\n` +
-                      `email       = min(1, (emailsSent + emailsRead) / ${options.opportunityEmailTarget})\n` +
-                      `documents   = min(1, filesViewedOrEdited / ${options.opportunityDocumentTarget})\n` +
-                      `score = copilot*${options.opportunityUnlicensedCopilotWeight} + collab*${options.opportunityCollaborationWeight} + email*${options.opportunityEmailWeight} + documents*${options.opportunityDocumentWeight}\n\n` +
-                      `recommended when unlicensedCopilotActiveDays >= ${options.opportunityProvenDemandMinActiveDays}\n` +
-                      `               or score >= ${options.opportunityRecommendScore}`,
-                    source:
-                      `Copilot use comes from the Copilot audit import and covers this period exactly. Its target of ${options.opportunityCopilotTarget} per ${options.opportunityCopilotTargetBasisDays} days is scaled to the selected period (about ${opportunityCopilotTargetApprox} here; the formula keeps the exact division so a candidate on the bar is not rounded across it) because it is a raw total, not a per-active-day average. The Teams, email and document figures are a per-active-day average across this same period, taken from Microsoft\u2019s daily usage reports - a day the user did not appear in the report at all does not drag the average down. Expand a row for its four component scores and the full justification.`,
+                    what: t('copilotAdoptionUsers.opportunities.businessCaseWhat', {
+                      days: options.opportunityProvenDemandMinActiveDays,
+                      score: options.opportunityRecommendScore,
+                    }),
+                    how: t('copilotAdoptionUsers.opportunities.businessCaseHow', {
+                      copilotWeight: options.opportunityUnlicensedCopilotWeight,
+                      collaborationWeight: options.opportunityCollaborationWeight,
+                      emailWeight: options.opportunityEmailWeight,
+                      documentWeight: options.opportunityDocumentWeight,
+                    }),
+                    formula: t('copilotAdoptionUsers.opportunities.businessCaseFormula', {
+                      copilotTarget: opportunityCopilotTargetExpression,
+                      collaborationTarget: options.opportunityCollaborationTarget,
+                      emailTarget: options.opportunityEmailTarget,
+                      documentTarget: options.opportunityDocumentTarget,
+                      copilotWeight: options.opportunityUnlicensedCopilotWeight,
+                      collaborationWeight: options.opportunityCollaborationWeight,
+                      emailWeight: options.opportunityEmailWeight,
+                      documentWeight: options.opportunityDocumentWeight,
+                      provenDemandDays: options.opportunityProvenDemandMinActiveDays,
+                      recommendScore: options.opportunityRecommendScore,
+                    }),
+                    source: t('copilotAdoptionUsers.opportunities.businessCaseSource', {
+                      target: options.opportunityCopilotTarget,
+                      basisDays: options.opportunityCopilotTargetBasisDays,
+                      approx: opportunityCopilotTargetApprox,
+                    }),
                   }}
                 >
-                  Business case
+                  {t('copilotAdoptionUsers.opportunities.businessCaseHeader')}
                 </SortableTh>
                 <SortableTh
-                  label="unlicensed Copilot use"
+                  label={t('copilotAdoptionUsers.opportunities.unlicensedUseLabel')}
                   sortKey="copilot"
                   activeKey={filters.sortBy}
                   descending={filters.sortDesc}
                   onSort={applySort}
                   defaultDescending
-                  infoTitle="Already using Copilot"
+                  infoTitle={t('copilotAdoptionUsers.opportunities.alreadyUsingTitle')}
                   info={{
-                    what: 'Copilot interactions this person made in the selected period despite holding no Microsoft 365 Copilot licence - almost always Copilot Chat, which is available without one.',
-                    how: 'Counted from the Copilot audit log for users who hold none of the SKUs classified as a Copilot licence. Shown as interactions and the number of distinct days they happened on, because ten interactions across ten days is a habit and ten in one afternoon is an experiment.',
-                    source:
-                      'Invisible in Microsoft\u2019s own Copilot usage report, which only covers licensed users. It needs the Copilot audit import to be enabled.',
+                    what: t('copilotAdoptionUsers.opportunities.alreadyUsingWhat'),
+                    how: t('copilotAdoptionUsers.opportunities.alreadyUsingHow'),
+                    source: t('copilotAdoptionUsers.opportunities.alreadyUsingSource'),
                   }}
                 >
-                  Already using Copilot
+                  {t('copilotAdoptionUsers.opportunities.alreadyUsingTitle')}
                 </SortableTh>
-                <SortableTh label="Teams activity" sortKey="collaboration" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} numeric defaultDescending>
-                  Teams (per day)
+                <SortableTh label={t('copilotAdoptionUsers.opportunities.teamsActivityLabel')} sortKey="collaboration" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} numeric defaultDescending>
+                  {t('copilotAdoptionUsers.opportunities.teamsPerDayHeader')}
                 </SortableTh>
-                <SortableTh label="email activity" sortKey="email" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} numeric defaultDescending>
-                  Email (per day)
+                <SortableTh label={t('copilotAdoptionUsers.opportunities.emailActivityLabel')} sortKey="email" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} numeric defaultDescending>
+                  {t('copilotAdoptionUsers.opportunities.emailPerDayHeader')}
                 </SortableTh>
-                <SortableTh label="document activity" sortKey="documents" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} numeric defaultDescending>
-                  Files (per day)
+                <SortableTh label={t('copilotAdoptionUsers.opportunities.documentActivityLabel')} sortKey="documents" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} numeric defaultDescending>
+                  {t('copilotAdoptionUsers.opportunities.filesPerDayHeader')}
                 </SortableTh>
-                <SortableTh label="last Microsoft 365 activity" sortKey="lastM365" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
-                  Last M365 activity
+                <SortableTh label={t('copilotAdoptionUsers.opportunities.lastM365Label')} sortKey="lastM365" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
+                  {t('copilotAdoptionUsers.opportunities.lastM365Header')}
                 </SortableTh>
               </tr>
             </thead>
@@ -501,9 +517,12 @@ export default function OpportunitiesPanel({
                       <td className={table.td}>
                         <Tooltip
                           relationship="description"
-                          content={`Copilot demand ${Math.round(row.copilotDemandScore)} / Collaboration ${Math.round(
-                            row.collaborationScore,
-                          )} / Email ${Math.round(row.emailScore)} / Documents ${Math.round(row.documentScore)}`}
+                          content={t('copilotAdoptionUsers.opportunities.scoreTooltip', {
+                            copilot: Math.round(row.copilotDemandScore),
+                            collaboration: Math.round(row.collaborationScore),
+                            email: Math.round(row.emailScore),
+                            documents: Math.round(row.documentScore),
+                          })}
                         >
                           <div>
                             <ScoreBar score={row.opportunityScore} />
@@ -513,24 +532,24 @@ export default function OpportunitiesPanel({
                       <td className={`${table.td} ${table.tdNoWrap}`}>
                         {row.unlicensedCopilotInteractions > 0 ? (
                           <Badge className={styles.evidence} size="small">
-                            {formatCount(row.unlicensedCopilotInteractions)} in {row.unlicensedCopilotActiveDays}d
+                            {t('copilotAdoptionUsers.opportunities.unlicensedBadge', { interactions: formatCount(row.unlicensedCopilotInteractions), days: row.unlicensedCopilotActiveDays })}
                           </Badge>
                         ) : (
                           <Text size={200} className={styles.muted}>
-                            Not yet
+                            {t('copilotAdoptionUsers.opportunities.notYet')}
                           </Text>
                         )}
                       </td>
                       <td className={`${table.td} ${table.tdNumeric}`}>
                         {formatCount(row.teamsMessages)}
                         <Text size={100} block className={table.tdSub}>
-                          {formatCount(row.teamsMeetings)} mtgs
+                          {t('copilotAdoptionUsers.opportunities.meetingsAbbrev', { count: formatCount(row.teamsMeetings) })}
                         </Text>
                       </td>
                       <td className={`${table.td} ${table.tdNumeric}`}>
                         {formatCount(row.emailsSent)}
                         <Text size={100} block className={table.tdSub}>
-                          {formatCount(row.emailsRead)} read
+                          {t('copilotAdoptionUsers.opportunities.readAbbrev', { count: formatCount(row.emailsRead) })}
                         </Text>
                       </td>
                       <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.filesViewedOrEdited)}</td>
@@ -539,92 +558,92 @@ export default function OpportunitiesPanel({
                     {open && (
                       <DetailRow colSpan={8}>
                         <DetailSections>
-                          <DetailSection title={`Business case - ${Math.round(row.opportunityScore)}/100`}>
+                          <DetailSection title={t('copilotAdoptionUsers.opportunities.businessCaseDetailTitle', { score: Math.round(row.opportunityScore) })}>
                             <DetailStats>
                               <DetailStat
-                                label="Copilot demand"
+                                label={t('copilotAdoptionUsers.opportunities.copilotDemand')}
                                 value={Math.round(row.copilotDemandScore)}
-                                sub={`weight ${options.opportunityUnlicensedCopilotWeight}`}
+                                sub={t('copilotAdoptionUsers.opportunities.weightSub', { weight: options.opportunityUnlicensedCopilotWeight })}
                               />
                               <DetailStat
-                                label="Collaboration"
+                                label={t('copilotAdoptionUsers.opportunities.collaboration')}
                                 value={Math.round(row.collaborationScore)}
-                                sub={`weight ${options.opportunityCollaborationWeight}`}
+                                sub={t('copilotAdoptionUsers.opportunities.weightSub', { weight: options.opportunityCollaborationWeight })}
                               />
                               <DetailStat
-                                label="Email"
+                                label={t('copilotAdoptionUsers.opportunities.email')}
                                 value={Math.round(row.emailScore)}
-                                sub={`weight ${options.opportunityEmailWeight}`}
+                                sub={t('copilotAdoptionUsers.opportunities.weightSub', { weight: options.opportunityEmailWeight })}
                               />
                               <DetailStat
-                                label="Documents"
+                                label={t('copilotAdoptionUsers.opportunities.documents')}
                                 value={Math.round(row.documentScore)}
-                                sub={`weight ${options.opportunityDocumentWeight}`}
+                                sub={t('copilotAdoptionUsers.opportunities.weightSub', { weight: options.opportunityDocumentWeight })}
                               />
                             </DetailStats>
                           </DetailSection>
 
-                          <DetailSection title="Microsoft 365 activity (per active day)">
+                          <DetailSection title={t('copilotAdoptionUsers.opportunities.m365ActivityTitle')}>
                             <DetailStats>
                               <DetailStat
-                                label="Teams messages"
+                                label={t('copilotAdoptionUsers.opportunities.teamsMessages')}
                                 value={formatCount(row.teamsMessages)}
-                                sub={`with ${formatCount(row.teamsMeetings)} meetings \u00b7 target ${options.opportunityCollaborationTarget}`}
+                                sub={t('copilotAdoptionUsers.opportunities.withMeetingsTarget', { meetings: formatCount(row.teamsMeetings), target: options.opportunityCollaborationTarget })}
                               />
                               <DetailStat
-                                label="Emails sent"
+                                label={t('copilotAdoptionUsers.opportunities.emailsSent')}
                                 value={formatCount(row.emailsSent)}
-                                sub={`${formatCount(row.emailsRead)} read \u00b7 target ${options.opportunityEmailTarget}`}
+                                sub={t('copilotAdoptionUsers.opportunities.readTarget', { read: formatCount(row.emailsRead), target: options.opportunityEmailTarget })}
                               />
                               <DetailStat
-                                label="Files"
+                                label={t('copilotAdoptionUsers.opportunities.files')}
                                 value={formatCount(row.filesViewedOrEdited)}
-                                sub={`viewed or edited \u00b7 target ${options.opportunityDocumentTarget}`}
+                                sub={t('copilotAdoptionUsers.opportunities.viewedOrEditedTarget', { target: options.opportunityDocumentTarget })}
                               />
                               <DetailStat
-                                label="Last M365 activity"
+                                label={t('copilotAdoptionUsers.opportunities.lastM365Header')}
                                 value={formatDate(row.lastM365ActivityUtc)}
                               />
                             </DetailStats>
                           </DetailSection>
 
-                          <DetailSection title="Unlicensed Copilot use">
+                          <DetailSection title={t('copilotAdoptionUsers.opportunities.unlicensedUseTitle')}>
                             <DetailStats>
                               <DetailStat
-                                label="Interactions"
+                                label={t('copilotAdoptionUsers.opportunities.interactions')}
                                 value={formatCount(row.unlicensedCopilotInteractions)}
-                                sub={`target ${opportunityCopilotTargetApprox} for this period`}
+                                sub={t('copilotAdoptionUsers.opportunities.targetThisPeriod', { target: opportunityCopilotTargetApprox })}
                               />
                               <DetailStat
-                                label="Active days"
+                                label={t('copilotAdoptionUsers.opportunities.activeDays')}
                                 value={formatCount(row.unlicensedCopilotActiveDays)}
-                                sub={`proven demand at ${options.opportunityProvenDemandMinActiveDays}`}
+                                sub={t('copilotAdoptionUsers.opportunities.provenDemandAt', { days: options.opportunityProvenDemandMinActiveDays })}
                               />
                               <DetailStat
-                                label="Last Copilot use"
+                                label={t('copilotAdoptionUsers.opportunities.lastCopilotUse')}
                                 value={formatDate(row.lastCopilotInteractionUtc)}
                               />
                               <DetailStat
-                                label="Qualified by"
+                                label={t('copilotAdoptionUsers.opportunities.qualifiedBy')}
                                 value={
-                                  row.qualificationTierLabel
-                                  || (row.recommended ? 'Recommended' : 'Not recommended')
+                                  opportunityTierLabel(t, row.qualificationTier, row.qualificationTierLabel)
+                                  || (row.recommended ? t('copilotAdoptionUsers.opportunities.recommended') : t('copilotAdoptionUsers.opportunities.notRecommended'))
                                 }
-                                sub={`recommend at ${options.opportunityRecommendScore}`}
+                                sub={t('copilotAdoptionUsers.opportunities.recommendAt', { score: options.opportunityRecommendScore })}
                               />
                             </DetailStats>
                           </DetailSection>
                         </DetailSections>
 
                         <DetailSection
-                          title="Justification"
+                          title={t('copilotAdoptionUsers.opportunities.justificationTitle')}
                           info={{
-                            what: 'The score restated in plain English, naming the specific signals that produced it for this person.',
-                            how: 'Written per user rather than per band - no two candidates reach the same score by the same route, so this genuinely differs from row to row.',
-                            source: 'Safe to paste directly into a licence request. It is also in the CSV export, in full.',
+                            what: t('copilotAdoptionUsers.opportunities.justificationWhat'),
+                            how: t('copilotAdoptionUsers.opportunities.justificationHow'),
+                            source: t('copilotAdoptionUsers.opportunities.justificationSource'),
                           }}
                         >
-                          <DetailRationale text={row.rationale} />
+                          <DetailRationale text={opportunityRationale(t, row)} />
                         </DetailSection>
                       </DetailRow>
                     )}
@@ -639,18 +658,21 @@ export default function OpportunitiesPanel({
       {!loading && data && data.total > 0 && (
         <div className={styles.footer}>
           <Text size={200} className={styles.muted}>
-            Showing {formatCount(data.skip + 1)}-{formatCount(Math.min(data.skip + PAGE_SIZE, data.total))} of{' '}
-            {formatCount(data.total)} candidates
+            {t('copilotAdoptionUsers.opportunities.showingCandidates', {
+              start: formatCount(data.skip + 1),
+              end: formatCount(Math.min(data.skip + PAGE_SIZE, data.total)),
+              total: formatCount(data.total),
+            })}
           </Text>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <Button size="small" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
-              Previous
+              {t('copilotAdoptionUsers.common.previous')}
             </Button>
             <Text size={200} className={styles.muted}>
-              Page {page + 1} of {totalPages}
+              {t('copilotAdoptionUsers.common.page', { page: page + 1, totalPages })}
             </Text>
             <Button size="small" disabled={page + 1 >= totalPages} onClick={() => setPage((p) => p + 1)}>
-              Next
+              {t('copilotAdoptionUsers.common.next')}
             </Button>
           </div>
         </div>

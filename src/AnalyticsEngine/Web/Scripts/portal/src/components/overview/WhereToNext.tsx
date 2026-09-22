@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react';
 import { Text, makeStyles, tokens } from '@fluentui/react-components';
+import { useT, type TranslationKey } from '../../i18n';
 import {
   ChartMultiple20Regular,
   DataUsage20Regular,
@@ -59,8 +60,8 @@ interface Pointer {
   key: string;
   /** Hash route, e.g. '#/insights/reports' - the portal uses a HashRouter. */
   href: string;
-  title: string;
-  blurb: string;
+  titleKey: TranslationKey;
+  blurbKey: TranslationKey;
   icon: ReactElement;
   /**
    * Which figures must be present for this pointer to be worth showing. The server only returns a
@@ -80,61 +81,61 @@ const POINTERS: Pointer[] = [
   {
     key: 'reports',
     href: '#/insights/reports',
-    title: 'Reports',
-    blurb: 'Chart activity, Copilot use and page traffic over time, sliced by department or site.',
+    titleKey: 'overview.whereToNext.reports.title',
+    blurbKey: 'overview.whereToNext.reports.blurb',
     icon: <ChartMultiple20Regular />,
   },
   {
     key: 'copilot-adoption',
     href: '#/insights/copilot-adoption',
-    title: 'Copilot Adoption',
-    blurb: 'Who is getting value from their Copilot licence, and who has stopped using it.',
+    titleKey: 'overview.whereToNext.copilotAdoption.title',
+    blurbKey: 'overview.whereToNext.copilotAdoption.blurb',
     icon: <Sparkle20Regular />,
     needsAnyOf: ['copilotInteractions', 'copilotAiInteractions'],
   },
   {
     key: 'licence-activity',
     href: '#/insights/licence-activity',
-    title: 'Licence activity',
-    blurb: 'Licences you are paying for against the activity actually seen, service by service.',
+    titleKey: 'overview.whereToNext.licenceActivity.title',
+    blurbKey: 'overview.whereToNext.licenceActivity.blurb',
     icon: <DataUsage20Regular />,
   },
   {
     key: 'agent-costs',
     href: '#/insights/agent-costs',
-    title: 'Agent costs',
-    blurb: 'Billed Copilot Studio credits and Azure spend, attributed per agent.',
+    titleKey: 'overview.whereToNext.agentCosts.title',
+    blurbKey: 'overview.whereToNext.agentCosts.blurb',
     icon: <Money20Regular />,
     needsAnyOf: ['copilotStudioCreditDays', 'azureCostDays'],
   },
   {
     key: 'dlp',
     href: '#/insights/dlp',
-    title: 'DLP impact',
-    blurb: 'Where Purview data-loss-prevention policies are blocking people and agents.',
+    titleKey: 'overview.whereToNext.dlp.title',
+    blurbKey: 'overview.whereToNext.dlp.blurb',
     icon: <ShieldProhibited20Regular />,
     needsAnyOf: ['dlpMatches'],
   },
   {
     key: 'teams-permissions',
     href: '#/admin/teams-permissions',
-    title: 'Teams permissions',
-    blurb: 'Turn on channel-level Teams analytics, one team at a time.',
+    titleKey: 'overview.whereToNext.teamsPermissions.title',
+    blurbKey: 'overview.whereToNext.teamsPermissions.blurb',
     icon: <PeopleTeam20Regular />,
     needsAnyOf: ['teams'],
   },
   {
     key: 'health',
     href: '#/admin/health',
-    title: 'Service health',
-    blurb: 'Import liveness, exceptions, component health and database freshness.',
+    titleKey: 'overview.whereToNext.health.title',
+    blurbKey: 'overview.whereToNext.health.blurb',
     icon: <Pulse20Regular />,
   },
   {
     key: 'configuration',
     href: '#/admin/configuration',
-    title: 'Service configuration',
-    blurb: 'Which imports are switched on, the database schema version and connected services.',
+    titleKey: 'overview.whereToNext.configuration.title',
+    blurbKey: 'overview.whereToNext.configuration.blurb',
     icon: <Settings20Regular />,
   },
 ];
@@ -149,6 +150,7 @@ export function visiblePointers(availableKeys: readonly string[]): Pointer[] {
  * "What else is in here?" - a short, clickable tour of the portal for someone who has just landed on it.
  */
 export default function WhereToNext({ availableKeys }: { availableKeys: readonly string[] }) {
+  const t = useT();
   const styles = useStyles();
   const pointers = visiblePointers(availableKeys);
 
@@ -159,11 +161,11 @@ export default function WhereToNext({ availableKeys }: { availableKeys: readonly
           <div className={styles.head}>
             {p.icon}
             <Text weight="semibold" className={styles.title}>
-              {p.title}
+              {t(p.titleKey)}
             </Text>
           </div>
           <Text size={200} className={styles.blurb}>
-            {p.blurb}
+            {t(p.blurbKey)}
           </Text>
         </a>
       ))}

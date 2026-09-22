@@ -20,8 +20,9 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { fetchImportJob, importCsv, previewCsv } from '../../api/userOrgsApi';
-import type {
-  UserOrgCsvPreview,
+import { formatNumber, plural, useT, type TFunction } from '../../i18n';
+import { STATUS_KEYS } from './userOrgShared';
+import type {  UserOrgCsvPreview,
   UserOrgImportJob,
   UserOrgImportMode,
   UserOrgType,
@@ -54,6 +55,7 @@ export interface CsvImportPanelProps {
  */
 export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportPanelProps) {
   const styles = useStyles();
+  const t = useT();
   const fileInput = useRef<HTMLInputElement>(null);
 
   const [file, setFile] = useState<File | null>(null);
@@ -134,7 +136,7 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
     try {
       setPreview(await previewCsv(orgType.id, chosen));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'The file could not be read.');
+      setError(e instanceof Error ? e.message : t('errors.userOrgs.fileUnreadable'));
     } finally {
       setBusy(false);
     }
@@ -163,7 +165,7 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
         errorMessage: null,
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'The import could not be started.');
+      setError(e instanceof Error ? e.message : t('errors.userOrgs.importNotStarted'));
     } finally {
       setBusy(false);
     }
@@ -190,7 +192,7 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
         {busy && <Spinner size="tiny" />}
         {(file || job) && (
           <Button appearance="subtle" size="small" onClick={reset} disabled={running}>
-            Clear
+            {t('userOrgs.csv.clear')}
           </Button>
         )}
       </div>
@@ -201,11 +203,11 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
         </MessageBar>
       )}
 
-      {preview && !job && <PreviewTable preview={preview} styles={styles} />}
+      {preview && !job && <PreviewTable preview={preview} styles={styles} t={t} />}
 
       {preview && !job && (
         <>
-          <Field label="What should happen to users who are not in the file?">
+          <Field label={t('userOrgs.csv.modeLabel')}>
             <RadioGroup
               value={mode}
               onChange={(_e, d) => {
@@ -213,10 +215,10 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
                 setConfirmedClear(false);
               }}
             >
-              <Radio value="merge" label="Merge - leave them exactly as they are" />
+              <Radio value="merge" label={t('userOrgs.csv.modeMerge')} />
               <Radio
                 value="replace"
-                label={`Replace - clear their ${orgType.name} value (the file is the complete list)`}
+                label={t('userOrgs.csv.modeReplace', { name: orgType.name })}
               />
             </RadioGroup>
           </Field>
@@ -225,24 +227,36 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
             <MessageBar intent="warning">
               <MessageBarBody>
                 <strong>
-                  This will clear {preview.wouldClearCount.toLocaleString()} user
-                  {preview.wouldClearCount === 1 ? "'s" : "s'"} {orgType.name} value.
+                  {t(
+                    plural(
+                      preview.wouldClearCount,
+                      'userOrgs.csv.clearWarning.one',
+                      'userOrgs.csv.clearWarning.other',
+                    ),
+                    { count: formatNumber(preview.wouldClearCount), name: orgType.name },
+                  )}
                 </strong>{' '}
-                The file keeps {(preview.currentlyAssignedCount - preview.wouldClearCount).toLocaleString()} of the{' '}
-                {preview.currentlyAssignedCount.toLocaleString()} users who have one today. Anyone it does not
-                cover loses theirs.
+                {t('userOrgs.csv.clearWarning.keeps', {
+                  kept: formatNumber(preview.currentlyAssignedCount - preview.wouldClearCount),
+                  assigned: formatNumber(preview.currentlyAssignedCount),
+                })}
                 {preview.unknownUpnCount > 0 && (
                   <>
                     {' '}
-                    {preview.unknownUpnCount.toLocaleString()} row
-                    {preview.unknownUpnCount === 1 ? '' : 's'} in the file match no user at all — if that is
-                    unexpected, check the file before continuing.
+                    {t(
+                      plural(
+                        preview.unknownUpnCount,
+                        'userOrgs.csv.clearWarning.unknown.one',
+                        'userOrgs.csv.clearWarning.unknown.other',
+                      ),
+                      { count: formatNumber(preview.unknownUpnCount) },
+                    )}
                   </>
                 )}
                 <Checkbox
                   checked={confirmedClear}
                   onChange={(_e, d) => setConfirmedClear(d.checked === true)}
-                  label="I understand, clear the users this file does not cover"
+                  label={t('userOrgs.csv.confirmClear')}
                 />
               </MessageBarBody>
             </MessageBar>
@@ -258,13 +272,16 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
                 (mode === 'replace' && preview.wouldClearCount > 0 && !confirmedClear)
               }
             >
-              Import {preview.totalRows.toLocaleString()} row{preview.totalRows === 1 ? '' : 's'}
+              {t(
+                plural(preview.totalRows, 'userOrgs.csv.import.one', 'userOrgs.csv.import.other'),
+                { count: formatNumber(preview.totalRows) },
+              )}
             </Button>
           </div>
         </>
       )}
 
-      {job && <JobProgress job={job} styles={styles} />}
+      {job && <JobProgress job={job} styles={styles} t={t} />}
     </div>
   );
 }
@@ -272,9 +289,11 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
 function PreviewTable({
   preview,
   styles,
+  t,
 }: {
   preview: UserOrgCsvPreview;
   styles: ReturnType<typeof useStyles>;
+  t: TFunction;
 }) {
   // Deliberately the whole-file counts, not the ten rows on screen. A truncated export whose first
   // ten user principal names happen to exist looks perfectly clean in the table, and a Merge of it
@@ -285,33 +304,43 @@ function PreviewTable({
     <div>
       <Text size={200} className={styles.muted} block>
         {preview.headerDetected
-          ? `Header row found: "${preview.upnColumnName}" and "${preview.orgColumnName}", ${preview.delimiter}-separated.`
-          : `No header row recognised, so the first column is treated as the user and the second as the organisation. ${preview.delimiter}-separated.`}
+          ? t('userOrgs.csv.headerFound', {
+              upnColumn: preview.upnColumnName ?? '',
+              orgColumn: preview.orgColumnName ?? '',
+              delimiter: preview.delimiter,
+            })
+          : t('userOrgs.csv.headerMissing', { delimiter: preview.delimiter })}
       </Text>
 
       <Text size={200} className={styles.muted} block>
-        {matchedRows.toLocaleString()} of the {preview.totalRows.toLocaleString()} rows in the file
-        match a user in this database.
+        {t('userOrgs.csv.matchSummary', {
+          matched: formatNumber(matchedRows),
+          total: formatNumber(preview.totalRows),
+        })}
       </Text>
 
       {preview.unknownUpnCount > 0 && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            {preview.unknownUpnCount.toLocaleString()} row
-            {preview.unknownUpnCount === 1 ? '' : 's'} in the file match no user in this database and
-            will be skipped. Check the file uses the same user principal names the product imports,
-            and that it is not a partial export.
+            {t(
+              plural(
+                preview.unknownUpnCount,
+                'userOrgs.csv.unknownRows.one',
+                'userOrgs.csv.unknownRows.other',
+              ),
+              { count: formatNumber(preview.unknownUpnCount) },
+            )}
           </MessageBarBody>
         </MessageBar>
       )}
 
-      <Table size="small" aria-label="File preview">
+      <Table size="small" aria-label={t('userOrgs.csv.previewAriaLabel')}>
         <TableHeader>
           <TableRow>
-            <TableHeaderCell>Line</TableHeaderCell>
-            <TableHeaderCell>User</TableHeaderCell>
-            <TableHeaderCell>Organisation</TableHeaderCell>
-            <TableHeaderCell>Matches a user</TableHeaderCell>
+            <TableHeaderCell>{t('userOrgs.csv.column.line')}</TableHeaderCell>
+            <TableHeaderCell>{t('userOrgs.csv.column.user')}</TableHeaderCell>
+            <TableHeaderCell>{t('userOrgs.csv.column.organisation')}</TableHeaderCell>
+            <TableHeaderCell>{t('userOrgs.csv.column.matches')}</TableHeaderCell>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -322,7 +351,7 @@ function PreviewTable({
               <TableCell>
                 {row.clearsValue ? (
                   <Badge appearance="tint" color="warning">
-                    clears the value
+                    {t('userOrgs.csv.clearsValue')}
                   </Badge>
                 ) : (
                   row.orgValue
@@ -331,11 +360,11 @@ function PreviewTable({
               <TableCell>
                 {row.userExists ? (
                   <Badge appearance="tint" color="success">
-                    yes
+                    {t('admin.common.yes')}
                   </Badge>
                 ) : (
                   <Badge appearance="tint" color="danger">
-                    no
+                    {t('admin.common.no')}
                   </Badge>
                 )}
               </TableCell>
@@ -346,17 +375,21 @@ function PreviewTable({
 
       {preview.moreRowsExist && (
         <Text size={200} className={styles.muted} block>
-          Showing the first {preview.rows.length} rows. The whole file is imported.
+          {t('userOrgs.csv.showingFirst', { count: formatNumber(preview.rows.length) })}
         </Text>
       )}
 
       {preview.truncatedValueCount > 0 && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            {preview.truncatedValueCount.toLocaleString()} organisation name
-            {preview.truncatedValueCount === 1 ? ' is' : 's are'} longer than 200 characters and will
-            be stored shortened. Names that are identical for their first 200 characters become one
-            organisation.
+            {t(
+              plural(
+                preview.truncatedValueCount,
+                'userOrgs.csv.truncated.one',
+                'userOrgs.csv.truncated.other',
+              ),
+              { count: formatNumber(preview.truncatedValueCount) },
+            )}
           </MessageBarBody>
         </MessageBar>
       )}
@@ -364,9 +397,13 @@ function PreviewTable({
       {preview.problems.length > 0 && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            Some rows cannot be used:{' '}
-            {preview.problems.map((p) => `line ${p.lineNumber} (${p.reason})`).join('; ')}. They are
-            skipped and counted; the rest of the file still imports.
+            {t('userOrgs.csv.problems', {
+              problems: preview.problems
+                .map((p) =>
+                  t('userOrgs.csv.problemLine', { line: p.lineNumber, reason: p.reason }),
+                )
+                .join('; '),
+            })}
           </MessageBarBody>
         </MessageBar>
       )}
@@ -377,17 +414,17 @@ function PreviewTable({
 function JobProgress({
   job,
   styles,
+  t,
 }: {
   job: UserOrgImportJob;
   styles: ReturnType<typeof useStyles>;
+  t: TFunction;
 }) {
   if (job.status === 'pending' || job.status === 'running') {
     return (
       <div className={styles.row}>
         <Spinner size="tiny" />
-        <Text>
-          Importing {job.rowsTotal.toLocaleString()} row(s)... this page will update when it finishes.
-        </Text>
+        <Text>{t('userOrgs.job.importing', { count: formatNumber(job.rowsTotal) })}</Text>
       </div>
     );
   }
@@ -395,12 +432,7 @@ function JobProgress({
   if (job.status === 'interrupted') {
     return (
       <MessageBar intent="warning">
-        <MessageBarBody>
-          This import stopped reporting progress, which usually means the web app restarted while it was
-          running. It was either applied in full or not at all — the file is applied in a single
-          transaction, so it cannot have been left half done — but which of those happened is not
-          recorded. Upload the file again to be sure; importing the same file twice is harmless.
-        </MessageBarBody>
+        <MessageBarBody>{t('userOrgs.job.interrupted')}</MessageBarBody>
       </MessageBar>
     );
   }
@@ -409,7 +441,10 @@ function JobProgress({
     return (
       <MessageBar intent="error">
         <MessageBarBody>
-          The import {job.status}. {job.errorMessage ?? ''}
+          {t('userOrgs.job.failed', {
+            status: t(STATUS_KEYS[job.status]),
+            message: job.errorMessage ?? '',
+          })}
         </MessageBarBody>
       </MessageBar>
     );
@@ -418,23 +453,23 @@ function JobProgress({
   return (
     <div>
       <MessageBar intent="success">
-        <MessageBarBody>Import finished.</MessageBarBody>
+        <MessageBarBody>{t('userOrgs.job.finished')}</MessageBarBody>
       </MessageBar>
       <div className={styles.counts}>
         <Badge appearance="tint" color="brand">
-          {job.rowsApplied.toLocaleString()} changed
+          {t('userOrgs.job.changed', { count: formatNumber(job.rowsApplied) })}
         </Badge>
         <Badge appearance="tint" color="informative">
-          {job.rowsCleared.toLocaleString()} cleared
+          {t('userOrgs.job.cleared', { count: formatNumber(job.rowsCleared) })}
         </Badge>
         {job.rowsUnknownUpn > 0 && (
           <Badge appearance="tint" color="warning">
-            {job.rowsUnknownUpn.toLocaleString()} unknown user(s)
+            {t('userOrgs.job.unknownUsers', { count: formatNumber(job.rowsUnknownUpn) })}
           </Badge>
         )}
         {job.rowsInvalid > 0 && (
           <Badge appearance="tint" color="danger">
-            {job.rowsInvalid.toLocaleString()} unusable row(s)
+            {t('userOrgs.job.unusableRows', { count: formatNumber(job.rowsInvalid) })}
           </Badge>
         )}
       </div>

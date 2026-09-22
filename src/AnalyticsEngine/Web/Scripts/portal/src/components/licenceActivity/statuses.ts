@@ -1,3 +1,5 @@
+import type { TFunction, TranslationKey } from '../../i18n';
+
 // Friendly rendering of the backend coverage/evidence status vocabulary
 // (LicenceActivityCoverage.Status / LicenceActivityEvidence.Status):
 // available | partial | missingCoverage | unmatchableIdentity | notImported | disabled.
@@ -12,48 +14,55 @@ export interface StatusMeta {
   explanation: string;
 }
 
-const STATUS_META: Record<string, StatusMeta> = {
+interface StatusMetaDef {
+  tone: StatusTone;
+  labelKey: TranslationKey;
+  explanationKey: TranslationKey;
+}
+
+const STATUS_META: Record<string, StatusMetaDef> = {
   available: {
     tone: 'success',
-    label: 'Available',
-    explanation: 'Measured across the whole period.',
+    labelKey: 'licenceActivity.status.available.label',
+    explanationKey: 'licenceActivity.status.available.explanation',
   },
   partial: {
     tone: 'warning',
-    label: 'Partial',
-    explanation: 'Part of this period could not be measured in full, so activity here may be understated.',
+    labelKey: 'licenceActivity.status.partial.label',
+    explanationKey: 'licenceActivity.status.partial.explanation',
   },
   missingCoverage: {
     tone: 'warning',
-    label: 'Missing coverage',
-    explanation:
-      'Part of the chosen period has no measurement behind it, so nobody can be shown as inactive for this service.',
+    labelKey: 'licenceActivity.status.missingCoverage.label',
+    explanationKey: 'licenceActivity.status.missingCoverage.explanation',
   },
   unmatchableIdentity: {
     tone: 'warning',
-    label: 'Identities could not be matched',
-    explanation:
-      'Microsoft hid the identities in this report, so its activity cannot be tied back to the people holding the licence.',
+    labelKey: 'licenceActivity.status.unmatchableIdentity.label',
+    explanationKey: 'licenceActivity.status.unmatchableIdentity.explanation',
   },
   notImported: {
     tone: 'subtle',
-    label: 'Not imported',
-    explanation: 'This service\u2019s usage data has never been collected on this deployment.',
+    labelKey: 'licenceActivity.status.notImported.label',
+    explanationKey: 'licenceActivity.status.notImported.explanation',
   },
   disabled: {
     tone: 'subtle',
-    label: 'Import switched off',
-    explanation: 'Collection for this service is switched off in the installer.',
+    labelKey: 'licenceActivity.status.disabled.label',
+    explanationKey: 'licenceActivity.status.disabled.explanation',
   },
   unknown: {
     tone: 'subtle',
-    label: 'Unknown',
-    explanation: 'Not measured for this person \u2013 which is not the same as measured as no activity.',
+    labelKey: 'licenceActivity.status.unknown.label',
+    explanationKey: 'licenceActivity.status.unknown.explanation',
   },
 };
 
 /** Tone/label/explanation for a status string, with a neutral fallback for anything unlisted. */
-export function statusMeta(status: string | null | undefined): StatusMeta {
-  if (!status) return { tone: 'informative', label: 'Unknown', explanation: '' };
-  return STATUS_META[status] ?? { tone: 'informative', label: status, explanation: '' };
+export function statusMeta(status: string | null | undefined, t: TFunction): StatusMeta {
+  if (!status) return { tone: 'informative', label: t('licenceActivity.common.unknown'), explanation: '' };
+  const meta = STATUS_META[status];
+  return meta
+    ? { tone: meta.tone, label: t(meta.labelKey), explanation: t(meta.explanationKey) }
+    : { tone: 'informative', label: status, explanation: '' };
 }

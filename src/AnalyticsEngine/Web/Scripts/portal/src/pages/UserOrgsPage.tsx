@@ -24,6 +24,8 @@ import toast from '../components/toast';
 import CsvImportPanel from '../components/userOrgs/CsvImportPanel';
 import OrgTypeDialog from '../components/userOrgs/OrgTypeDialog';
 import { createOrgType, deleteOrgType, fetchOrgTypes, updateOrgType } from '../api/userOrgsApi';
+import { formatDateParts, formatNumber, useT } from '../i18n';
+import { STATUS_KEYS } from '../components/userOrgs/userOrgShared';
 import type { UserOrgType, UserOrgTypeSave } from '../types/userOrgs';
 
 const useStyles = makeStyles({
@@ -43,6 +45,7 @@ const useStyles = makeStyles({
  */
 export default function UserOrgsPage() {
   const styles = useStyles();
+  const t = useT();
 
   const [types, setTypes] = useState<UserOrgType[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -54,9 +57,9 @@ export default function UserOrgsPage() {
       setTypes(await fetchOrgTypes());
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load the organisation types.');
+      setError(e instanceof Error ? e.message : t('errors.userOrgs.loadFailed'));
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     load();
@@ -65,10 +68,10 @@ export default function UserOrgsPage() {
   const onSave = async (model: UserOrgTypeSave) => {
     if (editing) {
       await updateOrgType(editing.id, model);
-      toast.success(`Saved ${model.name}.`);
+      toast.success(t('userOrgs.toast.saved', { name: model.name }));
     } else {
       await createOrgType(model);
-      toast.success(`Created ${model.name}.`);
+      toast.success(t('userOrgs.toast.created', { name: model.name }));
     }
     setDialogOpen(false);
     setEditing(null);
@@ -78,25 +81,25 @@ export default function UserOrgsPage() {
   const onDelete = async (type: UserOrgType) => {
     // A confirm() rather than a dialog: this destroys every assignment under the type, and the count
     // being destroyed is the thing the admin needs in front of them when they decide.
-    const message =
-      `Delete "${type.name}"?\n\n` +
-      `This removes the organisation values of ${type.assignedUserCount.toLocaleString()} user(s) ` +
-      `and cannot be undone.`;
+    const message = t('userOrgs.delete.confirm', {
+      name: type.name,
+      count: formatNumber(type.assignedUserCount),
+    });
     if (!window.confirm(message)) return;
 
     try {
       await deleteOrgType(type.id);
-      toast.success(`Deleted ${type.name}.`);
+      toast.success(t('userOrgs.toast.deleted', { name: type.name }));
       await load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Could not delete the organisation type.');
+      toast.error(e instanceof Error ? e.message : t('errors.userOrgs.deleteFailed'));
     }
   };
 
   if (!types && !error) {
     return (
       <div style={{ textAlign: 'center', padding: '32px' }}>
-        <Spinner size={100} label="Loading organisation types..." />
+        <Spinner size={100} label={t('userOrgs.page.loading')} />
       </div>
     );
   }
@@ -108,7 +111,7 @@ export default function UserOrgsPage() {
   return (
     <div>
       <div className={styles.toolbar}>
-        <Title3 block>User organisations</Title3>
+        <Title3 block>{t('userOrgs.page.title')}</Title3>
         <Button
           appearance="primary"
           icon={<Add20Regular />}
@@ -117,15 +120,12 @@ export default function UserOrgsPage() {
             setDialogOpen(true);
           }}
         >
-          New organisation type
+          {t('userOrgs.page.new')}
         </Button>
       </div>
 
       <Text block className={styles.muted}>
-        Group users by something your directory does not track reliably - a cost centre, a business
-        unit, a team from an HR export. Each type takes its values either from a custom Microsoft Entra
-        attribute, read on every user import, or from a CSV you upload here. A user has at most one
-        value per type.
+        {t('userOrgs.page.intro')}
       </Text>
 
       {error && (
@@ -136,21 +136,19 @@ export default function UserOrgsPage() {
 
       <div className={styles.cards}>
         <Card>
-          <CardHeader header={<Subtitle2>Organisation types</Subtitle2>} />
+          <CardHeader header={<Subtitle2>{t('userOrgs.types.title')}</Subtitle2>} />
           {types && types.length === 0 ? (
-            <Text className={styles.muted}>
-              None defined yet. Create one to start grouping users.
-            </Text>
+            <Text className={styles.muted}>{t('userOrgs.types.empty')}</Text>
           ) : (
-            <Table size="small" aria-label="Organisation types">
+            <Table size="small" aria-label={t('userOrgs.types.title')}>
               <TableHeader>
                 <TableRow>
-                  <TableHeaderCell>Name</TableHeaderCell>
-                  <TableHeaderCell>Source</TableHeaderCell>
-                  <TableHeaderCell>Users assigned</TableHeaderCell>
-                  <TableHeaderCell>Distinct values</TableHeaderCell>
-                  <TableHeaderCell>State</TableHeaderCell>
-                  <TableHeaderCell>Actions</TableHeaderCell>
+                  <TableHeaderCell>{t('userOrgs.column.name')}</TableHeaderCell>
+                  <TableHeaderCell>{t('userOrgs.column.source')}</TableHeaderCell>
+                  <TableHeaderCell>{t('userOrgs.column.usersAssigned')}</TableHeaderCell>
+                  <TableHeaderCell>{t('userOrgs.column.distinctValues')}</TableHeaderCell>
+                  <TableHeaderCell>{t('userOrgs.column.state')}</TableHeaderCell>
+                  <TableHeaderCell>{t('userOrgs.column.actions')}</TableHeaderCell>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -160,31 +158,37 @@ export default function UserOrgsPage() {
                     <TableCell>
                       {type.source === 'entra' ? (
                         <span>
-                          Entra attribute{' '}
+                          {t('userOrgs.source.entra')}{' '}
                           <Text className={styles.mono}>{type.entraAttributeName}</Text>
                         </span>
                       ) : (
                         <span>
-                          CSV upload
+                          {t('userOrgs.source.csv')}
                           {type.lastImport && (
                             <Text size={200} block className={styles.muted}>
-                              last imported {new Date(type.lastImport.queuedUtc).toLocaleString()} by{' '}
-                              {type.lastImport.startedBy ?? 'unknown'} ({type.lastImport.status})
+                              {t('userOrgs.source.lastImported', {
+                                when: formatDateParts(new Date(type.lastImport.queuedUtc), {
+                                  dateStyle: 'short',
+                                  timeStyle: 'short',
+                                }),
+                                who: type.lastImport.startedBy ?? t('userOrgs.source.unknownUser'),
+                                status: t(STATUS_KEYS[type.lastImport.status]),
+                              })}
                             </Text>
                           )}
                         </span>
                       )}
                     </TableCell>
-                    <TableCell>{type.assignedUserCount.toLocaleString()}</TableCell>
-                    <TableCell>{type.distinctValueCount.toLocaleString()}</TableCell>
+                    <TableCell>{formatNumber(type.assignedUserCount)}</TableCell>
+                    <TableCell>{formatNumber(type.distinctValueCount)}</TableCell>
                     <TableCell>
                       {type.isEnabled ? (
                         <Badge appearance="tint" color="success">
-                          Enabled
+                          {t('userOrgs.state.enabled')}
                         </Badge>
                       ) : (
                         <Badge appearance="tint" color="informative">
-                          Disabled
+                          {t('userOrgs.state.disabled')}
                         </Badge>
                       )}
                     </TableCell>
@@ -199,7 +203,7 @@ export default function UserOrgsPage() {
                             setDialogOpen(true);
                           }}
                         >
-                          Edit
+                          {t('userOrgs.action.edit')}
                         </Button>
                         <Button
                           appearance="subtle"
@@ -207,7 +211,7 @@ export default function UserOrgsPage() {
                           icon={<Delete16Regular />}
                           onClick={() => onDelete(type)}
                         >
-                          Delete
+                          {t('userOrgs.action.delete')}
                         </Button>
                       </div>
                     </TableCell>
@@ -220,26 +224,20 @@ export default function UserOrgsPage() {
 
         {csvTypes.map((type) => (
           <Card key={type.id}>
-            <CardHeader header={<Subtitle2>Import {type.name} from a file</Subtitle2>} />
+            <CardHeader
+              header={<Subtitle2>{t('userOrgs.import.cardTitle', { name: type.name })}</Subtitle2>}
+            />
             <Text block className={styles.muted}>
-              A CSV with a user column and an organisation column, in either order. A row with a blank
-              organisation clears that user's value.
+              {t('userOrgs.import.cardIntro')}
             </Text>
             <CsvImportPanel orgType={type} onImportFinished={load} />
           </Card>
         ))}
 
-        {(types ?? []).some((t) => t.source === 'entra') && (
+        {(types ?? []).some((t2) => t2.source === 'entra') && (
           <Card>
-            <CardHeader header={<Subtitle2>How Entra-sourced types are kept up to date</Subtitle2>} />
-            <Text block>
-              These are read during the normal user import, so values appear after the next import
-              cycle. Any change to which Entra attributes are in use - adding or deleting a type,
-              enabling or disabling one, pointing one at a different attribute, or switching one to
-              CSV - makes the next cycle re-read every user once so the new set is populated for
-              people who have not otherwise changed. That one cycle takes longer than usual, and on a
-              large tenant noticeably so.
-            </Text>
+            <CardHeader header={<Subtitle2>{t('userOrgs.entraCard.title')}</Subtitle2>} />
+            <Text block>{t('userOrgs.entraCard.body')}</Text>
           </Card>
         )}
       </div>

@@ -1,4 +1,5 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
+import { formatNumber, translateActive, useT, type TFunction } from '../../i18n';
 
 const useStyles = makeStyles({
   root: {
@@ -20,6 +21,10 @@ const useStyles = makeStyles({
 
 export type GaugeBand = { upTo: number; colour: string; label: string };
 
+const NEEDS_ATTENTION_LABEL = 'Needs attention';
+const PROGRESSING_LABEL = 'Progressing';
+const HEALTHY_LABEL = 'Healthy';
+
 /**
  * The default judgement scale for an adoption-style percentage. Deliberately not a smooth gradient:
  * a continuous ramp implies the difference between 41% and 43% means something, and it does not.
@@ -30,9 +35,9 @@ export type GaugeBand = { upTo: number; colour: string; label: string };
  * a shared constant is the only thing that makes that automatic.
  */
 export const ADOPTION_BANDS: GaugeBand[] = [
-  { upTo: 40, colour: '#d13438', label: 'Needs attention' },
-  { upTo: 70, colour: '#c19c00', label: 'Progressing' },
-  { upTo: 100, colour: '#107c10', label: 'Healthy' },
+  { upTo: 40, colour: '#d13438', label: NEEDS_ATTENTION_LABEL },
+  { upTo: 70, colour: '#c19c00', label: PROGRESSING_LABEL },
+  { upTo: 100, colour: '#107c10', label: HEALTHY_LABEL },
 ];
 
 /** The KPI tone matching a value on a band scale, so a card and its gauge can never disagree. */
@@ -44,15 +49,16 @@ export function bandTone(value: number, bands: GaugeBand[] = ADOPTION_BANDS): 'c
 }
 
 /** The scale in words, for an explanation that cannot drift from the colours it describes. */
-export function describeBands(bands: GaugeBand[] = ADOPTION_BANDS): string {
+export function describeBands(t: TFunction = translateActive, bands: GaugeBand[] = ADOPTION_BANDS): string {
   return bands
     .map((band, i) => {
       const from = i === 0 ? 0 : bands[i - 1].upTo;
+      const label = bandLabel(band.label, t).toLowerCase();
       return i === 0
-        ? `below ${band.upTo}% ${band.label.toLowerCase()}`
+        ? t('charts.gauge.band.below', { upTo: band.upTo, label })
         : i === bands.length - 1
-          ? `above ${from}% is ${band.label.toLowerCase()}`
-          : `${from}-${band.upTo}% is ${band.label.toLowerCase()}`;
+          ? t('charts.gauge.band.above', { from, label })
+          : t('charts.gauge.band.range', { from, upTo: band.upTo, label });
     })
     .join(', ');
 }
@@ -79,6 +85,7 @@ export default function GaugeRing({
   bands?: GaugeBand[];
   size?: number;
 }) {
+  const t = useT();
   const styles = useStyles();
 
   const clamped = Math.max(0, Math.min(100, value));
@@ -112,7 +119,7 @@ export default function GaugeRing({
 
   return (
     <div className={styles.root}>
-      <svg width={size} height={size * 0.82} viewBox={`0 0 ${size} ${size * 0.82}`} className={styles.svg} role="img" aria-label={`${label}: ${clamped}%`}>
+      <svg width={size} height={size * 0.82} viewBox={`0 0 ${size} ${size * 0.82}`} className={styles.svg} role="img" aria-label={t('charts.gauge.ariaLabel', { label, percent: formatNumber(clamped) })}>
         <path d={arcPath(0, 100, r)} fill="none" stroke={tokens.colorNeutralBackground3} strokeWidth={stroke} strokeLinecap="round" />
 
         {bands.map((band, i) => {
@@ -148,10 +155,10 @@ export default function GaugeRing({
           fill={tokens.colorNeutralForeground1}
           style={{ fontVariantNumeric: 'tabular-nums' }}
         >
-          {Math.round(clamped)}%
+          {formatNumber(Math.round(clamped))}%
         </text>
         <text x={radius} y={radius + size * 0.15} textAnchor="middle" fontSize={size * 0.075} fill={activeBand.colour}>
-          {activeBand.label}
+          {bandLabel(activeBand.label, t)}
         </text>
       </svg>
 
@@ -165,4 +172,17 @@ export default function GaugeRing({
       )}
     </div>
   );
+}
+
+function bandLabel(label: string, t: TFunction): string {
+  switch (label) {
+    case NEEDS_ATTENTION_LABEL:
+      return t('charts.gauge.needsAttention');
+    case PROGRESSING_LABEL:
+      return t('charts.gauge.progressing');
+    case HEALTHY_LABEL:
+      return t('charts.gauge.healthy');
+    default:
+      return label;
+  }
 }

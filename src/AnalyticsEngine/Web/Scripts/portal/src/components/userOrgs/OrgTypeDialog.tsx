@@ -21,6 +21,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { fetchAttributeCatalogue, testEntraAttribute } from '../../api/userOrgsApi';
+import { formatNumber, plural, useT, type TFunction } from '../../i18n';
 import type {
   UserOrgAttributeCatalogue,
   UserOrgSource,
@@ -63,6 +64,7 @@ export interface OrgTypeDialogProps {
  */
 export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgTypeDialogProps) {
   const styles = useStyles();
+  const t = useT();
 
   const [name, setName] = useState('');
   const [source, setSource] = useState<UserOrgSource>('entra');
@@ -153,7 +155,7 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
         normalisedValue: null,
         wouldTruncate: false,
         hasNoValue: false,
-        message: e instanceof Error ? e.message : 'The test failed.',
+        message: e instanceof Error ? e.message : t('errors.userOrgs.testFailed'),
       });
       setProvenAttribute(null);
     } finally {
@@ -172,7 +174,7 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
         isEnabled,
       });
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : 'Could not save the organisation type.');
+      setSaveError(e instanceof Error ? e.message : t('errors.userOrgs.saveFailed'));
     } finally {
       setSaving(false);
     }
@@ -182,18 +184,22 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
     <Dialog open={open} onOpenChange={(_e, data) => !data.open && onDismiss()}>
       <DialogSurface mountNode={undefined}>
         <DialogBody>
-          <DialogTitle>{editing ? `Edit ${editing.name}` : 'New organisation type'}</DialogTitle>
+          <DialogTitle>
+            {editing
+              ? t('userOrgs.dialog.editTitle', { name: editing.name })
+              : t('userOrgs.dialog.newTitle')}
+          </DialogTitle>
           <DialogContent>
             <div className={styles.form}>
               <Field
-                label="Name"
+                label={t('userOrgs.dialog.nameLabel')}
                 required
-                hint="The label this grouping is shown under on the user lookup page, for example Cost Centre. Organisation types are not yet available as a filter on the reports."
+                hint={t('userOrgs.dialog.nameHint')}
               >
                 <Input value={name} onChange={(_e, d) => setName(d.value)} maxLength={100} />
               </Field>
 
-              <Field label="Where the values come from">
+              <Field label={t('userOrgs.dialog.sourceLabel')}>
                 <RadioGroup
                   value={source}
                   onChange={(_e, d) => {
@@ -201,11 +207,8 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
                     setTestResult(null);
                   }}
                 >
-                  <Radio
-                    value="entra"
-                    label="A custom Microsoft Entra attribute, read on every user import"
-                  />
-                  <Radio value="csv" label="A CSV file uploaded here" />
+                  <Radio value="entra" label={t('userOrgs.dialog.sourceEntra')} />
+                  <Radio value="csv" label={t('userOrgs.dialog.sourceCsv')} />
                 </RadioGroup>
               </Field>
 
@@ -215,11 +218,14 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
                   (source === 'entra' && attribute.trim() !== (editing.entraAttributeName ?? ''))) && (
                   <MessageBar intent="warning">
                     <MessageBarBody>
-                      Saving this discards the {editing.assignedUserCount.toLocaleString()} value
-                      {editing.assignedUserCount === 1 ? '' : 's'} this type holds today. They were read
-                      from a source that will no longer be the source of truth for it, so leaving them
-                      would show stale values indefinitely — a CSV Merge in particular never touches
-                      users the file does not mention.
+                      {t(
+                        plural(
+                          editing.assignedUserCount,
+                          'userOrgs.dialog.discardWarning.one',
+                          'userOrgs.dialog.discardWarning.other',
+                        ),
+                        { count: formatNumber(editing.assignedUserCount) },
+                      )}
                     </MessageBarBody>
                   </MessageBar>
                 )}
@@ -227,9 +233,9 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
               {source === 'entra' && (
                 <>
                   <Field
-                    label="Entra attribute"
+                    label={t('userOrgs.dialog.attributeLabel')}
                     required
-                    hint="One of extensionAttribute1-15, employeeId, employeeType, employeeOrgData.costCenter, employeeOrgData.division, a directory extension (extension_{appId}_{name}) or a schema extension."
+                    hint={t('userOrgs.dialog.attributeHint')}
                   >
                     <Combobox
                       freeform
@@ -254,8 +260,8 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
                   )}
 
                   <Field
-                    label="Test it against a user"
-                    hint="Required before saving. Microsoft Graph rejects the whole user import if it does not recognise the attribute, so it has to be proved first."
+                    label={t('userOrgs.dialog.testLabel')}
+                    hint={t('userOrgs.dialog.testHint')}
                   >
                     <div className={styles.testRow}>
                       <Input
@@ -270,16 +276,16 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
                           testing || attribute.trim().length === 0 || testUpn.trim().length === 0
                         }
                       >
-                        {testing ? 'Testing...' : 'Test'}
+                        {testing ? t('userOrgs.dialog.testing') : t('userOrgs.dialog.testButton')}
                       </Button>
                     </div>
                   </Field>
 
-                  {testResult && <TestOutcome result={testResult} styles={styles} />}
+                  {testResult && <TestOutcome result={testResult} styles={styles} t={t} />}
 
                   {!attributeProven && !testResult && (
                     <Text size={200} className={styles.muted}>
-                      Test the attribute against a user before saving.
+                      {t('userOrgs.dialog.testFirst')}
                     </Text>
                   )}
                 </>
@@ -288,7 +294,7 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
               <Switch
                 checked={isEnabled}
                 onChange={(_e, d) => setIsEnabled(d.checked)}
-                label={isEnabled ? 'Enabled - included in imports' : 'Disabled - not imported'}
+                label={isEnabled ? t('userOrgs.dialog.enabled') : t('userOrgs.dialog.disabled')}
               />
 
               {saveError && (
@@ -300,10 +306,10 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
           </DialogContent>
           <DialogActions>
             <Button appearance="secondary" onClick={onDismiss}>
-              Cancel
+              {t('userOrgs.dialog.cancel')}
             </Button>
             <Button appearance="primary" onClick={save} disabled={!canSave || saving}>
-              {saving ? 'Saving...' : 'Save'}
+              {saving ? t('userOrgs.dialog.saving') : t('userOrgs.dialog.save')}
             </Button>
           </DialogActions>
         </DialogBody>
@@ -315,14 +321,16 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
 function TestOutcome({
   result,
   styles,
+  t,
 }: {
   result: UserOrgTestResult;
   styles: ReturnType<typeof useStyles>;
+  t: TFunction;
 }) {
   if (!result.succeeded) {
     return (
       <MessageBar intent="error">
-        <MessageBarBody>{result.message ?? 'The attribute could not be read.'}</MessageBarBody>
+        <MessageBarBody>{result.message ?? t('userOrgs.test.failed')}</MessageBarBody>
       </MessageBar>
     );
   }
@@ -330,14 +338,14 @@ function TestOutcome({
   return (
     <div>
       <MessageBar intent={result.hasNoValue ? 'warning' : 'success'}>
-        <MessageBarBody>{result.message ?? 'The attribute was read successfully.'}</MessageBarBody>
+        <MessageBarBody>{result.message ?? t('userOrgs.test.succeeded')}</MessageBarBody>
       </MessageBar>
       <div className={styles.resultGrid}>
-        <Text className={styles.label}>Graph property</Text>
+        <Text className={styles.label}>{t('userOrgs.test.graphProperty')}</Text>
         <Text className={styles.mono}>{result.graphProperty ?? '—'}</Text>
-        <Text className={styles.label}>Value from Graph</Text>
+        <Text className={styles.label}>{t('userOrgs.test.rawValue')}</Text>
         <Text className={styles.mono}>{result.rawValue ?? '—'}</Text>
-        <Text className={styles.label}>Stored as</Text>
+        <Text className={styles.label}>{t('userOrgs.test.storedAs')}</Text>
         <Text className={styles.mono}>{result.normalisedValue ?? '—'}</Text>
       </div>
     </div>

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { makeStyles, tokens, Button, Input, Text } from '@fluentui/react-components';
 import type { DateRange } from '../../types/licenceActivity';
+import { useT } from '../../i18n';
 import {
   PRESETS,
-  PRESET_LABELS,
+  PRESET_LABEL_KEYS,
   diffDaysInclusive,
   latestEndString,
   matchPreset,
@@ -11,6 +12,7 @@ import {
   validateRange,
   type PresetDays,
 } from './dateRange';
+import { formatCount } from './format';
 
 const useStyles = makeStyles({
   root: {
@@ -76,6 +78,7 @@ export default function DateRangeControl({
   disabled,
 }: DateRangeControlProps) {
   const styles = useStyles();
+  const t = useT();
   const latestEnd = latestEndString(now);
 
   const activePreset = matchPreset(value, now);
@@ -103,7 +106,7 @@ export default function DateRangeControl({
   };
 
   const applyCustom = (): void => {
-    const result = validateRange(draft, { now, minDays, maxDays });
+    const result = validateRange(draft, { now, minDays, maxDays, t });
     if (!result.ok) {
       setError(result.error);
       return;
@@ -124,7 +127,7 @@ export default function DateRangeControl({
             aria-pressed={activePreset === p && !customOpen}
             onClick={() => applyPreset(p)}
           >
-            {PRESET_LABELS[p]}
+            {t(PRESET_LABEL_KEYS[p])}
           </Button>
         ))}
         <Button
@@ -134,11 +137,14 @@ export default function DateRangeControl({
           aria-pressed={customOpen}
           onClick={openCustom}
         >
-          Custom range
+          {t('licenceActivity.dateRange.customRange')}
         </Button>
         {!customOpen && (
           <Text size={200} className={styles.hint}>
-            {diffDaysInclusive(value.from, value.to).toLocaleString()} days ending {value.to}
+            {t('licenceActivity.dateRange.daysEnding', {
+              days: formatCount(diffDaysInclusive(value.from, value.to)),
+              date: value.to,
+            })}
           </Text>
         )}
       </div>
@@ -148,20 +154,20 @@ export default function DateRangeControl({
           <div className={styles.custom}>
             <label className={styles.field}>
               <Text size={200} className={styles.fieldLabel}>
-                From
+                {t('licenceActivity.dateRange.from')}
               </Text>
               <Input
                 type="date"
                 value={draft.from}
                 max={draft.to || latestEnd}
                 disabled={disabled}
-                aria-label="Start date"
+                aria-label={t('licenceActivity.dateRange.startDate')}
                 onChange={(_e: any, d: any) => setDraft((prev) => ({ ...prev, from: d.value }))}
               />
             </label>
             <label className={styles.field}>
               <Text size={200} className={styles.fieldLabel}>
-                To
+                {t('licenceActivity.dateRange.to')}
               </Text>
               <Input
                 type="date"
@@ -169,12 +175,12 @@ export default function DateRangeControl({
                 min={draft.from || undefined}
                 max={latestEnd}
                 disabled={disabled}
-                aria-label="End date"
+                aria-label={t('licenceActivity.dateRange.endDate')}
                 onChange={(_e: any, d: any) => setDraft((prev) => ({ ...prev, to: d.value }))}
               />
             </label>
             <Button appearance="primary" size="small" disabled={disabled} onClick={applyCustom}>
-              Apply
+              {t('licenceActivity.common.apply')}
             </Button>
           </div>
           {error && (

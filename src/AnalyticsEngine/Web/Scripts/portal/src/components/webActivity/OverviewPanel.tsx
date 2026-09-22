@@ -5,14 +5,16 @@ import TimeSeriesChart from '../charts/TimeSeriesChart';
 import { KpiGrid, type KpiDefinition } from '../shared/KpiGrid';
 import { seriesColor } from '../charts/chartCommon';
 import type { WebActivityOverview } from '../../types/webActivity';
+import { useT } from '../../i18n';
 import {
-  DWELL_CAVEAT,
+  dwellCaveatLower,
   FailedQueryNote,
   JudgementList,
   SectionCard,
   WindowNote,
   bounceTone,
   bucketsToCategories,
+  translatedBucketsToCategories,
   formatCount,
   formatDecimal,
   formatDuration,
@@ -41,101 +43,79 @@ export default function OverviewPanel({
   directoryImported: boolean;
 }) {
   const styles = useWebActivityStyles();
+  const t = useT();
   const kpis = data.kpis;
   const reachMeasurable = kpis.reachPct !== null && kpis.directoryImported && directoryImported;
 
   const items: KpiDefinition[] = [
     {
       key: 'visits',
-      label: 'Visits',
+      label: t('webActivity.common.visits'),
       value: formatCount(kpis.visits),
-      hint: `${formatDecimal(kpis.pagesPerVisit)} pages per visit`,
+      hint: t('webActivity.overview.kpi.pagesPerVisitHint', { count: formatDecimal(kpis.pagesPerVisit) }),
       info: {
-        what: 'Browsing sessions on the SharePoint sites the tracker is deployed to.',
-        how:
-          'One visit is one Application Insights session that had at least one page view in the '
-          + 'window, measured from its first page view inside that window. Visits are therefore '
-          + 'window-local: a session straddling the boundary is counted in both periods, so visit '
-          + 'totals from adjacent periods are not additive.',
+        what: t('webActivity.overview.kpi.visitsWhat'),
+        how: t('webActivity.overview.kpi.visitsHow'),
       },
     },
     {
       key: 'visitors',
-      label: 'Visitors',
+      label: t('webActivity.common.visitors'),
       value: formatCount(kpis.visitors),
       hint: reachMeasurable
-        ? `${formatPct(kpis.reachPct)} of ${formatCount(kpis.knownUsers)} enabled directory users`
-        : 'no directory to measure against',
+        ? t('webActivity.overview.kpi.reachHint', { pct: formatPct(kpis.reachPct), count: formatCount(kpis.knownUsers) })
+        : t('webActivity.overview.kpi.noDirectoryHint'),
       tone: reachMeasurable ? reachToneOrNeutral(kpis.reachPct) : 'neutral',
       info: {
-        what: 'Distinct people who visited at least once.',
-        how:
-          'The percentage is enabled directory users who visited, over all enabled directory users '
-          + '- which includes guests, shared mailboxes and service accounts, and excludes any site '
-          + 'the tracker is not deployed to, so it is a floor on real reach rather than a precise '
-          + 'figure. Without the Graph user import there is no population to divide by, so no '
-          + 'percentage is shown.',
+        what: t('webActivity.overview.kpi.visitorsWhat'),
+        how: t('webActivity.overview.kpi.visitorsHow'),
       },
     },
     {
       key: 'pageviews',
-      label: 'Page views',
+      label: t('webActivity.common.pageViews'),
       value: formatCount(kpis.pageViews),
-      hint: `${formatCount(kpis.uniquePageViews)} unique, across ${formatCount(kpis.uniquePages)} pages`,
+      hint: t('webActivity.overview.kpi.pageViewsHint', { unique: formatCount(kpis.uniquePageViews), pages: formatCount(kpis.uniquePages) }),
       info: {
-        what: 'Every page view recorded, and how many distinct pages they landed on.',
-        how:
-          'Unique page views count a page once per visit, the same definition Google Analytics uses, '
-          + 'so a reader refreshing an article inflates page views but not unique page views.',
+        what: t('webActivity.overview.kpi.pageViewsWhat'),
+        how: t('webActivity.overview.kpi.pageViewsHow'),
       },
     },
     {
       key: 'bounce',
-      label: 'Single-page visits',
+      label: t('webActivity.common.singlePageVisits'),
       value: kpis.visits > 0 ? formatPct(kpis.bouncePct) : '-',
-      hint: kpis.visits > 0 ? 'people who saw one page and left' : 'no visits recorded in this period',
+      hint: kpis.visits > 0 ? t('webActivity.overview.kpi.bounceHint') : t('webActivity.common.noVisitsRecorded'),
       tone: kpis.visits > 0 ? bounceTone(kpis.bouncePct) : 'neutral',
       info: {
-        what: 'The share of visits that saw exactly one page.',
-        how:
-          'Visits with exactly one page view, over all visits. High is not automatically bad - a '
-          + 'deep link to one policy document is a legitimate one-page visit - but on a home page it '
-          + 'means the landing page is not leading anywhere.',
+        what: t('webActivity.overview.kpi.bounceWhat'),
+        how: t('webActivity.overview.kpi.bounceHow'),
       },
     },
     {
       key: 'load',
-      label: 'Average page load',
+      label: t('webActivity.overview.kpi.averagePageLoad'),
       value: formatSeconds(kpis.averageLoadSeconds),
-      hint: `${formatDuration(kpis.averageSecondsOnPage)} average time on page`,
+      hint: t('webActivity.overview.kpi.averageTimeHint', { duration: formatDuration(kpis.averageSecondsOnPage) }),
       tone: loadTone(kpis.averageLoadSeconds),
       info: {
-        what: 'How long a page took to become usable, as the browser measured it.',
-        how:
-          'Mean of the page load time the tracker reports per view, in seconds. Views where the '
-          + 'browser did not report a load time are excluded rather than counted as zero, and a dash '
-          + 'means none reported one. The mean hides the slow tail: the Technology tab carries the '
-          + '95th percentile, and the Page views tab ranks the slowest pages. Average time on page ' + DWELL_CAVEAT.charAt(0).toLowerCase()
-          + DWELL_CAVEAT.slice(1),
+        what: t('webActivity.common.loadWhat'),
+        how: t('webActivity.overview.kpi.loadHowPrefix', { caveat: dwellCaveatLower(t) }),
       },
     },
     {
       key: 'returning',
-      label: 'Seen in both halves',
+      label: t('webActivity.overview.kpi.seenBothHalves'),
       value: formatCount(kpis.returningVisitors),
-      hint: `${formatCount(kpis.newVisitors)} first seen in the second half`,
+      hint: t('webActivity.overview.kpi.firstSeenSecondHalfHint', { count: formatCount(kpis.newVisitors) }),
       info: {
-        what: 'People who visited in both halves of the period, and people who appeared only in the second.',
-        how:
-          'This is new to THIS WINDOW, not new to the intranet. Someone whose first ever visit '
-          + 'predates the window is indistinguishable here from someone who simply did not visit in '
-          + 'the first half. Establishing a genuine first-ever visit would mean scanning the entire '
-          + 'page-view history, which is exactly the query this page must never run.',
+        what: t('webActivity.overview.kpi.seenBothHalvesWhat'),
+        how: t('webActivity.overview.kpi.seenBothHalvesHow'),
       },
     },
   ];
 
-  const segmentCategories = bucketsToCategories(data.visitorSegments).filter((c) => c.value > 0);
+  const segmentCategories = translatedBucketsToCategories(t, 'visitorSegment', data.visitorSegments).filter((c) => c.value > 0);
 
   return (
     <div>
@@ -153,24 +133,20 @@ export default function OverviewPanel({
 
       <div className={styles.stack}>
         <SectionCard
-          title="Traffic over time"
-          description="Weekly page views, visits and visitors. Visits are counted in the week they started."
-          note={
-            'The first and last bars can be partial weeks, because the window rarely starts and ends '
-            + 'on a Monday. A visit already open when the window began is measured from its first '
-            + 'page view inside it, so it can appear as a short - even single-page - visit.'
-          }
+          title={t('webActivity.overview.trafficOverTime.title')}
+          description={t('webActivity.overview.trafficOverTime.description')}
+          note={t('webActivity.overview.trend.note')}
           query={queryFor(data.queries, 'overview-trend')}
           isEmpty={data.trend.length === 0}
         >
           <TimeSeriesChart
-            valueLabel="Count"
+            valueLabel={t('webActivity.common.count')}
             series={[
-              { name: 'Page views', points: data.trend.map((p) => ({ weekStart: p.weekStart, value: p.pageViews })) },
-              { name: 'Visits', points: data.trend.map((p) => ({ weekStart: p.weekStart, value: p.visits })) },
-              { name: 'Visitors', points: data.trend.map((p) => ({ weekStart: p.weekStart, value: p.visitors })) },
+              { name: t('webActivity.common.pageViews'), points: data.trend.map((p) => ({ weekStart: p.weekStart, value: p.pageViews })) },
+              { name: t('webActivity.common.visits'), points: data.trend.map((p) => ({ weekStart: p.weekStart, value: p.visits })) },
+              { name: t('webActivity.common.visitors'), points: data.trend.map((p) => ({ weekStart: p.weekStart, value: p.visitors })) },
               {
-                name: 'Single-page visits',
+                name: t('webActivity.common.singlePageVisits'),
                 points: data.trend.map((p) => ({ weekStart: p.weekStart, value: p.bounces })),
               },
             ]}
@@ -180,16 +156,12 @@ export default function OverviewPanel({
 
       <div className={styles.grid}>
         <SectionCard
-          title="How habitually people visit"
-          description="Visitors grouped by how many separate days they came back."
+          title={t('webActivity.overview.habit.title')}
+          description={t('webActivity.overview.habit.description')}
           note={
             data.window.segmentsFullyReachable
-              ? 'Bands are a share of the days in the period, so "Daily" means the same thing over a '
-                + 'month as it does over a year.'
-              : 'Bands are a share of the days in the period. This period is too short to separate '
-                + 'the lower bands - with only a handful of possible day counts there is nothing '
-                + 'between "one-off" and "regular", so an empty band here means "cannot tell", not '
-                + '"nobody".'
+              ? t('webActivity.overview.segments.noteFull')
+              : t('webActivity.overview.segments.noteShort')
           }
           query={queryFor(data.queries, 'overview-segments')}
           isEmpty={segmentCategories.length === 0}
@@ -198,42 +170,39 @@ export default function OverviewPanel({
             categories={segmentCategories}
             colours={segmentCategories.map((_, i) => seriesColor(i))}
             centreValue={formatCount(kpis.visitors)}
-            centreLabel="visitors"
+            centreLabel={t('webActivity.common.visitorsLower')}
           />
         </SectionCard>
 
         <SectionCard
-          title="How far people get"
-          description="Visits by the number of pages they saw."
+          title={t('webActivity.overview.depth.title')}
+          description={t('webActivity.common.visitDepthDescription')}
           query={queryFor(data.queries, 'overview-depth')}
           isEmpty={data.visitDepth.every((b) => b.count === 0)}
         >
           <CategoryBarChart
-            categories={bucketsToCategories(data.visitDepth)}
-            valueLabel="Visits"
+            categories={translatedBucketsToCategories(t, 'visitDepth', data.visitDepth)}
+            valueLabel={t('webActivity.common.visits')}
             showShare
           />
         </SectionCard>
 
         <SectionCard
-          title="Busiest sites"
-          description="Page views per SharePoint site, as a share of ALL page views in the period."
-          note={
-            'Only the top ' + data.window.top + ' are shown, so these do not add up to 100% - the '
-            + 'remainder is the tail this chart does not list.'
-          }
+          title={t('webActivity.overview.busiestSites.title')}
+          description={t('webActivity.overview.busiestSites.description')}
+          note={t('webActivity.overview.busiestSites.note', { top: data.window.top })}
           query={queryFor(data.queries, 'overview-sites')}
           isEmpty={data.topSites.length === 0}
-          emptyMessage="No page views could be attributed to a site. The tracker reports the site URL as a custom property - if it is missing, hits are still counted but cannot be grouped."
+          emptyMessage={t('webActivity.overview.busiestSites.empty')}
         >
-          <CategoryBarChart categories={toCategories(data.topSites)} valueLabel="Page views" />
+          <CategoryBarChart categories={toCategories(data.topSites)} valueLabel={t('webActivity.common.pageViews')} />
         </SectionCard>
       </div>
 
       <div className={styles.stack}>
         <SectionCard
-          title="When the intranet is used"
-          description="Page views by day of the week and hour of the day."
+          title={t('webActivity.overview.heatmap.title')}
+          description={t('webActivity.overview.heatmap.description')}
           query={queryFor(data.queries, 'overview-heatmap')}
           isEmpty={data.heatmap.length === 0}
         >
@@ -243,8 +212,8 @@ export default function OverviewPanel({
               hour: cell.hour,
               value: cell.pageViews,
             }))}
-            valueLabel="page views"
-            footnote="Hours are UTC. Page views are stored in UTC and a multi-region intranet has no single local clock to convert to."
+            valueLabel={t('webActivity.common.pageViewsLower')}
+            footnote={t('webActivity.overview.heatmap.footnote')}
           />
         </SectionCard>
       </div>

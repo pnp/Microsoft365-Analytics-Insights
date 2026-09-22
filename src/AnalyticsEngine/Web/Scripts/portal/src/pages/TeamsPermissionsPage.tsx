@@ -7,6 +7,11 @@ import { fetchMsGraph, GRAPH_ENDPOINTS } from '../auth/graph';
 import { fetchGraphToken } from '../auth/siteToken';
 import type { GraphAccessToken } from '../types/graphToken';
 import type { User, Team } from '@microsoft/microsoft-graph-types';
+import { useT, type TFunction } from '../i18n';
+
+type TeamsPermissionsProps = {
+  t: TFunction;
+};
 
 type TeamsPermissionsState = {
   loading: boolean;
@@ -31,8 +36,8 @@ type TeamsPermissionsState = {
  * Tokens are fetched at the point of use rather than cached on the page, because a Graph access
  * token only lasts about an hour and this page is one an admin leaves open.
  */
-export default class TeamsPermissionsPage extends React.Component<{}, TeamsPermissionsState> {
-  constructor(props: {}) {
+class TeamsPermissionsPageInner extends React.Component<TeamsPermissionsProps, TeamsPermissionsState> {
+  constructor(props: TeamsPermissionsProps) {
     super(props);
     this.state = {
       loading: true,
@@ -46,7 +51,7 @@ export default class TeamsPermissionsPage extends React.Component<{}, TeamsPermi
   async loadTeamsData(tokenResponse: GraphAccessToken) {
     // Get profile
     const graphProfile: User = await fetchMsGraph(GRAPH_ENDPOINTS.ME, tokenResponse.accessToken).catch(() => {
-      this.setState({ error: 'Unable to fetch Graph profile.' });
+      this.setState({ error: this.props.t('admin.teamsPermissions.errors.fetchGraphProfile') });
     });
 
     if (graphProfile) {
@@ -76,7 +81,7 @@ export default class TeamsPermissionsPage extends React.Component<{}, TeamsPermi
       GRAPH_ENDPOINTS.JOINED_TEAMS,
       accessToken,
     ).catch(() => {
-      this.setState({ error: 'Unable to fetch joined teams.' });
+      this.setState({ error: this.props.t('admin.teamsPermissions.errors.fetchJoinedTeams') });
     });
 
     if (joinedTeamsResponse) {
@@ -90,23 +95,21 @@ export default class TeamsPermissionsPage extends React.Component<{}, TeamsPermi
   }
 
   render() {
+    const t = this.props.t;
     return (
       <div>
-        <Title3 block>Grant Team Access to the Microsoft 365 Advanced Analytics Engine</Title3>
+        <Title3 block>{t('admin.teamsPermissions.title')}</Title3>
         <div style={{ height: 16 }} />
         {this.state.loading ? (
           <div style={{ textAlign: 'center', padding: '32px' }}>
-            <Spinner size={100} label="Loading your Teams..." />
+            <Spinner size={100} label={t('admin.teamsPermissions.loadingTeams')} />
           </div>
         ) : (
           <div>
             {this.state.noToken && (
               <MessageBar intent="error" style={{ marginBlock: '12px' }}>
                 <MessageBarBody>
-                  The site couldn't get a Microsoft Graph token for your session, so your Teams can't be listed. This
-                  usually means the sign-in that captured your refresh token has expired or predates it - sign out and
-                  sign in again. If it keeps happening, check that the runtime app registration has the delegated Teams
-                  permissions and that the site's reply URL is registered.
+                  {t('admin.teamsPermissions.noTokenMessage')}
                 </MessageBarBody>
               </MessageBar>
             )}
@@ -118,36 +121,41 @@ export default class TeamsPermissionsPage extends React.Component<{}, TeamsPermi
             )}
 
             <Text block style={{ marginBlock: '12px' }}>
-              This page is so you can authorise deep analytics for a Team. This will allow Microsoft 365 Advanced
-              Analytics and Insights to read messages for anonymous statistical reporting purposes only.
+              {t('admin.teamsPermissions.description')}
             </Text>
 
             <section>
               {this.state.joinedTeams ? (
                 <div>
                   <Subtitle1 block style={{ marginBlock: '12px' }}>
-                    Your Teams - {this.state.graphProfile?.displayName}
+                    {t('admin.teamsPermissions.yourTeamsTitle', {
+                      displayName: this.state.graphProfile?.displayName ?? '',
+                    })}
                   </Subtitle1>
                   <Text block style={{ marginBottom: '8px' }}>
-                    Here are all the Teams you have access to. Select which Teams you want to enable for deep analytics
-                    and continue.
+                    {t('admin.teamsPermissions.yourTeamsDescription')}
                   </Text>
                   <TeamList teamsList={this.state.joinedTeams} />
                 </div>
               ) : (
                 <Text block>
                   {this.state.noToken
-                    ? 'Your Teams will be listed here once the site can get a Graph token for your session.'
-                    : 'No Teams found for your account.'}
+                    ? t('admin.teamsPermissions.noTokenTeamsPlaceholder')
+                    : t('admin.teamsPermissions.noTeamsFound')}
                 </Text>
               )}
             </section>
             <Text block size={200} style={{ marginTop: '12px', color: 'var(--colorNeutralForeground3)' }}>
-              Note: tokens are securely stored in a temporary Redis cache &amp; aren't accessible to anyone.
+              {t('admin.teamsPermissions.tokenNote')}
             </Text>
           </div>
         )}
       </div>
     );
   }
+}
+
+export default function TeamsPermissionsPage() {
+  const t = useT();
+  return <TeamsPermissionsPageInner t={t} />;
 }

@@ -26,6 +26,7 @@ import toast from '../toast';
 import type { UserDataCategory, UserDataDetailRow } from '../../types/userData';
 import { fetchUserDetail } from '../../api/userLookupApi';
 import Spinner from '../Spinner';
+import { formatDateParts, formatNumber, plural, useT, type TFunction, type TranslationKey } from '../../i18n';
 
 const useStyles = makeStyles({
   row: {
@@ -85,6 +86,90 @@ const useStyles = makeStyles({
   },
 });
 
+const phrase = (...parts: string[]) => parts.join(' ');
+
+export const USER_DATA_WORKLOADS_BY_FLAG: Record<string, { english: string; nameKey: TranslationKey; descriptionKey: TranslationKey }> = {
+  ActivityLog: {
+    english: 'Audit log',
+    nameKey: 'admin.userLookup.workload.ActivityLog.name',
+    descriptionKey: 'admin.userLookup.workload.ActivityLog.description',
+  },
+  Copilot: {
+    english: phrase('Copilot', '&', 'Power', 'Platform'),
+    nameKey: 'admin.userLookup.workload.Copilot.name',
+    descriptionKey: 'admin.userLookup.workload.Copilot.description',
+  },
+  WebTraffic: {
+    english: 'Web traffic',
+    nameKey: 'admin.userLookup.workload.WebTraffic.name',
+    descriptionKey: 'admin.userLookup.workload.WebTraffic.description',
+  },
+  SentEmails: {
+    english: 'Sent emails',
+    nameKey: 'admin.userLookup.workload.SentEmails.name',
+    descriptionKey: 'admin.userLookup.workload.SentEmails.description',
+  },
+  GraphTeams: {
+    english: 'Teams',
+    nameKey: 'admin.userLookup.workload.GraphTeams.name',
+    descriptionKey: 'admin.userLookup.workload.GraphTeams.description',
+  },
+  Calls: {
+    english: 'Teams calls',
+    nameKey: 'admin.userLookup.workload.Calls.name',
+    descriptionKey: 'admin.userLookup.workload.Calls.description',
+  },
+  GraphUsageReports: {
+    english: 'Usage reports',
+    nameKey: 'admin.userLookup.workload.GraphUsageReports.name',
+    descriptionKey: 'admin.userLookup.workload.GraphUsageReports.description',
+  },
+  GraphUsersMetadata: {
+    english: 'User metadata',
+    nameKey: 'admin.userLookup.workload.GraphUsersMetadata.name',
+    descriptionKey: 'admin.userLookup.workload.GraphUsersMetadata.description',
+  },
+};
+
+const USER_DATA_WORKLOAD_BY_ENGLISH = new Map(
+  Object.values(USER_DATA_WORKLOADS_BY_FLAG).map((entry) => [entry.english, entry]),
+);
+
+export function userDataWorkloadName(t: TFunction, serverName: string): string {
+  const entry = USER_DATA_WORKLOAD_BY_ENGLISH.get(serverName);
+  return entry ? t(entry.nameKey) : serverName;
+}
+
+export function userDataWorkloadNames(t: TFunction, serverNames: string[]): string[] {
+  return serverNames.map((name) => userDataWorkloadName(t, name));
+}
+
+function serverText(t: TFunction, key: string, field: 'label' | 'description', fallback: string): string {
+  if (!key) return fallback;
+  const catalogKey = `admin.userLookup.category.${key}.${field}` as TranslationKey;
+  const translated = t(catalogKey);
+  return translated === catalogKey ? fallback : translated;
+}
+
+function detailTitle(t: TFunction, categoryKey: string, title: string | null): string | null {
+  if (categoryKey === 'calls-organised' && title === 'Call' + ' / ' + 'meeting') return t('admin.userLookup.detail.callsOrganised.title');
+  if (categoryKey === 'call-sessions' && title === 'Call session' + ' attended') return t('admin.userLookup.detail.callSessions.title');
+  if (categoryKey.startsWith('usage-') && title === 'Activity report' + ' day') return t('admin.userLookup.detail.usage.title');
+  if (title === '(audit event)') return t('admin.userLookup.detail.auditEventFallback.title');
+  return title;
+}
+
+function detailText(t: TFunction, categoryKey: string, detail: string | null): string | null {
+  if (!detail) return detail;
+  if ((categoryKey === 'calls-organised' || categoryKey === 'call-sessions') && detail.startsWith('Ended ')) {
+    return t('admin.userLookup.detail.ended', { date: detail.slice('Ended '.length) });
+  }
+  if (categoryKey.startsWith('usage-') && detail.startsWith('Last activity ')) {
+    return t('admin.userLookup.detail.lastActivity', { date: detail.slice('Last activity '.length) });
+  }
+  return detail;
+}
+
 type CategoryRowProps = {
   upn: string;
   category: UserDataCategory;
@@ -93,6 +178,7 @@ type CategoryRowProps = {
 /** A single category row that can expand to lazily load & show its most recent rows. */
 export default function CategoryRow({ upn, category }: CategoryRowProps) {
   const styles = useStyles();
+  const t = useT();
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -100,6 +186,9 @@ export default function CategoryRow({ upn, category }: CategoryRowProps) {
   const [totalCount, setTotalCount] = useState<number | null>(null);
 
   const canDrill = category.supportsDetail && category.count > 0;
+  const categoryLabel = serverText(t, category.key, 'label', category.label);
+  const categoryDescription = serverText(t, category.key, 'description', category.description);
+  const workloadNames = userDataWorkloadNames(t, category.workloads);
 
   const toggle = async () => {
     if (expanded) {
@@ -116,7 +205,7 @@ export default function CategoryRow({ upn, category }: CategoryRowProps) {
         setRows(resp.rows);
         setTotalCount(resp.totalCount);
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to load detail.');
+        setError(e instanceof Error ? e.message : t('admin.userLookup.categoryRow.loadDetailFailed'));
       } finally {
         setLoading(false);
       }
@@ -126,9 +215,9 @@ export default function CategoryRow({ upn, category }: CategoryRowProps) {
   const copySql = async () => {
     try {
       await navigator.clipboard.writeText(category.sqlQuery);
-      toast.success('SQL copied to clipboard');
+      toast.success(t('admin.userLookup.categoryRow.sqlCopied'));
     } catch {
-      toast.error('Could not copy to clipboard');
+      toast.error(t('admin.userLookup.categoryRow.sqlCopyFailed'));
     }
   };
 
@@ -136,21 +225,28 @@ export default function CategoryRow({ upn, category }: CategoryRowProps) {
     <>
       <div className={styles.row}>
         <div className={styles.main}>
-          <Text weight="semibold">{category.label}</Text>
+          <Text weight="semibold">{categoryLabel}</Text>
           <Text size={200} block className={styles.desc}>
-            {category.description}
+            {categoryDescription}
           </Text>
           <div className={styles.source}>
-            <Text size={200}>Source: {category.workloads.join(', ') || 'n/a'}</Text>
+            <Text size={200}>
+              {t('admin.userLookup.categoryRow.source', { source: workloadNames.join(', ') || 'n/a' })}
+            </Text>
             {!category.workloadsEnabled && (
               <Tooltip
                 relationship="description"
-                content={`This data isn't being imported (workload${
-                  category.workloads.length === 1 ? '' : 's'
-                } "${category.workloads.join('", "')}" disabled), so a count of 0 is expected.`}
+                content={t(
+                  plural(
+                    category.workloads.length,
+                    'admin.userLookup.categoryRow.importOffTooltip.one',
+                    'admin.userLookup.categoryRow.importOffTooltip.other',
+                  ),
+                  { workloads: workloadNames.join('", "') },
+                )}
               >
                 <Badge appearance="tint" color="warning" size="small">
-                  import off
+                  {t('admin.userLookup.categoryRow.importOff')}
                 </Badge>
               </Tooltip>
             )}
@@ -158,7 +254,7 @@ export default function CategoryRow({ upn, category }: CategoryRowProps) {
         </div>
 
         <Text className={styles.count} weight="semibold">
-          {category.count.toLocaleString()}
+          {formatNumber(category.count)}
         </Text>
 
         <div className={styles.actions}>
@@ -171,12 +267,12 @@ export default function CategoryRow({ upn, category }: CategoryRowProps) {
             <PopoverSurface>
               <div className={styles.sqlSurface}>
                 <Text size={200} weight="semibold">
-                  SQL to reproduce this count
+                  {t('admin.userLookup.categoryRow.sqlTitle')}
                 </Text>
                 <pre className={styles.sqlBlock}>{category.sqlQuery}</pre>
                 <div>
                   <Button appearance="primary" size="small" icon={<Copy16Regular />} onClick={copySql}>
-                    Copy to clipboard
+                    {t('admin.userLookup.categoryRow.copyToClipboard')}
                   </Button>
                 </div>
               </div>
@@ -189,7 +285,7 @@ export default function CategoryRow({ upn, category }: CategoryRowProps) {
               icon={expanded ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
               onClick={toggle}
             >
-              {expanded ? 'Hide' : 'View recent'}
+              {expanded ? t('admin.userLookup.categoryRow.hideRecent') : t('admin.userLookup.categoryRow.viewRecent')}
             </Button>
           )}
         </div>
@@ -197,31 +293,44 @@ export default function CategoryRow({ upn, category }: CategoryRowProps) {
 
       {expanded && (
         <div className={styles.detail}>
-          {loading && <Spinner size={24} label="Loading recent rows..." />}
+          {loading && <Spinner size={24} label={t('admin.userLookup.categoryRow.loadingRecentRows')} />}
           {error && <Text style={{ color: tokens.colorPaletteRedForeground1 }}>{error}</Text>}
           {rows &&
             (rows.length === 0 ? (
-              <Text style={{ color: tokens.colorNeutralForeground3 }}>No rows.</Text>
+              <Text style={{ color: tokens.colorNeutralForeground3 }}>{t('admin.userLookup.categoryRow.noRows')}</Text>
             ) : (
               <>
                 <Text size={200} block style={{ marginBottom: '8px', color: tokens.colorNeutralForeground3 }}>
-                  Showing {rows.length} most recent of {(totalCount ?? category.count).toLocaleString()}.
+                  {t('admin.userLookup.categoryRow.showingRecent', {
+                    count: formatNumber(rows.length),
+                    total: formatNumber(totalCount ?? category.count),
+                  })}
                 </Text>
-                <Table size="small" aria-label={`${category.label} recent rows`}>
+                <Table
+                  size="small"
+                  aria-label={t('admin.userLookup.categoryRow.recentRowsAriaLabel', { category: categoryLabel })}
+                >
                   <TableHeader>
                     <TableRow>
-                      <TableHeaderCell style={{ width: 200 }}>When</TableHeaderCell>
-                      <TableHeaderCell>Detail</TableHeaderCell>
+                      <TableHeaderCell style={{ width: 200 }}>{t('admin.userLookup.categoryRow.columnWhen')}</TableHeaderCell>
+                      <TableHeaderCell>{t('admin.userLookup.categoryRow.columnDetail')}</TableHeaderCell>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {rows.map((r, i) => (
                       <TableRow key={i}>
-                        <TableCell>{r.timestamp ? new Date(r.timestamp).toLocaleString() : '—'}</TableCell>
                         <TableCell>
-                          {r.title ? <strong>{r.title}</strong> : null}
-                          {r.title && r.detail ? ' — ' : ''}
-                          {r.detail}
+                          {r.timestamp
+                            ? formatDateParts(new Date(r.timestamp), {
+                                dateStyle: 'short',
+                                timeStyle: 'medium',
+                              })
+                            : '—'}
+                        </TableCell>
+                        <TableCell>
+                          {detailTitle(t, category.key, r.title) ? <strong>{detailTitle(t, category.key, r.title)}</strong> : null}
+                          {detailTitle(t, category.key, r.title) && detailText(t, category.key, r.detail) ? ' — ' : ''}
+                          {detailText(t, category.key, r.detail)}
                         </TableCell>
                       </TableRow>
                     ))}

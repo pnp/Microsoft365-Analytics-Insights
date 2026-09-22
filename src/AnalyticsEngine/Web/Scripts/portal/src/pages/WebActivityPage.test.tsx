@@ -284,6 +284,11 @@ describe('WebActivityPage', () => {
         hasAnyHits: false,
         lastHitUtc: null,
         available: false,
+        // Deliberately not the text the assertion looks for. The reasons are now written by the
+        // SPA from the availability flags rather than echoed from the server, so that they can be
+        // translated - see `availabilityReasonTexts` in components/webActivity/AvailabilityBar.
+        // Leaving a server string here that the SPA does not render is the point: it proves the
+        // advice below comes from the flags, not from whatever prose the API happened to send.
         reasons: ['Add the AI Tracker app to the site collections you want reported on.'],
       }),
     );
@@ -292,7 +297,7 @@ describe('WebActivityPage', () => {
 
     await screen.findByText(/No SharePoint page views have been collected/);
     fireEvent.click(screen.getByRole('button', { name: /Show what is missing/ }));
-    await screen.findByText(/Add the AI Tracker app/);
+    await screen.findByText(/add the AI Tracker app to the site collections you want reported on/);
   });
 
   it('does not blame the tracker when the collection check itself failed', async () => {

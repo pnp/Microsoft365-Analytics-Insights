@@ -32,6 +32,14 @@ import Spinner from '../Spinner';
 import { BandBadge, ScoreBar, scoreColour, SortableTh, useAdoptionTableStyles } from './adoptionShared';
 import { formatCount, formatDate, formatPct, weightSharePct } from '../shared/KpiGrid';
 import ActionPlan, { ActionBadge } from './ActionPlan';
+import { useT, useTNode, type TFunction } from '../../i18n';
+import {
+  adoptionBandLabel,
+  actionLabel,
+  recommendedActionText,
+  reclaimEligibilityLabel,
+  reclaimEligibilityReason,
+} from './serverText';
 
 const PAGE_SIZE = 50;
 
@@ -151,6 +159,8 @@ export default function LicensedUsersPanel({
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
+  const t = useT();
+  const tNode = useTNode();
 
   const [filters, setFilters] = useState<LicensedUserFilters>({
     ...DEFAULT_FILTERS,
@@ -181,7 +191,7 @@ export default function LicensedUsersPanel({
       })
       .catch((e: any) => {
         if (cancelled || controller.signal.aborted) return;
-        setError(e instanceof Error ? e.message : 'Failed to load licensed users.');
+        setError(e instanceof Error ? e.message : t('copilotAdoptionUsers.licensed.loadError'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -193,7 +203,7 @@ export default function LicensedUsersPanel({
       // a bare `cancelled` flag would only suppress the state update and leave the loop running.
       controller.abort();
     };
-  }, [windowDays, filters, page, seatLicenceTypeIds, reloadKey]);
+  }, [windowDays, filters, page, seatLicenceTypeIds, reloadKey, t]);
 
   /**
    * Applies a column-header sort. The effect above already resets the page whenever `filters`
@@ -231,63 +241,63 @@ export default function LicensedUsersPanel({
         <Input
           className={styles.grow}
           value={searchDraft}
-          placeholder="Search name, email, department, job title or manager"
-          aria-label="Search licensed Copilot users"
+          placeholder={t('copilotAdoptionUsers.common.searchPlaceholder')}
+          aria-label={t('copilotAdoptionUsers.licensed.searchAria')}
           onChange={(_e: any, d: any) => setSearchDraft(d.value)}
           onKeyDown={(e: any) => {
             if (e.key === 'Enter') setFilters((f) => ({ ...f, search: searchDraft }));
           }}
         />
         <Button size="small" onClick={() => setFilters((f) => ({ ...f, search: searchDraft }))}>
-          Search
+          {t('copilotAdoptionUsers.common.search')}
         </Button>
 
         <Select
           value={filters.bands.length === 1 ? String(filters.bands[0]) : ''}
-          aria-label="Filter by engagement band"
+          aria-label={t('copilotAdoptionUsers.licensed.filterEngagementBandAria')}
           onChange={(_e: any, d: any) =>
             setFilters((f) => ({ ...f, bands: d.value === '' ? [] : [Number(d.value) as AdoptionBand] }))
           }
         >
-          <option value="">All engagement bands</option>
+          <option value="">{t('copilotAdoptionUsers.licensed.allEngagementBands')}</option>
           {(filterOptions?.bands ?? []).map((b) => (
             <option key={b.value} value={b.value}>
-              {b.name}
+              {adoptionBandLabel(t, b.value, b.name)}
             </option>
           ))}
         </Select>
 
         <Select
           value={filters.actions.length === 1 ? filters.actions[0] : ''}
-          aria-label="Filter by recommended action"
+          aria-label={t('copilotAdoptionUsers.licensed.filterRecommendedActionAria')}
           onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, actions: d.value === '' ? [] : [d.value] }))}
         >
-          <option value="">All recommended actions</option>
+          <option value="">{t('copilotAdoptionUsers.licensed.allRecommendedActions')}</option>
           {actionPlan.map((a) => (
             <option key={a.code} value={a.code}>
-              {a.label} ({a.users.toLocaleString()})
+              {actionLabel(t, a.code, a.label)} ({formatCount(a.users)})
             </option>
           ))}
         </Select>
 
         <Select
           value={filters.reclaimEligibility}
-          aria-label="Filter by reclaim eligibility"
+          aria-label={t('copilotAdoptionUsers.licensed.filterReclaimAria')}
           onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, reclaimEligibility: d.value }))}
         >
-          <option value="">All reclaim tiers</option>
-          <option value="certain">Certain reclaim</option>
-          <option value="probable">Probable reclaim</option>
-          <option value="review">Review before reclaim</option>
-          <option value="excluded">Excluded from reclaim</option>
+          <option value="">{t('copilotAdoptionUsers.licensed.allReclaimTiers')}</option>
+          <option value="certain">{t('copilotAdoptionUsers.licensed.certainReclaim')}</option>
+          <option value="probable">{t('copilotAdoptionUsers.licensed.probableReclaim')}</option>
+          <option value="review">{t('copilotAdoptionUsers.licensed.reviewBeforeReclaim')}</option>
+          <option value="excluded">{t('copilotAdoptionUsers.licensed.excludedFromReclaim')}</option>
         </Select>
 
         <Select
           value={filters.department}
-          aria-label="Filter by department"
+          aria-label={t('copilotAdoptionUsers.licensed.filterDepartmentAria')}
           onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, department: d.value }))}
         >
-          <option value="">All departments</option>
+          <option value="">{t('copilotAdoptionUsers.common.allDepartments')}</option>
           {(filterOptions?.departments ?? []).map((dept) => (
             <option key={dept} value={dept}>
               {dept}
@@ -296,16 +306,16 @@ export default function LicensedUsersPanel({
         </Select>
 
         <Checkbox
-          label="Cowork users only"
+          label={t('copilotAdoptionUsers.licensed.coworkUsersOnly')}
           checked={filters.coworkOnly}
           onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, coworkOnly: !!d.checked }))}
         />
         <Tooltip
-          content="Disabled accounts still holding a Copilot licence - the clearest licences to reclaim."
+          content={t('copilotAdoptionUsers.licensed.disabledOnlyTooltip')}
           relationship="description"
         >
           <Checkbox
-            label="Disabled accounts only"
+            label={t('copilotAdoptionUsers.licensed.disabledAccountsOnly')}
             checked={filters.disabledOnly}
             onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, disabledOnly: !!d.checked }))}
           />
@@ -319,10 +329,10 @@ export default function LicensedUsersPanel({
           icon={<ArrowClockwise16Regular />}
           onClick={() => setReloadKey((k) => k + 1)}
         >
-          Refresh
+          {t('copilotAdoptionUsers.common.refresh')}
         </Button>
         <Button size="small" icon={<ArrowDownload16Regular />} as="a" href={exportUrl}>
-          Export CSV
+          {t('copilotAdoptionUsers.common.exportCsv')}
         </Button>
       </div>
 
@@ -334,12 +344,12 @@ export default function LicensedUsersPanel({
 
       {loading && (
         <div style={{ textAlign: 'center', padding: '28px' }}>
-          <Spinner size={56} label="Loading users..." />
+          <Spinner size={56} label={t('copilotAdoptionUsers.licensed.loadingUsers')} />
         </div>
       )}
 
       {!loading && data && data.rows.length === 0 && (
-        <Text className={styles.muted}>No licensed users match these filters.</Text>
+        <Text className={styles.muted}>{t('copilotAdoptionUsers.licensed.noMatches')}</Text>
       )}
 
       {!loading && data && data.rows.length > 0 && (
@@ -347,9 +357,9 @@ export default function LicensedUsersPanel({
           {visibleActions.length > 0 && (
             <Accordion collapsible className={styles.legend}>
               <AccordionItem value="actions">
-                <AccordionHeader>What these actions mean</AccordionHeader>
+                <AccordionHeader>{t('copilotAdoptionUsers.licensed.actionsLegendTitle')}</AccordionHeader>
                 <AccordionPanel>
-                  <ActionPlan actions={visibleActions} showCounts={false} />
+                  <ActionPlan actions={visibleActions} options={options} showCounts={false} />
                 </AccordionPanel>
               </AccordionItem>
             </Accordion>
@@ -359,114 +369,121 @@ export default function LicensedUsersPanel({
           <table className={table.table}>
             <thead>
               <tr>
-                <SortableTh label="user" sortKey="upn" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} className={table.stickyLeft}>
-                  User
+                <SortableTh label={t('copilotAdoptionUsers.common.userSortLabel')} sortKey="upn" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} className={table.stickyLeft}>
+                  {t('copilotAdoptionUsers.common.user')}
                 </SortableTh>
-                <SortableTh label="department" sortKey="department" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
-                  Department
+                <SortableTh label={t('copilotAdoptionUsers.common.departmentSortLabel')} sortKey="department" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
+                  {t('copilotAdoptionUsers.common.department')}
                 </SortableTh>
                 <SortableTh
-                  label="engagement score"
+                  label={t('copilotAdoptionUsers.licensed.engagementScoreLabel')}
                   sortKey="score"
                   activeKey={filters.sortBy}
                   descending={filters.sortDesc}
                   onSort={applySort}
-                  infoTitle="Engagement score"
+                  infoTitle={t('copilotAdoptionUsers.licensed.engagementScoreTitle')}
                   info={{
-                    what: 'How much a part of this person\u2019s working week Copilot has become, scored 0 to 100. Deliberately not "did they use it": two people who each tried it once look identical on that, and that never tells you what to do next.',
+                    what: t('copilotAdoptionUsers.licensed.engagementScoreWhat'),
                     how: (
                       <>
-                        <p>
-                          Three things, each measured against a target and each capped there, so
-                          going past a target buys no extra credit:
-                        </p>
+                        <p>{t('copilotAdoptionUsers.licensed.engagementScoreHowIntro')}</p>
                         <ul>
                           <li>
                             <strong>
-                              How often - frequency (
-                              {formatPct(weightSharePct(options.frequencyWeight, scoreWeights))})
+                              {t('copilotAdoptionUsers.licensed.engagementFrequencyLabel', {
+                                weight: formatPct(weightSharePct(options.frequencyWeight, scoreWeights)),
+                              })}
                             </strong>
-                            : days they used Copilot, against{' '}
-                            {formatPct(options.frequencyTargetRatio * 100)} of their available
-                            working days.
+                            {t('copilotAdoptionUsers.licensed.engagementFrequencyText', {
+                              target: formatPct(options.frequencyTargetRatio * 100),
+                            })}
                           </li>
                           <li>
                             <strong>
-                              How much - depth (
-                              {formatPct(weightSharePct(options.depthWeight, scoreWeights))})
+                              {t('copilotAdoptionUsers.licensed.engagementDepthLabel', {
+                                weight: formatPct(weightSharePct(options.depthWeight, scoreWeights)),
+                              })}
                             </strong>
-                            : interactions on each day they did use it, against a target of{' '}
-                            {options.depthTargetInteractionsPerActiveDay}.
+                            {t('copilotAdoptionUsers.licensed.engagementDepthText', {
+                              target: options.depthTargetInteractionsPerActiveDay,
+                            })}
                           </li>
                           <li>
                             <strong>
-                              How widely - breadth (
-                              {formatPct(weightSharePct(options.breadthWeight, scoreWeights))})
+                              {t('copilotAdoptionUsers.licensed.engagementBreadthLabel', {
+                                weight: formatPct(weightSharePct(options.breadthWeight, scoreWeights)),
+                              })}
                             </strong>
-                            : how many different Copilot apps they use, against a target of{' '}
-                            {options.breadthTargetApps}.
+                            {t('copilotAdoptionUsers.licensed.engagementBreadthText', {
+                              target: options.breadthTargetApps,
+                            })}
                           </li>
                         </ul>
                         <p>
-                          <strong>Confidence</strong> keeps depth honest. Depth is a per-day
-                          average, so somebody active on a single day can hit the target in one
-                          sitting and read as a power user. Depth therefore only counts in full once
-                          Copilot has been used on {options.depthMinActiveDays} separate days; below
-                          that it counts in proportion, so half as many days counts for half.
+                          {tNode('copilotAdoptionUsers.licensed.confidenceSentence', {
+                            confidence: <strong>{t('copilotAdoptionUsers.licensed.confidenceLabel')}</strong>,
+                            days: options.depthMinActiveDays,
+                          })}
                         </p>
-                        <p>
-                          Accounts newer than the reporting period get a smaller frequency target,
-                          so nobody is marked down for days before they joined.
-                        </p>
+                        <p>{t('copilotAdoptionUsers.licensed.newAccountsFrequency')}</p>
                       </>
                     ),
-                    formula:
-                      'frequency  = min(1, activeDays / expectedActiveDays)\n' +
-                      `confidence = min(1, activeDays / ${options.depthMinActiveDays})\n` +
-                      `depth      = min(1, interactions / activeDays / ${options.depthTargetInteractionsPerActiveDay}) x confidence\n` +
-                      `breadth    = min(1, appsUsed / ${options.breadthTargetApps})\n` +
-                      `score      = (frequency x ${options.frequencyWeight} + depth x ${options.depthWeight} + breadth x ${options.breadthWeight})` +
-                      (Math.abs(weightSum - 1) < 1e-9
-                        ? ' x 100'
-                        : `\n             / ${weightSum} x 100`),
-                    source: 'Hover the bar on any row for that user\u2019s three component scores.',
+                    formula: t(
+                      Math.abs(weightSum - 1) < 1e-9
+                        ? 'copilotAdoptionUsers.licensed.engagementFormula.unitWeight'
+                        : 'copilotAdoptionUsers.licensed.engagementFormula.weighted',
+                      {
+                        depthMinDays: options.depthMinActiveDays,
+                        depthTarget: options.depthTargetInteractionsPerActiveDay,
+                        breadthTarget: options.breadthTargetApps,
+                        frequencyWeight: options.frequencyWeight,
+                        depthWeight: options.depthWeight,
+                        breadthWeight: options.breadthWeight,
+                        weightSum,
+                      },
+                    ),
+                    source: t('copilotAdoptionUsers.licensed.engagementScoreSource'),
                   }}
                 >
-                  Engagement
+                  {t('copilotAdoptionUsers.licensed.engagementHeader')}
                 </SortableTh>
                 <SortableTh
-                  label="band"
+                  label={t('copilotAdoptionUsers.licensed.bandSortLabel')}
                   sortKey="band"
                   activeKey={filters.sortBy}
                   descending={filters.sortDesc}
                   onSort={applySort}
-                  infoTitle="Engagement band"
+                  infoTitle={t('copilotAdoptionUsers.licensed.bandTitle')}
                   info={{
-                    what: 'The engagement score turned into a label, so a list of numbers becomes a list of decisions.',
-                    how: `Champion at ${options.championScore}+, Established at ${options.establishedScore}+, Developing at ${options.developingScore}+, Trialling below that. Users with no activity in this period are not scored at all: they are split into Dormant (used Copilot at some point in the last ${options.historyDays} days) and Never used. Sorting by this column follows the adoption ladder, not the alphabet.`,
-                    source:
-                      'Established and above is what the "habitual users" headline counts. Dormant plus Never used is the idle-seat population, which is NOT the same as "reclaimable licences" - that figure is the certain and probable reclaim tiers only, after review, exclusion and window-mismatch hold-backs.',
+                    what: t('copilotAdoptionUsers.licensed.bandWhat'),
+                    how: t('copilotAdoptionUsers.licensed.bandHow', {
+                      champion: options.championScore,
+                      established: options.establishedScore,
+                      developing: options.developingScore,
+                      historyDays: options.historyDays,
+                    }),
+                    source: t('copilotAdoptionUsers.licensed.bandSource'),
                   }}
                 >
-                  Band
+                  {t('copilotAdoptionUsers.licensed.bandHeader')}
                 </SortableTh>
                 <SortableTh
-                  label="signal source"
+                  label={t('copilotAdoptionUsers.licensed.signalSourceLabel')}
                   sortKey="signalSource"
                   activeKey={filters.sortBy}
                   descending={filters.sortDesc}
                   onSort={applySort}
-                  infoTitle="Signal source and reconciliation"
+                  infoTitle={t('copilotAdoptionUsers.licensed.signalSourceTitle')}
                   info={{
-                    what: "Which source produced this row's engagement score, and whether both source figures are available for comparison.",
-                    how: `Audit rows use this product's Copilot audit-log import over the selected D${windowDays} window. usageReport rows use Microsoft's per-user Copilot usage report when the audit import has no signal for that user. Where both sources have signal, the cell is marked "both sources" - hover it for the two figures side by side, rather than pretending one corrects the other.`,
-                    source: "Microsoft's report uses Microsoft's settled report period and covers licensed users only; the audit log covers the selected period and includes unlicensed Copilot Chat.",
+                    what: t('copilotAdoptionUsers.licensed.signalSourceWhat'),
+                    how: t('copilotAdoptionUsers.licensed.signalSourceHow', { windowDays }),
+                    source: t('copilotAdoptionUsers.licensed.signalSourceSource'),
                   }}
                 >
-                  Signal
+                  {t('copilotAdoptionUsers.licensed.signalHeader')}
                 </SortableTh>
                 <SortableTh
-                  label="interactions"
+                  label={t('copilotAdoptionUsers.licensed.interactionsSortLabel')}
                   sortKey="interactions"
                   activeKey={filters.sortBy}
                   descending={filters.sortDesc}
@@ -474,65 +491,71 @@ export default function LicensedUsersPanel({
                   numeric
                   defaultDescending
                 >
-                  Interactions
+                  {t('copilotAdoptionUsers.licensed.interactionsHeader')}
                 </SortableTh>
                 <SortableTh
-                  label="active days"
+                  label={t('copilotAdoptionUsers.licensed.activeDaysSortLabel')}
                   sortKey="activeDays"
                   activeKey={filters.sortBy}
                   descending={filters.sortDesc}
                   onSort={applySort}
                   numeric
                   defaultDescending
-                  infoTitle="Active days"
+                  infoTitle={t('copilotAdoptionUsers.licensed.activeDaysTitle')}
                   info={{
-                    what: 'Distinct days this person had at least one Copilot interaction, against the number needed to score full marks for frequency.',
-                    how: `The target is ${formatPct(options.frequencyTargetRatio * 100)} of the working days in the period, assuming ${options.workingDaysPerWeek} working days a week. Working days rather than calendar days - against calendar days even a genuinely daily user would cap out around 71% and look like a partial adopter.`,
-                    formula: `expectedActiveDays = ${options.windowDays} days x (${options.workingDaysPerWeek}/7) x ${options.frequencyTargetRatio}`,
+                    what: t('copilotAdoptionUsers.licensed.activeDaysWhat'),
+                    how: t('copilotAdoptionUsers.licensed.activeDaysHow', {
+                      target: formatPct(options.frequencyTargetRatio * 100),
+                      workingDays: options.workingDaysPerWeek,
+                    }),
+                    formula: t('copilotAdoptionUsers.licensed.activeDaysFormula', {
+                      windowDays: options.windowDays,
+                      workingDays: options.workingDaysPerWeek,
+                      ratio: options.frequencyTargetRatio,
+                    }),
                   }}
                 >
-                  Active days
+                  {t('copilotAdoptionUsers.licensed.activeDaysHeader')}
                 </SortableTh>
-                <SortableTh label="apps used" sortKey="apps" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} numeric defaultDescending>
-                  Apps
+                <SortableTh label={t('copilotAdoptionUsers.licensed.appsUsedLabel')} sortKey="apps" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} numeric defaultDescending>
+                  {t('copilotAdoptionUsers.licensed.appsHeader')}
                 </SortableTh>
-                <SortableTh label="Cowork use" sortKey="cowork" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} defaultDescending>
-                  Cowork
+                <SortableTh label={t('copilotAdoptionUsers.licensed.coworkUseLabel')} sortKey="cowork" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort} defaultDescending>
+                  {t('copilotAdoptionUsers.licensed.coworkHeader')}
                 </SortableTh>
-                <SortableTh label="last used" sortKey="lastUse" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
-                  Last used
+                <SortableTh label={t('copilotAdoptionUsers.licensed.lastUsedLabel')} sortKey="lastUse" activeKey={filters.sortBy} descending={filters.sortDesc} onSort={applySort}>
+                  {t('copilotAdoptionUsers.licensed.lastUsedHeader')}
                 </SortableTh>
                 <SortableTh
-                  label="reclaim tier"
+                  label={t('copilotAdoptionUsers.licensed.reclaimTierLabel')}
                   sortKey="reclaimEligibility"
                   activeKey={filters.sortBy}
                   descending={filters.sortDesc}
                   onSort={applySort}
-                  infoTitle="Reclaim eligibility"
+                  infoTitle={t('copilotAdoptionUsers.licensed.reclaimEligibilityTitle')}
                   info={{
-                    what: 'Whether this seat is safe to put in the reclaim total. Certain means a disabled account still holds a seat; probable means no observed use beyond the grace period; review means a human must check first; excluded means an admin already reviewed it.',
-                    how: `Uses the same row-level key as the headline reclaim counts. A new user inside the ${options.reclaimGraceDays}-day grace period is review-only, and active new users have their expected active days prorated. Sorting by this column runs most-actionable first, not alphabetically.`,
-                    source: 'Leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from Microsoft 365 usage data, so they must be handled through review or an exclusion.',
+                    what: t('copilotAdoptionUsers.licensed.reclaimEligibilityWhat'),
+                    how: t('copilotAdoptionUsers.licensed.reclaimEligibilityHow', { days: options.reclaimGraceDays }),
+                    source: t('copilotAdoptionUsers.licensed.reclaimEligibilitySource'),
                   }}
                 >
-                  Reclaim tier
+                  {t('copilotAdoptionUsers.licensed.reclaimTierHeader')}
                 </SortableTh>
                 <SortableTh
-                  label="recommended action"
+                  label={t('copilotAdoptionUsers.licensed.recommendedActionLabel')}
                   sortKey="action"
                   activeKey={filters.sortBy}
                   descending={filters.sortDesc}
                   onSort={applySort}
                   className={table.stickyRight}
-                  infoTitle="Recommended action"
+                  infoTitle={t('copilotAdoptionUsers.licensed.recommendedActionTitle')}
                   info={{
-                    what: 'The single next step for this person, as a tag. What each tag means is stated once under "What these actions mean" above the table - it is the same sentence for everyone who carries the tag, so repeating it on every row would be noise.',
-                    how: 'Derived from the band, and for the middle bands from the breadth score as well: someone with a real habit confined to one Copilot surface needs broadening rather than more coaching.',
-                    source:
-                      'The CSV export carries both the tag and the full sentence on every row, because a spreadsheet gets sorted and filtered and cannot rely on a legend.',
+                    what: t('copilotAdoptionUsers.licensed.recommendedActionWhat'),
+                    how: t('copilotAdoptionUsers.licensed.recommendedActionHow'),
+                    source: t('copilotAdoptionUsers.licensed.recommendedActionSource'),
                   }}
                 >
-                  Action
+                  {t('copilotAdoptionUsers.licensed.actionHeader')}
                 </SortableTh>
               </tr>
             </thead>
@@ -545,7 +568,7 @@ export default function LicensedUsersPanel({
                         {row.userPrincipalName}
                       </Text>
                       <Text size={100} className={row.accountEnabled === false ? styles.disabled : styles.muted}>
-                        {row.accountEnabled === false ? 'Account disabled' : row.jobTitle || row.mail || ''}
+                        {row.accountEnabled === false ? t('copilotAdoptionUsers.licensed.accountDisabled') : row.jobTitle || row.mail || ''}
                       </Text>
                     </span>
                   </td>
@@ -553,11 +576,13 @@ export default function LicensedUsersPanel({
                   <td className={table.td}>
                     <Tooltip
                       relationship="description"
-                      content={`Frequency ${Math.round(row.frequencyScore)} / Depth ${Math.round(
-                        row.depthScore,
-                      )} / Breadth ${Math.round(row.breadthScore)}. Active on ${row.activeDays} of ${
-                        row.expectedActiveDays
-                      } days needed for full marks.`}
+                      content={t('copilotAdoptionUsers.licensed.scoreTooltip', {
+                        frequency: Math.round(row.frequencyScore),
+                        depth: Math.round(row.depthScore),
+                        breadth: Math.round(row.breadthScore),
+                        activeDays: row.activeDays,
+                        expectedDays: row.expectedActiveDays,
+                      })}
                     >
                       <div>
                         <ScoreBar score={row.adoptionScore} colour={scoreColour(row.adoptionScore, bands)} />
@@ -565,10 +590,10 @@ export default function LicensedUsersPanel({
                     </Tooltip>
                   </td>
                   <td className={`${table.td} ${table.tdNoWrap}`}>
-                    <BandBadge band={row.band} name={row.bandName} />
+                    <BandBadge band={row.band} name={adoptionBandLabel(t, row.band, row.bandName)} />
                   </td>
                   <td className={`${table.td} ${table.tdNoWrap}`}>
-                    <Text size={200}>{sourceLabel(row.signalSource)}</Text>
+                    <Text size={200}>{sourceLabel(t, row.signalSource)}</Text>
                     {row.sourceComparisonAvailable && (
                       // The two source figures used to be printed under the label. Squeezed into this
                       // column they wrapped to five lines and set the height of every row in the
@@ -578,9 +603,9 @@ export default function LicensedUsersPanel({
                         size={100}
                         block
                         className={`${table.tdSub} ${styles.comparison}`}
-                        title={sourceComparisonText(row, windowDays, dataSources)}
+                        title={sourceComparisonText(t, row, windowDays, dataSources)}
                       >
-                        both sources
+                        {t('copilotAdoptionUsers.licensed.bothSources')}
                       </Text>
                     )}
                   </td>
@@ -589,27 +614,27 @@ export default function LicensedUsersPanel({
                     {row.activeDays} <span className={styles.muted}>/ {Math.round(row.expectedActiveDays)}</span>
                   </td>
                   <td className={`${table.td} ${table.tdNumeric}`}>{row.appsUsed}</td>
-                  <td className={`${table.td} ${table.tdNoWrap}`}>{coworkCell(row)}</td>
+                  <td className={`${table.td} ${table.tdNoWrap}`}>{coworkCell(t, row)}</td>
                   <td className={`${table.td} ${table.tdNoWrap}`}>
                     {formatDate(row.lastInteractionUtc)}
                     {row.daysSinceLastUse !== null && row.daysSinceLastUse > 0 && (
                       <Text size={100} block className={table.tdSub}>
-                        {row.daysSinceLastUse} days ago
+                        {t('copilotAdoptionUsers.licensed.daysAgo', { days: row.daysSinceLastUse })}
                       </Text>
                     )}
                   </td>
                   <td className={`${table.td} ${table.tdNoWrap}`}>
-                    <Tooltip relationship="description" content={row.reclaimEligibilityReason || 'This active seat is not in a reclaim tier.'}>
-                      <Text size={200}>{row.reclaimEligibility || '—'}</Text>
+                    <Tooltip relationship="description" content={reclaimEligibilityReason(t, row, options) || t('copilotAdoptionUsers.licensed.activeSeatNotReclaimable')}>
+                      <Text size={200}>{reclaimEligibilityLabel(t, row.reclaimEligibility)}</Text>
                     </Tooltip>
                     {row.reclaimExclusionExpired && (
                       <Text size={100} block className={table.tdSub}>
-                        exclusion expired
+                        {t('copilotAdoptionUsers.licensed.exclusionExpired')}
                       </Text>
                     )}
                   </td>
                   <td className={`${table.td} ${table.tdNoWrap} ${table.stickyRight}`}>
-                    <Tooltip relationship="description" content={row.recommendedAction}>
+                    <Tooltip relationship="description" content={recommendedActionText(t, row, options)}>
                       <div>
                         <ActionBadge code={row.recommendedActionCode} label={row.recommendedActionLabel} />
                       </div>
@@ -626,22 +651,25 @@ export default function LicensedUsersPanel({
       {!loading && data && data.total > 0 && (
         <div className={styles.footer}>
           <Text size={200} className={styles.muted}>
-            Showing {formatCount(data.skip + 1)}-{formatCount(Math.min(data.skip + PAGE_SIZE, data.total))} of{' '}
-            {formatCount(data.total)} licensed users
+            {t('copilotAdoptionUsers.licensed.showingUsers', {
+              start: formatCount(data.skip + 1),
+              end: formatCount(Math.min(data.skip + PAGE_SIZE, data.total)),
+              total: formatCount(data.total),
+            })}
           </Text>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <Button size="small" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
-              Previous
+              {t('copilotAdoptionUsers.common.previous')}
             </Button>
             <Text size={200} className={styles.muted}>
-              Page {page + 1} of {totalPages}
+              {t('copilotAdoptionUsers.common.page', { page: page + 1, totalPages })}
             </Text>
             <Button
               size="small"
               disabled={page + 1 >= totalPages}
               onClick={() => setPage((p) => p + 1)}
             >
-              Next
+              {t('copilotAdoptionUsers.common.next')}
             </Button>
           </div>
         </div>
@@ -651,8 +679,12 @@ export default function LicensedUsersPanel({
 }
 
 
-function sourceLabel(source: string): string {
-  return source === 'usageReport' ? 'Microsoft usage report' : source === 'audit' ? 'Audit log' : source;
+function sourceLabel(t: TFunction, source: string): string {
+  return source === 'usageReport'
+    ? t('copilotAdoptionUsers.licensed.sourceUsageReport')
+    : source === 'audit'
+      ? t('copilotAdoptionUsers.licensed.sourceAudit')
+      : source;
 }
 
 /**
@@ -663,24 +695,37 @@ function sourceLabel(source: string): string {
  * the column stays one line wide. "Yes (312 audit interactions)" was wide enough on its own to push
  * the pinned Action column over the top of it.
  */
-function coworkCell(row: LicensedUserAdoptionRow): string {
-  if (!row.usedCowork) return 'No';
-  if (row.coworkReportTotalTasks !== null) return `Yes \u00b7 ${formatCount(row.coworkReportTotalTasks)} tasks`;
-  if (row.coworkReportActiveDays !== null && row.coworkReportActiveDays > 0) {
-    return `Yes \u00b7 ${formatCount(row.coworkReportActiveDays)} days`;
+function coworkCell(t: TFunction, row: LicensedUserAdoptionRow): string {
+  if (!row.usedCowork) return t('copilotAdoptionUsers.licensed.coworkNo');
+  if (row.coworkReportTotalTasks !== null) {
+    return t('copilotAdoptionUsers.licensed.coworkTasks', { count: formatCount(row.coworkReportTotalTasks) });
   }
-  return `Yes \u00b7 ${formatCount(row.coworkInteractions)} audited`;
+  if (row.coworkReportActiveDays !== null && row.coworkReportActiveDays > 0) {
+    return t('copilotAdoptionUsers.licensed.coworkDays', { count: formatCount(row.coworkReportActiveDays) });
+  }
+  return t('copilotAdoptionUsers.licensed.coworkAudited', { count: formatCount(row.coworkInteractions) });
 }
 
-function sourceComparisonText(row: LicensedUserAdoptionRow, windowDays: number, dataSources?: AdoptionDataSources): string {
+function sourceComparisonText(
+  t: TFunction,
+  row: LicensedUserAdoptionRow,
+  windowDays: number,
+  dataSources?: AdoptionDataSources,
+): string {
   const reportPeriod = dataSources?.copilotUsageReportPeriodDays
     ? `D${dataSources.copilotUsageReportPeriodDays}`
-    : 'Microsoft window';
-  const snapshot = dataSources?.copilotUsageReportDate ? `, ${formatDate(dataSources.copilotUsageReportDate)}` : '';
+    : t('copilotAdoptionUsers.licensed.microsoftWindow');
+  const snapshotDate = dataSources?.copilotUsageReportDate
+    ? t('copilotAdoptionUsers.licensed.sourceComparisonSnapshotDate', { date: formatDate(dataSources.copilotUsageReportDate) })
+    : '';
 
-  return `Audit D${windowDays}: ${formatCount(row.auditInteractions)} interactions, ${formatCount(
-    row.auditActiveDays,
-  )} days. Microsoft report ${reportPeriod}${snapshot}: ${
-    row.reportPrompts === null ? '—' : formatCount(row.reportPrompts)
-  } prompts, ${row.reportActiveDays === null ? '—' : formatCount(row.reportActiveDays)} days.`;
+  return t('copilotAdoptionUsers.licensed.sourceComparison', {
+    windowDays,
+    auditInteractions: formatCount(row.auditInteractions),
+    auditDays: formatCount(row.auditActiveDays),
+    reportPeriod,
+    snapshotDate,
+    prompts: row.reportPrompts === null ? '—' : formatCount(row.reportPrompts),
+    reportDays: row.reportActiveDays === null ? '—' : formatCount(row.reportActiveDays),
+  });
 }

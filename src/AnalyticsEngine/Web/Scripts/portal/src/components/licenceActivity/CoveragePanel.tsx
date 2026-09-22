@@ -1,7 +1,8 @@
 import { makeStyles, tokens, Card, Text, Badge } from '@fluentui/react-components';
 import type { LicenceActivityCoverage, WorkloadKey } from '../../types/licenceActivity';
 import { WORKLOADS } from '../../types/licenceActivity';
-import { DASH, formatAge, formatDate, formatDateTime, formatMaybeCount } from './format';
+import { useT } from '../../i18n';
+import { DASH, formatAge, formatCount, formatDate, formatDateTime, formatMaybeCount } from './format';
 import { statusMeta } from './statuses';
 import { granularityLabel, sourceLabel } from './sources';
 
@@ -87,22 +88,27 @@ interface CoveragePanelProps {
  */
 export default function CoveragePanel({ generatedUtc, expiresUtc, coverage, now }: CoveragePanelProps) {
   const styles = useStyles();
+  const t = useT();
+  const unknown = t('licenceActivity.common.unknown');
 
   return (
     <Card className={styles.card}>
       <div className={styles.head}>
         <Text size={200} weight="semibold" className={styles.title}>
-          Where these figures come from
+          {t('licenceActivity.coverage.title')}
         </Text>
         <Text size={200} className={styles.generated}>
-          Prepared {formatDateTime(generatedUtc)} ({formatAge(generatedUtc, now)}); held for up to{' '}
-          {formatDateTime(expiresUtc)}
+          {t('licenceActivity.coverage.preparedHeld', {
+            prepared: formatDateTime(generatedUtc),
+            age: formatAge(generatedUtc, t, now),
+            expires: formatDateTime(expiresUtc),
+          })}
         </Text>
       </div>
 
       {coverage.length === 0 ? (
         <Text size={200} className={styles.sub}>
-          No source information was reported for these figures.
+          {t('licenceActivity.coverage.noSourceInfo')}
         </Text>
       ) : (
         <div className={styles.grid}>
@@ -112,34 +118,43 @@ export default function CoveragePanel({ generatedUtc, expiresUtc, coverage, now 
                 <Text size={300} weight="semibold">
                   {workloadLabel(entry.workload)}
                 </Text>
-                <Badge appearance="tint" color={statusMeta(entry.status).tone} size="small">
-                  {statusMeta(entry.status).label}
+                <Badge appearance="tint" color={statusMeta(entry.status, t).tone} size="small">
+                  {statusMeta(entry.status, t).label}
                 </Badge>
               </div>
 
               <Text size={200} className={styles.line}>
-                Source: {sourceLabel(entry.source) || DASH}
+                {t('licenceActivity.common.source')} {sourceLabel(entry.source, t) || DASH}
                 {entry.measure ? ` \u00b7 ${entry.measure}` : ''}
-                {entry.granularity ? ` \u00b7 ${granularityLabel(entry.granularity)}` : ''}
+                {entry.granularity ? ` \u00b7 ${granularityLabel(entry.granularity, t)}` : ''}
               </Text>
 
               <Text size={100} className={styles.sub}>
-                Last imported {formatDate(entry.latestImportUtc)}
-                {entry.lagDays > 0 ? ` \u00b7 most recent data is ${entry.lagDays} days old` : ''}
-                {entry.reportPeriodDays ? ` \u00b7 covers ${entry.reportPeriodDays} days` : ''}
+                {t('licenceActivity.common.lastImported', { date: formatDate(entry.latestImportUtc) })}
+                {entry.lagDays > 0
+                  ? ` \u00b7 ${t('licenceActivity.coverage.mostRecentDataDaysOld', { days: formatCount(entry.lagDays) })}`
+                  : ''}
+                {entry.reportPeriodDays
+                  ? ` \u00b7 ${t('licenceActivity.coverage.coversDays', { days: formatCount(entry.reportPeriodDays) })}`
+                  : ''}
               </Text>
 
               <Text size={100} className={styles.sub}>
-                Data from {formatDate(entry.effectiveFromUtc)}
-                {' \u2013 '}
-                {formatDate(entry.effectiveToUtc)}
+                {t('licenceActivity.common.dataFrom', {
+                  from: formatDate(entry.effectiveFromUtc),
+                  to: formatDate(entry.effectiveToUtc),
+                })}
               </Text>
 
               <Text size={100} className={styles.sub}>
-                {formatMaybeCount(entry.observedSamples)} of {formatMaybeCount(entry.expectedSamples)} measurements
-                taken
+                {t('licenceActivity.common.measurementsTaken', {
+                  observed: formatMaybeCount(entry.observedSamples, unknown),
+                  expected: formatMaybeCount(entry.expectedSamples, unknown),
+                })}
                 {entry.unmatchedUsers > 0
-                  ? ` \u00b7 ${entry.unmatchedUsers.toLocaleString()} people couldn't be matched`
+                  ? ` \u00b7 ${t('licenceActivity.common.peopleCouldNotBeMatched', {
+                      count: formatCount(entry.unmatchedUsers),
+                    })}`
                   : ''}
               </Text>
 

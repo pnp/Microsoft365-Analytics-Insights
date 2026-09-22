@@ -19,8 +19,9 @@ Never reuse one body unchanged for both audiences.
 3. **Verify every claim against the diff — never trust a PR body.** Especially "no migrations" and "no config-schema change" (see *Verification* below). A wrong claim here can cost a customer a broken upgrade.
 4. **No real customer data** in notes, PR bodies or examples — see the repo-wide policy in `.github/copilot-instructions.md`. Use `contoso`, zeroed GUIDs, fake URLs. Error text quoted from a real deployment must be scrubbed of tenant names, hostnames and GUIDs.
    Azure plans and validation summaries must also omit real environment metadata; keep subscriptions, tenants, regions, resource names/IDs, URLs, CIDRs, deployment timestamps/results and production failures out-of-band.
-5. **Issues are only closable when the fix reaches `main`.** PRs into `dev` say "Addresses #N", never "Fixes #N". Close issues only after the release PR is merged.
-6. **Include the commit trailer** on any commit you are authorized to make:
+5. **Refuse to release a partially translated portal.** If the release diff touches `src/AnalyticsEngine/Web/Scripts/portal`, the portal's translation checks must be green *before* you write the PR — see *Verify the portal is fully translated* below. A half-translated portal is a customer-visible defect that no amount of release-note wording can excuse, and it is invisible in a diff: the English still renders, just in the middle of a Spanish page. This is a **blocker**, not a note.
+6. **Issues are only closable when the fix reaches `main`.** PRs into `dev` say "Addresses #N", never "Fixes #N". Close issues only after the release PR is merged.
+7. **Include the commit trailer** on any commit you are authorized to make:
    `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>`
 
 ## How releases work here
@@ -32,6 +33,8 @@ Never reuse one body unchanged for both audiences.
   - Releases are created as **drafts** while the repo variable `PUBLISH_RELEASES` is not `true`. A draft is effectively a release candidate — publishing is a human decision.
   - Assets: `AITrackerInstaller.zip`, `AppInsightsImporter.zip`, `ControlPanelApp.zip`, `Office365ActivityImporter.zip`, `Website.zip`.
   - Releases with migrations must also carry each matching `<migrationid>.manual.sql` as a downloadable asset.
+  - The generated **"What's Changed" list is anchored on the last published stable release**, resolved by the *Resolve changelog baseline* step, not on whatever tag GitHub can reach from the commit being built. Left automatic it anchors on the most recent tag *reachable from that commit*, and stable tags sit on `main`'s release merge commits, which are not ancestors of `dev` — so a `dev` testing build silently walks back to the last *testing* tag. That is how `Testing build 1836` shipped a changelog anchored on tag `1826`, re-listing four already-shipped stable releases when its real delta over stable was one pull request. If a generated changelog ever looks too long, check its **Full Changelog** compare link before trusting it.
+- **Testing builds get real notes too.** A generated PR list is the starting point, not the deliverable. A tester needs the same lead as an admin: the build's shape, its **baseline** (which stable release it is *plus* what), whether it carries migrations or config changes, and what to actually exercise. Keep the level-300 discipline; scale the length to the delta.
 - **Every merge to `dev` cuts its own test build.** Merging three PRs makes three draft prereleases; only the last contains everything. Offer to delete the superseded drafts.
 - **`net10` is a long-lived mirror of the stable release**, not a feature branch. It is the .NET 10 / ASP.NET Core port PoC, and its whole value depends on tracking `main`. As `net10.yml` puts it: *"`net10` rots when `main` moves, not when someone commits here."* **A release is not finished until `main` has been forward-ported into `net10`** — see *Sync the `net10` PoC branch* below.
 - `main` is protected: required checks `test_dotnet (Release)`, `test_aitracker`, `gitleaks`, plus one approving review. The PR build/test workflows only trigger on the **`ready_for_review`** event — a PR opened directly as non-draft never fires them. If required checks are missing, toggle the PR draft → ready (`gh pr ready <n> --undo` then `gh pr ready <n>`). Occasionally a job hangs as a zombie (`in_progress` on a completed run); re-run just that job with `gh run rerun <run-id> --job <job-id>`.
@@ -63,6 +66,87 @@ Select-String -Path src\AnalyticsEngine\Common\Entities\Installer\BaseSolutionIn
 - `CONFIG_VERSION` changed ⇒ tell admins to re-open and re-save their configuration, and confirm older config files still load.
 - No hits ⇒ you may state "no migrations / no config-schema change / no maintenance window" — and say it **prominently**, because it makes the upgrade trivial.
 
+#### Verify the portal is fully translated
+
+The web portal ships in English and Spanish. Both are first-class: a Spanish-speaking admin sets
+their browser to Spanish and gets a Spanish portal, so an English label left in a new panel is not
+a cosmetic slip — it is a visible defect on a page they cannot avoid.
+
+First, does this release touch the portal at all?
+
+```powershell
+git --no-pager diff --name-only origin/main origin/dev |
+  Select-String -Pattern "Web/Scripts/portal/"
+```
+
+**No hits ⇒ nothing to check.** Say so in the report: "no portal changes, translation gate not
+applicable".
+
+**Any hit ⇒ the following must both pass before you write the PR.** Run them; do not infer the
+result from the PR body or from CI having been green on an older commit.
+
+```powershell
+cd src\AnalyticsEngine\Web\Scripts\portal
+npm ci                     # first run only
+npm run lint               # tsc --noEmit
+npx vitest run src/i18n
+```
+
+What each one proves, and what to do when it fails:
+
+| Check | Proves | If it fails |
+|---|---|---|
+| `npm run lint` | Every catalog key exists in **every** language. `catalog/es/*.ts` is typed against `catalog/en/*.ts`, so a new English string with no Spanish translation is a **type error**. | **Blocker.** A `Property '"x.y"' is missing in type` error naming a `catalog/es/` file is literally an untranslated string. Send it back to the feature branch. |
+| `npx vitest run src/i18n` → *"finds no user-facing string outside the translation catalog"* | No text reaches a user without going through the catalog. Fails with a file/line worklist of every offending string. | **Blocker.** New UI was written with its text typed straight into the JSX. Send it back. |
+| `npx vitest run src/i18n` → *"does not pass English off as Spanish"* | Nobody satisfied the compiler by copying the English across. | **Blocker.** This is the failure mode that produces a half-Spanish page while every other check is green. |
+| `npx vitest run src/i18n` → *"keeps the same placeholders in both languages"* and *"supplies every placeholder each string needs"* | A `{count}` present in one language and not the other, or never supplied at the call site, renders as literal `{count}` on screen. | **Blocker.** Cheap to fix, embarrassing to ship. |
+| `npx vitest run src/i18n` → *"formats every number and date through the portal language"* | No surviving `toLocaleString()`. | **Blocker.** `1,234` means one thousand two hundred and thirty-four in English and one point two three four in Spanish — a figure in the wrong locale is wrong by a factor of a thousand. |
+
+Also sanity-check the *size* of the change, because the gate can only see strings that exist:
+
+```powershell
+git --no-pager diff --stat origin/main origin/dev -- "src/AnalyticsEngine/Web/Scripts/portal/src/i18n/catalog"
+git --no-pager diff --stat origin/main origin/dev -- "src/AnalyticsEngine/Web/Scripts/portal/src/pages" "src/AnalyticsEngine/Web/Scripts/portal/src/components"
+```
+
+A release that adds a whole new page but barely touches `catalog/` deserves a second look: the
+likely explanation is text smuggled past the check inside a prop name the checker does not treat as
+user-facing, or an entry added to `src/i18n/lint/allowList.ts`. **Read every `allowList.ts` change
+in the diff.** That file is the only way to make the gate ignore a string, so an addition to it is
+either a genuine language-neutral term (a Microsoft product name, a file format, a unit) or an
+attempt to get an untranslated string through. Challenge anything that is an ordinary English word.
+
+**Finally, the two things neither check can see.**
+
+*A reworded English string.* If a release *changes* an existing English value rather than adding a
+new key, the key still exists in both languages, so `tsc` and the gate both stay green while the
+Spanish is now a translation of the old sentence. Diff the English catalog and confirm each changed
+value's Spanish was updated too:
+
+```powershell
+git --no-pager diff origin/main origin/dev -- "src/AnalyticsEngine/Web/Scripts/portal/src/i18n/catalog/en"
+git --no-pager diff origin/main origin/dev -- "src/AnalyticsEngine/Web/Scripts/portal/src/i18n/catalog/es"
+```
+
+Every key whose English changed should appear in both diffs. One that appears only in the first is
+a stale translation — a blocker, and one that will otherwise ship silently.
+
+*Display text authored by the .NET API.* A string the server writes and the SPA renders verbatim is
+invisible to the untranslated-text check, because from the SPA's side there is no string. The rule
+is that the API sends a stable key beside the text and the SPA translates from the key;
+`src/i18n/lint/serverAuthoredText.test.ts` reads the C# and fails when they drift. So if the
+release adds or renames anything in an API controller that the portal *displays* — a KPI figure, a
+chart, a judgement, an availability reason — check its catalog entry landed too:
+
+```powershell
+git --no-pager diff --name-only origin/main origin/dev | Select-String -Pattern "Web/Controllers/|Web/Models/"
+```
+
+If that touches a controller the portal renders from, and `catalog/` is unchanged, ask why.
+
+If a new **language** was added in the release, say so in the admin notes, and check the language
+appears in the portal's language picker (`LANGUAGES` in `src/i18n/languages.ts`).
+
 ### 3. Write the release PR (developer-focused and technical)
 
 The `dev`→`main` PR is the first independent technical review of the combined release. Its body should include:
@@ -71,8 +155,11 @@ The `dev`→`main` PR is the first independent technical review of the combined 
 2. Technical implementation summary by subsystem.
 3. Tests, benchmark evidence and migration/manual-script proof.
 4. Explicit database, fresh-install schema and installer-config effects.
-5. Risks, hand-resolved merge areas, deferred work and reviewer hotspots.
-6. Issues addressed by the release.
+5. **Portal translation state** — either "no portal changes" or the result of the two commands in
+   *Verify the portal is fully translated*, with the number of catalog keys added per language and
+   an explicit note on any `allowList.ts` addition and why it is language-neutral.
+6. Risks, hand-resolved merge areas, deferred work and reviewer hotspots.
+7. Issues addressed by the release.
 
 Tone: concise but technically deep. Assume the reader knows the codebase and is reviewing correctness, not operating the product.
 
@@ -104,7 +191,7 @@ The auto-generated "What's Changed" list is not acceptable as final notes. Prepa
 7. Close the issues the release brought into `main`, each with a comment naming the build number and summarising what shipped. Leave partially-addressed issues open with a comment stating precisely what remains and why.
 8. Offer to delete superseded draft prereleases. **Never publish a draft** without being asked — the `PUBLISH_RELEASES` gate is deliberate.
 9. **Forward-port the release into `net10`** — see the next section. The release is not done until this is either completed or explicitly deferred by the user.
-10. Report: build number, draft/published state, standard asset verification, manual SQL asset verification, issues closed, `net10` sync state, and anything still open.
+10. Report: build number, draft/published state, standard asset verification, manual SQL asset verification, **portal translation gate result**, issues closed, `net10` sync state, and anything still open.
 
 ### 6. Sync the `net10` PoC branch
 
@@ -147,6 +234,9 @@ gh release list --repo pnp/Microsoft365-Analytics-Insights --limit 5
 gh release view <tag> --repo pnp/Microsoft365-Analytics-Insights --json name,isDraft,isPrerelease,targetCommitish,assets
 gh release upload <tag> <migrationid>.manual.sql --repo pnp/Microsoft365-Analytics-Insights
 gh release edit <tag> --repo pnp/Microsoft365-Analytics-Insights --notes-file <file>
+
+# portal translation gate (only when the diff touches Web/Scripts/portal)
+cd src\AnalyticsEngine\Web\Scripts\portal; npm run lint; npx vitest run src/i18n
 
 # net10 forward-port
 git --no-pager rev-list --left-right --count origin/main...origin/net10   # left = main commits missing from net10

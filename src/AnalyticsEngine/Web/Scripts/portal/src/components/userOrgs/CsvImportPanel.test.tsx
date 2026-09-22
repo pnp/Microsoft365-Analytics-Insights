@@ -100,7 +100,7 @@ describe('CsvImportPanel', () => {
     await waitFor(() => expect(screen.getByText('a@contoso.com')).toBeInTheDocument());
     expect(screen.getByText('ghost@contoso.com')).toBeInTheDocument();
     // The unmatched row is the thing an admin most needs to notice before a Replace.
-    expect(screen.getByText(/match no user in this database/i)).toBeInTheDocument();
+    expect(screen.getByText(/matches? no user in this database/i)).toBeInTheDocument();
   });
 
   it('reports matches over the whole file, not just the rows on screen', async () => {
@@ -193,7 +193,7 @@ describe('CsvImportPanel', () => {
     // Quantified from the whole file, not from the ten-row sample: the number that matters is how
     // many people lose their value, and a sample cannot reveal it.
     expect(screen.getByText(/This will clear/i)).toBeInTheDocument();
-    expect(screen.getByText(/1,199 users'/)).toBeInTheDocument();
+    expect(screen.getByText(/1,199 users\u2019 Cost Centre value/)).toBeInTheDocument();
   });
 
   it('blocks a destructive replace until it is explicitly confirmed', async () => {

@@ -1,6 +1,7 @@
 import { Fragment } from 'react';
 import { Card, CardHeader, Subtitle2, Text, Badge, makeStyles, tokens } from '@fluentui/react-components';
 import type { UserProfile } from '../../types/userData';
+import { formatDateParts, formatNumber, useT, type TFunction } from '../../i18n';
 
 const useStyles = makeStyles({
   grid: {
@@ -25,43 +26,46 @@ const useStyles = makeStyles({
   },
 });
 
-function yesNo(value: boolean | null): string {
+function yesNo(t: TFunction, value: boolean | null): string {
   if (value == null) return '—';
-  return value ? 'Yes' : 'No';
+  return value ? t('admin.common.yes') : t('admin.common.no');
 }
 
 function formatUtc(value: string | null): string {
   if (!value) return '—';
-  return new Date(value).toLocaleString(undefined, { timeZone: 'UTC', timeZoneName: 'short' });
+  return formatDateParts(new Date(value), { dateStyle: 'short', timeStyle: 'medium', timeZone: 'UTC', timeZoneName: 'short' });
 }
 
 export default function UserProfileCard({ profile }: { profile: UserProfile }) {
   const styles = useStyles();
+  const t = useT();
   const orgs = profile.orgs ?? [];
   const rows: Array<[string, string]> = [
     ['UPN', profile.userPrincipalName || '—'],
     ['Mail', profile.mail || '—'],
-    ['Azure AD id', profile.azureAdId || '—'],
-    ['Account enabled', yesNo(profile.accountEnabled)],
-    ['Department', profile.department || '—'],
-    ['Job title', profile.jobTitle || '—'],
-    ['Company', profile.companyName || '—'],
-    ['Office', profile.officeLocation || '—'],
-    ['Country / region', profile.countryOrRegion || '—'],
-    ['Usage location', profile.usageLocation || '—'],
-    ['State / province', profile.stateOrProvince || '—'],
-    ['Postal code', profile.postalCode || '—'],
-    ['Manager', profile.managerUserPrincipalName || '—'],
-    // One row per configured org type, so the labels match what the admin named them rather than a
-    // generic "Organisations" list. Nothing is added when no org types are configured, which is how
-    // a deployment that has not adopted the feature sees this page unchanged.
+    [t('admin.userLookup.profile.azureAdId'), profile.azureAdId || '—'],
+    [t('admin.userLookup.profile.accountEnabled'), yesNo(t, profile.accountEnabled)],
+    [t('admin.userLookup.profile.department'), profile.department || '—'],
+    [t('admin.userLookup.profile.jobTitle'), profile.jobTitle || '—'],
+    [t('admin.userLookup.profile.company'), profile.companyName || '—'],
+    [t('admin.userLookup.profile.office'), profile.officeLocation || '—'],
+    [t('admin.userLookup.profile.countryOrRegion'), profile.countryOrRegion || '—'],
+    [t('admin.userLookup.profile.usageLocation'), profile.usageLocation || '—'],
+    [t('admin.userLookup.profile.stateOrProvince'), profile.stateOrProvince || '—'],
+    [t('admin.userLookup.profile.postalCode'), profile.postalCode || '—'],
+    [t('admin.userLookup.profile.manager'), profile.managerUserPrincipalName || '—'],
+    // One row per configured org type. The label is the name the ADMINISTRATOR gave the type, so it
+    // is deliberately not translated - it is tenant data, like the value beside it, and a
+    // translation catalogue cannot contain something invented at runtime. Nothing is added when no
+    // org types are configured, which is how a deployment that has not adopted the feature sees
+    // this page unchanged.
     ...orgs.map((org) => [org.orgTypeName, org.value || '—'] as [string, string]),
-    ['Last updated (UTC)', formatUtc(profile.lastUpdatedUtc ?? profile.lastUpdated)],
+    [t('admin.userLookup.profile.lastUpdatedUtc'), formatUtc(profile.lastUpdatedUtc ?? profile.lastUpdated)],
   ];
 
   return (
     <Card>
-      <CardHeader header={<Subtitle2>Profile</Subtitle2>} />
+      <CardHeader header={<Subtitle2>{t('admin.userLookup.profile.title')}</Subtitle2>} />
       <div className={styles.grid}>
         {rows.map(([label, value]) => (
           <Fragment key={label}>
@@ -71,10 +75,10 @@ export default function UserProfileCard({ profile }: { profile: UserProfile }) {
         ))}
       </div>
       <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
-        Values written before this UTC contract may reflect the web-job host's old local time.
+        {t('admin.userLookup.profile.utcContractWarning')}
       </Text>
       <div>
-        <Text weight="semibold">Licenses ({profile.licenses.length})</Text>
+        <Text weight="semibold">{t('admin.userLookup.profile.licensesTitle', { count: formatNumber(profile.licenses.length) })}</Text>
         {profile.licenses.length > 0 ? (
           <div className={styles.licenses}>
             {profile.licenses.map((license, i) => (
@@ -86,7 +90,7 @@ export default function UserProfileCard({ profile }: { profile: UserProfile }) {
           </div>
         ) : (
           <Text block style={{ color: tokens.colorNeutralForeground3 }}>
-            No licenses recorded.
+            {t('admin.userLookup.profile.noLicenses')}
           </Text>
         )}
       </div>

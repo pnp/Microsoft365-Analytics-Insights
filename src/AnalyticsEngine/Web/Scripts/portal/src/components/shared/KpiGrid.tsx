@@ -2,6 +2,7 @@ import { makeStyles, tokens, Text, Card } from '@fluentui/react-components';
 import type { ReactNode } from 'react';
 import InfoTip from './InfoTip';
 import type { InfoTipContent } from './InfoTip';
+import { formatDateParts, formatNumber } from '../../i18n';
 
 /**
  * Visual weight of a headline figure. This is judgement, not decoration: on a page that is used to
@@ -98,21 +99,34 @@ export function KpiGrid({ items }: { items: KpiDefinition[] }) {
   );
 }
 
-/** Formats a whole number for display, e.g. 12345 -> "12,345". */
+/**
+ * Formats a whole number for display, e.g. 12345 -> "12,345" in English, "12.345" in Spanish.
+ *
+ * Goes through `formatNumber` rather than `toLocaleString()`, which would use the browser's own
+ * locale and ignore the language the reader chose. That is not cosmetic: "1,234" is one thousand
+ * two hundred and thirty-four to an English reader and one point two three four to a Spanish one,
+ * and these figures end up in licence negotiations.
+ */
 export function formatCount(value: number): string {
-  return Math.round(value).toLocaleString();
+  return formatNumber(Math.round(value));
 }
 
-/** Formats a percentage to one decimal place, dropping a trailing ".0". */
+/**
+ * Formats a percentage to one decimal place, dropping a trailing ".0".
+ *
+ * The digits go through `formatNumber`, so a Spanish reader gets "12,3%" rather than "12.3%" -
+ * `toFixed` always produces a full stop, which in Spanish is the thousands separator.
+ */
 export function formatPct(value: number): string {
   const rounded = Math.round(value * 10) / 10;
-  return `${rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1)}%`;
+  const digits = rounded % 1 === 0 ? 0 : 1;
+  return `${formatNumber(rounded, { minimumFractionDigits: digits, maximumFractionDigits: digits })}%`;
 }
 
-/** A UTC ISO date as a short local-format date, or a dash when absent. */
+/** A UTC ISO date as a short date in the reader's language, or a dash when absent. */
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return '\u2014';
-  return new Date(iso).toLocaleDateString(undefined, {
+  return formatDateParts(new Date(iso), {
     day: 'numeric',
     month: 'short',
     year: 'numeric',

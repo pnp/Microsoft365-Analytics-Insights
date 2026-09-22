@@ -7,6 +7,8 @@
 // filters can't grow it without limit. Names only: a per-scope count would be misleading across a
 // cross-scope catalogue, so counts live in the demographic breakdown, never in these labels.
 
+import { compareStrings } from '../../i18n';
+
 /** A single filter option: id + display name only (no scope-specific count). */
 export interface DemographicOption {
   id: number;
@@ -91,7 +93,7 @@ export function mergeDemographicOptions(
 
   const evicted = kept.length < order.length;
   const keptSet = new Set(kept);
-  const options = kept.map((id) => byId.get(id)!).sort((a, b) => a.name.localeCompare(b.name));
+  const options = kept.map((id) => byId.get(id)!).sort((a, b) => compareStrings(a.name, b.name));
 
   return {
     options,
