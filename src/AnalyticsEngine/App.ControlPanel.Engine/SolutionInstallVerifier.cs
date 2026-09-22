@@ -106,14 +106,7 @@ namespace App.ControlPanel.Engine
             await VerifyKeyVaultDataPlaneAccess(testRg);
 
             // Firewall tests
-            if (_testConfig.IsValid)
-            {
-                await ExecuteAndReportFailure("SQL connectivity", () => base.VerifySQL(_testConfig.SQLConnectionString));
-            }
-            else
-            {
-                _logger.LogError($"Can't verify SQL Server access - configure a test target in solution tests configuration menu when SQL is created");
-            }
+            await VerifySqlConnectivity(testRg);
 
             var activityAccountErrs = Config.RuntimeAccountOffice365.GetValidationErrors();
             if (activityAccountErrs.Count > 0)
@@ -135,6 +128,91 @@ namespace App.ControlPanel.Engine
         }
 
         /// <summary>
+        /// Run the SQL connectivity test, falling back to autodetecting the target from the installer
+        /// configuration when no test target has been saved.
+        /// </summary>
+        /// <remarks>
+        /// Previously this reported "Can't verify SQL Server access - configure a test target in solution
+        /// tests configuration menu" whenever the Solution Tests Configuration form had never been opened,
+        /// which is the common case: every detail needed to find the server is already in the configuration
+        /// being tested, so making the operator open a second form and press Autodetect there was pure
+        /// ceremony. The saved test target still wins when there is one, so a deliberately overridden
+        /// target (a different server, or a SQL login that differs from the installer's) is never ignored.
+        /// </remarks>
+        async Task VerifySqlConnectivity(ResourceGroupResource testRg)
+        {
+            var connectionString = SavedTestTargetWins(_testConfig) ? _testConfig.SQLConnectionString : null;
+
+            if (connectionString == null)
+            {
+                connectionString = await AutodetectSqlTestConnectionString(testRg);
+            }
+
+            if (string.IsNullOrEmpty(connectionString))
+            {
+                _logger.LogError("Can't verify SQL Server access - no SQL test target could be resolved. Configure one in the " +
+                    "'Solution Tests Configuration' menu once SQL is created.");
+                return;
+            }
+
+            await ExecuteAndReportFailure("SQL connectivity", () => base.VerifySQL(connectionString));
+        }
+
+        /// <summary>
+        /// Whether a saved test target should be used as-is, rather than detecting one. A deliberately
+        /// overridden target - a different server, or a SQL login that differs from the installer's - must
+        /// never be silently replaced by autodetection.
+        /// </summary>
+        internal static bool SavedTestTargetWins(TestConfiguration testConfig) => testConfig != null && testConfig.IsValid;
+
+        /// <summary>
+        /// Work out a SQL connection string from the configuration under test, so a connectivity test can
+        /// run without the operator having saved one by hand first. Never throws - a failed autodetection
+        /// only means the connectivity test is skipped, and must not abort the rest of the tests.
+        /// </summary>
+        async Task<string> AutodetectSqlTestConnectionString(ResourceGroupResource testRg)
+        {
+            if (!ConfigIsReadyForSqlAutodetection(Config))
+            {
+                _logger.LogInformation("No SQL test target is configured, and the configuration does not yet have everything " +
+                    "needed to detect one (an installer account, subscription, resource-group and SQL Server name).");
+                return null;
+            }
+
+            if (testRg == null)
+            {
+                _logger.LogInformation($"No SQL test target is configured, and resource-group '{Config.ResourceGroupName}' was not " +
+                    "found, so the SQL Server details can't be detected.");
+                return null;
+            }
+
+            _logger.LogInformation("No SQL test target is configured - detecting one from this configuration...");
+
+            try
+            {
+                var detected = await GetSqlDetails(testRg, Config.SQLServerAdminPassword);
+
+                // Server-level, with no database selected: exactly what the saved test target uses. A
+                // configuration test legitimately runs before the database exists, so naming the catalog
+                // here would turn a healthy pre-install check into a "cannot open database" failure.
+                var connectionString = detected?.Sql?.ConnectionString;
+
+                if (!string.IsNullOrEmpty(connectionString))
+                {
+                    _logger.LogInformation($"Detected SQL test target '{StringUtils.RedactSqlConnectionString(connectionString)}'. " +
+                        "Save it in 'Solution Tests Configuration' if you want to test a different server or login.");
+                }
+
+                return connectionString;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Couldn't detect the SQL Server details for the connectivity test: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
         /// Return SQL details so connectivity tests can run against an existing server.
         /// We cannot read back the SQL password, so it must come from config - unless the deployment uses
         /// Microsoft Entra ID authentication, in which case there is no password at all (issue #117).
@@ -142,37 +220,52 @@ namespace App.ControlPanel.Engine
         public async Task<AutodetectedSqlDetails> GetSqlDetails(string sqlPassword)
         {
             var (testRg, _) = await GetResourceGroupIfValid();
-            if (testRg != null)
+            if (testRg == null)
             {
-                SqlDetails sqlInfo = null;
-                var sqlServer = testRg.GetSqlServers().AsEnumerable().Where(s => s.Data.Name == Config.SQLServerName).SingleOrDefault();
-                if (sqlServer == null)
-                {
-                    _logger.LogError($"Can't find SQL Server with name '{Config.SQLServerName}' in resource-group '{testRg.Data.Name}'");
-                }
-                else
-                {
-                    var decision = await SqlServerAuthReader.DetectAsync(sqlServer, sqlPassword, Config.SqlAuthMode, _logger,
-                        await ResolveInstallerObjectIdForDiagnostics(),
-                        Config.SQLEntraDatabaseUsers != null && Config.SQLEntraDatabaseUsers.Count > 0);
-                    sqlInfo = new SqlDetails
-                    {
-                        SqlFqdn = sqlServer.Data.FullyQualifiedDomainName,
-                        AuthMethod = decision.Method,
-                        SqlPassword = decision.UsesEntraId ? null : sqlPassword,
-                        SqlUsername = decision.UsesEntraId ? null : sqlServer.Data.AdministratorLogin
-                    };
-                    if (!decision.UsesEntraId)
-                        DatabasePaaSInfo.EnsureSqlLoginUsable(sqlInfo.SqlFqdn, sqlInfo.SqlUsername, sqlInfo.SqlPassword);
-                }
+                _logger.LogError($"Can't find resource-group '{Config.ResourceGroupName}'");
+                return null;
+            }
 
-                return new AutodetectedSqlDetails { Sql = sqlInfo };
+            return await GetSqlDetails(testRg, sqlPassword);
+        }
+
+        /// <summary>
+        /// As <see cref="GetSqlDetails(string)"/>, for a resource-group that has already been resolved.
+        /// </summary>
+        /// <remarks>
+        /// Exists so the configuration test can detect its own SQL target without paying for a second
+        /// subscription/resource-group round trip, which it has already made by the time it gets here.
+        /// </remarks>
+        async Task<AutodetectedSqlDetails> GetSqlDetails(ResourceGroupResource testRg, string sqlPassword)
+        {
+            if (testRg == null)
+            {
+                throw new ArgumentNullException(nameof(testRg));
+            }
+
+            SqlDetails sqlInfo = null;
+            var sqlServer = testRg.GetSqlServers().AsEnumerable().Where(s => s.Data.Name == Config.SQLServerName).SingleOrDefault();
+            if (sqlServer == null)
+            {
+                _logger.LogError($"Can't find SQL Server with name '{Config.SQLServerName}' in resource-group '{testRg.Data.Name}'");
             }
             else
             {
-                _logger.LogError($"Can't find resource-group '{Config.ResourceGroupName}'");
+                var decision = await SqlServerAuthReader.DetectAsync(sqlServer, sqlPassword, Config.SqlAuthMode, _logger,
+                    await ResolveInstallerObjectIdForDiagnostics(),
+                    Config.SQLEntraDatabaseUsers != null && Config.SQLEntraDatabaseUsers.Count > 0);
+                sqlInfo = new SqlDetails
+                {
+                    SqlFqdn = sqlServer.Data.FullyQualifiedDomainName,
+                    AuthMethod = decision.Method,
+                    SqlPassword = decision.UsesEntraId ? null : sqlPassword,
+                    SqlUsername = decision.UsesEntraId ? null : sqlServer.Data.AdministratorLogin
+                };
+                if (!decision.UsesEntraId)
+                    DatabasePaaSInfo.EnsureSqlLoginUsable(sqlInfo.SqlFqdn, sqlInfo.SqlUsername, sqlInfo.SqlPassword);
             }
-            return null;
+
+            return new AutodetectedSqlDetails { Sql = sqlInfo };
         }
 
         /// <summary>

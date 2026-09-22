@@ -146,7 +146,15 @@ namespace App.ControlPanel
 
         private void upgradeDatabaseSchemaToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            new DatabaseUpgradeForm().ShowDialog();
+            // Disposed explicitly: ShowDialog only hides the form, so without this it would linger with its
+            // background worker attached until the installer exits.
+            using (var f = new DatabaseUpgradeForm())
+            {
+                // Give the current config so the form can autodetect the target database and default the
+                // Microsoft Entra ID credential to the installer's own app registration.
+                f.SolutionInstallConfig = this.SelectedUI?.GetConfigurationState();
+                f.ShowDialog();
+            }
         }
 
         private void proxyConfigToolStripMenuItem_Click(object sender, EventArgs e)
