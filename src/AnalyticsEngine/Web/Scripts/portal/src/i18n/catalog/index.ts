@@ -93,35 +93,16 @@ export const EN_CATALOG: Catalog = flatten(Object.values(EN_MODULES) as unknown 
 /**
  * Per-language loaders for everything except English.
  *
- * The imports are written out one module at a time rather than through a computed path because
- * Vite has to see every import literally at build time to split them into chunks. A
- * `import('./' + language + '/app')` would defeat the splitting and fail only at runtime.
+ * Each language is imported through a *single* module - its `index.ts` - so Vite emits one chunk
+ * and the browser makes one request. Importing the seventeen modules individually here made it
+ * seventeen requests gathered with `Promise.all`, which rejects on the first failure: one dropped
+ * request took the whole language down. See the note in `es/index.ts`.
+ *
+ * The import path is written out literally rather than computed, because Vite has to see it at
+ * build time to split the chunk; `import('./' + language)` would fail only at runtime.
  */
 const LOADERS: Record<Exclude<Language, 'en'>, () => Promise<Catalog>> = {
-  es: async () =>
-    flatten(
-      (
-        await Promise.all([
-          import('./es/app'),
-          import('./es/common'),
-          import('./es/charts'),
-          import('./es/overview'),
-          import('./es/reports'),
-          import('./es/copilotAdoption'),
-          import('./es/copilotAdoptionCowork'),
-          import('./es/copilotAdoptionAgents'),
-          import('./es/copilotAdoptionUsers'),
-          import('./es/teamsExplorer'),
-          import('./es/webActivity'),
-          import('./es/licenceActivity'),
-          import('./es/agentCosts'),
-          import('./es/dlp'),
-          import('./es/errors'),
-          import('./es/health'),
-          import('./es/admin'),
-        ])
-      ).map((module) => module.default as Catalog),
-    ),
+  es: async () => flatten(Object.values((await import('./es')).default)),
 };
 
 const loaded = new Map<Language, Catalog>([['en', EN_CATALOG]]);

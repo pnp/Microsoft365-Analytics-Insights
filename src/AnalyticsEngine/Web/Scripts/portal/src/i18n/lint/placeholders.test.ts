@@ -28,6 +28,31 @@ const PLACEHOLDER = /\{(\w+)\}/g;
 /** Helpers whose first argument is a catalog key and whose second is the values object. */
 const KEY_THEN_VALUES = new Set(['t', 'tNode', 'translateActive']);
 
+/**
+ * The catalog keys a `t()` key argument can resolve to.
+ *
+ * Usually one literal. But `t(plural(n, 'x.one', 'x.other'), { count })` passes a *call* as the
+ * key, and both of its keys have to be checked - a missing `{ count }` there renders the literal
+ * text `{count}` just as surely, and this is the most common shape in the portal for a string that
+ * has a placeholder at all. Skipping it, which an implementation that only accepts a string
+ * literal does, leaves the check green over exactly the calls most likely to be wrong.
+ */
+function resolvedKeys(argument: ts.Expression | undefined): string[] {
+  if (!argument) return [];
+  if (ts.isStringLiteral(argument)) {
+    return argument.text in EN_CATALOG ? [argument.text] : [];
+  }
+  if (ts.isCallExpression(argument) && calleeName(argument) === 'plural') {
+    return argument.arguments
+      .slice(1, 3)
+      .filter((a): a is ts.StringLiteral => ts.isStringLiteral(a) && a.text in EN_CATALOG)
+      .map((a) => a.text);
+  }
+  // A key chosen at runtime - `t(row.labelKey)`, `t(STATUS_KEYS[status])` - cannot be resolved
+  // statically. Those are nearly always simple labels with no placeholders.
+  return [];
+}
+
 function placeholdersOf(key: string): Set<string> {
   const text = EN_CATALOG[key];
   if (typeof text !== 'string') return new Set();
@@ -75,9 +100,8 @@ export function checkPlaceholders(sourceText: string, fileName: string): string[
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && KEY_THEN_VALUES.has(calleeName(node))) {
       const [keyArgument, valuesArgument] = node.arguments;
-      if (keyArgument && ts.isStringLiteral(keyArgument) && keyArgument.text in EN_CATALOG) {
-        const expected = placeholdersOf(keyArgument.text);
-
+      const keys = resolvedKeys(keyArgument);
+      if (keys.length > 0) {
         let supplied: Set<string> | null = new Set();
         if (valuesArgument) {
           if (ts.isObjectLiteralExpression(valuesArgument)) {
@@ -101,14 +125,23 @@ export function checkPlaceholders(sourceText: string, fileName: string): string[
 
         if (supplied) {
           const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
-          const where = `${fileName}:${line + 1} ${keyArgument.text}`;
-          const missing = [...expected].filter((name) => !supplied.has(name));
-          const extra = [...supplied].filter((name) => !expected.has(name));
-          if (missing.length > 0) {
-            problems.push(`${where}: renders literally, no value for {${missing.join('}, {')}}`);
+          for (const key of keys) {
+            const expected = placeholdersOf(key);
+            const where = `${fileName}:${line + 1} ${key}`;
+            const missing = [...expected].filter((name) => !supplied.has(name));
+            if (missing.length > 0) {
+              problems.push(`${where}: renders literally, no value for {${missing.join('}, {')}}`);
+            }
           }
+          // An extra value is only wrong if NO resolved key wants it - with `plural()` the two
+          // forms can legitimately differ, and supplying a name only one of them uses is fine.
+          const wanted = new Set(keys.flatMap((key) => [...placeholdersOf(key)]));
+          const extra = [...supplied].filter((name) => !wanted.has(name));
           if (extra.length > 0) {
-            problems.push(`${where}: silently dropped, not in the text: ${extra.join(', ')}`);
+            const { line: at } = source.getLineAndCharacterOfPosition(node.getStart(source));
+            problems.push(
+              `${fileName}:${at + 1} ${keys.join(' / ')}: silently dropped, not in the text: ${extra.join(', ')}`,
+            );
           }
         }
       }
@@ -155,6 +188,25 @@ describe('Translation placeholders at the call site', () => {
     it('accepts a call that supplies exactly the right values', () => {
       expect(scan("const x = t('common.unit.user.one', { count: 1 });")).toEqual([]);
       expect(scan("const x = t('common.action.print');")).toEqual([]);
+    });
+
+    /**
+     * `t(plural(...))` is the shape most likely to need a placeholder and the one an
+     * implementation that only accepts a string-literal key silently skips - so it is checked in
+     * both directions explicitly.
+     */
+    it('checks both keys of a plural call', () => {
+      const problems = scan(
+        "const x = t(plural(n, 'common.unit.user.one', 'common.unit.user.other'));",
+      );
+      expect(problems).toHaveLength(2);
+      expect(problems[0]).toContain('{count}');
+    });
+
+    it('accepts a plural call that supplies the count', () => {
+      expect(
+        scan("const x = t(plural(n, 'common.unit.user.one', 'common.unit.user.other'), { count: n });"),
+      ).toEqual([]);
     });
 
     it('does not guess at a key or a values object it cannot resolve', () => {

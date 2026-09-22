@@ -209,16 +209,20 @@ thirty-four in English and **one point two three four** in Spanish.
 ### Only the language you read is downloaded
 
 English is bundled — it is the source language and the runtime fallback. Every other language is a
-separate chunk that `main.tsx` fetches for the language it detects, before the first render, so a
-Spanish reader never sees an English flash and an English reader never downloads Spanish.
+separate chunk (one per language, not one per module: `Promise.all` over many chunks rejects if any
+single request fails, which would drop a whole language over one proxy hiccup) that `main.tsx`
+fetches for the language it detects, before the first render, so a Spanish reader never sees an
+English flash and an English reader never downloads Spanish. A fetch that does fail falls the
+*whole* language back to English — text, locale and `<html lang>` together — and picking the
+language again retries it.
 
 Measured on the production build (gzipped, eagerly-loaded chunks):
 
 | | eager |
 | --- | --- |
 | before this feature | 178 kB |
-| English reader | 272 kB |
-| Spanish reader | 272 kB + 65 kB fetched |
+| English reader | 275 kB |
+| Spanish reader | 275 kB + 86 kB in one chunk |
 
 **The point of the split is the third language, not the second.** Bundling every language would
 make each new one a permanent download for every user, which turns "should we support Norwegian?"
@@ -247,15 +251,17 @@ cached.
      to `t()`** (which would land inside a translated sentence), and — as a catch-all — **any
      phrase of three words or more wherever it is written**, which is what catches a sentence
      assembled inside a helper and returned as a string.
-   - `catalog.test.ts` fails on a key claimed by two modules, a key not namespaced to its module, a
-     `{placeholder}` present in one language and not the other, an empty translation in either
-     language, a sentence chopped into fragments that no translator can reassemble, an HTML entity
-     that would be shown to the reader verbatim, and English pasted into the Spanish catalog to
-     satisfy the compiler — which is the realistic way a half-Spanish page ships while every other
-     check is green.
+   - `catalog.test.ts` runs against **every language in `LANGUAGES`**, and fails on a key claimed
+     by two modules, a key not namespaced to its module, a language whose modules do not line up
+     with English module-for-module, a `{placeholder}` present in one language and not the other,
+     an empty translation, a sentence chopped into fragments that no translator can reassemble, an
+     HTML entity that would be shown to the reader verbatim, and English pasted into a translated
+     catalog to satisfy the compiler — which is the realistic way a half-translated page ships
+     while every other check is green.
    - `placeholders.test.ts` fails when a call site does not supply a `{placeholder}` the string
      needs (it would render as literal `{count}`) or supplies one the string does not have (it is
-     silently dropped, so a figure vanishes from the sentence).
+     silently dropped, so a figure vanishes from the sentence). It resolves `t(plural(…))` to both
+     of its keys, because that is the shape most likely to carry a placeholder.
    - `localeFormatting.test.ts` fails on any `toLocaleString()` / `toLocaleDateString(undefined, …)`
      / `new Intl.*(undefined, …)` outside `locale.ts`. That class is invisible to every other
      check, because such a call contains no string at all — and three of them survived the initial
@@ -276,11 +282,12 @@ string untranslated cannot be merged.
 
 1. Add it to `LANGUAGES` in `src/i18n/languages.ts` with a region-qualified locale and its name in
    its own language, and extend the `Language` union.
-2. Copy `src/i18n/catalog/es/` to `src/i18n/catalog/<id>/` and translate.
-3. Add a loader for it in `LOADERS` in `src/i18n/catalog/index.ts`, listing each module's
-   `import()` literally — Vite has to see them to split them into chunks.
-4. Add it to `ES_MODULES`' sibling list in `src/test/catalogModules.ts` so the per-module checks
-   cover it.
+2. Copy `src/i18n/catalog/es/` to `src/i18n/catalog/<id>/`, including its `index.ts`, and translate.
+3. Add one line to `LOADERS` in `src/i18n/catalog/index.ts`: `import('./<id>')`. Write the path
+   literally — Vite has to see it to split the chunk.
+4. Register it in `MODULES` in `src/test/catalogModules.ts`, so the per-module checks cover it.
+   `catalog.test.ts` runs its whole suite against every language in `LANGUAGES` and fails if one is
+   missing from that list, so this cannot be forgotten silently.
 
 `npm run lint` then lists every key still missing, and will not go green until the new language is
 complete. A language with more than two plural categories (Polish, Arabic, Russian) needs a real

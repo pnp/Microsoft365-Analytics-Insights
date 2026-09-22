@@ -28,20 +28,20 @@ export function minutesAgo(iso: string | null): number | null {
   return (Date.now() - t) / 60000;
 }
 
-export function howLongAgo(iso: string | null, t?: TFunction): string {
+export function howLongAgo(iso: string | null, t: TFunction = translateActive): string {
   const m = minutesAgo(iso);
-  if (m === null) return t ? t('health.time.never') : 'never';
-  if (m < 1) return t ? t('health.time.justNow') : 'just now';
+  if (m === null) return t('health.time.never');
+  if (m < 1) return t('health.time.justNow');
   if (m < 60) {
     const minutes = formatNumber(Math.round(m));
-    return t ? t('health.time.minutesAgo', { minutes }) : `${minutes} min ago`;
+    return t('health.time.minutesAgo', { minutes });
   }
   if (m < 60 * 24) {
     const hours = formatNumber(Number((m / 60).toFixed(1)));
-    return t ? t('health.time.hoursAgo', { hours }) : `${hours} hours ago`;
+    return t('health.time.hoursAgo', { hours });
   }
   const days = formatNumber(Number((m / 60 / 24).toFixed(1)));
-  return t ? t('health.time.daysAgo', { days }) : `${days} days ago`;
+  return t('health.time.daysAgo', { days });
 }
 
 export function freshnessColor(iso: string | null, greenHours: number, amberHours: number): BadgeColor {

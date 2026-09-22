@@ -1,57 +1,33 @@
 import type { Catalog } from '../i18n/translate';
-import type { Language } from '../i18n';
-import { EN_MODULES } from '../i18n';
-
-import esApp from '../i18n/catalog/es/app';
-import esCommon from '../i18n/catalog/es/common';
-import esCharts from '../i18n/catalog/es/charts';
-import esOverview from '../i18n/catalog/es/overview';
-import esReports from '../i18n/catalog/es/reports';
-import esCopilot from '../i18n/catalog/es/copilotAdoption';
-import esCopilotCowork from '../i18n/catalog/es/copilotAdoptionCowork';
-import esCopilotAgents from '../i18n/catalog/es/copilotAdoptionAgents';
-import esCopilotUsers from '../i18n/catalog/es/copilotAdoptionUsers';
-import esTeamsExplorer from '../i18n/catalog/es/teamsExplorer';
-import esWebActivity from '../i18n/catalog/es/webActivity';
-import esLicenceActivity from '../i18n/catalog/es/licenceActivity';
-import esAgentCosts from '../i18n/catalog/es/agentCosts';
-import esDlp from '../i18n/catalog/es/dlp';
-import esErrors from '../i18n/catalog/es/errors';
-import esHealth from '../i18n/catalog/es/health';
-import esAdmin from '../i18n/catalog/es/admin';
+import type { Language } from '../i18n/languages';
+import { EN_MODULES } from '../i18n/catalog';
+import esModules from '../i18n/catalog/es';
 
 /**
  * The catalog with its module boundaries intact, for the tests that are about those boundaries -
  * "is every key namespaced to its own area?", "does any key appear in two modules?".
  *
- * Kept out of `src/i18n/catalog/index.ts` because that file is in the production bundle, and this
- * imports every Spanish module statically - the exact thing the lazy loading there exists to
- * avoid. A test helper is never reachable from `main.tsx`, so it costs a reader nothing.
- *
- * Adding a catalog module means adding it here too. `catalog.test.ts` fails if the two lists
- * disagree, so it cannot be forgotten silently.
+ * Reads the same per-language `index.ts` that production loads, rather than keeping a second list
+ * of modules in step with it. An earlier version did keep its own list, which meant a module added
+ * to the catalog but forgotten here made the tests crash with
+ * `Cannot convert undefined or null to object` instead of reporting anything useful.
  */
-const ES_MODULES = {
-  app: esApp,
-  common: esCommon,
-  charts: esCharts,
-  overview: esOverview,
-  reports: esReports,
-  copilotAdoption: esCopilot,
-  copilotAdoptionCowork: esCopilotCowork,
-  copilotAdoptionAgents: esCopilotAgents,
-  copilotAdoptionUsers: esCopilotUsers,
-  teamsExplorer: esTeamsExplorer,
-  webActivity: esWebActivity,
-  licenceActivity: esLicenceActivity,
-  agentCosts: esAgentCosts,
-  dlp: esDlp,
-  errors: esErrors,
-  health: esHealth,
-  admin: esAdmin,
-} as const;
+const MODULES: Partial<Record<Language, Record<string, Catalog>>> = {
+  en: EN_MODULES as unknown as Record<string, Catalog>,
+  es: esModules,
+};
 
 export function catalogModulesFor(language: Language): Record<string, Catalog> {
-  const modules = language === 'en' ? EN_MODULES : ES_MODULES;
-  return modules as unknown as Record<string, Catalog>;
+  const modules = MODULES[language];
+  if (!modules) {
+    throw new Error(
+      `No catalog modules registered for "${language}". Add its index.ts to src/test/catalogModules.ts.`,
+    );
+  }
+  return modules;
+}
+
+/** Every language whose catalog can be broken down by module - i.e. every language that ships. */
+export function languagesWithModules(): Language[] {
+  return Object.keys(MODULES) as Language[];
 }

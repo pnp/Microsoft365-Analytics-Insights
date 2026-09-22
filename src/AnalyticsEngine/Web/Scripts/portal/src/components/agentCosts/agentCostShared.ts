@@ -77,11 +77,11 @@ const HARNESS_LABEL_KEYS: Record<string, TranslationKey> = {
  * "StandardOrCopilotChat" in a report is a leaked enum. `NotAssessed` and `Unknown` are deliberately
  * worded so they read as "we could not tell", never as a harness in their own right.
  */
-export function harnessLabel(value: string | null | undefined, t?: TFunction): string {
+export function harnessLabel(value: string | null | undefined, t: TFunction = translateActive): string {
   const key = value ? HARNESS_LABEL_KEYS[value] : undefined;
   if (key) return (t ?? translateActive)(key);
   if (value === 'GitHubCopilot') return 'GitHub Copilot';
-  return value || (t ? t('agentCosts.state.notReported') : NOT_REPORTED);
+  return value || t('agentCosts.state.notReported');
 }
 
 /** A UTC ISO date as a short date. Rendered in UTC - the underlying grain is a UTC usage day. */
