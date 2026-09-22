@@ -132,7 +132,16 @@ stylesheet):
 | `data-print="page-break"` | Starts a new sheet, and keeps its own content with it. |
 | `data-print="keep-with-next"` | Never left stranded at the foot of a page with its content overleaf. |
 | `data-print="only"` | Rendered on paper only. |
-| `data-print="footer"` | Repeated at the foot of every printed page. |
+| `data-print="shell"` | The layout table that carries the running footer. Block flow on screen. |
+| `data-print="footer"` | The `<tfoot>` repeated at the foot of every printed page. |
+
+The footer is a real `<tfoot>` inside a layout `<table>` wrapping the report, and that is load-bearing.
+A running footer must repeat on every page *and* have room reserved for it; `position: fixed` gives
+only the first, so it overprints the last line of a full page, and Chromium mis-resolves the negative
+`bottom` meant to lift it into the page margin - it lands the footer across the *top* of each sheet.
+A table section is the only construct that does both, the same mechanism that repeats a long report
+table's header row. On screen `src/index.css` flattens the table back to block flow and hides the
+footer, so it costs nothing there.
 
 `src/printStyles.test.ts` asserts the stylesheet half - Vitest runs with `css: false`, so a
 component test can prove an attribute is present but never that it does anything. It also fails on
