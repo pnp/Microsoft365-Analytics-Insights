@@ -6,6 +6,12 @@ export interface UserLicense {
   skuId: string | null;
 }
 
+/** One configured organisation the user belongs to. */
+export interface UserOrgValue {
+  orgTypeName: string;
+  value: string;
+}
+
 export interface UserProfile {
   userId: number;
   userPrincipalName: string;
@@ -26,6 +32,11 @@ export interface UserProfile {
   postalCode: string | null;
   managerUserPrincipalName: string | null;
   licenses: UserLicense[];
+  /**
+   * Configured organisations the user belongs to. Empty on a deployment with no org types defined,
+   * and absent entirely on an API build that predates the feature - hence the optional marker.
+   */
+  orgs?: UserOrgValue[];
 }
 
 export interface UserDataCategory {

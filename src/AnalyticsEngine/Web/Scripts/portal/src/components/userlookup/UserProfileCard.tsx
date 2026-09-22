@@ -37,6 +37,7 @@ function formatUtc(value: string | null): string {
 
 export default function UserProfileCard({ profile }: { profile: UserProfile }) {
   const styles = useStyles();
+  const orgs = profile.orgs ?? [];
   const rows: Array<[string, string]> = [
     ['UPN', profile.userPrincipalName || '—'],
     ['Mail', profile.mail || '—'],
@@ -51,6 +52,10 @@ export default function UserProfileCard({ profile }: { profile: UserProfile }) {
     ['State / province', profile.stateOrProvince || '—'],
     ['Postal code', profile.postalCode || '—'],
     ['Manager', profile.managerUserPrincipalName || '—'],
+    // One row per configured org type, so the labels match what the admin named them rather than a
+    // generic "Organisations" list. Nothing is added when no org types are configured, which is how
+    // a deployment that has not adopted the feature sees this page unchanged.
+    ...orgs.map((org) => [org.orgTypeName, org.value || '—'] as [string, string]),
     ['Last updated (UTC)', formatUtc(profile.lastUpdatedUtc ?? profile.lastUpdated)],
   ];
 

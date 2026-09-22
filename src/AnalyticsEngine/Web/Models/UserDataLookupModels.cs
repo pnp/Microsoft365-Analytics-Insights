@@ -17,6 +17,22 @@ namespace Web.AnalyticsWeb.Models
     }
 
     /// <summary>
+    /// One configured organisation value held by a user (from user_org_assignments).
+    /// </summary>
+    /// <remarks>
+    /// Property names match the column aliases in the raw SQL that loads them, because EF's
+    /// <c>SqlQuery&lt;T&gt;</c> maps by name.
+    /// </remarks>
+    public class UserOrgValueModel
+    {
+        [JsonProperty("orgTypeName")]
+        public string OrgTypeName { get; set; }
+
+        [JsonProperty("value")]
+        public string Value { get; set; }
+    }
+
+    /// <summary>
     /// The "users" row plus its de-normalised lookup values for one user.
     /// </summary>
     public class UserProfileModel
@@ -77,6 +93,16 @@ namespace Web.AnalyticsWeb.Models
 
         [JsonProperty("licenses")]
         public List<UserLicenseModel> Licenses { get; set; } = new List<UserLicenseModel>();
+
+        /// <summary>
+        /// The user's configured organisation values, one per org type they are in.
+        /// </summary>
+        /// <remarks>
+        /// Empty when no org types are configured, which is how an existing deployment that has not
+        /// adopted the feature sees no change at all on this page.
+        /// </remarks>
+        [JsonProperty("orgs")]
+        public List<UserOrgValueModel> Orgs { get; set; } = new List<UserOrgValueModel>();
     }
 
     /// <summary>
