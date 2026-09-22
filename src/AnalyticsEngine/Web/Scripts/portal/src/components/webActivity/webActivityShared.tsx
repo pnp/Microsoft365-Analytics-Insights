@@ -1,5 +1,6 @@
 import { makeStyles, tokens, Text, Card, MessageBar, MessageBarBody } from '@fluentui/react-components';
 import type { ReactNode } from 'react';
+import { formatDateParts, formatNumber, plural, useT, type TFunction, type TranslationKey } from '../../i18n';
 import SqlPopover from '../SqlPopover';
 import type { KpiTone } from '../shared/KpiGrid';
 import type { ReportCategory, ReportSeries } from '../../types/reports';
@@ -53,10 +54,15 @@ export function reachToneOrNeutral(percent: number | null | undefined): KpiTone 
 }
 
 /** The dwell-time caveat, shown wherever an average time on page is. */
-export const DWELL_CAVEAT =
-  'Excludes the last page of each visit: the tracker measures dwell time against the NEXT page view, '
-  + 'so there is nothing to measure a visit\u2019s final page against. Exit pages are therefore '
-  + 'under-represented in any average time figure.';
+export const DWELL_CAVEAT_KEY = 'webActivity.shared.dwellCaveat' satisfies TranslationKey;
+
+export function dwellCaveat(t: TFunction): string {
+  return t(DWELL_CAVEAT_KEY);
+}
+
+export function dwellCaveatLower(t: TFunction): string {
+  return t('webActivity.shared.dwellCaveatLower');
+}
 
 /**
  * The KPI tone for how much of the intranet relies on search.
@@ -85,13 +91,13 @@ export function judgementIntent(tone: WebActivityJudgement['tone']): 'success' |
 
 /** Whole number with thousands separators. */
 export function formatCount(value: number): string {
-  return Math.round(value).toLocaleString();
+  return formatNumber(Math.round(value));
 }
 
 /** One decimal place, dropping a trailing ".0". */
 export function formatDecimal(value: number): string {
   const rounded = Math.round(value * 10) / 10;
-  return rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1);
+  return formatNumber(rounded, { minimumFractionDigits: 0, maximumFractionDigits: 1 });
 }
 
 /** A percentage to one decimal place. */
@@ -114,7 +120,7 @@ export function formatDuration(seconds: number | null | undefined): string {
 /** A page load time, which is small enough that two decimals are the readable choice. */
 export function formatSeconds(seconds: number | null | undefined): string {
   if (seconds === null || seconds === undefined) return '\u2014';
-  return `${(Math.round(seconds * 100) / 100).toFixed(2)}s`;
+  return `${formatNumber(Math.round(seconds * 100) / 100, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}s`;
 }
 
 /** An hour-of-day index as "14:00 UTC", or a dash when there is none. */
@@ -126,7 +132,7 @@ export function formatHour(hour: number | null | undefined): string {
 /** A UTC ISO date as a short local-format date, or a dash when absent. */
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return '\u2014';
-  return new Date(iso).toLocaleDateString(undefined, {
+  return formatDateParts(new Date(iso), {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
@@ -199,6 +205,16 @@ export function toCategories(rows: WebActivityNamedCount[]): ReportCategory[] {
 /** Distribution buckets -> bar categories, preserving bucket order. */
 export function bucketsToCategories(buckets: WebActivityBucket[]): ReportCategory[] {
   return buckets.map((bucket) => ({ label: bucket.label, value: bucket.count }));
+}
+
+export function translatedBucketLabel(t: TFunction, group: string, bucket: WebActivityBucket): string {
+  const catalogKey = (`webActivity.bucket.` + `${group}.${bucket.key}.label`) as TranslationKey;
+  const translated = t(catalogKey);
+  return translated === catalogKey ? bucket.label : translated;
+}
+
+export function translatedBucketsToCategories(t: TFunction, group: string, buckets: WebActivityBucket[]): ReportCategory[] {
+  return buckets.map((bucket) => ({ label: translatedBucketLabel(t, group, bucket), value: bucket.count }));
 }
 
 /**
@@ -349,6 +365,7 @@ export function SectionCard({
   children,
 }: SectionCardProps) {
   const styles = useStyles();
+  const t = useT();
 
   return (
     <Card className={styles.card}>
@@ -363,7 +380,7 @@ export function SectionCard({
         </div>
         <div className={styles.actions}>
           {actions}
-          {query?.sql && <SqlPopover sql={query.sql} title={`SQL behind "${title}"`} />}
+          {query?.sql && <SqlPopover sql={query.sql} title={t('webActivity.shared.sqlBehindTitle', { title })} />}
         </div>
       </div>
 
@@ -376,11 +393,11 @@ export function SectionCard({
       <div className={styles.body}>
         {query?.error ? (
           <MessageBar intent="error">
-            <MessageBarBody>This section could not be loaded: {query.error}</MessageBarBody>
+            <MessageBarBody>{t('webActivity.shared.sectionLoadFailed', { error: query.error })}</MessageBarBody>
           </MessageBar>
         ) : isEmpty ? (
           <Text size={200} className={styles.muted}>
-            {emptyMessage ?? 'No data for this period.'}
+            {emptyMessage ?? t('webActivity.shared.noDataForPeriod')}
           </Text>
         ) : (
           children
@@ -400,11 +417,15 @@ export function SectionCard({
  */
 export function WindowNote({ window: reportWindow }: { window: WebActivityWindow }) {
   const styles = useStyles();
+  const t = useT();
 
   return (
     <Text size={200} className={styles.muted}>
-      Covering {formatRange(reportWindow.fromUtc, reportWindow.toUtc)} ({reportWindow.days} days,{' '}
-      {reportWindow.workingDays} working days). All times are UTC.
+      {t('webActivity.shared.windowNote', {
+        range: formatRange(reportWindow.fromUtc, reportWindow.toUtc),
+        days: formatCount(reportWindow.days),
+        workingDays: formatCount(reportWindow.workingDays),
+      })}
     </Text>
   );
 }
@@ -439,15 +460,14 @@ export function JudgementList({ judgements }: { judgements: WebActivityJudgement
  * incomplete, which is the part a reader would otherwise never learn.
  */
 export function FailedQueryNote({ queries }: { queries: WebActivityQueryInfo[] }) {
+  const t = useT();
   const failed = queries.filter((q) => q.error);
   if (failed.length === 0) return null;
 
   return (
     <MessageBar intent="warning" style={{ marginTop: '12px' }}>
       <MessageBarBody>
-        {failed.length === 1 ? 'One query on this tab' : `${failed.length} queries on this tab`} could
-        not be loaded, so some figures below may read as zero when they are in fact unknown. The
-        affected sections show the error.
+        {t(plural(failed.length, 'webActivity.shared.failedQuery.one', 'webActivity.shared.failedQuery.other'), { count: formatCount(failed.length) })}
       </MessageBarBody>
     </MessageBar>
   );

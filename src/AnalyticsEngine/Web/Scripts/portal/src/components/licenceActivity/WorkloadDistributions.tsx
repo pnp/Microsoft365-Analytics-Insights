@@ -2,12 +2,13 @@ import { memo } from 'react';
 import { makeStyles, tokens, Card, Text } from '@fluentui/react-components';
 import type { LicenceActivityDistribution, WorkloadKey } from '../../types/licenceActivity';
 import { WORKLOADS } from '../../types/licenceActivity';
+import { useT } from '../../i18n';
 import {
   ACTIVITY_BANDS,
   activeCount,
   activeRatePct,
-  BAND_DESCRIPTIONS,
-  BAND_METHOD,
+  bandDescription,
+  bandLabel,
   bandCount,
   distributionTotal,
   measuredCount,
@@ -71,6 +72,7 @@ const useStyles = makeStyles({
 /** One workload's five-band stacked bar plus a legend of counts. */
 function DistributionCard({ distribution }: { distribution: LicenceActivityDistribution }) {
   const styles = useStyles();
+  const t = useT();
   const total = distributionTotal(distribution);
   const measured = measuredCount(distribution);
   const rate = activeRatePct(distribution);
@@ -84,12 +86,16 @@ function DistributionCard({ distribution }: { distribution: LicenceActivityDistr
         </Text>
         <Text size={200} className={styles.muted}>
           {rate == null
-            ? 'Not measured'
-            : `${formatCount(activeCount(distribution))} of ${formatCount(measured)} active (${formatPct(rate)})`}
+            ? t('licenceActivity.common.notMeasured')
+            : t('licenceActivity.distribution.activeOfMeasured', {
+                active: formatCount(activeCount(distribution)),
+                measured: formatCount(measured),
+                rate: formatPct(rate),
+              })}
         </Text>
       </div>
 
-      <div className={styles.bar} role="img" aria-label={`${label} activity distribution`}>
+      <div className={styles.bar} role="img" aria-label={t('licenceActivity.distribution.aria', { label })}>
         {ACTIVITY_BANDS.map((band) => {
           const count = bandCount(distribution, band.key);
           if (count <= 0 || total <= 0) return null;
@@ -98,7 +104,11 @@ function DistributionCard({ distribution }: { distribution: LicenceActivityDistr
               key={band.key}
               className={styles.segment}
               style={{ width: `${(count / total) * 100}%`, backgroundColor: band.colour }}
-              title={`${band.label}: ${formatCount(count)}. ${BAND_DESCRIPTIONS[band.key]}`}
+              title={t('licenceActivity.distribution.bandTitle', {
+                label: bandLabel(t, band.key),
+                count: formatCount(count),
+                description: bandDescription(t, band.key) ?? '',
+              })}
             />
           );
         })}
@@ -106,10 +116,13 @@ function DistributionCard({ distribution }: { distribution: LicenceActivityDistr
 
       <div className={styles.legend}>
         {ACTIVITY_BANDS.map((band) => (
-          <span key={band.key} className={styles.legendItem} title={BAND_DESCRIPTIONS[band.key]}>
+          <span key={band.key} className={styles.legendItem} title={bandDescription(t, band.key) ?? undefined}>
             <span className={styles.swatch} style={{ backgroundColor: band.colour }} aria-hidden />
             <Text size={100} className={styles.legendLabel}>
-              {band.label} {formatCount(bandCount(distribution, band.key))}
+              {t('licenceActivity.distribution.bandLegendLabel', {
+                label: bandLabel(t, band.key),
+                count: formatCount(bandCount(distribution, band.key)),
+              })}
             </Text>
           </span>
         ))}
@@ -135,6 +148,7 @@ interface WorkloadDistributionsProps {
  */
 function WorkloadDistributions({ workloads }: WorkloadDistributionsProps) {
   const styles = useStyles();
+  const t = useT();
 
   // Present in a stable workload order regardless of how the backend ordered them. Only ever the five
   // workloads of the ONE selected licence - never all 50 SKUs' distributions at once.
@@ -143,14 +157,13 @@ function WorkloadDistributions({ workloads }: WorkloadDistributionsProps) {
   );
 
   if (ordered.length === 0) {
-    return <Text className={styles.muted}>No activity is available for this licence.</Text>;
+    return <Text className={styles.muted}>{t('licenceActivity.distribution.noActivity')}</Text>;
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
       <Text size={100} className={styles.muted}>
-        {BAND_METHOD} The &quot;active&quot; count is everyone with any measured activity, out of the people whose
-        whole period could be measured.
+        {t('licenceActivity.band.method')} {t('licenceActivity.distribution.activeCountExplanation')}
       </Text>
       <div className={styles.grid}>
         {ordered.map((distribution) => (

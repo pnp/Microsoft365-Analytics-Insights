@@ -3,8 +3,9 @@ import { makeStyles, tokens, Text, Badge, Button, Tooltip } from '@fluentui/reac
 import { ChevronDown16Regular, ChevronRight16Regular } from '@fluentui/react-icons';
 import type { LicenceActivityEvidence, LicenceActivityUser, WorkloadKey } from '../../types/licenceActivity';
 import { WORKLOADS } from '../../types/licenceActivity';
-import { BAND_METHOD, bandColour, bandForeground, bandLabel, frequencyPct } from './bands';
-import { DASH, UNKNOWN_TEXT, formatAge, formatDate } from './format';
+import { formatNumber, useT, type TFunction } from '../../i18n';
+import { BAND_METHOD_KEY, bandColour, bandForeground, bandLabel, frequencyPct } from './bands';
+import { DASH, formatAge, formatDate } from './format';
 import { statusMeta } from './statuses';
 import { sourceLabel } from './sources';
 import { useLaTableStyles } from './tableStyles';
@@ -81,27 +82,35 @@ function isUnknown(ev: LicenceActivityEvidence | null): boolean {
 }
 
 /** An activity average to one decimal, or the unknown marker when not measured (never 0). */
-function formatAverage(value: number | null | undefined): string {
-  if (value == null) return UNKNOWN_TEXT;
-  return (Math.round(value * 10) / 10).toLocaleString();
+function formatAverage(value: number | null | undefined, t: TFunction): string {
+  if (value == null) return t('licenceActivity.common.unknown');
+  return formatNumber(Math.round(value * 10) / 10);
 }
 
 /** Active/measured counts with expected context, distinguishing "nothing measured" from a real 0. */
-function formatSamples(ev: LicenceActivityEvidence | null): string {
-  if (!ev) return UNKNOWN_TEXT;
-  if (ev.observedSamples <= 0) return `${DASH}; ${ev.observedSamples} of ${ev.expectedSamples} measured`;
+function formatSamples(ev: LicenceActivityEvidence | null, t: TFunction): string {
+  if (!ev) return t('licenceActivity.common.unknown');
+  if (ev.observedSamples <= 0) {
+    return `${DASH}; ${t('licenceActivity.users.samplesMeasured', {
+      observed: formatNumber(ev.observedSamples),
+      expected: formatNumber(ev.expectedSamples),
+    })}`;
+  }
   const base = `${ev.activeSamples} / ${ev.observedSamples}`;
-  return ev.observedSamples !== ev.expectedSamples ? `${base} of ${ev.expectedSamples}` : base;
+  return ev.observedSamples !== ev.expectedSamples
+    ? t('licenceActivity.users.activeObservedOfExpected', { base, expected: formatNumber(ev.expectedSamples) })
+    : base;
 }
 
 /** A band badge - grey "Unknown" when incomplete, coloured otherwise. `showReason` adds the coverage
  *  reason under an unknown badge (used in the main row; off in the detail, which has a status column). */
 function BandCell({ ev, showReason = true }: { ev: LicenceActivityEvidence | null; showReason?: boolean }) {
   const styles = useStyles();
+  const t = useT();
   const unknown = isUnknown(ev);
   const shown = unknown ? 'unknown' : ev?.band ?? 'unknown';
   // Only surface a reason that ADDS information: a literal "unknown" status would just repeat the badge.
-  const reason = showReason && unknown && ev && ev.status && ev.status !== 'unknown' ? statusMeta(ev.status).label : null;
+  const reason = showReason && unknown && ev && ev.status && ev.status !== 'unknown' ? statusMeta(ev.status, t).label : null;
   return (
     <span style={{ display: 'inline-flex', flexDirection: 'column', gap: '2px' }}>
       <Badge
@@ -109,7 +118,7 @@ function BandCell({ ev, showReason = true }: { ev: LicenceActivityEvidence | nul
         size="small"
         style={{ backgroundColor: bandColour(shown), color: bandForeground(shown) }}
       >
-        {unknown ? UNKNOWN_TEXT : bandLabel(shown)}
+        {unknown ? t('licenceActivity.common.unknown') : bandLabel(t, shown)}
       </Badge>
       {reason && (
         <Text size={100} className={styles.reason}>
@@ -124,27 +133,28 @@ function BandCell({ ev, showReason = true }: { ev: LicenceActivityEvidence | nul
  *  without re-ranking the list by a different workload. */
 function AllWorkloadsDetail({ user }: { user: LicenceActivityUser }) {
   const styles = useStyles();
+  const t = useT();
   return (
     <div className={styles.detailInner}>
       <Text size={200} weight="semibold" block className={styles.detailTitle}>
-        Every service for {user.userPrincipalName}
+        {t('licenceActivity.users.everyServiceFor', { user: user.userPrincipalName })}
       </Text>
       <table className={styles.detailTable}>
         <thead>
           <tr>
-            <th className={styles.detailHead}>Service</th>
-            <th className={styles.detailHead}>Data</th>
-            <th className={styles.detailHead}>Activity</th>
-            <th className={styles.detailHead}>Where it comes from</th>
-            <th className={styles.detailHead}>Active / measured (expected)</th>
-            <th className={styles.detailHead}>Average</th>
-            <th className={styles.detailHead}>Last active</th>
+            <th className={styles.detailHead}>{t('licenceActivity.common.service')}</th>
+            <th className={styles.detailHead}>{t('licenceActivity.common.data')}</th>
+            <th className={styles.detailHead}>{t('licenceActivity.common.activity')}</th>
+            <th className={styles.detailHead}>{t('licenceActivity.users.whereItComesFrom')}</th>
+            <th className={styles.detailHead}>{t('licenceActivity.users.activeMeasuredExpected')}</th>
+            <th className={styles.detailHead}>{t('licenceActivity.common.average')}</th>
+            <th className={styles.detailHead}>{t('licenceActivity.common.lastActive')}</th>
           </tr>
         </thead>
         <tbody>
           {WORKLOADS.map((w) => {
             const ev = evidenceFor(user, w.key);
-            const meta = statusMeta(ev?.status);
+            const meta = statusMeta(ev?.status, t);
             return (
               <tr key={w.key}>
                 <td className={styles.detailCell}>
@@ -165,15 +175,15 @@ function AllWorkloadsDetail({ user }: { user: LicenceActivityUser }) {
                 </td>
                 <td className={styles.detailCell}>
                   <Text size={200}>
-                    {sourceLabel(ev?.source) || DASH}
+                    {sourceLabel(ev?.source, t) || DASH}
                     {ev?.measure ? ` \u00b7 ${ev.measure}` : ''}
                   </Text>
                 </td>
                 <td className={styles.detailCell}>
-                  <Text size={200}>{formatSamples(ev)}</Text>
+                  <Text size={200}>{formatSamples(ev, t)}</Text>
                 </td>
                 <td className={styles.detailCell}>
-                  <Text size={200}>{formatAverage(ev?.averageActions)}</Text>
+                  <Text size={200}>{formatAverage(ev?.averageActions, t)}</Text>
                 </td>
                 <td className={styles.detailCell}>
                   <Text size={200}>{formatDate(ev?.lastActivityUtc)}</Text>
@@ -214,10 +224,11 @@ export default function UsersTable({
   workloadLabel,
   showRank,
   startRank = 1,
-  emptyText = 'Nobody to show for this selection.',
+  emptyText,
 }: UsersTableProps) {
   const styles = useStyles();
   const table = useLaTableStyles();
+  const t = useT();
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
 
   const toggle = (userId: number): void =>
@@ -229,7 +240,7 @@ export default function UsersTable({
     });
 
   if (rows.length === 0) {
-    return <div className={styles.empty}>{emptyText}</div>;
+    return <div className={styles.empty}>{emptyText ?? t('licenceActivity.users.nobodyToShow')}</div>;
   }
 
   const colSpan = 7 + (showRank ? 1 : 0);
@@ -239,20 +250,20 @@ export default function UsersTable({
       <table className={table.table}>
         <thead>
           <tr>
-            <th className={table.th} aria-label="Expand" />
+            <th className={table.th} aria-label={t('licenceActivity.users.expandAria')} />
             {showRank && <th className={`${table.th} ${table.thNumeric}`}>#</th>}
-            <th className={table.th}>Person</th>
-            <th className={table.th}>Department</th>
+            <th className={table.th}>{t('licenceActivity.users.person')}</th>
+            <th className={table.th}>{t('licenceActivity.common.department')}</th>
             <th className={table.th}>
-              <Tooltip relationship="description" content={BAND_METHOD}>
+              <Tooltip relationship="description" content={t(BAND_METHOD_KEY)}>
                 <span style={{ borderBottom: `1px dotted ${tokens.colorNeutralForeground4}`, cursor: 'help' }}>
-                  {workloadLabel} activity
+                  {t('licenceActivity.users.workloadActivity', { workload: workloadLabel })}
                 </span>
               </Tooltip>
             </th>
-            <th className={`${table.th} ${table.thNumeric}`}>Average actions</th>
-            <th className={`${table.th} ${table.thNumeric}`}>Active / measured</th>
-            <th className={table.th}>Last active</th>
+            <th className={`${table.th} ${table.thNumeric}`}>{t('licenceActivity.users.averageActions')}</th>
+            <th className={`${table.th} ${table.thNumeric}`}>{t('licenceActivity.users.activeMeasured')}</th>
+            <th className={table.th}>{t('licenceActivity.common.lastActive')}</th>
           </tr>
         </thead>
         <tbody>
@@ -269,7 +280,7 @@ export default function UsersTable({
                       size="small"
                       icon={open ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
                       aria-expanded={open}
-                      aria-label={`Show all services for ${row.userPrincipalName}`}
+                      aria-label={t('licenceActivity.users.showAllServicesFor', { user: row.userPrincipalName })}
                       onClick={() => toggle(row.userId)}
                     />
                   </td>
@@ -283,7 +294,7 @@ export default function UsersTable({
                       </Text>
                       {row.accountEnabled === false && (
                         <Text size={100} className={styles.disabled}>
-                          Account disabled
+                          {t('licenceActivity.users.accountDisabled')}
                         </Text>
                       )}
                     </span>
@@ -292,13 +303,13 @@ export default function UsersTable({
                   <td className={table.td}>
                     <BandCell ev={ev} />
                   </td>
-                  <td className={`${table.td} ${table.tdNumeric}`}>{formatAverage(ev?.averageActions)}</td>
+                  <td className={`${table.td} ${table.tdNumeric}`}>{formatAverage(ev?.averageActions, t)}</td>
                   <td className={`${table.td} ${table.tdNumeric}`}>
                     {(() => {
                       const freq = ev && ev.observedSamples > 0 ? frequencyPct(ev.activeSamples, ev.observedSamples) : null;
                       return (
                         <>
-                          {formatSamples(ev)}
+                          {formatSamples(ev, t)}
                           {freq != null && <span className={styles.muted}> ({Math.round(freq)}%)</span>}
                         </>
                       );
@@ -308,7 +319,7 @@ export default function UsersTable({
                     {formatDate(ev?.lastActivityUtc)}
                     {ev?.lastActivityUtc && (
                       <Text size={100} block className={styles.muted}>
-                        {formatAge(ev.lastActivityUtc)}
+                        {formatAge(ev.lastActivityUtc, t)}
                       </Text>
                     )}
                   </td>

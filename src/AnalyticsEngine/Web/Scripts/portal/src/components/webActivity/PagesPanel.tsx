@@ -13,6 +13,7 @@ import StackedAreaChart from '../charts/StackedAreaChart';
 import PageTable from './PageTable';
 import { KpiGrid, type KpiDefinition } from '../shared/KpiGrid';
 import type { WebActivityPages } from '../../types/webActivity';
+import { useT } from '../../i18n';
 import {
   FailedQueryNote,
   SectionCard,
@@ -49,77 +50,66 @@ export default function PagesPanel({
   exporting: boolean;
 }) {
   const styles = useWebActivityStyles();
+  const t = useT();
   const kpis = data.kpis;
 
   const items: KpiDefinition[] = [
     {
       key: 'tpv',
-      label: 'Total page views',
+      label: t('webActivity.pages.kpi.totalPageViews'),
       value: formatCount(kpis.pageViews),
       info: {
-        what: 'Every page view recorded in the period.',
-        how: 'One row of dbo.hits is one page view.',
+        what: t('webActivity.pages.kpi.totalPageViewsWhat'),
+        how: t('webActivity.pages.kpi.totalPageViewsHow'),
       },
     },
     {
       key: 'upv',
-      label: 'Unique page views',
+      label: t('webActivity.pages.kpi.uniquePageViews'),
       value: formatCount(kpis.uniquePageViews),
-      hint: `${formatPct(kpis.uniqueSharePct)} of total`,
+      hint: t('webActivity.pages.kpi.ofTotalHint', { pct: formatPct(kpis.uniqueSharePct) }),
       info: {
-        what: 'A page counted once per visit, however many times it was viewed in that visit.',
-        how:
-          'Distinct (visit, page) pairs - the definition Google Analytics uses. A low share of total '
-          + 'means people re-open or refresh the same pages a lot within a visit, which is often a '
-          + 'sign of a page that is a jumping-off point rather than a destination.',
+        what: t('webActivity.pages.kpi.uniquePageViewsWhat'),
+        how: t('webActivity.pages.kpi.uniquePageViewsHow'),
       },
     },
     {
       key: 'per-visit',
-      label: 'Pages per visit',
+      label: t('webActivity.common.pagesPerVisit'),
       value: formatDecimal(kpis.pagesPerVisit),
       info: {
-        what: 'Average number of page views recorded in a visit.',
-        how:
-          'Page views that belong to a visit, divided by visits. Page views arriving without a '
-          + 'session are excluded from the top line here, so this does not equal the Total page '
-          + 'views card divided by Visits. A refresh counts as another view.',
+        what: t('webActivity.pages.kpi.pagesPerVisitWhat'),
+        how: t('webActivity.pages.kpi.pagesPerVisitHow'),
       },
     },
     {
       key: 'dwell',
-      label: 'Average time on page',
+      label: t('webActivity.pages.kpi.averageTimeOnPage'),
       value: formatDuration(kpis.averageSecondsOnPage),
       info: {
-        what: 'How long a page was open before the visitor moved on.',
-        how:
-          'Mean of the per-view dwell time the tracker reports. It cannot measure the LAST page of a '
-          + 'visit - there is no next page view to measure against - so exit pages are '
-          + 'systematically under-represented in this figure.',
+        what: t('webActivity.pages.kpi.averageTimeOnPageWhat'),
+        how: t('webActivity.pages.kpi.averageTimeHow'),
       },
     },
     {
       key: 'load',
-      label: 'Average load time',
+      label: t('webActivity.pages.kpi.averageLoadTime'),
       value: formatSeconds(kpis.averageLoadSeconds),
       tone: loadTone(kpis.averageLoadSeconds),
       info: {
-        what: 'How long a page took to become usable, as the browser measured it.',
-        how: 'Mean of the browser-reported page load time, in seconds. Views with no reported time are excluded.',
+        what: t('webActivity.common.loadWhat'),
+        how: t('webActivity.pages.kpi.averageLoadTimeHow'),
       },
     },
     {
       key: 'quiet',
-      label: 'Quiet pages',
+      label: t('webActivity.pages.kpi.quietPages'),
       value: formatCount(kpis.quietPages),
-      hint: `of ${formatCount(kpis.uniquePages)} pages viewed at all`,
+      hint: t('webActivity.pages.kpi.quietPagesHint', { count: formatCount(kpis.uniquePages) }),
       tone: 'opportunity',
       info: {
-        what: 'Pages viewed three times or fewer in the whole period.',
-        how:
-          'These are your content-cleanup backlog. Note the denominator: it is pages that were '
-          + 'viewed AT LEAST ONCE. A page nobody opened at all never appears in the page-view data, '
-          + 'so this list under-counts genuinely dead content rather than over-counting it.',
+        what: t('webActivity.pages.kpi.quietPagesWhat'),
+        how: t('webActivity.pages.kpi.quietPagesHow'),
       },
     },
   ];
@@ -138,8 +128,8 @@ export default function PagesPanel({
 
       <div className={styles.stack}>
         <SectionCard
-          title="Most viewed pages"
-          description={`Top ${data.window.top} by page views, with how long people stayed and how many entered the site there.`}
+          title={t('webActivity.pages.mostViewed.title')}
+          description={t('webActivity.pages.mostViewed.description', { top: data.window.top })}
           query={queryFor(data.queries, 'pages-top')}
           isEmpty={data.topPages.length === 0}
           actions={
@@ -150,28 +140,25 @@ export default function PagesPanel({
               onClick={onExportPages}
               disabled={exporting}
             >
-              Export
+              {t('webActivity.common.export')}
             </Button>
           }
         >
           <PageTable
             rows={data.topPages}
-            label="Most viewed pages"
+            label={t('webActivity.pages.mostViewed.title')}
             columns={{ site: true, uniquePageViews: true, dwell: true, load: true, entries: true, bounce: true }}
             dwellFootnote
           />
         </SectionCard>
 
         <SectionCard
-          title="Slowest pages"
-          description={`Pages with at least ${data.window.minimumViews} views with a recorded load time, ranked by average load time.`}
-          note={
-            'A view floor is applied deliberately. Without one this table is always topped by a page '
-            + 'that was opened once, slowly - noise presented as a finding.'
-          }
+          title={t('webActivity.pages.slowest.title')}
+          description={t('webActivity.pages.slowest.description', { minimumViews: data.window.minimumViews })}
+          note={t('webActivity.pages.slowest.note')}
           query={queryFor(data.queries, 'pages-slowest')}
           isEmpty={data.slowestPages.length === 0}
-          emptyMessage="No page has enough views with a recorded load time to rank."
+          emptyMessage={t('webActivity.pages.slowest.empty')}
           actions={
             <Button
               appearance="subtle"
@@ -180,28 +167,24 @@ export default function PagesPanel({
               onClick={onExportSlow}
               disabled={exporting}
             >
-              Export
+              {t('webActivity.common.export')}
             </Button>
           }
         >
           <PageTable
             rows={data.slowestPages}
-            label="Slowest pages"
+            label={t('webActivity.pages.slowest.title')}
             columns={{ site: true, uniquePageViews: false, dwell: false, load: true }}
           />
         </SectionCard>
 
         <SectionCard
-          title="Pages nobody reads"
-          description="Viewed three times or fewer in the whole period - the cheapest content-cleanup backlog you will get."
-          note={
-            'Sorted least-viewed first and then by URL, so the list is stable between refreshes and '
-            + 'can be worked through. Check a page before retiring it: a seldom-read page that is '
-            + 'legally required to exist is not a pruning candidate.'
-          }
+          title={t('webActivity.pages.quiet.title')}
+          description={t('webActivity.pages.quiet.description')}
+          note={t('webActivity.pages.quiet.note')}
           query={queryFor(data.queries, 'pages-quiet')}
           isEmpty={data.quietPages.length === 0}
-          emptyMessage="Every page that was viewed at all was viewed more than three times."
+          emptyMessage={t('webActivity.pages.quiet.empty')}
           actions={
             <Button
               appearance="subtle"
@@ -210,33 +193,33 @@ export default function PagesPanel({
               onClick={onExportQuiet}
               disabled={exporting}
             >
-              Export
+              {t('webActivity.common.export')}
             </Button>
           }
         >
           <PageTable
             rows={data.quietPages}
-            label="Pages nobody reads"
+            label={t('webActivity.pages.quiet.title')}
             columns={{ site: true, uniquePageViews: true, dwell: true, load: false }}
             dwellFootnote
           />
         </SectionCard>
 
         <SectionCard
-          title="Total and unique page views by site"
+          title={t('webActivity.pages.bySite.title')}
           query={queryFor(data.queries, 'pages-sites')}
           isEmpty={data.bySite.length === 0}
         >
           <div className={styles.tableWrap}>
-            <Table size="small" aria-label="Page views by site">
+            <Table size="small" aria-label={t('webActivity.pages.bySite.aria')}>
               <TableHeader>
                 <TableRow>
-                  <TableHeaderCell>Site</TableHeaderCell>
-                  <TableHeaderCell className={styles.numeric}>Page views</TableHeaderCell>
-                  <TableHeaderCell className={styles.numeric}>Unique</TableHeaderCell>
-                  <TableHeaderCell className={styles.numeric}>Visits</TableHeaderCell>
-                  <TableHeaderCell className={styles.numeric}>Visitors</TableHeaderCell>
-                  <TableHeaderCell className={styles.numeric}>Pages / visit</TableHeaderCell>
+                  <TableHeaderCell>{t('webActivity.common.site')}</TableHeaderCell>
+                  <TableHeaderCell className={styles.numeric}>{t('webActivity.common.pageViews')}</TableHeaderCell>
+                  <TableHeaderCell className={styles.numeric}>{t('webActivity.common.unique')}</TableHeaderCell>
+                  <TableHeaderCell className={styles.numeric}>{t('webActivity.common.visits')}</TableHeaderCell>
+                  <TableHeaderCell className={styles.numeric}>{t('webActivity.common.visitors')}</TableHeaderCell>
+                  <TableHeaderCell className={styles.numeric}>{t('webActivity.common.pagesPerVisitShort')}</TableHeaderCell>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -264,34 +247,32 @@ export default function PagesPanel({
         </SectionCard>
 
         <SectionCard
-          title="When pages are read, over time"
-          description="Weekly page views split by period of the day (UTC)."
+          title={t('webActivity.pages.readOverTime.title')}
+          description={t('webActivity.pages.readOverTime.description')}
           query={queryFor(data.queries, 'pages-period-over-time')}
           isEmpty={data.periodOverTime.length === 0}
         >
-          <StackedAreaChart series={toStackedSeries(data.periodOverTime)} valueLabel="Page views" />
+          <StackedAreaChart series={toStackedSeries(data.periodOverTime)} valueLabel={t('webActivity.common.pageViews')} />
         </SectionCard>
       </div>
 
       <div className={styles.grid}>
         <SectionCard
-          title="How concentrated the traffic is"
-          description="The share of all page views taken by the busiest tenth of pages."
+          title={t('webActivity.pages.concentration.title')}
+          description={t('webActivity.pages.concentration.description')}
           query={queryFor(data.queries, 'pages-distribution')}
           isEmpty={kpis.uniquePages < data.window.minimumPagesForDecile}
           emptyMessage={
             kpis.uniquePages === 0
-              ? 'No pages were viewed in this period.'
-              : `A busiest-tenth figure needs at least ${data.window.minimumPagesForDecile} pages `
-                + 'with views to mean anything. Below that a single page is already more than a '
-                + 'tenth of the pages viewed in this period, so the figure would not be a tenth at all.'
+              ? t('webActivity.pages.concentration.emptyNoPages')
+              : t('webActivity.pages.concentration.emptyTooFew', { count: data.window.minimumPagesForDecile })
           }
         >
           <CategoryBarChart
-            valueLabel="Share of page views (%)"
+            valueLabel={t('webActivity.pages.concentration.valueLabel')}
             categories={[
-              { label: 'Busiest 10% of pages', value: Math.round(kpis.topDecilePagePct * 10) / 10 },
-              { label: 'Everything else', value: Math.round((100 - kpis.topDecilePagePct) * 10) / 10 },
+              { label: t('webActivity.pages.concentration.busiestTenth'), value: Math.round(kpis.topDecilePagePct * 10) / 10 },
+              { label: t('webActivity.pages.concentration.everythingElse'), value: Math.round((100 - kpis.topDecilePagePct) * 10) / 10 },
             ]}
           />
         </SectionCard>

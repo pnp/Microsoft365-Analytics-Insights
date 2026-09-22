@@ -1,3 +1,5 @@
+import { translateActive } from '../i18n/runtime';
+import type { TranslationKey } from '../i18n/catalog';
 import { apiFetch } from './http';
 import type {
   AdoptionFilterOptions,
@@ -52,7 +54,7 @@ const delay = (ms: number, signal?: AbortSignal): Promise<void> =>
     signal?.addEventListener('abort', onAbort, { once: true });
   });
 
-async function getJson<T>(path: string, what: string, signal?: AbortSignal): Promise<T> {
+async function getJson<T>(path: string, failureKey: TranslationKey, signal?: AbortSignal): Promise<T> {
   const giveUpAt = Date.now() + POLL_CEILING_MS;
 
   for (;;) {
@@ -69,10 +71,7 @@ async function getJson<T>(path: string, what: string, signal?: AbortSignal): Pro
       const waitMs = (body?.retryAfterSeconds ?? DEFAULT_RETRY_SECONDS) * 1000;
 
       if (Date.now() + waitMs >= giveUpAt) {
-        throw new Error(
-          `The Copilot adoption analysis is taking longer than expected and hasn't finished yet. ` +
-            `It is still running on the server - reload the page in a few minutes.`,
-        );
+        throw new Error(translateActive('errors.copilotAdoption.analysisStillRunning'));
       }
 
       // Abortable, so unmounting the page or changing the period actually STOPS the loop. A plain
@@ -82,7 +81,7 @@ async function getJson<T>(path: string, what: string, signal?: AbortSignal): Pro
     }
 
     if (!response.ok) {
-      throw new Error(`Couldn't load ${what} (${response.status}).`);
+      throw new Error(translateActive(failureKey, { status: response.status }));
     }
 
     return response.json() as Promise<T>;
@@ -142,7 +141,7 @@ function applyCoworkFilters(params: URLSearchParams, filters: CoworkFilters): UR
 }
 
 export function fetchAdoptionAvailability(): Promise<CopilotAdoptionAvailability> {
-  return getJson<CopilotAdoptionAvailability>('/availability', 'the Copilot adoption availability');
+  return getJson<CopilotAdoptionAvailability>('/availability', 'errors.copilotAdoption.availabilityFailed');
 }
 
 export function fetchAdoptionSummary(
@@ -155,7 +154,7 @@ export function fetchAdoptionSummary(
   if (emailDomain) params.set('emailDomain', emailDomain);
   return getJson<CopilotAdoptionSummary>(
     `/summary?${params}`,
-    'the Copilot adoption summary',
+    'errors.copilotAdoption.summaryFailed',
     signal,
   );
 }
@@ -174,7 +173,7 @@ export function fetchAdoptionFilters(
 ): Promise<AdoptionFilterOptions> {
   return getJson<AdoptionFilterOptions>(
     `/filters?${scopeParams(windowDays, seatLicenceTypeIds)}`,
-    'the Copilot adoption filters',
+    'errors.copilotAdoption.filtersFailed',
     signal,
   );
 }
@@ -191,7 +190,7 @@ export function fetchLicensedUsers(
   params.set('skip', String(skip));
   params.set('take', String(take));
 
-  return getJson<LicensedUserPage>(`/licensed-users?${params}`, 'the licensed Copilot users', signal);
+  return getJson<LicensedUserPage>(`/licensed-users?${params}`, 'errors.copilotAdoption.licensedUsersFailed', signal);
 }
 
 export function fetchOpportunities(
@@ -206,7 +205,7 @@ export function fetchOpportunities(
   params.set('skip', String(skip));
   params.set('take', String(take));
 
-  return getJson<LicenceOpportunityPage>(`/opportunities?${params}`, 'the Copilot licence opportunities', signal);
+  return getJson<LicenceOpportunityPage>(`/opportunities?${params}`, 'errors.copilotAdoption.opportunitiesFailed', signal);
 }
 
 export function fetchCowork(
@@ -221,7 +220,7 @@ export function fetchCowork(
   params.set('skip', String(skip));
   params.set('take', String(take));
 
-  return getJson<CoworkReadinessPage>(`/cowork?${params}`, 'the Cowork readiness list', signal);
+  return getJson<CoworkReadinessPage>(`/cowork?${params}`, 'errors.copilotAdoption.coworkFailed', signal);
 }
 
 export function fetchAdoptionSql(
@@ -231,7 +230,7 @@ export function fetchAdoptionSql(
 ): Promise<Record<string, string>> {
   return getJson<Record<string, string>>(
     `/sql?${scopeParams(windowDays, seatLicenceTypeIds)}`,
-    'the Copilot adoption queries',
+    'errors.copilotAdoption.queriesFailed',
     signal,
   );
 }

@@ -92,6 +92,9 @@ export interface DataOverviewSection extends HealthSectionBase {
   hitsLast7d: number | null;
   newestHitUtc: string | null;
   newestAuditEventUtc: string | null;
+  copilotUsageReportsIdentitiesConcealed: boolean;
+  copilotUsageReportLastImportUtc: string | null;
+  copilotUsageReportErrors: string[];
   /** Cheap DMV counts / DB size couldn't be read (e.g. no VIEW DATABASE STATE). */
   countsError: string | null;
   /** The bounded 24h/7d volume + freshness scans failed or timed out (expected on very large tenants). */

@@ -9,6 +9,7 @@ import {
 } from '@fluentui/react-components';
 import { Code16Regular, Copy16Regular } from '@fluentui/react-icons';
 import toast from './toast';
+import { useT } from '../i18n';
 
 const useStyles = makeStyles({
   surface: {
@@ -43,15 +44,16 @@ type SqlPopoverProps = {
  * A small "SQL" button that opens a popover showing a query with a copy-to-clipboard action, so
  * admins can reproduce a figure themselves. Mirrors the popover used by the User Lookup page.
  */
-export default function SqlPopover({ sql, title = 'SQL to reproduce this', buttonLabel = 'SQL' }: SqlPopoverProps) {
+export default function SqlPopover({ sql, title, buttonLabel }: SqlPopoverProps) {
   const styles = useStyles();
+  const t = useT();
 
   const copySql = async () => {
     try {
       await navigator.clipboard.writeText(sql);
-      toast.success('SQL copied to clipboard');
+      toast.success(t('common.sql.copied'));
     } catch {
-      toast.error('Could not copy to clipboard');
+      toast.error(t('common.sql.copyFailed'));
     }
   };
 
@@ -59,18 +61,18 @@ export default function SqlPopover({ sql, title = 'SQL to reproduce this', butto
     <Popover withArrow trapFocus>
       <PopoverTrigger disableButtonEnhancement>
         <Button appearance="subtle" size="small" icon={<Code16Regular />}>
-          {buttonLabel}
+          {buttonLabel ?? t('common.sql.buttonLabel')}
         </Button>
       </PopoverTrigger>
       <PopoverSurface>
         <div className={styles.surface}>
           <Text size={200} weight="semibold">
-            {title}
+            {title ?? t('common.sql.title')}
           </Text>
           <pre className={styles.sqlBlock}>{sql}</pre>
           <div>
             <Button appearance="primary" size="small" icon={<Copy16Regular />} onClick={copySql}>
-              Copy to clipboard
+              {t('common.action.copyToClipboard')}
             </Button>
           </div>
         </div>

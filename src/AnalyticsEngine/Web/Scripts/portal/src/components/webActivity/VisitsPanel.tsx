@@ -5,11 +5,13 @@ import TimeSeriesChart from '../charts/TimeSeriesChart';
 import { KpiGrid, type KpiDefinition } from '../shared/KpiGrid';
 import { seriesColor } from '../charts/chartCommon';
 import type { WebActivityVisits } from '../../types/webActivity';
+import { useT } from '../../i18n';
 import {
   FailedQueryNote,
   SectionCard,
   WindowNote,
   bucketsToCategories,
+  translatedBucketsToCategories,
   formatCount,
   formatDecimal,
   formatHour,
@@ -31,75 +33,70 @@ import {
  */
 export default function VisitsPanel({ data }: { data: WebActivityVisits }) {
   const styles = useWebActivityStyles();
+  const t = useT();
   const kpis = data.kpis;
 
   // Listed devices plus the visits they do not account for, so the ring cannot imply it covers
   // every visit when the device list was truncated.
-  const deviceCategories = withRemainder(toCategories(data.byDevice), kpis.visits, 'Other / unknown');
+  const deviceCategories = withRemainder(toCategories(data.byDevice), kpis.visits, t('webActivity.common.otherUnknown'));
 
   const items: KpiDefinition[] = [
     {
       key: 'visits',
-      label: 'Total visits',
+      label: t('webActivity.visits.kpi.totalVisits'),
       value: formatCount(kpis.visits),
       info: {
-        what: 'Browsing sessions with at least one page view in the period.',
-        how: 'Distinct Application Insights sessions behind the page views in the window.',
+        what: t('webActivity.visits.kpi.totalVisitsWhat'),
+        how: t('webActivity.visits.kpi.totalVisitsHow'),
       },
     },
     {
       key: 'visitors',
-      label: 'Unique visitors',
+      label: t('webActivity.visits.kpi.uniqueVisitors'),
       value: formatCount(kpis.visitors),
-      hint: `${formatDecimal(kpis.visitsPerVisitor)} visits each`,
+      hint: t('webActivity.visits.kpi.visitsEachHint', { count: formatDecimal(kpis.visitsPerVisitor) }),
       info: {
-        what: 'Distinct people behind those visits.',
-        how: 'Distinct users on the visiting sessions. Sessions with no identified user are excluded.',
+        what: t('webActivity.visits.kpi.uniqueVisitorsWhat'),
+        how: t('webActivity.visits.kpi.uniqueVisitorsHow'),
       },
     },
     {
       key: 'pages',
-      label: 'Unique pages',
+      label: t('webActivity.visits.kpi.uniquePages'),
       value: formatCount(kpis.uniquePages),
       info: {
-        what: 'Distinct pages that were viewed at least once.',
-        how: 'Distinct URLs across the page views in the window.',
+        what: t('webActivity.visits.kpi.uniquePagesWhat'),
+        how: t('webActivity.visits.kpi.uniquePagesHow'),
       },
     },
     {
       key: 'earliest',
-      label: 'Earliest visit',
+      label: t('webActivity.visits.kpi.earliestVisit'),
       value: formatHour(kpis.earliestVisitHour),
       hint: 'UTC',
       info: {
-        what: 'The earliest hour of the day at which any visit started.',
-        how:
-          'Hour of the earliest visit start in the window, in UTC. Useful mainly as a sanity check '
-          + 'on where your people actually are: an intranet with an 03:00 UTC start has a timezone '
-          + 'you may not have planned maintenance around.',
+        what: t('webActivity.visits.kpi.earliestVisitWhat'),
+        how: t('webActivity.visits.kpi.earliestVisitHow'),
       },
     },
     {
       key: 'latest',
-      label: 'Latest visit',
+      label: t('webActivity.visits.kpi.latestVisit'),
       value: formatHour(kpis.latestVisitHour),
       hint: 'UTC',
       info: {
-        what: 'The latest hour of the day at which any visit started.',
-        how: 'Hour of the latest visit start in the window, in UTC.',
+        what: t('webActivity.visits.kpi.latestVisitWhat'),
+        how: t('webActivity.visits.kpi.latestVisitHow'),
       },
     },
     {
       key: 'out-of-hours',
-      label: 'Out of hours',
+      label: t('webActivity.visits.kpi.outOfHours'),
       value: formatPct(kpis.outOfHoursPct),
-      hint: `${formatCount(kpis.outOfHoursVisits)} visits`,
+      hint: t('webActivity.common.visitsCount', { count: formatCount(kpis.outOfHoursVisits) }),
       info: {
-        what: 'Visits that started outside 07:00-19:00 UTC, or at the weekend.',
-        how:
-          'A fixed UTC working window, not a per-user local one - the import does not record a '
-          + 'visitor timezone. On a multi-region intranet a high figure usually means offices in '
-          + 'other timezones rather than people working late, so read it with the geography tab.',
+        what: t('webActivity.visits.kpi.outOfHoursWhat'),
+        how: t('webActivity.visits.kpi.outOfHoursHow'),
       },
     },
   ];
@@ -118,16 +115,16 @@ export default function VisitsPanel({ data }: { data: WebActivityVisits }) {
 
       <div className={styles.stack}>
         <SectionCard
-          title="Visits and visitors over time"
-          description="Weekly, with each visit counted in the week it started."
+          title={t('webActivity.visits.trend.title')}
+          description={t('webActivity.visits.trend.description')}
           query={queryFor(data.queries, 'visits-trend')}
           isEmpty={data.trend.length === 0}
         >
           <TimeSeriesChart
-            valueLabel="Count"
+            valueLabel={t('webActivity.common.count')}
             series={[
-              { name: 'Visits', points: data.trend.map((p) => ({ weekStart: p.weekStart, value: p.visits })) },
-              { name: 'Visitors', points: data.trend.map((p) => ({ weekStart: p.weekStart, value: p.visitors })) },
+              { name: t('webActivity.common.visits'), points: data.trend.map((p) => ({ weekStart: p.weekStart, value: p.visits })) },
+              { name: t('webActivity.common.visitors'), points: data.trend.map((p) => ({ weekStart: p.weekStart, value: p.visitors })) },
             ]}
           />
         </SectionCard>
@@ -135,82 +132,82 @@ export default function VisitsPanel({ data }: { data: WebActivityVisits }) {
 
       <div className={styles.grid}>
         <SectionCard
-          title="Visits by site"
+          title={t('webActivity.visits.bySite.title')}
           query={queryFor(data.queries, 'visits-sites')}
           isEmpty={data.bySite.length === 0}
         >
-          <CategoryBarChart categories={toCategories(data.bySite)} valueLabel="Visits" />
+          <CategoryBarChart categories={toCategories(data.bySite)} valueLabel={t('webActivity.common.visits')} />
         </SectionCard>
 
         <SectionCard
-          title="Visits by page"
-          description="The pages seen in the most visits, rather than the pages with the most views."
+          title={t('webActivity.visits.byPage.title')}
+          description={t('webActivity.visits.byPage.description')}
           query={queryFor(data.queries, 'visits-pages')}
           isEmpty={data.byPage.length === 0}
         >
-          <CategoryBarChart categories={toCategories(data.byPage)} valueLabel="Visits" />
+          <CategoryBarChart categories={toCategories(data.byPage)} valueLabel={t('webActivity.common.visits')} />
         </SectionCard>
 
         <SectionCard
-          title="Visits by device"
+          title={t('webActivity.visits.byDevice.title')}
           query={queryFor(data.queries, 'visits-devices')}
           isEmpty={data.byDevice.length === 0}
-          emptyMessage="No device was recorded for any visit. Device is derived from the browser's user agent by Application Insights and is not always populated."
+          emptyMessage={t('webActivity.visits.byDevice.empty')}
         >
           <DonutChart
             categories={deviceCategories}
             colours={deviceCategories.map((_, i) => seriesColor(i))}
             centreValue={formatCount(kpis.visits)}
-            centreLabel="visits"
+            centreLabel={t('webActivity.common.visitsLower')}
           />
         </SectionCard>
 
         <SectionCard
-          title="Visits by browser"
+          title={t('webActivity.visits.byBrowser.title')}
           query={queryFor(data.queries, 'visits-browsers')}
           isEmpty={data.byBrowser.length === 0}
         >
-          <CategoryBarChart categories={toCategories(data.byBrowser)} valueLabel="Visits" />
+          <CategoryBarChart categories={toCategories(data.byBrowser)} valueLabel={t('webActivity.common.visits')} />
         </SectionCard>
 
         <SectionCard
-          title="Visits by day of week"
+          title={t('webActivity.visits.byDay.title')}
           query={queryFor(data.queries, 'visits-heatmap')}
           isEmpty={data.byDay.every((b) => b.count === 0)}
         >
-          <CategoryBarChart categories={bucketsToCategories(data.byDay)} valueLabel="Visits" showShare />
+          <CategoryBarChart categories={translatedBucketsToCategories(t, 'day', data.byDay)} valueLabel={t('webActivity.common.visits')} showShare />
         </SectionCard>
 
         <SectionCard
-          title="Visits by period of day"
-          description="UTC. After midnight 00-04, early morning 05-08, late morning 09-11, afternoon 12-16, evening 17-20, late night 21-23."
+          title={t('webActivity.visits.byPeriod.title')}
+          description={t('webActivity.visits.byPeriod.description')}
           query={queryFor(data.queries, 'visits-heatmap')}
           isEmpty={data.byPeriodOfDay.every((b) => b.count === 0)}
         >
-          <CategoryBarChart categories={bucketsToCategories(data.byPeriodOfDay)} valueLabel="Visits" showShare />
+          <CategoryBarChart categories={translatedBucketsToCategories(t, 'period', data.byPeriodOfDay)} valueLabel={t('webActivity.common.visits')} showShare />
         </SectionCard>
 
         <SectionCard
-          title="Popular hours"
-          description="When visits start, by hour of the day (UTC)."
+          title={t('webActivity.visits.popularHours.title')}
+          description={t('webActivity.visits.popularHours.description')}
           query={queryFor(data.queries, 'visits-heatmap')}
           isEmpty={data.byHour.every((b) => b.count === 0)}
         >
           <CategoryBarChart
             categories={bucketsToCategories(data.byHour).filter((c) => c.value > 0)}
-            valueLabel="Visits"
+            valueLabel={t('webActivity.common.visits')}
           />
         </SectionCard>
       </div>
 
       <div className={styles.stack}>
         <SectionCard
-          title="Site mix over time"
-          description="Weekly page views per site, stacked, so a site that is growing or dying stands out."
+          title={t('webActivity.visits.siteMix.title')}
+          description={t('webActivity.visits.siteMix.description')}
           query={queryFor(data.queries, 'visits-site-over-time')}
           isEmpty={data.siteOverTime.length === 0}
         >
-          <StackedAreaChart series={toStackedSeries(data.siteOverTime)} valueLabel="Page views" />
+          <StackedAreaChart series={toStackedSeries(data.siteOverTime)} valueLabel={t('webActivity.common.pageViews')} />
         </SectionCard>
       </div>
     </div>

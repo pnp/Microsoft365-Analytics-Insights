@@ -10,7 +10,9 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import Spinner from '../Spinner';
-import type { HealthSectionBase, HealthStatusName, HourCount } from '../../types/health';
+import { formatDateParts, formatNumber, translateActive, useT, type TFunction } from '../../i18n';
+import { health as enHealth } from '../../i18n/catalog/en/health';
+import type { ComponentHealthRow, DataOverviewSection, HealthSectionBase, HealthStatusName, HourCount } from '../../types/health';
 
 export type BadgeColor = 'success' | 'warning' | 'danger' | 'informative' | 'subtle';
 
@@ -27,13 +29,20 @@ export function minutesAgo(iso: string | null): number | null {
   return (Date.now() - t) / 60000;
 }
 
-export function howLongAgo(iso: string | null): string {
+export function howLongAgo(iso: string | null, t: TFunction = translateActive): string {
   const m = minutesAgo(iso);
-  if (m === null) return 'never';
-  if (m < 1) return 'just now';
-  if (m < 60) return `${Math.round(m)} min ago`;
-  if (m < 60 * 24) return `${(m / 60).toFixed(1)} hours ago`;
-  return `${(m / 60 / 24).toFixed(1)} days ago`;
+  if (m === null) return t('health.time.never');
+  if (m < 1) return t('health.time.justNow');
+  if (m < 60) {
+    const minutes = formatNumber(Math.round(m));
+    return t('health.time.minutesAgo', { minutes });
+  }
+  if (m < 60 * 24) {
+    const hours = formatNumber(Number((m / 60).toFixed(1)));
+    return t('health.time.hoursAgo', { hours });
+  }
+  const days = formatNumber(Number((m / 60 / 24).toFixed(1)));
+  return t('health.time.daysAgo', { days });
 }
 
 export function freshnessColor(iso: string | null, greenHours: number, amberHours: number): BadgeColor {
@@ -75,18 +84,139 @@ export function formatUtc(iso: string | null): string {
   if (!iso) return '-';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '-';
-  return `${d.toISOString().slice(0, 19).replace('T', ' ')} UTC`;
+  return `${formatDateParts(d, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+    timeZone: 'UTC',
+  })} UTC`;
 }
 
 export function formatSize(mb: number): string {
   if (!mb || mb <= 0) return '-';
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
-  return `${mb.toLocaleString()} MB`;
+  if (mb >= 1024) return `${formatNumber(Number((mb / 1024).toFixed(1)))} GB`;
+  return `${formatNumber(mb)} MB`;
 }
 
 /** null (couldn't compute, e.g. the bounded scan timed out) renders as "-"; otherwise a localised count. */
 export function formatCount(n: number | null): string {
-  return n === null || n === undefined ? '-' : n.toLocaleString();
+  return n === null || n === undefined ? '-' : formatNumber(n);
+}
+
+function isDataOverviewSection(section: HealthSectionBase): section is DataOverviewSection {
+  return Object.prototype.hasOwnProperty.call(section, 'dataError')
+    && Object.prototype.hasOwnProperty.call(section, 'countsError')
+    && Object.prototype.hasOwnProperty.call(section, 'recentVolumeError');
+}
+
+export function translateHealthComponentDetailText(detail: string | null | undefined, t: TFunction): string {
+  if (!detail) return '';
+
+  if (detail === enHealth['health.reason.runtimeCertificateExpired']) {
+    return t('health.reason.runtimeCertificateExpired');
+  }
+
+  const certificateValid = /^Runtime certificate '([^']+)' valid; expires ([0-9-]+)\.$/.exec(detail);
+  if (certificateValid) {
+    return t('health.reason.runtimeCertificateValid', {
+      certificateName: certificateValid[1],
+      expiryDate: certificateValid[2],
+    });
+  }
+
+  if (detail === enHealth['health.reason.clientSecretAuthValid']) {
+    return t('health.reason.clientSecretAuthValid');
+  }
+
+  const certificateCheckPrefix = enHealth['health.reason.runtimeCertificateCheckFailed'].replace('{error}', '');
+  if (detail.startsWith(certificateCheckPrefix)) {
+    return t('health.reason.runtimeCertificateCheckFailed', {
+      error: detail.slice(certificateCheckPrefix.length),
+    });
+  }
+
+  const queueDepthPrefix = enHealth['health.reason.teamsCallsQueueDepthFailed'].replace('{error}', '');
+  if (detail.startsWith(queueDepthPrefix)) {
+    const diagnostic = detail.slice(queueDepthPrefix.length);
+    const networkHint = enHealth['health.reason.teamsCallsQueueDepthFailedNetworkBlock']
+      .replace(queueDepthPrefix, '')
+      .replace('{error}', '');
+    if (diagnostic.endsWith(networkHint)) {
+      return t('health.reason.teamsCallsQueueDepthFailedNetworkBlock', {
+        error: diagnostic.slice(0, -networkHint.length),
+      });
+    }
+
+    return t('health.reason.teamsCallsQueueDepthFailed', { error: diagnostic });
+  }
+
+  return detail;
+}
+
+export function translateHealthComponentDetail(component: ComponentHealthRow, t: TFunction): string {
+  return translateHealthComponentDetailText(component.detail, t);
+}
+
+export function translateHealthReasonText(reason: string, t: TFunction): string {
+  if (reason === enHealth['health.reason.allChecksPassing']) return t('health.reason.allChecksPassing');
+  if (reason === enHealth['health.reason.databaseReachableOpenDataTab']) {
+    return t('health.reason.databaseReachableOpenDataTab');
+  }
+  if (reason === enHealth['health.reason.applicationInsightsNotConfigured']) return t('health.reason.applicationInsightsNotConfigured');
+  if (reason === enHealth['health.reason.telemetryQueriesFailing']) {
+    return t('health.reason.telemetryQueriesFailing');
+  }
+  if (reason === enHealth['health.reason.someConfigurationCouldntBeRead']) return t('health.reason.someConfigurationCouldntBeRead');
+
+  const databaseErrorPrefix = enHealth['health.reason.databaseQueryFailed'].replace('{error}', '');
+  if (reason.startsWith(databaseErrorPrefix)) {
+    return t('health.reason.databaseQueryFailed', { error: reason.slice(databaseErrorPrefix.length) });
+  }
+
+  const componentMatch = /^(.+) is (unhealthy|degraded): (.+)$/.exec(reason);
+  if (componentMatch) {
+    return t(
+      componentMatch[2] === 'unhealthy'
+        ? 'health.reason.componentUnhealthy'
+        : 'health.reason.componentDegraded',
+      {
+        component: componentMatch[1],
+        detail: translateHealthComponentDetailText(componentMatch[3], t),
+      },
+    );
+  }
+
+  return reason;
+}
+
+export function healthReasonTexts(section: HealthSectionBase, t: TFunction): string[] {
+  if (isDataOverviewSection(section)) {
+    if (section.dataError) {
+      return [t('health.reason.databaseQueryFailed', { error: section.dataError })];
+    }
+
+    const reasons: string[] = [];
+    if (section.countsError) {
+      reasons.push(t('health.reason.approximateCountsUnavailable', { error: section.countsError }));
+    }
+    if (section.recentVolumeError) {
+      reasons.push(t('health.reason.recentVolumeScanDidntComplete', { error: section.recentVolumeError }));
+    }
+    if (section.copilotUsageReportsIdentitiesConcealed) {
+      reasons.push(t('health.reason.copilotUsageIdentitiesConcealed'));
+    }
+    for (const copilotError of section.copilotUsageReportErrors ?? []) {
+      reasons.push(t('health.reason.graphCopilotUsageReportImportFailed', { error: copilotError }));
+    }
+
+    if (reasons.length > 0) return reasons;
+  }
+
+  return (section.reasons ?? []).map((reason) => translateHealthReasonText(reason, t));
 }
 
 // KQL summarize-by-bin omits empty hours, so pad to a full 24-bar series for a readable sparkline.
@@ -137,7 +267,7 @@ export function useHealthSection<T>(fetcher: () => Promise<T>, active: boolean):
       setData(d);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load.');
+      setError(e instanceof Error ? e.message : translateActive('health.section.failedToLoad'));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -209,11 +339,25 @@ export function useHealthStyles() {
 }
 
 export function HealthStatusBadge({ status }: { status: HealthStatusName | null }) {
+  const t = useT();
   return (
     <Badge appearance="filled" color={statusColor(status)}>
-      {status ?? 'Unknown'}
+      {healthStatusText(status, t)}
     </Badge>
   );
+}
+
+export function healthStatusText(status: string | null, t: TFunction): string {
+  switch ((status ?? '').toLowerCase()) {
+    case 'healthy':
+      return t('health.status.healthy');
+    case 'degraded':
+      return t('health.status.degraded');
+    case 'unhealthy':
+      return t('health.status.unhealthy');
+    default:
+      return t('health.status.unknown');
+  }
 }
 
 export function SectionReasons({ reasons }: { reasons: string[] }) {
@@ -247,6 +391,7 @@ export function SectionFrame<T extends HealthSectionBase>({
   children: (data: T) => ReactNode;
 }) {
   const styles = useSharedStyles();
+  const t = useT();
   const { data, loading, error, refreshing, reload } = state;
 
   return (
@@ -257,20 +402,20 @@ export function SectionFrame<T extends HealthSectionBase>({
         <span className={styles.spacer} />
         {data && (
           <Text size={200} className={styles.muted}>
-            loaded {formatUtc(data.loadedAtUtc)}
+            {t('health.section.loaded', { when: formatUtc(data.loadedAtUtc) })}
           </Text>
         )}
         <Button size="small" appearance="secondary" disabled={refreshing} onClick={reload}>
-          {refreshing ? 'Refreshing...' : 'Refresh'}
+          {refreshing ? t('health.action.refreshing') : t('health.action.refresh')}
         </Button>
       </div>
 
       {description && <Text className={styles.desc}>{description}</Text>}
-      {data && <SectionReasons reasons={data.reasons} />}
+      {data && <SectionReasons reasons={healthReasonTexts(data, t)} />}
 
       {loading && !data ? (
         <div className={styles.loading}>
-          <Spinner size={60} label={`Loading ${title.toLowerCase()}...`} />
+          <Spinner size={60} label={t('health.section.loading', { title: title.toLowerCase() })} />
         </div>
       ) : error && !data ? (
         <MessageBar intent="error">

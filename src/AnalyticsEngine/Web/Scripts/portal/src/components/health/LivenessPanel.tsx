@@ -11,6 +11,7 @@ import {
   Badge,
 } from '@fluentui/react-components';
 import { fetchHealthLiveness } from '../../api/healthApi';
+import { formatNumber, useT } from '../../i18n';
 import {
   CYCLE_SLA_HOURS,
   SectionFrame,
@@ -23,35 +24,36 @@ import {
 
 /** Import liveness (App Insights): is each importer still looping and finishing? */
 export default function LivenessPanel({ active }: { active: boolean }) {
+  const t = useT();
   const styles = useHealthStyles();
   const state = useHealthSection(fetchHealthLiveness, active);
 
   return (
     <SectionFrame
-      title="Import liveness"
-      description={`Is each importer still looping and finishing? A full activity import cycle should complete at least once every ${CYCLE_SLA_HOURS} hours. "Last confirmed cycle" is the FinishedImportCycle event; the per-section rows are the FinishedSectionImport events.`}
+      title={t('health.liveness.title')}
+      description={t('health.liveness.description', { hours: formatNumber(CYCLE_SLA_HOURS) })}
       state={state}
     >
       {(data) =>
         !data.appInsightsConfigured ? (
           <MessageBar intent="info">
-            <MessageBarBody>Application Insights is not configured, so import liveness is unavailable.</MessageBarBody>
+            <MessageBarBody>{t('health.liveness.appInsightsNotConfigured')}</MessageBarBody>
           </MessageBar>
         ) : data.livenessError ? (
           <MessageBar intent="warning">
-            <MessageBarBody>Couldn't load import liveness: {data.livenessError}</MessageBarBody>
+            <MessageBarBody>{t('health.liveness.loadError', { error: data.livenessError })}</MessageBarBody>
           </MessageBar>
         ) : (
           <>
-            <Text className={styles.subHeading}>Last confirmed cycle per job</Text>
+            <Text className={styles.subHeading}>{t('health.liveness.lastCycleHeading')}</Text>
             {data.lastCyclePerJob.length > 0 ? (
-              <Table size="small" aria-label="Last cycle per job">
+              <Table size="small" aria-label={t('health.liveness.lastCycleAriaLabel')}>
                 <TableHeader>
                   <TableRow>
-                    <TableHeaderCell>Importer</TableHeaderCell>
-                    <TableHeaderCell>Last cycle (UTC)</TableHeaderCell>
-                    <TableHeaderCell>Freshness</TableHeaderCell>
-                    <TableHeaderCell>Duration</TableHeaderCell>
+                    <TableHeaderCell>{t('health.liveness.columnImporter')}</TableHeaderCell>
+                    <TableHeaderCell>{t('health.liveness.columnLastCycleUtc')}</TableHeaderCell>
+                    <TableHeaderCell>{t('health.liveness.columnFreshness')}</TableHeaderCell>
+                    <TableHeaderCell>{t('health.liveness.columnDuration')}</TableHeaderCell>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -63,7 +65,7 @@ export default function LivenessPanel({ active }: { active: boolean }) {
                       <TableCell>{formatUtc(job.lastCycleUtc)}</TableCell>
                       <TableCell>
                         <Badge appearance="filled" color={freshnessColor(job.lastCycleUtc, CYCLE_SLA_HOURS, CYCLE_SLA_HOURS * 2)}>
-                          {howLongAgo(job.lastCycleUtc)}
+                          {howLongAgo(job.lastCycleUtc, t)}
                         </Badge>
                       </TableCell>
                       <TableCell>
@@ -75,31 +77,31 @@ export default function LivenessPanel({ active }: { active: boolean }) {
               </Table>
             ) : (
               <MessageBar intent="info">
-                <MessageBarBody>No FinishedImportCycle events in the retention window yet.</MessageBarBody>
+                <MessageBarBody>{t('health.liveness.noFinishedImportCycles')}</MessageBarBody>
               </MessageBar>
             )}
 
-            <Text className={styles.subHeading}>Web tracker (pageViews in App Insights, last 24h)</Text>
+            <Text className={styles.subHeading}>{t('health.liveness.webTrackerHeading')}</Text>
             <div>
               <Badge appearance="filled" color={data.pageViewsLast24h > 0 ? 'success' : 'warning'}>
-                {data.pageViewsLast24h.toLocaleString()} pageViews
+                {t('health.liveness.pageViewsBadge', { count: formatNumber(data.pageViewsLast24h) })}
               </Badge>{' '}
               <Text size={200}>
                 {data.pageViewsLast24h > 0
-                  ? `last seen ${howLongAgo(data.newestPageViewUtc)}`
-                  : 'none - the web tracker may not be deployed on the site, or is not sending to App Insights'}
+                  ? t('health.liveness.lastSeen', { when: howLongAgo(data.newestPageViewUtc, t) })
+                  : t('health.liveness.noPageViews')}
               </Text>
             </div>
 
-            <Text className={styles.subHeading}>Last run per section</Text>
+            <Text className={styles.subHeading}>{t('health.liveness.lastRunHeading')}</Text>
             {data.lastSectionImports.length > 0 ? (
-              <Table size="small" aria-label="Last section imports">
+              <Table size="small" aria-label={t('health.liveness.lastSectionAriaLabel')}>
                 <TableHeader>
                   <TableRow>
-                    <TableHeaderCell>Section</TableHeaderCell>
-                    <TableHeaderCell>Importer</TableHeaderCell>
-                    <TableHeaderCell>Last run (UTC)</TableHeaderCell>
-                    <TableHeaderCell>Freshness</TableHeaderCell>
+                    <TableHeaderCell>{t('health.liveness.columnSection')}</TableHeaderCell>
+                    <TableHeaderCell>{t('health.liveness.columnImporter')}</TableHeaderCell>
+                    <TableHeaderCell>{t('health.liveness.columnLastRunUtc')}</TableHeaderCell>
+                    <TableHeaderCell>{t('health.liveness.columnFreshness')}</TableHeaderCell>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -112,7 +114,7 @@ export default function LivenessPanel({ active }: { active: boolean }) {
                       <TableCell>{formatUtc(s.lastRunUtc)}</TableCell>
                       <TableCell>
                         <Badge appearance="filled" color={freshnessColor(s.lastRunUtc, CYCLE_SLA_HOURS, CYCLE_SLA_HOURS * 3)}>
-                          {howLongAgo(s.lastRunUtc)}
+                          {howLongAgo(s.lastRunUtc, t)}
                         </Badge>
                       </TableCell>
                     </TableRow>
@@ -120,19 +122,19 @@ export default function LivenessPanel({ active }: { active: boolean }) {
                 </TableBody>
               </Table>
             ) : (
-              <Text>No FinishedSectionImport events in the retention window yet.</Text>
+              <Text>{t('health.liveness.noFinishedSectionImports')}</Text>
             )}
 
             {data.lastHeartbeats.length > 0 ? (
               <>
-                <Text className={styles.subHeading}>Importer heartbeats</Text>
-                <Table size="small" aria-label="Importer heartbeats">
+                <Text className={styles.subHeading}>{t('health.liveness.heartbeatsHeading')}</Text>
+                <Table size="small" aria-label={t('health.liveness.heartbeatsAriaLabel')}>
                   <TableHeader>
                     <TableRow>
-                      <TableHeaderCell>Job</TableHeaderCell>
-                      <TableHeaderCell>Last beat (UTC)</TableHeaderCell>
-                      <TableHeaderCell>Freshness</TableHeaderCell>
-                      <TableHeaderCell>Last cycle secs</TableHeaderCell>
+                      <TableHeaderCell>{t('health.liveness.columnJob')}</TableHeaderCell>
+                      <TableHeaderCell>{t('health.liveness.columnLastBeatUtc')}</TableHeaderCell>
+                      <TableHeaderCell>{t('health.liveness.columnFreshness')}</TableHeaderCell>
+                      <TableHeaderCell>{t('health.liveness.columnLastCycleSecs')}</TableHeaderCell>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -144,7 +146,7 @@ export default function LivenessPanel({ active }: { active: boolean }) {
                         <TableCell>{formatUtc(b.lastBeatUtc)}</TableCell>
                         <TableCell>
                           <Badge appearance="filled" color={freshnessColor(b.lastBeatUtc, 0.5, 1)}>
-                            {howLongAgo(b.lastBeatUtc)}
+                            {howLongAgo(b.lastBeatUtc, t)}
                           </Badge>
                         </TableCell>
                         <TableCell>{b.lastCycleDurationSeconds}</TableCell>
@@ -155,9 +157,7 @@ export default function LivenessPanel({ active }: { active: boolean }) {
               </>
             ) : (
               <Text size={200} className={styles.muted}>
-                Independent-timer ImporterHeartbeat events are not being emitted yet (that host is a later phase).
-                Until then, "Last confirmed cycle" above is the liveness signal - note it only fires when a cycle
-                completes, so a job stuck mid-cycle would still look recent.
+                {t('health.liveness.noHeartbeats')}
               </Text>
             )}
           </>

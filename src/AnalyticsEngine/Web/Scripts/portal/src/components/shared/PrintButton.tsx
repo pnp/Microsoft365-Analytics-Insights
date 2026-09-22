@@ -1,5 +1,6 @@
 import { Button, Tooltip } from '@fluentui/react-components';
 import { Print16Regular } from '@fluentui/react-icons';
+import { useT } from '../../i18n';
 
 /**
  * Prints the report currently on screen, without the app shell around it.
@@ -16,16 +17,17 @@ import { Print16Regular } from '@fluentui/react-icons';
  */
 export default function PrintButton({
   tooltip,
-  label = 'Print',
+  label,
 }: {
   /** What this printout will contain, so the reader knows before they spend the paper. */
   tooltip: string;
   label?: string;
 }) {
+  const t = useT();
   return (
     <Tooltip relationship="description" content={tooltip}>
       <Button icon={<Print16Regular />} onClick={() => window.print()}>
-        {label}
+        {label ?? t('common.action.print')}
       </Button>
     </Tooltip>
   );

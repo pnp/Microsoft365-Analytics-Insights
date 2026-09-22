@@ -1,3 +1,5 @@
+import { translateActive } from '../i18n/runtime';
+
 /**
  * Shared fetch wrapper for the portal's calls to the site's own `[Authorize]`'d API.
  *
@@ -47,10 +49,45 @@ let reauthNavigationStarted = false;
  */
 const NEVER_SETTLES: Promise<Response> = new Promise<Response>(() => {});
 
+/**
+ * `sessionStorage`, guarded.
+ *
+ * `window.sessionStorage` is a *getter*, and in a browser with site data blocked - or on a
+ * restricted origin - reading the property itself throws `SecurityError`, before any method on it
+ * is called. `restoreRouteAfterReauth()` runs from `main.tsx` before anything is rendered, so an
+ * unguarded read there is a blank portal for a reader whose only choice was to block cookies.
+ *
+ * The cost of storage being unavailable is losing the route across a re-authentication, and one
+ * extra sign-in bounce before the loop guard notices. Both are far better than no portal.
+ */
+function sessionRead(key: string): string | null {
+  try {
+    return window.sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function sessionWrite(key: string, value: string): void {
+  try {
+    window.sessionStorage.setItem(key, value);
+  } catch {
+    // Route restoration and the sign-in loop guard degrade; the portal still works.
+  }
+}
+
+function sessionRemove(key: string): void {
+  try {
+    window.sessionStorage.removeItem(key);
+  } catch {
+    // Nothing was stored, so nothing needs removing.
+  }
+}
+
 /** Thrown when the session has expired and re-authenticating has already been tried once. */
 export class SessionExpiredError extends Error {
   constructor() {
-    super('Your session has expired. Reload the page to sign in again.');
+    super(translateActive('errors.http.sessionExpired'));
     this.name = 'SessionExpiredError';
   }
 }
@@ -64,8 +101,8 @@ export class SessionExpiredError extends Error {
  * user to where they were.
  */
 export function restoreRouteAfterReauth(): void {
-  const saved = sessionStorage.getItem(RETURN_ROUTE_KEY);
-  sessionStorage.removeItem(RETURN_ROUTE_KEY);
+  const saved = sessionRead(RETURN_ROUTE_KEY);
+  sessionRemove(RETURN_ROUTE_KEY);
 
   if (saved && saved !== window.location.hash) {
     window.location.hash = saved;
@@ -74,10 +111,10 @@ export function restoreRouteAfterReauth(): void {
 
 function reauthenticate(): void {
   reauthNavigationStarted = true;
-  sessionStorage.setItem(REAUTH_FLAG, '1');
+  sessionWrite(REAUTH_FLAG, '1');
 
   if (window.location.hash) {
-    sessionStorage.setItem(RETURN_ROUTE_KEY, window.location.hash);
+    sessionWrite(RETURN_ROUTE_KEY, window.location.hash);
   }
 
   // A full-page navigation, not a fetch: only a top-level request can follow the redirect to Entra
@@ -109,7 +146,7 @@ export async function apiFetch(input: string, init: RequestInit = {}): Promise<R
       return NEVER_SETTLES;
     }
 
-    if (sessionStorage.getItem(REAUTH_FLAG) === null) {
+    if (sessionRead(REAUTH_FLAG) === null) {
       reauthenticate();
       return NEVER_SETTLES;
     }
@@ -123,7 +160,7 @@ export async function apiFetch(input: string, init: RequestInit = {}): Promise<R
   // sign-in attempt. Skipped once we're navigating away, so a late in-flight success can't re-arm
   // the guard for the document that is already on its way to sign-in.
   if (!reauthNavigationStarted) {
-    sessionStorage.removeItem(REAUTH_FLAG);
+    sessionRemove(REAUTH_FLAG);
   }
 
   return response;

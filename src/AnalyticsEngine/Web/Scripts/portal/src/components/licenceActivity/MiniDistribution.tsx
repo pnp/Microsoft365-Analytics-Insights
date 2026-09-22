@@ -1,6 +1,7 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { LicenceActivityDistribution } from '../../types/licenceActivity';
-import { ACTIVITY_BANDS, BAND_DESCRIPTIONS, distributionTotal } from './bands';
+import { useT } from '../../i18n';
+import { ACTIVITY_BANDS, bandDescription, bandLabel, distributionTotal } from './bands';
 import { formatCount } from './format';
 import ActivityCoverageHelp from './ActivityCoverageHelp';
 
@@ -45,8 +46,14 @@ const useStyles = makeStyles({
  */
 export function MiniDistribution({ distribution }: { distribution: LicenceActivityDistribution }) {
   const styles = useStyles();
+  const t = useT();
   const total = distributionTotal(distribution);
-  const label = ACTIVITY_BANDS.map((b) => `${b.label} ${formatCount(distribution[b.key])}`).join(', ');
+  const label = ACTIVITY_BANDS.map((b) =>
+    t('licenceActivity.distribution.bandLegendLabel', {
+      label: bandLabel(t, b.key),
+      count: formatCount(distribution[b.key]),
+    }),
+  ).join(', ');
 
   return (
     <div className={styles.bar} role="img" aria-label={label} title={label}>
@@ -60,7 +67,11 @@ export function MiniDistribution({ distribution }: { distribution: LicenceActivi
               key={b.key}
               className={styles.seg}
               style={{ width: `${(count / total) * 100}%`, backgroundColor: b.colour }}
-              title={`${b.label}: ${formatCount(count)}. ${BAND_DESCRIPTIONS[b.key]}`}
+              title={t('licenceActivity.distribution.bandTitle', {
+                label: bandLabel(t, b.key),
+                count: formatCount(count),
+                description: bandDescription(t, b.key) ?? '',
+              })}
             />
           ) : null;
         })
@@ -72,14 +83,15 @@ export function MiniDistribution({ distribution }: { distribution: LicenceActivi
 /** An accessible legend of the band colours, shown once per table so the mini-bars are readable. */
 export function BandLegend() {
   const styles = useStyles();
+  const t = useT();
   return (
     <>
       <div className={styles.legend}>
         {ACTIVITY_BANDS.map((b) => (
-          <span key={b.key} className={styles.legendItem} title={BAND_DESCRIPTIONS[b.key]}>
+          <span key={b.key} className={styles.legendItem} title={bandDescription(t, b.key) ?? undefined}>
             <span className={styles.swatch} style={{ backgroundColor: b.colour }} aria-hidden />
             <Text size={100} className={styles.legendLabel}>
-              {b.label}
+              {bandLabel(t, b.key)}
             </Text>
           </span>
         ))}

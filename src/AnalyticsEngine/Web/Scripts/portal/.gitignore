@@ -27,3 +27,6 @@ dist
 *.njsproj
 *.sln
 *.sw?
+
+# Scratch scripts run through vite-node while working on the portal (e.g. the i18n scan helper).
+*.tmp.ts

@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { ReportSeries, ReportTimePoint } from '../../types/reports';
+import { useT } from '../../i18n';
 import {
   formatCompact,
   formatValue,
@@ -108,6 +109,7 @@ function isIsolatedPoint(points: ReportTimePoint[], i: number): boolean {
  * reads out every series' value for the hovered week.
  */
 export default function TimeSeriesChart({ series, valueLabel, height = 300, gapNote }: TimeSeriesChartProps) {
+  const t = useT();
   const styles = useStyles();
   const rootRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<{ index: number; xPx: number } | null>(null);
@@ -136,7 +138,7 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
   }, [series]);
 
   if (n === 0) {
-    return <div className={styles.empty}>No data for this period.</div>;
+    return <div className={styles.empty}>{t('charts.empty.noDataForPeriod')}</div>;
   }
 
   const x = (i: number): number => (n === 1 ? plotLeft + plotW / 2 : plotLeft + (plotW * i) / (n - 1));
@@ -170,7 +172,7 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
         className={styles.svg}
         viewBox={`0 0 ${W} ${H}`}
         role="img"
-        aria-label={`${valueLabel} per week`}
+        aria-label={t('charts.timeSeries.ariaLabel', { valueLabel })}
       >
         {/* Gridlines + y-axis labels */}
         {ticks.map((t) => (
@@ -280,7 +282,7 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
               </span>
               <Text size={200} weight="semibold">
                 {s.points[hover.index]?.value == null
-                  ? 'No data'
+                  ? t('charts.timeSeries.noData')
                   : formatValue(s.points[hover.index].value as number)}
               </Text>
             </div>

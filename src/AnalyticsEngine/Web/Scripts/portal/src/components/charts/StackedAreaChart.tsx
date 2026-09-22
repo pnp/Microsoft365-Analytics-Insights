@@ -1,5 +1,6 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { ReportSeries } from '../../types/reports';
+import { useT } from '../../i18n';
 import { formatCompact, formatValue, formatWeek, niceTicks, seriesColor } from './chartCommon';
 
 const W = 960;
@@ -62,11 +63,12 @@ export default function StackedAreaChart({
   series: ReportSeries[];
   valueLabel: string;
 }) {
+  const t = useT();
   const styles = useStyles();
 
   const withPoints = series.filter((s) => s.points.length > 0);
   if (withPoints.length === 0) {
-    return <div className={styles.empty}>No data for this period.</div>;
+    return <div className={styles.empty}>{t('charts.empty.noDataForPeriod')}</div>;
   }
 
   // Series can have different week coverage, so build a shared spine and treat a missing week as
@@ -99,7 +101,7 @@ export default function StackedAreaChart({
 
   return (
     <div className={styles.root}>
-      <svg viewBox={`0 0 ${W} ${H}`} className={styles.svg} role="img" aria-label={`${valueLabel} over time by population`}>
+      <svg viewBox={`0 0 ${W} ${H}`} className={styles.svg} role="img" aria-label={t('charts.stackedArea.ariaLabel', { valueLabel })}>
         <defs>
           {bands.map((band, i) => (
             <linearGradient key={band.series.name} id={`area-grad-${i}`} x1="0" y1="0" x2="0" y2="1">
@@ -167,9 +169,9 @@ export default function StackedAreaChart({
             fill="transparent"
           >
             <title>
-              {`Week of ${formatWeek(week)}\n` +
+              {t('charts.stackedArea.weekOf', { week: formatWeek(week) }) + '\n' +
                 withPoints.map((s) => `${s.name}: ${formatValue(valueAt(s, week))}`).join('\n') +
-                `\nTotal: ${formatValue(totals[i])}`}
+                `\n${t('charts.stackedArea.total', { value: formatValue(totals[i]) })}`}
             </title>
           </rect>
         ))}

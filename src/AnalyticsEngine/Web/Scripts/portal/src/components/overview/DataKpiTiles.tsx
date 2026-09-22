@@ -18,6 +18,26 @@ import {
   Sparkle20Regular,
 } from '@fluentui/react-icons';
 import type { NamedCount } from '../../types/systemStatus';
+import { formatNumber, useT, type TFunction, type TranslationKey } from '../../i18n';
+
+/**
+ * The catalog entry for a figure the server sends, or null for one this build does not know.
+ *
+ * `api/SystemStatus` authors its own English `name` and `hint`. Server-authored display text
+ * cannot be translated where it is written, so the SPA translates it here instead, keyed on the
+ * model's stable `key` - the same one it already uses to choose the icon, and which the API
+ * contract documents as independent of the display name.
+ *
+ * Falling back to the server's text rather than to the key matters: a deployment running a newer
+ * API than SPA would otherwise show `overview.dataCount.somethingNew.name` on the home page.
+ * English for one unrecognised tile is a far better failure than that.
+ */
+function tileText(t: TFunction, key: string, field: 'name' | 'hint', fallback: string): string {
+  if (!key) return fallback;
+  const catalogKey = `overview.dataCount.${key}.${field}` as TranslationKey;
+  const translated = t(catalogKey);
+  return translated === catalogKey ? fallback : translated;
+}
 
 /**
  * Icon per figure, keyed off the server's stable `key` rather than the display label - renaming a
@@ -92,29 +112,34 @@ const useStyles = makeStyles({
  */
 export default function DataKpiTiles({ counts }: { counts: NamedCount[] }) {
   const styles = useStyles();
+  const t = useT();
 
   return (
     <div className={styles.grid}>
-      {counts.map((c) => (
-        <Card key={c.key || c.name} className={styles.tile}>
-          <div className={styles.head}>
-            {ICONS[c.key] ?? <Database20Regular />}
-            <Text size={200} weight="semibold" className={styles.label}>
-              {c.name}
-            </Text>
-          </div>
-          {/* mergeClasses, not string concatenation: both rules set `color`, and only Griffel's
-              merge resolves that deterministically. */}
-          <span className={mergeClasses(styles.value, c.count === 0 && styles.valueEmpty)}>
-            {c.count.toLocaleString()}
-          </span>
-          {c.hint && (
-            <Text size={200} className={styles.hint}>
-              {c.hint}
-            </Text>
-          )}
-        </Card>
-      ))}
+      {counts.map((c) => {
+        const name = tileText(t, c.key, 'name', c.name);
+        const hint = c.hint ? tileText(t, c.key, 'hint', c.hint) : null;
+        return (
+          <Card key={c.key || c.name} className={styles.tile}>
+            <div className={styles.head}>
+              {ICONS[c.key] ?? <Database20Regular />}
+              <Text size={200} weight="semibold" className={styles.label}>
+                {name}
+              </Text>
+            </div>
+            {/* mergeClasses, not string concatenation: both rules set `color`, and only Griffel's
+                merge resolves that deterministically. */}
+            <span className={mergeClasses(styles.value, c.count === 0 && styles.valueEmpty)}>
+              {formatNumber(c.count)}
+            </span>
+            {hint && (
+              <Text size={200} className={styles.hint}>
+                {hint}
+              </Text>
+            )}
+          </Card>
+        );
+      })}
     </div>
   );
 }

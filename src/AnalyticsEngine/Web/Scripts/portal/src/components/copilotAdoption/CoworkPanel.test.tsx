@@ -20,6 +20,8 @@ vi.mock('../../api/copilotAdoptionApi', () => ({
 const { default: CoworkPanel } = await import('./CoworkPanel');
 
 const OPTIONS = {
+  workingDaysPerWeek: 5,
+  habitBucketNormalisationDays: 28,
   coworkLoadMinScore: 50,
   coworkFluencyMinScore: 50,
   coworkRegularMinActiveDays: 3,
@@ -32,6 +34,10 @@ const OPTIONS = {
   coworkEmailTarget: 80,
   coworkCollaborationTarget: 50,
   coworkDocumentTarget: 30,
+  coworkMinutesSavedPerMeeting: 5,
+  coworkMinutesSavedPerMailThread: 1,
+  coworkMinutesSavedPerDocument: 3,
+  coworkEstimateLowerBoundRatio: 0.5,
 } as CopilotAdoptionOptions;
 
 function row(overrides: Partial<CoworkReadinessRow>): CoworkReadinessRow {
@@ -345,7 +351,7 @@ describe('CoworkPanel', () => {
     ).toBeTruthy();
   });
 
-  it('never renders the estimate without its assumptions', async () => {
+  it('renders catalogued estimate assumptions from the received facts', async () => {
     render(
       summary({
         coworkValueEstimate: {
@@ -362,8 +368,17 @@ describe('CoworkPanel', () => {
     );
 
     expect(screen.getByText(/a model, not a measurement/)).toBeTruthy();
-    expect(screen.getByText('Assumes 5 minutes per meeting.')).toBeTruthy();
+    expect(
+      screen.getByText('Assumes Cowork saves 5 minutes per meeting, 1 per email and 3 per document.'),
+    ).toBeTruthy();
+    expect(
+      screen.getByText('The lower bound applies 50% of those assumptions; the upper bound applies them in full.'),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Volumes are observed from Microsoft's usage reports for 40 users, restated over 20 working days a month."),
+    ).toBeTruthy();
     expect(screen.getByText(/Time saved is NOT measured/)).toBeTruthy();
+    expect(screen.getByText(/This report reports seats, people and hours - never money\./)).toBeTruthy();
   });
 
   it('shows the estimate as a range rather than a single number', async () => {

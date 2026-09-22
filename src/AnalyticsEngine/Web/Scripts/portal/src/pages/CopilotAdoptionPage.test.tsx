@@ -231,6 +231,24 @@ async function renderPage() {
 }
 
 describe('CopilotAdoptionPage view split', () => {
+  it('translates unavailable availability reasons instead of rendering server English', async () => {
+    vi.mocked(fetchAdoptionAvailability).mockResolvedValue({
+      available: false,
+      copilotAuditImportEnabled: false,
+      copilotUsageReportImportEnabled: false,
+      userMetadataImportEnabled: false,
+      m365UsageReportImportEnabled: true,
+      messages: ['SERVER: user metadata off', 'SERVER: sources off'],
+    });
+
+    renderWithProvider(<CopilotAdoptionPage />, { language: 'es' });
+
+    await waitFor(() => expect(screen.getByText(/La importación de metadatos de usuario está deshabilitada/)).toBeVisible());
+    expect(screen.getByText(/No está habilitada ni la importación de auditoría de Copilot ni la importación del informe de uso de Copilot/)).toBeVisible();
+    expect(screen.queryByText('SERVER: user metadata off')).toBeNull();
+    expect(screen.queryByText('SERVER: sources off')).toBeNull();
+  });
+
   it('opens on an executive view with the three acts and no SQL popovers', async () => {
     await renderPage();
 
