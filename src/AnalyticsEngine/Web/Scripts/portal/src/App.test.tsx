@@ -308,4 +308,28 @@ describe('Printed footer', () => {
     expect(screen.queryByText(/Microsoft 365 Advanced Analytics · /)).not.toBeInTheDocument();
     expect(footer()?.closest('[data-print="hide"]')).toBeNull();
   });
+
+  it('is a table footer section, which is what makes it repeat with room reserved for it', async () => {
+    // Not a detail of taste. A footer positioned with `position: fixed` repeats but reserves no
+    // space, so it overprints the last line of every full page - and Chromium mis-resolves the
+    // negative offset meant to lift it into the page margin, printing it across the *top* of each
+    // sheet instead. Only a real <tfoot> in a real table both repeats and reserves the space, so
+    // the element type and its place in the shell are the fix, not decoration.
+    renderAt('/insights/reports');
+    await screen.findByLabelText('Insights navigation');
+
+    const foot = footer();
+    expect(foot?.tagName).toBe('TFOOT');
+
+    const shell = foot?.parentElement;
+    expect(shell?.tagName).toBe('TABLE');
+    expect(shell).toHaveAttribute('data-print', 'shell');
+    // A layout table has nothing to say to a screen reader; the footer's text and link remain in
+    // the accessibility tree regardless.
+    expect(shell).toHaveAttribute('role', 'presentation');
+
+    // The report has to be *inside* the same table, or there is nothing for the footer to reserve
+    // space on each page of.
+    expect(screen.getByRole('main').closest('[data-print="shell"]')).toBe(shell);
+  });
 });

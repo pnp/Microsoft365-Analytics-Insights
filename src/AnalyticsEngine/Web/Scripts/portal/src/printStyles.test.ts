@@ -152,19 +152,38 @@ describe('print stylesheet', () => {
   });
 
   it('repeats the product, build and repository at the foot of every page', () => {
-    // `position: fixed` is what makes a browser repeat an element on each printed page; without it
-    // the footer appears once, at the end of the last page.
+    // A running footer has to repeat on every page *and* have room reserved for it. `position:
+    // fixed` gives the first and not the second - and Chromium mis-resolves a negative `bottom` in
+    // paged media, which is how this shipped printing the footer across the top of each sheet.
+    // Measured in Chromium 153 by printing to PDF and reading the text positions back: at
+    // `bottom: -11mm` the footer sat 50pt from the top of the page; at `bottom: 0` it sat at the
+    // foot but the last body line ran to 743.6pt under a footer starting at 737.7pt. A real table
+    // section is the only construct that does both, so the footer is a <tfoot>.
     const declarations = printDeclarationsFor("[data-print='footer']");
-    expect(declarations).toMatch(/position:\s*fixed/);
-    expect(declarations).toMatch(/display:\s*block\s*!important/);
+    expect(declarations).toMatch(/display:\s*table-footer-group\s*!important/);
+    expect(declarations).not.toMatch(/position:\s*fixed/);
 
-    // A fixed element is laid out inside the page area, so the report would flow underneath it
-    // unless the bottom @page margin reserves a strip and the footer is offset down into it. Both
-    // halves, together, or the footer silently overprints the last rows on every page.
-    expect(declarations).toMatch(/bottom:\s*-\d+(\.\d+)?mm/);
-    const pageMargin = printDeclarationsFor('@page').match(/margin:\s*([^;]+)/)?.[1] ?? '';
-    const bottomMargin = pageMargin.trim().split(/\s+/).pop() ?? '';
-    expect(Number.parseFloat(bottomMargin)).toBeGreaterThan(12);
+    // A table section only repeats if its ancestor is actually a table when printing - on screen
+    // the whole thing is flattened to block flow, so this is what switches it on.
+    expect(printDeclarationsFor("[data-print='shell']")).toMatch(/display:\s*table\s*!important/);
+    expect(printDeclarationsFor("[data-print='shell'] > tbody")).toMatch(
+      /display:\s*table-row-group\s*!important/,
+    );
+
+    // Padding and borders do not apply to a table-footer-group box, so the rule and the gap that
+    // separate the footer from the report have to be on the cell.
+    const cell = printDeclarationsFor("[data-print='footer'] td");
+    expect(cell).toMatch(/padding-top:/);
+    expect(cell).toMatch(/border-top:/);
+  });
+
+  it('exempts the shell row from the rule that keeps table rows whole', () => {
+    // `tr { break-inside: avoid }` keeps a report table's rows from splitting across a page. The
+    // shell's single row *is* the whole report, so leaving it in scope would forbid the very break
+    // every page after the first depends on.
+    const declarations = printDeclarationsFor("[data-print='shell'] > tbody > tr");
+    expect(declarations).toMatch(/[^-]break-inside:\s*auto\s*!important/);
+    expect(declarations).toMatch(/page-break-inside:\s*auto\s*!important/);
   });
 
   it('has a rule for every data-print value the components use', () => {
