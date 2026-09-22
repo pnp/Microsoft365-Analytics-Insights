@@ -41,7 +41,14 @@ const useStyles = makeStyles({
   },
 });
 
-function availabilityReasonTexts(availability: TeamsAvailability, t: TFunction): string[] {
+/**
+ * The reasons the server would have written, rebuilt from the flags it sends.
+ *
+ * Exported for its own tests: this reproduces a chain of conditions that lives in C#
+ * (`TeamsExplorerAvailability.Build`), and a faithful copy is the whole point - an `else if`
+ * flattened into an `if` shows an administrator two complaints that contradict each other.
+ */
+export function availabilityReasonTexts(availability: TeamsAvailability, t: TFunction): string[] {
   const reasons: string[] = [];
 
   if (!availability.usageReportsAvailable) {
@@ -56,9 +63,13 @@ function availabilityReasonTexts(availability: TeamsAvailability, t: TFunction):
 
   if (!availability.teamsAnalyticsAvailable) {
     reasons.push(t('teamsExplorer.availability.reason.teamsAnalyticsOff'));
-  } else if (availability.totalTeams === 0) {
+  } else if (availability.teamCountsKnown && availability.totalTeams === 0) {
+    // Gated on teamCountsKnown, mirroring the server's `totalTeams.HasValue` guard. The counts are
+    // plain numbers on the wire with null collapsed to 0, so without the flag a count the store
+    // could not read - its query times out on a large tenant - would be reported to the
+    // administrator as "no teams have been discovered yet". Unknown is not zero.
     reasons.push(t('teamsExplorer.availability.reason.noTeamsDiscovered'));
-  } else if (availability.authorisedTeams === 0) {
+  } else if (availability.teamCountsKnown && availability.authorisedTeams === 0) {
     reasons.push(t('teamsExplorer.availability.reason.noAuthorisedTeams'));
   }
 
@@ -92,13 +103,20 @@ export default function AvailabilityBar({ availability }: { availability: TeamsA
     { labelKey: 'teamsExplorer.availability.source.calls', on: availability.callsAvailable },
     {
       labelKey: 'teamsExplorer.availability.source.teamsChannels',
-      on: availability.teamsAnalyticsAvailable && availability.authorisedTeams > 0,
-      detail: availability.teamsAnalyticsAvailable
-        ? t('teamsExplorer.availability.authorisedTeams', {
-          authorised: availability.authorisedTeams,
-          total: availability.totalTeams,
-        })
-        : undefined,
+      // An unknown count must not be read as "none authorised": the badge would say the source is
+      // off, and the detail would assert "0 of 0 authorised", on the strength of a query that
+      // never returned. With the count unknown, report what is actually known - whether the
+      // import is switched on - and say nothing about how many teams there are.
+      on:
+        availability.teamsAnalyticsAvailable &&
+        (!availability.teamCountsKnown || availability.authorisedTeams > 0),
+      detail:
+        availability.teamsAnalyticsAvailable && availability.teamCountsKnown
+          ? t('teamsExplorer.availability.authorisedTeams', {
+            authorised: availability.authorisedTeams,
+            total: availability.totalTeams,
+          })
+          : undefined,
     },
     { labelKey: 'teamsExplorer.availability.source.cognitiveEnrichment', on: availability.cognitiveAvailable },
     { labelKey: 'teamsExplorer.availability.source.userDemographics', on: availability.userMetadataAvailable },

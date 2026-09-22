@@ -93,6 +93,19 @@ namespace Common.Entities.TeamsExplorer
         /// <summary>Teams discovered by the import, authorised or not.</summary>
         public int TotalTeams { get; set; }
 
+        /// <summary>
+        /// Whether <see cref="TotalTeams"/> and <see cref="AuthorisedTeams"/> were actually read.
+        ///
+        /// Both are plain <c>int</c> on the wire, so a count the store could not produce - the
+        /// query timed out, which it does on a large tenant - is indistinguishable from a real
+        /// zero once serialised. The difference matters: zero teams means "nothing has been
+        /// discovered yet", and an unknown count means nothing at all, so a caller that treats the
+        /// two alike tells an administrator their import has found no teams when in fact it was
+        /// never asked. <see cref="Reasons"/> already gets this right by branching on the nullable
+        /// inputs; this flag is what lets the web portal do the same.
+        /// </summary>
+        public bool TeamCountsKnown { get; set; }
+
         /// <summary>True when at least one source can produce data, i.e. the page is worth showing.</summary>
         public bool Available =>
             UsageReportsAvailable || CallsAvailable || TeamsAnalyticsAvailable;
@@ -123,6 +136,7 @@ namespace Common.Entities.TeamsExplorer
                 UserMetadataAvailable = sources.UserMetadata,
                 AuthorisedTeams = authorisedTeams ?? 0,
                 TotalTeams = totalTeams ?? 0,
+                TeamCountsKnown = totalTeams.HasValue && authorisedTeams.HasValue,
             };
 
             if (!sources.UsageReports)
