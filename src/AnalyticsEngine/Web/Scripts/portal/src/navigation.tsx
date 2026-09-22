@@ -17,6 +17,7 @@ import {
 } from '@fluentui/react-icons';
 
 import { lazyWithReload } from './lazyWithReload';
+import type { TranslationKey } from './i18n';
 
 // Code-split the pages so each route is a separate chunk (smaller initial load). lazyWithReload
 // recovers from a stale chunk after a rebuild/redeploy instead of leaving the route blank.
@@ -46,7 +47,8 @@ export type AreaId = 'insights' | 'admin';
 
 export interface AreaDefinition {
   id: AreaId;
-  label: string;
+  /** Catalog key for the area's name. Resolved at render time - see the note on ROUTES. */
+  labelKey: TranslationKey;
   /** Path prefix owned by the area, e.g. '/insights'. */
   basePath: string;
   /** Where the area switcher lands when this area is selected. */
@@ -54,8 +56,8 @@ export interface AreaDefinition {
 }
 
 export const AREAS: AreaDefinition[] = [
-  { id: 'insights', label: 'Insights', basePath: '/insights', homePath: '/insights/overview' },
-  { id: 'admin', label: 'Administration', basePath: '/admin', homePath: '/admin/health' },
+  { id: 'insights', labelKey: 'app.area.insights', basePath: '/insights', homePath: '/insights/overview' },
+  { id: 'admin', labelKey: 'app.area.admin', basePath: '/admin', homePath: '/admin/health' },
 ];
 
 /** The area the portal opens on. */
@@ -65,10 +67,10 @@ export interface PortalRoute {
   area: AreaId;
   /** Absolute route path, also used as the nav item's value. */
   path: string;
-  /** Left-nav label. */
-  label: string;
-  /** Optional section heading grouping items within an area's nav. */
-  group?: string;
+  /** Catalog key for the left-nav label. */
+  labelKey: TranslationKey;
+  /** Catalog key for an optional section heading grouping items within an area's nav. */
+  groupKey?: TranslationKey;
   icon: ReactElement;
   element: ReactElement;
 }
@@ -81,21 +83,21 @@ export const ROUTES: PortalRoute[] = [
   {
     area: 'insights',
     path: '/insights/overview',
-    label: 'Overview',
+    labelKey: 'app.route.overview',
     icon: <Home20Regular />,
     element: <InsightsOverviewPage />,
   },
   {
     area: 'insights',
     path: '/insights/reports',
-    label: 'Reports',
+    labelKey: 'app.route.reports',
     icon: <ChartMultiple20Regular />,
     element: <ReportsPage />,
   },
   {
     area: 'insights',
     path: '/insights/teams',
-    label: 'Teams Explorer',
+    labelKey: 'app.route.teamsExplorer',
     // Deliberately NOT PeopleTeam20Regular: that icon already marks the admin "Teams permissions"
     // page, and two different pages sharing an icon in the same nav is a reliable way to send
     // someone to the wrong one.
@@ -105,7 +107,7 @@ export const ROUTES: PortalRoute[] = [
   {
     area: 'insights',
     path: '/insights/web-activity',
-    label: 'Web activity',
+    labelKey: 'app.route.webActivity',
     // A globe rather than a chart: this page is about the intranet as a web site - who browses it
     // and from where - and ChartMultiple already marks the generic "Reports" page next to it.
     icon: <Globe20Regular />,
@@ -114,28 +116,28 @@ export const ROUTES: PortalRoute[] = [
   {
     area: 'insights',
     path: '/insights/copilot-adoption',
-    label: 'Copilot Adoption',
+    labelKey: 'app.route.copilotAdoption',
     icon: <Sparkle20Regular />,
     element: <CopilotAdoptionPage />,
   },
   {
     area: 'insights',
     path: '/insights/licence-activity',
-    label: 'Licence activity',
+    labelKey: 'app.route.licenceActivity',
     icon: <DataUsage20Regular />,
     element: <LicenceActivityPage />,
   },
   {
     area: 'insights',
     path: '/insights/agent-costs',
-    label: 'Agent costs',
+    labelKey: 'app.route.agentCosts',
     icon: <Money20Regular />,
     element: <AgentCostsPage />,
   },
   {
     area: 'insights',
     path: '/insights/dlp',
-    label: 'DLP impact',
+    labelKey: 'app.route.dlp',
     icon: <ShieldProhibited20Regular />,
     element: <DlpPage />,
   },
@@ -143,48 +145,48 @@ export const ROUTES: PortalRoute[] = [
   {
     area: 'admin',
     path: '/admin/health',
-    label: 'Service health',
-    group: 'Monitoring',
+    labelKey: 'app.route.health',
+    groupKey: 'app.navGroup.monitoring',
     icon: <Pulse20Regular />,
     element: <HealthPage />,
   },
   {
     area: 'admin',
     path: '/admin/install-log',
-    label: 'Install log',
-    group: 'Monitoring',
+    labelKey: 'app.route.installLog',
+    groupKey: 'app.navGroup.monitoring',
     icon: <DocumentBulletList20Regular />,
     element: <InstallLogPage />,
   },
   {
     area: 'admin',
     path: '/admin/profiling',
-    label: 'Profiling',
-    group: 'Monitoring',
+    labelKey: 'app.route.profiling',
+    groupKey: 'app.navGroup.monitoring',
     icon: <DataTrending20Regular />,
     element: <ProfilingStatusPage />,
   },
   {
     area: 'admin',
     path: '/admin/teams-permissions',
-    label: 'Teams permissions',
-    group: 'Manage',
+    labelKey: 'app.route.teamsPermissions',
+    groupKey: 'app.navGroup.manage',
     icon: <PeopleTeam20Regular />,
     element: <TeamsPermissionsPage />,
   },
   {
     area: 'admin',
     path: '/admin/user-lookup',
-    label: 'User data lookup',
-    group: 'Manage',
+    labelKey: 'app.route.userLookup',
+    groupKey: 'app.navGroup.manage',
     icon: <DatabaseSearch20Regular />,
     element: <UserLookupPage />,
   },
   {
     area: 'admin',
     path: '/admin/configuration',
-    label: 'Service configuration',
-    group: 'Manage',
+    labelKey: 'app.route.configuration',
+    groupKey: 'app.navGroup.manage',
     icon: <Settings20Regular />,
     element: <ServiceConfigurationPage />,
   },
@@ -201,15 +203,15 @@ export function routesForArea(area: AreaId): PortalRoute[] {
 }
 
 /**
- * An area's routes bucketed by their `group` heading, preserving declaration order and keeping
- * ungrouped items (group === undefined) in a single leading bucket.
+ * An area's routes bucketed by their `groupKey` heading, preserving declaration order and keeping
+ * ungrouped items (groupKey === undefined) in a single leading bucket.
  */
-export function groupedRoutesForArea(area: AreaId): { group?: string; routes: PortalRoute[] }[] {
-  const buckets: { group?: string; routes: PortalRoute[] }[] = [];
+export function groupedRoutesForArea(area: AreaId): { groupKey?: TranslationKey; routes: PortalRoute[] }[] {
+  const buckets: { groupKey?: TranslationKey; routes: PortalRoute[] }[] = [];
   for (const route of routesForArea(area)) {
     const last = buckets[buckets.length - 1];
-    if (last && last.group === route.group) last.routes.push(route);
-    else buckets.push({ group: route.group, routes: [route] });
+    if (last && last.groupKey === route.groupKey) last.routes.push(route);
+    else buckets.push({ groupKey: route.groupKey, routes: [route] });
   }
   return buckets;
 }

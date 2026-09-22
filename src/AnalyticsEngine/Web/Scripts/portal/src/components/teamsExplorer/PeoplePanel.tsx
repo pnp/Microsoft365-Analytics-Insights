@@ -16,6 +16,7 @@ import {
 import { ArrowDownload16Regular } from '@fluentui/react-icons';
 import CategoryBarChart from '../charts/CategoryBarChart';
 import type { TeamsPeople, TeamsPersonRow } from '../../types/teamsExplorer';
+import { useT, useTNode, type TFunction } from '../../i18n';
 import {
   SectionCard,
   WindowNote,
@@ -51,6 +52,8 @@ const SEGMENT_COLOUR: Record<string, 'success' | 'brand' | 'informative' | 'warn
   Dormant: 'warning',
 };
 
+const REPORTS_READ_ALL = 'Reports.Read.All';
+
 /**
  * People: who to recruit as a champion, and who to help.
  *
@@ -73,14 +76,17 @@ export default function PeoplePanel({
 }) {
   const styles = useStyles();
   const shared = useTeamsStyles();
+  const t = useT();
+  const tNode = useTNode();
 
   if (!usageReportsAvailable) {
     return (
       <MessageBar intent="warning">
         <MessageBarBody>
-          The Microsoft 365 usage reports import is switched off, so there is no per-user Teams
-          activity and nobody can be ranked. Enable <strong>Graph usage reports</strong> in the
-          installer and grant the runtime app <strong>Reports.Read.All</strong>.
+          {tNode('teamsExplorer.people.usageReportsOff', {
+            importName: <strong>{t('teamsExplorer.people.usageReportsOff.importName')}</strong>,
+            permission: <strong>{REPORTS_READ_ALL}</strong>,
+          })}
         </MessageBarBody>
       </MessageBar>
     );
@@ -93,27 +99,24 @@ export default function PeoplePanel({
       {data.namesObfuscated && (
         <MessageBar intent="warning" style={{ marginTop: '12px' }}>
           <MessageBarBody>
-            The usage reports appear to carry anonymised user names, so the people below cannot be
-            identified. This is a Microsoft 365 admin centre setting - <em>Reports</em> &gt;{' '}
-            <em>Display concealed user, group, and site names in all reports</em> - and it is applied
-            by Microsoft before the data ever reaches this product. Turn it off in the admin centre
-            if you need named adoption reporting.
+            {tNode('teamsExplorer.people.namesObfuscated', {
+              reports: <em>{t('teamsExplorer.people.namesObfuscated.reports')}</em>,
+              setting: <em>{t('teamsExplorer.people.namesObfuscated.setting')}</em>,
+            })}
           </MessageBarBody>
         </MessageBar>
       )}
 
       <MessageBar intent="info" style={{ marginTop: '12px' }}>
         <MessageBarBody>
-          These lists name individuals. They are intended for running a champions programme or an
-          enablement campaign, not for performance management - Teams activity measures how someone
-          works, not how well.
+          {t('teamsExplorer.people.privacyNotice')}
         </MessageBarBody>
       </MessageBar>
 
       <div className={shared.stack}>
         <SectionCard
-          title="Teams champions"
-          description="The people getting the most out of Teams - your best enablement recruits."
+          title={t('teamsExplorer.people.champions.title')}
+          description={t('teamsExplorer.people.champions.description')}
           query={queryFor(data.queries, 'people-champions')}
           isEmpty={data.champions.length === 0}
         >
@@ -125,21 +128,20 @@ export default function PeoplePanel({
               onClick={onExportChampions}
               disabled={exporting}
             >
-              Export CSV
+              {t('teamsExplorer.action.exportCsv')}
             </Button>
           </div>
-          <PeopleTable rows={data.champions} styles={styles} wrapClass={shared.tableWrap} />
+          <PeopleTable rows={data.champions} styles={styles} wrapClass={shared.tableWrap} t={t} />
         </SectionCard>
 
         <SectionCard
-          title="Dormant users"
-          description="People the usage reports covered who did nothing in Teams at all."
+          title={t('teamsExplorer.people.dormant.title')}
+          description={t('teamsExplorer.people.dormant.description')}
           query={queryFor(data.queries, 'people-dormant')}
           isEmpty={data.dormant.length === 0}
-          emptyMessage="Everyone the usage reports covered did something in Teams this period."
+          emptyMessage={t('teamsExplorer.people.dormant.empty')}
           note={
-            'Ordered by how long ago they were last seen, so the people who have drifted furthest '
-            + 'come first.'
+            t('teamsExplorer.people.dormant.note')
           }
         >
           <div className={styles.exportRow}>
@@ -150,25 +152,24 @@ export default function PeoplePanel({
               onClick={onExportDormant}
               disabled={exporting}
             >
-              Export CSV
+              {t('teamsExplorer.action.exportCsv')}
             </Button>
           </div>
-          <PeopleTable rows={data.dormant} styles={styles} wrapClass={shared.tableWrap} />
+          <PeopleTable rows={data.dormant} styles={styles} wrapClass={shared.tableWrap} t={t} />
         </SectionCard>
 
         <SectionCard
-          title="Where the champions are"
-          description="Departments with the most power users."
+          title={t('teamsExplorer.people.championDepartments.title')}
+          description={t('teamsExplorer.people.championDepartments.description')}
           query={queryFor(data.queries, 'people-departments')}
           isEmpty={data.championsByDepartment.length === 0}
           note={
-            'A power user is active on more than 60% of the period\u2019s working days. Departments '
-            + 'with many are where a champions programme already has a foothold.'
+            t('teamsExplorer.people.championDepartments.note')
           }
         >
           <CategoryBarChart
             categories={toCategories(data.championsByDepartment)}
-            valueLabel="power users"
+            valueLabel={t('teamsExplorer.people.valueLabel.powerUsers')}
           />
         </SectionCard>
       </div>
@@ -180,27 +181,29 @@ function PeopleTable({
   rows,
   styles,
   wrapClass,
+  t,
 }: {
   rows: TeamsPersonRow[];
   styles: ReturnType<typeof useStyles>;
   wrapClass: string;
+  t: TFunction;
 }) {
   return (
     <div className={wrapClass}>
-      <Table size="small" aria-label="Teams users">
+      <Table size="small" aria-label={t('teamsExplorer.people.table.aria')}>
         <TableHeader>
           <TableRow>
-            <TableHeaderCell>User</TableHeaderCell>
-            <TableHeaderCell>Department</TableHeaderCell>
-            <TableHeaderCell>Segment</TableHeaderCell>
-            <TableHeaderCell>Active days</TableHeaderCell>
-            <TableHeaderCell>Channel</TableHeaderCell>
-            <TableHeaderCell>Private chat</TableHeaderCell>
-            <TableHeaderCell>Organised</TableHeaderCell>
-            <TableHeaderCell>Attended</TableHeaderCell>
-            <TableHeaderCell>Calls hosted</TableHeaderCell>
-            <TableHeaderCell>Calls joined</TableHeaderCell>
-            <TableHeaderCell>Last seen</TableHeaderCell>
+            <TableHeaderCell>{t('teamsExplorer.column.user')}</TableHeaderCell>
+            <TableHeaderCell>{t('teamsExplorer.column.department')}</TableHeaderCell>
+            <TableHeaderCell>{t('teamsExplorer.column.segment')}</TableHeaderCell>
+            <TableHeaderCell>{t('teamsExplorer.column.activeDays')}</TableHeaderCell>
+            <TableHeaderCell>{t('teamsExplorer.column.channel')}</TableHeaderCell>
+            <TableHeaderCell>{t('teamsExplorer.column.privateChat')}</TableHeaderCell>
+            <TableHeaderCell>{t('teamsExplorer.column.organised')}</TableHeaderCell>
+            <TableHeaderCell>{t('teamsExplorer.column.attended')}</TableHeaderCell>
+            <TableHeaderCell>{t('teamsExplorer.column.callsHosted')}</TableHeaderCell>
+            <TableHeaderCell>{t('teamsExplorer.column.callsJoined')}</TableHeaderCell>
+            <TableHeaderCell>{t('teamsExplorer.column.lastSeen')}</TableHeaderCell>
           </TableRow>
         </TableHeader>
         <TableBody>

@@ -11,6 +11,7 @@ import {
 import { CheckmarkCircle16Filled, Circle16Regular } from '@fluentui/react-icons';
 import type { UserDataCategory, Workload } from '../../types/userData';
 import CategoryRow from './CategoryRow';
+import { formatNumber, useT, useTNode } from '../../i18n';
 
 const useStyles = makeStyles({
   cards: {
@@ -41,6 +42,8 @@ type CategoryTableProps = {
 
 export default function CategoryTable({ upn, categories, workloads }: CategoryTableProps) {
   const styles = useStyles();
+  const t = useT();
+  const tNode = useTNode();
   const total = categories.reduce((sum, c) => sum + c.count, 0);
   const enabledCount = workloads.filter((w) => w.enabled).length;
 
@@ -50,13 +53,15 @@ export default function CategoryTable({ upn, categories, workloads }: CategoryTa
         <CardHeader
           header={
             <Subtitle2>
-              Import workloads ({enabledCount} of {workloads.length} enabled)
+              {t('admin.userLookup.categoryTable.importWorkloadsTitle', {
+                enabledCount: formatNumber(enabledCount),
+                totalCount: formatNumber(workloads.length),
+              })}
             </Subtitle2>
           }
         />
         <Text size={200} className={styles.hint}>
-          Data is only collected for enabled workloads. A category fed only by disabled workloads will show 0 records -
-          that is expected, not a fault.
+          {t('admin.userLookup.categoryTable.importWorkloadsHint')}
         </Text>
         <div className={styles.workloads}>
           {workloads.map((w) => (
@@ -77,12 +82,15 @@ export default function CategoryTable({ upn, categories, workloads }: CategoryTa
         <CardHeader
           header={
             <Subtitle2>
-              Data held ({total.toLocaleString()} records across {categories.length} categories)
+              {t('admin.userLookup.categoryTable.dataHeldTitle', {
+                records: formatNumber(total),
+                categories: formatNumber(categories.length),
+              })}
             </Subtitle2>
           }
         />
         <Text size={200} className={styles.hint}>
-          Click the <strong>SQL</strong> button on any row to view and copy the query behind its count.
+          {tNode('admin.userLookup.categoryTable.sqlHint', { sql: <strong>SQL</strong> })}
         </Text>
         <div className={styles.list}>
           {categories.map((c) => (

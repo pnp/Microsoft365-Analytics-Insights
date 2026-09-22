@@ -2,6 +2,7 @@ import { makeStyles, tokens, Text, Badge, Button } from '@fluentui/react-compone
 import { ChevronDown16Regular, ChevronRight16Regular } from '@fluentui/react-icons';
 import { useCallback, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useT } from '../../i18n';
 import { AdoptionBand } from '../../types/copilotAdoption';
 import type { AdoptionSegmentRow } from '../../types/copilotAdoption';
 import { ADOPTION_BANDS } from '../charts/GaugeRing';
@@ -408,11 +409,12 @@ export function SegmentTable({
   bands?: { champion: number; established: number; developing: number };
 }) {
   const styles = useStyles();
+  const t = useT();
 
   if (rows.length === 0) {
     return (
       <div className={styles.empty}>
-        Not enough licensed users in any {segmentLabel.toLowerCase()} to break down reliably.
+        {t('copilotAdoption.shared.segmentTable.empty', { segment: segmentLabel.toLowerCase() })}
       </div>
     );
   }
@@ -422,12 +424,12 @@ export function SegmentTable({
       <thead>
         <tr>
           <th className={styles.th}>{segmentLabel}</th>
-          <th className={`${styles.th} ${styles.thNumeric}`}>Licences</th>
-          <th className={`${styles.th} ${styles.thNumeric}`}>Active</th>
-          <th className={`${styles.th} ${styles.thNumeric}`}>Habitual</th>
-          <th className={`${styles.th} ${styles.thNumeric}`}>Never used</th>
-          <th className={styles.th}>Adoption rate</th>
-          <th className={styles.th}>Avg. score</th>
+          <th className={`${styles.th} ${styles.thNumeric}`}>{t('copilotAdoption.shared.segmentTable.licences')}</th>
+          <th className={`${styles.th} ${styles.thNumeric}`}>{t('copilotAdoption.shared.segmentTable.active')}</th>
+          <th className={`${styles.th} ${styles.thNumeric}`}>{t('copilotAdoption.shared.segmentTable.habitual')}</th>
+          <th className={`${styles.th} ${styles.thNumeric}`}>{t('copilotAdoption.shared.segmentTable.neverUsed')}</th>
+          <th className={styles.th}>{t('copilotAdoption.shared.segmentTable.adoptionRate')}</th>
+          <th className={styles.th}>{t('copilotAdoption.shared.segmentTable.avgScore')}</th>
         </tr>
       </thead>
       <tbody>
@@ -519,6 +521,7 @@ export function ExpandableUserCell({
   className?: string;
 }) {
   const styles = useStyles();
+  const t = useT();
   return (
     <td className={`${styles.td} ${className ?? ''}`}>
       <div className={styles.expandableUser}>
@@ -528,7 +531,7 @@ export function ExpandableUserCell({
           className={styles.expandToggle}
           icon={open ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
           aria-expanded={open}
-          aria-label={`${open ? 'Hide' : 'Show'} the full assessment for ${userPrincipalName}`}
+          aria-label={t(open ? 'copilotAdoption.shared.expandableUser.hideAssessment' : 'copilotAdoption.shared.expandableUser.showAssessment', { user: userPrincipalName })}
           onClick={onToggle}
         />
         <span className={styles.upnStack}>
@@ -690,6 +693,7 @@ export function SortableTh({
   children?: ReactNode;
 }) {
   const styles = useStyles();
+  const t = useT();
   const active = activeKey === sortKey;
   const ariaSort: 'ascending' | 'descending' | 'none' = active
     ? descending
@@ -707,7 +711,7 @@ export function SortableTh({
           type="button"
           className={styles.sortButton}
           onClick={() => onSort(sortKey, active ? !descending : defaultDescending)}
-          title={`Sort by ${label}`}
+          title={t('copilotAdoption.shared.sortableTh.sortBy', { label })}
         >
           {children ?? label}
           <span

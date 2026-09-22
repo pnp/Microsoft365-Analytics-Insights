@@ -3,6 +3,7 @@ import type {
   AdoptionCombinedSegmentRow,
   AdoptionConcentrationBand,
 } from '../../types/copilotAdoption';
+import { useT } from '../../i18n';
 import { formatCount, formatPct } from '../shared/KpiGrid';
 import { useAdoptionTableStyles } from './adoptionShared';
 
@@ -121,9 +122,10 @@ const useStyles = makeStyles({
  */
 export function ConcentrationBar({ bands }: { bands: AdoptionConcentrationBand[] }) {
   const styles = useStyles();
+  const t = useT();
 
   if (bands.length === 0) {
-    return <div className={styles.empty}>No active users to rank.</div>;
+    return <div className={styles.empty}>{t('copilotAdoption.combinedViews.concentration.empty')}</div>;
   }
 
   return (
@@ -142,9 +144,13 @@ export function ConcentrationBar({ bands }: { bands: AdoptionConcentrationBand[]
                 // the last step or two. Pick the label colour from the fill's luminance instead.
                 color: readableForeground(...hexToRgb(colour)),
               }}
-              title={`${b.label}: ${formatCount(b.users)} users, ${formatCount(b.interactions)} interactions (${formatPct(
-                b.sharePct,
-              )} of all activity), ${b.interactionsPerUser} each`}
+              title={t('copilotAdoption.combinedViews.concentration.sliceTitle', {
+                label: b.label,
+                users: formatCount(b.users),
+                interactions: formatCount(b.interactions),
+                pct: formatPct(b.sharePct),
+                perUser: b.interactionsPerUser,
+              })}
             >
               {b.sharePct >= 8 ? formatPct(b.sharePct) : ''}
             </div>
@@ -163,7 +169,7 @@ export function ConcentrationBar({ bands }: { bands: AdoptionConcentrationBand[]
             <Text size={200}>
               <strong>{b.label}</strong>{' '}
               <span className={styles.muted}>
-                ({formatCount(b.users)} users, {b.interactionsPerUser} interactions each)
+                {t('copilotAdoption.combinedViews.concentration.legendDetail', { users: formatCount(b.users), perUser: b.interactionsPerUser })}
               </span>
             </Text>
           </div>
@@ -183,11 +189,12 @@ export function ConcentrationBar({ bands }: { bands: AdoptionConcentrationBand[]
 export function CombinedSegmentTable({ rows }: { rows: AdoptionCombinedSegmentRow[] }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
+  const t = useT();
 
   if (rows.length === 0) {
     return (
       <div className={styles.empty}>
-        No department has enough licensed or unlicensed Copilot users to compare reliably.
+        {t('copilotAdoption.combinedViews.segment.empty')}
       </div>
     );
   }
@@ -221,14 +228,14 @@ export function CombinedSegmentTable({ rows }: { rows: AdoptionCombinedSegmentRo
     <table className={table.table}>
       <thead>
         <tr>
-          <th className={table.th}>Department</th>
-          <th className={`${table.th} ${table.thNumeric}`}>Licences</th>
-          <th className={`${table.th} ${table.thNumeric}`}>Active licences</th>
-          <th className={`${table.th} ${table.thNumeric}`}>Interactions per licence</th>
-          <th className={`${table.th} ${table.thNumeric}`}>Licences using agents</th>
-          <th className={`${table.th} ${table.thNumeric}`}>Unlicensed users</th>
-          <th className={`${table.th} ${table.thNumeric}`}>Interactions per unlicensed user</th>
-          <th className={`${table.th} ${table.thNumeric}`}>Unlicensed using agents</th>
+          <th className={table.th}>{t('copilotAdoption.combinedViews.segment.department')}</th>
+          <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.licences')}</th>
+          <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.activeLicences')}</th>
+          <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.interactionsPerLicence')}</th>
+          <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.licencesUsingAgents')}</th>
+          <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.unlicensedUsers')}</th>
+          <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.interactionsPerUnlicensedUser')}</th>
+          <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoption.combinedViews.segment.unlicensedUsingAgents')}</th>
         </tr>
       </thead>
       <tbody>

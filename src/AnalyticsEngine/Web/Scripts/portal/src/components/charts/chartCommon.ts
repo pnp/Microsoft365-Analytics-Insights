@@ -1,6 +1,8 @@
 // Shared helpers for the lightweight SVG report charts. Kept dependency-free (no charting library)
 // so the portal stays small and there is nothing extra to deploy.
 
+import { formatDateParts, formatNumber } from '../../i18n';
+
 /**
  * Categorical palette for chart series / bars. Saturated Fluent-family colours that read well on
  * the app's light theme (webLightTheme). Series cycle through these in order.
@@ -56,33 +58,34 @@ export function formatCompact(n: number): string {
   if (abs >= 1e9) return `${trim(n / 1e9)}B`;
   if (abs >= 1e6) return `${trim(n / 1e6)}M`;
   if (abs >= 1e3) return `${trim(n / 1e3)}k`;
-  if (Number.isInteger(n)) return String(n);
+  if (Number.isInteger(n)) return formatNumber(n);
 
   // Enough precision to keep neighbouring ticks distinct without a wall of digits.
-  return Number(n.toFixed(2)).toString();
+  return formatNumber(Number(n.toFixed(2)));
 }
 
 function trim(n: number): string {
   // One decimal place, but drop a trailing ".0".
-  return n.toFixed(1).replace(/\.0$/, '');
+  const rounded = Number(n.toFixed(1));
+  return formatNumber(rounded, { maximumFractionDigits: 1 });
 }
 
 /** Full number for tooltips (e.g. "1,234"; fractional values keep up to two decimals). */
 export function formatValue(n: number): string {
   const rounded = Number.isInteger(n) ? n : Math.round(n * 100) / 100;
-  return rounded.toLocaleString();
+  return formatNumber(rounded, { maximumFractionDigits: 2 });
 }
 
 /** Week-start ISO date -> short label like "14 Apr". */
 export function formatWeek(iso: string): string {
   // The week starts are UTC date-only values (Kind=Utc, serialised with a trailing Z), so format
   // them in UTC - otherwise a Monday renders as the previous Sunday for viewers west of UTC.
-  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: 'UTC' });
+  return formatDateParts(new Date(iso), { day: 'numeric', month: 'short', timeZone: 'UTC' });
 }
 
 /** Week-start ISO date -> longer label like "Mon 14 Apr 2026" (tooltip header). */
 export function formatWeekLong(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
+  return formatDateParts(new Date(iso), {
     weekday: 'short',
     day: 'numeric',
     month: 'short',

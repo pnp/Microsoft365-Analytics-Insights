@@ -1,5 +1,6 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { AdoptionHabitBucket } from '../../types/copilotAdoption';
+import { useT } from '../../i18n';
 import DonutChart from '../charts/DonutChart';
 import { formatCount, formatPct } from '../shared/KpiGrid';
 
@@ -81,13 +82,13 @@ const useStyles = makeStyles({
  */
 export default function HabitStrip({ buckets }: { buckets: AdoptionHabitBucket[] }) {
   const styles = useStyles();
+  const t = useT();
 
   const total = buckets.reduce((sum, b) => sum + b.users, 0);
   if (total === 0) {
     return (
       <div className={styles.empty}>
-        No user was active in this period, so there is no habit to measure. The reclaimable-licence figure is
-        the one that matters here.
+        {t('copilotAdoption.habitStrip.empty')}
       </div>
     );
   }
@@ -105,7 +106,7 @@ export default function HabitStrip({ buckets }: { buckets: AdoptionHabitBucket[]
             </Text>
             <span className={styles.users}>{formatCount(b.users)}</span>
             <Text size={200} className={styles.share}>
-              {formatPct(b.sharePct)} of active users
+              {t('copilotAdoption.habitStrip.ofActiveUsers', { pct: formatPct(b.sharePct) })}
             </Text>
           </div>
         ))}
@@ -116,7 +117,7 @@ export default function HabitStrip({ buckets }: { buckets: AdoptionHabitBucket[]
           categories={buckets.map((b) => ({ label: b.label, value: b.users }))}
           colours={buckets.map((b) => BUCKET_COLOUR[b.label] ?? '#605e5c')}
           centreValue={formatCount(total)}
-          centreLabel="active users"
+          centreLabel={t('copilotAdoption.habitStrip.centreLabel')}
           size={150}
         />
       </div>

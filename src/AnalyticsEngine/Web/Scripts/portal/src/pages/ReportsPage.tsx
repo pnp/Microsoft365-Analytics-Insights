@@ -25,30 +25,30 @@ import TimeSeriesChart from '../components/charts/TimeSeriesChart';
 import CategoryBarChart from '../components/charts/CategoryBarChart';
 import MatrixChart from '../components/charts/MatrixChart';
 import WordCloud from '../components/charts/WordCloud';
+import { formatDateParts, formatNumber, useT, type TranslationKey } from '../i18n';
 
 /** The report areas in display order, with the enabled-flag they map to and their friendly copy. */
-const AREA_DEFS: { flag: keyof ReportAreas; key: ReportAreaKey; label: string; blurb: string }[] = [
-  { flag: 'copilot', key: 'copilot', label: 'Copilot', blurb: 'Microsoft 365 Copilot adoption and usage.' },
-  { flag: 'copilot', key: 'copilot-agents', label: 'Copilot agents', blurb: 'Copilot agent popularity and usage.' },
-  { flag: 'usage', key: 'usage', label: 'Microsoft 365 usage', blurb: 'Weekly active users across Microsoft 365 workloads.' },
+const AREA_DEFS: { flag: keyof ReportAreas; key: ReportAreaKey; labelKey: TranslationKey; blurbKey: TranslationKey }[] = [
+  { flag: 'copilot', key: 'copilot', labelKey: 'reports.area.copilot.label', blurbKey: 'reports.area.copilot.blurb' },
+  { flag: 'copilot', key: 'copilot-agents', labelKey: 'reports.area.copilotAgents.label', blurbKey: 'reports.area.copilotAgents.blurb' },
+  { flag: 'usage', key: 'usage', labelKey: 'reports.area.usage.label', blurbKey: 'reports.area.usage.blurb' },
   {
     flag: 'officeApps',
     key: 'office-apps',
-    label: 'Office apps',
-    blurb:
-      'Which Office apps people use, on which platforms, in which departments, and how far Copilot has reached them. Every figure counts people, not actions - the Microsoft report behind it records who used an app, never how much.',
+    labelKey: 'reports.area.officeApps.label',
+    blurbKey: 'reports.area.officeApps.blurb',
   },
-  { flag: 'spoAudit', key: 'spo-audit', label: 'SharePoint & OneDrive', blurb: 'File activity from the audit log.' },
-  { flag: 'webTraffic', key: 'web-traffic', label: 'Website traffic', blurb: 'Page views and visitors from the page tracker.' },
-  { flag: 'calls', key: 'calls', label: 'Teams calls', blurb: 'Teams call volume and duration.' },
-  { flag: 'emails', key: 'emails', label: 'Emails', blurb: 'Sent email volume.' },
+  { flag: 'spoAudit', key: 'spo-audit', labelKey: 'reports.area.spoAudit.label', blurbKey: 'reports.area.spoAudit.blurb' },
+  { flag: 'webTraffic', key: 'web-traffic', labelKey: 'reports.area.webTraffic.label', blurbKey: 'reports.area.webTraffic.blurb' },
+  { flag: 'calls', key: 'calls', labelKey: 'reports.area.calls.label', blurbKey: 'reports.area.calls.blurb' },
+  { flag: 'emails', key: 'emails', labelKey: 'reports.area.emails.label', blurbKey: 'reports.area.emails.blurb' },
 ];
 
 const MONTH_OPTIONS = [
-  { value: 1, label: 'Last month' },
-  { value: 3, label: 'Last 3 months' },
-  { value: 6, label: 'Last 6 months' },
-];
+  { value: 1, labelKey: 'reports.period.lastMonth' },
+  { value: 3, labelKey: 'reports.period.last3Months' },
+  { value: 6, labelKey: 'reports.period.last6Months' },
+] satisfies { value: number; labelKey: TranslationKey }[];
 
 const useStyles = makeStyles({
   header: {
@@ -101,6 +101,7 @@ const useStyles = makeStyles({
  */
 export default function ReportsPage() {
   const styles = useStyles();
+  const t = useT();
 
   const [areas, setAreas] = useState<ReportAreas | null>(null);
   const [areasError, setAreasError] = useState<string | null>(null);
@@ -121,7 +122,7 @@ export default function ReportsPage() {
         if (!cancelled) setAreas(a);
       })
       .catch((e) => {
-        if (!cancelled) setAreasError(e instanceof Error ? e.message : 'Failed to load report areas.');
+        if (!cancelled) setAreasError(e instanceof Error ? e.message : t('reports.error.loadAreas'));
       })
       .finally(() => {
         if (!cancelled) setAreasLoading(false);
@@ -129,7 +130,7 @@ export default function ReportsPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
 
   const enabledAreas = useMemo(
     () => (areas ? AREA_DEFS.filter((d) => areas[d.flag]) : []),
@@ -153,26 +154,26 @@ export default function ReportsPage() {
     <div>
       <div className={styles.header}>
         <div>
-          <Title3>Reports</Title3>
+          <Title3>{t('reports.title')}</Title3>
           <Body1 block className={styles.intro}>
-            A quick, built-in view of how your Microsoft 365 usage is trending. The report charts appear only when
-            their data is being imported. For licence assignments and activity, open{' '}
-            <Link href="#/insights/licence-activity">Licence activity</Link> in the Insights navigation.
+            {t('reports.intro.beforeLicenceActivity')}{' '}
+            <Link href="#/insights/licence-activity">{t('reports.intro.licenceActivityLink')}</Link>{' '}
+            {t('reports.intro.afterLicenceActivity')}
           </Body1>
         </div>
         {enabledAreas.length > 0 && (
           <div className={styles.controls}>
             <Text size={200} className={styles.muted}>
-              Period
+              {t('reports.period.label')}
             </Text>
             <Select
               value={String(months)}
               onChange={(_e: unknown, data: { value: string }) => setMonths(Number(data.value))}
-              aria-label="Reporting period"
+              aria-label={t('reports.period.ariaLabel')}
             >
               {MONTH_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
-                  {o.label}
+                  {t(o.labelKey)}
                 </option>
               ))}
             </Select>
@@ -185,7 +186,7 @@ export default function ReportsPage() {
           <TabList selectedValue={selectedTab ?? ''} onTabSelect={onTabSelect}>
             {enabledAreas.map((a) => (
               <Tab key={a.key} value={a.key}>
-                {a.label}
+                {t(a.labelKey)}
               </Tab>
             ))}
           </TabList>
@@ -201,28 +202,26 @@ export default function ReportsPage() {
       {!areasLoading && !areasError && enabledAreas.length === 0 && (
         <MessageBar intent="info" style={{ marginTop: '16px' }}>
           <MessageBarBody>
-            No built-in report charts are available yet because no data imports are enabled. Enable one or more
-            imports (Copilot, usage reports, SharePoint activity, website traffic, Teams calls or emails) in the
-            installer to see them.
+            {t('reports.empty.noImports')}
           </MessageBarBody>
         </MessageBar>
       )}
 
       {areasLoading ? (
         <div style={{ textAlign: 'center', padding: '32px' }}>
-          <Spinner size={80} label="Loading reports..." />
+          <Spinner size={80} label={t('reports.loading.reports')} />
         </div>
       ) : areasError ? null : selectedTab && enabledAreas.some((a) => a.key === selectedTab) ? (
         <>
           {selectedTab === 'copilot-agents' && (
             <div className={styles.controls} style={{ marginTop: '16px', flexWrap: 'wrap' }}>
               <Text size={200} className={styles.muted}>
-                Top agents
+                {t('reports.topAgents.label')}
               </Text>
               <Select
                 value={String(topAgents)}
                 onChange={(_e: unknown, data: { value: string }) => setTopAgents(Number(data.value))}
-                aria-label="Number of top Copilot agents"
+                aria-label={t('reports.topAgents.ariaLabel')}
               >
                 {[5, 8, 10, 15, 20].map((count) => (
                   <option key={count} value={count}>
@@ -236,11 +235,11 @@ export default function ReportsPage() {
                 onKeyDown={(event: { key: string }) => {
                   if (event.key === 'Enter') setAgentNameFilter(agentNameDraft.trim());
                 }}
-                placeholder="Filter by agent name"
-                aria-label="Filter Copilot agents by name"
+                placeholder={t('reports.topAgents.filterPlaceholder')}
+                aria-label={t('reports.topAgents.filterAriaLabel')}
               />
               <Button size="small" onClick={() => setAgentNameFilter(agentNameDraft.trim())}>
-                Apply
+                {t('common.action.apply')}
               </Button>
               {agentNameFilter && (
                 <Button
@@ -251,7 +250,7 @@ export default function ReportsPage() {
                     setAgentNameFilter('');
                   }}
                 >
-                  Clear
+                  {t('common.action.clear')}
                 </Button>
               )}
             </div>
@@ -261,7 +260,7 @@ export default function ReportsPage() {
             key={selectedTab}
             area={selectedTab}
             months={months}
-            blurb={enabledAreas.find((a) => a.key === selectedTab)?.blurb ?? ''}
+            blurb={t(enabledAreas.find((a) => a.key === selectedTab)!.blurbKey)}
             topAgents={topAgents}
             agentName={agentNameFilter}
           />
@@ -297,7 +296,9 @@ function ReportAreaView({
   blurb: string;
   topAgents: number;
   agentName: string;
-}) {  const styles = useStyles();
+}) {
+  const styles = useStyles();
+  const t = useT();
 
   const [data, setData] = useState<ReportAreaData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -317,7 +318,7 @@ function ReportAreaView({
         if (!cancelled) setData(d);
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load the report.');
+        if (!cancelled) setError(e instanceof Error ? e.message : t('reports.error.loadReport'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -325,12 +326,12 @@ function ReportAreaView({
     return () => {
       cancelled = true;
     };
-  }, [area, months, topAgents, agentName, reloadKey]);
+  }, [area, months, topAgents, agentName, reloadKey, t]);
 
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '32px' }}>
-        <Spinner size={64} label="Loading charts..." />
+        <Spinner size={64} label={t('reports.loading.charts')} />
       </div>
     );
   }
@@ -345,7 +346,7 @@ function ReportAreaView({
 
   if (!data) return null;
 
-  const fromLabel = new Date(data.fromWeek).toLocaleDateString(undefined, {
+  const fromLabel = formatDateParts(new Date(data.fromWeek), {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
@@ -356,10 +357,9 @@ function ReportAreaView({
     <div className={styles.cards}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
         <Text size={200} className={styles.muted}>
-          {blurb} Weeks from {fromLabel}
           {area === 'usage' || area === 'office-apps'
-            ? '. Usage reports arrive a few days late, so the latest weeks appear once their report does.'
-            : ' to now.'}
+            ? t('reports.areaHeader.usageLag', { blurb, from: fromLabel })
+            : t('reports.areaHeader.toNow', { blurb, from: fromLabel })}
         </Text>
         <Button
           appearance="subtle"
@@ -367,16 +367,15 @@ function ReportAreaView({
           icon={<ArrowClockwise16Regular />}
           onClick={() => setReloadKey((k) => k + 1)}
         >
-          Refresh
+          {t('common.action.refresh')}
         </Button>
       </div>
 
       {area === 'calls' && (
         <MessageBar intent="info">
           <MessageBarBody>
-            This is the headline call volume only. For meeting size and length, time-of-day patterns,
-            modalities, organiser concentration and call quality, see{' '}
-            <Link href="#/insights/teams">Teams Explorer</Link>.
+            {t('reports.callsInfo.beforeTeamsExplorer')}{' '}
+            <Link href="#/insights/teams">{t('reports.callsInfo.teamsExplorerLink')}</Link>.
           </MessageBarBody>
         </MessageBar>
       )}
@@ -389,8 +388,7 @@ function ReportAreaView({
       {data.months < months && (
         <MessageBar intent="info">
           <MessageBarBody>
-            Showing the last {data.months} months rather than {months}. This report reads one record
-            per person per day, so a longer window cannot be built in time on a large tenant.
+            {t('reports.clampedWindow', { current: formatNumber(data.months), selected: formatNumber(months) })}
           </MessageBarBody>
         </MessageBar>
       )}
@@ -398,10 +396,7 @@ function ReportAreaView({
       {area === 'copilot' && data.cognitiveConfigured === false && (
         <MessageBar intent="info">
           <MessageBarBody>
-            Prompt insights (common prompt phrases, weekly prompt sentiment and prompt language) are not shown because
-            Azure AI Language is not configured. Those three charts are built from cognitive enrichment of Copilot
-            prompt history, so without it they would always be empty. Add a Cognitive Services endpoint and key in the
-            installer, then re-run the Copilot interaction history import, to enable them.
+            {t('reports.promptInsights.notConfigured')}
           </MessageBarBody>
         </MessageBar>
       )}
@@ -417,13 +412,13 @@ function ReportAreaView({
                 {chart.description}
               </Text>
             </div>
-            <SqlPopover sql={chart.sql} title="SQL behind this chart" />
+            <SqlPopover sql={chart.sql} title={t('reports.chart.sqlTitle')} />
           </div>
 
           <div className={styles.chartBody}>
             {chart.error ? (
               <MessageBar intent="warning">
-                <MessageBarBody>Couldn't load this chart: {chart.error}</MessageBarBody>
+                <MessageBarBody>{t('reports.chart.loadError', { error: chart.error })}</MessageBarBody>
               </MessageBar>
             ) : (
               <>
@@ -454,7 +449,7 @@ function ReportAreaView({
                     ) : chart.type === 'wordcloud' && chart.categories ? (
                       <WordCloud categories={chart.categories} valueLabel={chart.valueLabel} />
                     ) : (
-                      <Text className={styles.muted}>No data for this period.</Text>
+                      <Text className={styles.muted}>{t('reports.chart.noData')}</Text>
                     )}
                   </>
                 )}

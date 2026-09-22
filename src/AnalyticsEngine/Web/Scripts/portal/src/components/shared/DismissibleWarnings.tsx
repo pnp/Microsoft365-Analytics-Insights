@@ -8,6 +8,7 @@ import {
 } from '@fluentui/react-components';
 import { Dismiss16Regular, Warning16Regular } from '@fluentui/react-icons';
 import type { CSSProperties } from 'react';
+import { plural, useT } from '../../i18n';
 
 const useStyles = makeStyles({
   list: {
@@ -48,6 +49,7 @@ export default function DismissibleWarnings({
   style?: CSSProperties;
 }) {
   const styles = useStyles();
+  const t = useT();
   const [dismissedKey, setDismissedKey] = useState<string | null>(null);
 
   if (messages.length === 0) return null;
@@ -64,7 +66,9 @@ export default function DismissibleWarnings({
         data-print="hide"
         onClick={() => setDismissedKey(null)}
       >
-        {messages.length === 1 ? 'Show 1 data warning' : `Show ${messages.length} data warnings`}
+        {t(plural(messages.length, 'common.warnings.show.one', 'common.warnings.show.other'), {
+          count: messages.length,
+        })}
       </Button>
     );
   }
@@ -83,8 +87,8 @@ export default function DismissibleWarnings({
           <Button
             appearance="transparent"
             icon={<Dismiss16Regular />}
-            aria-label="Hide these warnings"
-            title="Hide these warnings"
+            aria-label={t('common.warnings.hide')}
+            title={t('common.warnings.hide')}
             data-print="hide"
             onClick={() => setDismissedKey(key)}
           />

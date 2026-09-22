@@ -10,6 +10,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import Spinner from '../Spinner';
+import { formatDateParts, formatNumber, useT, type TFunction } from '../../i18n';
 import type { HealthSectionBase, HealthStatusName, HourCount } from '../../types/health';
 
 export type BadgeColor = 'success' | 'warning' | 'danger' | 'informative' | 'subtle';
@@ -27,13 +28,20 @@ export function minutesAgo(iso: string | null): number | null {
   return (Date.now() - t) / 60000;
 }
 
-export function howLongAgo(iso: string | null): string {
+export function howLongAgo(iso: string | null, t?: TFunction): string {
   const m = minutesAgo(iso);
-  if (m === null) return 'never';
-  if (m < 1) return 'just now';
-  if (m < 60) return `${Math.round(m)} min ago`;
-  if (m < 60 * 24) return `${(m / 60).toFixed(1)} hours ago`;
-  return `${(m / 60 / 24).toFixed(1)} days ago`;
+  if (m === null) return t ? t('health.time.never') : 'never';
+  if (m < 1) return t ? t('health.time.justNow') : 'just now';
+  if (m < 60) {
+    const minutes = formatNumber(Math.round(m));
+    return t ? t('health.time.minutesAgo', { minutes }) : `${minutes} min ago`;
+  }
+  if (m < 60 * 24) {
+    const hours = formatNumber(Number((m / 60).toFixed(1)));
+    return t ? t('health.time.hoursAgo', { hours }) : `${hours} hours ago`;
+  }
+  const days = formatNumber(Number((m / 60 / 24).toFixed(1)));
+  return t ? t('health.time.daysAgo', { days }) : `${days} days ago`;
 }
 
 export function freshnessColor(iso: string | null, greenHours: number, amberHours: number): BadgeColor {
@@ -75,18 +83,27 @@ export function formatUtc(iso: string | null): string {
   if (!iso) return '-';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '-';
-  return `${d.toISOString().slice(0, 19).replace('T', ' ')} UTC`;
+  return `${formatDateParts(d, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+    timeZone: 'UTC',
+  })} UTC`;
 }
 
 export function formatSize(mb: number): string {
   if (!mb || mb <= 0) return '-';
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
-  return `${mb.toLocaleString()} MB`;
+  if (mb >= 1024) return `${formatNumber(Number((mb / 1024).toFixed(1)))} GB`;
+  return `${formatNumber(mb)} MB`;
 }
 
 /** null (couldn't compute, e.g. the bounded scan timed out) renders as "-"; otherwise a localised count. */
 export function formatCount(n: number | null): string {
-  return n === null || n === undefined ? '-' : n.toLocaleString();
+  return n === null || n === undefined ? '-' : formatNumber(n);
 }
 
 // KQL summarize-by-bin omits empty hours, so pad to a full 24-bar series for a readable sparkline.
@@ -209,11 +226,25 @@ export function useHealthStyles() {
 }
 
 export function HealthStatusBadge({ status }: { status: HealthStatusName | null }) {
+  const t = useT();
   return (
     <Badge appearance="filled" color={statusColor(status)}>
-      {status ?? 'Unknown'}
+      {healthStatusText(status, t)}
     </Badge>
   );
+}
+
+export function healthStatusText(status: string | null, t: TFunction): string {
+  switch ((status ?? '').toLowerCase()) {
+    case 'healthy':
+      return t('health.status.healthy');
+    case 'degraded':
+      return t('health.status.degraded');
+    case 'unhealthy':
+      return t('health.status.unhealthy');
+    default:
+      return t('health.status.unknown');
+  }
 }
 
 export function SectionReasons({ reasons }: { reasons: string[] }) {
@@ -247,6 +278,7 @@ export function SectionFrame<T extends HealthSectionBase>({
   children: (data: T) => ReactNode;
 }) {
   const styles = useSharedStyles();
+  const t = useT();
   const { data, loading, error, refreshing, reload } = state;
 
   return (
@@ -257,11 +289,11 @@ export function SectionFrame<T extends HealthSectionBase>({
         <span className={styles.spacer} />
         {data && (
           <Text size={200} className={styles.muted}>
-            loaded {formatUtc(data.loadedAtUtc)}
+            {t('health.section.loaded', { when: formatUtc(data.loadedAtUtc) })}
           </Text>
         )}
         <Button size="small" appearance="secondary" disabled={refreshing} onClick={reload}>
-          {refreshing ? 'Refreshing...' : 'Refresh'}
+          {refreshing ? t('health.action.refreshing') : t('health.action.refresh')}
         </Button>
       </div>
 
@@ -270,7 +302,7 @@ export function SectionFrame<T extends HealthSectionBase>({
 
       {loading && !data ? (
         <div className={styles.loading}>
-          <Spinner size={60} label={`Loading ${title.toLowerCase()}...`} />
+          <Spinner size={60} label={t('health.section.loading', { title: title.toLowerCase() })} />
         </div>
       ) : error && !data ? (
         <MessageBar intent="error">

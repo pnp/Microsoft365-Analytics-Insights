@@ -5,7 +5,13 @@ import { renderWithProvider } from '../../test/renderWithProvider';
 import DemographicBreakdown from './DemographicBreakdown';
 import { WORKLOADS } from '../../types/licenceActivity';
 import type { LicenceActivityDemographic } from '../../types/licenceActivity';
-import { BAND_DESCRIPTIONS, COPILOT_COVERAGE_NOTE } from './bands';
+import { licenceActivity as en } from '../../i18n/catalog/en/licenceActivity';
+
+const BAND_DESCRIPTIONS = {
+  unknown: en['licenceActivity.band.description.unknown'],
+  zero: en['licenceActivity.band.description.zero'],
+};
+const COPILOT_COVERAGE_NOTE = en['licenceActivity.band.copilotCoverageNote'];
 
 function demo(over: Partial<LicenceActivityDemographic> = {}): LicenceActivityDemographic {
   return {

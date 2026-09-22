@@ -2,6 +2,7 @@ import { memo, useMemo } from 'react';
 import { makeStyles, tokens, Card, Text, MessageBar, MessageBarBody } from '@fluentui/react-components';
 import type { LicenceActivityDemographic, LicenceActivityDistribution } from '../../types/licenceActivity';
 import { WORKLOADS } from '../../types/licenceActivity';
+import { useT } from '../../i18n';
 import { formatCount } from './format';
 import { useLaTableStyles } from './tableStyles';
 import { MiniDistribution, BandLegend } from './MiniDistribution';
@@ -55,6 +56,7 @@ interface DemographicBreakdownProps {
 function DemographicBreakdown({ title, segmentLabel, rows, truncated }: DemographicBreakdownProps) {
   const styles = useStyles();
   const table = useLaTableStyles();
+  const t = useT();
 
   const sorted = useMemo(
     () => [...rows].sort((a, b) => b.assignedUsers - a.assignedUsers || a.name.localeCompare(b.name)),
@@ -72,8 +74,7 @@ function DemographicBreakdown({ title, segmentLabel, rows, truncated }: Demograp
           {title}
         </Text>
         <Text size={200} className={styles.muted}>
-          People with any imported licence, not necessarily a licence for every service, by {segmentLabel.toLowerCase()},
-          largest first.
+          {t('licenceActivity.demographics.description', { segment: segmentLabel.toLowerCase() })}
         </Text>
         <BandLegend />
       </div>
@@ -81,8 +82,7 @@ function DemographicBreakdown({ title, segmentLabel, rows, truncated }: Demograp
       {capped && (
         <MessageBar intent="info">
           <MessageBarBody>
-            Showing only the {formatCount(shown.length)} largest by number of people assigned &mdash; this is not the
-            full list.
+            {t('licenceActivity.demographics.capped', { count: formatCount(shown.length) })}
           </MessageBarBody>
         </MessageBar>
       )}
@@ -92,7 +92,7 @@ function DemographicBreakdown({ title, segmentLabel, rows, truncated }: Demograp
           <thead className={styles.stickyHead}>
             <tr>
               <th className={table.th}>{segmentLabel}</th>
-              <th className={`${table.th} ${table.thNumeric}`}>People assigned</th>
+              <th className={`${table.th} ${table.thNumeric}`}>{t('licenceActivity.common.peopleAssigned')}</th>
               {WORKLOADS.map((w) => (
                 <th key={w.key} className={table.th}>
                   {w.label}

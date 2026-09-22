@@ -20,6 +20,7 @@ import { AppToaster } from './components/toast';
 import Spinner from './components/Spinner';
 import { AREAS, DEFAULT_PATH, ROUTES, areaForPath, groupedRoutesForArea } from './navigation';
 import { PRODUCT_NAME, REPOSITORY_URL, buildLabel } from './product';
+import { LanguageSwitcher, useT } from './i18n';
 
 const useStyles = makeStyles({
   header: {
@@ -34,6 +35,11 @@ const useStyles = makeStyles({
   brand: {
     color: tokens.colorNeutralForegroundOnBrand,
     fontWeight: tokens.fontWeightSemibold,
+  },
+  headerActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
   },
   signOut: {
     color: tokens.colorNeutralForegroundOnBrand,
@@ -121,6 +127,7 @@ export default function App() {
   const styles = useStyles();
   const location = useLocation();
   const navigate = useNavigate();
+  const t = useT();
   const [navOpen, setNavOpen] = useState(true);
   const build = buildLabel();
 
@@ -152,29 +159,38 @@ export default function App() {
       <AppToaster />
       <header className={styles.header} data-print="hide">
         <Text size={400} className={styles.brand}>
+          {/* The product's own name. Microsoft does not translate it, and neither do we: a
+              customer searching for it, or matching it against their licence, needs the same
+              string in every language. */}
           Microsoft 365 Advanced Analytics
         </Text>
-        <Button
-          appearance="transparent"
-          className={styles.signOut}
-          icon={<SignOut20Regular />}
-          onClick={() => {
-            // Server-side OIDC sign-out (full page navigation, not a SPA route).
-            window.location.href = '/Account/SignOut';
-          }}
-        >
-          Sign out
-        </Button>
+        <div className={styles.headerActions}>
+          <LanguageSwitcher />
+          <Button
+            appearance="transparent"
+            className={styles.signOut}
+            icon={<SignOut20Regular />}
+            onClick={() => {
+              // Server-side OIDC sign-out (full page navigation, not a SPA route).
+              window.location.href = '/Account/SignOut';
+            }}
+          >
+            {t('app.signOut')}
+          </Button>
+        </div>
       </header>
 
       <div className={styles.areaBar} data-print="hide">
-        <Tooltip content={navOpen ? 'Collapse navigation' : 'Expand navigation'} relationship="label">
+        <Tooltip
+          content={navOpen ? t('app.nav.collapse') : t('app.nav.expand')}
+          relationship="label"
+        >
           <Hamburger onClick={() => setNavOpen(!navOpen)} />
         </Tooltip>
         <TabList selectedValue={currentArea} onTabSelect={onAreaSelect} size="large">
           {AREAS.map((area) => (
             <Tab key={area.id} value={area.id}>
-              {area.label}
+              {t(area.labelKey)}
             </Tab>
           ))}
         </TabList>
@@ -188,15 +204,17 @@ export default function App() {
           data-print="hide"
           selectedValue={location.pathname}
           onNavItemSelect={(_event: unknown, data: { value: unknown }) => goTo(String(data.value))}
-          aria-label={`${AREAS.find((a) => a.id === currentArea)?.label} navigation`}
+          aria-label={t('app.nav.ariaLabel', {
+            area: t(AREAS.find((a) => a.id === currentArea)?.labelKey ?? AREAS[0].labelKey),
+          })}
         >
           <NavDrawerBody>
             {navGroups.map((bucket, i) => (
-              <div key={bucket.group ?? `ungrouped-${i}`}>
-                {bucket.group && <NavSectionHeader>{bucket.group}</NavSectionHeader>}
+              <div key={bucket.groupKey ?? `ungrouped-${i}`}>
+                {bucket.groupKey && <NavSectionHeader>{t(bucket.groupKey)}</NavSectionHeader>}
                 {bucket.routes.map((route) => (
                   <NavItem key={route.path} value={route.path} icon={route.icon}>
-                    {route.label}
+                    {t(route.labelKey)}
                   </NavItem>
                 ))}
               </div>
@@ -209,7 +227,7 @@ export default function App() {
             <Suspense
               fallback={
                 <div style={{ textAlign: 'center', padding: '32px' }}>
-                  <Spinner size={80} label="Loading..." />
+                  <Spinner size={80} label={t('common.state.loading')} />
                 </div>
               }
             >

@@ -5,6 +5,7 @@
 // "nobody did this" when the truth is "we didn't measure it". These helpers force the caller to be
 // explicit about the null case rather than letting `null` coerce to 0 somewhere in a template.
 
+import { formatDateParts, formatNumber, type TFunction } from '../../i18n';
 import type { LicenceActivitySku } from '../../types/licenceActivity';
 
 /** A licence name can be absent in storage; use an actual identifier rather than invent a product. */
@@ -14,22 +15,19 @@ export function licenceName(sku: LicenceActivitySku): string {
   return `Licence ${sku.licenceTypeId}`;
 }
 
-/** Rendered for a value that is genuinely unknown, as opposed to a measured zero. */
-export const UNKNOWN_TEXT = 'Unknown';
-
 /** An em dash, for an unknown value in a dense table cell where the word "Unknown" is too heavy. */
 export const DASH = '\u2014';
 
 /** A whole number with thousands separators, e.g. 12345 -> "12,345". */
 export function formatCount(value: number): string {
-  return Math.round(value).toLocaleString();
+  return formatNumber(Math.round(value));
 }
 
 /**
  * A possibly-unknown count. Null/undefined -> the unknown marker; a real number (including 0) ->
  * that number. This is the workhorse for "Unknown is not zero".
  */
-export function formatMaybeCount(value: number | null | undefined, unknown: string = UNKNOWN_TEXT): string {
+export function formatMaybeCount(value: number | null | undefined, unknown: string): string {
   return value == null ? unknown : formatCount(value);
 }
 
@@ -55,7 +53,7 @@ export function formatDate(iso: string | null | undefined, unknown: string = DAS
   if (!iso) return unknown;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return unknown;
-  return date.toLocaleDateString(undefined, {
+  return formatDateParts(date, {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
@@ -68,7 +66,7 @@ export function formatDateTime(iso: string | null | undefined, unknown: string =
   if (!iso) return unknown;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return unknown;
-  return date.toLocaleString(undefined, {
+  return formatDateParts(date, {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
@@ -92,10 +90,15 @@ export function daysAgo(iso: string | null | undefined, now: Date = new Date()):
 }
 
 /** "today" / "yesterday" / "N days ago" for a past UTC timestamp, or the unknown marker when absent. */
-export function formatAge(iso: string | null | undefined, now: Date = new Date(), unknown: string = UNKNOWN_TEXT): string {
+export function formatAge(
+  iso: string | null | undefined,
+  t: TFunction,
+  now: Date = new Date(),
+  unknown = t('licenceActivity.common.unknown'),
+): string {
   const days = daysAgo(iso, now);
   if (days == null) return unknown;
-  if (days === 0) return 'today';
-  if (days === 1) return 'yesterday';
-  return `${days.toLocaleString()} days ago`;
+  if (days === 0) return t('common.time.today');
+  if (days === 1) return t('common.time.yesterday');
+  return t('common.time.daysAgo', { days: formatNumber(days) });
 }

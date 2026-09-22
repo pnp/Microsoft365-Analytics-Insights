@@ -1,6 +1,7 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { ReportCategory } from '../../types/reports';
 import type { CopilotAdoptionOptions } from '../../types/copilotAdoption';
+import { useT, type TFunction } from '../../i18n';
 import { formatCount, formatPct } from '../shared/KpiGrid';
 
 const useStyles = makeStyles({
@@ -91,48 +92,18 @@ export function funnelLabelFillForStage(stageColour: string, darkFill: string = 
  * better than confidently explaining the wrong stage. The membership rule is stated first, because
  * "how is this counted?" is the question the reader has when they hover a name they did not choose.
  */
-function stageHelp(label: string, options: CopilotAdoptionOptions): string | null {
+function stageHelp(t: TFunction, label: string, options: CopilotAdoptionOptions): string | null {
   switch (label) {
     case 'Licensed':
-      return (
-        'The licensed users this analysis scored - holders of a Copilot licence SKU, taken from the '
-        + 'imported licence assignments. It counts seats, not use: nobody at this stage has to have '
-        + 'touched Copilot. This is the 100% baseline every other stage is measured against, and it '
-        + 'is the scored population rather than the raw seat count, so a run that hits its row cap '
-        + 'does not open with a drop that is really an artefact of how many users were read.'
-      );
+      return t('copilotAdoption.adoptionFunnel.stageHelp.licensed');
     case 'Ever used Copilot':
-      return (
-        'Everyone counted at "Active this period", plus everyone banded Dormant - not counted as '
-        + 'active in the period, but with earlier use on record. Those two groups are exactly this '
-        + 'stage, so the drop to "Active this period" is the Dormant population. Earlier use is read '
-        + `from the audit import\u2019s history, which goes back at least ${options.historyDays} `
-        + 'days, and from Microsoft\u2019s per-user usage report.'
-      );
+      return t('copilotAdoption.adoptionFunnel.stageHelp.everUsed', { historyDays: options.historyDays });
     case 'Active this period':
-      return (
-        'Licensed users counted as having at least one Copilot interaction inside the selected '
-        + `reporting period (${options.windowDays} days). Users counted at "Ever used Copilot" but `
-        + 'not here are the Dormant group - earlier use on record, but not counted as active in the '
-        + 'period - and they need a conversation rather than onboarding. Where the audit import has '
-        + 'nothing for a user but Microsoft\u2019s per-user usage report does, that report is used '
-        + 'instead, and it covers Microsoft\u2019s own window rather than exactly the period '
-        + 'selected here.'
-      );
+      return t('copilotAdoption.adoptionFunnel.stageHelp.activeThisPeriod', { windowDays: options.windowDays });
     case 'Habitual users':
-      return (
-        `Licensed users whose engagement score reaches ${options.establishedScore} out of 100 - the `
-        + 'Established and Champion bands, which are the two this report counts as a formed habit. '
-        + 'The score is a weighted blend of how often they use Copilot, how much they do on each '
-        + 'active day, and how many Copilot surfaces they use; the Method tab sets out the weights '
-        + 'and the exact formula.'
-      );
+      return t('copilotAdoption.adoptionFunnel.stageHelp.habitual', { establishedScore: options.establishedScore });
     case 'Champions':
-      return (
-        `Licensed users whose engagement score reaches ${options.championScore} out of 100 - the top `
-        + 'band. Champions are your advocate pool for enablement, not a target the whole population '
-        + 'is expected to reach.'
-      );
+      return t('copilotAdoption.adoptionFunnel.stageHelp.champions', { championScore: options.championScore });
     default:
       return null;
   }
@@ -161,9 +132,10 @@ export default function AdoptionFunnel({
   options: CopilotAdoptionOptions;
 }) {
   const styles = useStyles();
+  const t = useT();
 
   if (stages.length === 0) {
-    return <div className={styles.empty}>No licensed users to chart.</div>;
+    return <div className={styles.empty}>{t('copilotAdoption.adoptionFunnel.empty')}</div>;
   }
 
   const top = Math.max(stages[0]?.value ?? 0, 1);
@@ -179,7 +151,7 @@ export default function AdoptionFunnel({
 
   return (
     <div className={styles.root}>
-      <svg viewBox={`0 0 ${W} ${height}`} className={styles.svg} role="img" aria-label="Copilot adoption funnel">
+      <svg viewBox={`0 0 ${W} ${height}`} className={styles.svg} role="img" aria-label={t('copilotAdoption.adoptionFunnel.ariaLabel')}>
         <defs>
           {STAGE_COLOURS.map((colour, i) => (
             <linearGradient key={i} id={`funnel-grad-${i}`} x1="0" y1="0" x2="1" y2="0">
@@ -217,24 +189,19 @@ export default function AdoptionFunnel({
           // red against them contradicts that advice and points enablement budget at the people who
           // are already succeeding, so the final step is reported as a neutral "not yet" instead.
           const isTopTier = index === stages.length - 1;
-          const help = stageHelp(stage.label, options);
+          const help = stageHelp(t, stage.label, options);
           const previousLabel = previous === null ? null : stages[index - 1].label;
           const dropText = isTopTier
-            ? `${formatCount(lost)} not yet ${stage.label}`
-            : `${formatCount(lost)} lost here`;
+            ? t('copilotAdoption.adoptionFunnel.notYet', { count: formatCount(lost), stage: stage.label })
+            : t('copilotAdoption.adoptionFunnel.lostHere', { count: formatCount(lost) });
           const dropColour = isTopTier
             ? tokens.colorNeutralForeground3
             : tokens.colorPaletteRedForeground1;
           const dropHelp = previous === null
             ? ''
             : isTopTier
-              ? `${formatCount(lost)} of the ${formatCount(previous)} users at "${previousLabel}" have not reached "${stage.label}". `
-                + `Reaching "${stage.label}" is the top tier of engagement, not a target for everyone: users at `
-                + `"${previousLabel}" have already formed a habit and need no action. Read this as the size of your `
-                + `advocate pool, not as a loss.`
-              : `${formatCount(lost)} of the ${formatCount(previous)} users at "${previousLabel}" did not reach "${stage.label}". `
-                + `The percentage is the conversion from the stage immediately above, not from the top of the funnel. `
-                + `The biggest single drop is where enablement effort should go.`;
+              ? t('copilotAdoption.adoptionFunnel.dropHelp.topTier', { lost: formatCount(lost), previous: formatCount(previous), previousLabel: previousLabel ?? '', stage: stage.label })
+              : t('copilotAdoption.adoptionFunnel.dropHelp.loss', { lost: formatCount(lost), previous: formatCount(previous), previousLabel: previousLabel ?? '', stage: stage.label });
 
           // The narrowest point decides whether the labels fit. A stage holding a handful of users is
           // only a few pixels wide, and white text centred on it lands on the page background where
@@ -258,7 +225,7 @@ export default function AdoptionFunnel({
                 ].join(' ')}
                 fill={`url(#funnel-grad-${index % STAGE_COLOURS.length})`}
               >
-                <title>{`${stage.label}: ${formatCount(stage.value)} (${formatPct(sharePct)} of licensed)`}</title>
+                <title>{t('copilotAdoption.adoptionFunnel.stageTitle', { label: stage.label, count: formatCount(stage.value), pct: formatPct(sharePct) })}</title>
               </polygon>
 
               <text
@@ -307,7 +274,7 @@ export default function AdoptionFunnel({
                 fillOpacity={labelsFitInside ? inShapeCaptionOpacity : 1}
                 style={{ pointerEvents: 'none' }}
               >
-                {formatPct(sharePct)} of licensed
+                {t('copilotAdoption.adoptionFunnel.ofLicensed', { pct: formatPct(sharePct) })}
               </text>
 
               {previous === null ? (
@@ -317,7 +284,7 @@ export default function AdoptionFunnel({
                   fontSize={13}
                   fill={tokens.colorNeutralForeground3}
                 >
-                  baseline
+                  {t('copilotAdoption.adoptionFunnel.baseline')}
                 </text>
               ) : (
                 <>
@@ -362,10 +329,7 @@ export default function AdoptionFunnel({
       </svg>
 
       <Text size={200} className={styles.caption}>
-        Each stage is a subset of the one above it. The figure on the right is the conversion from the stage
-        immediately above, not from the top - the biggest single drop is where the effort should go. The last
-        step is shown in grey rather than red because it is not a loss: everyone who reaches the stage above it
-        has already formed a habit. Hover any stage name for how it is counted, or any figure for the detail.
+        {t('copilotAdoption.adoptionFunnel.caption')}
       </Text>
     </div>
   );

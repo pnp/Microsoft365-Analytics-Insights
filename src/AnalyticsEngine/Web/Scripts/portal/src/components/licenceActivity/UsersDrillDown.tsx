@@ -12,6 +12,7 @@ import {
   MessageBarBody,
 } from '@fluentui/react-components';
 import { ArrowClockwise16Regular } from '@fluentui/react-icons';
+import { useT, type TranslationKey } from '../../i18n';
 import {
   WORKLOADS,
   type LicenceActivityCoverage,
@@ -33,13 +34,13 @@ const MAX_TOP = 100;
 // Must match LicenceActivityQuery.Create's server-side limit, which throws (=> HTTP 400) above it.
 const MAX_SEARCH = 100;
 
-const BROWSE_SORTS: { value: string; label: string }[] = [
-  { value: 'activity:desc', label: 'Most active first' },
-  { value: 'activity:asc', label: 'Least active first' },
-  { value: 'lastActivity:desc', label: 'Most recently active' },
-  { value: 'lastActivity:asc', label: 'Longest since active' },
-  { value: 'upn:asc', label: 'Sign-in address (A\u2013Z)' },
-  { value: 'upn:desc', label: 'Sign-in address (Z\u2013A)' },
+const BROWSE_SORTS: { value: string; labelKey: TranslationKey }[] = [
+  { value: 'activity:desc', labelKey: 'licenceActivity.users.sort.mostActive' },
+  { value: 'activity:asc', labelKey: 'licenceActivity.users.sort.leastActive' },
+  { value: 'lastActivity:desc', labelKey: 'licenceActivity.users.sort.mostRecentlyActive' },
+  { value: 'lastActivity:asc', labelKey: 'licenceActivity.users.sort.longestSinceActive' },
+  { value: 'upn:asc', labelKey: 'licenceActivity.users.sort.upnAsc' },
+  { value: 'upn:desc', labelKey: 'licenceActivity.users.sort.upnDesc' },
 ];
 
 const useStyles = makeStyles({
@@ -128,6 +129,7 @@ function clampTop(n: number): number {
 /** A 1..100 count field with commit-on-blur/Enter, so the bounded lists refetch once per change. */
 function TopCountInput({ value, onCommit, disabled }: { value: number; onCommit: (n: number) => void; disabled?: boolean }) {
   const styles = useStyles();
+  const t = useT();
   const [text, setText] = useState(String(value));
   useEffect(() => setText(String(value)), [value]);
 
@@ -145,7 +147,7 @@ function TopCountInput({ value, onCommit, disabled }: { value: number; onCommit:
       max={MAX_TOP}
       value={text}
       disabled={disabled}
-      aria-label="Number of people in each list"
+      aria-label={t('licenceActivity.users.topCountAria')}
       onChange={(_e: any, d: any) => setText(d.value)}
       onBlur={commit}
       onKeyDown={(e: any) => {
@@ -200,6 +202,7 @@ export default function UsersDrillDown({
   refreshToken,
 }: UsersDrillDownProps) {
   const styles = useStyles();
+  const t = useT();
 
   const [workload, setWorkload] = useState<WorkloadKey>('teams');
   const [top, setTop] = useState(10);
@@ -231,8 +234,8 @@ export default function UsersDrillDown({
   const workloadCoverage = coverage.find((c) => c.workload === workload) ?? null;
   const coverageIncomplete = workloadCoverage != null && workloadCoverage.status !== 'available';
   const rankEmptyText = coverageIncomplete
-    ? `${workloadLabel} activity isn't fully measured, so people can't be ranked here - see the note above.`
-    : 'Nobody can be ranked for this service.';
+    ? t('licenceActivity.users.rankUnavailableIncomplete', { workload: workloadLabel })
+    : t('licenceActivity.users.rankUnavailableEmpty');
 
   // Reset the page atomically when the scope (licence / workload / browse filter) changes, DURING
   // render - so `params` never briefly pairs a new scope with the old page, which would fire a wasted
@@ -301,16 +304,19 @@ export default function UsersDrillDown({
             {licenceName(licence)}
           </Text>
           <Text size={200} className={styles.muted}>
-            {formatCount(licence.assignedUsers)} people hold this licence. Choose a service to rank them by how much they
-            use it.
+            {t('licenceActivity.users.holdLicenceChooseService', { count: formatCount(licence.assignedUsers) })}
           </Text>
         </div>
         <div className={styles.controls}>
           <div className={styles.field}>
             <Text size={200} className={styles.muted}>
-              Service
+              {t('licenceActivity.common.service')}
             </Text>
-            <Select value={workload} aria-label="Service" onChange={(_e: any, d: any) => setWorkload(d.value as WorkloadKey)}>
+            <Select
+              value={workload}
+              aria-label={t('licenceActivity.common.service')}
+              onChange={(_e: any, d: any) => setWorkload(d.value as WorkloadKey)}
+            >
               {WORKLOADS.map((w) => (
                 <option key={w.key} value={w.key}>
                   {w.label}
@@ -320,11 +326,11 @@ export default function UsersDrillDown({
           </div>
           <div className={styles.field}>
             <Text size={200} className={styles.muted}>
-              Show top
+              {t('licenceActivity.users.showTop')}
             </Text>
             <TopCountInput value={top} onCommit={setTop} />
             <Text size={200} className={styles.muted}>
-              of each
+              {t('licenceActivity.users.ofEach')}
             </Text>
           </div>
           <Button
@@ -332,14 +338,16 @@ export default function UsersDrillDown({
             appearance="subtle"
             icon={<ArrowClockwise16Regular />}
             onClick={reload}
-            aria-label="Refresh the list"
+            aria-label={t('licenceActivity.users.refreshAria')}
           >
-            Refresh
+            {t('licenceActivity.common.refresh')}
           </Button>
         </div>
       </div>
 
-      {error != null && <ApiErrorBar error={error} fallback="Couldn't load the people holding this licence." onRetry={retry} />}
+      {error != null && (
+        <ApiErrorBar error={error} fallback={t('licenceActivity.users.couldNotLoad')} onRetry={retry} />
+      )}
 
       {/* A failed load unmounts the browse controls below (they live inside `data && ...`), which
           would otherwise strand an admin whose SEARCH TERM caused the failure: every surviving
@@ -355,7 +363,7 @@ export default function UsersDrillDown({
               setSearch('');
             }}
           >
-            Clear search and try again
+            {t('licenceActivity.users.clearSearch')}
           </Button>
         </div>
       )}
@@ -364,11 +372,11 @@ export default function UsersDrillDown({
         <MessageBar intent="warning">
           <MessageBarBody>
             <strong>
-              {workloadLabel}: {statusMeta(workloadCoverage.status).label}.
+              {workloadLabel}: {statusMeta(workloadCoverage.status, t).label}.
             </strong>{' '}
-            {statusMeta(workloadCoverage.status).explanation}
-            {workloadCoverage.message ? ` ${workloadCoverage.message}` : ''} People with recorded activity still appear
-            as most active; nobody is listed as least active for this service.
+            {statusMeta(workloadCoverage.status, t).explanation}
+            {workloadCoverage.message ? ` ${workloadCoverage.message}` : ''}{' '}
+            {t('licenceActivity.users.incompleteWarning')}
           </MessageBarBody>
         </MessageBar>
       )}
@@ -387,7 +395,7 @@ export default function UsersDrillDown({
 
       {loading && !data && (
         <div className={styles.center}>
-          <Spinner size="small" label="Loading people..." />
+          <Spinner size="small" label={t('licenceActivity.users.loading')} />
         </div>
       )}
 
@@ -397,10 +405,10 @@ export default function UsersDrillDown({
             <div className={styles.panel}>
               <div className={styles.panelHead}>
                 <Text weight="semibold" size={300}>
-                  Most active
+                  {t('licenceActivity.users.mostActive')}
                 </Text>
                 <Text size={200} className={styles.muted}>
-                  top {top}
+                  {t('licenceActivity.users.topN', { count: formatCount(top) })}
                 </Text>
               </div>
               <UsersTable
@@ -414,10 +422,10 @@ export default function UsersDrillDown({
             <div className={styles.panel}>
               <div className={styles.panelHead}>
                 <Text weight="semibold" size={300}>
-                  Least active
+                  {t('licenceActivity.users.leastActive')}
                 </Text>
                 <Text size={200} className={styles.muted}>
-                  bottom {top}
+                  {t('licenceActivity.users.bottomN', { count: formatCount(top) })}
                 </Text>
               </div>
               <UsersTable
@@ -433,16 +441,15 @@ export default function UsersDrillDown({
           <div className={styles.browse}>
             <div className={styles.panelHead}>
               <Text weight="semibold" size={300}>
-                Everyone with this licence
+                {t('licenceActivity.users.everyoneWithLicence')}
               </Text>
               <Text size={200} className={styles.muted}>
-                {formatCount(data.totalUsers)} people
+                {t('licenceActivity.users.peopleCount', { count: formatCount(data.totalUsers) })}
               </Text>
             </div>
 
             <Text size={100} className={styles.muted}>
-              Staff names aren&apos;t collected by this product, so people are listed and searched by their sign-in
-              address.
+              {t('licenceActivity.users.noStaffNames')}
             </Text>
 
             <div className={styles.browseControls}>
@@ -450,19 +457,19 @@ export default function UsersDrillDown({
                 className={styles.grow}
                 value={searchDraft}
                 maxLength={MAX_SEARCH}
-                placeholder="Search by sign-in address"
-                aria-label="Search users"
+                placeholder={t('licenceActivity.users.searchPlaceholder')}
+                aria-label={t('licenceActivity.users.searchAria')}
                 onChange={(_e: any, d: any) => setSearchDraft(sanitiseDraft(d.value))}
                 onKeyDown={(e: any) => {
                   if (e.key === 'Enter') commitSearch(searchDraft);
                 }}
               />
               <Button size="small" onClick={() => commitSearch(searchDraft)}>
-                Search
+                {t('licenceActivity.common.search')}
               </Button>
               <Select
                 value={`${sort}:${direction}`}
-                aria-label="Sort users"
+                aria-label={t('licenceActivity.users.sortAria')}
                 onChange={(_e: any, d: any) => {
                   const [nextSort, nextDir] = d.value.split(':');
                   setSort(nextSort as UsersSortKey);
@@ -471,7 +478,7 @@ export default function UsersDrillDown({
               >
                 {BROWSE_SORTS.map((o) => (
                   <option key={o.value} value={o.value}>
-                    {o.label}
+                    {t(o.labelKey)}
                   </option>
                 ))}
               </Select>
@@ -483,25 +490,30 @@ export default function UsersDrillDown({
               workloadLabel={workloadLabel}
               startRank={(data.query.page - 1) * data.query.pageSize + 1}
               showRank
-              emptyText={search ? 'Nobody matches your search.' : 'Nobody to show for this selection.'}
+              emptyText={search ? t('licenceActivity.users.noSearchMatches') : t('licenceActivity.users.nobodyToShow')}
             />
 
             {data.totalUsers > 0 && (
               <div className={styles.footer}>
                 <Text size={200} className={styles.muted}>
-                  Showing {formatCount((data.query.page - 1) * data.query.pageSize + 1)}&ndash;
-                  {formatCount(Math.min(data.query.page * data.query.pageSize, data.totalUsers))} of{' '}
-                  {formatCount(data.totalUsers)} people
+                  {t('licenceActivity.users.showingRange', {
+                    from: formatCount((data.query.page - 1) * data.query.pageSize + 1),
+                    to: formatCount(Math.min(data.query.page * data.query.pageSize, data.totalUsers)),
+                    total: formatCount(data.totalUsers),
+                  })}
                 </Text>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                   <Button size="small" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
-                    Previous
+                    {t('licenceActivity.common.previous')}
                   </Button>
                   <Text size={200} className={styles.muted}>
-                    Page {data.query.page} of {totalPages}
+                    {t('licenceActivity.users.pageOf', {
+                      page: formatCount(data.query.page),
+                      totalPages: formatCount(totalPages),
+                    })}
                   </Text>
                   <Button size="small" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
-                    Next
+                    {t('licenceActivity.common.next')}
                   </Button>
                 </div>
               </div>

@@ -1,6 +1,7 @@
 import { memo, useMemo } from 'react';
 import { makeStyles, tokens, Card, Text, Select } from '@fluentui/react-components';
 import type { LicenceActivitySku } from '../../types/licenceActivity';
+import { compareStrings, useT } from '../../i18n';
 import { formatCount, licenceName } from './format';
 
 const useStyles = makeStyles({
@@ -41,11 +42,12 @@ interface SelectedLicenceBarProps {
  */
 function SelectedLicenceBar({ licences, selectedLicenceTypeId, onSelect }: SelectedLicenceBarProps) {
   const styles = useStyles();
+  const t = useT();
 
   const sorted = useMemo(
     () =>
       [...licences].sort(
-        (a, b) => b.assignedUsers - a.assignedUsers || licenceName(a).localeCompare(licenceName(b)),
+        (a, b) => b.assignedUsers - a.assignedUsers || compareStrings(licenceName(a), licenceName(b)),
       ),
     [licences],
   );
@@ -57,17 +59,17 @@ function SelectedLicenceBar({ licences, selectedLicenceTypeId, onSelect }: Selec
   return (
     <Card className={styles.card}>
       <Text size={200} weight="semibold" className={styles.label}>
-        Licence
+        {t('licenceActivity.common.licence')}
       </Text>
       <Select
         className={styles.select}
         value={selectedLicenceTypeId == null ? '' : String(selectedLicenceTypeId)}
-        aria-label="Selected licence"
+        aria-label={t('licenceActivity.selectedLicence.aria')}
         onChange={(_e: any, d: any) => {
           if (d.value !== '') onSelect(Number(d.value));
         }}
       >
-        {selectedLicenceTypeId == null && <option value="">Choose a licence</option>}
+        {selectedLicenceTypeId == null && <option value="">{t('licenceActivity.selectedLicence.choose')}</option>}
         {sorted.map((sku) => (
           <option key={sku.licenceTypeId} value={sku.licenceTypeId}>
             {licenceName(sku)}
@@ -76,7 +78,7 @@ function SelectedLicenceBar({ licences, selectedLicenceTypeId, onSelect }: Selec
       </Select>
       {selected && (
         <Text size={200} className={styles.caption}>
-          {formatCount(selected.assignedUsers)} people hold this licence
+          {t('licenceActivity.selectedLicence.peopleHold', { count: formatCount(selected.assignedUsers) })}
         </Text>
       )}
     </Card>

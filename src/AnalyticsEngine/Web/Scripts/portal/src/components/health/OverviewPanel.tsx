@@ -14,8 +14,9 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import Spinner from '../Spinner';
+import { useT } from '../../i18n';
 import type { HealthSummary } from '../../types/health';
-import { type SectionState, SectionReasons, statusColor, useHealthStyles } from './healthShared';
+import { type SectionState, SectionReasons, healthStatusText, statusColor, useHealthStyles } from './healthShared';
 
 const useStyles = makeStyles({
   reasons: {
@@ -42,6 +43,7 @@ export default function OverviewPanel({
   state: SectionState<HealthSummary>;
   onOpenSection: (key: string) => void;
 }) {
+  const t = useT();
   const shared = useHealthStyles();
   const styles = useStyles();
   const { data, loading, error } = state;
@@ -49,7 +51,7 @@ export default function OverviewPanel({
   if (loading && !data) {
     return (
       <div style={{ textAlign: 'center', padding: '32px' }}>
-        <Spinner size={80} label="Loading system health..." />
+        <Spinner size={80} label={t('health.overview.loadingSystemHealth')} />
       </div>
     );
   }
@@ -67,9 +69,7 @@ export default function OverviewPanel({
   return (
     <div>
       <Text className={styles.intro}>
-        A single "is it working?" view. All values are read-only and best-effort - a data-source hiccup greys out one
-        sub-section, it never breaks the page. This Overview rolls up every section but skips the heavy database scans
-        (those load only when you open the Data tab), so it stays cheap even on a large tenant.
+        {t('health.overview.intro')}
       </Text>
 
       {data.overallReasons.length > 0 && (
@@ -86,21 +86,19 @@ export default function OverviewPanel({
         <div style={{ marginTop: 12 }}>
           <MessageBar intent="warning">
             <MessageBarBody>
-              Application Insights is not configured for this web app, so the Import liveness, Exceptions and
-              Component-health (App Insights) sub-sections are unavailable. The Data overview, Configuration and runtime
-              credential / Service Bus checks still work.
+              {t('health.overview.appInsightsNotConfigured')}
             </MessageBarBody>
           </MessageBar>
         </div>
       )}
 
-      <Text className={shared.subHeading}>Sub-sections</Text>
-      <Table size="small" aria-label="Section status">
+      <Text className={shared.subHeading}>{t('health.overview.subSectionsHeading')}</Text>
+      <Table size="small" aria-label={t('health.overview.sectionStatusAriaLabel')}>
         <TableHeader>
           <TableRow>
-            <TableHeaderCell>Sub-section</TableHeaderCell>
-            <TableHeaderCell>Status</TableHeaderCell>
-            <TableHeaderCell>Notes</TableHeaderCell>
+            <TableHeaderCell>{t('health.overview.columnSubSection')}</TableHeaderCell>
+            <TableHeaderCell>{t('health.overview.columnStatus')}</TableHeaderCell>
+            <TableHeaderCell>{t('health.overview.columnNotes')}</TableHeaderCell>
             <TableHeaderCell />
           </TableRow>
         </TableHeader>
@@ -110,7 +108,7 @@ export default function OverviewPanel({
               <TableCell>{s.label}</TableCell>
               <TableCell>
                 <Badge appearance="filled" color={statusColor(s.status)}>
-                  {s.status}
+                  {healthStatusText(s.status, t)}
                 </Badge>
               </TableCell>
               <TableCell>
@@ -118,7 +116,7 @@ export default function OverviewPanel({
               </TableCell>
               <TableCell>
                 <Button size="small" appearance="subtle" onClick={() => onOpenSection(s.key)}>
-                  Open
+                  {t('health.overview.open')}
                 </Button>
               </TableCell>
             </TableRow>

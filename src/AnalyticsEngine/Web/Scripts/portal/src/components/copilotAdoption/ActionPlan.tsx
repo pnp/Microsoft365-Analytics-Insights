@@ -1,5 +1,6 @@
 import { makeStyles, tokens, Text, Badge } from '@fluentui/react-components';
 import type { AdoptionActionSummary } from '../../types/copilotAdoption';
+import { useT } from '../../i18n';
 import { formatCount, formatPct } from '../shared/KpiGrid';
 
 /**
@@ -129,9 +130,10 @@ export default function ActionPlan({
   onSelect?: (code: string) => void;
 }) {
   const styles = useStyles();
+  const t = useT();
 
   if (actions.length === 0) {
-    return <div className={styles.empty}>No licensed users to plan for.</div>;
+    return <div className={styles.empty}>{t('copilotAdoption.actionPlan.empty')}</div>;
   }
 
   return (
@@ -147,7 +149,7 @@ export default function ActionPlan({
             className={rowClass}
             role={onSelect ? 'button' : undefined}
             tabIndex={onSelect ? 0 : undefined}
-            title={onSelect ? `Show the ${formatCount(a.users)} people who need this` : undefined}
+            title={onSelect ? t('copilotAdoption.actionPlan.rowTitle', { count: formatCount(a.users) }) : undefined}
             onClick={onSelect ? () => onSelect(a.code) : undefined}
             onKeyDown={
               onSelect
@@ -173,7 +175,7 @@ export default function ActionPlan({
               {a.description}
               {(a.guidanceLinks?.length ?? 0) > 0 && (
                 <span className={styles.guidance}>
-                  <Text size={200}>Microsoft&apos;s guidance for this kind of user:</Text>
+                  <Text size={200}>{t('copilotAdoption.actionPlan.microsoftGuidance')}</Text>
                   {a.guidanceLinks?.map((link) => (
                     <a
                       key={`${a.code}-${link.url}`}
@@ -193,7 +195,7 @@ export default function ActionPlan({
                 <>
                   {' '}
                   <Text size={200} className={styles.drill}>
-                    Show these people &rsaquo;
+                    {t('copilotAdoption.actionPlan.showPeople')}
                   </Text>
                 </>
               )}

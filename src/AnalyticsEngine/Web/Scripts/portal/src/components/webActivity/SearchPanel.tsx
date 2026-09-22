@@ -13,6 +13,7 @@ import TimeSeriesChart from '../charts/TimeSeriesChart';
 import WordCloud from '../charts/WordCloud';
 import { KpiGrid, type KpiDefinition } from '../shared/KpiGrid';
 import type { WebActivitySearch, WebActivitySearchTermRow } from '../../types/webActivity';
+import { useT } from '../../i18n';
 import {
   FailedQueryNote,
   SectionCard,
@@ -47,73 +48,56 @@ export default function SearchPanel({
   exporting: boolean;
 }) {
   const styles = useWebActivityStyles();
+  const t = useT();
   const kpis = data.kpis;
 
   const items: KpiDefinition[] = [
     {
       key: 'searches',
-      label: 'Searches',
+      label: t('webActivity.common.searches'),
       value: formatCount(kpis.searches),
-      hint: `${formatCount(kpis.terms)} distinct terms`,
+      hint: t('webActivity.search.kpi.distinctTermsHint', { count: formatCount(kpis.terms) }),
       info: {
-        what: 'Searches run from the SharePoint sites the tracker covers.',
-        how:
-          'One row of dbo.searches is one search. Searches imported before the search fix migration '
-          + 'have no timestamp and cannot be attributed to any period, so they are excluded '
-          + 'everywhere rather than being dropped into whichever window happens to be open.',
+        what: t('webActivity.search.kpi.searchesWhat'),
+        how: t('webActivity.search.kpi.searchesHow'),
       },
     },
     {
       key: 'searchers',
-      label: 'People who searched',
+      label: t('webActivity.search.kpi.peopleWhoSearched'),
       value: formatCount(kpis.searchers),
-      info: { what: 'Distinct people who ran at least one search.', how: 'Distinct users behind the searching sessions.' },
+      info: { what: t('webActivity.search.kpi.peopleWhoSearchedWhat'), how: t('webActivity.search.kpi.peopleWhoSearchedHow') },
     },
     {
       key: 'reliance',
-      label: 'Visits that searched',
+      label: t('webActivity.search.kpi.visitsThatSearched'),
       value: formatPct(kpis.searchReliancePct),
-      hint: `${formatCount(kpis.sessionsWithSearch)} visits`,
+      hint: t('webActivity.common.visitsCount', { count: formatCount(kpis.sessionsWithSearch) }),
       tone: searchRelianceTone(kpis.searchReliancePct),
       info: {
-        what: 'The share of all visits in which at least one search was run.',
-        how:
-          'Search is a fallback on an intranet, so this is really a navigation measure. When most '
-          + 'visits need search, the menu is not getting people where they are going - and the top '
-          + 'terms below are a list of the links it should be offering.',
+        what: t('webActivity.search.kpi.visitsThatSearchedWhat'),
+        how: t('webActivity.search.kpi.relianceHow'),
       },
     },
     {
       key: 'per-visit',
-      label: 'Searches per searching visit',
+      label: t('webActivity.search.kpi.searchesPerSearchingVisit'),
       value: formatDecimal(kpis.searchesPerSearchingVisit),
-      hint: `${formatCount(kpis.strugglingVisits)} visits searched 3+ times`,
+      hint: t('webActivity.search.kpi.strugglingVisitsHint', { count: formatCount(kpis.strugglingVisits) }),
       info: {
-        what: 'How many searches a visit runs once it has started searching.',
-        how:
-          'Repeated searching in one visit is often someone rephrasing because the first attempt '
-          + 'failed, though several unrelated searches look identical here - the count compares '
-          + 'nothing about the terms. Treat visits with three or more searches as a "people may not '
-          + 'be finding things" signal to investigate, not as proof of it.',
+        what: t('webActivity.search.kpi.searchesPerSearchingVisitWhat'),
+        how: t('webActivity.search.kpi.perVisitHow'),
       },
     },
     {
       key: 'dead-ends',
-      label: 'Searches leading nowhere',
+      label: t('webActivity.search.kpi.searchesLeadingNowhere'),
       value: formatPct(kpis.deadEndPct),
-      hint: `${formatCount(kpis.deadEndSearches)} searches`,
+      hint: t('webActivity.common.searchesCount', { count: formatCount(kpis.deadEndSearches) }),
       tone: kpis.deadEndPct >= 50 ? 'warning' : 'neutral',
       info: {
-        what: 'Searches after which the visit recorded no further page view.',
-        how:
-          'A proxy, not a fact. The import records the term and the time, not the result count or '
-          + 'whether a result was clicked, so a genuine zero-result search and a search whose '
-          + 'results were ignored look identical here. Page views within '
-          + String(data.kpis.deadEndGraceSeconds)
-          + ' seconds of the search do not count, because the search results page is itself a page '
-          + 'view and would otherwise make every search look successful - which also means a fast '
-          + 'click-through lands in this bucket, as does a search that was simply the last thing '
-          + 'someone did that day. Read it as an upper bound.',
+        what: t('webActivity.search.kpi.searchesLeadingNowhereWhat'),
+        how: t('webActivity.search.kpi.deadEndsHow', { seconds: data.kpis.deadEndGraceSeconds }),
       },
     },
   ];
@@ -132,25 +116,25 @@ export default function SearchPanel({
 
       <div className={styles.stack}>
         <SectionCard
-          title="What people search for"
-          description="Size is search volume. Colour carries nothing."
+          title={t('webActivity.search.wordCloud.title')}
+          description={t('webActivity.search.wordCloud.description')}
           query={queryFor(data.queries, 'search-terms')}
           isEmpty={data.topTerms.length === 0}
           emptyMessage={
             searchAvailable
-              ? 'No searches were recorded in this period.'
-              : 'No searches have ever been recorded. The tracker captures search terms on the search results page, so it has to be deployed to the site your search centre lives on.'
+              ? t('webActivity.search.wordCloud.emptyThisPeriod')
+              : t('webActivity.search.wordCloud.emptyEver')
           }
         >
           <WordCloud
             categories={data.topTerms.map((t) => ({ label: t.term, value: t.searches }))}
-            valueLabel="Searches"
+            valueLabel={t('webActivity.common.searches')}
           />
         </SectionCard>
 
         <SectionCard
-          title="Top search terms"
-          description={`Top ${data.window.top} by volume, with how often each led nowhere.`}
+          title={t('webActivity.search.topTerms.title')}
+          description={t('webActivity.search.topTerms.description', { top: data.window.top })}
           query={queryFor(data.queries, 'search-terms')}
           isEmpty={data.topTerms.length === 0}
           actions={
@@ -161,38 +145,33 @@ export default function SearchPanel({
               onClick={onExportTerms}
               disabled={exporting}
             >
-              Export
+              {t('webActivity.common.export')}
             </Button>
           }
         >
-          <TermTable rows={data.topTerms} label="Top search terms" />
+          <TermTable rows={data.topTerms} label={t('webActivity.search.topTerms.title')} />
         </SectionCard>
 
         <SectionCard
-          title="Terms that lead nowhere"
-          description={`Terms searched at least 3 times, ranked by the share of searches with no further page view.`}
-          note={
-            'Each row is a term that repeatedly recorded no further page view. That is worth '
-            + 'checking - the page may not exist, or may not use their words - but it is not proof '
-            + 'of a failed search: a visitor who clicked a result quickly, or who searched as their '
-            + 'last action, counts here too.'
-          }
+          title={t('webActivity.search.deadEndTerms.title')}
+          description={t('webActivity.search.deadEndTerms.description')}
+          note={t('webActivity.search.deadTerms.note')}
           query={queryFor(data.queries, 'search-dead-ends')}
           isEmpty={data.deadEndTerms.length === 0}
-          emptyMessage="No term was searched often enough, or failed often enough, to rank."
+          emptyMessage={t('webActivity.search.deadEndTerms.empty')}
         >
-          <TermTable rows={data.deadEndTerms} hideSearchers label="Terms that led nowhere" />
+          <TermTable rows={data.deadEndTerms} hideSearchers label={t('webActivity.search.deadEndTerms.label')} />
         </SectionCard>
 
         <SectionCard
-          title="Searches over time"
+          title={t('webActivity.search.trend.title')}
           query={queryFor(data.queries, 'search-trend')}
           isEmpty={data.trend.length === 0}
         >
           <TimeSeriesChart
-            valueLabel="Searches"
+            valueLabel={t('webActivity.common.searches')}
             series={[
-              { name: 'Searches', points: data.trend.map((p) => ({ weekStart: p.weekStart, value: p.searches })) },
+              { name: t('webActivity.common.searches'), points: data.trend.map((p) => ({ weekStart: p.weekStart, value: p.searches })) },
             ]}
           />
         </SectionCard>
@@ -200,34 +179,30 @@ export default function SearchPanel({
 
       <div className={styles.grid}>
         <SectionCard
-          title="Searches by day of week"
+          title={t('webActivity.search.byDay.title')}
           query={queryFor(data.queries, 'search-day-hour')}
           isEmpty={data.byDay.every((b) => b.count === 0)}
         >
-          <CategoryBarChart categories={bucketsToCategories(data.byDay)} valueLabel="Searches" showShare />
+          <CategoryBarChart categories={bucketsToCategories(data.byDay)} valueLabel={t('webActivity.common.searches')} showShare />
         </SectionCard>
 
         <SectionCard
-          title="Searches by period of day"
-          description="UTC."
+          title={t('webActivity.search.byPeriod.title')}
+          description={t('webActivity.common.utc')}
           query={queryFor(data.queries, 'search-day-hour')}
           isEmpty={data.byPeriodOfDay.every((b) => b.count === 0)}
         >
-          <CategoryBarChart categories={bucketsToCategories(data.byPeriodOfDay)} valueLabel="Searches" showShare />
+          <CategoryBarChart categories={bucketsToCategories(data.byPeriodOfDay)} valueLabel={t('webActivity.common.searches')} showShare />
         </SectionCard>
 
         <SectionCard
-          title="Where people were when they searched"
-          description="The site of the last page viewed before the search."
-          note={
-            'Reconstructed. The import does not record where a search was launched from, so this is '
-            + 'the site of the previous page view in the same visit - a search run as the very first '
-            + 'action of a visit has no site and is not counted here.'
-          }
+          title={t('webActivity.search.bySite.title')}
+          description={t('webActivity.search.bySite.description')}
+          note={t('webActivity.search.bySite.note')}
           query={queryFor(data.queries, 'search-sites')}
           isEmpty={data.bySite.length === 0}
         >
-          <CategoryBarChart categories={toCategories(data.bySite)} valueLabel="Searches" />
+          <CategoryBarChart categories={toCategories(data.bySite)} valueLabel={t('webActivity.common.searches')} />
         </SectionCard>
       </div>
     </div>
@@ -244,17 +219,18 @@ function TermTable({
   label: string;
 }) {
   const styles = useWebActivityStyles();
+  const t = useT();
 
   return (
     <div className={styles.tableWrap}>
       <Table size="small" aria-label={label}>
         <TableHeader>
           <TableRow>
-            <TableHeaderCell>Term</TableHeaderCell>
-            <TableHeaderCell className={styles.numeric}>Searches</TableHeaderCell>
-            {!hideSearchers && <TableHeaderCell className={styles.numeric}>People</TableHeaderCell>}
-            <TableHeaderCell className={styles.numeric}>Led nowhere</TableHeaderCell>
-            <TableHeaderCell className={styles.numeric}>Share</TableHeaderCell>
+            <TableHeaderCell>{t('webActivity.search.termTable.term')}</TableHeaderCell>
+            <TableHeaderCell className={styles.numeric}>{t('webActivity.common.searches')}</TableHeaderCell>
+            {!hideSearchers && <TableHeaderCell className={styles.numeric}>{t('webActivity.search.termTable.people')}</TableHeaderCell>}
+            <TableHeaderCell className={styles.numeric}>{t('webActivity.search.termTable.ledNowhere')}</TableHeaderCell>
+            <TableHeaderCell className={styles.numeric}>{t('webActivity.common.share')}</TableHeaderCell>
           </TableRow>
         </TableHeader>
         <TableBody>

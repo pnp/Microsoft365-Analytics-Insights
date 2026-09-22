@@ -17,6 +17,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowClockwise16Regular, ArrowDownload16Regular } from '@fluentui/react-icons';
 
+import { useT, type TFunction, type TranslationKey } from '../i18n';
 import {
   fetchAllDetailRows,
   fetchAvailability,
@@ -60,12 +61,12 @@ import {
   windowOfDays,
 } from '../components/agentCosts/agentCostShared';
 
-const WINDOW_OPTIONS = [
-  { value: 7, label: 'Last 7 days' },
-  { value: 30, label: 'Last 30 days' },
-  { value: 60, label: 'Last 60 days' },
-  { value: 90, label: 'Last 90 days' },
-  { value: 180, label: 'Last 180 days' },
+const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
+  { value: 7, labelKey: 'agentCosts.window.last7Days' },
+  { value: 30, labelKey: 'agentCosts.window.last30Days' },
+  { value: 60, labelKey: 'agentCosts.window.last60Days' },
+  { value: 90, labelKey: 'agentCosts.window.last90Days' },
+  { value: 180, labelKey: 'agentCosts.window.last180Days' },
 ];
 
 const PAGE_SIZE = 50;
@@ -73,9 +74,9 @@ const PAGE_SIZE = 50;
 // Fixed messages, so an effect can recognise the error IT set and clear it once its own request succeeds.
 // Without that, a panel that failed and then recovered (for example paging after a timeout) keeps showing a
 // stale banner over fresh, correct data.
-const BREAKDOWN_ERROR = 'Could not load the credit breakdown. Try changing the period or refreshing.';
-const DETAIL_ERROR = 'Could not load the billed lines. Try changing the period or refreshing.';
-const AZURE_ERROR = 'Could not load the Azure cost breakdown. Try changing the period or refreshing.';
+const BREAKDOWN_ERROR = 'agentCosts.error.breakdown';
+const DETAIL_ERROR = 'agentCosts.error.detail';
+const AZURE_ERROR = 'agentCosts.error.azure';
 
 type DetailSort = 'credits' | 'date' | 'agent' | 'feature' | 'users';
 
@@ -142,13 +143,14 @@ function orUndefined(value: string): string | undefined {
  * The display text for a pivot value. Only the harness dimension stores identifiers rather than
  * human text, so only it needs translating; everything else is already what Microsoft reported.
  */
-function labelFor(dimension: CreditDimension, value: string | null | undefined): string {
-  if (dimension === 'harness') return harnessLabel(value);
-  return value || NOT_REPORTED;
+function labelFor(dimension: CreditDimension, value: string | null | undefined, t: TFunction): string {
+  if (dimension === 'harness') return harnessLabel(value, t);
+  return value || t('agentCosts.state.notReported');
 }
 
 export default function AgentCostsPage() {
   const styles = useStyles();
+  const t = useT();
 
   const [days, setDays] = useState(30);
   const [availability, setAvailability] = useState<AgentCostAvailability | null>(null);
@@ -243,7 +245,7 @@ export default function AgentCostsPage() {
         setTopUsers(usersResult);
       } catch (ex) {
         if (cancelled || controller.signal.aborted) return;
-        setError(ex instanceof Error ? ex.message : 'Could not load the agent cost figures.');
+        setError(ex instanceof Error ? ex.message : t('agentCosts.error.summary'));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -265,11 +267,11 @@ export default function AgentCostsPage() {
         const result = await fetchBreakdown(filters, dimension, 20, controller.signal);
         if (!cancelled) {
           setBreakdown(result);
-          setError((e) => (e === BREAKDOWN_ERROR ? null : e));
+          setError((e) => (e === t(BREAKDOWN_ERROR) ? null : e));
         }
       } catch (ex) {
         if (cancelled || controller.signal.aborted) return;
-        setError(BREAKDOWN_ERROR);
+        setError(t(BREAKDOWN_ERROR));
       }
     })();
 
@@ -293,11 +295,11 @@ export default function AgentCostsPage() {
         );
         if (!cancelled) {
           setDetail(result);
-          setError((e) => (e === DETAIL_ERROR ? null : e));
+          setError((e) => (e === t(DETAIL_ERROR) ? null : e));
         }
       } catch (ex) {
         if (cancelled || controller.signal.aborted) return;
-        setError(DETAIL_ERROR);
+        setError(t(DETAIL_ERROR));
       } finally {
         if (!cancelled) setDetailLoading(false);
       }
@@ -319,11 +321,11 @@ export default function AgentCostsPage() {
         const result = await fetchAzureBreakdown(filters, azureDimension, 20, controller.signal);
         if (!cancelled) {
           setAzure(result);
-          setError((e) => (e === AZURE_ERROR ? null : e));
+          setError((e) => (e === t(AZURE_ERROR) ? null : e));
         }
       } catch (ex) {
         if (cancelled || controller.signal.aborted) return;
-        setError(AZURE_ERROR);
+        setError(t(AZURE_ERROR));
       }
     })();
 
@@ -348,8 +350,8 @@ export default function AgentCostsPage() {
   );
 
   const categories = useMemo(
-    () => breakdown.map((r) => ({ label: labelFor(dimension, r.label ?? r.key), value: r.billedCredits })),
-    [breakdown, dimension],
+    () => breakdown.map((r) => ({ label: labelFor(dimension, r.label ?? r.key, t), value: r.billedCredits })),
+    [breakdown, dimension, t],
   );
 
   // The share denominator is the TRUE window total from the summary, not the sum of the rows on screen.
@@ -402,43 +404,44 @@ export default function AgentCostsPage() {
 
   const exportPage = useCallback(() => {
     if (!detail) return;
-    saveCsv(detailRowsToCsv(detail.rows), `agent-credits-${filters.from}-to-${filters.to}-page${detail.page}.csv`);
-  }, [detail, filters.from, filters.to]);
+    saveCsv(detailRowsToCsv(detail.rows, t), `agent-credits-${filters.from}-to-${filters.to}-page${detail.page}.csv`);
+  }, [detail, filters.from, filters.to, t]);
 
   const exportAll = useCallback(async () => {
     setExporting(true);
     setNotice(null);
     try {
       const result = await fetchAllDetailRows(filters, sort, direction);
-      saveCsv(detailRowsToCsv(result.rows), `agent-credits-${filters.from}-to-${filters.to}-filtered.csv`);
+      saveCsv(detailRowsToCsv(result.rows, t), `agent-credits-${filters.from}-to-${filters.to}-filtered.csv`);
       setNotice(
         result.truncated
-          ? `Exported the first ${result.rows.length.toLocaleString()} of ${result.totalRows.toLocaleString()} billed lines. Narrow the filters or shorten the period to export the rest.`
-          : `Exported ${result.rows.length.toLocaleString()} billed line(s).`,
+          ? t('agentCosts.notice.exportedTruncated', {
+              rows: formatCount(result.rows.length),
+              totalRows: formatCount(result.totalRows),
+            })
+          : t('agentCosts.notice.exportedRows', { rows: formatCount(result.rows.length) }),
       );
     } catch (ex) {
-      setError(ex instanceof Error ? ex.message : 'Could not export the billed lines.');
+      setError(ex instanceof Error ? ex.message : t('agentCosts.error.export'));
     } finally {
       setExporting(false);
     }
-  }, [filters, sort, direction]);
+  }, [filters, sort, direction, t]);
 
   return (
     <>
       <div className={styles.header}>
         <div>
-          <Title3 block>Agent costs</Title3>
+          <Title3 block>{t('agentCosts.title')}</Title3>
           <Body1 block className={styles.intro}>
-            What Microsoft charged for your Copilot Studio agents, broken down as far as the billing data allows -
-            by agent, environment, harness and billing feature, plus Azure spend for the subscriptions you import.
-            Breakdowns only appear once Microsoft actually reports the dimension behind them.
+            {t('agentCosts.intro')}
           </Body1>
         </div>
         <div className={styles.controls}>
           <Select value={String(days)} onChange={(_: unknown, d: { value: string }) => setDays(Number(d.value))} disabled={loading}>
             {WINDOW_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
-                {o.label}
+                {t(o.labelKey)}
               </option>
             ))}
           </Select>
@@ -448,7 +451,7 @@ export default function AgentCostsPage() {
             disabled={loading}
             onClick={() => setReloadToken((t) => t + 1)}
           >
-            Refresh
+            {t('common.action.refresh')}
           </Button>
         </div>
       </div>
@@ -474,14 +477,14 @@ export default function AgentCostsPage() {
           {availability.copilotStudioCreditsEnabled && availability.copilotStudioCreditsLastError && (
             <MessageBar intent="warning">
               <MessageBarBody>
-                <strong>Copilot Studio credit import is failing.</strong> {availability.copilotStudioCreditsLastError}
+                <strong>{t('agentCosts.warning.copilotStudioImportFailing')}</strong> {availability.copilotStudioCreditsLastError}
               </MessageBarBody>
             </MessageBar>
           )}
           {availability.azureCostsEnabled && availability.azureCostsLastError && (
             <MessageBar intent="warning">
               <MessageBarBody>
-                <strong>Azure cost import is failing.</strong> {availability.azureCostsLastError}
+                <strong>{t('agentCosts.warning.azureCostImportFailing')}</strong> {availability.azureCostsLastError}
               </MessageBarBody>
             </MessageBar>
           )}
@@ -495,48 +498,48 @@ export default function AgentCostsPage() {
 
       {loading && !summary ? (
         <div className={styles.body}>
-          <Spinner size={32} label="Loading agent costs..." />
+          <Spinner size={32} label={t('agentCosts.loading')} />
         </div>
       ) : (
         <div className={styles.cards}>
           {/* Headline figures + entitlement headroom. */}
           <Card>
             <div className={styles.cardHead}>
-              <Text weight="semibold">Spend in the selected period</Text>
+              <Text weight="semibold">{t('agentCosts.spend.title')}</Text>
               {availability?.copilotStudioCreditsLastImportUtc && (
                 <Text className={styles.muted} size={200}>
-                  Imported {formatDateTime(availability.copilotStudioCreditsLastImportUtc)} UTC
+                  {t('agentCosts.spend.importedUtc', { when: formatDateTime(availability.copilotStudioCreditsLastImportUtc) })}
                 </Text>
               )}
             </div>
             <div className={`${styles.kpiGrid} ${styles.body}`}>
               <div className={styles.kpi}>
                 <span className={styles.kpiValue}>{formatCredits(summary?.billedCredits ?? 0)}</span>
-                <span className={styles.kpiLabel}>Copilot Credits billed</span>
+                <span className={styles.kpiLabel}>{t('agentCosts.kpi.creditsBilled')}</span>
               </div>
               <div className={styles.kpi}>
                 <span className={styles.kpiValue}>{formatCredits(summary?.nonBilledCredits ?? 0)}</span>
-                <span className={styles.kpiLabel}>Credits not charged</span>
-                <span className={styles.kpiHint}>Used but covered by an allowance</span>
+                <span className={styles.kpiLabel}>{t('agentCosts.kpi.creditsNotCharged')}</span>
+                <span className={styles.kpiHint}>{t('agentCosts.kpi.creditsNotCharged.hint')}</span>
               </div>
               <div className={styles.kpi}>
                 <span className={styles.kpiValue}>{formatCount(summary?.distinctAgents ?? 0)}</span>
-                <span className={styles.kpiLabel}>Agents with spend</span>
+                <span className={styles.kpiLabel}>{t('agentCosts.kpi.agentsWithSpend')}</span>
               </div>
               <div className={styles.kpi}>
                 <span className={styles.kpiValue}>{formatCount(summary?.distinctEnvironments ?? 0)}</span>
-                <span className={styles.kpiLabel}>Environments</span>
+                <span className={styles.kpiLabel}>{t('agentCosts.kpi.environments')}</span>
               </div>
               <div className={styles.kpi}>
                 <span className={styles.kpiValue}>{formatCount(summary?.peakDistinctUsersOnASlice)}</span>
-                <span className={styles.kpiLabel}>Busiest slice</span>
-                <span className={styles.kpiHint}>Most people on a single billed line - never a tenant user total</span>
+                <span className={styles.kpiLabel}>{t('agentCosts.kpi.busiestSlice')}</span>
+                <span className={styles.kpiHint}>{t('agentCosts.kpi.busiestSlice.hint')}</span>
               </div>
               {summary?.unclassifiedHarnessCredits ? (
                 <div className={styles.kpi}>
                   <span className={styles.kpiValue}>{formatCredits(summary.unclassifiedHarnessCredits)}</span>
-                  <span className={styles.kpiLabel}>Unclassified harness</span>
-                  <span className={styles.kpiHint}>Microsoft reported a feature we do not recognise</span>
+                  <span className={styles.kpiLabel}>{t('agentCosts.kpi.unclassifiedHarness')}</span>
+                  <span className={styles.kpiHint}>{t('agentCosts.kpi.unclassifiedHarness.hint')}</span>
                 </div>
               ) : null}
             </div>
@@ -545,24 +548,27 @@ export default function AgentCostsPage() {
               <div className={`${styles.kpiGrid} ${styles.body}`}>
                 <div className={styles.kpi}>
                   <span className={styles.kpiValue}>{formatCredits(summary.capacity.available)}</span>
-                  <span className={styles.kpiLabel}>Credits available now</span>
+                  <span className={styles.kpiLabel}>{t('agentCosts.capacity.availableNow')}</span>
                   <span className={styles.kpiHint}>
-                    {formatCredits(summary.capacity.consumed)} of {formatCredits(summary.capacity.entitled)} used
+                    {t('agentCosts.capacity.usedOfEntitled', {
+                      consumed: formatCredits(summary.capacity.consumed),
+                      entitled: formatCredits(summary.capacity.entitled),
+                    })}
                     {summary.capacity.consumptionType ? ` (${summary.capacity.consumptionType})` : ''}
                   </span>
                 </div>
                 <div className={styles.kpi}>
                   <span className={styles.kpiValue}>{summary.capacity.status ?? DASH}</span>
-                  <span className={styles.kpiLabel}>Capacity status</span>
+                  <span className={styles.kpiLabel}>{t('agentCosts.capacity.status')}</span>
                   <span className={styles.kpiHint}>
-                    As at {formatDay(summary.capacity.consumptionAsOf ?? summary.capacity.snapshotUtc)}
+                    {t('agentCosts.capacity.asAt', { day: formatDay(summary.capacity.consumptionAsOf ?? summary.capacity.snapshotUtc) })}
                   </span>
                 </div>
                 {summary.capacity.payAsYouGoConsumed != null && (
                   <div className={styles.kpi}>
                     <span className={styles.kpiValue}>{formatCredits(summary.capacity.payAsYouGoConsumed)}</span>
-                    <span className={styles.kpiLabel}>Pay-as-you-go credits</span>
-                    <span className={styles.kpiHint}>Billed on top of pre-purchased capacity</span>
+                    <span className={styles.kpiLabel}>{t('agentCosts.capacity.payAsYouGo')}</span>
+                    <span className={styles.kpiHint}>{t('agentCosts.capacity.payAsYouGo.hint')}</span>
                   </div>
                 )}
               </div>
@@ -573,13 +579,13 @@ export default function AgentCostsPage() {
                 {summary.azureCost.map((c) => (
                   <div className={styles.kpi} key={c.currency ?? 'unknown'}>
                     <span className={styles.kpiValue}>{formatMoney(c.cost, c.currency)}</span>
-                    <span className={styles.kpiLabel}>Azure spend</span>
+                    <span className={styles.kpiLabel}>{t('agentCosts.azureSpend.title')}</span>
                     {c.quantity !== null && c.quantity !== undefined && (
                       <span className={styles.kpiHint}>
-                        {formatCredits(c.quantity)} metered units billed
+                        {t('agentCosts.azureSpend.meteredUnitsBilled', { quantity: formatCredits(c.quantity) })}
                       </span>
                     )}
-                    {c.includesEstimates && <span className={styles.kpiHint}>Includes estimates that can still change</span>}
+                    {c.includesEstimates && <span className={styles.kpiHint}>{t('agentCosts.azureSpend.includesEstimates')}</span>}
                   </div>
                 ))}
               </div>
@@ -589,9 +595,9 @@ export default function AgentCostsPage() {
           {/* Daily trend. Deliberately a plain bar strip: the grain is daily, and the shared
               time-series chart is built around a weekly spine. */}
           <Card>
-            <Text weight="semibold">Credits per day</Text>
+            <Text weight="semibold">{t('agentCosts.trend.title')}</Text>
             {trend.length === 0 ? (
-              <div className={styles.empty}>No credit usage in this period.</div>
+              <div className={styles.empty}>{t('agentCosts.trend.empty')}</div>
             ) : (
               <>
                 <div className={styles.trendRow}>
@@ -600,13 +606,16 @@ export default function AgentCostsPage() {
                       key={p.date}
                       className={styles.trendBar}
                       style={{ height: `${Math.max(2, (p.billedCredits / trendMax) * 100)}%` }}
-                      title={`${formatDay(p.date)}: ${formatCredits(p.billedCredits)} credits`}
+                      title={t('agentCosts.trend.barTitle', { day: formatDay(p.date), credits: formatCredits(p.billedCredits) })}
                     />
                   ))}
                 </div>
                 <Text className={styles.muted} size={200}>
-                  {formatDay(trend[0].date)} to {formatDay(trend[trend.length - 1].date)}, peak{' '}
-                  {formatCredits(trendMax)} credits in a day
+                  {t('agentCosts.trend.caption', {
+                    from: formatDay(trend[0].date),
+                    to: formatDay(trend[trend.length - 1].date),
+                    peak: formatCredits(trendMax),
+                  })}
                 </Text>
               </>
             )}
@@ -614,12 +623,12 @@ export default function AgentCostsPage() {
 
           {/* Filters. */}
           <Card>
-            <Text weight="semibold">Narrow the per-agent figures</Text>
+            <Text weight="semibold">{t('agentCosts.filters.title')}</Text>
             <div className={`${styles.filterBar} ${styles.body}`}>
               <label className={styles.filterField}>
-                <span className={styles.filterLabel}>Agent</span>
+                <span className={styles.filterLabel}>{t('agentCosts.filter.agent')}</span>
                 <Select value={agentId} onChange={(_: unknown, d: { value: string }) => setAgentId(d.value)} disabled={loading}>
-                  <option value="">All agents</option>
+                  <option value="">{t('agentCosts.filter.agent.all')}</option>
                   {options?.agents.map((a) => (
                     <option key={a.id} value={a.id}>
                       {a.label}
@@ -628,9 +637,9 @@ export default function AgentCostsPage() {
                 </Select>
               </label>
               <label className={styles.filterField}>
-                <span className={styles.filterLabel}>Environment</span>
+                <span className={styles.filterLabel}>{t('agentCosts.filter.environment')}</span>
                 <Select value={environmentId} onChange={(_: unknown, d: { value: string }) => setEnvironmentId(d.value)} disabled={loading}>
-                  <option value="">All environments</option>
+                  <option value="">{t('agentCosts.filter.environment.all')}</option>
                   {options?.environments.map((e) => (
                     <option key={e.id} value={e.id}>
                       {e.label}
@@ -639,20 +648,20 @@ export default function AgentCostsPage() {
                 </Select>
               </label>
               <label className={styles.filterField}>
-                <span className={styles.filterLabel}>Harness</span>
+                <span className={styles.filterLabel}>{t('agentCosts.filter.harness')}</span>
                 <Select value={harness} onChange={(_: unknown, d: { value: string }) => setHarness(d.value)} disabled={loading}>
-                  <option value="">All harnesses</option>
+                  <option value="">{t('agentCosts.filter.harness.all')}</option>
                   {options?.harnesses.map((h) => (
                     <option key={h} value={h}>
-                      {harnessLabel(h)}
+                      {harnessLabel(h, t)}
                     </option>
                   ))}
                 </Select>
               </label>
               <label className={styles.filterField}>
-                <span className={styles.filterLabel}>Billing feature</span>
+                <span className={styles.filterLabel}>{t('agentCosts.filter.billingFeature')}</span>
                 <Select value={feature} onChange={(_: unknown, d: { value: string }) => setFeature(d.value)} disabled={loading}>
-                  <option value="">All features</option>
+                  <option value="">{t('agentCosts.filter.billingFeature.all')}</option>
                   {options?.features.map((f) => (
                     <option key={f} value={f}>
                       {f}
@@ -661,8 +670,8 @@ export default function AgentCostsPage() {
                 </Select>
               </label>
               <label className={styles.filterField}>
-                <span className={styles.filterLabel}>Search agent name</span>
-                <Input value={search} onChange={(_: unknown, d: { value: string }) => setSearch(d.value)} placeholder="Agent name or ID" />
+                <span className={styles.filterLabel}>{t('agentCosts.filter.searchAgentName')}</span>
+                <Input value={search} onChange={(_: unknown, d: { value: string }) => setSearch(d.value)} placeholder={t('agentCosts.filter.searchAgentName.placeholder')} />
               </label>
             </div>
           </Card>
@@ -671,11 +680,11 @@ export default function AgentCostsPage() {
           <Card>
             <div className={styles.cardHead}>
               <div>
-                <Text weight="semibold">Where the credits went</Text>
+                <Text weight="semibold">{t('agentCosts.breakdown.title')}</Text>
                 {activeDimension && (
                   <div>
                     <Text className={styles.muted} size={200}>
-                      {activeDimension.hint}
+                      {t(activeDimension.hintKey)}
                     </Text>
                   </div>
                 )}
@@ -687,13 +696,13 @@ export default function AgentCostsPage() {
             >
               {availableCreditDimensions.map((d) => (
                 <Tab key={d.key} value={d.key}>
-                  {d.label}
+                  {t(d.labelKey)}
                 </Tab>
               ))}
             </TabList>
 
             <div className={styles.body}>
-              <CategoryBarChart categories={categories} valueLabel="credits" />
+              <CategoryBarChart categories={categories} valueLabel={t('agentCosts.unit.credits')} />
             </div>
 
             {breakdown.length > 0 && (
@@ -701,18 +710,18 @@ export default function AgentCostsPage() {
                 <table className={styles.table}>
                   <thead>
                     <tr>
-                      <th className={styles.th}>{activeDimension?.label ?? 'Value'}</th>
-                      <th className={`${styles.th} ${styles.thNumeric}`}>Credits billed</th>
-                      <th className={`${styles.th} ${styles.thNumeric}`}>Share</th>
-                      <th className={`${styles.th} ${styles.thNumeric}`}>Not charged</th>
-                      <th className={`${styles.th} ${styles.thNumeric}`}>Days active</th>
-                      <th className={`${styles.th} ${styles.thNumeric}`}>Busiest slice (people)</th>
+                      <th className={styles.th}>{activeDimension ? t(activeDimension.labelKey) : t('agentCosts.table.value')}</th>
+                      <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.creditsBilled')}</th>
+                      <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.share')}</th>
+                      <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.notCharged')}</th>
+                      <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.daysActive')}</th>
+                      <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.busiestSlicePeople')}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {breakdown.map((r) => (
                       <tr key={r.key ?? NOT_REPORTED}>
-                        <td className={`${styles.td} ${r.key ? '' : styles.tdMuted}`}>{labelFor(dimension, r.label ?? r.key)}</td>
+                        <td className={`${styles.td} ${r.key ? '' : styles.tdMuted}`}>{labelFor(dimension, r.label ?? r.key, t)}</td>
                         <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCredits(r.billedCredits)}</td>
                         <td className={`${styles.td} ${styles.tdNumeric}`}>
                           {shareTotal > 0 ? `${Math.round((r.billedCredits / shareTotal) * 1000) / 10}%` : DASH}
@@ -726,8 +735,10 @@ export default function AgentCostsPage() {
                 </table>
                 {hasHiddenRows && (
                   <Text className={styles.muted} size={200}>
-                    Showing the top {breakdown.length} of this period&apos;s spend. Shares are of the full{' '}
-                    {formatCredits(shareTotal)} credits, so they will not add up to 100%.
+                    {t('agentCosts.breakdown.hiddenRows', {
+                      count: formatCount(breakdown.length),
+                      credits: formatCredits(shareTotal),
+                    })}
                   </Text>
                 )}
               </div>
@@ -738,11 +749,10 @@ export default function AgentCostsPage() {
           <Card>
             <div className={styles.cardHead}>
               <div>
-                <Text weight="semibold">Every billed line</Text>
+                <Text weight="semibold">{t('agentCosts.detail.title')}</Text>
                 <div>
                   <Text className={styles.muted} size={200}>
-                    One row per day, agent and billing dimension - the most detailed view Microsoft&apos;s billing data
-                    allows. Click a column heading to sort.
+                    {t('agentCosts.detail.description')}
                   </Text>
                 </div>
               </div>
@@ -753,7 +763,7 @@ export default function AgentCostsPage() {
                   disabled={detailLoading || !detail || detail.rows.length === 0}
                   onClick={exportPage}
                 >
-                  Export this page
+                  {t('agentCosts.detail.exportPage')}
                 </Button>
                 <Button
                   appearance="primary"
@@ -761,13 +771,13 @@ export default function AgentCostsPage() {
                   disabled={exporting || detailLoading || !detail || detail.totalRows === 0}
                   onClick={exportAll}
                 >
-                  {exporting ? 'Exporting...' : `Export all ${detail ? formatCount(detail.totalRows) : ''} rows`}
+                  {exporting ? t('agentCosts.detail.exporting') : t('agentCosts.detail.exportAllRows', { rows: detail ? formatCount(detail.totalRows) : '' })}
                 </Button>
               </div>
             </div>
 
             {!detail || detail.rows.length === 0 ? (
-              <div className={styles.empty}>No billed lines match the current filters.</div>
+              <div className={styles.empty}>{t('agentCosts.detail.empty')}</div>
             ) : (
               <>
                 <div className={`${styles.wrap} ${styles.body}`}>
@@ -775,28 +785,28 @@ export default function AgentCostsPage() {
                     <thead>
                       <tr>
                         <th className={`${styles.th} ${styles.thSortable}`} onClick={() => toggleSort('date')}>
-                          Day{sort === 'date' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
+                          {t('agentCosts.table.day')}{sort === 'date' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
                         </th>
                         <th className={`${styles.th} ${styles.thSortable}`} onClick={() => toggleSort('agent')}>
-                          Agent{sort === 'agent' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
+                          {t('agentCosts.table.agent')}{sort === 'agent' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
                         </th>
-                        <th className={styles.th}>Environment</th>
-                        <th className={styles.th}>Harness</th>
+                        <th className={styles.th}>{t('agentCosts.table.environment')}</th>
+                        <th className={styles.th}>{t('agentCosts.table.harness')}</th>
                         <th className={`${styles.th} ${styles.thSortable}`} onClick={() => toggleSort('feature')}>
-                          Billing feature{sort === 'feature' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
+                          {t('agentCosts.table.billingFeature')}{sort === 'feature' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
                         </th>
                         <th
                           className={`${styles.th} ${styles.thNumeric} ${styles.thSortable}`}
                           onClick={() => toggleSort('credits')}
                         >
-                          Credits{sort === 'credits' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
+                          {t('agentCosts.table.credits')}{sort === 'credits' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
                         </th>
-                        <th className={`${styles.th} ${styles.thNumeric}`}>Not charged</th>
+                        <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.notCharged')}</th>
                         <th
                           className={`${styles.th} ${styles.thNumeric} ${styles.thSortable}`}
                           onClick={() => toggleSort('users')}
                         >
-                          People{sort === 'users' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
+                          {t('agentCosts.table.people')}{sort === 'users' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
                         </th>
                       </tr>
                     </thead>
@@ -806,7 +816,7 @@ export default function AgentCostsPage() {
                           <td className={styles.td}>{formatDay(r.usageDate)}</td>
                           <td className={styles.td}>{r.agentName || r.agentId || DASH}</td>
                           <td className={styles.td}>{r.environmentName || r.environmentId || DASH}</td>
-                          <td className={styles.td}>{r.harness ? harnessLabel(r.harness) : DASH}</td>
+                          <td className={styles.td}>{r.harness ? harnessLabel(r.harness, t) : DASH}</td>
                           <td className={styles.td}>{r.featureName || DASH}</td>
                           <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCredits(r.billedCredits)}</td>
                           <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCredits(r.nonBilledCredits)}</td>
@@ -823,17 +833,21 @@ export default function AgentCostsPage() {
                     disabled={loading || detail.page <= 1}
                     onClick={() => setPage((p) => Math.max(1, p - 1))}
                   >
-                    Previous
+                    {t('agentCosts.pager.previous')}
                   </Button>
                   <Text size={200} className={styles.muted}>
-                    Page {detail.page} of {totalPages} &middot; {formatCount(detail.totalRows)} billed lines
+                    {t('agentCosts.pager.pageOfBilledLines', {
+                      page: formatCount(detail.page),
+                      totalPages: formatCount(totalPages),
+                      rows: formatCount(detail.totalRows),
+                    })}
                   </Text>
                   <Button
                     appearance="secondary"
                     disabled={loading || detail.page >= totalPages}
                     onClick={() => setPage((p) => p + 1)}
                   >
-                    Next
+                    {t('agentCosts.pager.next')}
                   </Button>
                 </div>
               </>
@@ -844,15 +858,12 @@ export default function AgentCostsPage() {
           <Card>
             <div className={styles.cardHead}>
               <div>
-                <Text weight="semibold">Who is spending the credits</Text>
+                <Text weight="semibold">{t('agentCosts.users.title')}</Text>
                 <div>
                   <Text className={styles.muted} size={200}>
-                    Billed Copilot Studio credits per person, reported by Microsoft. Nothing here is estimated or
-                    shared out - but it comes from a different Microsoft report than the per-agent figures above, so
-                    the two totals will not always match exactly. <strong>The agent, feature, model, tool and channel
-                    filters do not apply here</strong> - Microsoft's per-person report does not carry those
-                    dimensions, so this panel always shows everyone (narrowed only by environment). Azure spend is
-                    not included: Azure bills by resource and never records who caused a charge.
+                    {t('agentCosts.users.descriptionBeforeStrong')}{' '}
+                    <strong>{t('agentCosts.users.descriptionStrong')}</strong>{' '}
+                    {t('agentCosts.users.descriptionAfterStrong')}
                   </Text>
                 </div>
               </div>
@@ -861,20 +872,20 @@ export default function AgentCostsPage() {
             {topUsers.length === 0 ? (
               <div className={styles.empty}>
                 {!availability?.copilotStudioCreditsEnabled
-                  ? 'The Copilot Studio credit import is switched off.'
+                  ? t('agentCosts.users.empty.importOff')
                   : availability?.hasPerUserCreditData
-                    ? 'No per-person credit usage in this period.'
-                    : "No per-person figures yet. Microsoft added these to the Power Platform licensing API in July 2026, so a tenant whose API does not offer them will only ever show the per-agent view above."}
+                    ? t('agentCosts.users.empty.noUsage')
+                    : t('agentCosts.users.empty.noFigures')}
               </div>
             ) : (
               <div className={`${styles.wrap} ${styles.body}`}>
                 <table className={styles.table}>
                   <thead>
                     <tr>
-                      <th className={styles.th}>Person</th>
-                      <th className={`${styles.th} ${styles.thNumeric}`}>Credits billed</th>
-                      <th className={`${styles.th} ${styles.thNumeric}`}>Share</th>
-                      <th className={`${styles.th} ${styles.thNumeric}`}>Days active</th>
+                      <th className={styles.th}>{t('agentCosts.table.person')}</th>
+                      <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.creditsBilled')}</th>
+                      <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.share')}</th>
+                      <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.daysActive')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -883,7 +894,7 @@ export default function AgentCostsPage() {
                         <td className={styles.td}>
                           {u.userPrincipalName ?? (
                             <span title={u.entraObjectId ?? undefined}>
-                              Unresolved user{u.entraObjectId ? ` (${u.entraObjectId})` : ''}
+                              {t('agentCosts.users.unresolvedUser')}{u.entraObjectId ? ` (${u.entraObjectId})` : ''}
                             </span>
                           )}
                         </td>
@@ -897,8 +908,10 @@ export default function AgentCostsPage() {
                   </tbody>
                 </table>
                 <Text className={styles.muted} size={200}>
-                  Shares are of the {formatCredits(userTotal)} credits shown here, which is the top{' '}
-                  {topUsers.length} people - not necessarily every person who used an agent.
+                  {t('agentCosts.users.shareCaption', {
+                    credits: formatCredits(userTotal),
+                    people: formatCount(topUsers.length),
+                  })}
                 </Text>
               </div>
             )}
@@ -908,12 +921,10 @@ export default function AgentCostsPage() {
           <Card>
             <div className={styles.cardHead}>
               <div>
-                <Text weight="semibold">Azure spend</Text>
+                <Text weight="semibold">{t('agentCosts.azureSpend.title')}</Text>
                 <div>
                   <Text className={styles.muted} size={200}>
-                    Daily costs from Microsoft Cost Management for the scopes this deployment is configured to read. Only the
-                    date range applies here - the Copilot filters above do not. Azure bills by resource, so these
-                    figures cannot be attributed to individual people.
+                    {t('agentCosts.azureSpend.description')}
                   </Text>
                 </div>
               </div>
@@ -924,7 +935,7 @@ export default function AgentCostsPage() {
               >
                 {availableAzureDimensions.map((d) => (
                   <option key={d.key} value={d.key}>
-                    {d.label}
+                    {t(d.labelKey)}
                   </option>
                 ))}
               </Select>
@@ -933,18 +944,18 @@ export default function AgentCostsPage() {
             {azure.length === 0 ? (
               <div className={styles.empty}>
                 {availability?.azureCostsEnabled
-                  ? 'No Azure costs stored for this period.'
-                  : 'The Azure cost import is switched off.'}
+                  ? t('agentCosts.azureSpend.empty.noCosts')
+                  : t('agentCosts.azureSpend.empty.importOff')}
               </div>
             ) : (
               <div className={`${styles.wrap} ${styles.body}`}>
                 <table className={styles.table}>
                   <thead>
                     <tr>
-                      <th className={styles.th}>{AZURE_DIMENSIONS.find((d) => d.key === azureDimension)?.label}</th>
-                      <th className={`${styles.th} ${styles.thNumeric}`}>Cost</th>
-                      <th className={`${styles.th} ${styles.thNumeric}`}>Quantity</th>
-                      <th className={styles.th}>Final?</th>
+                      <th className={styles.th}>{t(AZURE_DIMENSIONS.find((d) => d.key === azureDimension)?.labelKey ?? 'agentCosts.table.value')}</th>
+                      <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.cost')}</th>
+                      <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.quantity')}</th>
+                      <th className={styles.th}>{t('agentCosts.table.final')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -954,7 +965,7 @@ export default function AgentCostsPage() {
                         <td className={`${styles.td} ${styles.tdNumeric}`}>{formatMoney(r.cost, r.currency)}</td>
                         <td className={`${styles.td} ${styles.tdNumeric}`}>{formatQuantity(r.quantity)}</td>
                         <td className={`${styles.td} ${styles.tdMuted}`}>
-                          {r.includesEstimates ? 'Estimate - can still change' : 'Final - billing period closed'}
+                          {r.includesEstimates ? t('agentCosts.azureSpend.estimate') : t('agentCosts.azureSpend.final')}
                         </td>
                       </tr>
                     ))}

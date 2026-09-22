@@ -5,6 +5,7 @@ import CategoryBarChart from '../charts/CategoryBarChart';
 import StackedAreaChart from '../charts/StackedAreaChart';
 import TreemapChart from '../charts/TreemapChart';
 import type { TeamsAdoption, TeamsGrouping } from '../../types/teamsExplorer';
+import { useT, type TranslationKey } from '../../i18n';
 import {
   SectionCard,
   WindowNote,
@@ -17,12 +18,12 @@ import {
 } from './teamsShared';
 
 /** The demographic dimensions the breakdown can group by, matching `TeamsExplorerQuery.Groupings`. */
-export const GROUPINGS: { value: TeamsGrouping; label: string }[] = [
-  { value: 'department', label: 'Department' },
-  { value: 'country', label: 'Country' },
-  { value: 'office', label: 'Office' },
-  { value: 'jobTitle', label: 'Job title' },
-  { value: 'company', label: 'Company' },
+export const GROUPINGS: { value: TeamsGrouping; labelKey: TranslationKey }[] = [
+  { value: 'department', labelKey: 'teamsExplorer.adoption.group.department' },
+  { value: 'country', labelKey: 'teamsExplorer.adoption.group.country' },
+  { value: 'office', labelKey: 'teamsExplorer.adoption.group.office' },
+  { value: 'jobTitle', labelKey: 'teamsExplorer.adoption.group.jobTitle' },
+  { value: 'company', labelKey: 'teamsExplorer.adoption.group.company' },
 ];
 
 const useStyles = makeStyles({
@@ -65,104 +66,100 @@ export default function AdoptionPanel({
 }) {
   const styles = useStyles();
   const shared = useTeamsStyles();
+  const t = useT();
   const { rhythm, lifecycle } = data;
 
   const kpis: KpiDefinition[] = [
     {
       key: 'dau',
-      label: 'Average daily users',
+      label: t('teamsExplorer.adoption.kpi.averageDailyUsers.label'),
       value: formatDecimal(rhythm.meanDailyActiveUsers),
-      hint: `Across ${data.window.workingDays} working days`,
+      hint: t('teamsExplorer.adoption.kpi.averageDailyUsers.hint', { days: formatCount(data.window.workingDays) }),
       info: {
-        what: 'The mean number of people active in Teams on a working day.',
+        what: t('teamsExplorer.adoption.kpi.averageDailyUsers.what'),
         how:
-          'Weekends are excluded from the average. Including them would drag the figure down for '
-          + 'every organisation that does not work at the weekend, which is almost all of them.',
-        formula: 'mean(daily active users on Mon-Fri)',
-        source: 'Microsoft 365 usage reports.',
+          t('teamsExplorer.adoption.kpi.averageDailyUsers.how'),
+        formula: t('teamsExplorer.adoption.kpi.averageDailyUsers.formula'),
+        source: t('teamsExplorer.adoption.source.usageReports'),
       },
     },
     {
       key: 'wau',
-      label: 'Weekly active users',
+      label: t('teamsExplorer.adoption.kpi.weeklyActiveUsers.label'),
       value: formatCount(rhythm.weeklyActiveUsers),
-      hint: 'Last 7 days of the reporting window',
+      hint: t('teamsExplorer.adoption.kpi.weeklyActiveUsers.hint'),
       info: {
-        what: 'Distinct people active in Teams in the last 7 days covered by the usage reports.',
-        formula: 'count(distinct users with any activity in the trailing 7 days)',
-        source: 'Microsoft 365 usage reports.',
+        what: t('teamsExplorer.adoption.kpi.weeklyActiveUsers.what'),
+        formula: t('teamsExplorer.adoption.kpi.weeklyActiveUsers.formula'),
+        source: t('teamsExplorer.adoption.source.usageReports'),
       },
     },
     {
       key: 'mau',
-      label: 'Monthly active users',
+      label: t('teamsExplorer.adoption.kpi.monthlyActiveUsers.label'),
       value: formatCount(rhythm.monthlyActiveUsers),
-      hint: 'Last 28 days of the reporting window',
+      hint: t('teamsExplorer.adoption.kpi.monthlyActiveUsers.hint'),
       info: {
-        what: 'Distinct people active in Teams in the last 28 days covered by the usage reports.',
+        what: t('teamsExplorer.adoption.kpi.monthlyActiveUsers.what'),
         how:
-          'Capped at the reporting window, so a 7-day window reports the same figure for weekly and '
-          + 'monthly rather than quietly reaching outside the period you asked for.',
-        formula: 'count(distinct users with any activity in the trailing 28 days)',
-        source: 'Microsoft 365 usage reports.',
+          t('teamsExplorer.adoption.kpi.monthlyActiveUsers.how'),
+        formula: t('teamsExplorer.adoption.kpi.monthlyActiveUsers.formula'),
+        source: t('teamsExplorer.adoption.source.usageReports'),
       },
     },
     {
       key: 'stickiness',
-      label: 'Stickiness',
+      label: t('teamsExplorer.adoption.kpi.stickiness.label'),
       value: formatPct(rhythm.stickinessPct),
-      hint: 'Daily users as a share of monthly users',
+      hint: t('teamsExplorer.adoption.kpi.stickiness.hint'),
       tone: reachTone(rhythm.stickinessPct),
       info: {
-        what: 'How much of the monthly audience shows up on any given working day.',
+        what: t('teamsExplorer.adoption.kpi.stickiness.what'),
         how:
-          '100% would mean everyone who uses Teams at all uses it every working day. A low figure '
-          + 'with high monthly reach means Teams is something people visit, not somewhere they work.',
-        formula: 'average daily active users / monthly active users x 100',
-        source: 'Microsoft 365 usage reports.',
+          t('teamsExplorer.adoption.kpi.stickiness.how'),
+        formula: t('teamsExplorer.adoption.kpi.stickiness.formula'),
+        source: t('teamsExplorer.adoption.source.usageReports'),
       },
     },
     {
       key: 'new',
-      label: 'Newly active',
+      label: t('teamsExplorer.adoption.kpi.newlyActive.label'),
       value: formatCount(lifecycle.newUsers),
-      hint: 'Active in the second half of the period only',
+      hint: t('teamsExplorer.adoption.kpi.newlyActive.hint'),
       tone: 'good',
       info: {
-        what: 'People who started using Teams during this period.',
+        what: t('teamsExplorer.adoption.kpi.newlyActive.what'),
         how:
-          'The window is split in half; someone active only in the later half is newly active, and '
-          + 'someone active only in the earlier half has lapsed.',
-        source: 'Microsoft 365 usage reports.',
+          t('teamsExplorer.adoption.kpi.newlyActive.how'),
+        source: t('teamsExplorer.adoption.source.usageReports'),
       },
     },
     {
       key: 'lapsed',
-      label: 'Lapsed',
+      label: t('teamsExplorer.adoption.kpi.lapsed.label'),
       value: formatCount(lifecycle.lapsedUsers),
-      hint: 'Active in the first half only',
+      hint: t('teamsExplorer.adoption.kpi.lapsed.hint'),
       tone: lifecycle.lapsedUsers > lifecycle.newUsers ? 'critical' : 'warning',
       info: {
-        what: 'People who were using Teams and then stopped during this period.',
+        what: t('teamsExplorer.adoption.kpi.lapsed.what'),
         how:
-          'The most actionable number on this tab: these are people who had already adopted Teams, '
-          + 'so something changed. More lapsed than newly active means the base is shrinking.',
-        source: 'Microsoft 365 usage reports.',
+          t('teamsExplorer.adoption.kpi.lapsed.how'),
+        source: t('teamsExplorer.adoption.source.usageReports'),
       },
     },
   ];
 
   const segmentSeries = [
     {
-      name: 'Power',
+      name: t('teamsExplorer.adoption.segment.power'),
       points: data.segmentTrend.map((p) => ({ weekStart: p.weekStart, value: p.power })),
     },
     {
-      name: 'Regular',
+      name: t('teamsExplorer.adoption.segment.regular'),
       points: data.segmentTrend.map((p) => ({ weekStart: p.weekStart, value: p.regular })),
     },
     {
-      name: 'Light',
+      name: t('teamsExplorer.adoption.segment.light'),
       points: data.segmentTrend.map((p) => ({ weekStart: p.weekStart, value: p.light })),
     },
   ];
@@ -182,7 +179,7 @@ export default function AdoptionPanel({
     value: row.users,
   }));
 
-  const groupLabel = GROUPINGS.find((g) => g.value === groupBy)?.label ?? 'Department';
+  const groupLabel = t(GROUPINGS.find((g) => g.value === groupBy)?.labelKey ?? 'teamsExplorer.adoption.group.department');
 
   return (
     <div>
@@ -194,47 +191,46 @@ export default function AdoptionPanel({
 
       <div className={shared.stack}>
         <SectionCard
-          title="Engagement over time"
-          description="How the split between power, regular and light users moves week to week."
+          title={t('teamsExplorer.adoption.engagementOverTime.title')}
+          description={t('teamsExplorer.adoption.engagementOverTime.description')}
           query={queryFor(data.queries, 'adoption-segment-trend')}
           isEmpty={data.segmentTrend.length === 0}
           note={
-            'Each week is judged against its own number of working days, so a short first or last '
-            + 'week does not push everyone into the light band.'
+            t('teamsExplorer.adoption.engagementOverTime.note')
           }
         >
-          <StackedAreaChart series={segmentSeries} valueLabel="Users" />
+          <StackedAreaChart series={segmentSeries} valueLabel={t('teamsExplorer.adoption.valueLabel.users')} />
         </SectionCard>
 
         <SectionCard
-          title={`Reach by ${groupLabel.toLowerCase()}`}
-          description="Where Teams has landed, and where it has not."
+          title={t('teamsExplorer.adoption.reachBy.title', { group: groupLabel.toLowerCase() })}
+          description={t('teamsExplorer.adoption.reachBy.description')}
           query={queryFor(data.queries, 'adoption-breakdown')}
           isEmpty={data.breakdown.length === 0}
           emptyMessage={
             demographicsAvailable
-              ? 'No users could be grouped for this period.'
-              : 'User metadata is not being imported, so there is nothing to group by. Switch on the Graph user metadata import.'
+              ? t('teamsExplorer.adoption.reachBy.emptyNoGroups')
+              : t('teamsExplorer.adoption.reachBy.emptyMetadataUnavailable')
           }
           note={
             demographicsAvailable
               ? undefined
-              : 'User metadata is not being imported, so every group will read "(not set)".'
+              : t('teamsExplorer.adoption.reachBy.metadataUnavailableNote')
           }
         >
           <div className={styles.controls}>
             <div className={styles.field}>
               <Text size={200} className={styles.fieldLabel}>
-                Group by
+                {t('teamsExplorer.adoption.groupBy')}
               </Text>
               <Select
                 value={groupBy}
                 onChange={(_: any, d: any) => onGroupByChange(d.value as TeamsGrouping)}
-                aria-label="Group the adoption breakdown by"
+                aria-label={t('teamsExplorer.adoption.groupByAria')}
               >
                 {GROUPINGS.map((option) => (
                   <option key={option.value} value={option.value}>
-                    {option.label}
+                    {t(option.labelKey)}
                   </option>
                 ))}
               </Select>
@@ -242,31 +238,30 @@ export default function AdoptionPanel({
           </div>
 
           <div style={{ marginTop: '12px' }}>
-            <CategoryBarChart categories={reachCategories} valueLabel="% reach" />
+            <CategoryBarChart categories={reachCategories} valueLabel={t('teamsExplorer.adoption.valueLabel.reachPct')} />
           </div>
         </SectionCard>
 
         <SectionCard
-          title={`Active users by ${groupLabel.toLowerCase()}`}
-          description="Where the people actually using Teams are, by volume."
+          title={t('teamsExplorer.adoption.activeUsersBy.title', { group: groupLabel.toLowerCase() })}
+          description={t('teamsExplorer.adoption.activeUsersBy.description')}
           query={queryFor(data.queries, 'adoption-breakdown')}
           isEmpty={volumeCategories.length === 0}
         >
-          <TreemapChart categories={volumeCategories} valueLabel="active users" />
+          <TreemapChart categories={volumeCategories} valueLabel={t('teamsExplorer.adoption.valueLabel.activeUsers')} />
         </SectionCard>
 
         <SectionCard
-          title="Where people use Teams"
-          description="Distinct users seen on each client platform."
+          title={t('teamsExplorer.adoption.devices.title')}
+          description={t('teamsExplorer.adoption.devices.description')}
           query={queryFor(data.queries, 'adoption-devices')}
           isEmpty={deviceCategories.length === 0}
-          emptyMessage="No device usage was reported for this period."
+          emptyMessage={t('teamsExplorer.adoption.devices.empty')}
           note={
-            'Shares add up to more than 100% on purpose: most people use more than one platform. '
-            + 'Mobile reach is the one to watch for frontline and deskless staff.'
+            t('teamsExplorer.adoption.devices.note')
           }
         >
-          <CategoryBarChart categories={deviceCategories} valueLabel="users" />
+          <CategoryBarChart categories={deviceCategories} valueLabel={t('teamsExplorer.adoption.valueLabel.usersLower')} />
         </SectionCard>
       </div>
     </div>

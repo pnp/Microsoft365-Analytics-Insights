@@ -21,13 +21,14 @@ import { ArrowClockwise16Regular, ChevronDown16Regular, ChevronRight16Regular } 
 import { fetchDlpAvailability, fetchDlpSummary } from '../api/dlpApi';
 import type { DlpAvailability, DlpImpactRow, DlpSummary } from '../types/dlp';
 import Spinner from '../components/Spinner';
+import { formatNumber, useT, type TranslationKey } from '../i18n';
 
 const WINDOWS = [
-  { days: 7, label: 'Last 7 days' },
-  { days: 28, label: 'Last 28 days' },
-  { days: 90, label: 'Last 90 days' },
-  { days: 180, label: 'Last 180 days' },
-];
+  { days: 7, labelKey: 'dlp.period.last7Days' },
+  { days: 28, labelKey: 'dlp.period.last28Days' },
+  { days: 90, labelKey: 'dlp.period.last90Days' },
+  { days: 180, labelKey: 'dlp.period.last180Days' },
+] satisfies { days: number; labelKey: TranslationKey }[];
 
 const useStyles = makeStyles({
   intro: { marginTop: '8px' },
@@ -66,7 +67,7 @@ function KpiCard({ label, value, hint, danger }: { label: string; value: number;
       <Text size={200} className={styles.muted}>
         {label}
       </Text>
-      <span className={`${styles.kpiValue} ${danger ? styles.blocked : ''}`}>{value.toLocaleString()}</span>
+      <span className={`${styles.kpiValue} ${danger ? styles.blocked : ''}`}>{formatNumber(value)}</span>
       {hint && (
         <Text size={100} className={styles.muted}>
           {hint}
@@ -98,6 +99,7 @@ function ImpactTable({
   expandable?: boolean;
 }) {
   const styles = useStyles();
+  const t = useT();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Defensive: a ranked list is only ever absent if the API contract has drifted. Rendering "nothing
   // in this period" beats taking the whole page down with a TypeError, which is exactly what an
@@ -123,16 +125,16 @@ function ImpactTable({
       </Text>
       {safeRows.length === 0 ? (
         <Text size={200} className={styles.muted}>
-          Nothing in this period.
+          {t('dlp.table.empty')}
         </Text>
       ) : (
         <Table size="small" aria-label={title}>
           <TableHeader>
             <TableRow>
               <TableHeaderCell>{nameHeader}</TableHeaderCell>
-              <TableHeaderCell style={{ width: 110 }}>Blocked</TableHeaderCell>
-              <TableHeaderCell style={{ width: 110 }}>Audited only</TableHeaderCell>
-              {showUsers && <TableHeaderCell style={{ width: 110 }}>Users</TableHeaderCell>}
+              <TableHeaderCell style={{ width: 110 }}>{t('dlp.column.blocked')}</TableHeaderCell>
+              <TableHeaderCell style={{ width: 110 }}>{t('dlp.column.auditedOnly')}</TableHeaderCell>
+              {showUsers && <TableHeaderCell style={{ width: 110 }}>{t('dlp.column.users')}</TableHeaderCell>}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -161,10 +163,10 @@ function ImpactTable({
                       )}
                     </TableCell>
                     <TableCell className={`${styles.td} ${r.blockedCount > 0 ? styles.blocked : ''}`}>
-                      {r.blockedCount.toLocaleString()}
+                      {formatNumber(r.blockedCount)}
                     </TableCell>
-                    <TableCell className={styles.td}>{r.auditedCount.toLocaleString()}</TableCell>
-                    {showUsers && <TableCell className={styles.td}>{(r.usersAffected ?? 0).toLocaleString()}</TableCell>}
+                    <TableCell className={styles.td}>{formatNumber(r.auditedCount)}</TableCell>
+                    {showUsers && <TableCell className={styles.td}>{formatNumber(r.usersAffected ?? 0)}</TableCell>}
                   </TableRow>
 
                   {canExpand && isOpen && (
@@ -172,14 +174,17 @@ function ImpactTable({
                       <TableCell className={styles.td} colSpan={columnCount}>
                         <div className={styles.nested}>
                           <Text size={200} className={styles.muted} block style={{ marginBottom: '4px' }}>
-                            Policies affecting {r.name ?? 'this agent'}
+                            {t('dlp.policyDrilldown.title', { name: r.name ?? t('dlp.policyDrilldown.thisAgent') })}
                           </Text>
-                          <Table size="extra-small" aria-label={`Policies affecting ${r.name ?? 'this agent'}`}>
+                          <Table
+                            size="extra-small"
+                            aria-label={t('dlp.policyDrilldown.title', { name: r.name ?? t('dlp.policyDrilldown.thisAgent') })}
+                          >
                             <TableHeader>
                               <TableRow>
-                                <TableHeaderCell>Policy</TableHeaderCell>
-                                <TableHeaderCell style={{ width: 110 }}>Blocked</TableHeaderCell>
-                                <TableHeaderCell style={{ width: 110 }}>Audited only</TableHeaderCell>
+                                <TableHeaderCell>{t('dlp.column.policy')}</TableHeaderCell>
+                                <TableHeaderCell style={{ width: 110 }}>{t('dlp.column.blocked')}</TableHeaderCell>
+                                <TableHeaderCell style={{ width: 110 }}>{t('dlp.column.auditedOnly')}</TableHeaderCell>
                               </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -187,9 +192,9 @@ function ImpactTable({
                                 <TableRow key={p.id ?? `${p.name}-${pi}`}>
                                   <TableCell className={styles.td}>{p.name ?? '—'}</TableCell>
                                   <TableCell className={`${styles.td} ${p.blockedCount > 0 ? styles.blocked : ''}`}>
-                                    {p.blockedCount.toLocaleString()}
+                                    {formatNumber(p.blockedCount)}
                                   </TableCell>
-                                  <TableCell className={styles.td}>{p.auditedCount.toLocaleString()}</TableCell>
+                                  <TableCell className={styles.td}>{formatNumber(p.auditedCount)}</TableCell>
                                 </TableRow>
                               ))}
                             </TableBody>
@@ -220,6 +225,7 @@ function ImpactTable({
  */
 export default function DlpPage() {
   const styles = useStyles();
+  const t = useT();
 
   const [days, setDays] = useState(28);
   const [reloadKey, setReloadKey] = useState(0);
@@ -247,7 +253,7 @@ export default function DlpPage() {
         }
       })
       .catch((e: any) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load DLP data.');
+        if (!cancelled) setError(e instanceof Error ? e.message : t('dlp.error.loadData'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -263,12 +269,16 @@ export default function DlpPage() {
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
-        <Title3>DLP impact on Copilot</Title3>
+        <Title3>{t('dlp.title')}</Title3>
         <div className={styles.toolbar}>
-          <Select value={String(days)} onChange={(_e: any, data: any) => setDays(Number(data.value))} aria-label="Reporting period">
+          <Select
+            value={String(days)}
+            onChange={(_e: any, data: any) => setDays(Number(data.value))}
+            aria-label={t('dlp.period.ariaLabel')}
+          >
             {WINDOWS.map((w) => (
               <option key={w.days} value={w.days}>
-                {w.label}
+                {t(w.labelKey)}
               </option>
             ))}
           </Select>
@@ -278,14 +288,13 @@ export default function DlpPage() {
             onClick={() => setReloadKey((k) => k + 1)}
             disabled={loading}
           >
-            Refresh
+            {t('common.action.refresh')}
           </Button>
         </div>
       </div>
 
       <Body1 block className={styles.intro}>
-        Where Microsoft Purview Data Loss Prevention policies stopped Microsoft 365 Copilot from using
-        content — which agents and people are most affected, and which policies are responsible.
+        {t('dlp.intro')}
       </Body1>
 
       {error && (
@@ -302,7 +311,7 @@ export default function DlpPage() {
 
       {loading && (
         <div style={{ textAlign: 'center', padding: '32px' }}>
-          <Spinner size={64} label="Loading DLP data..." />
+          <Spinner size={64} label={t('dlp.loading')} />
         </div>
       )}
 
@@ -310,89 +319,85 @@ export default function DlpPage() {
         <>
           <div className={styles.kpiRow}>
             <KpiCard
-              label="Blocked"
+              label={t('dlp.kpi.blocked.label')}
               value={summary.copilotBlockedCount}
-              hint="Copilot was denied content"
+              hint={t('dlp.kpi.blocked.hint')}
               danger
             />
             <KpiCard
-              label="Audited only"
+              label={t('dlp.kpi.auditedOnly.label')}
               value={summary.copilotAuditedCount}
-              hint="Policy matched, nothing withheld"
+              hint={t('dlp.kpi.auditedOnly.hint')}
             />
-            <KpiCard label="People affected" value={summary.usersImpacted} hint="Distinct users blocked" />
-            <KpiCard label="Agents affected" value={summary.agentsImpacted} hint="Distinct agents blocked" />
-            <KpiCard label="Policies involved" value={summary.policiesInvolved} hint="Distinct DLP policies" />
+            <KpiCard label={t('dlp.kpi.peopleAffected.label')} value={summary.usersImpacted} hint={t('dlp.kpi.peopleAffected.hint')} />
+            <KpiCard label={t('dlp.kpi.agentsAffected.label')} value={summary.agentsImpacted} hint={t('dlp.kpi.agentsAffected.hint')} />
+            <KpiCard label={t('dlp.kpi.policiesInvolved.label')} value={summary.policiesInvolved} hint={t('dlp.kpi.policiesInvolved.hint')} />
           </div>
 
           {totalCopilot === 0 && (
             <MessageBar intent="success" style={{ marginTop: '12px' }}>
               <MessageBarBody>
-                No DLP policy affected Copilot in this period. If you expected activity, remember that a
-                policy change can take up to four hours to reach Copilot, and that the policy must target
-                the &quot;Microsoft 365 Copilot and Copilot Chat&quot; location.
+                {t('dlp.noCopilotActivity')}
               </MessageBarBody>
             </MessageBar>
           )}
 
           <Text className={styles.sectionTitle} weight="semibold" size={500} block>
-            Who and what is affected
+            {t('dlp.affected.title')}
           </Text>
 
           <ImpactTable
-            title="Agents"
-            description="Copilot agents whose access to content was affected by a DLP policy. This is the only view that can attribute a DLP block to a specific agent. Select an agent to see which policies affected it."
-            nameHeader="Agent"
+            title={t('dlp.affected.agents.title')}
+            description={t('dlp.affected.agents.description')}
+            nameHeader={t('dlp.column.agent')}
             rows={summary.topAgents}
             showUsers
             expandable
           />
           <ImpactTable
-            title="People"
-            description="Users whose Copilot requests were affected most often. Select a person to see which policies affected them."
-            nameHeader="User"
+            title={t('dlp.affected.people.title')}
+            description={t('dlp.affected.people.description')}
+            nameHeader={t('dlp.column.user')}
             rows={summary.topUsers}
             showUsers={false}
             expandable
           />
           <ImpactTable
-            title="Policies"
-            description="The DLP policies responsible. A policy with blocks in the 'Audited only' column is matching without withholding anything - typically because its rules are in simulation mode."
-            nameHeader="Policy"
+            title={t('dlp.affected.policies.title')}
+            description={t('dlp.affected.policies.description')}
+            nameHeader={t('dlp.column.policy')}
             rows={summary.topPolicies}
             showUsers
           />
           <ImpactTable
-            title="Sensitivity labels"
-            description="Labels on the content Copilot was stopped from using. The most common Copilot DLP policy shape is 'prevent Copilot processing content with label X', so this is usually the explanation."
-            nameHeader="Sensitivity label"
+            title={t('dlp.affected.sensitivityLabels.title')}
+            description={t('dlp.affected.sensitivityLabels.description')}
+            nameHeader={t('dlp.column.sensitivityLabel')}
             rows={summary.topSensitivityLabels}
             showUsers
           />
 
           <Text className={styles.sectionTitle} weight="semibold" size={500} block>
-            Tenant-wide DLP activity
+            {t('dlp.tenant.title')}
           </Text>
           <Body1 block className={styles.muted} style={{ marginTop: '4px' }}>
-            DLP policy activity across Exchange, SharePoint/OneDrive and endpoint devices, from the
-            separate DLP audit feed. These records identify the person but never the Copilot agent, so
-            they are reported separately and are not combined with the Copilot figures above.
+            {t('dlp.tenant.description')}
           </Body1>
 
           {!availability?.tenantDlpAvailable ? (
             <Text size={200} className={styles.muted} block style={{ marginTop: '8px' }}>
-              The DLP import is switched off, so there is nothing to show here.
+              {t('dlp.tenant.importOff')}
             </Text>
           ) : (
             <>
               <div className={styles.kpiRow}>
-                <KpiCard label="Blocked" value={summary.tenantBlockedCount} hint="Across all workloads" danger />
-                <KpiCard label="Audited only" value={summary.tenantAuditedCount} hint="Matched, not enforced" />
+                <KpiCard label={t('dlp.kpi.blocked.label')} value={summary.tenantBlockedCount} hint={t('dlp.tenant.blocked.hint')} danger />
+                <KpiCard label={t('dlp.kpi.auditedOnly.label')} value={summary.tenantAuditedCount} hint={t('dlp.tenant.auditedOnly.hint')} />
               </div>
               <ImpactTable
-                title="Policies (tenant-wide)"
-                description="Policies firing across the tenant, from the DLP audit feed."
-                nameHeader="Policy"
+                title={t('dlp.tenant.policies.title')}
+                description={t('dlp.tenant.policies.description')}
+                nameHeader={t('dlp.column.policy')}
                 rows={summary.tenantTopPolicies}
                 showUsers={false}
               />

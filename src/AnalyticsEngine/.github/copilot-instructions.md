@@ -11,6 +11,24 @@
 ## Project Guidelines
 - User prefers to keep the existing InsertBatch row-by-row implementation rather than replacing it with SqlBulkCopy.
 
+## Web portal UI — no UI change without its translations
+The portal at [`Web/Scripts/portal`](../Web/Scripts/portal/README.md) ships in **English (en-GB) and Spanish (es-ES)**. It picks a language from the browser and lets the user change it from the header, so both languages are live for every customer. Adding a panel in English only is not "translate it later" — it puts English labels in the middle of a Spanish page for every Spanish-speaking admin.
+
+**Any change under `Web/Scripts/portal/src` that adds or reworders text must add that text to the catalog in every language, in the same change.**
+
+- English goes in `src/i18n/catalog/en/<area>.ts`, Spanish in `src/i18n/catalog/es/<area>.ts`, and is rendered with `t('<key>')` from `useT()`. Keys are namespaced by module (`health.*`, `webActivity.*`).
+- `catalog/es/*.ts` is typed `Record<keyof typeof en, string>`, so **a missing Spanish key is a compile error** — `npm run lint` fails, and so does the production build.
+- `npx vitest run src/i18n` fails on: text that never reached the catalog (reported as a file/line worklist), English copied into the Spanish catalog to satisfy the compiler, a `{placeholder}` that differs between the two languages, a key in the wrong module, and a duplicate key.
+- **Module-level constant tables carry keys, not text.** `const WORKLOADS = [{ key: 'email', label: 'Email' }]` becomes `labelKey: TranslationKey`, resolved with `t(w.labelKey)` at the render site — those arrays are evaluated at import time, before a language exists.
+- **Never translate tenant data.** User and display names, department/job title/office, site and team names, file names, URLs, agent names, SKU names — anything from SQL or the Graph — renders exactly as stored.
+- **Numbers and dates go through `formatNumber` / `formatDateParts`** from `src/i18n`, never a bare `toLocaleString()`. `1,234` is one thousand two hundred and thirty-four in English and **one point two three four** in Spanish; the wrong locale is wrong by a factor of a thousand on a page used to justify licence spend.
+- `src/i18n/lint/allowList.ts` exempts a string from the check and is **only** for text identical in both languages (Microsoft product names, file formats, units, symbols). An ordinary English word added there is how a half-translated portal ships with every check green.
+- **Rewording an existing English string silently invalidates its Spanish.** The key is still present in both languages, so `tsc` and the gate both stay green while the Spanish now translates the *old* sentence. The tooling cannot see this one — when you change an English value, re-read its Spanish in the same edit.
+
+Existing component tests assert English wording, and `renderWithProvider` pins the language to English, so **a translation change that breaks a test means the English text changed** — restore the English rather than editing the test.
+
+Both checks run in CI: `tests.yml` builds the solution (which runs `npm run build`, hence `tsc`) and then runs `npm run test` in the portal directory, inside `test_dotnet (Release)` — a required check on `dev` and `main`. A branch that leaves a string untranslated cannot be merged. The `release-manager` agent runs them again before cutting a release and refuses to release on a failure.
+
 ## Installer config schema — bump `CONFIG_VERSION` on every change
 Whenever you change the **installer's saved config schema** — any add / remove / rename of a persisted property on `BaseSolutionInstallConfig`, `SolutionInstallConfig`, `TargetSolutionConfig` or `ImportTaskSettings` (a new import toggle, a new Azure-resource field, etc.) — you **must** bump `CONFIG_VERSION` in [`Common/Entities/Installer/BaseSolutionInstallConfig.cs`](../Common/Entities/Installer/BaseSolutionInstallConfig.cs). Use `Major.Minor.Patch`: **minor** for additive / back-compatible changes, **major** for breaking ones. Add a one-line entry to the `// History:` comment next to the constant describing what changed. This value becomes the `ConfigSchemaVersion` stamped into every saved `*.json` config, so keeping it in step with the schema is how config compatibility is reasoned about across upgrades. Do this in the **same** change that alters the schema — don't leave it to a follow-up.
 

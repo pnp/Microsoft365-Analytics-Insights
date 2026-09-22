@@ -4,7 +4,13 @@ import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import WorkloadDistributions from './WorkloadDistributions';
 import type { LicenceActivityDistribution, WorkloadKey } from '../../types/licenceActivity';
-import { BAND_DESCRIPTIONS, COPILOT_COVERAGE_NOTE } from './bands';
+import { licenceActivity as en } from '../../i18n/catalog/en/licenceActivity';
+
+const BAND_DESCRIPTIONS = {
+  unknown: en['licenceActivity.band.description.unknown'],
+  zero: en['licenceActivity.band.description.zero'],
+};
+const COPILOT_COVERAGE_NOTE = en['licenceActivity.band.copilotCoverageNote'];
 
 function dist(workload: WorkloadKey, over: Partial<LicenceActivityDistribution> = {}): LicenceActivityDistribution {
   return { workload, high: 0, moderate: 0, low: 0, zero: 0, unknown: 0, ...over };

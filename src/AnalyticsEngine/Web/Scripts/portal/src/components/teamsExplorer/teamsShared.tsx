@@ -2,6 +2,7 @@ import { makeStyles, tokens, Text, Card, MessageBar, MessageBarBody } from '@flu
 import type { ReactNode } from 'react';
 import SqlPopover from '../SqlPopover';
 import type { KpiTone } from '../shared/KpiGrid';
+import { formatDateParts, formatNumber, useT, type TFunction } from '../../i18n';
 import type {
   TeamsBucket,
   TeamsNamedCount,
@@ -30,13 +31,16 @@ export function reachTone(percent: number): KpiTone {
 
 /** Whole number with thousands separators. */
 export function formatCount(value: number): string {
-  return Math.round(value).toLocaleString();
+  return formatNumber(Math.round(value));
 }
 
 /** One decimal place, dropping a trailing ".0". */
 export function formatDecimal(value: number): string {
   const rounded = Math.round(value * 10) / 10;
-  return rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1);
+  return formatNumber(rounded, {
+    minimumFractionDigits: rounded % 1 === 0 ? 0 : 1,
+    maximumFractionDigits: rounded % 1 === 0 ? 0 : 1,
+  });
 }
 
 /** A percentage to one decimal place. */
@@ -52,7 +56,7 @@ export function formatHours(value: number): string {
 /** A UTC ISO date as a short local-format date, or a dash when absent. */
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return '\u2014';
-  return new Date(iso).toLocaleDateString(undefined, {
+  return formatDateParts(new Date(iso), {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
@@ -176,6 +180,7 @@ export function SectionCard({
   children,
 }: SectionCardProps) {
   const styles = useStyles();
+  const t = useT();
 
   return (
     <Card className={styles.card}>
@@ -188,7 +193,7 @@ export function SectionCard({
             </Text>
           )}
         </div>
-        {query?.sql && <SqlPopover sql={query.sql} title={`SQL behind "${title}"`} />}
+        {query?.sql && <SqlPopover sql={query.sql} title={t('teamsExplorer.shared.sqlBehind', { title })} />}
       </div>
 
       {note && (
@@ -200,11 +205,11 @@ export function SectionCard({
       <div className={styles.body}>
         {query?.error ? (
           <MessageBar intent="error">
-            <MessageBarBody>This section could not be loaded: {query.error}</MessageBarBody>
+            <MessageBarBody>{t('teamsExplorer.shared.sectionLoadError', { error: query.error })}</MessageBarBody>
           </MessageBar>
         ) : isEmpty ? (
           <Text size={200} className={styles.muted}>
-            {emptyMessage ?? 'No data for this period.'}
+            {emptyMessage ?? t('teamsExplorer.shared.noData')}
           </Text>
         ) : (
           children
@@ -223,16 +228,21 @@ export function WindowNote({
   includeUsage?: boolean;
 }) {
   const styles = useStyles();
+  const t = useT();
 
   const usageDiffers =
     includeUsage && (window.usageFromUtc !== window.fromUtc || window.usageToUtc !== window.toUtc);
 
   return (
     <Text size={200} className={styles.muted}>
-      Call data covers {formatRange(window.fromUtc, window.toUtc)}.
+      {t('teamsExplorer.shared.callDataCovers', { range: formatRange(window.fromUtc, window.toUtc) })}
       {usageDiffers
-        ? ` Usage-report figures cover ${formatRange(window.usageFromUtc, window.usageToUtc)} \u2013 Microsoft publishes them a few days in arrears, so the window is shifted back rather than left half-empty.`
+        ? ` ${usageReportWindowNote(t, formatRange(window.usageFromUtc, window.usageToUtc))}`
         : ''}
     </Text>
   );
+}
+
+function usageReportWindowNote(t: TFunction, range: string): string {
+  return t('teamsExplorer.shared.usageReportFiguresCover', { range });
 }

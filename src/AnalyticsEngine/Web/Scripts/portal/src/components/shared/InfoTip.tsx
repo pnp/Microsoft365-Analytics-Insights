@@ -10,6 +10,7 @@ import {
 } from '@fluentui/react-components';
 import { Info16Regular } from '@fluentui/react-icons';
 import type { ReactNode } from 'react';
+import { useT } from '../../i18n';
 
 const useStyles = makeStyles({
   trigger: {
@@ -105,7 +106,9 @@ export type InfoTipContent = {
  */
 export default function InfoTip({ title, content }: { title: string; content: InfoTipContent }) {
   const styles = useStyles();
+  const t = useT();
   const formulaIsMultiLine = typeof content.formula === 'string' && content.formula.includes('\n');
+  const explainLabel = t('common.infoTip.ariaLabel', { title });
 
   return (
     <Popover withArrow positioning="below-end">
@@ -114,8 +117,8 @@ export default function InfoTip({ title, content }: { title: string; content: In
           appearance="transparent"
           className={styles.trigger}
           icon={<Info16Regular />}
-          aria-label={`How "${title}" is calculated`}
-          title={`How "${title}" is calculated`}
+          aria-label={explainLabel}
+          title={explainLabel}
         />
       </PopoverTrigger>
       <PopoverSurface className={styles.surface}>
@@ -128,7 +131,7 @@ export default function InfoTip({ title, content }: { title: string; content: In
           {content.formula && (
             <div>
               <Text size={100} block className={styles.formulaLabel}>
-                Calculation
+                {t('common.infoTip.calculation')}
               </Text>
               <div
                 className={mergeClasses(styles.formula, formulaIsMultiLine && styles.formulaBlock)}

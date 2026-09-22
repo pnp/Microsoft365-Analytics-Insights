@@ -138,6 +138,130 @@ stylesheet):
 component test can prove an attribute is present but never that it does anything. It also fails on
 any `data-print` value the stylesheet has never heard of.
 
+## Languages
+
+The portal ships in **English (en-GB)** and **Spanish (es-ES)**.
+
+It opens in the visitor's own language with nothing to configure: an earlier explicit choice wins,
+then the browser's `navigator.languages`, then English. Matching is on the primary subtag, so
+`es-MX` and `es-419` get Spanish rather than falling back to English because the region is not
+Spain. The picker is a globe in the brand bar — in the header rather than on a settings page,
+because somebody who has landed on a portal in a language they cannot read also cannot navigate to
+a settings page to fix it. The choice is kept in `localStorage`, and a browser with site data
+blocked degrades to detection instead of throwing.
+
+### How it works
+
+| File | Role |
+| --- | --- |
+| `src/i18n/index.ts` | The public API. Import from here, not from the files behind it. |
+| `src/i18n/catalog/en/<area>.ts` | English text for one area, as a flat `as const` object of dotted keys. |
+| `src/i18n/catalog/es/<area>.ts` | The Spanish counterpart, typed `Record<keyof typeof en, string>`. |
+| `src/i18n/catalog/index.ts` | Merges the modules, derives `TranslationKey`, and fetches non-English catalogs. |
+| `src/i18n/I18nProvider.tsx` | Context, `useT()`/`useTNode()`, and `<html lang>`. |
+| `src/i18n/locale.ts` | Locale-aware `formatNumber` / `formatDateParts` / `compareStrings`. |
+| `src/i18n/lint/` | The untranslated-text check and its allow-list. |
+
+```tsx
+import { useT } from '../../i18n';
+
+export default function Panel() {
+  const t = useT();
+  return <Text>{t('health.title')}</Text>;
+}
+```
+
+`t()` takes a `TranslationKey`, so a typo or a renamed key is a build error rather than a key name
+appearing on screen. `{placeholder}` markers are substituted from the second argument; `useTNode()`
+does the same but accepts elements, so a sentence containing a link stays one translatable
+sentence. `plural(count, oneKey, otherKey)` picks between two real keys — English and Spanish share
+the same one/other split, so a runtime plural engine would buy nothing and would hide both forms
+from the compiler.
+
+Text that came out of the customer's tenant — user and display names, departments, site and team
+names, file names, URLs, agent and SKU names — is **never** translated. Only the product's own
+wording is.
+
+Numbers and dates must go through `formatNumber` / `formatDateParts` rather than a bare
+`toLocaleString()`. This is correctness, not polish: `1,234` is one thousand two hundred and
+thirty-four in English and **one point two three four** in Spanish.
+
+### Only the language you read is downloaded
+
+English is bundled — it is the source language and the runtime fallback. Every other language is a
+separate chunk that `main.tsx` fetches for the language it detects, before the first render, so a
+Spanish reader never sees an English flash and an English reader never downloads Spanish.
+
+Measured on the production build (gzipped, eagerly-loaded chunks):
+
+| | eager |
+| --- | --- |
+| before this feature | 178 kB |
+| English reader | 272 kB |
+| Spanish reader | 272 kB + 65 kB fetched |
+
+**The point of the split is the third language, not the second.** Bundling every language would
+make each new one a permanent download for every user, which turns "should we support Norwegian?"
+into a question about page weight. This way it costs existing readers nothing.
+
+The English catalog is the +94 kB: text that used to live inside each page's lazily-loaded chunk
+now sits in the eager bundle. Moving it back — one catalog module per route, loaded with the page —
+is possible but would mean each page registering its own catalog at runtime, and a page that forgot
+would render raw keys. That trade (a guaranteed-correct 94 kB against a silently-breakable saving)
+was not worth taking on an authenticated internal admin portal whose assets are content-hashed and
+cached.
+
+### Two checks stop a half-translated portal shipping
+
+1. **`npm run lint` (`tsc --noEmit`)** — each Spanish module is typed against its English
+   counterpart, so an English key with no Spanish translation is a *compile error*:
+   `Property '"health.title"' is missing in type ... src/i18n/catalog/es/health.ts`.
+   The production build runs the same type-check, so an untranslated string cannot be built.
+
+2. **`npx vitest run src/i18n`** — catches what the type system cannot see:
+   - `hardcodedStrings.test.ts` parses every page and component with the TypeScript AST and fails
+     on any string a user could read that is not a catalog key, listing file, line and text. It
+     covers JSX text, user-facing props (`label`, `title`, `aria-label`, `content`, …), rendered
+     expressions, the `label`/`title`/`what`/`how` properties of the constant tables this portal
+     keeps most of its text in, and toasts.
+   - `catalog.test.ts` fails on a key claimed by two modules, a key not namespaced to its module, a
+     `{placeholder}` present in one language and not the other, an empty translation, a sentence
+     chopped into fragments that no translator can reassemble, an HTML entity that would be shown
+     to the reader verbatim, and English pasted into the Spanish catalog to satisfy the compiler —
+     which is the realistic way a half-Spanish page ships while every other check is green.
+
+`src/i18n/lint/allowList.ts` is the only escape hatch, and is for text that reads *identically* in
+both languages: Microsoft product names Microsoft itself does not translate (Copilot, Teams,
+SharePoint, Power BI…), technical identifiers (SQL, CSV, GUID, UPN, DLP), units and symbols. An
+ordinary English word added there defeats the whole mechanism, so additions are expected to be
+challenged in review — and the `release-manager` agent reads every change to it in a release diff.
+
+Both checks run in CI on every pull request. `tests.yml` builds the solution (which runs
+`npm run build`, and therefore `tsc`) and then runs `npm run test` in this directory, inside the
+`test_dotnet (Release)` job — a required status check on `dev` and `main`. A branch that leaves a
+string untranslated cannot be merged.
+
+### Adding a language
+
+1. Add it to `LANGUAGES` in `src/i18n/languages.ts` with a region-qualified locale and its name in
+   its own language, and extend the `Language` union.
+2. Copy `src/i18n/catalog/es/` to `src/i18n/catalog/<id>/` and translate.
+3. Add a loader for it in `LOADERS` in `src/i18n/catalog/index.ts`, listing each module's
+   `import()` literally — Vite has to see them to split them into chunks.
+4. Add it to `ES_MODULES`' sibling list in `src/test/catalogModules.ts` so the per-module checks
+   cover it.
+
+`npm run lint` then lists every key still missing, and will not go green until the new language is
+complete. A language with more than two plural categories (Polish, Arabic, Russian) needs a real
+plural selector in `plural.ts` first — that is a deliberate deferral, not an oversight.
+
+### Adding a string
+
+Put it in the catalog module for its area, translate it in every language, and render it with
+`t()`. Existing component tests assert **English** wording and `renderWithProvider` pins the
+language to English, so a test failing after a translation change means the English text changed —
+restore the English rather than editing the test.
+
 ## Local development
 
 ```bash

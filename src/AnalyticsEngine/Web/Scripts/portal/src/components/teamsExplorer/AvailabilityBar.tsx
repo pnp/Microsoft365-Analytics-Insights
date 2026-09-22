@@ -10,6 +10,7 @@ import {
   MessageBarTitle,
 } from '@fluentui/react-components';
 import { ChevronDown16Regular, ChevronRight16Regular } from '@fluentui/react-icons';
+import { useT, type TranslationKey } from '../../i18n';
 import type { TeamsAvailability } from '../../types/teamsExplorer';
 
 const useStyles = makeStyles({
@@ -50,36 +51,40 @@ const useStyles = makeStyles({
  */
 export default function AvailabilityBar({ availability }: { availability: TeamsAvailability }) {
   const styles = useStyles();
+  const t = useT();
   const [expanded, setExpanded] = useState(false);
 
-  const sources: { label: string; on: boolean; detail?: string }[] = [
-    { label: 'Usage reports', on: availability.usageReportsAvailable },
-    { label: 'Calls', on: availability.callsAvailable },
+  const sources: { labelKey: TranslationKey; on: boolean; detail?: string }[] = [
+    { labelKey: 'teamsExplorer.availability.source.usageReports', on: availability.usageReportsAvailable },
+    { labelKey: 'teamsExplorer.availability.source.calls', on: availability.callsAvailable },
     {
-      label: 'Teams & channels',
+      labelKey: 'teamsExplorer.availability.source.teamsChannels',
       on: availability.teamsAnalyticsAvailable && availability.authorisedTeams > 0,
       detail: availability.teamsAnalyticsAvailable
-        ? `${availability.authorisedTeams} of ${availability.totalTeams} teams authorised`
+        ? t('teamsExplorer.availability.authorisedTeams', {
+          authorised: availability.authorisedTeams,
+          total: availability.totalTeams,
+        })
         : undefined,
     },
-    { label: 'Cognitive enrichment', on: availability.cognitiveAvailable },
-    { label: 'User demographics', on: availability.userMetadataAvailable },
+    { labelKey: 'teamsExplorer.availability.source.cognitiveEnrichment', on: availability.cognitiveAvailable },
+    { labelKey: 'teamsExplorer.availability.source.userDemographics', on: availability.userMetadataAvailable },
   ];
 
   return (
     <div className={styles.root}>
       <div className={styles.badges}>
         <Text size={200} className={styles.muted}>
-          Data sources:
+          {t('teamsExplorer.availability.dataSources')}
         </Text>
         {sources.map((source) => (
           <Badge
-            key={source.label}
+            key={source.labelKey}
             appearance="tint"
             color={source.on ? 'success' : 'informative'}
             title={source.detail}
           >
-            {source.label}
+            {t(source.labelKey)}
             {source.detail ? ` \u2013 ${source.detail}` : ''}
           </Badge>
         ))}
@@ -95,13 +100,18 @@ export default function AvailabilityBar({ availability }: { availability: TeamsA
             onClick={() => setExpanded((open) => !open)}
             aria-expanded={expanded}
           >
-            {expanded ? 'Hide' : 'Show'} what is missing ({availability.reasons.length})
+            {t(
+              expanded
+                ? 'teamsExplorer.availability.hideMissing'
+                : 'teamsExplorer.availability.showMissing',
+              { count: availability.reasons.length },
+            )}
           </Button>
 
           {expanded && (
             <MessageBar intent={availability.available ? 'info' : 'warning'}>
               <MessageBarBody>
-                <MessageBarTitle>Some Teams data is not being collected</MessageBarTitle>
+                <MessageBarTitle>{t('teamsExplorer.availability.missingTitle')}</MessageBarTitle>
                 <ul className={styles.reasons}>
                   {availability.reasons.map((reason) => (
                     <li key={reason}>

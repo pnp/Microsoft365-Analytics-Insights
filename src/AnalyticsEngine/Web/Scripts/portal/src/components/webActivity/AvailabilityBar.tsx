@@ -17,6 +17,7 @@ import {
   Question16Regular,
 } from '@fluentui/react-icons';
 import type { WebActivityAvailability } from '../../types/webActivity';
+import { useT } from '../../i18n';
 import { formatDate } from './webActivityShared';
 
 const useStyles = makeStyles({
@@ -64,30 +65,31 @@ const useStyles = makeStyles({
  */
 export default function AvailabilityBar({ availability }: { availability: WebActivityAvailability }) {
   const styles = useStyles();
+  const t = useT();
   const [expanded, setExpanded] = useState(false);
 
   const sources: { label: string; on: boolean; unknown?: boolean; detail?: string }[] = [
-    { label: 'Web traffic import', on: availability.webTrafficAvailable },
+    { label: t('webActivity.availability.source.webTrafficImport'), on: availability.webTrafficAvailable },
     { label: 'Application Insights', on: availability.appInsightsConfigured },
     {
-      label: 'Page views collected',
+      label: t('webActivity.availability.source.pageViewsCollected'),
       on: availability.hasAnyHits,
       // "Nothing collected" and "the check failed" need opposite advice, so the badge has to be
       // able to say it does not know - otherwise it reads "off" beside a message saying the
       // opposite, which is how an admin ends up redeploying a working tracker.
       unknown: !availability.collectionStatusKnown,
-      detail: availability.lastHitUtc ? `last ${formatDate(availability.lastHitUtc)}` : undefined,
+      detail: availability.lastHitUtc ? t('webActivity.availability.lastHit', { date: formatDate(availability.lastHitUtc) }) : undefined,
     },
-    { label: 'Search terms', on: availability.searchAvailable },
-    { label: 'Element clicks', on: availability.clickTrackingAvailable },
-    { label: 'User directory', on: availability.userMetadataAvailable },
+    { label: t('webActivity.availability.source.searchTerms'), on: availability.searchAvailable },
+    { label: t('webActivity.availability.source.elementClicks'), on: availability.clickTrackingAvailable },
+    { label: t('webActivity.availability.source.userDirectory'), on: availability.userMetadataAvailable },
   ];
 
   return (
     <div className={styles.root}>
       <div className={styles.badges}>
         <Text size={200} className={styles.muted}>
-          Data sources:
+          {t('webActivity.availability.dataSources')}
         </Text>
         {sources.map((source) => (
           <Badge
@@ -105,7 +107,7 @@ export default function AvailabilityBar({ availability }: { availability: WebAct
             }
             title={source.detail}
           >
-            {source.label}: {source.unknown ? 'unknown' : source.on ? 'on' : 'off'}
+            {t('webActivity.availability.badge', { label: source.label, status: source.unknown ? t('webActivity.availability.status.unknown') : source.on ? t('webActivity.availability.status.on') : t('webActivity.availability.status.off') })}
             {source.detail ? ` \u2013 ${source.detail}` : ''}
           </Badge>
         ))}
@@ -121,13 +123,13 @@ export default function AvailabilityBar({ availability }: { availability: WebAct
             onClick={() => setExpanded((open) => !open)}
             aria-expanded={expanded}
           >
-            {expanded ? 'Hide' : 'Show'} what is missing ({availability.reasons.length})
+            {t(expanded ? 'webActivity.availability.hideMissing' : 'webActivity.availability.showMissing', { count: availability.reasons.length })}
           </Button>
 
           {expanded && (
             <MessageBar intent={availability.available ? 'info' : 'warning'}>
               <MessageBarBody>
-                <MessageBarTitle>Some web traffic data is not being collected</MessageBarTitle>
+                <MessageBarTitle>{t('webActivity.availability.missingTitle')}</MessageBarTitle>
                 <ul className={styles.reasons}>
                   {availability.reasons.map((reason) => (
                     <li key={reason}>

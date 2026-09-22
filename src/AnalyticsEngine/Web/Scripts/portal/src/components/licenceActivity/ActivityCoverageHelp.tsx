@@ -1,5 +1,6 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
-import { BAND_DESCRIPTIONS, COPILOT_COVERAGE_NOTE } from './bands';
+import { useT } from '../../i18n';
+import { BAND_DESCRIPTION_KEYS, COPILOT_COVERAGE_NOTE_KEY } from './bands';
 
 const useStyles = makeStyles({
   root: {
@@ -22,24 +23,20 @@ const useStyles = makeStyles({
 
 export default function ActivityCoverageHelp({ showCopilot = false }: { showCopilot?: boolean }) {
   const styles = useStyles();
+  const t = useT();
 
   return (
     <div className={styles.root}>
       <Text size={200} role="note">
-        Unknown means insufficient data, not no activity. No activity means complete reporting data shows no usage.
+        {t('licenceActivity.activityCoverage.summary')}
       </Text>
       <details>
-        <summary className={styles.summary}>Why is activity Unknown?</summary>
+        <summary className={styles.summary}>{t('licenceActivity.activityCoverage.whyUnknown')}</summary>
         <div className={styles.detail}>
-          <Text size={200}>{BAND_DESCRIPTIONS.unknown}</Text>
-          <Text size={200}>
-            When the source contains only recorded events, finding no events does not prove that the person was inactive.
-          </Text>
-          {showCopilot && <Text size={200}>{COPILOT_COVERAGE_NOTE}</Text>}
-          <Text size={200}>
-            Under Where these figures come from, select Show data sources for the source, reporting dates and import
-            status for each service.
-          </Text>
+          <Text size={200}>{t(BAND_DESCRIPTION_KEYS.unknown)}</Text>
+          <Text size={200}>{t('licenceActivity.activityCoverage.recordedEventsOnly')}</Text>
+          {showCopilot && <Text size={200}>{t(COPILOT_COVERAGE_NOTE_KEY)}</Text>}
+          <Text size={200}>{t('licenceActivity.activityCoverage.showSourcesHelp')}</Text>
         </div>
       </details>
     </div>

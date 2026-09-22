@@ -16,6 +16,7 @@ import CategoryBarChart from '../charts/CategoryBarChart';
 import TimeSeriesChart from '../charts/TimeSeriesChart';
 import SentimentLight from '../shared/SentimentLight';
 import type { TeamsConversations } from '../../types/teamsExplorer';
+import { useT } from '../../i18n';
 import {
   SENTIMENT_SCALE_NOTE,
   SectionCard,
@@ -36,6 +37,8 @@ const useStyles = makeStyles({
   },
 });
 
+const COGNITIVE_ENDPOINT = 'CognitiveEndpoint';
+
 /**
  * What people are talking about, and how they sound doing it.
  *
@@ -47,15 +50,15 @@ const useStyles = makeStyles({
 export default function ConversationsPanel({ data }: { data: TeamsConversations }) {
   const styles = useStyles();
   const shared = useTeamsStyles();
+  const t = useT();
 
   if (!data.cognitiveAvailable) {
     return (
       <MessageBar intent="warning">
         <MessageBarBody>
-          Cognitive services are not configured, so channel messages are never scored: key phrases,
-          detected languages and sentiment cannot be produced. Set <strong>CognitiveEndpoint</strong>{' '}
-          (with either a key or the runtime service principal) on the web application and the
-          importer, then wait for the next Teams import cycle.
+          {t('teamsExplorer.conversations.cognitiveOff.beforeEndpoint')}{' '}
+          <strong>{COGNITIVE_ENDPOINT}</strong>{' '}
+          {t('teamsExplorer.conversations.cognitiveOff.afterEndpoint')}
         </MessageBarBody>
       </MessageBar>
     );
@@ -65,7 +68,7 @@ export default function ConversationsPanel({ data }: { data: TeamsConversations 
 
   const sentimentSeries = [
     {
-      name: 'Sentiment',
+      name: t('teamsExplorer.column.sentiment'),
       points: data.sentimentTrend.map((p) => ({ weekStart: p.weekStart, value: p.sentiment })),
     },
   ];
@@ -77,61 +80,58 @@ export default function ConversationsPanel({ data }: { data: TeamsConversations 
       {nothingScored && (
         <MessageBar intent="info" style={{ marginTop: '12px' }}>
           <MessageBarBody>
-            Cognitive services are configured, but no channel day in this period carries a score yet.
-            Scoring happens during the Teams import, and only for teams that have been authorised for
-            deep analytics - so check the Teams permissions page and give the importer a cycle to
-            catch up.
+            {t('teamsExplorer.conversations.nothingScored')}
           </MessageBarBody>
         </MessageBar>
       )}
 
       <div className={shared.stack}>
         <SectionCard
-          title="What people are talking about"
-          description="The key phrases extracted from channel conversation."
+          title={t('teamsExplorer.conversations.keywords.title')}
+          description={t('teamsExplorer.conversations.keywords.description')}
           query={queryFor(data.queries, 'conv-keywords')}
           isEmpty={data.keywords.length === 0}
-          emptyMessage="No key phrases were extracted for this period."
+          emptyMessage={t('teamsExplorer.conversations.keywords.empty')}
         >
-          <WordCloud categories={toCategories(data.keywords)} valueLabel="mentions" />
+          <WordCloud categories={toCategories(data.keywords)} valueLabel={t('teamsExplorer.valueLabel.mentions')} />
         </SectionCard>
 
         <SectionCard
-          title="Sentiment over time"
-          description="Weighted by message count, week by week."
+          title={t('teamsExplorer.conversations.sentimentOverTime.title')}
+          description={t('teamsExplorer.conversations.sentimentOverTime.description')}
           query={queryFor(data.queries, 'conv-sentiment-trend')}
           isEmpty={data.sentimentTrend.every((p) => p.sentiment === null)}
-          emptyMessage="No scored conversation in this period."
+          emptyMessage={t('teamsExplorer.conversations.sentimentOverTime.empty')}
           note={SENTIMENT_SCALE_NOTE}
         >
-          <TimeSeriesChart series={sentimentSeries} valueLabel="Sentiment" height={220} />
+          <TimeSeriesChart series={sentimentSeries} valueLabel={t('teamsExplorer.column.sentiment')} height={220} />
         </SectionCard>
       </div>
 
       <div className={shared.grid}>
         <SectionCard
-          title="Languages in use"
-          description="What the organisation actually writes in."
+          title={t('teamsExplorer.conversations.languages.title')}
+          description={t('teamsExplorer.conversations.languages.description')}
           query={queryFor(data.queries, 'conv-languages')}
           isEmpty={data.languages.length === 0}
         >
-          <CategoryBarChart categories={toCategories(data.languages)} valueLabel="channel days" showShare />
+          <CategoryBarChart categories={toCategories(data.languages)} valueLabel={t('teamsExplorer.valueLabel.channelDays')} showShare />
         </SectionCard>
 
         <SectionCard
-          title="Sentiment by team"
-          description="Where the conversation is positive, and where it is not."
+          title={t('teamsExplorer.conversations.sentimentByTeam.title')}
+          description={t('teamsExplorer.conversations.sentimentByTeam.description')}
           query={queryFor(data.queries, 'conv-sentiment-team')}
           isEmpty={data.sentimentByTeam.length === 0}
           note={SENTIMENT_SCALE_NOTE}
         >
           <div className={shared.tableWrap}>
-            <Table size="small" aria-label="Sentiment by team">
+            <Table size="small" aria-label={t('teamsExplorer.conversations.sentimentByTeam.aria')}>
               <TableHeader>
                 <TableRow>
-                  <TableHeaderCell>Team</TableHeaderCell>
-                  <TableHeaderCell>Messages</TableHeaderCell>
-                  <TableHeaderCell>Sentiment</TableHeaderCell>
+                  <TableHeaderCell>{t('teamsExplorer.column.team')}</TableHeaderCell>
+                  <TableHeaderCell>{t('teamsExplorer.column.messages')}</TableHeaderCell>
+                  <TableHeaderCell>{t('teamsExplorer.column.sentiment')}</TableHeaderCell>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -148,19 +148,19 @@ export default function ConversationsPanel({ data }: { data: TeamsConversations 
         </SectionCard>
 
         <SectionCard
-          title="Sentiment by channel"
-          description="The same read, one level down."
+          title={t('teamsExplorer.conversations.sentimentByChannel.title')}
+          description={t('teamsExplorer.conversations.sentimentByChannel.description')}
           query={queryFor(data.queries, 'conv-sentiment-channel')}
           isEmpty={data.sentimentByChannel.length === 0}
           note={SENTIMENT_SCALE_NOTE}
         >
           <div className={shared.tableWrap}>
-            <Table size="small" aria-label="Sentiment by channel">
+            <Table size="small" aria-label={t('teamsExplorer.conversations.sentimentByChannel.aria')}>
               <TableHeader>
                 <TableRow>
-                  <TableHeaderCell>Channel</TableHeaderCell>
-                  <TableHeaderCell>Messages</TableHeaderCell>
-                  <TableHeaderCell>Sentiment</TableHeaderCell>
+                  <TableHeaderCell>{t('teamsExplorer.column.channel')}</TableHeaderCell>
+                  <TableHeaderCell>{t('teamsExplorer.column.messages')}</TableHeaderCell>
+                  <TableHeaderCell>{t('teamsExplorer.column.sentiment')}</TableHeaderCell>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -178,8 +178,9 @@ export default function ConversationsPanel({ data }: { data: TeamsConversations 
       </div>
 
       <Text size={200} className={styles.muted} style={{ marginTop: '12px', display: 'block' }}>
-        {formatCount(data.scoredChannelDays)} channel-days in this period carry a sentiment score.
-        Scoring only covers teams authorised for deep analytics.
+        {t('teamsExplorer.conversations.scoredChannelDays', {
+          count: formatCount(data.scoredChannelDays),
+        })}
       </Text>
     </div>
   );

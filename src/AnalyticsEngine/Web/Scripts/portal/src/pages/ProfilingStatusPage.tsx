@@ -26,6 +26,7 @@ import { fetchProfilingStatus, fetchTraceLogs } from '../api/profilingStatusApi'
 import type { DateRangeStat, ProfilingStatus, TraceLogPage } from '../types/profilingStatus';
 import Spinner from '../components/Spinner';
 import SqlPopover from '../components/SqlPopover';
+import { formatDateParts, formatNumber, useT, type TFunction } from '../i18n';
 
 const PAGE_SIZES = [25, 50, 100];
 
@@ -73,7 +74,7 @@ const useStyles = makeStyles({
 
 /** Formats an ISO date string as a local date, or an em dash when there's no data. */
 function formatDate(d: string | null): string {
-  return d ? new Date(d).toLocaleDateString() : '—';
+  return d ? formatDateParts(new Date(d), { dateStyle: 'short' }) : '—';
 }
 
 /** A titled card with a table of earliest/latest dates for a set of tables. */
@@ -81,10 +82,12 @@ function RangeSection({
   title,
   description,
   stats,
+  t,
 }: {
   title: string;
   description: string;
   stats: DateRangeStat[];
+  t: TFunction;
 }) {
   const styles = useStyles();
   return (
@@ -98,9 +101,9 @@ function RangeSection({
       <Table size="small" aria-label={title}>
         <TableHeader>
           <TableRow>
-            <TableHeaderCell>Data</TableHeaderCell>
-            <TableHeaderCell style={{ width: 150 }}>Earliest</TableHeaderCell>
-            <TableHeaderCell style={{ width: 150 }}>Latest</TableHeaderCell>
+            <TableHeaderCell>{t('admin.profiling.rangeSection.columnData')}</TableHeaderCell>
+            <TableHeaderCell style={{ width: 150 }}>{t('admin.profiling.rangeSection.columnEarliest')}</TableHeaderCell>
+            <TableHeaderCell style={{ width: 150 }}>{t('admin.profiling.rangeSection.columnLatest')}</TableHeaderCell>
             <TableHeaderCell style={{ width: 90 }}>SQL</TableHeaderCell>
           </TableRow>
         </TableHeader>
@@ -126,7 +129,7 @@ function RangeSection({
                 </>
               )}
               <TableCell>
-                <SqlPopover sql={s.sql} title="SQL to reproduce these dates" />
+                <SqlPopover sql={s.sql} title={t('admin.profiling.rangeSection.sqlTitle')} />
               </TableCell>
             </TableRow>
           ))}
@@ -145,6 +148,7 @@ const TRACE_SQL = 'SELECT Id, [Datetime], Message FROM profiling.TraceLogs ORDER
  */
 export default function ProfilingStatusPage() {
   const styles = useStyles();
+  const t = useT();
 
   // Re-fetch both sections when the user clicks Refresh.
   const [reloadKey, setReloadKey] = useState(0);
@@ -170,7 +174,7 @@ export default function ProfilingStatusPage() {
         if (!cancelled) setStatus(s);
       })
       .catch((e: any) => {
-        if (!cancelled) setStatusError(e instanceof Error ? e.message : 'Failed to load profiling status.');
+        if (!cancelled) setStatusError(e instanceof Error ? e.message : t('admin.profiling.errors.loadStatusFailed'));
       })
       .finally(() => {
         if (!cancelled) setStatusLoading(false);
@@ -189,7 +193,7 @@ export default function ProfilingStatusPage() {
         if (!cancelled) setTrace(p);
       })
       .catch((e: any) => {
-        if (!cancelled) setTraceError(e instanceof Error ? e.message : 'Failed to load trace logs.');
+        if (!cancelled) setTraceError(e instanceof Error ? e.message : t('admin.profiling.errors.loadTraceLogsFailed'));
       })
       .finally(() => {
         if (!cancelled) setTraceLoading(false);
@@ -210,23 +214,22 @@ export default function ProfilingStatusPage() {
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
-        <Title3>Profiling</Title3>
+        <Title3>{t('admin.profiling.title')}</Title3>
         <Button appearance="subtle" icon={<ArrowClockwise16Regular />} onClick={refreshAll} disabled={statusLoading && traceLoading}>
-          Refresh
+          {t('admin.profiling.refresh')}
         </Button>
       </div>
       <Body1 block className={styles.intro}>
-        The current state of the profiling data: how fresh each table is, and the profiling runbooks'
-        own trace log. Use this to check the runbooks have run and that data is up to date.
+        {t('admin.profiling.description')}
       </Body1>
 
       <Text className={styles.sectionTitle} weight="semibold" size={500} block>
-        Data freshness
+        {t('admin.profiling.dataFreshness')}
       </Text>
 
       {statusLoading && (
         <div style={{ textAlign: 'center', padding: '32px' }}>
-          <Spinner size={64} label="Loading profiling status..." />
+          <Spinner size={64} label={t('admin.profiling.loadingStatus')} />
         </div>
       )}
       {statusError && (
@@ -237,26 +240,28 @@ export default function ProfilingStatusPage() {
       {!statusLoading && status && (
         <>
           <RangeSection
-            title="Compiled profiling data"
-            description="Built by the profiling runbooks. If these are empty or stale, the runbooks haven't run (or errored)."
+            title={t('admin.profiling.compiledData.title')}
+            description={t('admin.profiling.compiledData.description')}
             stats={status.compiledProfiling}
+            t={t}
           />
           <RangeSection
-            title="Source activity data"
-            description="The raw activity-log tables that feed the profiling compile, imported from the Microsoft 365 usage reports."
+            title={t('admin.profiling.sourceActivityData.title')}
+            description={t('admin.profiling.sourceActivityData.description')}
             stats={status.activityTables}
+            t={t}
           />
         </>
       )}
 
       <div className={styles.sectionTitle} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         <Text weight="semibold" size={500}>
-          Trace logs
+          {t('admin.profiling.traceLogs.title')}
         </Text>
-        <SqlPopover sql={TRACE_SQL} title="SQL behind the trace log" buttonLabel="SQL" />
+        <SqlPopover sql={TRACE_SQL} title={t('admin.profiling.traceLogs.sqlTitle')} buttonLabel="SQL" />
       </div>
       <Body1 block className={styles.muted} style={{ marginTop: '4px' }}>
-        Trace output written by the profiling runbooks (<code>profiling.TraceLogs</code>), newest first.
+        {t('admin.profiling.traceLogs.description')}
       </Body1>
 
       {traceError && (
@@ -266,7 +271,7 @@ export default function ProfilingStatusPage() {
       )}
       {!traceError && trace && trace.error && (
         <MessageBar intent="warning" style={{ marginTop: '12px' }}>
-          <MessageBarBody>Couldn't read the profiling trace logs: {trace.error}</MessageBarBody>
+          <MessageBarBody>{t('admin.profiling.traceLogs.readFailed', { error: trace.error })}</MessageBarBody>
         </MessageBar>
       )}
 
@@ -275,20 +280,24 @@ export default function ProfilingStatusPage() {
           <div className={styles.toolbar}>
             <Text size={200} className={styles.muted}>
               {traceLoading && !trace
-                ? 'Loading…'
+                ? t('admin.profiling.traceLogs.loading')
                 : total === 0
-                  ? 'No trace logs.'
-                  : `Showing ${firstRow.toLocaleString()}–${lastRow.toLocaleString()} of ${total.toLocaleString()}`}
+                  ? t('admin.profiling.traceLogs.none')
+                  : t('admin.profiling.traceLogs.showing', {
+                      firstRow: formatNumber(firstRow),
+                      lastRow: formatNumber(lastRow),
+                      total: formatNumber(total),
+                    })}
             </Text>
             <div className={styles.spacer} />
-            <Text size={200}>Rows per page</Text>
+            <Text size={200}>{t('admin.profiling.traceLogs.rowsPerPage')}</Text>
             <Select
               value={String(pageSize)}
               onChange={(_e: any, data: any) => {
                 setPageSize(Number(data.value));
                 setPage(0);
               }}
-              aria-label="Rows per page"
+              aria-label={t('admin.profiling.traceLogs.rowsPerPage')}
             >
               {PAGE_SIZES.map((n) => (
                 <option key={n} value={n}>
@@ -300,27 +309,29 @@ export default function ProfilingStatusPage() {
 
           {traceLoading ? (
             <div style={{ textAlign: 'center', padding: '32px' }}>
-              <Spinner size={48} label="Loading trace logs..." />
+              <Spinner size={48} label={t('admin.profiling.traceLogs.loadingTraceLogs')} />
             </div>
           ) : (
-            <Table size="small" aria-label="Profiling trace logs">
+            <Table size="small" aria-label={t('admin.profiling.traceLogs.ariaLabel')}>
               <TableHeader>
                 <TableRow>
-                  <TableHeaderCell style={{ width: 200 }}>When</TableHeaderCell>
-                  <TableHeaderCell>Message</TableHeaderCell>
+                  <TableHeaderCell style={{ width: 200 }}>{t('admin.profiling.traceLogs.columnWhen')}</TableHeaderCell>
+                  <TableHeaderCell>{t('admin.profiling.traceLogs.columnMessage')}</TableHeaderCell>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {trace && trace.rows.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={2}>
-                      <Text className={styles.muted}>No trace logs on this page.</Text>
+                      <Text className={styles.muted}>{t('admin.profiling.traceLogs.noneOnPage')}</Text>
                     </TableCell>
                   </TableRow>
                 )}
                 {trace?.rows.map((r) => (
                   <TableRow key={r.id}>
-                    <TableCell>{new Date(r.datetime).toLocaleString()}</TableCell>
+                    <TableCell>
+                      {formatDateParts(new Date(r.datetime), { dateStyle: 'short', timeStyle: 'medium' })}
+                    </TableCell>
                     <TableCell>
                       <span className={styles.message}>{r.message}</span>
                     </TableCell>
@@ -338,7 +349,7 @@ export default function ProfilingStatusPage() {
               disabled={!canPrev || traceLoading}
               onClick={() => setPage((p) => Math.max(0, p - 1))}
             >
-              Previous
+              {t('admin.profiling.traceLogs.previous')}
             </Button>
             <Button
               appearance="subtle"
@@ -348,7 +359,7 @@ export default function ProfilingStatusPage() {
               disabled={!canNext || traceLoading}
               onClick={() => setPage((p) => p + 1)}
             >
-              Next
+              {t('admin.profiling.traceLogs.next')}
             </Button>
           </div>
         </Card>

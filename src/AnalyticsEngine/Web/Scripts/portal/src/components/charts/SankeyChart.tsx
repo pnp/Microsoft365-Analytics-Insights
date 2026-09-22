@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
+import { useT } from '../../i18n';
 import { formatValue, seriesColor } from './chartCommon';
 
 const useStyles = makeStyles({
@@ -94,6 +95,7 @@ type Node = { key: string; label: string; value: number; y: number; h: number };
  * imply a journey happened where none did.
  */
 export default function SankeyChart({ flows, valueLabel, height = 420, caption }: SankeyChartProps) {
+  const t = useT();
   const styles = useStyles();
   const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null);
 
@@ -166,7 +168,7 @@ export default function SankeyChart({ flows, valueLabel, height = 420, caption }
   }, [flows, height]);
 
   if (!model) {
-    return <div className={styles.empty}>No visit flows for this period.</div>;
+    return <div className={styles.empty}>{t('charts.sankey.empty')}</div>;
   }
 
   const x0 = SIDE;
@@ -179,7 +181,7 @@ export default function SankeyChart({ flows, valueLabel, height = 420, caption }
         viewBox={`0 0 ${W} ${height}`}
         preserveAspectRatio="xMidYMid meet"
         role="img"
-        aria-label={`Sankey diagram of where visits started and ended, measured in ${valueLabel}.`}
+        aria-label={t('charts.sankey.ariaLabel', { valueLabel })}
       >
         {model.ribbons.map((r) => {
           const midX = (x0 + NODE_W + x1) / 2;
@@ -203,7 +205,7 @@ export default function SankeyChart({ flows, valueLabel, height = 420, caption }
               onMouseLeave={() => setHover(null)}
             >
               <title>
-                {`${r.flow.sourceLabel} \u2192 ${r.flow.targetLabel}: ${formatValue(r.flow.value)} ${valueLabel}`}
+                {t('charts.sankey.flowTitle', { source: r.flow.sourceLabel, target: r.flow.targetLabel, value: formatValue(r.flow.value), valueLabel })}
               </title>
             </path>
           );
@@ -221,7 +223,7 @@ export default function SankeyChart({ flows, valueLabel, height = 420, caption }
               fill={tokens.colorNeutralForeground2}
             >
               {truncate(n.label)}
-              <title>{`${n.label}: ${formatValue(n.value)} ${valueLabel}`}</title>
+              <title>{t('charts.sankey.nodeTitle', { label: n.label, value: formatValue(n.value), valueLabel })}</title>
             </text>
           </g>
         ))}
@@ -238,7 +240,7 @@ export default function SankeyChart({ flows, valueLabel, height = 420, caption }
               fill={tokens.colorNeutralForeground2}
             >
               {truncate(n.label)}
-              <title>{`${n.label}: ${formatValue(n.value)} ${valueLabel}`}</title>
+              <title>{t('charts.sankey.nodeTitle', { label: n.label, value: formatValue(n.value), valueLabel })}</title>
             </text>
           </g>
         ))}
@@ -271,11 +273,11 @@ export default function SankeyChart({ flows, valueLabel, height = 420, caption }
 
       {/* The diagram is decorative to a screen reader; this is the same data as text. */}
       <table className={styles.srOnly}>
-        <caption>Where visits started and ended</caption>
+        <caption>{t('charts.sankey.tableCaption')}</caption>
         <thead>
           <tr>
-            <th scope="col">Started on</th>
-            <th scope="col">Ended on</th>
+            <th scope="col">{t('charts.sankey.startedOn')}</th>
+            <th scope="col">{t('charts.sankey.endedOn')}</th>
             <th scope="col">{valueLabel}</th>
           </tr>
         </thead>
@@ -283,7 +285,7 @@ export default function SankeyChart({ flows, valueLabel, height = 420, caption }
           {model.ribbons.map((r) => (
             <tr key={`sr-${r.flow.sourceKey}\u0000${r.flow.targetKey}`}>
               <td>{r.flow.sourceLabel}</td>
-              <td>{r.flow.isSelfFlow ? 'the same page' : r.flow.targetLabel}</td>
+              <td>{r.flow.isSelfFlow ? t('charts.sankey.samePage') : r.flow.targetLabel}</td>
               <td>{formatValue(r.flow.value)}</td>
             </tr>
           ))}

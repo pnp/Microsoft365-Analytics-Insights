@@ -1,4 +1,5 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
+import { useT } from '../../i18n';
 import { formatValue } from './chartCommon';
 
 /** One cell: a day (0 = Monday) and hour, with its value. */
@@ -94,6 +95,7 @@ const useStyles = makeStyles({
  *    colours mean categories, which they do not.
  */
 export default function HeatmapChart({ cells, valueLabel, footnote }: HeatmapChartProps) {
+  const t = useT();
   const styles = useStyles();
 
   const values = new Map<string, number>();
@@ -110,7 +112,7 @@ export default function HeatmapChart({ cells, valueLabel, footnote }: HeatmapCha
   }
 
   if (total <= 0) {
-    return <div className={styles.empty}>No data for this period.</div>;
+    return <div className={styles.empty}>{t('charts.empty.noDataForPeriod')}</div>;
   }
 
   return (
@@ -131,6 +133,7 @@ export default function HeatmapChart({ cells, valueLabel, footnote }: HeatmapCha
             values={values}
             max={max}
             valueLabel={valueLabel}
+            t={t}
             dayLabelClass={styles.dayLabel}
             cellClass={styles.cell}
           />
@@ -139,14 +142,14 @@ export default function HeatmapChart({ cells, valueLabel, footnote }: HeatmapCha
 
       <div className={styles.legend}>
         <Text size={100} className={styles.muted}>
-          None
+          {t('charts.legend.none')}
         </Text>
         <span className={styles.swatch} style={{ backgroundColor: shade(0, 1) }} />
         {[0.25, 0.5, 0.75, 1].map((fraction) => (
           <span key={fraction} className={styles.swatch} style={{ backgroundColor: shade(fraction, 1) }} />
         ))}
         <Text size={100} className={styles.muted}>
-          {formatValue(max)} {valueLabel}
+          {t('charts.legend.maxValue', { value: formatValue(max), valueLabel })}
         </Text>
       </div>
 
@@ -170,6 +173,7 @@ function Row({
   values,
   max,
   valueLabel,
+  t,
   dayLabelClass,
   cellClass,
 }: {
@@ -178,6 +182,7 @@ function Row({
   values: Map<string, number>;
   max: number;
   valueLabel: string;
+  t: ReturnType<typeof useT>;
   dayLabelClass: string;
   cellClass: string;
 }) {
@@ -191,7 +196,7 @@ function Row({
             key={`${dayIndex}:${hour}`}
             className={cellClass}
             style={{ backgroundColor: shade(value, max) }}
-            title={`${day} ${String(hour).padStart(2, '0')}:00 - ${formatValue(value)} ${valueLabel}`}
+            title={t('charts.heatmap.cellTitle', { day, hour: String(hour).padStart(2, '0'), value: formatValue(value), valueLabel })}
           />
         );
       })}

@@ -7,6 +7,7 @@ import InfoTip from '../shared/InfoTip';
 import HabitStrip from './HabitStrip';
 import { KpiGrid, formatCount } from '../shared/KpiGrid';
 import type { KpiDefinition } from '../shared/KpiGrid';
+import { useT, type TFunction } from '../../i18n';
 
 const useStyles = makeStyles({
   stack: {
@@ -64,17 +65,16 @@ export default function UnlicensedPanel({
   sql: Record<string, string> | null;
 }) {
   const styles = useStyles();
+  const t = useT();
 
   if (unlicensed.activeUsers === 0) {
     return (
       <Card>
         <Text weight="semibold" size={400}>
-          No unlicensed Copilot use in this period
+          {t('copilotAdoptionUsers.unlicensed.emptyTitle')}
         </Text>
         <Text size={200} block className={styles.muted} style={{ marginTop: '6px' }}>
-          Nobody without a Microsoft 365 Copilot licence used Copilot in the last {windowDays} days. That is
-          either a genuine finding or a sign the Copilot audit import is not running - the Health page will
-          say which.
+          {t('copilotAdoptionUsers.unlicensed.emptyBody', { days: windowDays })}
         </Text>
       </Card>
     );
@@ -82,12 +82,11 @@ export default function UnlicensedPanel({
 
   return (
     <div className={styles.stack}>
-      <KpiGrid items={buildUnlicensedKpis(unlicensed, options, windowDays)} />
+      <KpiGrid items={buildUnlicensedKpis(t, unlicensed, options, windowDays)} />
 
       {unlicensed.truncated && (
         <Text size={200} className={styles.muted}>
-          The unlicensed population was capped at {formatCount(options.maxUnlicensedUsersScored)} users, so
-          these figures are a floor rather than a total.
+          {t('copilotAdoptionUsers.unlicensed.truncated', { count: formatCount(options.maxUnlicensedUsersScored) })}
         </Text>
       )}
 
@@ -95,19 +94,26 @@ export default function UnlicensedPanel({
         <div className={styles.cardHead}>
           <div>
             <Text weight="semibold" size={400}>
-              Habit formation without a licence
+              {t('copilotAdoptionUsers.unlicensed.habitTitle')}
             </Text>
             <Text size={200} block className={styles.muted}>
-              The same buckets the licensed population uses, so the two can be read against each other.
+              {t('copilotAdoptionUsers.unlicensed.habitSubtitle')}
             </Text>
           </div>
           <InfoTip
-            title="Habit formation without a licence"
+            title={t('copilotAdoptionUsers.unlicensed.habitTitle')}
             content={{
-              what: 'People with no Copilot licence, split by how many days a month they use Copilot Chat.',
-              how: `Identical rules to the licensed habit strip: active days in the period restated as days per ${options.habitBucketNormalisationDays}-day month and rounded to whole days. Infrequent 1-${options.habitModerateMinDays - 1}, Moderate ${options.habitModerateMinDays}-${options.habitFrequentMinDays - 1}, Frequent ${options.habitFrequentMinDays}-${options.habitDailyMinDays - 1}, Daily ${options.habitDailyMinDays}+.`,
-              source:
-                'Anyone in the Frequent or Daily tile has built a Copilot habit with no licence and no enablement. That is the strongest licence case in the building, and it is invisible in Microsoft\u2019s own reports.',
+              what: t('copilotAdoptionUsers.unlicensed.habitWhat'),
+              how: t('copilotAdoptionUsers.unlicensed.habitHow', {
+                days: options.habitBucketNormalisationDays,
+                infrequentMax: options.habitModerateMinDays - 1,
+                moderateMin: options.habitModerateMinDays,
+                moderateMax: options.habitFrequentMinDays - 1,
+                frequentMin: options.habitFrequentMinDays,
+                frequentMax: options.habitDailyMinDays - 1,
+                dailyMin: options.habitDailyMinDays,
+              }),
+              source: t('copilotAdoptionUsers.unlicensed.habitSource'),
             }}
           />
         </div>
@@ -121,32 +127,31 @@ export default function UnlicensedPanel({
           <div className={styles.cardHead}>
             <div>
               <Text weight="semibold" size={400}>
-                Where unlicensed Copilot is used
+                {t('copilotAdoptionUsers.unlicensed.whereUsedTitle')}
               </Text>
               <Text size={200} block className={styles.muted}>
-                Worth comparing with the licensed breakdown - the two are usually not the same shape.
+                {t('copilotAdoptionUsers.unlicensed.whereUsedSubtitle')}
               </Text>
             </div>
             <div className={styles.cardTools}>
               <InfoTip
-                title="Where unlicensed Copilot is used"
+                title={t('copilotAdoptionUsers.unlicensed.whereUsedTitle')}
                 content={{
-                  what: 'Copilot interactions by unlicensed users, broken down by the app they happened in.',
-                  how: `Top ${options.topSegments} app hosts from the Copilot audit log, for users holding none of the SKUs classified as a Copilot licence.`,
-                  source:
-                    'Unlicensed use concentrates in Copilot Chat and Teams, because that is what is available without a licence. Licences are normally sold on Word and Outlook - if the licensed breakdown looks the same as this one, the licences are not buying anything the free experience does not already give.',
+                  what: t('copilotAdoptionUsers.unlicensed.whereUsedWhat'),
+                  how: t('copilotAdoptionUsers.unlicensed.whereUsedHow', { topSegments: options.topSegments }),
+                  source: t('copilotAdoptionUsers.unlicensed.whereUsedSource'),
                 }}
               />
               {sql?.unlicensedUsageByApp && (
-                <SqlPopover sql={sql.unlicensedUsageByApp} title="SQL behind this chart" />
+                <SqlPopover sql={sql.unlicensedUsageByApp} title={t('copilotAdoptionUsers.unlicensed.sqlBehindChart')} />
               )}
             </div>
           </div>
           <div className={styles.cardBody}>
             {unlicensed.usageByApp.length > 0 ? (
-              <TreemapChart categories={unlicensed.usageByApp} valueLabel="interactions" />
+              <TreemapChart categories={unlicensed.usageByApp} valueLabel={t('copilotAdoptionUsers.unlicensed.interactionsValueLabel')} />
             ) : (
-              <div className={styles.empty}>No per-app breakdown available.</div>
+              <div className={styles.empty}>{t('copilotAdoptionUsers.unlicensed.noPerApp')}</div>
             )}
           </div>
         </Card>
@@ -155,30 +160,29 @@ export default function UnlicensedPanel({
           <div className={styles.cardHead}>
             <div>
               <Text weight="semibold" size={400}>
-                Unlicensed use by department
+                {t('copilotAdoptionUsers.unlicensed.byDepartmentTitle')}
               </Text>
               <Text size={200} block className={styles.muted}>
-                Where the unmet demand actually sits.
+                {t('copilotAdoptionUsers.unlicensed.byDepartmentSubtitle')}
               </Text>
             </div>
             <div className={styles.cardTools}>
               <InfoTip
-                title="Unlicensed use by department"
+                title={t('copilotAdoptionUsers.unlicensed.byDepartmentTitle')}
                 content={{
-                  what: 'Copilot interactions by unlicensed users, grouped by their department.',
-                  how: `Top ${options.topSegments} departments by interaction volume. Counts interactions rather than people, so one very heavy user can lift a department.`,
-                  source:
-                    'Compare with the licensed/unlicensed table on the Overview tab: a department that appears here and also has idle licences can usually be rebalanced instead of bought for.',
+                  what: t('copilotAdoptionUsers.unlicensed.byDepartmentWhat'),
+                  how: t('copilotAdoptionUsers.unlicensed.byDepartmentHow', { topSegments: options.topSegments }),
+                  source: t('copilotAdoptionUsers.unlicensed.byDepartmentSource'),
                 }}
               />
-              {sql?.unlicensedUsage && <SqlPopover sql={sql.unlicensedUsage} title="SQL behind this chart" />}
+              {sql?.unlicensedUsage && <SqlPopover sql={sql.unlicensedUsage} title={t('copilotAdoptionUsers.unlicensed.sqlBehindChart')} />}
             </div>
           </div>
           <div className={styles.cardBody}>
             {unlicensed.usageByDepartment.length > 0 ? (
-              <CategoryBarChart categories={unlicensed.usageByDepartment} valueLabel="Interactions" />
+              <CategoryBarChart categories={unlicensed.usageByDepartment} valueLabel={t('copilotAdoptionUsers.unlicensed.interactionsHeader')} />
             ) : (
-              <div className={styles.empty}>No department information available for these users.</div>
+              <div className={styles.empty}>{t('copilotAdoptionUsers.unlicensed.noDepartment')}</div>
             )}
           </div>
         </Card>
@@ -188,6 +192,7 @@ export default function UnlicensedPanel({
 }
 
 function buildUnlicensedKpis(
+  t: TFunction,
   u: UnlicensedPopulationSummary,
   o: CopilotAdoptionOptions,
   windowDays: number,
@@ -199,54 +204,57 @@ function buildUnlicensedKpis(
   return [
     {
       key: 'users',
-      label: 'Unlicensed Copilot users',
+      label: t('copilotAdoptionUsers.unlicensed.usersLabel'),
       value: formatCount(u.activeUsers),
       tone: 'opportunity',
-      hint: `Used Copilot in the last ${windowDays} days with no licence`,
+      hint: t('copilotAdoptionUsers.unlicensed.usersHint', { days: windowDays }),
       info: {
-        what: 'Distinct people with no Microsoft 365 Copilot licence who nevertheless used Copilot in the period - in practice Copilot Chat, which is available without a licence.',
-        how: 'Counted from the Copilot audit log for every user holding none of the SKUs classified as a Copilot licence. Distinct people, not interactions.',
-        source:
-          'Entirely invisible in Microsoft\u2019s own Copilot usage reports, which cover licensed users only. This is the single strongest piece of evidence for unmet demand available anywhere.',
+        what: t('copilotAdoptionUsers.unlicensed.usersWhat'),
+        how: t('copilotAdoptionUsers.unlicensed.usersHow'),
+        source: t('copilotAdoptionUsers.unlicensed.usersSource'),
       },
     },
     {
       key: 'interactions',
-      label: 'Unlicensed interactions',
+      label: t('copilotAdoptionUsers.unlicensed.interactionsLabel'),
       value: formatCount(u.interactions),
       tone: 'opportunity',
-      hint: `${u.interactionsPerUserPerMonth} per user per month`,
+      hint: t('copilotAdoptionUsers.unlicensed.interactionsHint', { value: u.interactionsPerUserPerMonth }),
       info: {
-        what: 'Total Copilot interactions run by people without a licence, and the monthly average per person.',
-        how: `Interactions in the last ${windowDays} days, restated per ${o.habitBucketNormalisationDays}-day month so the per-user figure does not change meaning when the period changes.`,
-        source:
-          'Compare the per-user figure against the licensed population: unlicensed users out-using licensed ones is a licence-allocation problem, not an adoption problem.',
+        what: t('copilotAdoptionUsers.unlicensed.interactionsWhat'),
+        how: t('copilotAdoptionUsers.unlicensed.interactionsHow', {
+          windowDays,
+          normalisationDays: o.habitBucketNormalisationDays,
+        }),
+        source: t('copilotAdoptionUsers.unlicensed.interactionsSource'),
       },
     },
     {
       key: 'habitual',
-      label: 'Habitual without a licence',
+      label: t('copilotAdoptionUsers.unlicensed.habitualLabel'),
       value: formatCount(habitual),
       tone: habitual > 0 ? 'critical' : 'neutral',
-      hint: `${o.habitFrequentMinDays}+ active days a month`,
+      hint: t('copilotAdoptionUsers.unlicensed.habitualHint', { days: o.habitFrequentMinDays }),
       info: {
-        what: 'Unlicensed people who use Copilot Chat frequently or daily - they have built a habit with no licence, no training and no prompting.',
-        how: `The Frequent (${o.habitFrequentMinDays}-${o.habitDailyMinDays - 1} active days a month) and Daily (${o.habitDailyMinDays}+) buckets combined.`,
-        source:
-          'Coloured as a problem deliberately. Every person in this figure is doing knowledge work with a free tool that a licence would materially improve, and is a stronger candidate than anyone identified by inference from Teams or email volume.',
+        what: t('copilotAdoptionUsers.unlicensed.habitualWhat'),
+        how: t('copilotAdoptionUsers.unlicensed.habitualHow', {
+          frequentMin: o.habitFrequentMinDays,
+          frequentMax: o.habitDailyMinDays - 1,
+          dailyMin: o.habitDailyMinDays,
+        }),
+        source: t('copilotAdoptionUsers.unlicensed.habitualSource'),
       },
     },
     {
       key: 'agents',
-      label: 'Using agents unlicensed',
+      label: t('copilotAdoptionUsers.unlicensed.agentsLabel'),
       value: formatCount(u.agentUsers),
       tone: 'opportunity',
-      hint: 'Reached for an agent without a licence',
+      hint: t('copilotAdoptionUsers.unlicensed.agentsHint'),
       info: {
-        what: 'Unlicensed people who invoked at least one Copilot agent in the period.',
-        how: 'Counted from the agent attributed to each Copilot interaction in the audit log.',
-        source:
-          'Agent use is a step beyond ad-hoc chat - someone going out of their way to use an agent has found a specific job for Copilot, which is a more concrete business case than volume alone.',
+        what: t('copilotAdoptionUsers.unlicensed.agentsWhat'),
+        how: t('copilotAdoptionUsers.unlicensed.agentsHow'),
+        source: t('copilotAdoptionUsers.unlicensed.agentsSource'),
       },
     },
   ];
