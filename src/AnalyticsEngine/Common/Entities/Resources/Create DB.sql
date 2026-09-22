@@ -233,6 +233,119 @@ CREATE NONCLUSTERED INDEX [IX_copilot_adoption_reclaim_exclusions_user_review]
     INCLUDE ([reason], [excluded_by]);
 
 
+-- --------------------------------------------------
+-- Configurable user organisations.
+--
+-- Admin-defined grouping dimensions for users, populated either from a custom Entra attribute during
+-- the user-metadata import or from a CSV uploaded in the portal. See migration
+-- 202609221200001_UserOrganisations.
+--
+-- NOT related to [dbo].[orgs] / [dbo].[org_urls] above, which map SharePoint URL bases so web-traffic
+-- hits can be scoped. The user_org_ prefix exists to keep the two apart.
+--
+-- nvarchar throughout: org names come from a customer tenant and routinely contain non-Latin scripts.
+-- --------------------------------------------------
+
+-- Creating table 'user_org_types'
+CREATE TABLE [dbo].[user_org_types] (
+    [id] int IDENTITY(1,1) NOT NULL,
+    [name] nvarchar(100) NOT NULL,
+    [source_kind] tinyint NOT NULL,
+    [entra_attribute_name] nvarchar(200) NULL,
+    [is_enabled] bit NOT NULL CONSTRAINT [DF_user_org_types_is_enabled] DEFAULT (1),
+    [created_utc] datetime2(7) NOT NULL CONSTRAINT [DF_user_org_types_created_utc] DEFAULT SYSUTCDATETIME(),
+    [modified_utc] datetime2(7) NULL,
+    CONSTRAINT [PK_user_org_types] PRIMARY KEY CLUSTERED ([id] ASC),
+    CONSTRAINT [CK_user_org_types_source_kind] CHECK ([source_kind] IN (1, 2))
+);
+
+CREATE UNIQUE NONCLUSTERED INDEX [UX_user_org_types_name] ON [dbo].[user_org_types] ([name] ASC);
+
+
+-- Creating table 'user_org_values'
+CREATE TABLE [dbo].[user_org_values] (
+    [id] int IDENTITY(1,1) NOT NULL,
+    [org_type_id] int NOT NULL,
+    [name] nvarchar(200) NOT NULL,
+    CONSTRAINT [PK_user_org_values] PRIMARY KEY CLUSTERED ([id] ASC),
+    CONSTRAINT [FK_user_org_values_type] FOREIGN KEY ([org_type_id])
+        REFERENCES [dbo].[user_org_types] ([id])
+);
+
+CREATE UNIQUE NONCLUSTERED INDEX [UX_user_org_values_type_name]
+    ON [dbo].[user_org_values] ([org_type_id] ASC, [name] ASC);
+
+-- Target of the composite foreign key from user_org_assignments, which is what stops a user being
+-- assigned a value that belongs to a different org type.
+CREATE UNIQUE NONCLUSTERED INDEX [UX_user_org_values_id_type]
+    ON [dbo].[user_org_values] ([id] ASC, [org_type_id] ASC);
+
+
+-- Creating table 'user_org_assignments'
+-- The primary key (user_id, org_type_id) enforces the product rule that a user has at most one value
+-- per org type. FK_user_org_assignments_users is added after PK_users below.
+CREATE TABLE [dbo].[user_org_assignments] (
+    [user_id] int NOT NULL,
+    [org_type_id] int NOT NULL,
+    [org_value_id] int NOT NULL,
+    [last_updated_utc] datetime2(7) NOT NULL CONSTRAINT [DF_user_org_assignments_last_updated_utc] DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT [PK_user_org_assignments] PRIMARY KEY CLUSTERED ([user_id] ASC, [org_type_id] ASC),
+    CONSTRAINT [FK_user_org_assignments_value] FOREIGN KEY ([org_value_id], [org_type_id])
+        REFERENCES [dbo].[user_org_values] ([id], [org_type_id])
+);
+
+CREATE NONCLUSTERED INDEX [IX_user_org_assignments_value]
+    ON [dbo].[user_org_assignments] ([org_type_id] ASC, [org_value_id] ASC)
+    INCLUDE ([user_id]);
+
+
+-- Creating table 'user_org_import_jobs'
+-- mode: 1 = Replace, 2 = Merge.  status: 1 = Pending, 2 = Running, 3 = Succeeded, 4 = Failed, 5 = Cancelled.
+CREATE TABLE [dbo].[user_org_import_jobs] (
+    [id] int IDENTITY(1,1) NOT NULL,
+    [org_type_id] int NOT NULL,
+    [mode] tinyint NOT NULL,
+    [status] tinyint NOT NULL,
+    [file_name] nvarchar(260) NULL,
+    [started_by] nvarchar(256) NOT NULL,
+    [queued_utc] datetime2(7) NOT NULL CONSTRAINT [DF_user_org_import_jobs_queued_utc] DEFAULT SYSUTCDATETIME(),
+    [started_utc] datetime2(7) NULL,
+    [finished_utc] datetime2(7) NULL,
+    [heartbeat_utc] datetime2(7) NULL,
+    [rows_total] int NOT NULL CONSTRAINT [DF_user_org_import_jobs_rows_total] DEFAULT (0),
+    [rows_applied] int NOT NULL CONSTRAINT [DF_user_org_import_jobs_rows_applied] DEFAULT (0),
+    [rows_cleared] int NOT NULL CONSTRAINT [DF_user_org_import_jobs_rows_cleared] DEFAULT (0),
+    [rows_unknown_upn] int NOT NULL CONSTRAINT [DF_user_org_import_jobs_rows_unknown_upn] DEFAULT (0),
+    [rows_invalid] int NOT NULL CONSTRAINT [DF_user_org_import_jobs_rows_invalid] DEFAULT (0),
+    [error_message] nvarchar(2000) NULL,
+    CONSTRAINT [PK_user_org_import_jobs] PRIMARY KEY CLUSTERED ([id] ASC),
+    CONSTRAINT [FK_user_org_import_jobs_type] FOREIGN KEY ([org_type_id])
+        REFERENCES [dbo].[user_org_types] ([id]),
+    CONSTRAINT [CK_user_org_import_jobs_mode] CHECK ([mode] IN (1, 2)),
+    CONSTRAINT [CK_user_org_import_jobs_status] CHECK ([status] IN (1, 2, 3, 4, 5))
+);
+
+CREATE NONCLUSTERED INDEX [IX_user_org_import_jobs_type_queued]
+    ON [dbo].[user_org_import_jobs] ([org_type_id] ASC, [queued_utc] DESC)
+    INCLUDE ([status]);
+
+
+-- Creating table 'user_org_import_staging'
+CREATE TABLE [dbo].[user_org_import_staging] (
+    [job_id] int NOT NULL,
+    [line_number] int NOT NULL,
+    [upn] nvarchar(250) NOT NULL,
+    [org_value] nvarchar(200) NULL,
+    CONSTRAINT [PK_user_org_import_staging] PRIMARY KEY CLUSTERED ([job_id] ASC, [line_number] ASC),
+    CONSTRAINT [FK_user_org_import_staging_job] FOREIGN KEY ([job_id])
+        REFERENCES [dbo].[user_org_import_jobs] ([id]) ON DELETE CASCADE
+);
+
+CREATE NONCLUSTERED INDEX [IX_user_org_import_staging_job_upn]
+    ON [dbo].[user_org_import_staging] ([job_id] ASC, [upn] ASC)
+    INCLUDE ([org_value]);
+
+
 
 -- --------------------------------------------------
 -- Creating all PRIMARY KEY constraints
@@ -379,6 +492,14 @@ ADD CONSTRAINT [PK_users]
 -- Creating foreign key on [user_id] in table 'copilot_adoption_reclaim_exclusions'
 ALTER TABLE [dbo].[copilot_adoption_reclaim_exclusions]
 ADD CONSTRAINT [FK_copilot_adoption_reclaim_exclusions_users]
+    FOREIGN KEY ([user_id]) REFERENCES [dbo].[users] ([id]) ON DELETE CASCADE;
+
+
+-- Creating foreign key on [user_id] in table 'user_org_assignments'
+-- The only cascade path into this table. Deleting an org type clears its children explicitly, in one
+-- transaction, because SQL Server rejects multiple cascade paths to the same table.
+ALTER TABLE [dbo].[user_org_assignments]
+ADD CONSTRAINT [FK_user_org_assignments_users]
     FOREIGN KEY ([user_id]) REFERENCES [dbo].[users] ([id]) ON DELETE CASCADE;
 
 

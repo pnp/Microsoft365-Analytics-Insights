@@ -100,7 +100,7 @@ namespace Tests.UnitTests
         // snapshot verbatim: none of those tables was ever exposed as a DbSet, so removing them does not
         // touch the entity model. As the chain head its snapshot is the one EF compares the live entity
         // model against.
-        private const string LatestId = "202609201430001_DropCopilotAdoptionPeriodTables";
+        private const string LatestId = "202609221200001_UserOrganisations";
         private const string IndexName = "IX_urls_full_url";
 
         // "Καλημέρα κόσμε" - the classic Greek charset sample (synthetic; no customer data).

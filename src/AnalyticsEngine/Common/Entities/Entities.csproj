@@ -499,6 +499,10 @@
     <Compile Include="Migrations\202609201430001_DropCopilotAdoptionPeriodTables.Designer.cs">
       <DependentUpon>202609201430001_DropCopilotAdoptionPeriodTables.cs</DependentUpon>
     </Compile>
+    <Compile Include="Migrations\202609221200001_UserOrganisations.cs" />
+    <Compile Include="Migrations\202609221200001_UserOrganisations.Designer.cs">
+      <DependentUpon>202609221200001_UserOrganisations.cs</DependentUpon>
+    </Compile>
     <Compile Include="Migrations\202609190900001_IndexPlatformUserActivityLogDate.cs" />
     <Compile Include="Migrations\202609190900001_IndexPlatformUserActivityLogDate.Designer.cs">
       <DependentUpon>202609190900001_IndexPlatformUserActivityLogDate.cs</DependentUpon>
@@ -553,6 +557,8 @@
     <Compile Include="IAnalyticsDbContextFactory.cs" />
     <Compile Include="Entities\Url.cs" />
     <Compile Include="Entities\User.cs" />
+    <Compile Include="UserOrgs\EntraOrgAttributeSpec.cs" />
+    <Compile Include="UserOrgs\UserOrgRules.cs" />
     <Compile Include="ResourceProxy.cs" />
     <Compile Include="Xlsx\XlsxChart.cs" />
     <Compile Include="Xlsx\XlsxSheet.cs" />
@@ -768,6 +774,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609201430001_DropCopilotAdoptionPeriodTables.resx">
       <DependentUpon>202609201430001_DropCopilotAdoptionPeriodTables.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Migrations\202609221200001_UserOrganisations.resx">
+      <DependentUpon>202609221200001_UserOrganisations.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Migrations\202609190900001_IndexPlatformUserActivityLogDate.resx">
       <DependentUpon>202609190900001_IndexPlatformUserActivityLogDate.cs</DependentUpon>
