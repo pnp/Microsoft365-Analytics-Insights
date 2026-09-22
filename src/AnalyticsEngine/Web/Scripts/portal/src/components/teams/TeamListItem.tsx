@@ -4,6 +4,7 @@ import { CheckmarkCircle20Filled, Circle20Regular } from '@fluentui/react-icons'
 import { tokens } from '@fluentui/react-components';
 import { TeamAuthStatus, AuthTokenResponse } from '../../types/TeamAuthStatus';
 import type { Team } from '@microsoft/microsoft-graph-types';
+import { useT, type TFunction } from '../../i18n';
 
 type TeamSelectionProps = {
   authState: TeamAuthStatus;
@@ -11,12 +12,14 @@ type TeamSelectionProps = {
   isClickedOverrideCallback: (team: Team) => boolean;
   team: Team;
   isBusy: boolean;
+  t: TFunction;
 };
 
-export default class TeamListItem extends React.Component<TeamSelectionProps> {
+class TeamListItemInner extends React.Component<TeamSelectionProps> {
   render() {
     const checked: boolean = this.props.isClickedOverrideCallback(this.props.team);
     const authState = this.props.authState;
+    const t = this.props.t;
     return (
       <TableRow>
         <TableCell>
@@ -27,7 +30,7 @@ export default class TeamListItem extends React.Component<TeamSelectionProps> {
               onChange={(_e: any, data: any) =>
                 this.props.teamToggleCallback(data.checked === true, this.props.team.id ?? undefined)
               }
-              label={this.props.team.displayName ?? '(unnamed team)'}
+              label={this.props.team.displayName ?? t('admin.teams.teamListItem.unnamedTeam')}
             />
           </TableCellLayout>
         </TableCell>
@@ -39,9 +42,12 @@ export default class TeamListItem extends React.Component<TeamSelectionProps> {
         <TableCell>
           {authState && authState.authStatus !== AuthTokenResponse.Unknown ? (
             authState.authStatus === AuthTokenResponse.HaveAuth ? (
-              <CheckmarkCircle20Filled primaryFill={tokens.colorPaletteGreenForeground1} aria-label="Authorised" />
+              <CheckmarkCircle20Filled
+                primaryFill={tokens.colorPaletteGreenForeground1}
+                aria-label={t('admin.teams.teamListItem.authorised')}
+              />
             ) : (
-              <Circle20Regular aria-label="Not authorised" />
+              <Circle20Regular aria-label={t('admin.teams.teamListItem.notAuthorised')} />
             )
           ) : (
             <Text>--</Text>
@@ -50,4 +56,9 @@ export default class TeamListItem extends React.Component<TeamSelectionProps> {
       </TableRow>
     );
   }
+}
+
+export default function TeamListItem(props: Omit<TeamSelectionProps, 't'>) {
+  const t = useT();
+  return <TeamListItemInner {...props} t={t} />;
 }

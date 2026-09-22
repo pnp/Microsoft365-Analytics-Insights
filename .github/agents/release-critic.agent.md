@@ -128,6 +128,7 @@ Defects hide in the gap between two things that must agree. Whenever you change 
 | A migration's ownership of an object | the completion guard that requires that object |
 | An on-screen table | the Excel/CSV export of the same table |
 | A UI label or checkbox | what the code actually does |
+| **Any English text in the portal** | **its translation in `src/i18n/catalog/es/` — and whether the key is still used** |
 | A JSON property name | the TypeScript type and every saved export |
 | A doc comment asserting an invariant | whether the invariant still holds |
 
@@ -135,6 +136,23 @@ In the source session: a terminology pass rewrote quoted string literals but not
 column header whose Excel twin already used the new word; and a migration split left its manual script
 still building — and requiring — indexes it no longer owned, which re-coupled exactly what the split
 had separated.
+
+**Reword an English string and you have silently invalidated its Spanish.** Nothing catches it: the
+key still exists in both languages, so `tsc` is happy and the untranslated-text gate is happy — the
+Spanish is simply now a translation of the *old* sentence. This is the one translation defect the
+tooling cannot see, so it has to be looked for by hand. In any round that touches
+`Web/Scripts/portal`, diff the English catalog against the release base and re-read the Spanish for
+every changed value:
+
+```powershell
+git --no-pager diff origin/main origin/dev -- "src/AnalyticsEngine/Web/Scripts/portal/src/i18n/catalog/en"
+```
+
+While you are there, also run the gate itself — it is cheap and it is a blocker for the release:
+
+```powershell
+cd src\AnalyticsEngine\Web\Scripts\portal; npm run lint; npx vitest run src/i18n
+```
 
 ### 5. Re-verify, commit, and go round again
 

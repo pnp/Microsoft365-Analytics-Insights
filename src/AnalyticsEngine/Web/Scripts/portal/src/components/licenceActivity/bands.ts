@@ -1,4 +1,5 @@
 import type { LicenceActivityDistribution } from '../../types/licenceActivity';
+import type { TFunction, TranslationKey } from '../../i18n';
 
 /** The engagement bands, worst-to-best after the two "active" tiers, with the two non-active tiers
  * kept visually distinct: `zero` (measured, no activity) is red; `unknown` (not measured) is grey. */
@@ -6,7 +7,8 @@ export type BandKey = 'high' | 'moderate' | 'low' | 'zero' | 'unknown';
 
 export interface BandDef {
   key: BandKey;
-  label: string;
+  labelKey: TranslationKey;
+  descriptionKey: TranslationKey;
   colour: string;
   /** The badge text colour to use ON `colour`, chosen so the pair clears WCAG AA (>= 4.5:1). The two
    *  light fills (low gold, unknown grey) need dark text; the darker fills read fine against white. */
@@ -20,11 +22,41 @@ const DARK_FG = '#000000';
 const LIGHT_FG = '#ffffff';
 
 export const ACTIVITY_BANDS: BandDef[] = [
-  { key: 'high', label: 'High', colour: '#0b6a0b', foreground: LIGHT_FG },
-  { key: 'moderate', label: 'Moderate', colour: '#498205', foreground: LIGHT_FG },
-  { key: 'low', label: 'Low', colour: '#c19c00', foreground: DARK_FG },
-  { key: 'zero', label: 'No activity', colour: '#d13438', foreground: LIGHT_FG },
-  { key: 'unknown', label: 'Unknown', colour: '#8a8886', foreground: DARK_FG },
+  {
+    key: 'high',
+    labelKey: 'licenceActivity.band.high',
+    descriptionKey: 'licenceActivity.band.description.high',
+    colour: '#0b6a0b',
+    foreground: LIGHT_FG,
+  },
+  {
+    key: 'moderate',
+    labelKey: 'licenceActivity.band.moderate',
+    descriptionKey: 'licenceActivity.band.description.moderate',
+    colour: '#498205',
+    foreground: LIGHT_FG,
+  },
+  {
+    key: 'low',
+    labelKey: 'licenceActivity.band.low',
+    descriptionKey: 'licenceActivity.band.description.low',
+    colour: '#c19c00',
+    foreground: DARK_FG,
+  },
+  {
+    key: 'zero',
+    labelKey: 'licenceActivity.band.zero',
+    descriptionKey: 'licenceActivity.band.description.zero',
+    colour: '#d13438',
+    foreground: LIGHT_FG,
+  },
+  {
+    key: 'unknown',
+    labelKey: 'licenceActivity.band.unknown',
+    descriptionKey: 'licenceActivity.band.description.unknown',
+    colour: '#8a8886',
+    foreground: DARK_FG,
+  },
 ];
 
 const BY_KEY: Record<string, BandDef> = Object.fromEntries(ACTIVITY_BANDS.map((b) => [b.key, b]));
@@ -34,35 +66,25 @@ const BY_KEY: Record<string, BandDef> = Object.fromEntries(ACTIVITY_BANDS.map((b
  * describe how often someone was active across the READINGS taken in the period - deliberately not
  * "active days", which the figures only become if a service's source says so.
  */
-export const BAND_DESCRIPTIONS: Record<BandKey, string> = {
-  high: 'Active in three quarters or more of the weeks that were measured.',
-  moderate: 'Active in a quarter to under three quarters of the weeks that were measured.',
-  low: 'Active in under a quarter of the weeks that were measured, but active in at least one.',
-  zero: 'Complete reporting data shows no activity in any week for this user and period. Every week was measured in full.',
-  unknown:
-    'At least one week could not be measured in full, so there is not enough reporting data to determine activity ' +
-    'for this user and period. Reports or user rows may be missing, coverage may be incomplete, or usage counters ' +
-    'may be unavailable. This is not evidence of no activity.',
+export const BAND_DESCRIPTION_KEYS: Record<BandKey, TranslationKey> = {
+  high: 'licenceActivity.band.description.high',
+  moderate: 'licenceActivity.band.description.moderate',
+  low: 'licenceActivity.band.description.low',
+  zero: 'licenceActivity.band.description.zero',
+  unknown: 'licenceActivity.band.description.unknown',
 };
 
-export const COPILOT_COVERAGE_NOTE =
-  'The official Copilot usage report covers Copilot-licensed users only. These charts can also include people with ' +
-  'other licences, so someone without a Copilot licence may appear as Unknown rather than inactive. ' +
-  'Unknown alone does not tell you whether someone has a Copilot licence.';
+export const COPILOT_COVERAGE_NOTE_KEY: TranslationKey = 'licenceActivity.band.copilotCoverageNote';
 
 /** A one-line summary of how the levels are worked out, for a column tooltip. */
-export const BAND_METHOD =
-  "Activity levels describe how many of the period's weeks someone was active in: " +
-  'High = three quarters or more, Moderate = a quarter to under three quarters, Low = under a quarter, ' +
-  'No activity = none. A week is only counted when every one of its days was imported; where a week could ' +
-  'not be measured in full the level is Unknown, not zero.';
+export const BAND_METHOD_KEY: TranslationKey = 'licenceActivity.band.method';
 
-export function bandLabel(band: string): string {
-  return BY_KEY[band]?.label ?? band;
+export function bandLabel(t: TFunction, band: string): string {
+  return BY_KEY[band] ? t(BY_KEY[band].labelKey) : band;
 }
 
-export function bandDescription(band: string): string | null {
-  return (BY_KEY[band] ? BAND_DESCRIPTIONS[band as BandKey] : null) ?? null;
+export function bandDescription(t: TFunction, band: string): string | null {
+  return (BY_KEY[band] ? t(BY_KEY[band].descriptionKey) : null) ?? null;
 }
 
 export function bandColour(band: string): string {

@@ -1,3 +1,4 @@
+import { translateActive } from '../i18n/runtime';
 import { apiFetch } from './http';
 import type { DlpAvailability, DlpSummary } from '../types/dlp';
 
@@ -11,7 +12,7 @@ export async function fetchDlpAvailability(): Promise<DlpAvailability> {
   });
 
   if (!response.ok) {
-    throw new Error(`Couldn't load DLP availability (${response.status}).`);
+    throw new Error(translateActive('errors.dlp.availabilityFailed', { status: response.status }));
   }
 
   return response.json() as Promise<DlpAvailability>;
@@ -25,7 +26,7 @@ export async function fetchDlpSummary(days: number): Promise<DlpSummary> {
   });
 
   if (!response.ok) {
-    throw new Error(`Couldn't load DLP summary (${response.status}).`);
+    throw new Error(translateActive('errors.dlp.summaryFailed', { status: response.status }));
   }
 
   return response.json() as Promise<DlpSummary>;

@@ -5,6 +5,7 @@ import StackedAreaChart from '../charts/StackedAreaChart';
 import { KpiGrid, type KpiDefinition } from '../shared/KpiGrid';
 import { seriesColor } from '../charts/chartCommon';
 import type { WebActivityGeography, WebActivityPlaceRow } from '../../types/webActivity';
+import { useT } from '../../i18n';
 import {
   FailedQueryNote,
   SectionCard,
@@ -27,6 +28,7 @@ import {
  */
 export default function GeographyPanel({ data }: { data: WebActivityGeography }) {
   const styles = useWebActivityStyles();
+  const t = useT();
   const kpis = data.kpis;
 
   // The listed countries plus an explicit remainder. The denominator is the page views that
@@ -35,69 +37,61 @@ export default function GeographyPanel({ data }: { data: WebActivityGeography })
   const countryCategories = withRemainder(
     data.countries.map((c) => ({ label: c.name, value: c.pageViews })),
     kpis.countryPageViews,
-    'Other countries',
+    t('webActivity.geography.otherCountries'),
   );
 
   const items: KpiDefinition[] = [
     {
       key: 'visits',
-      label: 'Visits',
+      label: t('webActivity.common.visits'),
       value: formatCount(kpis.visits),
       info: {
-        what: 'Visits with at least one page view in the period.',
-        how:
-          'The same visit count as the other tabs, for scale. The location shares below are worked '
-          + 'out over located PAGE VIEWS, not over this number.',
+        what: t('webActivity.geography.kpi.visitsWhat'),
+        how: t('webActivity.geography.kpi.visitsHow'),
       },
     },
     {
       key: 'visitors',
-      label: 'Visitors',
+      label: t('webActivity.common.visitors'),
       value: formatCount(kpis.visitors),
-      info: { what: 'Distinct people who visited.', how: 'Distinct users behind the visiting sessions.' },
+      info: { what: t('webActivity.geography.kpi.visitorsWhat'), how: t('webActivity.geography.kpi.visitorsHow') },
     },
     {
       key: 'countries',
-      label: 'Countries',
+      label: t('webActivity.geography.countries'),
       value: formatCount(kpis.countries),
       info: {
-        what: 'Distinct countries page views came from.',
-        how: 'Resolved by Application Insights from the client IP address at collection time.',
+        what: t('webActivity.geography.kpi.countriesWhat'),
+        how: t('webActivity.geography.kpi.countriesHow'),
       },
     },
     {
       key: 'cities',
-      label: 'Cities',
+      label: t('webActivity.geography.cities'),
       value: formatCount(kpis.cities),
       info: {
-        what: 'Distinct cities page views came from.',
-        how:
-          'Also IP-derived. On a corporate network this is frequently the city of the internet '
-          + 'breakout rather than where the person is sitting, so read it as "which office egress '
-          + 'did this come through" rather than as a home address.',
+        what: t('webActivity.geography.kpi.citiesWhat'),
+        how: t('webActivity.geography.kpi.citiesHow'),
       },
     },
     {
       key: 'provinces',
-      label: 'Regions',
+      label: t('webActivity.geography.regions'),
       value: formatCount(kpis.provinces),
       info: {
-        what: 'Distinct states, provinces or regions page views came from.',
-        how: 'IP-derived, and populated less reliably than country.',
+        what: t('webActivity.geography.kpi.regionsWhat'),
+        how: t('webActivity.geography.kpi.regionsHow'),
       },
     },
     {
       key: 'unknown',
-      label: 'Unlocated views',
+      label: t('webActivity.geography.kpi.unlocatedViews'),
       value: formatPct(kpis.unknownLocationPct),
-      hint: `${formatCount(kpis.unknownLocationPageViews)} page views`,
+      hint: t('webActivity.common.pageViewsCount', { count: formatCount(kpis.unknownLocationPageViews) }),
       tone: kpis.unknownLocationPct > 25 ? 'warning' : 'neutral',
       info: {
-        what: 'Page views with neither a country nor a city.',
-        how:
-          'Shown because it is the honest denominator for everything else on this tab. A high figure '
-          + 'usually means traffic arriving through a VPN or proxy that Application Insights cannot '
-          + 'resolve - the location breakdown is then a sample, not a census.',
+        what: t('webActivity.geography.kpi.unlocatedViewsWhat'),
+        how: t('webActivity.geography.kpi.unlocatedViewsHow'),
       },
     },
   ];
@@ -116,54 +110,54 @@ export default function GeographyPanel({ data }: { data: WebActivityGeography })
 
       <div className={styles.grid}>
         <SectionCard
-          title="Countries"
+          title={t('webActivity.geography.countries')}
           query={queryFor(data.queries, 'geo-countries')}
           isEmpty={data.countries.length === 0}
-          emptyMessage="No page view in this period had a resolved country."
+          emptyMessage={t('webActivity.geography.countriesEmpty')}
         >
           <DonutChart
             categories={countryCategories}
             colours={countryCategories.map((_, i) => seriesColor(i))}
             centreValue={formatCount(kpis.countries)}
-            centreLabel="countries"
+            centreLabel={t('webActivity.geography.countriesLower')}
           />
         </SectionCard>
 
         <SectionCard
-          title="Cities"
+          title={t('webActivity.geography.cities')}
           query={queryFor(data.queries, 'geo-cities')}
           isEmpty={data.cities.length === 0}
         >
-          <PlaceTable rows={data.cities} heading="City" showCountry />
+          <PlaceTable rows={data.cities} heading={t('webActivity.geography.city')} showCountry />
         </SectionCard>
 
         <SectionCard
-          title="Regions"
+          title={t('webActivity.geography.regions')}
           query={queryFor(data.queries, 'geo-provinces')}
           isEmpty={data.provinces.length === 0}
-          emptyMessage="No page view in this period had a resolved state, province or region."
+          emptyMessage={t('webActivity.geography.regionsEmpty')}
         >
-          <PlaceTable rows={data.provinces} heading="Region" showCountry />
+          <PlaceTable rows={data.provinces} heading={t('webActivity.geography.region')} showCountry />
         </SectionCard>
 
         <SectionCard
-          title="Country reach"
-          description="Page views per country, as a share of the page views that resolved to a country."
+          title={t('webActivity.geography.countryReach.title')}
+          description={t('webActivity.geography.countryReach.description')}
           query={queryFor(data.queries, 'geo-countries')}
           isEmpty={data.countries.length === 0}
         >
-          <CategoryBarChart categories={countryCategories} valueLabel="Page views" showShare />
+          <CategoryBarChart categories={countryCategories} valueLabel={t('webActivity.common.pageViews')} showShare />
         </SectionCard>
       </div>
 
       <div className={styles.stack}>
         <SectionCard
-          title="Country mix over time"
-          description="Weekly page views per country, stacked - a new region appearing or an old one going quiet shows up here first."
+          title={t('webActivity.geography.countryMix.title')}
+          description={t('webActivity.geography.countryMix.description')}
           query={queryFor(data.queries, 'geo-country-over-time')}
           isEmpty={data.countryOverTime.length === 0}
         >
-          <StackedAreaChart series={toStackedSeries(data.countryOverTime)} valueLabel="Page views" />
+          <StackedAreaChart series={toStackedSeries(data.countryOverTime)} valueLabel={t('webActivity.common.pageViews')} />
         </SectionCard>
       </div>
     </div>
@@ -180,6 +174,7 @@ function PlaceTable({
   showCountry?: boolean;
 }) {
   const styles = useWebActivityStyles();
+  const t = useT();
 
   return (
     <div className={styles.tableWrap}>
@@ -187,11 +182,11 @@ function PlaceTable({
         <TableHeader>
           <TableRow>
             <TableHeaderCell>{heading}</TableHeaderCell>
-            {showCountry && <TableHeaderCell>Country</TableHeaderCell>}
-            <TableHeaderCell className={styles.numeric}>Page views</TableHeaderCell>
-            <TableHeaderCell className={styles.numeric}>Visits</TableHeaderCell>
-            <TableHeaderCell className={styles.numeric}>Visitors</TableHeaderCell>
-            <TableHeaderCell className={styles.numeric}>Share</TableHeaderCell>
+            {showCountry && <TableHeaderCell>{t('webActivity.geography.country')}</TableHeaderCell>}
+            <TableHeaderCell className={styles.numeric}>{t('webActivity.common.pageViews')}</TableHeaderCell>
+            <TableHeaderCell className={styles.numeric}>{t('webActivity.common.visits')}</TableHeaderCell>
+            <TableHeaderCell className={styles.numeric}>{t('webActivity.common.visitors')}</TableHeaderCell>
+            <TableHeaderCell className={styles.numeric}>{t('webActivity.common.share')}</TableHeaderCell>
           </TableRow>
         </TableHeader>
         <TableBody>

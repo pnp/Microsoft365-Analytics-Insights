@@ -5,7 +5,8 @@ import GaugeRing from '../charts/GaugeRing';
 import TimeSeriesChart from '../charts/TimeSeriesChart';
 import DonutChart from '../charts/DonutChart';
 import { seriesColor } from '../charts/chartCommon';
-import type { TeamsOverview } from '../../types/teamsExplorer';
+import type { TeamsJudgement, TeamsOverview, TeamsOverviewKpis } from '../../types/teamsExplorer';
+import { formatNumber, useT, type TFunction, type TranslationKey } from '../../i18n';
 import {
   SectionCard,
   WindowNote,
@@ -15,6 +16,8 @@ import {
   formatPct,
   queryFor,
   reachTone,
+  segmentDescription,
+  segmentLabel,
   useTeamsStyles,
 } from './teamsShared';
 
@@ -43,6 +46,132 @@ const useStyles = makeStyles({
   },
 });
 
+
+function judgementText(
+  t: TFunction,
+  key: string,
+  field: 'headline' | 'detail',
+  fallback: string,
+  values?: Record<string, string>,
+  variant?: string,
+): string {
+  if (!key) return fallback;
+  const catalogKey = `teamsExplorer.judgement.${key}.${field}${variant ? `.${variant}` : ''}` as TranslationKey;
+  const translated = t(catalogKey, values);
+  return translated === catalogKey ? fallback : translated;
+}
+
+function adoptionBandLabel(percent: number, t: TFunction): string {
+  if (percent < 40) return t('teamsExplorer.judgement.reach.band.needsAttention');
+  return percent < 70
+    ? t('teamsExplorer.judgement.reach.band.progressing')
+    : t('teamsExplorer.judgement.reach.band.healthy');
+}
+
+function firstPercent(text: string): string | undefined {
+  const match = text.match(/([0-9][0-9.,]*)%/);
+  if (!match) return undefined;
+  const value = Number(match[1].replace(/,/g, ''));
+  return Number.isFinite(value) ? formatPct(value) : match[0];
+}
+
+function serverCount(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  const value = Number(text.replace(/,/g, ''));
+  return Number.isFinite(value) ? formatCount(value) : text;
+}
+
+function formatOneDecimal(value: number): string {
+  return formatNumber(Math.round(value * 10) / 10, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+}
+
+function translatedJudgement(judgement: TeamsJudgement, kpis: TeamsOverviewKpis, t: TFunction) {
+  switch (judgement.key) {
+    case 'reach': {
+      const values = {
+        reach: formatPct(kpis.reachPct),
+        active: formatCount(kpis.activeUsers),
+        known: formatCount(kpis.knownUsers),
+        band: adoptionBandLabel(kpis.reachPct, t).toLowerCase(),
+      };
+      return {
+        headline: judgementText(t, judgement.key, 'headline', judgement.headline, values),
+        detail: judgementText(t, judgement.key, 'detail', judgement.detail, values),
+      };
+    }
+    case 'open-collaboration': {
+      const values = { share: formatPct(kpis.openCollaborationPct) };
+      return {
+        headline: judgementText(t, judgement.key, 'headline', judgement.headline, values),
+        detail: judgementText(
+          t,
+          judgement.key,
+          'detail',
+          judgement.detail,
+          values,
+          judgement.tone === 'warning' ? 'warning' : 'neutral',
+        ),
+      };
+    }
+    case 'after-hours': {
+      const values = { share: firstPercent(judgement.headline) ?? '' };
+      return {
+        headline: judgementText(t, judgement.key, 'headline', judgement.headline, values),
+        detail: judgementText(t, judgement.key, 'detail', judgement.detail, values),
+      };
+    }
+    case 'organiser-concentration': {
+      const values = { share: firstPercent(judgement.headline) ?? '' };
+      return {
+        headline: judgementText(t, judgement.key, 'headline', judgement.headline, values),
+        detail: judgementText(t, judgement.key, 'detail', judgement.detail, values),
+      };
+    }
+    case 'meeting-load': {
+      const values = { meetingsPerActiveUser: formatOneDecimal(kpis.meetingsPerActiveUser) };
+      return {
+        headline: judgementText(t, judgement.key, 'headline', judgement.headline, values),
+        detail: judgementText(t, judgement.key, 'detail', judgement.detail, values),
+      };
+    }
+    case 'ownerless-teams': {
+      const counts = judgement.headline.match(/([0-9][0-9,]*) of ([0-9][0-9,]*)/);
+      const values = {
+        ownerless: serverCount(counts?.[1]) ?? '',
+        total: serverCount(counts?.[2]) ?? formatCount(kpis.totalTeams),
+      };
+      return {
+        headline: judgementText(t, judgement.key, 'headline', judgement.headline, values),
+        detail: judgementText(t, judgement.key, 'detail', judgement.detail, values),
+      };
+    }
+    case 'team-sprawl': {
+      const values = {
+        active: formatCount(kpis.activeTeams),
+        total: formatCount(kpis.totalTeams),
+        share: formatPct(kpis.totalTeams > 0 ? (kpis.activeTeams / kpis.totalTeams) * 100 : 0),
+        dormant: formatCount(kpis.totalTeams - kpis.activeTeams),
+      };
+      return {
+        headline: judgementText(t, judgement.key, 'headline', judgement.headline, values),
+        detail: judgementText(
+          t,
+          judgement.key,
+          'detail',
+          judgement.detail,
+          values,
+          judgement.tone === 'warning' ? 'warning' : 'good',
+        ),
+      };
+    }
+    default:
+      return {
+        headline: judgementText(t, judgement.key, 'headline', judgement.headline),
+        detail: judgementText(t, judgement.key, 'detail', judgement.detail),
+      };
+  }
+}
+
 const TONE_COLOUR: Record<string, string> = {
   good: tokens.colorPaletteGreenBorderActive,
   warning: tokens.colorPaletteYellowBorderActive,
@@ -60,100 +189,98 @@ const TONE_COLOUR: Record<string, string> = {
 export default function OverviewPanel({ data }: { data: TeamsOverview }) {
   const styles = useStyles();
   const shared = useTeamsStyles();
+  const t = useT();
   const { kpis } = data;
 
   const kpiItems: KpiDefinition[] = [
     {
       key: 'reach',
-      label: 'Teams reach',
+      label: t('teamsExplorer.overview.kpi.teamsReach.label'),
       value: formatPct(kpis.reachPct),
-      hint: `${formatCount(kpis.activeUsers)} of ${formatCount(kpis.knownUsers)} known users`,
+      hint: t('teamsExplorer.overview.kpi.teamsReach.hint', {
+        active: formatCount(kpis.activeUsers),
+        known: formatCount(kpis.knownUsers),
+      }),
       tone: reachTone(kpis.reachPct),
       info: {
-        what: 'The share of directory users who did anything at all in Teams during the period.',
+        what: t('teamsExplorer.overview.kpi.teamsReach.what'),
         how:
-          'A user counts as active on a day when the Microsoft 365 usage report shows any chat '
-          + 'message, channel post, reply, meeting or call for them. The denominator is every user '
-          + 'in the directory whose account is enabled, or whose status is unknown.',
-        formula: 'active users / known users x 100',
+          t('teamsExplorer.overview.kpi.teamsReach.how'),
+        formula: t('teamsExplorer.overview.kpi.teamsReach.formula'),
         source:
-          'Microsoft 365 usage reports. This figure differs from the Reports page, which counts '
-          + 'users by their last-activity date inside a single report snapshot rather than by '
-          + 'measuring each day.',
+          t('teamsExplorer.overview.kpi.teamsReach.source'),
       },
     },
     {
       key: 'channel-share',
-      label: 'Open collaboration',
+      label: t('teamsExplorer.overview.kpi.openCollaboration.label'),
       value: formatPct(kpis.openCollaborationPct),
-      hint: 'Chat messages posted in channels rather than private chats',
+      hint: t('teamsExplorer.overview.kpi.openCollaboration.hint'),
       tone: kpis.openCollaborationPct < 15 ? 'warning' : 'neutral',
       info: {
-        what: 'Channel messages as a share of all chat messages.',
+        what: t('teamsExplorer.overview.kpi.openCollaboration.what'),
         how:
-          'Channel posts stay visible and searchable for everyone who joins the work later; '
-          + 'private chat does not. A very low share means knowledge is accumulating where nobody '
-          + 'else can find it.',
-        formula: 'channel messages / (channel messages + private chat messages) x 100',
-        source: 'Microsoft 365 usage reports (team chat, channel posts and replies vs private chat).',
+          t('teamsExplorer.overview.kpi.openCollaboration.how'),
+        formula: t('teamsExplorer.overview.kpi.openCollaboration.formula'),
+        source: t('teamsExplorer.overview.kpi.openCollaboration.source'),
       },
     },
     {
       key: 'meetings',
-      label: 'Meetings per active user',
+      label: t('teamsExplorer.overview.kpi.meetingsPerActiveUser.label'),
       value: formatDecimal(kpis.meetingsPerActiveUser),
-      hint: `${formatCount(kpis.meetingsAttended)} attended in total`,
+      hint: t('teamsExplorer.overview.kpi.meetingsPerActiveUser.hint', {
+        meetings: formatCount(kpis.meetingsAttended),
+      }),
       info: {
-        what: 'Meetings attended per active user over the period.',
+        what: t('teamsExplorer.overview.kpi.meetingsPerActiveUser.what'),
         how:
-          'A tenant-wide average hides the teams that are actually saturated, so read it alongside '
-          + 'the department breakdown on the Adoption tab.',
-        formula: 'meetings attended / active users',
-        source: 'Microsoft 365 usage reports.',
+          t('teamsExplorer.overview.kpi.meetingsPerActiveUser.how'),
+        formula: t('teamsExplorer.overview.kpi.meetingsPerActiveUser.formula'),
+        source: t('teamsExplorer.source.usageReports'),
       },
     },
     {
       key: 'audio-hours',
-      label: 'Audio hours',
+      label: t('teamsExplorer.overview.kpi.audioHours.label'),
       value: formatHours(kpis.audioHours),
-      hint: `Video on ${formatPct(kpis.videoSharePct)}, sharing on ${formatPct(kpis.screenShareSharePct)} of those hours`,
+      hint: t('teamsExplorer.overview.kpi.audioHours.hint', {
+        video: formatPct(kpis.videoSharePct),
+        sharing: formatPct(kpis.screenShareSharePct),
+      }),
       info: {
-        what: 'Total hours of audio across Teams calls and meetings.',
+        what: t('teamsExplorer.overview.kpi.audioHours.what'),
         how:
-          'Audio is used as the wall-clock figure because audio, video and screenshare durations '
-          + 'OVERLAP inside a single meeting - adding them together would produce more hours than '
-          + 'the meetings actually lasted. Video and screenshare are therefore reported as a share '
-          + 'of audio hours, and each can approach 100%.',
-        formula: 'audio seconds / 3600; video share = video seconds / audio seconds x 100',
-        source: 'Microsoft 365 usage reports.',
+          t('teamsExplorer.overview.kpi.audioHours.how'),
+        formula: t('teamsExplorer.overview.kpi.audioHours.formula'),
+        source: t('teamsExplorer.source.usageReports'),
       },
     },
     {
       key: 'calls',
-      label: 'Calls recorded',
+      label: t('teamsExplorer.overview.kpi.callsRecorded.label'),
       value: formatCount(kpis.calls),
-      hint: 'From the Graph call-records webhook',
+      hint: t('teamsExplorer.overview.kpi.callsRecorded.hint'),
       info: {
-        what: 'Calls and meetings whose records arrived from Microsoft Graph.',
+        what: t('teamsExplorer.overview.kpi.callsRecorded.what'),
         how:
-          'Separate from the meeting counts above, which come from the usage reports. Call records '
-          + 'arrive within minutes rather than days, which is why the two cover slightly different '
-          + 'windows.',
-        source: 'Graph call-records change notifications (the Teams calls import).',
+          t('teamsExplorer.overview.kpi.callsRecorded.how'),
+        source: t('teamsExplorer.source.graphCallRecords'),
       },
     },
     {
       key: 'teams',
-      label: 'Active teams',
+      label: t('teamsExplorer.overview.kpi.activeTeams.label'),
       value: `${formatCount(kpis.activeTeams)} / ${formatCount(kpis.totalTeams)}`,
-      hint: `${formatCount(kpis.activeChannels)} of ${formatCount(kpis.totalChannels)} channels saw a message`,
+      hint: t('teamsExplorer.overview.kpi.activeTeams.hint', {
+        activeChannels: formatCount(kpis.activeChannels),
+        totalChannels: formatCount(kpis.totalChannels),
+      }),
       info: {
-        what: 'Teams with at least one channel message in the period.',
+        what: t('teamsExplorer.overview.kpi.activeTeams.what'),
         how:
-          'Only teams authorised for deep analytics can be measured, so a team that has never been '
-          + 'authorised is counted in the total but can never appear as active. The Teams & '
-          + 'channels tab keeps the two apart.',
-        source: 'Teams deep analytics (per-team delegated authorisation).',
+          t('teamsExplorer.overview.kpi.activeTeams.how'),
+        source: t('teamsExplorer.overview.kpi.activeTeams.source'),
       },
     },
   ];
@@ -163,28 +290,28 @@ export default function OverviewPanel({ data }: { data: TeamsOverview }) {
 
   const activitySeries = [
     {
-      name: 'Active users',
+      name: t('teamsExplorer.overview.series.activeUsers'),
       points: data.trend.map((p) => ({ weekStart: p.weekStart, value: p.activeUsers })),
     },
   ];
 
   const messageSeries = [
     {
-      name: 'Channel messages',
+      name: t('teamsExplorer.overview.series.channelMessages'),
       points: data.trend.map((p) => ({ weekStart: p.weekStart, value: p.channelMessages })),
     },
     {
-      name: 'Private chat messages',
+      name: t('teamsExplorer.overview.series.privateChatMessages'),
       points: data.trend.map((p) => ({ weekStart: p.weekStart, value: p.privateMessages })),
     },
     {
-      name: 'Meetings attended',
+      name: t('teamsExplorer.overview.series.meetingsAttended'),
       points: data.trend.map((p) => ({ weekStart: p.weekStart, value: p.meetingsAttended })),
     },
   ];
 
   const segmentCategories = data.segmentMix.map((slice) => ({
-    label: slice.label,
+    label: segmentLabel(t, slice.segment, slice.label),
     value: slice.users,
   }));
   const measuredUsers = data.segmentMix.reduce((sum, slice) => sum + slice.users, 0);
@@ -199,82 +326,89 @@ export default function OverviewPanel({ data }: { data: TeamsOverview }) {
 
       {data.judgements.length > 0 && (
         <div className={styles.judgements}>
-          {data.judgements.map((judgement) => (
+          {data.judgements.map((judgement) => {
+            const text = translatedJudgement(judgement, kpis, t);
+            return (
             <Card
               key={judgement.key}
               className={styles.judgement}
               style={{ borderLeftColor: TONE_COLOUR[judgement.tone] ?? TONE_COLOUR.neutral }}
             >
-              <Text weight="semibold">{judgement.headline}</Text>
+              <Text weight="semibold">{text.headline}</Text>
               <Text size={200} className={styles.muted}>
-                {judgement.detail}
+                {text.detail}
               </Text>
             </Card>
-          ))}
+            );
+          })}
         </div>
       )}
 
       <div className={shared.grid}>
         <SectionCard
-          title="Reach against the directory"
-          description="Active users as a share of the directory, on the adoption scale."
+          title={t('teamsExplorer.overview.reachAgainstDirectory.title')}
+          description={t('teamsExplorer.overview.reachAgainstDirectory.description')}
           query={queryFor(data.queries, 'overview-usage')}
           isEmpty={kpis.knownUsers === 0}
-          emptyMessage="No directory users are known, so reach cannot be measured. Switch on the Graph user metadata import."
+          emptyMessage={t('teamsExplorer.overview.reachAgainstDirectory.empty')}
         >
           <div className={styles.gaugeRow}>
             <GaugeRing
               value={kpis.reachPct}
               label={formatPct(kpis.reachPct)}
-              sublabel={`${formatCount(kpis.activeUsers)} of ${formatCount(kpis.knownUsers)} users`}
+              sublabel={t('teamsExplorer.overview.reachAgainstDirectory.sublabel', {
+                active: formatCount(kpis.activeUsers),
+                known: formatCount(kpis.knownUsers),
+              })}
             />
           </div>
         </SectionCard>
 
         <SectionCard
-          title="Engagement mix"
-          description="How habitually people use Teams across the period's working days."
+          title={t('teamsExplorer.overview.engagementMix.title')}
+          description={t('teamsExplorer.overview.engagementMix.description')}
           query={segmentQuery}
           isEmpty={measuredUsers === 0}
-          emptyMessage="No users appeared in the Teams usage reports for this period."
+          emptyMessage={t('teamsExplorer.overview.engagementMix.empty')}
         >
           <DonutChart
             categories={segmentCategories}
             colours={segmentCategories.map((_, i) => seriesColor(i))}
             centreValue={formatCount(measuredUsers)}
-            centreLabel="measured users"
+            centreLabel={t('teamsExplorer.overview.engagementMix.centreLabel')}
           />
           <Text size={200} className={styles.muted}>
-            {data.segmentMix.map((slice) => `${slice.label}: ${slice.description}`).join(' ')}
+            {data.segmentMix
+              .map((slice) => `${segmentLabel(t, slice.segment, slice.label)}: ${segmentDescription(t, slice.segment, slice.description)}`)
+              .join(' ')}
           </Text>
         </SectionCard>
       </div>
 
       <div className={shared.stack}>
         <SectionCard
-          title="Weekly active users"
-          description="Distinct people who did anything in Teams each week."
+          title={t('teamsExplorer.overview.weeklyActiveUsers.title')}
+          description={t('teamsExplorer.overview.weeklyActiveUsers.description')}
           query={trendQuery}
           isEmpty={data.trend.length === 0}
         >
-          <TimeSeriesChart series={activitySeries} valueLabel="Users" height={240} />
+          <TimeSeriesChart series={activitySeries} valueLabel={t('teamsExplorer.overview.valueLabel.users')} height={240} />
         </SectionCard>
 
         <SectionCard
-          title="What people are doing"
-          description="Channel messages, private chat and meetings attended each week."
+          title={t('teamsExplorer.overview.whatPeopleAreDoing.title')}
+          description={t('teamsExplorer.overview.whatPeopleAreDoing.description')}
           query={trendQuery}
           isEmpty={data.trend.length === 0}
         >
-          <TimeSeriesChart series={messageSeries} valueLabel="Count" height={260} />
+          <TimeSeriesChart series={messageSeries} valueLabel={t('teamsExplorer.overview.valueLabel.count')} height={260} />
         </SectionCard>
       </div>
 
       {kpis.knownUsers > 0 && kpis.activeUsers === 0 && (
         <MessageBar intent="warning" style={{ marginTop: '16px' }}>
           <MessageBarBody>
-            The directory has users but none were active in Teams in this period. That is unusual
-            enough to be worth checking the import before drawing any conclusion from it.
+            {t('teamsExplorer.overview.noActiveUsersWarning')}
           </MessageBarBody>
         </MessageBar>
       )}

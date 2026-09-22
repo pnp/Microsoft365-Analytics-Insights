@@ -14,12 +14,14 @@ import SankeyChart from '../charts/SankeyChart';
 import PageTable from './PageTable';
 import { KpiGrid, type KpiDefinition } from '../shared/KpiGrid';
 import type { WebActivityJourneys } from '../../types/webActivity';
+import { useT } from '../../i18n';
 import {
   FailedQueryNote,
   SectionCard,
   WindowNote,
   bounceTone,
   bucketsToCategories,
+  translatedBucketsToCategories,
   formatCount,
   formatDecimal,
   formatDuration,
@@ -55,61 +57,50 @@ export default function JourneysPanel({
   exporting: boolean;
 }) {
   const styles = useWebActivityStyles();
+  const t = useT();
   const kpis = data.kpis;
 
   const items: KpiDefinition[] = [
     {
       key: 'bounce',
-      label: 'Bounce rate (single-page visits)',
+      label: t('webActivity.journeys.kpi.bounceRate'),
       value: kpis.visits > 0 ? formatPct(kpis.bouncePct) : '-',
       hint: kpis.visits > 0
-        ? `${formatCount(kpis.bounces)} of ${formatCount(kpis.visits)} visits`
-        : 'no visits recorded in this period',
+        ? t('webActivity.journeys.kpi.bouncesOfVisitsHint', { bounces: formatCount(kpis.bounces), visits: formatCount(kpis.visits) })
+        : t('webActivity.common.noVisitsRecorded'),
       tone: kpis.visits > 0 ? bounceTone(kpis.bouncePct) : 'neutral',
       info: {
-        what: 'Visits that saw exactly one page and then ended.',
-        how:
-          'Single-page visits over all visits. Judge it per page, not in aggregate: a deep link '
-          + 'straight to one policy document is a perfectly good one-page visit, while a home page '
-          + 'with the same rate is a navigation failure.',
+        what: t('webActivity.journeys.kpi.bounceWhat'),
+        how: t('webActivity.journeys.kpi.bounceHow'),
       },
     },
     {
       key: 'pages-per-visit',
-      label: 'Pages per visit',
+      label: t('webActivity.common.pagesPerVisit'),
       value: formatDecimal(kpis.pagesPerVisit),
-      hint: `median ${formatCount(kpis.medianPagesPerVisit)}`,
+      hint: t('webActivity.journeys.kpi.medianHint', { count: formatCount(kpis.medianPagesPerVisit) }),
       info: {
-        what: 'How many pages a visit sees, on average and at the midpoint.',
-        how:
-          'The median is shown next to the mean because a handful of very deep visits - a content '
-          + 'author clicking through fifty pages - drags the mean up and the median does not move. '
-          + 'When the two are far apart, trust the median.',
+        what: t('webActivity.journeys.kpi.pagesPerVisitWhat'),
+        how: t('webActivity.journeys.kpi.pagesPerVisitHow'),
       },
     },
     {
       key: 'visit-length',
-      label: 'Average visit length',
+      label: t('webActivity.journeys.kpi.averageVisitLength'),
       value: formatDuration(kpis.averageVisitSeconds),
       info: {
-        what: 'Total time a visit spent on pages.',
-        how:
-          'The per-page dwell times in the visit, summed. The tracker cannot measure the last page '
-          + 'of a visit, so this under-states real visit length - consistently, so it is still '
-          + 'usable for comparing periods.',
+        what: t('webActivity.journeys.kpi.averageVisitLengthWhat'),
+        how: t('webActivity.journeys.kpi.visitLengthHow'),
       },
     },
     {
       key: 'clicks',
-      label: 'Element clicks',
+      label: t('webActivity.common.elementClicks'),
       value: formatCount(kpis.clicks),
-      hint: clickTrackingAvailable ? 'recorded in this period' : 'no clicks recorded yet',
+      hint: clickTrackingAvailable ? t('webActivity.journeys.kpi.clicksRecordedHint') : t('webActivity.journeys.kpi.noClicksHint'),
       info: {
-        what: 'Clicks on tracked page elements - links, buttons, web parts.',
-        how:
-          'Optional: the SharePoint tracker only records these when element-click capture is '
-          + 'enabled, so zero usually means the feature is off rather than that nobody clicked '
-          + 'anything.',
+        what: t('webActivity.journeys.kpi.clicksWhat'),
+        how: t('webActivity.journeys.kpi.clicksHow'),
       },
     },
   ];
@@ -128,8 +119,8 @@ export default function JourneysPanel({
 
       <div className={styles.stack}>
         <SectionCard
-          title="Where visits start"
-          description="The first page of a visit, with how often the visit ended right there."
+          title={t('webActivity.journeys.entry.title')}
+          description={t('webActivity.journeys.entry.description')}
           query={queryFor(data.queries, 'journeys-entry')}
           isEmpty={data.entryPages.length === 0}
           actions={
@@ -140,48 +131,39 @@ export default function JourneysPanel({
               onClick={onExportEntry}
               disabled={exporting}
             >
-              Export
+              {t('webActivity.common.export')}
             </Button>
           }
         >
           <PageTable
             rows={data.entryPages}
-            label="Where visits start"
-            valueHeading="Entries"
+            label={t('webActivity.journeys.entry.title')}
+            valueHeading={t('webActivity.common.entries')}
             columns={{ site: true, uniquePageViews: false, dwell: true, bounce: true }}
             dwellFootnote
           />
         </SectionCard>
 
         <SectionCard
-          title="Landing pages people leave from"
-          description={`Entry pages with at least ${data.window.minimumViews} entries, ranked by how often the visit ended there.`}
-          note={
-            'These are the landing pages with the highest bounce RATES, not the largest number of '
-            + 'bounces - a page losing 5 of 5 visits ranks above one losing 500 of 1,000. Each one is '
-            + 'either a page that answered the question completely - which is fine - or a dead end '
-            + 'that should be offering a next step.'
-          }
+          title={t('webActivity.journeys.bouncePages.title')}
+          description={t('webActivity.journeys.bouncePages.description', { minimumViews: data.window.minimumViews })}
+          note={t('webActivity.journeys.bounce.note')}
           query={queryFor(data.queries, 'journeys-bounce')}
           isEmpty={data.bouncePages.length === 0}
-          emptyMessage="No entry page had enough entries to rank by bounce rate."
+          emptyMessage={t('webActivity.journeys.bouncePages.empty')}
         >
           <PageTable
             rows={data.bouncePages}
-            label="Landing pages people leave from"
-            valueHeading="Entries"
+            label={t('webActivity.journeys.bouncePages.title')}
+            valueHeading={t('webActivity.common.entries')}
             columns={{ site: true, uniquePageViews: false, dwell: false, bounce: true }}
           />
         </SectionCard>
 
         <SectionCard
-          title="Where visits end"
-          description="The last page of a visit."
-          note={
-            'No average time is shown here. The tracker measures dwell time against the NEXT page '
-            + 'view, and by definition these pages have none - so the figure would be an artefact, '
-            + 'not a measurement.'
-          }
+          title={t('webActivity.journeys.exit.title')}
+          description={t('webActivity.journeys.exit.description')}
+          note={t('webActivity.journeys.exit.note')}
           query={queryFor(data.queries, 'journeys-exit')}
           isEmpty={data.exitPages.length === 0}
           actions={
@@ -192,33 +174,25 @@ export default function JourneysPanel({
               onClick={onExportExit}
               disabled={exporting}
             >
-              Export
+              {t('webActivity.common.export')}
             </Button>
           }
         >
           <PageTable
             rows={data.exitPages}
-            label="Where visits end"
-            valueHeading="Exits"
+            label={t('webActivity.journeys.exit.title')}
+            valueHeading={t('webActivity.common.exits')}
             columns={{ site: true, uniquePageViews: false, dwell: false }}
           />
         </SectionCard>
 
         <SectionCard
-          title="Where visits start, and where they end up"
-          description="Each band is a set of visits that began on the page on the left and finished on the page on the right."
-          note={
-            'This is the question the two lists above cannot answer between them. They say which '
-            + 'pages are common starts and which are common ends, separately; this says which start '
-            + 'leads to which end - so you can see whether people landing on the home page reach the '
-            + 'service they came for, or finish on the page they arrived at. Bands that return to '
-            + 'the same page are visits that ended where they began, and are drawn in grey rather '
-            + 'than hidden: on most intranets they are the single biggest group, and leaving them '
-            + 'out would imply a journey happened where none did.'
-          }
+          title={t('webActivity.journeys.flows.title')}
+          description={t('webActivity.journeys.flows.description')}
+          note={t('webActivity.journeys.flows.note')}
           query={queryFor(data.queries, 'journeys-flows')}
           isEmpty={data.flows.length === 0}
-          emptyMessage="No visit in this period could be paired to a start and an end page."
+          emptyMessage={t('webActivity.journeys.flows.empty')}
           actions={
             <Button
               appearance="subtle"
@@ -227,7 +201,7 @@ export default function JourneysPanel({
               onClick={onExportFlows}
               disabled={exporting}
             >
-              Export
+              {t('webActivity.common.export')}
             </Button>
           }
         >
@@ -240,33 +214,28 @@ export default function JourneysPanel({
               value: f.visits,
               isSelfFlow: f.endedWhereItStarted,
               detail: [
-                f.endedWhereItStarted ? 'Ended on the page it started on' : '',
-                `${formatPct(f.sharePct)} of all visits`,
-                f.averagePages != null ? `${formatDecimal(f.averagePages)} pages on average` : '',
+                f.endedWhereItStarted ? t('webActivity.journeys.flows.endedWhereStarted') : '',
+                t('webActivity.journeys.flows.shareOfAllVisits', { pct: formatPct(f.sharePct) }),
+                f.averagePages != null ? t('webActivity.journeys.flows.pagesOnAverage', { count: formatDecimal(f.averagePages) }) : '',
                 f.endedWhereItStarted && f.singlePageVisits > 0
-                  ? `${formatCount(f.singlePageVisits)} saw only this page`
+                  ? t('webActivity.journeys.flows.sawOnlyThisPage', { count: formatCount(f.singlePageVisits) })
                   : '',
               ].filter((d) => d !== ''),
             }))}
-            valueLabel="visits"
+            valueLabel={t('webActivity.common.visitsLower')}
             caption={
-              `Showing the top ${data.flows.length} start-to-end pairs, which cover `
-              + `${formatPct(data.flowsCoveragePct)} of all visits that could be paired.`
+              t('webActivity.journeys.flows.caption', { count: formatCount(data.flows.length), pct: formatPct(data.flowsCoveragePct) })
             }
           />
         </SectionCard>
 
         <SectionCard
-          title="The routes people take"
-          description="The most-walked steps from one page to the next inside a visit."
-          note={
-            'A step back to the SAME page is excluded, so a refresh cannot fill this table with '
-            + '"Home to Home" and bury the real paths. The share column is of all steps taken OUT of '
-            + 'the left-hand page, so it answers "where do people go from here?".'
-          }
+          title={t('webActivity.journeys.routes.title')}
+          description={t('webActivity.journeys.routes.description')}
+          note={t('webActivity.journeys.transitions.note')}
           query={queryFor(data.queries, 'journeys-transitions')}
           isEmpty={data.transitions.length === 0}
-          emptyMessage="No visit in this period saw two different pages, so there are no journeys to show."
+          emptyMessage={t('webActivity.journeys.routes.empty')}
           actions={
             <Button
               appearance="subtle"
@@ -275,19 +244,19 @@ export default function JourneysPanel({
               onClick={onExportTransitions}
               disabled={exporting}
             >
-              Export
+              {t('webActivity.common.export')}
             </Button>
           }
         >
           <div className={styles.tableWrap}>
-            <Table size="small" aria-label="Page journeys">
+            <Table size="small" aria-label={t('webActivity.journeys.routes.aria')}>
               <TableHeader>
                 <TableRow>
-                  <TableHeaderCell>From</TableHeaderCell>
-                  <TableHeaderCell>Step</TableHeaderCell>
-                  <TableHeaderCell>To</TableHeaderCell>
-                  <TableHeaderCell className={styles.numeric}>Times</TableHeaderCell>
-                  <TableHeaderCell className={styles.numeric}>Share of exits from</TableHeaderCell>
+                  <TableHeaderCell>{t('webActivity.journeys.routes.from')}</TableHeaderCell>
+                  <TableHeaderCell>{t('webActivity.journeys.routes.step')}</TableHeaderCell>
+                  <TableHeaderCell>{t('webActivity.journeys.routes.to')}</TableHeaderCell>
+                  <TableHeaderCell className={styles.numeric}>{t('webActivity.journeys.routes.times')}</TableHeaderCell>
+                  <TableHeaderCell className={styles.numeric}>{t('webActivity.journeys.routes.shareOfExitsFrom')}</TableHeaderCell>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -320,33 +289,31 @@ export default function JourneysPanel({
 
       <div className={styles.grid}>
         <SectionCard
-          title="How deep visits go"
-          description="Visits by the number of pages they saw."
+          title={t('webActivity.journeys.depth.title')}
+          description={t('webActivity.common.visitDepthDescription')}
           query={queryFor(data.queries, 'journeys-depth')}
           isEmpty={data.depth.every((b) => b.count === 0)}
         >
-          <CategoryBarChart categories={bucketsToCategories(data.depth)} valueLabel="Visits" showShare />
+          <CategoryBarChart categories={translatedBucketsToCategories(t, 'visitDepth', data.depth)} valueLabel={t('webActivity.common.visits')} showShare />
         </SectionCard>
 
         <SectionCard
-          title="What visitors clicked"
-          description="Tracked page elements, by click count."
+          title={t('webActivity.journeys.clicks.title')}
+          description={t('webActivity.journeys.clicks.description')}
           query={queryFor(data.queries, 'journeys-clicks')}
           isEmpty={data.clickedElements.length === 0}
           emptyMessage={
             clickTrackingAvailable
-              ? 'No element clicks were recorded in this period.'
-              : 'No element click has ever been recorded. That usually means element-click capture is not switched on in the SharePoint tracker, but it can also mean it is on and nothing tracked has been clicked yet - this is inferred from the data, not read from the tracker\u2019s configuration. Only this panel depends on it.'
+              ? t('webActivity.journeys.clicks.emptyThisPeriod')
+              : t('webActivity.journeys.clicks.emptyEver')
           }
         >
-          <CategoryBarChart categories={toCategories(data.clickedElements)} valueLabel="Clicks" />
+          <CategoryBarChart categories={toCategories(data.clickedElements)} valueLabel={t('webActivity.journeys.clicks.valueLabel')} />
         </SectionCard>
       </div>
 
       <Text size={200} className={styles.muted} style={{ marginTop: '16px', display: 'block' }}>
-        Journeys are reconstructed from the order of page views inside a visit. A visit that started
-        before this period began is measured from its first page view inside it, so a visit
-        straddling the boundary appears in both adjacent periods.
+        {t('webActivity.journeys.footer')}
       </Text>
     </div>
   );

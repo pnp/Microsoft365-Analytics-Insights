@@ -2,6 +2,7 @@ import { memo, useMemo, useState, type CSSProperties } from 'react';
 import { makeStyles, tokens, Card, Text, Input } from '@fluentui/react-components';
 import type { LicenceActivityDistribution, LicenceActivitySku } from '../../types/licenceActivity';
 import { WORKLOADS } from '../../types/licenceActivity';
+import { compareStrings, useT } from '../../i18n';
 import { formatCount, licenceName } from './format';
 import { useLaTableStyles } from './tableStyles';
 import { MiniDistribution, BandLegend } from './MiniDistribution';
@@ -91,10 +92,11 @@ const selectButtonStyle: CSSProperties = {
 function SkuAssignments({ licences, selectedLicenceTypeId, onSelect }: SkuAssignmentsProps) {
   const styles = useStyles();
   const table = useLaTableStyles();
+  const t = useT();
   const [filter, setFilter] = useState('');
 
   const sorted = useMemo(
-    () => [...licences].sort((a, b) => b.assignedUsers - a.assignedUsers || licenceName(a).localeCompare(licenceName(b))),
+    () => [...licences].sort((a, b) => b.assignedUsers - a.assignedUsers || compareStrings(licenceName(a), licenceName(b))),
     [licences],
   );
 
@@ -111,7 +113,7 @@ function SkuAssignments({ licences, selectedLicenceTypeId, onSelect }: SkuAssign
   if (licences.length === 0) {
     return (
       <Card className={styles.card}>
-        <Text className={styles.muted}>No licence assignments were found for this selection.</Text>
+        <Text className={styles.muted}>{t('licenceActivity.assignments.empty')}</Text>
       </Card>
     );
   }
@@ -121,19 +123,24 @@ function SkuAssignments({ licences, selectedLicenceTypeId, onSelect }: SkuAssign
       <div className={styles.head}>
         <div className={styles.headText}>
           <Text weight="semibold" size={400}>
-            Licence assignments
+            {t('licenceActivity.assignments.title')}
           </Text>
           <Text size={200} className={styles.muted}>
-            Select a licence to see how much each service is used, and who holds it.
-            {showFilter ? ` Showing ${formatCount(visible.length)} of ${formatCount(licences.length)}.` : ''}
+            {t('licenceActivity.assignments.description')}
+            {showFilter
+              ? ` ${t('licenceActivity.assignments.showingOf', {
+                  shown: formatCount(visible.length),
+                  total: formatCount(licences.length),
+                })}`
+              : ''}
           </Text>
         </div>
         {showFilter && (
           <Input
             className={styles.filter}
             value={filter}
-            placeholder="Filter by licence name or code"
-            aria-label="Filter licences"
+            placeholder={t('licenceActivity.assignments.filterPlaceholder')}
+            aria-label={t('licenceActivity.assignments.filterAria')}
             onChange={(_e: any, d: any) => setFilter(d.value)}
           />
         )}
@@ -145,8 +152,8 @@ function SkuAssignments({ licences, selectedLicenceTypeId, onSelect }: SkuAssign
         <table className={table.table}>
           <thead className={showFilter ? styles.stickyHead : undefined}>
             <tr>
-              <th className={table.th}>Licence</th>
-              <th className={`${table.th} ${table.thNumeric}`}>People assigned</th>
+              <th className={table.th}>{t('licenceActivity.common.licence')}</th>
+              <th className={`${table.th} ${table.thNumeric}`}>{t('licenceActivity.common.peopleAssigned')}</th>
               {WORKLOADS.map((w) => (
                 <th key={w.key} className={table.th}>
                   {w.label}
@@ -213,7 +220,9 @@ function SkuAssignments({ licences, selectedLicenceTypeId, onSelect }: SkuAssign
         </table>
       </div>
 
-      {visible.length === 0 && <Text className={styles.empty}>No licences match &ldquo;{filter}&rdquo;.</Text>}
+      {visible.length === 0 && (
+        <Text className={styles.empty}>{t('licenceActivity.assignments.noMatches', { filter })}</Text>
+      )}
     </Card>
   );
 }

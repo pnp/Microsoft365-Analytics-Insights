@@ -12,6 +12,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { fetchHealthExceptions } from '../../api/healthApi';
+import { formatNumber, useT } from '../../i18n';
 import { SectionFrame, buildHourBuckets, useHealthSection, useHealthStyles } from './healthShared';
 import { shortenProblemId } from './problemId';
 
@@ -33,28 +34,29 @@ const useStyles = makeStyles({
 
 /** Exceptions overview (App Insights): a cheap catch-all early-warning of failures. */
 export default function ExceptionsPanel({ active }: { active: boolean }) {
+  const t = useT();
   const shared = useHealthStyles();
   const styles = useStyles();
   const state = useHealthSection(fetchHealthExceptions, active);
 
   return (
     <SectionFrame
-      title="Exceptions overview (last 24h)"
-      description="A cheap catch-all: every web-job logs errors into Application Insights, so a rising count is an early warning of failures no specific check anticipates."
+      title={t('health.exceptions.title')}
+      description={t('health.exceptions.description')}
       state={state}
     >
       {(data: any) => {
         if (!data.appInsightsConfigured) {
           return (
             <MessageBar intent="info">
-              <MessageBarBody>Application Insights is not configured, so the exceptions overview is unavailable.</MessageBarBody>
+              <MessageBarBody>{t('health.exceptions.appInsightsNotConfigured')}</MessageBarBody>
             </MessageBar>
           );
         }
         if (data.exceptionsError) {
           return (
             <MessageBar intent="warning">
-              <MessageBarBody>Couldn't load exceptions: {data.exceptionsError}</MessageBarBody>
+              <MessageBarBody>{t('health.exceptions.loadError', { error: data.exceptionsError })}</MessageBarBody>
             </MessageBar>
           );
         }
@@ -65,22 +67,21 @@ export default function ExceptionsPanel({ active }: { active: boolean }) {
         return (
           <>
             <div>
-              <span className={styles.bigNumber}>{data.exceptionsLast24h.toLocaleString()}</span>{' '}
-              <Text>exceptions in the last 24 hours</Text>
+              <span className={styles.bigNumber}>{formatNumber(data.exceptionsLast24h)}</span>{' '}
+              <Text>{t('health.exceptions.last24hLabel')}</Text>
             </div>
 
             {data.sqlCapacityExceptions24h > 0 && (
               <div style={{ marginTop: 8 }}>
                 <MessageBar intent="error">
                   <MessageBarBody>
-                    {data.sqlCapacityExceptions24h.toLocaleString()} of these look like SQL capacity / read-only
-                    failures - check the database storage / edition. This usually means data has stopped being written.
+                    {t('health.exceptions.sqlCapacityWarning', { count: formatNumber(data.sqlCapacityExceptions24h) })}
                   </MessageBarBody>
                 </MessageBar>
               </div>
             )}
 
-            <Text className={shared.subHeading}>Per hour</Text>
+            <Text className={shared.subHeading}>{t('health.exceptions.perHourHeading')}</Text>
             <div className={styles.spark}>
               {hourBuckets.map((h, i) => {
                 const pct = Math.round((100 * h.count) / maxHourCount);
@@ -100,9 +101,9 @@ export default function ExceptionsPanel({ active }: { active: boolean }) {
               })}
             </div>
 
-            <Text className={shared.subHeading}>Top exception types</Text>
+            <Text className={shared.subHeading}>{t('health.exceptions.topTypesHeading')}</Text>
             {data.topExceptionTypes.length > 0 ? (
-              <Table size="small" aria-label="Top exception types">
+              <Table size="small" aria-label={t('health.exceptions.topTypesAriaLabel')}>
                 <colgroup>
                   <col style={{ width: '30%' }} />
                   <col />
@@ -110,9 +111,9 @@ export default function ExceptionsPanel({ active }: { active: boolean }) {
                 </colgroup>
                 <TableHeader>
                   <TableRow>
-                    <TableHeaderCell>Type</TableHeaderCell>
-                    <TableHeaderCell>Problem id</TableHeaderCell>
-                    <TableHeaderCell className={shared.numeric}>Count</TableHeaderCell>
+                    <TableHeaderCell>{t('health.exceptions.columnType')}</TableHeaderCell>
+                    <TableHeaderCell>{t('health.exceptions.columnProblemId')}</TableHeaderCell>
+                    <TableHeaderCell className={shared.numeric}>{t('health.exceptions.columnCount')}</TableHeaderCell>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -128,13 +129,13 @@ export default function ExceptionsPanel({ active }: { active: boolean }) {
                           {shortenProblemId(t.problemId, t.type)}
                         </Text>
                       </TableCell>
-                      <TableCell className={shared.numeric}>{t.count.toLocaleString()}</TableCell>
+                      <TableCell className={shared.numeric}>{formatNumber(t.count)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             ) : (
-              <Text style={{ color: tokens.colorPaletteGreenForeground1 }}>No exceptions recorded in the last 24 hours.</Text>
+              <Text style={{ color: tokens.colorPaletteGreenForeground1 }}>{t('health.exceptions.empty')}</Text>
             )}
           </>
         );

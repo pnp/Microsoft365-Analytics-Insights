@@ -1,5 +1,6 @@
 import { Fragment } from 'react';
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
+import { formatNumber, useT } from '../../i18n';
 
 const useStyles = makeStyles({
   root: {
@@ -106,10 +107,11 @@ export default function RadarChart({
   size?: number;
   maxValue?: number;
 }) {
+  const t = useT();
   const styles = useStyles();
 
   if (axes.length < 3 || series.length === 0) {
-    return <div className={styles.empty}>Not enough data to plot.</div>;
+    return <div className={styles.empty}>{t('charts.radar.notEnoughData')}</div>;
   }
 
   const centre = size / 2;
@@ -146,7 +148,7 @@ export default function RadarChart({
 
   return (
     <div className={styles.root}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className={styles.svg} role="img" aria-label="Engagement component profile">
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className={styles.svg} role="img" aria-label={t('charts.radar.ariaLabel')}>
         {Array.from({ length: rings }, (_, ring) => {
           const ratio = (ring + 1) / rings;
           return (
@@ -222,7 +224,7 @@ export default function RadarChart({
                 const p = pointFor(i, v);
                 return (
                   <circle key={i} cx={p.x} cy={p.y} r={3.5} fill={filled ? s.colour : tokens.colorNeutralBackground1} stroke={s.colour} strokeWidth={filled ? 0 : 2}>
-                    <title>{`${s.name} - ${axes[i]}: ${Math.round(v)}`}</title>
+                    <title>{t('charts.radar.pointTitle', { series: s.name, axis: axes[i], value: formatNumber(Math.round(v)) })}</title>
                   </circle>
                 );
               })}
@@ -250,7 +252,7 @@ export default function RadarChart({
           ))}
           {showGap && (
             <Text size={200} className={styles.headCell}>
-              Gap
+              {t('charts.radar.gap')}
             </Text>
           )}
 
@@ -274,9 +276,7 @@ export default function RadarChart({
         </div>
 
         <Text size={100} className={styles.label}>
-          All {axes.length} components are 0-{maxValue} and share one scale, so the two outlines are directly
-          comparable. Read the table for the sizes - the area of a radar grows with the square of its
-          values, so the shape overstates the difference.
+          {t('charts.radar.scaleNote', { count: formatNumber(axes.length), max: formatNumber(maxValue) })}
         </Text>
       </div>
     </div>

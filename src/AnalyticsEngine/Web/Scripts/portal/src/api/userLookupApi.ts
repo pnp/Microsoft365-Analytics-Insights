@@ -1,3 +1,4 @@
+import { translateActive } from '../i18n/runtime';
 import { apiFetch } from './http';
 import type { UserDataSummary, UserDataDetailResponse } from '../types/userData';
 
@@ -11,7 +12,7 @@ async function getJson<T>(url: string): Promise<T> {
   });
 
   if (!response.ok) {
-    let message = `Request failed (${response.status})`;
+    let message = translateActive('errors.userLookup.requestFailed', { status: response.status });
     try {
       const body = await response.json();
       if (body && typeof body.message === 'string') {

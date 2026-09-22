@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import { makeStyles, tokens, Card, Text } from '@fluentui/react-components';
 import type { LicenceActivitySku } from '../../types/licenceActivity';
+import { useT } from '../../i18n';
 import { formatCount, licenceName } from './format';
 
 const useStyles = makeStyles({
@@ -53,36 +54,37 @@ interface OverviewSummaryProps {
  */
 function OverviewSummary({ distinctAssignedUsers, licenceCount, selectedLicence }: OverviewSummaryProps) {
   const styles = useStyles();
+  const t = useT();
 
   return (
     <div className={styles.grid}>
       <Card className={styles.card}>
         <Text size={200} weight="semibold" className={styles.label}>
-          People with a licence
+          {t('licenceActivity.overview.peopleWithLicence')}
         </Text>
         <Text size={800} weight="bold" className={styles.value}>
           {formatCount(distinctAssignedUsers)}
         </Text>
         <Text size={200} className={styles.caption}>
-          in this selection, counting each person once
+          {t('licenceActivity.overview.countingEachPersonOnce')}
         </Text>
       </Card>
 
       <Card className={styles.card}>
         <Text size={200} weight="semibold" className={styles.label}>
-          Licence types
+          {t('licenceActivity.overview.licenceTypes')}
         </Text>
         <Text size={800} weight="bold" className={styles.value}>
           {formatCount(licenceCount)}
         </Text>
         <Text size={200} className={styles.caption}>
-          {licenceCount === 1 ? 'assigned in this selection' : 'assigned, each measured separately'}
+          {licenceCount === 1 ? t('licenceActivity.overview.assignedOne') : t('licenceActivity.overview.assignedMany')}
         </Text>
       </Card>
 
       <Card className={styles.card}>
         <Text size={200} weight="semibold" className={styles.label}>
-          Selected licence
+          {t('licenceActivity.overview.selectedLicence')}
         </Text>
         {selectedLicence ? (
           <>
@@ -90,16 +92,16 @@ function OverviewSummary({ distinctAssignedUsers, licenceCount, selectedLicence 
               {licenceName(selectedLicence)}
             </Text>
             <Text size={200} className={styles.caption}>
-              {formatCount(selectedLicence.assignedUsers)} people hold it &middot; see By service and People
+              {t('licenceActivity.overview.peopleHoldItSeeTabs', { count: formatCount(selectedLicence.assignedUsers) })}
             </Text>
           </>
         ) : (
           <>
             <Text size={500} weight="bold" className={styles.valueMuted}>
-              None chosen
+              {t('licenceActivity.overview.noneChosen')}
             </Text>
             <Text size={200} className={styles.caption}>
-              Choose a licence below to see its services and people
+              {t('licenceActivity.overview.chooseLicenceBelow')}
             </Text>
           </>
         )}

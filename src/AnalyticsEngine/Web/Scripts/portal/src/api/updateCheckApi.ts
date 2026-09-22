@@ -1,3 +1,4 @@
+import { translateActive } from '../i18n/runtime';
 import { apiFetch } from './http';
 import type { UpdateCheck } from '../types/updateCheck';
 
@@ -16,7 +17,7 @@ export async function fetchUpdateCheck(): Promise<UpdateCheck> {
   });
 
   if (!response.ok) {
-    throw new Error(`Couldn't check for updates (${response.status}).`);
+    throw new Error(translateActive('errors.updateCheck.failed', { status: response.status }));
   }
 
   return response.json() as Promise<UpdateCheck>;

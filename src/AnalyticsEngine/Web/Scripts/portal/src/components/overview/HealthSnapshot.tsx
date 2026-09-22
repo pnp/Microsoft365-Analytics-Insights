@@ -11,6 +11,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
+import { useT, type TFunction, type TranslationKey } from '../../i18n';
 import type { DataOverviewSection, HealthSummary } from '../../types/health';
 import {
   CYCLE_SLA_HOURS,
@@ -19,7 +20,16 @@ import {
   howLongAgo,
   overallColor,
   statusColor,
+  translateHealthReasonText,
 } from '../health/healthShared';
+
+
+function sectionLabel(t: TFunction, key: string, fallback: string): string {
+  if (!key) return fallback;
+  const catalogKey = `health.section.${key}.label` as TranslationKey;
+  const translated = t(catalogKey);
+  return translated === catalogKey ? fallback : translated;
+}
 
 const useStyles = makeStyles({
   card: {
@@ -107,27 +117,29 @@ export default function HealthSnapshot({
   showAuditFreshness,
   showWebFreshness,
 }: HealthSnapshotProps) {
+  const t = useT();
   const styles = useStyles();
   const overall = summary?.overallStatus ?? null;
 
   // One flat list so each freshness figure sits next to the volume it explains, whatever the grid
   // wraps to - "newest audit event: 4 min ago" and "audit events (24h): 12,345" answer the same
   // question together and are close to meaningless apart.
-  const stats: { key: string; label: string; content: ReactNode }[] = [];
+  const stats: { key: string; labelKey: TranslationKey; labelValues?: Record<string, string>; content: ReactNode }[] = [];
 
-  const addWorkload = (key: string, name: string, newestUtc: string | null, last24h: number | null) => {
+  const addWorkload = (key: string, name: string, labelKey: TranslationKey, newestUtc: string | null, last24h: number | null) => {
     stats.push({
       key: `${key}-freshness`,
-      label: `Newest ${name}`,
+      labelKey: 'overview.healthSnapshot.newest',
+      labelValues: { name },
       content: (
         <Badge appearance="filled" color={freshnessColor(newestUtc, CYCLE_SLA_HOURS, CYCLE_SLA_HOURS * 2)}>
-          {howLongAgo(newestUtc)}
+          {howLongAgo(newestUtc, t)}
         </Badge>
       ),
     });
     stats.push({
       key: `${key}-volume`,
-      label: `${name.charAt(0).toUpperCase()}${name.slice(1)}s in the last 24h`,
+      labelKey,
       content: (
         <Text size={300} className={styles.statValue}>
           {formatCount(last24h)}
@@ -137,10 +149,10 @@ export default function HealthSnapshot({
   };
 
   if (showAuditFreshness) {
-    addWorkload('audit', 'audit event', data?.newestAuditEventUtc ?? null, data?.auditEventsLast24h ?? null);
+    addWorkload('audit', t('overview.healthSnapshot.auditEventName'), 'overview.healthSnapshot.auditEventsLast24h', data?.newestAuditEventUtc ?? null, data?.auditEventsLast24h ?? null);
   }
   if (showWebFreshness) {
-    addWorkload('hits', 'web page hit', data?.newestHitUtc ?? null, data?.hitsLast24h ?? null);
+    addWorkload('hits', t('overview.healthSnapshot.webPageHitName'), 'overview.healthSnapshot.webPageHitsLast24h', data?.newestHitUtc ?? null, data?.hitsLast24h ?? null);
   }
 
   return (
@@ -148,12 +160,12 @@ export default function HealthSnapshot({
       <CardHeader
         header={
           <div className={styles.headerRow}>
-            <Subtitle2 as="h2">System health</Subtitle2>
+            <Subtitle2 as="h2">{t('overview.healthSnapshot.title')}</Subtitle2>
             <Badge appearance="filled" color={overallColor(overall)}>
-              {overall ?? 'Checking...'}
+              {overall ? overviewStatusText(overall, t) : t('overview.healthSnapshot.checking')}
             </Badge>
             <span className={styles.spacer} />
-            <Link href="#/admin/health">Open Service health</Link>
+            <Link href="#/admin/health">{t('overview.healthSnapshot.openServiceHealth')}</Link>
           </div>
         }
       />
@@ -161,8 +173,7 @@ export default function HealthSnapshot({
       {summaryError && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            The health summary couldn't be read ({summaryError}). The figures above come straight from the
-            database and are unaffected.
+            {t('overview.healthSnapshot.summaryError', { error: summaryError })}
           </MessageBarBody>
         </MessageBar>
       )}
@@ -171,9 +182,9 @@ export default function HealthSnapshot({
         <div className={styles.sections}>
           {summary.sections.map((s) => (
             <span key={s.key} className={styles.chip}>
-              <Text size={200}>{s.label}</Text>
+              <Text size={200}>{sectionLabel(t, s.key, s.label)}</Text>
               <Badge appearance="filled" size="small" color={statusColor(s.status)}>
-                {s.status}
+                {overviewStatusText(s.status, t)}
               </Badge>
             </span>
           ))}
@@ -184,7 +195,7 @@ export default function HealthSnapshot({
         <ul className={styles.reasons}>
           {summary.overallReasons.slice(0, 4).map((r, i) => (
             <li key={i}>
-              <Text size={200}>{r}</Text>
+              <Text size={200}>{translateHealthReasonText(r, t)}</Text>
             </li>
           ))}
         </ul>
@@ -197,7 +208,7 @@ export default function HealthSnapshot({
               {stats.map((s) => (
                 <div key={s.key} className={styles.stat}>
                   <Text size={200} className={styles.statLabel}>
-                    {s.label}
+                    {t(s.labelKey, s.labelValues)}
                   </Text>
                   {s.content}
                 </div>
@@ -205,16 +216,28 @@ export default function HealthSnapshot({
             </div>
             {data.recentVolumeError && (
               <Text size={200} className={styles.muted}>
-                The freshness and 24h volume scan didn't finish on this database, so those figures show "-".
-                This is expected on very large tenants.
+                {t('overview.healthSnapshot.recentVolumeWarning')}
               </Text>
             )}
           </>
         ) : (
           <Text size={200} className={styles.muted}>
-            Checking how recent the imported data is...
+            {t('overview.healthSnapshot.checkingFreshness')}
           </Text>
         ))}
     </Card>
   );
+}
+
+function overviewStatusText(status: string | null, t: TFunction): string {
+  switch ((status ?? '').toLowerCase()) {
+    case 'healthy':
+      return t('overview.status.healthy');
+    case 'degraded':
+      return t('overview.status.degraded');
+    case 'unhealthy':
+      return t('overview.status.unhealthy');
+    default:
+      return t('overview.status.unknown');
+  }
 }

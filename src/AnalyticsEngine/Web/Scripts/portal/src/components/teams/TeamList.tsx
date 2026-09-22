@@ -13,9 +13,13 @@ import ConfirmSelection from './ConfirmSelection';
 import type { Team } from '@microsoft/microsoft-graph-types';
 import toast from '../toast';
 import { apiFetch } from '../../api/http';
+import { useT, type TFunction } from '../../i18n';
 
 type TeamListProps = {
   teamsList: Array<Team>;
+};
+type TeamListInnerProps = TeamListProps & {
+  t: TFunction;
 };
 type TeamListState = {
   userTeamsAuthState: Array<TeamAuthStatus>;
@@ -23,8 +27,8 @@ type TeamListState = {
   teamIdsToDeauth: Array<string>;
   isBusy: boolean;
 };
-export default class TeamList extends React.Component<TeamListProps, TeamListState> {
-  constructor(props: TeamListProps) {
+class TeamListInner extends React.Component<TeamListInnerProps, TeamListState> {
+  constructor(props: TeamListInnerProps) {
     super(props);
 
     const initalAuthState: Array<TeamAuthStatus> = [];
@@ -130,18 +134,18 @@ export default class TeamList extends React.Component<TeamListProps, TeamListSta
           deAuthCount={this.state.teamIdsToDeauth.length}
           isBusy={!this.state.isBusy}
         />
-        <Table aria-label="Teams" size="small" style={{ marginBlock: '12px' }}>
+        <Table aria-label={this.props.t('admin.teams.teamList.ariaLabel')} size="small" style={{ marginBlock: '12px' }}>
           <TableHeader>
             <TableRow>
               <TableHeaderCell style={{ width: 420 }}>
                 <Checkbox
                   disabled={this.state.isBusy}
                   onChange={(_e: any, data: any) => this.toggleAllTeams(data.checked === true)}
-                  label="Team Name"
+                  label={this.props.t('admin.teams.teamList.columnTeamName')}
                 />
               </TableHeaderCell>
-              <TableHeaderCell style={{ width: 400 }}>Graph ID</TableHeaderCell>
-              <TableHeaderCell style={{ width: 140 }}>Authorised?</TableHeaderCell>
+              <TableHeaderCell style={{ width: 400 }}>{this.props.t('admin.teams.teamList.columnGraphId')}</TableHeaderCell>
+              <TableHeaderCell style={{ width: 140 }}>{this.props.t('admin.teams.teamList.columnAuthorised')}</TableHeaderCell>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -257,9 +261,7 @@ export default class TeamList extends React.Component<TeamListProps, TeamListSta
             .catch(() => '');
           this.showApiError(response, serverMessage);
         } else {
-          toast(
-            'Selected Teams enabled for deep analytics successfully. It may take several hours before the extra metadata appears in any reports.',
-          );
+          toast(this.props.t('admin.teams.teamList.saveSuccess'));
           window.location.reload();
         }
         this.setState({ isBusy: false });
@@ -274,8 +276,13 @@ export default class TeamList extends React.Component<TeamListProps, TeamListSta
     const text =
       message && message.trim().length > 0
         ? message
-        : 'Unexpected response from API. Check JS log for more details.';
+        : this.props.t('admin.teams.teamList.unexpectedApiResponse');
     toast.error(text);
     this.setState({ isBusy: false });
   }
+}
+
+export default function TeamList(props: TeamListProps) {
+  const t = useT();
+  return <TeamListInner {...props} t={t} />;
 }

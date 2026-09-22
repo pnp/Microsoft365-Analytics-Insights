@@ -1,0 +1,130 @@
+import type { copilotAdoptionAgents as en } from '../en/copilotAdoptionAgents';
+
+/**
+ * Spanish (es-ES) text for the Copilot Adoption agents and resource-type panels.
+ *
+ * Typed against the English module, so a key added there without a translation here fails the
+ * build rather than reaching a customer as English text inside a Spanish page.
+ */
+const copilotAdoptionAgents: Record<keyof typeof en, string> = {
+  // Estado de agentes
+  'copilotAdoptionAgents.agents.empty.title': 'No se han encontrado agentes de Copilot',
+  'copilotAdoptionAgents.agents.empty.description': 'No se atribuyó a ningún agente ninguna interacción de Copilot en la ventana de historial. Puede que no se usen agentes en este inquilino o que la importación de auditoría de Copilot no lleve ejecutándose el tiempo suficiente para haber visto alguno.',
+  'copilotAdoptionAgents.agents.unit.interactions': 'interacciones',
+  'copilotAdoptionAgents.agents.unit.interactionsTitle': 'Interacciones',
+  'copilotAdoptionAgents.agents.health.keep': 'Mantener',
+  'copilotAdoptionAgents.agents.health.new': 'Nuevo',
+  'copilotAdoptionAgents.agents.health.review': 'Revisar',
+  'copilotAdoptionAgents.agents.health.retire': 'Retirar',
+  'copilotAdoptionAgents.agents.health.keep.meaning': 'Usado en los últimos {reviewDays} días por al menos {minUsers} personas. Está adoptado realmente: siga dándole soporte.',
+  'copilotAdoptionAgents.agents.health.new.meaning': 'Visto por primera vez en los últimos {newDays} días. Es demasiado nuevo para evaluarlo y queda exento deliberadamente de la revisión: un agente nuevo con dos usuarios no ha fallado, todavía está empezando.',
+  'copilotAdoptionAgents.agents.health.review.meaning': 'O bien se está apagando (último uso hace {reviewDays}-{retireDays} días) o sigue actual pero lo usan menos de {minUsers} personas; a menudo es su autor probándolo o un agente del que nadie fue informado.',
+  'copilotAdoptionAgents.agents.health.retire.meaning': 'Sin uso durante {retireDays} días o más. Confírmelo con su propietario y después retírelo.',
+
+  // Estado del inventario
+  'copilotAdoptionAgents.agents.inventoryHealth.title': 'Estado del inventario',
+  'copilotAdoptionAgents.agents.inventoryHealth.description': 'Cada agente conocido recibe exactamente un veredicto. Los recuentos Retirar y Revisar muestran el tamaño de la limpieza.',
+  'copilotAdoptionAgents.agents.inventoryHealth.what': 'Qué hacer con cada agente que se ha visto en la ventana de historial: mantenerlo, revisarlo, retirarlo o dejarlo sin tocar porque es demasiado nuevo para evaluarlo.',
+  'copilotAdoptionAgents.agents.inventoryHealth.how': 'Retirar = sin uso durante {retireDays} días o más. Revisar = último uso entre hace {reviewDays} y {retireDays} días, o sigue actual pero lo usan menos de {minUsers} personas. Nuevo = visto por primera vez en los últimos {newDays} días, lo que lo exime por completo de la revisión. Mantener = usado en los últimos {reviewDays} días por al menos {minUsers} personas.',
+  'copilotAdoptionAgents.agents.inventoryHealth.source': 'La exención "Nuevo" es deliberada: un agente recién creado con dos usuarios no ha fallado, todavía está empezando. Los agentes se cuentan durante {historyDays} días, no durante el periodo del informe, porque un agente que nadie ha tocado durante meses es exactamente lo que se busca aquí. Esa ventana es deliberadamente más corta que el historial de análisis: solo necesita llegar más allá del umbral de retirada de {retireDays} días, y leer un año completo de historial de auditoría para no aprender nada más exige demasiado trabajo en un inquilino grande.',
+  'copilotAdoptionAgents.agents.inventoryHealth.knownAgents': 'agentes conocidos',
+
+  // Gráficos de esfuerzo y departamento
+  'copilotAdoptionAgents.agents.effort.title': 'Dónde va el esfuerzo de los agentes',
+  'copilotAdoptionAgents.agents.effort.description': 'Interacciones por agente. Normalmente unos pocos concentran casi todo.',
+  'copilotAdoptionAgents.agents.effort.what': 'Interacciones totales atribuidas a cada agente en la ventana de historial, dimensionadas por área.',
+  'copilotAdoptionAgents.agents.effort.how': 'Los {top} agentes principales por recuento de interacciones. Se cuentan para todos: el valor de un agente para la organización no depende de si las personas que lo usan tienen licencia de Copilot.',
+  'copilotAdoptionAgents.agents.effort.source': 'Léalo junto con la tabla de inventario siguiente: un mosaico grande con muy pocos usuarios es una herramienta de una persona, no un agente adoptado.',
+  'copilotAdoptionAgents.agents.effort.empty': 'No se han registrado interacciones de agentes.',
+  'copilotAdoptionAgents.agents.department.title': 'Uso de agentes por departamento',
+  'copilotAdoptionAgents.agents.department.description': 'Interacciones de agentes en el periodo seleccionado, por el departamento de la persona que las ejecutó.',
+  'copilotAdoptionAgents.agents.department.what': 'Qué partes de la organización usan realmente agentes de Copilot.',
+  'copilotAdoptionAgents.agents.department.how': 'Interacciones de agentes en los últimos {windowDays} días agrupadas por el departamento del usuario según los metadatos importados; se muestran los {top} principales. Cuenta interacciones, no personas, por lo que un usuario intensivo puede dominar un departamento.',
+  'copilotAdoptionAgents.agents.department.source': 'A diferencia del inventario anterior, esto usa el periodo de informe seleccionado en lugar del historial completo: es una vista de "qué está pasando ahora".',
+  'copilotAdoptionAgents.agents.department.sqlTitle': 'SQL de este gráfico',
+
+  // Tabla de inventario
+  'copilotAdoptionAgents.agents.inventory.title': 'Inventario de agentes',
+  'copilotAdoptionAgents.agents.inventory.description': 'Cada agente visto en los últimos {days} días, primero los de más actividad.',
+  'copilotAdoptionAgents.agents.inventory.what': 'Cada agente de Copilot que se ha usado al menos una vez en la ventana de historial, con cuántas personas lo usan, cuánto, con qué amplitud y su veredicto.',
+  'copilotAdoptionAgents.agents.inventory.how': '"Usuarios" son personas distintas en todo el inquilino; "con licencia" indica cuántas tienen licencia de Copilot. "Superficies" es el número de hosts de Copilot distintos desde los que se invocó el agente: un agente usado en un solo host cumple una función más estrecha de lo que su recuento de interacciones sugiere, que es lo que mide "más versátil" arriba.',
+  'copilotAdoptionAgents.agents.inventory.source': 'La identidad del agente procede del registro de auditoría de Copilot. Los agentes que nunca se han invocado no aparecen: el registro de auditoría solo registra agentes que se usaron.',
+  'copilotAdoptionAgents.agents.inventory.sqlTitle': 'SQL de esta tabla',
+  'copilotAdoptionAgents.agents.inventory.search.placeholder': 'Buscar nombre o identificador de agente',
+  'copilotAdoptionAgents.agents.inventory.search.ariaLabel': 'Buscar agentes por nombre o identificador',
+  'copilotAdoptionAgents.agents.inventory.search.clearAriaLabel': 'Borrar búsqueda de agentes',
+  'copilotAdoptionAgents.agents.inventory.filterHealth.ariaLabel': 'Filtrar agentes por estado',
+  'copilotAdoptionAgents.agents.inventory.filterHealth.all': 'Todos los veredictos',
+  'copilotAdoptionAgents.agents.inventory.customOnly.tooltip': 'Agentes creados por su organización, no los que distribuye Microsoft.',
+  'copilotAdoptionAgents.agents.inventory.customOnly.label': 'Solo agentes personalizados',
+  'copilotAdoptionAgents.agents.inventory.visibleCount': '{visible} de {total} agentes',
+  'copilotAdoptionAgents.agents.inventory.noMatches': 'Ningún agente coincide con estos filtros.',
+  'copilotAdoptionAgents.agents.table.agent': 'Agente',
+  'copilotAdoptionAgents.agents.table.type': 'Tipo',
+  'copilotAdoptionAgents.agents.table.users': 'Usuarios',
+  'copilotAdoptionAgents.agents.table.interactions': 'Interacciones',
+  'copilotAdoptionAgents.agents.table.perUser': 'Por usuario',
+  'copilotAdoptionAgents.agents.table.surfaces': 'Superficies',
+  'copilotAdoptionAgents.agents.table.lastUsed': 'Último uso',
+  'copilotAdoptionAgents.agents.table.verdict': 'Veredicto',
+  'copilotAdoptionAgents.agents.table.type.custom': 'Personalizado',
+  'copilotAdoptionAgents.agents.table.type.microsoft': 'Microsoft',
+  'copilotAdoptionAgents.agents.table.licensedUsers': '{count} con licencia',
+  'copilotAdoptionAgents.agents.legend.title': 'Qué significa cada veredicto',
+
+  // KPI
+  'copilotAdoptionAgents.agents.kpi.active.label': 'Agentes activos',
+  'copilotAdoptionAgents.agents.kpi.active.hint': '{known} conocidos, {custom} personalizados',
+  'copilotAdoptionAgents.agents.kpi.active.what': 'Agentes usados al menos una vez en los últimos {windowDays} días. "Conocidos" cuenta todos los agentes vistos en cualquier punto de la ventana de inventario de {historyDays} días, usados recientemente o no.',
+  'copilotAdoptionAgents.agents.kpi.active.how': 'Un agente solo aparece cuando se ha invocado: el registro de auditoría de Copilot registra agentes que se usaron, no agentes que existen. Un agente creado pero nunca ejecutado es invisible aquí, y también para todos los demás.',
+  'copilotAdoptionAgents.agents.kpi.active.source': 'Personalizado significa un agente creado por su organización, no uno distribuido por Microsoft.',
+  'copilotAdoptionAgents.agents.kpi.users.label': 'Usuarios de agentes',
+  'copilotAdoptionAgents.agents.kpi.users.hint': '{licensed} de ellos tienen licencia de Copilot',
+  'copilotAdoptionAgents.agents.kpi.users.what': 'Personas distintas que usaron al menos un agente en los últimos {windowDays} días, con licencia o sin ella.',
+  'copilotAdoptionAgents.agents.kpi.users.how': 'Se calcula desde las filas por usuario en lugar de sumar por agente, lo que contaría dos veces a cualquiera que use más de uno.',
+  'copilotAdoptionAgents.agents.kpi.users.source': 'Los agentes también están disponibles para usuarios sin licencia de Copilot Chat, por eso esta cifra puede superar la cifra con licencia.',
+  'copilotAdoptionAgents.agents.kpi.intensity.label': 'Interacciones por usuario de agente',
+  'copilotAdoptionAgents.agents.kpi.intensity.hint': '{interactions} interacciones de agentes en total',
+  'copilotAdoptionAgents.agents.kpi.intensity.what': 'Cuánto usan realmente los agentes las personas que los usan.',
+  'copilotAdoptionAgents.agents.kpi.intensity.how': 'Interacciones totales de agentes en el periodo divididas por el número de personas distintas que ejecutaron al menos uno. Solo las personas que usaron un agente están en el denominador; incluir a todos los demás solo repetiría la tasa de adopción.',
+  'copilotAdoptionAgents.agents.kpi.intensity.source': 'Una cifra alta entre muy pocos usuarios indica uno o dos entusiastas, no una capacidad adoptada.',
+  'copilotAdoptionAgents.agents.kpi.popular.label': 'Agente más usado',
+  'copilotAdoptionAgents.agents.kpi.popular.hint': 'El agente cuya retirada se notaría más',
+  'copilotAdoptionAgents.agents.kpi.popular.what': 'El agente usado por el mayor número de personas distintas.',
+  'copilotAdoptionAgents.agents.kpi.popular.how': 'Clasificado por recuento de usuarios, no por recuento de interacciones: un agente que una persona ejecuta mil veces no es el más útil de forma generalizada, y clasificar por volumen diría que sí.',
+  'copilotAdoptionAgents.agents.kpi.popular.source': 'Los empates se resuelven por recuento de interacciones.',
+  'copilotAdoptionAgents.agents.kpi.versatile.label': 'Agente más versátil',
+  'copilotAdoptionAgents.agents.kpi.versatile.hint': 'Usado en el mayor número de superficies de Copilot',
+  'copilotAdoptionAgents.agents.kpi.versatile.what': 'El agente invocado desde el mayor número de superficies de Copilot distintas (Teams, Word, Outlook, Copilot Chat, etc.).',
+  'copilotAdoptionAgents.agents.kpi.versatile.how': 'Amplitud de superficie, no volumen. Un agente usado en todas partes por pocas personas cumple una función más amplia que uno usado constantemente en un solo host, y ambos necesitan soportes distintos.',
+  'copilotAdoptionAgents.agents.kpi.versatile.source': 'Los empates se resuelven por recuento de usuarios.',
+  'copilotAdoptionAgents.agents.kpi.retire.label': 'Agentes para retirar',
+  'copilotAdoptionAgents.agents.kpi.retire.hint': 'Sin uso durante más de {retireDays} días',
+  'copilotAdoptionAgents.agents.kpi.retire.what': 'Agentes que llevan suficiente tiempo sin usarse como para que casi seguro estén abandonados.',
+  'copilotAdoptionAgents.agents.kpi.retire.how': 'Sin interacción registrada durante {retireDays} días o más. Los agentes vistos por primera vez en los últimos {newDays} días quedan exentos igualmente, por lo que esto nunca atrapa algo que simplemente aún no se ha lanzado.',
+  'copilotAdoptionAgents.agents.kpi.retire.source': 'Retirar un agente requiere validación: confírmelo primero con su propietario. La finalidad de la cifra es mostrar que un parque de agentes sin revisar crece indefinidamente y nadie lo nota.',
+
+  // Tipos de recurso
+  'copilotAdoptionAgents.resourceTypes.group.tenantContent.title': 'Contenido del inquilino',
+  'copilotAdoptionAgents.resourceTypes.group.tenantContent.explanation': 'Tipos de contenido de la organización: tipos de archivo y entidades de Microsoft Graph. Recuento incompleto: un archivo citado por Copilot se clasifica como CITATION en lugar de por su tipo de archivo.',
+  'copilotAdoptionAgents.resourceTypes.group.usageRole.title': 'Cómo se usó',
+  'copilotAdoptionAgents.resourceTypes.group.usageRole.explanation': 'Cómo se usó el recurso, no qué es. Una cita puede ser contenido del inquilino o una página web, por lo que estas referencias se cuentan aquí y en ningún otro sitio.',
+  'copilotAdoptionAgents.resourceTypes.group.externalGrounding.title': 'Fundamentación externa al inquilino',
+  'copilotAdoptionAgents.resourceTypes.group.externalGrounding.explanation': 'Fundamentación externa a la organización. No es contenido del inquilino.',
+  'copilotAdoptionAgents.resourceTypes.group.unclassified.title': 'Sin clasificar',
+  'copilotAdoptionAgents.resourceTypes.group.unclassified.explanation': 'Valores que esta versión no reconoce y referencias cuyo tipo estaba vacío. Microsoft no publica ninguna lista de valores posibles y puede agregar otros nuevos en cualquier momento, por lo que se muestran tal cual en lugar de contarlos como contenido.',
+  'copilotAdoptionAgents.resourceTypes.empty': 'No hay datos para este periodo.',
+  'copilotAdoptionAgents.resourceTypes.referenceTitle': '{label}: {count} referencias',
+
+  // Razones de veredicto de agente creadas por el servidor
+  'copilotAdoptionAgents.server.healthReason.new': 'Visto por primera vez en los últimos {days} días. Demasiado nuevo para evaluarlo: dele tiempo para ganar adopción antes de revisarlo.',
+  'copilotAdoptionAgents.server.healthReason.retire.withDays': 'Sin uso durante {days} días ({retireDays}+ es la línea de retirada). Confírmelo con su propietario y después retírelo.',
+  'copilotAdoptionAgents.server.healthReason.retire.noUse': 'Sin uso registrado. Confírmelo con su propietario y después retírelo.',
+  'copilotAdoptionAgents.server.healthReason.review.quiet': 'Se está apagando: último uso hace {days} días. Merece la pena preguntar si sigue siendo necesario antes de que derive a la pila de retirada.',
+  'copilotAdoptionAgents.server.healthReason.review.fewUsers': 'Sigue en uso, pero solo por {users} {people}: por debajo de los {minUsers} necesarios para llamarlo adoptado. A menudo es su autor probándolo o un agente que nunca se anunció a las personas para las que se creó.',
+  'copilotAdoptionAgents.server.healthReason.person': 'persona',
+  'copilotAdoptionAgents.server.healthReason.people': 'personas',
+  'copilotAdoptionAgents.server.healthReason.keep': 'Usado en los últimos {reviewDays} días por {users} personas. Está adoptado realmente: siga dándole soporte.',
+};
+
+export default copilotAdoptionAgents;

@@ -1,5 +1,6 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { ReportCategory } from '../../types/reports';
+import { formatNumber, useT } from '../../i18n';
 import { formatValue } from './chartCommon';
 
 const useStyles = makeStyles({
@@ -73,11 +74,12 @@ export default function DonutChart({
   centreLabel,
   size = 168,
 }: DonutChartProps) {
+  const t = useT();
   const styles = useStyles();
 
   const total = categories.reduce((sum, c) => sum + c.value, 0);
   if (categories.length === 0 || total <= 0) {
-    return <div className={styles.empty}>No data for this period.</div>;
+    return <div className={styles.empty}>{t('charts.empty.noDataForPeriod')}</div>;
   }
 
   const radius = size / 2;
@@ -106,7 +108,7 @@ export default function DonutChart({
                 strokeDasharray={`${dash} ${circumference - dash}`}
                 strokeDashoffset={-offset}
               >
-                <title>{`${c.label}: ${formatValue(c.value)} (${Math.round(share * 1000) / 10}%)`}</title>
+                <title>{t('charts.donut.sliceTitle', { label: c.label, value: formatValue(c.value), percent: formatNumber(Math.round(share * 1000) / 10) })}</title>
               </circle>
             );
             offset += dash;
@@ -143,7 +145,7 @@ export default function DonutChart({
               {c.label}
             </Text>
             <Text size={200} weight="semibold" className={styles.legendValue}>
-              {formatValue(c.value)} ({Math.round((c.value / total) * 1000) / 10}%)
+              {t('charts.donut.legendValue', { value: formatValue(c.value), percent: formatNumber(Math.round((c.value / total) * 1000) / 10) })}
             </Text>
           </div>
         ))}
