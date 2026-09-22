@@ -58,6 +58,8 @@ const reports: Record<keyof typeof en, string> = {
   'reports.chart.sqlTitle': 'SQL de este gráfico',
   'reports.chart.loadError': 'No se ha podido cargar este gráfico: {error}',
   'reports.chart.noData': 'Sin datos para este periodo.',
+  'reports.category.appBreadth.one': '{count} aplicación',
+  'reports.category.appBreadth.other': '{count} aplicaciones',
 
 
   // Metadatos de gráficos de informes redactados por el servidor.

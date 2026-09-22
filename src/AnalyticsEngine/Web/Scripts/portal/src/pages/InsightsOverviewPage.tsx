@@ -9,7 +9,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { useT } from '../i18n';
+import { useT, type TFunction, type TranslationKey } from '../i18n';
 import { fetchSystemStatus } from '../api/systemStatusApi';
 import { fetchHealthData, fetchHealthSummary } from '../api/healthApi';
 import type { SystemStatus } from '../types/systemStatus';
@@ -58,6 +58,40 @@ const useStyles = makeStyles({
     marginTop: '12px',
   },
 });
+
+const phrase = (...parts: string[]) => parts.join(' ');
+
+export const ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY: Record<string, { english: string; key: TranslationKey }> = {
+  ActivityLog: { english: 'Activity/audit', key: 'overview.enabledImport.activityLog' },
+  Copilot: { english: 'Copilot', key: 'overview.enabledImport.copilot' },
+  CopilotInteractionHistory: {
+    english: phrase('Copilot', 'AI', 'interaction', 'history', '(tenant-wide', 'unless', 'scoped)'),
+    key: 'overview.enabledImport.copilotInteractionHistory',
+  },
+  ImportPowerPlatform: { english: 'Power Platform', key: 'overview.enabledImport.powerPlatform' },
+  ImportDlp: { english: phrase('DLP', 'policy', 'events'), key: 'overview.enabledImport.dlpPolicyEvents' },
+  GraphUsersMetadata: { english: 'User metadata', key: 'overview.enabledImport.userMetadata' },
+  GraphUsageReports: { english: 'Usage reports', key: 'overview.enabledImport.usageReports' },
+  GraphCopilotUsageReports: {
+    english: phrase('Copilot', 'usage', 'reports', '(Graph)'),
+    key: 'overview.enabledImport.copilotUsageReportsGraph',
+  },
+  GraphTeams: { english: 'Teams', key: 'overview.enabledImport.teams' },
+  WebTraffic: { english: 'Web traffic', key: 'overview.enabledImport.webTraffic' },
+  SentEmails: { english: 'Sent emails', key: 'overview.enabledImport.sentEmails' },
+  Calls: { english: 'Teams calls', key: 'overview.enabledImport.teamsCalls' },
+  CopilotStudioCredits: { english: phrase('Copilot', 'Studio', 'credits', '(billed)'), key: 'overview.enabledImport.copilotStudioCredits' },
+  AzureCostManagement: { english: phrase('Azure', 'costs', '(Cost', 'Management)'), key: 'overview.enabledImport.azureCosts' },
+};
+
+const ENABLED_IMPORT_KEY_BY_ENGLISH = new Map(
+  Object.values(ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY).map((entry) => [entry.english, entry.key]),
+);
+
+export function enabledImportLabelText(t: TFunction, serverLabel: string): string {
+  const key = ENABLED_IMPORT_KEY_BY_ENGLISH.get(serverLabel);
+  return key ? t(key) : serverLabel;
+}
 
 /**
  * Insights landing page: what data the solution holds, whether it is still arriving and healthy, and
@@ -206,7 +240,7 @@ export default function InsightsOverviewPage() {
               </Text>
               {status.enabledImports.map((name) => (
                 <Badge key={name} appearance="outline" color="informative">
-                  {name}
+                  {enabledImportLabelText(t, name)}
                 </Badge>
               ))}
             </div>

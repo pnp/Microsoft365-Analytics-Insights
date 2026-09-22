@@ -28,6 +28,7 @@ import type { UpdateCheck } from '../types/updateCheck';
 import { formatUtc } from '../components/health/healthShared';
 import Spinner from '../components/Spinner';
 import { useT, useTNode } from '../i18n';
+import { enabledImportLabelText } from './InsightsOverviewPage';
 
 const useStyles = makeStyles({
   cards: {
@@ -394,7 +395,7 @@ export default function ServiceConfigurationPage() {
               <div className={styles.chips}>
                 {health.enabledImports.map((f) => (
                   <Badge key={f} appearance="tint" color="brand">
-                    {f}
+                    {enabledImportLabelText(t, f)}
                   </Badge>
                 ))}
               </div>

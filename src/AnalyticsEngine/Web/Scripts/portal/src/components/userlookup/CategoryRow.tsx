@@ -86,6 +86,63 @@ const useStyles = makeStyles({
   },
 });
 
+const phrase = (...parts: string[]) => parts.join(' ');
+
+export const USER_DATA_WORKLOADS_BY_FLAG: Record<string, { english: string; nameKey: TranslationKey; descriptionKey: TranslationKey }> = {
+  ActivityLog: {
+    english: 'Audit log',
+    nameKey: 'admin.userLookup.workload.ActivityLog.name',
+    descriptionKey: 'admin.userLookup.workload.ActivityLog.description',
+  },
+  Copilot: {
+    english: phrase('Copilot', '&', 'Power', 'Platform'),
+    nameKey: 'admin.userLookup.workload.Copilot.name',
+    descriptionKey: 'admin.userLookup.workload.Copilot.description',
+  },
+  WebTraffic: {
+    english: 'Web traffic',
+    nameKey: 'admin.userLookup.workload.WebTraffic.name',
+    descriptionKey: 'admin.userLookup.workload.WebTraffic.description',
+  },
+  SentEmails: {
+    english: 'Sent emails',
+    nameKey: 'admin.userLookup.workload.SentEmails.name',
+    descriptionKey: 'admin.userLookup.workload.SentEmails.description',
+  },
+  GraphTeams: {
+    english: 'Teams',
+    nameKey: 'admin.userLookup.workload.GraphTeams.name',
+    descriptionKey: 'admin.userLookup.workload.GraphTeams.description',
+  },
+  Calls: {
+    english: 'Teams calls',
+    nameKey: 'admin.userLookup.workload.Calls.name',
+    descriptionKey: 'admin.userLookup.workload.Calls.description',
+  },
+  GraphUsageReports: {
+    english: 'Usage reports',
+    nameKey: 'admin.userLookup.workload.GraphUsageReports.name',
+    descriptionKey: 'admin.userLookup.workload.GraphUsageReports.description',
+  },
+  GraphUsersMetadata: {
+    english: 'User metadata',
+    nameKey: 'admin.userLookup.workload.GraphUsersMetadata.name',
+    descriptionKey: 'admin.userLookup.workload.GraphUsersMetadata.description',
+  },
+};
+
+const USER_DATA_WORKLOAD_BY_ENGLISH = new Map(
+  Object.values(USER_DATA_WORKLOADS_BY_FLAG).map((entry) => [entry.english, entry]),
+);
+
+export function userDataWorkloadName(t: TFunction, serverName: string): string {
+  const entry = USER_DATA_WORKLOAD_BY_ENGLISH.get(serverName);
+  return entry ? t(entry.nameKey) : serverName;
+}
+
+export function userDataWorkloadNames(t: TFunction, serverNames: string[]): string[] {
+  return serverNames.map((name) => userDataWorkloadName(t, name));
+}
 
 function serverText(t: TFunction, key: string, field: 'label' | 'description', fallback: string): string {
   if (!key) return fallback;
@@ -131,6 +188,7 @@ export default function CategoryRow({ upn, category }: CategoryRowProps) {
   const canDrill = category.supportsDetail && category.count > 0;
   const categoryLabel = serverText(t, category.key, 'label', category.label);
   const categoryDescription = serverText(t, category.key, 'description', category.description);
+  const workloadNames = userDataWorkloadNames(t, category.workloads);
 
   const toggle = async () => {
     if (expanded) {
@@ -173,7 +231,7 @@ export default function CategoryRow({ upn, category }: CategoryRowProps) {
           </Text>
           <div className={styles.source}>
             <Text size={200}>
-              {t('admin.userLookup.categoryRow.source', { source: category.workloads.join(', ') || 'n/a' })}
+              {t('admin.userLookup.categoryRow.source', { source: workloadNames.join(', ') || 'n/a' })}
             </Text>
             {!category.workloadsEnabled && (
               <Tooltip
@@ -184,7 +242,7 @@ export default function CategoryRow({ upn, category }: CategoryRowProps) {
                     'admin.userLookup.categoryRow.importOffTooltip.one',
                     'admin.userLookup.categoryRow.importOffTooltip.other',
                   ),
-                  { workloads: category.workloads.join('", "') },
+                  { workloads: workloadNames.join('", "') },
                 )}
               >
                 <Badge appearance="tint" color="warning" size="small">

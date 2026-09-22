@@ -30,6 +30,7 @@ import {
   formatPct,
   queryFor,
   toCategories,
+  translatedBucketsToCategories,
   useTeamsStyles,
 } from './teamsShared';
 
@@ -241,7 +242,7 @@ export default function MeetingsPanel({
           isEmpty={data.sizeDistribution.every((b) => b.count === 0)}
         >
           <CategoryBarChart
-            categories={bucketsToCategories(data.sizeDistribution)}
+            categories={translatedBucketsToCategories(t, 'size', data.sizeDistribution)}
             valueLabel={t('teamsExplorer.meetings.valueLabel.calls')}
             showShare
           />
@@ -254,7 +255,7 @@ export default function MeetingsPanel({
           isEmpty={data.durationDistribution.every((b) => b.count === 0)}
         >
           <CategoryBarChart
-            categories={bucketsToCategories(data.durationDistribution)}
+            categories={translatedBucketsToCategories(t, 'duration', data.durationDistribution)}
             valueLabel={t('teamsExplorer.meetings.valueLabel.calls')}
             showShare
           />
@@ -267,7 +268,7 @@ export default function MeetingsPanel({
           isEmpty={data.periodOfDay.every((b) => b.count === 0)}
         >
           <CategoryBarChart
-            categories={bucketsToCategories(data.periodOfDay)}
+            categories={translatedBucketsToCategories(t, 'period', data.periodOfDay)}
             valueLabel={t('teamsExplorer.meetings.valueLabel.calls')}
             showShare
           />

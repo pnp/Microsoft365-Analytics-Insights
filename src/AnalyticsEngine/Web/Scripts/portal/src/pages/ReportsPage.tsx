@@ -25,7 +25,7 @@ import TimeSeriesChart from '../components/charts/TimeSeriesChart';
 import CategoryBarChart from '../components/charts/CategoryBarChart';
 import MatrixChart from '../components/charts/MatrixChart';
 import WordCloud from '../components/charts/WordCloud';
-import { EN_CATALOG, formatDateParts, formatNumber, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
+import { EN_CATALOG, formatDateParts, formatNumber, plural, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
 
 /** The report areas in display order, with the enabled-flag they map to and their friendly copy. */
 const AREA_DEFS: { flag: keyof ReportAreas; key: ReportAreaKey; labelKey: TranslationKey; blurbKey: TranslationKey }[] = [
@@ -356,6 +356,25 @@ function chartWarningText(t: TFunction, chart: ReportChart): string | null {
   return translated === catalogKey ? chart.warning : translated;
 }
 
+const APP_BREADTH_LABEL = /^(\d+) apps?$/;
+
+export function reportCategories(t: TFunction, chart: ReportChart) {
+  if (chart.key !== 'office-apps-breadth' || !chart.categories) return chart.categories;
+
+  return chart.categories.map((category) => {
+    const match = APP_BREADTH_LABEL.exec(category.label);
+    if (!match) return category;
+
+    const count = Number(match[1]);
+    return {
+      ...category,
+      label: t(plural(count, 'reports.category.appBreadth.one', 'reports.category.appBreadth.other'), {
+        count: formatNumber(count),
+      }),
+    };
+  });
+}
+
 /** Fetches and renders the charts for a single report area over the chosen window. */
 function ReportAreaView({
   area,
@@ -481,6 +500,7 @@ function ReportAreaView({
         const description = chartText(t, chart.key, 'description', chart.description);
         const valueLabel = chartText(t, chart.key, 'valueLabel', chart.valueLabel);
         const warning = chartWarningText(t, chart);
+        const categories = reportCategories(t, chart);
         const matrix = chart.matrix
           ? {
               ...chart.matrix,
@@ -525,17 +545,17 @@ function ReportAreaView({
                   <>
                     {chart.type === 'timeseries' && chart.series ? (
                       <TimeSeriesChart series={chart.series} valueLabel={valueLabel} />
-                    ) : chart.type === 'bar' && chart.categories ? (
+                    ) : chart.type === 'bar' && categories ? (
                       <CategoryBarChart
-                        categories={chart.categories}
+                        categories={categories}
                         valueLabel={valueLabel}
                         showShare={chart.showShare}
                         valueSuffix={chart.valueSuffix}
                       />
                     ) : chart.type === 'matrix' && matrix ? (
                       <MatrixChart matrix={matrix} valueLabel={valueLabel} />
-                    ) : chart.type === 'wordcloud' && chart.categories ? (
-                      <WordCloud categories={chart.categories} valueLabel={valueLabel} />
+                    ) : chart.type === 'wordcloud' && categories ? (
+                      <WordCloud categories={categories} valueLabel={valueLabel} />
                     ) : (
                       <Text className={styles.muted}>{t('reports.chart.noData')}</Text>
                     )}

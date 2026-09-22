@@ -16,6 +16,8 @@ import {
   formatPct,
   queryFor,
   reachTone,
+  segmentDescription,
+  segmentLabel,
   useTeamsStyles,
 } from './teamsShared';
 
@@ -309,7 +311,7 @@ export default function OverviewPanel({ data }: { data: TeamsOverview }) {
   ];
 
   const segmentCategories = data.segmentMix.map((slice) => ({
-    label: slice.label,
+    label: segmentLabel(t, slice.segment, slice.label),
     value: slice.users,
   }));
   const measuredUsers = data.segmentMix.reduce((sum, slice) => sum + slice.users, 0);
@@ -376,7 +378,9 @@ export default function OverviewPanel({ data }: { data: TeamsOverview }) {
             centreLabel={t('teamsExplorer.overview.engagementMix.centreLabel')}
           />
           <Text size={200} className={styles.muted}>
-            {data.segmentMix.map((slice) => `${slice.label}: ${slice.description}`).join(' ')}
+            {data.segmentMix
+              .map((slice) => `${segmentLabel(t, slice.segment, slice.label)}: ${segmentDescription(t, slice.segment, slice.description)}`)
+              .join(' ')}
           </Text>
         </SectionCard>
       </div>

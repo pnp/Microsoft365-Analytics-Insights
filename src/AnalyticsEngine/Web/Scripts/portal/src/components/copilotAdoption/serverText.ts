@@ -2,12 +2,14 @@ import type {
   AgentUsageRow,
   CopilotAdoptionAvailability,
   CopilotAdoptionOptions,
+  CoworkReadinessRow,
+  CoworkTier,
   LicenceOpportunityRow,
   LicensedUserAdoptionRow,
 } from '../../types/copilotAdoption';
 import { AdoptionBand, AgentHealth } from '../../types/copilotAdoption';
 import { formatCount } from '../shared/KpiGrid';
-import { activeLocale, type TFunction, type TranslationKey, type TranslationValues } from '../../i18n';
+import { activeLocale, formatNumber, type TFunction, type TranslationKey, type TranslationValues } from '../../i18n';
 
 function catalogText(t: TFunction, key: TranslationKey, fallback: string, values?: TranslationValues): string {
   if (activeLocale().startsWith('en')) return fallback;
@@ -137,6 +139,17 @@ export function reclaimEligibilityLabel(t: TFunction, tier: string | null): stri
   }
 }
 
+export const TENURE_BASIS_LABEL_KEYS = {
+  accountAge: 'copilotAdoptionUsers.server.tenureBasis.accountAge',
+  unknown: 'copilotAdoptionUsers.server.tenureBasis.unknown',
+} as const satisfies Record<string, TranslationKey>;
+
+function tenureBasisLabel(t: TFunction, basis: string | null): string {
+  if (!basis) return '';
+  const key = TENURE_BASIS_LABEL_KEYS[basis as keyof typeof TENURE_BASIS_LABEL_KEYS];
+  return key ? catalogText(t, key, basis) : basis;
+}
+
 export function reclaimEligibilityReason(t: TFunction, row: LicensedUserAdoptionRow, options: CopilotAdoptionOptions): string {
   if (row.reclaimEligibility === 'excluded' && row.reclaimExclusionReason) {
     return t('copilotAdoptionUsers.server.reclaimReason.excluded', { reason: row.reclaimExclusionReason });
@@ -147,13 +160,13 @@ export function reclaimEligibilityReason(t: TFunction, row: LicensedUserAdoption
   if (row.band === AdoptionBand.NeverUsed) {
     if (row.tooNewToJudge) {
       return t('copilotAdoptionUsers.server.reclaimReason.tooNew', {
-        tenureBasis: row.tenureBasis ?? '',
+        tenureBasis: tenureBasisLabel(t, row.tenureBasis),
         days: options.reclaimGraceDays,
       });
     }
     if (row.accountEnabled === true && row.daysSinceTenureStart !== null) {
       return t('copilotAdoptionUsers.server.reclaimReason.probable', {
-        tenureBasis: row.tenureBasis ?? '',
+        tenureBasis: tenureBasisLabel(t, row.tenureBasis),
         days: options.reclaimGraceDays,
       });
     }
@@ -179,7 +192,7 @@ export function recommendedActionText(t: TFunction, row: LicensedUserAdoptionRow
   }
   if (row.tooNewToJudge && row.band === AdoptionBand.NeverUsed) {
     return t('copilotAdoptionUsers.server.recommendedAction.tooNew', {
-      tenureBasis: row.tenureBasis ?? '',
+      tenureBasis: tenureBasisLabel(t, row.tenureBasis),
       days: options.reclaimGraceDays,
     });
   }
@@ -301,6 +314,179 @@ export function agentHealthReason(t: TFunction, row: AgentUsageRow, options: Cop
       });
     default:
       return row.healthReason;
+  }
+}
+
+export const COWORK_TIER_LABEL_KEYS = {
+  established: 'copilotAdoptionCowork.tier.established.label',
+  trialling: 'copilotAdoptionCowork.tier.trialling.label',
+  primeCandidate: 'copilotAdoptionCowork.tier.primeCandidate.label',
+  buildFluencyFirst: 'copilotAdoptionCowork.tier.buildFluencyFirst.label',
+  lowCoordinationLoad: 'copilotAdoptionCowork.tier.lowCoordinationLoad.label',
+  notIndicated: 'copilotAdoptionCowork.tier.notIndicated.label',
+} as const satisfies Record<CoworkTier, TranslationKey>;
+
+export function coworkTierLabel(t: TFunction, tier: string, fallback: string): string {
+  const key = COWORK_TIER_LABEL_KEYS[tier as CoworkTier];
+  return key ? catalogText(t, key, fallback) : fallback;
+}
+
+function countPhrase(
+  t: TFunction,
+  value: number,
+  oneKey: TranslationKey,
+  otherKey: TranslationKey,
+): string {
+  return t(value === 1 ? oneKey : otherKey, { count: countText(value) });
+}
+
+function scoreText(value: number): string {
+  return formatNumber(value, { maximumFractionDigits: 15 });
+}
+
+function countText(value: number): string {
+  return formatNumber(value);
+}
+
+function coworkReportHasSignal(row: CoworkReadinessRow): boolean {
+  return (row.coworkReportTotalTasks ?? 0) > 0 || (row.coworkReportActiveDays ?? 0) > 0;
+}
+
+function coworkReportEvidencePhrase(t: TFunction, row: CoworkReadinessRow): string {
+  const days = row.coworkReportActiveDays ?? 0;
+  if (row.coworkReportTotalTasks !== null) {
+    return t('copilotAdoptionCowork.server.rationale.reportEvidence.tasks', {
+      tasks: countText(row.coworkReportTotalTasks),
+      taskWord: row.coworkReportTotalTasks === 1
+        ? t('copilotAdoptionCowork.server.rationale.task')
+        : t('copilotAdoptionCowork.server.rationale.tasks'),
+      days: countText(days),
+      dayWord: days === 1
+        ? t('copilotAdoptionCowork.server.rationale.day')
+        : t('copilotAdoptionCowork.server.rationale.days'),
+    });
+  }
+
+  return t('copilotAdoptionCowork.server.rationale.reportEvidence.activeDays', {
+    days: countText(days),
+    dayWord: days === 1
+      ? t('copilotAdoptionCowork.server.rationale.day')
+      : t('copilotAdoptionCowork.server.rationale.days'),
+  });
+}
+
+function coworkWorkloadPhrase(t: TFunction, row: CoworkReadinessRow): string {
+  const workload: string[] = [];
+  if (row.teamsMeetings > 0) {
+    workload.push(countPhrase(
+      t,
+      row.teamsMeetings,
+      'copilotAdoptionCowork.server.rationale.workload.meeting.one',
+      'copilotAdoptionCowork.server.rationale.workload.meeting.other',
+    ));
+  }
+  if (row.teamsMessages > 0) {
+    workload.push(countPhrase(
+      t,
+      row.teamsMessages,
+      'copilotAdoptionCowork.server.rationale.workload.teamsMessage.one',
+      'copilotAdoptionCowork.server.rationale.workload.teamsMessage.other',
+    ));
+  }
+  const mail = row.emailsSent + row.emailsRead;
+  if (mail > 0) {
+    workload.push(countPhrase(
+      t,
+      mail,
+      'copilotAdoptionCowork.server.rationale.workload.email.one',
+      'copilotAdoptionCowork.server.rationale.workload.email.other',
+    ));
+  }
+  if (row.filesViewedOrEdited > 0) {
+    workload.push(countPhrase(
+      t,
+      row.filesViewedOrEdited,
+      'copilotAdoptionCowork.server.rationale.workload.file.one',
+      'copilotAdoptionCowork.server.rationale.workload.file.other',
+    ));
+  }
+
+  return workload.length > 0
+    ? workload.join(', ')
+    : t('copilotAdoptionCowork.server.rationale.workload.none');
+}
+
+export function coworkRationaleText(t: TFunction, row: CoworkReadinessRow, options: CopilotAdoptionOptions): string {
+  if (activeLocale().startsWith('en')) return row.rationale;
+
+  const regularDays = Math.max(1, options.coworkRegularMinActiveDays);
+  switch (row.tier) {
+    case 'established':
+      if (coworkReportHasSignal(row)) {
+        return t('copilotAdoptionCowork.server.rationale.established.report', {
+          evidence: coworkReportEvidencePhrase(t, row),
+        });
+      }
+      return t('copilotAdoptionCowork.server.rationale.established.audit', {
+        interactions: countText(row.coworkInteractions),
+        interactionWord: row.coworkInteractions === 1
+          ? t('copilotAdoptionCowork.server.rationale.interaction')
+          : t('copilotAdoptionCowork.server.rationale.interactions'),
+        days: countText(row.coworkActiveDays),
+        dayWord: row.coworkActiveDays === 1
+          ? t('copilotAdoptionCowork.server.rationale.day')
+          : t('copilotAdoptionCowork.server.rationale.days'),
+      });
+
+    case 'trialling':
+      if (coworkReportHasSignal(row)) {
+        return t('copilotAdoptionCowork.server.rationale.trialling.report', {
+          evidence: coworkReportEvidencePhrase(t, row),
+          days: countText(regularDays),
+        });
+      }
+      return t('copilotAdoptionCowork.server.rationale.trialling.audit', {
+        interactions: countText(row.coworkInteractions),
+        interactionWord: row.coworkInteractions === 1
+          ? t('copilotAdoptionCowork.server.rationale.interaction')
+          : t('copilotAdoptionCowork.server.rationale.interactions'),
+        days: countText(row.coworkActiveDays),
+        dayWord: row.coworkActiveDays === 1
+          ? t('copilotAdoptionCowork.server.rationale.day')
+          : t('copilotAdoptionCowork.server.rationale.days'),
+        regularDays: countText(regularDays),
+      });
+
+    case 'primeCandidate':
+      return t('copilotAdoptionCowork.server.rationale.primeCandidate', {
+        fluency: scoreText(row.fluencyScore),
+        load: scoreText(row.coordinationLoadScore),
+        workload: coworkWorkloadPhrase(t, row),
+      });
+
+    case 'buildFluencyFirst':
+      return t('copilotAdoptionCowork.server.rationale.buildFluencyFirst', {
+        workload: coworkWorkloadPhrase(t, row),
+        fluency: scoreText(row.fluencyScore),
+        bar: scoreText(options.coworkFluencyMinScore),
+      });
+
+    case 'lowCoordinationLoad':
+      return t('copilotAdoptionCowork.server.rationale.lowCoordinationLoad', {
+        fluency: scoreText(row.fluencyScore),
+        load: scoreText(row.coordinationLoadScore),
+        workload: coworkWorkloadPhrase(t, row),
+      });
+
+    case 'notIndicated':
+      return t('copilotAdoptionCowork.server.rationale.notIndicated', {
+        fluency: scoreText(row.fluencyScore),
+        load: scoreText(row.coordinationLoadScore),
+        workload: coworkWorkloadPhrase(t, row),
+      });
+
+    default:
+      return row.rationale;
   }
 }
 

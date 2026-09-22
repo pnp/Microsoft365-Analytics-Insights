@@ -10,8 +10,17 @@ import {
 } from '@fluentui/react-components';
 import { CheckmarkCircle16Filled, Circle16Regular } from '@fluentui/react-icons';
 import type { UserDataCategory, Workload } from '../../types/userData';
-import CategoryRow from './CategoryRow';
+import CategoryRow, { USER_DATA_WORKLOADS_BY_FLAG, userDataWorkloadName } from './CategoryRow';
 import { formatNumber, useT, useTNode } from '../../i18n';
+
+const USER_DATA_WORKLOAD_DESCRIPTION_BY_NAME = new Map(
+  Object.values(USER_DATA_WORKLOADS_BY_FLAG).map((entry) => [entry.english, entry.descriptionKey]),
+);
+
+function userDataWorkloadDescription(t: ReturnType<typeof useT>, workload: Workload): string {
+  const key = USER_DATA_WORKLOAD_DESCRIPTION_BY_NAME.get(workload.name);
+  return key ? t(key) : workload.description;
+}
 
 const useStyles = makeStyles({
   cards: {
@@ -65,13 +74,17 @@ export default function CategoryTable({ upn, categories, workloads }: CategoryTa
         </Text>
         <div className={styles.workloads}>
           {workloads.map((w) => (
-            <Tooltip key={w.name} relationship="description" content={w.description}>
+            <Tooltip
+              key={w.name}
+              relationship="description"
+              content={userDataWorkloadDescription(t, w)}
+            >
               <Badge
                 appearance={w.enabled ? 'filled' : 'outline'}
                 color={w.enabled ? 'success' : 'informative'}
                 icon={w.enabled ? <CheckmarkCircle16Filled /> : <Circle16Regular />}
               >
-                {w.name}
+                {userDataWorkloadName(t, w.name)}
               </Badge>
             </Tooltip>
           ))}

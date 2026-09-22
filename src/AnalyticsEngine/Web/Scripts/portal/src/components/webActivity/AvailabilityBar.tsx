@@ -17,7 +17,7 @@ import {
   Question16Regular,
 } from '@fluentui/react-icons';
 import type { WebActivityAvailability } from '../../types/webActivity';
-import { useT } from '../../i18n';
+import { formatNumber, useT, type TFunction, type TranslationKey } from '../../i18n';
 import { formatDate } from './webActivityShared';
 
 const useStyles = makeStyles({
@@ -48,6 +48,75 @@ const useStyles = makeStyles({
   },
 });
 
+export const WEB_ACTIVITY_STALE_COLLECTION_DAYS = 3;
+
+export const WEB_ACTIVITY_AVAILABILITY_REASON_KEYS: Record<string, TranslationKey> = {
+  configurationUnreadable: 'webActivity.availability.reason.configurationUnreadable',
+  webTrafficOffWithExistingHits: 'webActivity.availability.reason.webTrafficOffWithExistingHits',
+  webTrafficOffNoHits: 'webActivity.availability.reason.webTrafficOffNoHits',
+  appInsightsMissing: 'webActivity.availability.reason.appInsightsMissing',
+  noPageViewsKnown: 'webActivity.availability.reason.noPageViewsKnown',
+  pageViewCheckFailed: 'webActivity.availability.reason.pageViewCheckFailed',
+  staleCollection: 'webActivity.availability.reason.staleCollection',
+  userMetadataOff: 'webActivity.availability.reason.userMetadataOff',
+  noSearches: 'webActivity.availability.reason.noSearches',
+  noClicks: 'webActivity.availability.reason.noClicks',
+};
+
+const unreadableConfigurationPrefix = ['Application', 'configuration', 'could', 'not', 'be', 'read'].join(' ');
+
+export function availabilityReasonTexts(
+  availability: WebActivityAvailability,
+  t: TFunction,
+  nowUtc: Date = new Date(),
+): string[] {
+  if (availability.reasons.some((reason) => reason.startsWith(unreadableConfigurationPrefix))) {
+    return [t(WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.configurationUnreadable)];
+  }
+
+  const reasons: string[] = [];
+
+  if (!availability.webTrafficAvailable) {
+    reasons.push(t(
+      availability.lastHitUtc
+        ? WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.webTrafficOffWithExistingHits
+        : WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.webTrafficOffNoHits,
+    ));
+  } else if (!availability.appInsightsConfigured) {
+    reasons.push(t(WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.appInsightsMissing));
+  } else if (!availability.lastHitUtc) {
+    reasons.push(t(
+      availability.collectionStatusKnown
+        ? WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.noPageViewsKnown
+        : WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.pageViewCheckFailed,
+    ));
+  } else {
+    const lastHit = new Date(availability.lastHitUtc);
+    const staleDays = (nowUtc.getTime() - lastHit.getTime()) / 86_400_000;
+
+    if (staleDays >= WEB_ACTIVITY_STALE_COLLECTION_DAYS) {
+      reasons.push(t(WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.staleCollection, {
+        days: formatNumber(Math.round(staleDays)),
+        date: formatDate(availability.lastHitUtc),
+      }));
+    }
+  }
+
+  if (!availability.userMetadataAvailable) {
+    reasons.push(t(WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.userMetadataOff));
+  }
+
+  if (!availability.searchAvailable) {
+    reasons.push(t(WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.noSearches));
+  }
+
+  if (!availability.clickTrackingAvailable) {
+    reasons.push(t(WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.noClicks));
+  }
+
+  return reasons;
+}
+
 /**
  * The per-source status strip.
  *
@@ -67,6 +136,7 @@ export default function AvailabilityBar({ availability }: { availability: WebAct
   const styles = useStyles();
   const t = useT();
   const [expanded, setExpanded] = useState(false);
+  const reasons = availabilityReasonTexts(availability, t);
 
   const sources: { label: string; on: boolean; unknown?: boolean; detail?: string }[] = [
     { label: t('webActivity.availability.source.webTrafficImport'), on: availability.webTrafficAvailable },
@@ -113,7 +183,7 @@ export default function AvailabilityBar({ availability }: { availability: WebAct
         ))}
       </div>
 
-      {availability.reasons.length > 0 && (
+      {reasons.length > 0 && (
         <>
           <Button
             className={styles.toggle}
@@ -123,7 +193,7 @@ export default function AvailabilityBar({ availability }: { availability: WebAct
             onClick={() => setExpanded((open) => !open)}
             aria-expanded={expanded}
           >
-            {t(expanded ? 'webActivity.availability.hideMissing' : 'webActivity.availability.showMissing', { count: availability.reasons.length })}
+            {t(expanded ? 'webActivity.availability.hideMissing' : 'webActivity.availability.showMissing', { count: reasons.length })}
           </Button>
 
           {expanded && (
@@ -131,7 +201,7 @@ export default function AvailabilityBar({ availability }: { availability: WebAct
               <MessageBarBody>
                 <MessageBarTitle>{t('webActivity.availability.missingTitle')}</MessageBarTitle>
                 <ul className={styles.reasons}>
-                  {availability.reasons.map((reason) => (
+                  {reasons.map((reason) => (
                     <li key={reason}>
                       <Text size={200}>{reason}</Text>
                     </li>

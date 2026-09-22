@@ -2,7 +2,7 @@ import { makeStyles, tokens, Text, Card, MessageBar, MessageBarBody } from '@flu
 import type { ReactNode } from 'react';
 import SqlPopover from '../SqlPopover';
 import type { KpiTone } from '../shared/KpiGrid';
-import { formatDateParts, formatNumber, useT, type TFunction } from '../../i18n';
+import { formatDateParts, formatNumber, useT, type TFunction, type TranslationKey } from '../../i18n';
 import type {
   TeamsBucket,
   TeamsNamedCount,
@@ -86,6 +86,76 @@ export function toCategories(rows: TeamsNamedCount[]): ReportCategory[] {
 /** Distribution buckets -> bar categories, preserving bucket order. */
 export function bucketsToCategories(buckets: TeamsBucket[]): ReportCategory[] {
   return buckets.map((bucket) => ({ label: bucket.label, value: bucket.count }));
+}
+
+export const TEAMS_SEGMENT_TEXT_KEYS: Record<string, { labelKey: TranslationKey; descriptionKey: TranslationKey }> = {
+  Power: {
+    labelKey: 'teamsExplorer.segment.Power.label',
+    descriptionKey: 'teamsExplorer.segment.Power.description',
+  },
+  Regular: {
+    labelKey: 'teamsExplorer.segment.Regular.label',
+    descriptionKey: 'teamsExplorer.segment.Regular.description',
+  },
+  Light: {
+    labelKey: 'teamsExplorer.segment.Light.label',
+    descriptionKey: 'teamsExplorer.segment.Light.description',
+  },
+  Dormant: {
+    labelKey: 'teamsExplorer.segment.Dormant.label',
+    descriptionKey: 'teamsExplorer.segment.Dormant.description',
+  },
+};
+
+export function segmentLabel(t: TFunction, segment: string, fallback: string = segment): string {
+  const keys = TEAMS_SEGMENT_TEXT_KEYS[segment];
+  return keys ? t(keys.labelKey) : fallback;
+}
+
+export function segmentDescription(t: TFunction, segment: string, fallback: string): string {
+  const keys = TEAMS_SEGMENT_TEXT_KEYS[segment];
+  return keys ? t(keys.descriptionKey) : fallback;
+}
+
+export const TEAMS_MEETING_BUCKET_LABEL_KEYS = {
+  size: {
+    '1': 'teamsExplorer.bucket.meetingSize.1.label',
+    '2': 'teamsExplorer.bucket.meetingSize.2.label',
+    '3-5': 'teamsExplorer.bucket.meetingSize.3-5.label',
+    '6-10': 'teamsExplorer.bucket.meetingSize.6-10.label',
+    '11-25': 'teamsExplorer.bucket.meetingSize.11-25.label',
+    '26-50': 'teamsExplorer.bucket.meetingSize.26-50.label',
+    '50+': 'teamsExplorer.bucket.meetingSize.50+.label',
+  },
+  duration: {
+    '<5': 'teamsExplorer.bucket.meetingDuration.<5.label',
+    '5-15': 'teamsExplorer.bucket.meetingDuration.5-15.label',
+    '15-30': 'teamsExplorer.bucket.meetingDuration.15-30.label',
+    '30-60': 'teamsExplorer.bucket.meetingDuration.30-60.label',
+    '60-120': 'teamsExplorer.bucket.meetingDuration.60-120.label',
+    '120+': 'teamsExplorer.bucket.meetingDuration.120+.label',
+  },
+  period: {
+    early: 'teamsExplorer.bucket.meetingPeriod.early.label',
+    'late-morning': 'teamsExplorer.bucket.meetingPeriod.lateMorning.label',
+    afternoon: 'teamsExplorer.bucket.meetingPeriod.afternoon.label',
+    evening: 'teamsExplorer.bucket.meetingPeriod.evening.label',
+    night: 'teamsExplorer.bucket.meetingPeriod.night.label',
+  },
+} as const satisfies Record<string, Record<string, TranslationKey>>;
+
+type TeamsMeetingBucketGroup = keyof typeof TEAMS_MEETING_BUCKET_LABEL_KEYS;
+
+export function translatedBucketsToCategories(
+  t: TFunction,
+  group: TeamsMeetingBucketGroup,
+  buckets: TeamsBucket[],
+): ReportCategory[] {
+  const keys: Record<string, TranslationKey> = TEAMS_MEETING_BUCKET_LABEL_KEYS[group];
+  return buckets.map((bucket) => {
+    const key = keys[bucket.key];
+    return { label: key ? t(key) : bucket.label, value: bucket.count };
+  });
 }
 
 /** Looks up one section's query diagnostics by key. */

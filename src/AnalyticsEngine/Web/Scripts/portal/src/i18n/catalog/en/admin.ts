@@ -86,6 +86,22 @@ export const admin = {
     'Import workloads ({enabledCount} of {totalCount} enabled)',
   'admin.userLookup.categoryTable.sqlHint':
     'Click the {sql} button on any row to view and copy the query behind its count.',
+  'admin.userLookup.workload.ActivityLog.name': 'Audit log',
+  'admin.userLookup.workload.ActivityLog.description': 'SharePoint / Exchange / Entra ID audit activity (Audit.SharePoint feed).',
+  'admin.userLookup.workload.Copilot.name': 'Copilot & Power Platform',
+  'admin.userLookup.workload.Copilot.description': 'Copilot interactions and Power Platform events (Audit.General feed).',
+  'admin.userLookup.workload.WebTraffic.name': 'Web traffic',
+  'admin.userLookup.workload.WebTraffic.description': 'SharePoint page views, likes and comments (App Insights tracker).',
+  'admin.userLookup.workload.SentEmails.name': 'Sent emails',
+  'admin.userLookup.workload.SentEmails.description': 'Messages sent from mailboxes (Graph).',
+  'admin.userLookup.workload.GraphTeams.name': 'Teams',
+  'admin.userLookup.workload.GraphTeams.description': 'Team memberships, owners, channels and reactions (Graph).',
+  'admin.userLookup.workload.Calls.name': 'Teams calls',
+  'admin.userLookup.workload.Calls.description': 'Teams call records: organiser and attended sessions.',
+  'admin.userLookup.workload.GraphUsageReports.name': 'Usage reports',
+  'admin.userLookup.workload.GraphUsageReports.description': 'Daily per-user activity reports (Outlook, OneDrive, SharePoint, Teams, Viva Engage).',
+  'admin.userLookup.workload.GraphUsersMetadata.name': 'User metadata',
+  'admin.userLookup.workload.GraphUsersMetadata.description': 'User profile metadata: department, job title, licences, manager, location.',
 
   // User data category rows.
   'admin.userLookup.categoryRow.columnDetail': 'Detail',

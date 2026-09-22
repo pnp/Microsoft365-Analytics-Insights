@@ -23,6 +23,7 @@ import {
   formatCount,
   formatDate,
   queryFor,
+  segmentLabel,
   toCategories,
   useTeamsStyles,
 } from './teamsShared';
@@ -213,7 +214,7 @@ function PeopleTable({
               <TableCell>{row.department ?? '\u2014'}</TableCell>
               <TableCell>
                 <Badge appearance="tint" color={SEGMENT_COLOUR[row.segment] ?? 'informative'}>
-                  {row.segment}
+                  {segmentLabel(t, row.segment)}
                 </Badge>
               </TableCell>
               <TableCell className={styles.numeric}>{formatCount(row.activeDays)}</TableCell>

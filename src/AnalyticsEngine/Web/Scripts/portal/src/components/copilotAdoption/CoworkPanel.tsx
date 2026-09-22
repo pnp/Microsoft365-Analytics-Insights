@@ -48,6 +48,7 @@ import { formatNumber, plural, useT, useTNode, type TFunction, type TranslationK
 import { formatCredits } from '../agentCosts/agentCostShared';
 import InfoTip from '../shared/InfoTip';
 import CoworkQuadrant from './CoworkQuadrant';
+import { coworkRationaleText, coworkTierLabel } from './serverText';
 
 const PAGE_SIZE = 50;
 
@@ -950,7 +951,7 @@ export default function CoworkPanel({
                         <td className={`${table.td} ${table.tdNoWrap}`}>{row.department || '\u2014'}</td>
                         <td className={`${table.td} ${table.tdNoWrap}`}>
                           <span className={styles.upn}>
-                            <Text size={200}>{row.tierLabel}</Text>
+                            <Text size={200}>{coworkTierLabel(t, row.tier, row.tierLabel)}</Text>
                             <span style={{ marginTop: '3px' }}>
                               <BasisBadge basis={row.basis} />
                             </span>
@@ -1168,7 +1169,7 @@ export default function CoworkPanel({
                               source: t('copilotAdoptionCowork.detail.justificationInfo.source'),
                             }}
                           >
-                            <DetailRationale text={row.rationale} />
+                            <DetailRationale text={coworkRationaleText(t, row, options)} />
                           </DetailSection>
                         </DetailRow>
                       )}

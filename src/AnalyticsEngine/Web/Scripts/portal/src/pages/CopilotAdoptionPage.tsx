@@ -485,7 +485,7 @@ export default function CopilotAdoptionPage() {
       {availability && !availability.available && (
         <MessageBar intent="info" style={{ marginTop: '16px' }}>
           <MessageBarBody>{t('copilotAdoption.page.unavailable.message')}<ul style={{ margin: '6px 0 0 0', paddingInlineStart: '20px' }}>
-              {availability.messages.map((m) => (
+              {availabilityMessages(t, availability).map((m) => (
                 <li key={m}>{m}</li>
               ))}
             </ul>

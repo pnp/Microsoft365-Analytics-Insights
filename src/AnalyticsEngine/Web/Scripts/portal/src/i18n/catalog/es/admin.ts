@@ -89,6 +89,22 @@ const admin: Record<keyof typeof en, string> = {
     'Cargas de trabajo de importación ({enabledCount} de {totalCount} habilitadas)',
   'admin.userLookup.categoryTable.sqlHint':
     'Haga clic en el botón {sql} de cualquier fila para ver y copiar la consulta que hay detrás de su recuento.',
+  'admin.userLookup.workload.ActivityLog.name': 'Registro de auditoría',
+  'admin.userLookup.workload.ActivityLog.description': 'Actividad de auditoría de SharePoint / Exchange / Entra ID (fuente Audit.SharePoint).',
+  'admin.userLookup.workload.Copilot.name': 'Copilot y Power Platform',
+  'admin.userLookup.workload.Copilot.description': 'Interacciones de Copilot y eventos de Power Platform (fuente Audit.General).',
+  'admin.userLookup.workload.WebTraffic.name': 'Tráfico web',
+  'admin.userLookup.workload.WebTraffic.description': 'Vistas de páginas, Me gusta y comentarios de SharePoint (rastreador de App Insights).',
+  'admin.userLookup.workload.SentEmails.name': 'Correos enviados',
+  'admin.userLookup.workload.SentEmails.description': 'Mensajes enviados desde buzones (Graph).',
+  'admin.userLookup.workload.GraphTeams.name': 'Teams',
+  'admin.userLookup.workload.GraphTeams.description': 'Pertenencias a equipos, propietarios, canales y reacciones (Graph).',
+  'admin.userLookup.workload.Calls.name': 'Llamadas de Teams',
+  'admin.userLookup.workload.Calls.description': 'Registros de llamadas de Teams: sesiones organizadas y asistidas.',
+  'admin.userLookup.workload.GraphUsageReports.name': 'Informes de uso',
+  'admin.userLookup.workload.GraphUsageReports.description': 'Informes diarios de actividad por usuario (Outlook, OneDrive, SharePoint, Teams, Viva Engage).',
+  'admin.userLookup.workload.GraphUsersMetadata.name': 'Metadatos de usuario',
+  'admin.userLookup.workload.GraphUsersMetadata.description': 'Metadatos de perfil de usuario: departamento, cargo, licencias, responsable y ubicación.',
 
   // User data category rows.
   'admin.userLookup.categoryRow.columnDetail': 'Detalle',

@@ -4,6 +4,82 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { EN_CATALOG } from '../catalog';
+import { COWORK_TIER_LABEL_KEYS, TENURE_BASIS_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
+import { TEAMS_MEETING_BUCKET_LABEL_KEYS, TEAMS_SEGMENT_TEXT_KEYS } from '../../components/teamsExplorer/teamsShared';
+import { WEB_ACTIVITY_AVAILABILITY_REASON_KEYS } from '../../components/webActivity/AvailabilityBar';
+import { USER_DATA_WORKLOADS_BY_FLAG } from '../../components/userlookup/CategoryRow';
+import { ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY } from '../../pages/InsightsOverviewPage';
+
+function sortedUnique(values: string[]): string[] {
+  return [...new Set(values)].sort((a, b) => a.localeCompare(b));
+}
+
+function catalogKeys(prefix: string): string[] {
+  return sortedUnique(Object.keys(EN_CATALOG).filter((key) => key.startsWith(prefix)));
+}
+
+function catalogValues(keys: string[]): string[] {
+  return sortedUnique(keys.map((key) => EN_CATALOG[key]));
+}
+
+function functionBody(source: string, name: string): string {
+  const start = source.indexOf(`function ${name}`);
+  expect(start, `Could not find function ${name}`).toBeGreaterThanOrEqual(0);
+  const brace = source.indexOf('{', start);
+  expect(brace, `Could not find function body for ${name}`).toBeGreaterThanOrEqual(0);
+
+  let depth = 0;
+  for (let i = brace; i < source.length; i++) {
+    const char = source[i];
+    if (char === '{') depth++;
+    if (char === '}') depth--;
+    if (depth === 0) return source.slice(brace + 1, i);
+  }
+
+  throw new Error(`Could not find end of function ${name}`);
+}
+
+function translationKeysIn(source: string, prefix: string): string[] {
+  const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return sortedUnique([...source.matchAll(new RegExp(`['"](${escapedPrefix}[^'"]+)['"]`, 'g'))].map((m) => m[1]));
+}
+
+function labelKeyMapFromFunction(source: string, functionName: string, prefix: string): Record<string, string> {
+  const body = functionBody(source, functionName);
+  const map: Record<string, string> = {};
+  const entry =
+    /(?:^|\n)\s*(?:(\w+)|'([^']+)'|\[\[([^\]]+)\]\.join\(' '\)\])\s*:\s*'([^']+)'/g;
+
+  for (const match of body.matchAll(entry)) {
+    const key = match[4];
+    if (!key.startsWith(prefix)) continue;
+
+    const label = match[1]
+      ?? match[2]
+      ?? [...match[3].matchAll(/'([^']+)'/g)].map((word) => word[1]).join(' ');
+    map[label] = key;
+  }
+
+  expect(Object.keys(map).length, `Could not extract ${functionName}'s ${prefix} map`).toBeGreaterThan(0);
+  return map;
+}
+
+function expectServerLabelsCoveredBySpaMap(serverLabels: string[], spaMap: Record<string, string>, context: string): void {
+  const uniqueServerLabels = sortedUnique(serverLabels);
+  expect(uniqueServerLabels.length, `${context}: server extraction matched no labels`).toBeGreaterThan(0);
+
+  const missing = uniqueServerLabels.filter((label) => !(label in spaMap));
+  const orphans = sortedUnique(Object.keys(spaMap).filter((label) => !uniqueServerLabels.includes(label)));
+  const wrongCatalogValue = uniqueServerLabels
+    .filter((label) => label in spaMap)
+    .filter((label) => EN_CATALOG[spaMap[label]] !== label)
+    .map((label) => `${label} -> ${spaMap[label]} -> ${EN_CATALOG[spaMap[label]]}`);
+
+  expect(
+    { missing, orphans, wrongCatalogValue },
+    `${context}: the C# labels and SPA translation map must be an exact two-way match.`,
+  ).toEqual({ missing: [], orphans: [], wrongCatalogValue: [] });
+}
 
 /**
  * The overview tiles are named by the server, so their translations are checked against the server.
@@ -338,6 +414,7 @@ describe('Health section labels', () => {
  * two lists in lock-step so a future server-side reason is not silently dropped on Spanish pages.
  */
 const TEAMS_AVAILABILITY_MODEL = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'TeamsExplorer', 'TeamsExplorerAvailability.cs');
+const TEAMS_AVAILABILITY_BAR = join(process.cwd(), 'src', 'components', 'teamsExplorer', 'AvailabilityBar.tsx');
 const TEAMS_AVAILABILITY_REASON_CALL = /model\.Reasons\.Add\(/g;
 
 function teamsAvailabilityReasonCount(): number {
@@ -348,19 +425,21 @@ function teamsAvailabilityReasonCount(): number {
 describe('Teams Explorer availability reasons', () => {
   it('finds the server model that still authors the compatibility reasons', () => {
     expect(() => readFileSync(TEAMS_AVAILABILITY_MODEL, 'utf8')).not.toThrow();
+    expect(() => readFileSync(TEAMS_AVAILABILITY_BAR, 'utf8')).not.toThrow();
     expect(teamsAvailabilityReasonCount()).toBe(8);
   });
 
-  it('has one catalogued SPA reason for every server-authored availability reason', () => {
-    const cataloguedReasons = Object.keys(EN_CATALOG)
-      .filter((key) => key.startsWith('teamsExplorer.availability.reason.'));
+  it('has the same catalogued SPA reasons as the server-authored availability reasons', () => {
+    const prefix = 'teamsExplorer.availability.reason.';
+    const renderedReasons = translationKeysIn(readFileSync(TEAMS_AVAILABILITY_BAR, 'utf8'), prefix);
+    const cataloguedReasons = catalogKeys(prefix);
 
     expect(
-      cataloguedReasons,
+      { renderedReasons, cataloguedReasons, serverCount: teamsAvailabilityReasonCount() },
       'TeamsExplorerAvailability added or removed a Reasons.Add(...) branch. Mirror the same boolean\n' +
         'condition in AvailabilityBar.tsx and add/remove the matching\n' +
         'teamsExplorer.availability.reason.* catalog entry in en/es.',
-    ).toHaveLength(teamsAvailabilityReasonCount());
+    ).toEqual({ renderedReasons: cataloguedReasons, cataloguedReasons, serverCount: renderedReasons.length });
   });
 
   it('projects the Service Bus prerequisite as a SPA-visible flag', () => {
@@ -441,32 +520,86 @@ const COPILOT_ADOPTION_SCORING = join(
   'CopilotAdoptionScoring.cs',
 );
 const COWORK_PANEL = join(process.cwd(), 'src', 'components', 'copilotAdoption', 'CoworkPanel.tsx');
+const COPILOT_ADOPTION_SERVER_TEXT_MODULE = join(process.cwd(), 'src', 'components', 'copilotAdoption', 'serverText.ts');
 const COWORK_ESTIMATE_ASSUMPTION_CALL = /estimate\.Assumptions\.Add\(/g;
-const COWORK_ESTIMATE_RENDERED_ASSUMPTION = /key="estimate-assumption-[^"]+"/g;
+const COWORK_ESTIMATE_ASSUMPTION_PREFIX = 'copilotAdoptionCowork.estimate.assumption.';
 
 function coworkEstimateServerAssumptionCount(): number {
   const source = readFileSync(COPILOT_ADOPTION_SCORING, 'utf8');
   return [...source.matchAll(COWORK_ESTIMATE_ASSUMPTION_CALL)].length;
 }
 
-function coworkEstimateRenderedAssumptionCount(): number {
+function coworkEstimateRenderedAssumptionKeys(): string[] {
   const source = readFileSync(COWORK_PANEL, 'utf8');
-  return [...source.matchAll(COWORK_ESTIMATE_RENDERED_ASSUMPTION)].length;
+  const list = source.match(/<ul className=\{styles\.assumptionList\}>([\s\S]*?)<\/ul>/)?.[1] ?? '';
+  expect(list, 'Could not find the Cowork estimate assumption list').toBeTruthy();
+
+  return sortedUnique(
+    [...list.matchAll(/'([^']+)'/g)]
+      .map((m) => m[1])
+      .filter((key) => key.startsWith(COWORK_ESTIMATE_ASSUMPTION_PREFIX)),
+  );
+}
+
+function coworkEstimateAssumptionIds(keys: string[]): string[] {
+  return sortedUnique(
+    keys.map((key) =>
+      key.slice(COWORK_ESTIMATE_ASSUMPTION_PREFIX.length).replace(/\.(?:one|other)$/, ''),
+    ),
+  );
 }
 
 describe('Copilot Adoption Cowork estimate assumptions', () => {
   it('finds the scoring file that still authors the compatibility assumptions', () => {
     expect(() => readFileSync(COPILOT_ADOPTION_SCORING, 'utf8')).not.toThrow();
     expect(coworkEstimateServerAssumptionCount()).toBeGreaterThan(0);
+    expect(coworkEstimateRenderedAssumptionKeys().length).toBeGreaterThan(0);
   });
 
-  it('renders one catalogued SPA bullet for every server-authored assumption', () => {
+  it('renders the same catalogued SPA assumptions the server still authors for compatibility', () => {
+    const renderedKeys = coworkEstimateRenderedAssumptionKeys();
+    const renderedIds = coworkEstimateAssumptionIds(renderedKeys);
+    const catalogIds = coworkEstimateAssumptionIds(catalogKeys(COWORK_ESTIMATE_ASSUMPTION_PREFIX));
+
     expect(
-      coworkEstimateRenderedAssumptionCount(),
+      { renderedIds, catalogIds, serverCount: coworkEstimateServerAssumptionCount() },
       'CopilotAdoptionScoring added or removed an estimate.Assumptions.Add(...) call. Mirror the\n' +
         'same assumption in CoworkPanel.tsx using copilotAdoptionCowork.estimate.assumption.*\n' +
-        'catalog entries in en/es, or deliberately remove the obsolete SPA bullet.',
-    ).toBe(coworkEstimateServerAssumptionCount());
+        'catalog entries in en/es, or deliberately remove the obsolete SPA bullet. Plural catalog\n' +
+        'forms count as one assumption.',
+    ).toEqual({ renderedIds: catalogIds, catalogIds, serverCount: renderedIds.length });
+  });
+
+  it('wires each Cowork assumption sentence to the facts that sentence describes', () => {
+    const source = readFileSync(COWORK_PANEL, 'utf8');
+    const list = source.match(/<ul className=\{styles\.assumptionList\}>([\s\S]*?)<\/ul>/)?.[1] ?? '';
+
+    const requiredFacts: Record<string, string[]> = {
+      saves: ['options.coworkMinutesSavedPerMeeting', 'options.coworkMinutesSavedPerMailThread', 'options.coworkMinutesSavedPerDocument'],
+      lowerBound: ['estimateLowerBoundPercent'],
+      volumes: ['estimate.cohortUsers', 'estimateWorkingDaysPerMonth'],
+      notMeasured: [],
+      noMoney: [],
+    };
+
+    const problems = Object.entries(requiredFacts).flatMap(([id, facts]) => {
+      const key = `${COWORK_ESTIMATE_ASSUMPTION_PREFIX}${id}`;
+      const keyPattern = id === 'volumes'
+        ? /copilotAdoptionCowork\.estimate\.assumption\.volumes\.(?:one|other)/
+        : new RegExp(key.replace(/\./g, '\\.'));
+      const keyIndex = list.search(keyPattern);
+      if (keyIndex < 0) return [`${id}: missing rendered key`];
+
+      const nextItem = list.indexOf('<li ', keyIndex + 1);
+      const item = list.slice(keyIndex, nextItem < 0 ? undefined : nextItem);
+      return facts.filter((fact) => !item.includes(fact)).map((fact) => `${id}: missing ${fact}`);
+    });
+
+    expect(
+      problems,
+      'The Cowork assumption bullets must use the same facts as the server-authored compatibility\n' +
+        'sentences they replace; a count-only guard cannot catch the right sentence fed by the wrong value.',
+    ).toEqual([]);
   });
 });
 
@@ -555,33 +688,54 @@ describe('User data lookup category labels', () => {
 
 /** DLP availability reasons are still authored by DlpAPIController; the SPA mirrors the same flags. */
 const DLP_CONTROLLER = join(process.cwd(), '..', '..', 'Controllers', 'DlpAPIController.cs');
+const DLP_PAGE = join(process.cwd(), 'src', 'pages', 'DlpPage.tsx');
 const DLP_REASON_CALL = /model\.Reasons\.Add\(/g;
 
 describe('DLP availability reasons', () => {
   it('finds the controller that defines them', () => {
     expect(() => readFileSync(DLP_CONTROLLER, 'utf8')).not.toThrow();
+    expect(() => readFileSync(DLP_PAGE, 'utf8')).not.toThrow();
     expect([...readFileSync(DLP_CONTROLLER, 'utf8').matchAll(DLP_REASON_CALL)]).toHaveLength(2);
   });
 
-  it('has one catalogued SPA reason for every server-authored DLP availability reason', () => {
-    const cataloguedReasons = Object.keys(EN_CATALOG).filter((key) => key.startsWith('dlp.availability.reason.'));
-    expect(cataloguedReasons).toHaveLength([...readFileSync(DLP_CONTROLLER, 'utf8').matchAll(DLP_REASON_CALL)].length);
+  it('has the same catalogued SPA reasons as the server-authored DLP availability reasons', () => {
+    const prefix = 'dlp.availability.reason.';
+    const renderedReasons = translationKeysIn(readFileSync(DLP_PAGE, 'utf8'), prefix);
+    const cataloguedReasons = catalogKeys(prefix);
+    const serverCount = [...readFileSync(DLP_CONTROLLER, 'utf8').matchAll(DLP_REASON_CALL)].length;
+
+    expect(
+      { renderedReasons, cataloguedReasons, serverCount },
+      'DlpAPIController added or removed a Reasons.Add(...) branch. Mirror the same boolean\n' +
+        'condition in DlpPage.tsx and add/remove the matching dlp.availability.reason.* catalog entry.',
+    ).toEqual({ renderedReasons: cataloguedReasons, cataloguedReasons, serverCount: renderedReasons.length });
   });
 });
 
 /** Agent cost availability messages are server-authored in SqlAgentCostReportStore.AddMessages. */
 const AGENT_COST_STORE = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'AgentCosts', 'SqlAgentCostReportStore.cs');
+const AGENT_COST_PAGE = join(process.cwd(), 'src', 'pages', 'AgentCostsPage.tsx');
 const AGENT_COST_MESSAGE_CALL = /result\.Messages\.Add\(/g;
 
 describe('Agent cost availability messages', () => {
   it('finds the store that defines them', () => {
     expect(() => readFileSync(AGENT_COST_STORE, 'utf8')).not.toThrow();
+    expect(() => readFileSync(AGENT_COST_PAGE, 'utf8')).not.toThrow();
     expect([...readFileSync(AGENT_COST_STORE, 'utf8').matchAll(AGENT_COST_MESSAGE_CALL)].length).toBeGreaterThanOrEqual(10);
   });
 
-  it('has one catalogued SPA message for every server-authored availability message', () => {
-    const cataloguedMessages = Object.keys(EN_CATALOG).filter((key) => key.startsWith('agentCosts.availability.message.'));
-    expect(cataloguedMessages).toHaveLength([...readFileSync(AGENT_COST_STORE, 'utf8').matchAll(AGENT_COST_MESSAGE_CALL)].length);
+  it('has the same catalogued SPA messages as the server-authored availability messages', () => {
+    const prefix = 'agentCosts.availability.message.';
+    const renderedMessages = translationKeysIn(readFileSync(AGENT_COST_PAGE, 'utf8'), prefix);
+    const cataloguedMessages = catalogKeys(prefix);
+    const serverCount = [...readFileSync(AGENT_COST_STORE, 'utf8').matchAll(AGENT_COST_MESSAGE_CALL)].length;
+
+    expect(
+      { renderedMessages, cataloguedMessages, serverCount },
+      'SqlAgentCostReportStore.AddMessages added or removed a result.Messages.Add(...) branch.\n' +
+        'Mirror the same condition in AgentCostsPage.tsx and add/remove the matching\n' +
+        'agentCosts.availability.message.* catalog entry.',
+    ).toEqual({ renderedMessages: cataloguedMessages, cataloguedMessages, serverCount: renderedMessages.length });
   });
 });
 
@@ -662,6 +816,39 @@ function copilotAdoptionServiceSource(): string {
     return readFileSync(COPILOT_ADOPTION_SERVICE_TEXT, 'utf8');
   }
 
+function copilotAdoptionServerTextModuleSource(): string {
+    return readFileSync(COPILOT_ADOPTION_SERVER_TEXT_MODULE, 'utf8');
+  }
+
+function copilotActionCodes(): string[] {
+    const source = copilotAdoptionScoringSource();
+    const actionClass = source.match(/public static class AdoptionActionCodes\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? '';
+    expect(actionClass, 'Could not find AdoptionActionCodes').toBeTruthy();
+
+    const codes = sortedUnique([...actionClass.matchAll(/public const string \w+ = "([^"]+)";/g)].map((m) => m[1]));
+    expect(codes.length, 'AdoptionActionCodes extraction matched no codes').toBeGreaterThanOrEqual(9);
+    return codes;
+  }
+
+function copilotAdoptionCatalogCodes(prefix: string): string[] {
+    return sortedUnique(catalogKeys(prefix).map((key) => key.slice(prefix.length).replace(/\.[^.]+$/, '')));
+  }
+
+function copilotFunnelLabels(): string[] {
+    const source = copilotAdoptionServiceSource();
+    const block = source.match(/private static List<AdoptionCategory> BuildFunnel\([\s\S]*?return new List<AdoptionCategory>\s*\{([\s\S]*?)\n\s*\};/)?.[1] ?? '';
+    expect(block, 'Could not find BuildFunnel labels').toBeTruthy();
+    return [...block.matchAll(/new AdoptionCategory \{ Label = "([^"]+)"/g)].map((m) => m[1]);
+  }
+
+function copilotScoreProfileLabels(): string[] {
+    return [...copilotAdoptionServiceSource().matchAll(/profiles\.Add\(Profile\("([^"]+)"/g)].map((m) => m[1]);
+  }
+
+function copilotConcentrationLabels(): string[] {
+    return [...copilotAdoptionScoringSource().matchAll(/Tuple\.Create\("([^"]+)",\s*0\.\d+\)/g)].map((m) => m[1]);
+  }
+
 describe('Copilot Adoption server-authored text', () => {
     it('finds the C# files that define it', () => {
       expect(() => readFileSync(COPILOT_ADOPTION_SCORING_TEXT, 'utf8')).not.toThrow();
@@ -672,72 +859,65 @@ describe('Copilot Adoption server-authored text', () => {
     });
 
     it('translates every recommended-action code the scorer can send', () => {
-      const source = copilotAdoptionScoringSource();
-      const codes = [...new Set([...source.matchAll(/public const string \w+ = "([^"]+)";/g)]
-        .map((m) => m[1])
-        .filter((code) => ['reclaim', 'reengage', 'coach', 'broaden', 'grow', 'sustain', 'advocate', 'review', 'excluded'].includes(code)))];
-      expect(codes.length).toBe(9);
+      const codes = copilotActionCodes();
+      const labelCodes = copilotAdoptionCatalogCodes('copilotAdoption.server.action.').filter((code) =>
+        catalogKeys(`copilotAdoption.server.action.${code}.`).includes(`copilotAdoption.server.action.${code}.label`));
+      const descriptionCodes = copilotAdoptionCatalogCodes('copilotAdoption.server.action.').filter((code) =>
+        catalogKeys(`copilotAdoption.server.action.${code}.`).includes(`copilotAdoption.server.action.${code}.description`));
 
       const missing = codes.flatMap((code) => [
-        `copilotAdoption.server.action.${code}.label`,
-        `copilotAdoption.server.action.${code}.description`,
-      ]).filter((key) => !(key in EN_CATALOG));
+          `copilotAdoption.server.action.${code}.label`,
+          `copilotAdoption.server.action.${code}.description`,
+        ]).filter((key) => !(key in EN_CATALOG));
 
-      expect(missing).toEqual([]);
+      expect(
+        { missing, labelCodes, descriptionCodes },
+        'AdoptionActionCodes and copilotAdoption.server.action.* catalog entries must be an exact\n' +
+          'two-way match. A new C# action code with no catalog entry would otherwise fall back to English.',
+      ).toEqual({ missing: [], labelCodes: codes, descriptionCodes: codes });
     });
 
     it('translates every engagement band and habit bucket label the scorer can send', () => {
       const source = copilotAdoptionScoringSource();
-      const bandLabels = [...source.matchAll(/case AdoptionBand\.\w+: return "([^"]+)";/g)].map((m) => m[1]);
-      const bucketLabels = [...source.matchAll(/"((?:Infrequent|Moderate|Frequent|Daily))"/g)].map((m) => m[1]);
+      const bandLabels = sortedUnique([...source.matchAll(/case AdoptionBand\.\w+: return "([^"]+)";/g)].map((m) => m[1]));
+      const bucketLabels = sortedUnique([...source.matchAll(/"((?:Infrequent|Moderate|Frequent|Daily))"/g)].map((m) => m[1]));
 
-      expect(new Set(bandLabels).size).toBeGreaterThanOrEqual(6);
-      expect(new Set(bucketLabels).size).toBe(4);
+      expect(bandLabels.length).toBeGreaterThanOrEqual(6);
+      expect(bucketLabels.length).toBe(4);
 
-      const expected = [
-        'copilotAdoption.server.band.neverUsed',
-        'copilotAdoption.server.band.dormant',
-        'copilotAdoption.server.band.trialling',
-        'copilotAdoption.server.band.developing',
-        'copilotAdoption.server.band.established',
-        'copilotAdoption.server.band.champion',
-        'copilotAdoption.server.habitBucket.infrequent',
-        'copilotAdoption.server.habitBucket.moderate',
-        'copilotAdoption.server.habitBucket.frequent',
-        'copilotAdoption.server.habitBucket.daily',
-        'copilotAdoption.server.habitBucket.infrequent.range',
-        'copilotAdoption.server.habitBucket.moderate.range',
-        'copilotAdoption.server.habitBucket.frequent.range',
-        'copilotAdoption.server.habitBucket.daily.range',
-      ];
+      const serverText = copilotAdoptionServerTextModuleSource();
+      expectServerLabelsCoveredBySpaMap(
+        bandLabels,
+        labelKeyMapFromFunction(serverText, 'adoptionBandLabel', 'copilotAdoption.server.band.'),
+        'Copilot Adoption band labels',
+      );
+      expectServerLabelsCoveredBySpaMap(
+        bucketLabels,
+        labelKeyMapFromFunction(serverText, 'habitBucketLabel', 'copilotAdoption.server.habitBucket.'),
+        'Copilot Adoption habit bucket labels',
+      );
 
-      expect(expected.filter((key) => !(key in EN_CATALOG))).toEqual([]);
+      const rangeKeys = catalogKeys('copilotAdoption.server.habitBucket.').filter((key) => key.endsWith('.range'));
+      expect(rangeKeys.map((key) => key.replace(/\.range$/, ''))).toEqual(catalogKeys('copilotAdoption.server.habitBucket.').filter((key) => !key.endsWith('.range')));
     });
 
     it('translates every funnel, concentration and profile label the service can send', () => {
-      const source = copilotAdoptionServiceSource();
-      const serviceLabels = [
-        ...source.matchAll(/new AdoptionCategory \{ Label = "([^"]+)"/g),
-        ...source.matchAll(/Profile\("([^"]+)"/g),
-      ].map((m) => m[1]);
-
-      expect(serviceLabels).toEqual(expect.arrayContaining(['Licensed', 'Ever used Copilot', 'Typical active user']));
-
-      const expected = [
-        'copilotAdoption.server.funnel.licensed',
-        'copilotAdoption.server.funnel.everUsedCopilot',
-        'copilotAdoption.server.funnel.activeThisPeriod',
-        'copilotAdoption.server.funnel.habitualUsers',
-        'copilotAdoption.server.funnel.champions',
-        'copilotAdoption.server.scoreProfile.typicalActiveUser',
-        'copilotAdoption.server.scoreProfile.yourChampions',
-        'copilotAdoption.server.concentration.top10',
-        'copilotAdoption.server.concentration.next15',
-        'copilotAdoption.server.concentration.next25',
-        'copilotAdoption.server.concentration.bottom50',
-      ];
-
-      expect(expected.filter((key) => !(key in EN_CATALOG))).toEqual([]);
+      const serverText = copilotAdoptionServerTextModuleSource();
+      expectServerLabelsCoveredBySpaMap(
+        copilotFunnelLabels(),
+        labelKeyMapFromFunction(serverText, 'funnelStageLabel', 'copilotAdoption.server.funnel.'),
+        'Copilot Adoption funnel labels',
+      );
+      expectServerLabelsCoveredBySpaMap(
+        copilotScoreProfileLabels(),
+        labelKeyMapFromFunction(serverText, 'scoreProfileLabel', 'copilotAdoption.server.scoreProfile.'),
+        'Copilot Adoption score profile labels',
+      );
+      expectServerLabelsCoveredBySpaMap(
+        copilotConcentrationLabels(),
+        labelKeyMapFromFunction(serverText, 'concentrationLabel', 'copilotAdoption.server.concentration.'),
+        'Copilot Adoption concentration labels',
+      );
     });
 
     it('translates every agent health and opportunity tier branch the scorer can send', () => {
@@ -760,3 +940,184 @@ describe('Copilot Adoption server-authored text', () => {
       expect(expected.filter((key) => !(key in EN_CATALOG))).toEqual([]);
     });
   });
+
+/**
+ * Enabled-import badges on the Overview and Service configuration pages come from
+ * HealthService.ImportLabelsBySettingProperty. The API still sends the English label rather than
+ * the stable setting-property key, so the SPA map records both: the key for drift detection and
+ * the English label for current rendering.
+ */
+const HEALTH_SERVICE = join(process.cwd(), '..', '..', 'Models', 'Health', 'HealthService.cs');
+const IMPORT_LABEL_ENTRY = /\{\s*nameof\(ImportTaskSettings\.(\w+)\),\s*"([^"]+)"\s*\}/g;
+
+function enabledImportLabelsBySettingProperty(): Record<string, string> {
+  const source = readFileSync(HEALTH_SERVICE, 'utf8');
+  return Object.fromEntries([...source.matchAll(IMPORT_LABEL_ENTRY)].map((m) => [m[1], m[2]]));
+}
+
+describe('Enabled-import badges', () => {
+  it('finds the health service map that defines them', () => {
+    expect(() => readFileSync(HEALTH_SERVICE, 'utf8')).not.toThrow();
+    expect(Object.keys(enabledImportLabelsBySettingProperty()).length).toBeGreaterThanOrEqual(10);
+  });
+
+  it('has a SPA label entry for every server setting-property key', () => {
+    const server = enabledImportLabelsBySettingProperty();
+    const spa = ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY;
+
+    expect(Object.keys(spa).sort()).toEqual(Object.keys(server).sort());
+    expect(Object.fromEntries(Object.entries(spa).map(([key, value]) => [key, value.english]))).toEqual(server);
+    expect(Object.values(spa).map((value) => value.key).filter((key) => !(key in EN_CATALOG))).toEqual([]);
+  });
+});
+
+/**
+ * User Lookup workload badges and source lists are server-authored product wording. Categories
+ * already have their own guard above; this covers the workload catalogue beside them.
+ */
+const USER_DATA_WORKLOAD = /new\s+UserDataWorkloadDef\s*\{\s*Flag\s*=\s*Wf\.(\w+),\s*Name\s*=\s*"([^"]+)",\s*Description\s*=\s*"([^"]+)"/g;
+
+function userDataWorkloadsByFlag(): Record<string, { name: string; description: string }> {
+  const source = readFileSync(USER_DATA_RULES, 'utf8');
+  const flags = new Map([...source.matchAll(/public\s+const\s+string\s+(\w+)\s*=\s*"([^"]+)";/g)].map((m) => [m[1], m[2]]));
+  return Object.fromEntries([...source.matchAll(USER_DATA_WORKLOAD)].map((m) => [
+    flags.get(m[1]) ?? m[1],
+    { name: m[2], description: m[3] },
+  ]));
+}
+
+describe('User data lookup workload labels', () => {
+  it('finds the rules file that defines them', () => {
+    expect(() => readFileSync(USER_DATA_RULES, 'utf8')).not.toThrow();
+    expect(Object.keys(userDataWorkloadsByFlag()).length).toBeGreaterThanOrEqual(8);
+  });
+
+  it('has a SPA label entry for every server workload flag', () => {
+    const server = userDataWorkloadsByFlag();
+    const spa = USER_DATA_WORKLOADS_BY_FLAG;
+
+    expect(Object.keys(spa).sort()).toEqual(Object.keys(server).sort());
+    expect(Object.fromEntries(Object.entries(spa).map(([key, value]) => [key, value.english]))).toEqual(
+      Object.fromEntries(Object.entries(server).map(([key, value]) => [key, value.name])),
+    );
+    expect(Object.values(spa).flatMap((value) => [value.nameKey, value.descriptionKey]).filter((key) => !(key in EN_CATALOG))).toEqual([]);
+  });
+});
+
+function teamsSegmentKeysFromScoring(): string[] {
+  const source = readFileSync(TEAMS_SCORING, 'utf8');
+  return sortedUnique([...source.matchAll(/case TeamsUserSegment\.(\w+): return "[^"]*";/g)].map((m) => m[1]));
+}
+
+function teamsMeetingBucketKeys(): Record<keyof typeof TEAMS_MEETING_BUCKET_LABEL_KEYS, string[]> {
+  const source = readFileSync(join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'TeamsExplorer', 'SqlTeamsExplorerStore.cs'), 'utf8');
+  const sizeBlock = source.match(/private static List<TeamsBucketRow> BuildSizeBuckets[\s\S]*?var buckets = new\[\]\s*\{([\s\S]*?)\};/)?.[1] ?? '';
+  const durationBlock = source.match(/private static List<TeamsBucketRow> BuildDurationBuckets[\s\S]*?var buckets = new\[\]\s*\{([\s\S]*?)\};/)?.[1] ?? '';
+  const periodBlock = source.match(/private static List<TeamsBucketRow> BuildPeriodOfDay[\s\S]*?var buckets = new\[\]\s*\{([\s\S]*?)\};/)?.[1] ?? '';
+
+  return {
+    size: sortedUnique([...sizeBlock.matchAll(/Key = "([^"]+)"/g)].map((m) => m[1])),
+    duration: sortedUnique([...durationBlock.matchAll(/Key = "([^"]+)"/g)].map((m) => m[1])),
+    period: sortedUnique([...periodBlock.matchAll(/Key = "([^"]+)"/g)].map((m) => m[1])),
+  };
+}
+
+describe('Teams Explorer segment and meeting bucket labels', () => {
+  it('finds the C# that defines them', () => {
+    expect(() => readFileSync(TEAMS_SCORING, 'utf8')).not.toThrow();
+    expect(teamsSegmentKeysFromScoring().length).toBeGreaterThanOrEqual(4);
+    expect(teamsMeetingBucketKeys().size.length).toBeGreaterThanOrEqual(7);
+  });
+
+  it('has a SPA label entry for every server segment', () => {
+    expect(Object.keys(TEAMS_SEGMENT_TEXT_KEYS).sort()).toEqual(teamsSegmentKeysFromScoring());
+    expect(Object.values(TEAMS_SEGMENT_TEXT_KEYS).flatMap((value) => [value.labelKey, value.descriptionKey]).filter((key) => !(key in EN_CATALOG))).toEqual([]);
+  });
+
+  it('has a SPA label entry for every server meeting bucket key', () => {
+    const server = teamsMeetingBucketKeys();
+    for (const group of Object.keys(TEAMS_MEETING_BUCKET_LABEL_KEYS) as (keyof typeof TEAMS_MEETING_BUCKET_LABEL_KEYS)[]) {
+      expect(sortedUnique(Object.keys(TEAMS_MEETING_BUCKET_LABEL_KEYS[group]))).toEqual(server[group]);
+      expect(Object.values(TEAMS_MEETING_BUCKET_LABEL_KEYS[group]).filter((key) => !(key in EN_CATALOG))).toEqual([]);
+    }
+  });
+});
+
+/**
+ * Web Activity availability reasons are still serialized as English for API compatibility; the SPA
+ * renders catalogued wording from the same availability facts. One legacy branch ("configuration
+ * unreadable") is not distinguishable from the booleans on the wire, so the SPA map includes a
+ * compatibility key until the API exposes that state explicitly.
+ */
+const WEB_ACTIVITY_AVAILABILITY = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'SpoWebActivity', 'WebActivityAvailability.cs');
+const WEB_ACTIVITY_REASON_CALL = /model\.Reasons\.Add\(/g;
+
+describe('Web Activity availability reasons', () => {
+  it('finds the server model that still authors the compatibility reasons', () => {
+    expect(() => readFileSync(WEB_ACTIVITY_AVAILABILITY, 'utf8')).not.toThrow();
+    expect([...readFileSync(WEB_ACTIVITY_AVAILABILITY, 'utf8').matchAll(WEB_ACTIVITY_REASON_CALL)].length).toBe(8);
+  });
+
+  it('has catalogued SPA reasons for the server-authored availability branches', () => {
+    expect(Object.values(WEB_ACTIVITY_AVAILABILITY_REASON_KEYS).filter((key) => !(key in EN_CATALOG))).toEqual([]);
+    expect(Object.keys(WEB_ACTIVITY_AVAILABILITY_REASON_KEYS)).toEqual([
+      'configurationUnreadable',
+      'webTrafficOffWithExistingHits',
+      'webTrafficOffNoHits',
+      'appInsightsMissing',
+      'noPageViewsKnown',
+      'pageViewCheckFailed',
+      'staleCollection',
+      'userMetadataOff',
+      'noSearches',
+      'noClicks',
+    ]);
+  });
+});
+
+describe('Reports app-breadth bucket labels', () => {
+  it('finds the Office apps query that produces app-count labels', () => {
+    const source = readFileSync(REPORTS_CONTROLLERS[1], 'utf8');
+    expect(source).toContain('internal static string AppBreadthQuery()');
+    expect(source).toContain("CASE WHEN AppCount = 1 THEN N' app' ELSE N' apps' END AS Label");
+  });
+
+  it('has plural catalogue keys for the app-count labels', () => {
+    expect(EN_CATALOG['reports.category.appBreadth.one']).toBe('{count} app');
+    expect(EN_CATALOG['reports.category.appBreadth.other']).toBe('{count} apps');
+  });
+});
+
+const TENURE_BASIS_CONST = /public\s+const\s+string\s+TenureBasis\w+\s*=\s*"([^"]+)";/g;
+
+function tenureBasisKeys(): string[] {
+  const source = readFileSync(COPILOT_ADOPTION_SCORING, 'utf8');
+  return [...source.matchAll(TENURE_BASIS_CONST)].map((m) => m[1]);
+}
+
+describe('Copilot Adoption tenure-basis labels', () => {
+  it('finds the scoring file that defines them', () => {
+    expect(() => readFileSync(COPILOT_ADOPTION_SCORING, 'utf8')).not.toThrow();
+    expect(tenureBasisKeys().length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('has a SPA label map entry for every server tenure-basis code', () => {
+    expect(Object.keys(TENURE_BASIS_LABEL_KEYS).sort()).toEqual(tenureBasisKeys().sort());
+  });
+
+  it('has catalog text for every mapped tenure-basis code', () => {
+    const missing = Object.values(TENURE_BASIS_LABEL_KEYS).filter((catalogKey) => !(catalogKey in EN_CATALOG));
+    expect(missing, 'Add missing tenure-basis display text to copilotAdoptionUsers in en/es.').toEqual([]);
+  });
+});
+
+describe('Copilot Adoption Cowork row tier labels', () => {
+  it('finds the scoring file that defines them', () => {
+    expect(() => readFileSync(COPILOT_ADOPTION_SCORING, 'utf8')).not.toThrow();
+    expect(coworkTierKeys().length).toBeGreaterThanOrEqual(6);
+  });
+
+  it('has a SPA label map entry for every server Cowork tier code', () => {
+    expect(Object.keys(COWORK_TIER_LABEL_KEYS).sort()).toEqual(coworkTierKeys().sort());
+  });
+});
