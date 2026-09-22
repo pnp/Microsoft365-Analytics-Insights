@@ -558,7 +558,13 @@
     <Compile Include="Entities\Url.cs" />
     <Compile Include="Entities\User.cs" />
     <Compile Include="UserOrgs\EntraOrgAttributeSpec.cs" />
+    <Compile Include="UserOrgs\IUserOrgStore.cs" />
+    <Compile Include="UserOrgs\SqlUserOrgAssignmentStore.cs" />
+    <Compile Include="UserOrgs\SqlUserOrgImportJobStore.cs" />
+    <Compile Include="UserOrgs\SqlUserOrgTypeStore.cs" />
+    <Compile Include="UserOrgs\UserOrgModels.cs" />
     <Compile Include="UserOrgs\UserOrgRules.cs" />
+    <Compile Include="UserOrgs\UserOrgStores.cs" />
     <Compile Include="ResourceProxy.cs" />
     <Compile Include="Xlsx\XlsxChart.cs" />
     <Compile Include="Xlsx\XlsxSheet.cs" />

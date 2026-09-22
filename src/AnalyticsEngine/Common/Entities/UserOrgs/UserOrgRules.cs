@@ -253,5 +253,61 @@ namespace Common.Entities.UserOrgs
             unparseable = bad;
             return specs;
         }
+
+        /// <summary>
+        /// Collapses a batch of assignment updates so that at most one survives per
+        /// (user, org type) slot, keeping the <b>last</b> one.
+        /// </summary>
+        /// <param name="updates">The raw batch.</param>
+        /// <param name="duplicatesCollapsed">How many updates were discarded.</param>
+        /// <remarks>
+        /// Necessary, not defensive. <c>user_org_assignments</c> is keyed on (user_id, org_type_id), so
+        /// two rows for the same slot in one bulk batch would violate the primary key and fail the whole
+        /// import. Last-wins matches what an admin expects from a CSV that lists a person twice - the
+        /// later line is the correction - and the discarded count is reported so the import summary can
+        /// say the file had duplicates rather than silently picking one.
+        ///
+        /// Ordinal comparison on the value is deliberate: this only decides whether to *report* a
+        /// duplicate, and SQL Server's case-insensitive collation still decides what is ultimately
+        /// stored.
+        /// </remarks>
+        public static IReadOnlyList<UserOrgAssignmentUpdate> DeduplicateUpdates(
+            IReadOnlyList<UserOrgAssignmentUpdate> updates,
+            out int duplicatesCollapsed)
+        {
+            duplicatesCollapsed = 0;
+            if (updates == null || updates.Count == 0)
+            {
+                return new UserOrgAssignmentUpdate[0];
+            }
+
+            // Index of the surviving entry for each slot, so "last wins" costs one pass, not a
+            // reverse-then-reverse. At 200k users x several org types the allocation difference matters.
+            var slotToIndex = new Dictionary<UserOrgAssignmentUpdate, int>(
+                updates.Count, UserOrgAssignmentSlotComparer.Instance);
+            var kept = new List<UserOrgAssignmentUpdate>(updates.Count);
+
+            foreach (var update in updates)
+            {
+                if (update == null)
+                {
+                    continue;
+                }
+
+                int existingIndex;
+                if (slotToIndex.TryGetValue(update, out existingIndex))
+                {
+                    kept[existingIndex] = update;
+                    duplicatesCollapsed++;
+                }
+                else
+                {
+                    slotToIndex[update] = kept.Count;
+                    kept.Add(update);
+                }
+            }
+
+            return kept;
+        }
     }
 }
