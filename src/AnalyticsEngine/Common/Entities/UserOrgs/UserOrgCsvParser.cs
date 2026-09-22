@@ -104,8 +104,9 @@ namespace Common.Entities.UserOrgs
         /// </summary>
         /// <param name="stream">The uploaded content. Read from the current position to the end.</param>
         /// <param name="maxDataLines">
-        /// Stop after this many data lines. The preview passes a small number so a 200,000-row file can
-        /// be sampled without reading all of it.
+        /// Stop after this many data lines. Defaults to the full allowance: both the preview and the
+        /// import read the whole file, because the preview doubles as the blast-radius preflight for a
+        /// Replace and a sample of the first few rows cannot answer that question.
         /// </param>
         public static UserOrgCsvParseResult Parse(Stream stream, int maxDataLines = MaxDataLines)
         {

@@ -262,6 +262,75 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task AStaleTokenOnTheUnqualifiedKeyDoesNotKillTheFallback()
+        {
+            // The production shape Gemini found and the old fake could not express. A tenant that
+            // imported users before organisations were configured still has a token on the UNQUALIFIED
+            // cache key. Months later the configured attribute is removed from the tenant, so the
+            // org-carrying request 400s and the loader falls back - onto that key, whose token is long
+            // dead. Graph rejects it too, and before this was fixed that second rejection escaped and
+            // took the entire user import down, instead of completing it without organisation values.
+            var handler = new RecordingHandler(url =>
+            {
+                if (url.Contains("onPremisesExtensionAttributes"))
+                {
+                    return new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent("{}") };
+                }
+
+                return url.Contains("deltatoken=ANCIENT")
+                    ? new HttpResponseMessage(HttpStatusCode.BadRequest)
+                    {
+                        Content = new StringContent("{\"error\":{\"code\":\"resyncRequired\"}}"),
+                    }
+                    : Ok(DeltaPayload);
+            });
+
+            FakeDeltaValueProvider provider;
+            var loader = BuildLoader(handler, out provider);
+
+            // Written before organisations existed, and never touched since.
+            provider.SeedToken(string.Empty, "ANCIENT");
+
+            loader.SetOrgSelection(OneOrgAttribute());
+            var users = await loader.LoadAllActiveUsers();
+            await loader.CommitDeltaTokenAsync();
+
+            Assert.AreEqual(1, users.Count, "The rest of the user import must still complete.");
+            Assert.IsTrue(loader.OrgSelectionWasRejected);
+            Assert.AreEqual(string.Empty, provider.KeyQualifier);
+            Assert.AreEqual("NEWTOKEN", await provider.GetDeltaToken(), "The dead token must be replaced.");
+        }
+
+        [TestMethod]
+        public async Task ATokenIsOnlyEverReadFromTheKeyItWasWrittenUnder()
+        {
+            // The qualified and unqualified keys are separate stores, exactly as they are in Redis.
+            // Collapsing them would hide the scenario above.
+            var handler = new RecordingHandler(_ => Ok(DeltaPayload));
+            FakeDeltaValueProvider provider;
+            var loader = BuildLoader(handler, out provider);
+            var selection = OneOrgAttribute();
+
+            provider.SeedToken(string.Empty, "PRE-FEATURE");
+
+            loader.SetOrgSelection(selection);
+            Assert.IsNull(
+                await provider.GetDeltaToken(),
+                "The qualified key starts empty even though the unqualified one has a token.");
+
+            await loader.LoadAllActiveUsers();
+            await loader.CommitDeltaTokenAsync();
+
+            Assert.AreEqual("NEWTOKEN", await provider.GetDeltaToken());
+
+            loader.SetOrgSelection(GraphUserOrgSelection.None);
+            Assert.AreEqual(
+                "PRE-FEATURE",
+                await provider.GetDeltaToken(),
+                "Turning organisations off reads the key that was last written before they were on.");
+        }
+
+        [TestMethod]
         public async Task ARejectedSelectionMeansOrgValuesAreNotWritten()
         {
             // The response from a fallback carries no org properties at all, so applying it would read

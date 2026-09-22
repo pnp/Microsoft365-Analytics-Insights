@@ -348,20 +348,8 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             var summary = summaries.FirstOrDefault(s => s.Type != null && s.Type.Id == orgTypeId);
             preview.CurrentlyAssignedCount = summary == null ? 0 : summary.AssignedUserCount;
 
-            // The users this file keeps: currently assigned AND given a value by the file. Counting the
-            // users the file covers is a different question and gives the wrong answer exactly when it
-            // matters - a file covering a large population that barely overlaps the assigned one would
-            // subtract to zero and suppress the warning at the moment it is about to wipe everybody.
-            var keptCount = 0;
-            if (matchedWithValue.Count > 0 && preview.CurrentlyAssignedCount > 0)
-            {
-                var kept = await _users
-                    .FindAssignedUpnsAsync(orgTypeId, matchedWithValue.ToList(), cancellationToken)
-                    .ConfigureAwait(false);
-                keptCount = kept.Count;
-            }
-
-            preview.WouldClearCount = Math.Max(0, preview.CurrentlyAssignedCount - keptCount);
+            preview.WouldClearCount = await CountWouldClearAsync(orgTypeId, parsed.Rows, cancellationToken)
+                .ConfigureAwait(false);
             preview.MatchedUserCount = matchedWithValue.Count;
 
             var shown = parsed.Rows.Take(PreviewRowCount).ToList();
@@ -385,12 +373,16 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         /// <summary>
         /// Parses an upload in full, stages it and queues the background import.
         /// </summary>
+        /// <param name="confirmClear">
+        /// Whether the administrator has acknowledged how many users a Replace will clear.
+        /// </param>
         public async Task<UserOrgImportQueuedModel> QueueImportAsync(
             int orgTypeId,
             UserOrgImportMode mode,
             Stream content,
             string fileName,
             string startedBy,
+            bool confirmClear,
             CancellationToken cancellationToken)
         {
             var type = await _types.GetAsync(orgTypeId, cancellationToken).ConfigureAwait(false);
@@ -443,6 +435,25 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                         : "That file contains no rows.");
             }
 
+            if (mode == UserOrgImportMode.Replace)
+            {
+                // Recomputed here from the file actually being imported and the assignments as they
+                // are right now, rather than trusting the preview. The preview is a separate request
+                // that may be minutes old, and the endpoint is reachable directly - so a gate that
+                // lives only in the browser is not a gate at all. This also catches the case where
+                // somebody else changed the assignments between the preview and the import.
+                var wouldClear = await CountWouldClearAsync(orgTypeId, parsed.Rows, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (wouldClear > 0 && !confirmClear)
+                {
+                    throw new UserOrgValidationException(
+                        $"This import would clear the {type.Name} value of {wouldClear:N0} user(s) that the file does "
+                        + "not give a value to. Review the preview and confirm before continuing, or use Merge to "
+                        + "leave them as they are.");
+                }
+            }
+
             var jobId = await _jobs.CreateJobWithRowsAsync(
                 new UserOrgImportJob
                 {
@@ -471,6 +482,55 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         {
             var job = await _jobs.GetJobAsync(jobId, cancellationToken).ConfigureAwait(false);
             return job == null ? null : ToModel(job, _utcNow());
+        }
+
+        /// <summary>
+        /// How many users would lose their value for this org type if the parsed file were imported
+        /// with Replace.
+        /// </summary>
+        /// <remarks>
+        /// One implementation, used by both the preview and the import, so what an administrator is
+        /// shown and what the import enforces cannot disagree.
+        ///
+        /// The count is the users currently assigned <b>minus</b> those the file both covers and gives
+        /// a value to. Subtracting "users the file covers" instead would be a different question with
+        /// a dangerously wrong answer: a file covering a large population that barely overlaps the
+        /// assigned one subtracts to zero, suppressing the warning at the exact moment the import is
+        /// about to wipe everybody.
+        /// </remarks>
+        private async Task<int> CountWouldClearAsync(
+            int orgTypeId,
+            IReadOnlyList<UserOrgStagedRow> rows,
+            CancellationToken cancellationToken)
+        {
+            var summaries = await _types.GetSummariesAsync(cancellationToken).ConfigureAwait(false);
+            var summary = summaries.FirstOrDefault(s => s.Type != null && s.Type.Id == orgTypeId);
+            var assigned = summary == null ? 0 : summary.AssignedUserCount;
+
+            if (assigned == 0)
+            {
+                return 0;
+            }
+
+            // Last line wins, matching the merge: a later blank line for the same person is a clear,
+            // so they stop counting as kept.
+            var keptUpns = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            foreach (var row in rows)
+            {
+                keptUpns[row.Upn] = row.OrgValue != null;
+            }
+
+            var covered = keptUpns.Where(p => p.Value).Select(p => p.Key).ToList();
+            if (covered.Count == 0)
+            {
+                return assigned;
+            }
+
+            var kept = await _users
+                .FindAssignedUpnsAsync(orgTypeId, covered, cancellationToken)
+                .ConfigureAwait(false);
+
+            return Math.Max(0, assigned - kept.Count);
         }
 
         internal static string DescribeDelimiter(char delimiter)

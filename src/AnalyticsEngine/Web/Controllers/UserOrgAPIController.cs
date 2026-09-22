@@ -179,7 +179,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// </summary>
         [HttpPost]
         [Route("import-csv")]
-        public async Task<IHttpActionResult> ImportCsv(int orgTypeId, string mode, CancellationToken cancellationToken)
+        public async Task<IHttpActionResult> ImportCsv(int orgTypeId, string mode, CancellationToken cancellationToken, bool confirmClear = false)
         {
             var forged = RejectIfNotXhr();
             if (forged != null) return forged;
@@ -205,7 +205,7 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 var startedBy = User?.Identity?.Name ?? "unknown";
                 return await RunAsync(svc => svc.QueueImportAsync(
-                    orgTypeId, importMode, upload.File.Content, upload.File.FileName, startedBy, cancellationToken)).ConfigureAwait(false);
+                    orgTypeId, importMode, upload.File.Content, upload.File.FileName, startedBy, confirmClear, cancellationToken)).ConfigureAwait(false);
             }
         }
         /// <summary>GET api/UserOrg/jobs/{id} - import progress.</summary>

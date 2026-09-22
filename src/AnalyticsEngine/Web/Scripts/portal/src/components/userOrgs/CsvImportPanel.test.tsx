@@ -182,6 +182,38 @@ describe('CsvImportPanel', () => {
     expect(screen.getByRole('button', { name: /^Import/ })).toBeEnabled();
   });
 
+  it('sends the confirmation to the server, because the server re-checks it', async () => {
+    // The disabled button only stops this browser. The server refuses a clearing replace unless
+    // confirmClear arrives with it, so the flag has to be on the wire, not just in component state.
+    previewCsv.mockResolvedValue(preview({ wouldClearCount: 1199 }));
+    importCsv.mockResolvedValue({ jobId: 7, rowsQueued: 3, rowsInvalid: 0 });
+    fetchImportJob.mockResolvedValue(job());
+
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+    await chooseFile();
+    await waitFor(() => expect(screen.getByLabelText(/Replace/)).toBeInTheDocument());
+    await userEvent.click(screen.getByLabelText(/Replace/));
+    await userEvent.click(screen.getByLabelText(/I understand/));
+    await userEvent.click(screen.getByRole('button', { name: /^Import/ }));
+
+    await waitFor(() => expect(importCsv).toHaveBeenCalled());
+    expect(importCsv).toHaveBeenCalledWith(1, 'replace', expect.any(File), true);
+  });
+
+  it('does not claim confirmation for a merge', async () => {
+    previewCsv.mockResolvedValue(preview());
+    importCsv.mockResolvedValue({ jobId: 7, rowsQueued: 3, rowsInvalid: 0 });
+    fetchImportJob.mockResolvedValue(job());
+
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+    await chooseFile();
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Import/ })).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: /^Import/ }));
+
+    await waitFor(() => expect(importCsv).toHaveBeenCalled());
+    expect(importCsv).toHaveBeenCalledWith(1, 'merge', expect.any(File), false);
+  });
+
   it('reports unusable rows without blocking the import', async () => {
     previewCsv.mockResolvedValue(
       preview({ problems: [{ lineNumber: 9, reason: 'the user column is empty or too long' }] }),
@@ -208,7 +240,7 @@ describe('CsvImportPanel', () => {
     await waitFor(() => expect(screen.getByText('Import finished.')).toBeInTheDocument(), {
       timeout: 5000,
     });
-    expect(screen.getByText(/2 set/)).toBeInTheDocument();
+    expect(screen.getByText(/2 changed/)).toBeInTheDocument();
     expect(screen.getByText(/1 cleared/)).toBeInTheDocument();
     expect(screen.getByText(/1 unknown user/)).toBeInTheDocument();
     expect(onImportFinished).toHaveBeenCalled();

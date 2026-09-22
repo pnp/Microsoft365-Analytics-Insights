@@ -167,9 +167,17 @@ namespace Tests.UnitTests.FakeLoaderClasses
     /// <summary>
     /// Fake implementation of IDeltaValueProvider for testing
     /// </summary>
+    /// <remarks>
+    /// Tokens are stored <b>per qualifier</b>, exactly as <c>RedisProcessDeltaValueProvider</c> stores
+    /// them under a per-qualifier cache key. A single shared field would be a materially different
+    /// thing, and it hid a production defect once: the fallback path switches to the unqualified key,
+    /// and with one field that key looked empty, so a test could not see that a real deployment still
+    /// has a token sitting there from before organisations were configured.
+    /// </remarks>
     public class FakeDeltaValueProvider : IDeltaValueProvider
     {
-        private string _deltaToken;
+        private readonly Dictionary<string, string> _tokensByQualifier =
+            new Dictionary<string, string>(StringComparer.Ordinal);
 
         /// <summary>The qualifier most recently pushed in by the loader, so tests can assert on it.</summary>
         public string KeyQualifier { get; private set; } = string.Empty;
@@ -179,23 +187,30 @@ namespace Tests.UnitTests.FakeLoaderClasses
             KeyQualifier = string.IsNullOrEmpty(qualifier) ? string.Empty : qualifier;
         }
 
+        /// <summary>Seeds a token under a specific qualifier, to model a key written by an earlier cycle.</summary>
+        public void SeedToken(string qualifier, string token)
+        {
+            _tokensByQualifier[string.IsNullOrEmpty(qualifier) ? string.Empty : qualifier] = token;
+        }
+
         public Task ClearDeltaToken(CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _deltaToken = null;
+            _tokensByQualifier.Remove(KeyQualifier);
             return Task.CompletedTask;
         }
 
         public Task<string> GetDeltaToken(CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(_deltaToken);
+            string token;
+            return Task.FromResult(_tokensByQualifier.TryGetValue(KeyQualifier, out token) ? token : null);
         }
 
         public Task SetDeltaToken(string deltaToken, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _deltaToken = deltaToken;
+            _tokensByQualifier[KeyQualifier] = deltaToken;
             return Task.CompletedTask;
         }
     }

@@ -166,6 +166,14 @@ namespace Common.Entities.UserOrgs
 
         public int RowsTotal { get; set; }
 
+        /// <summary>
+        /// Assignments this import actually created or changed.
+        /// </summary>
+        /// <remarks>
+        /// A count of mutations, not of rows processed: re-importing an identical file reports zero,
+        /// because nothing needed changing. The portal labels it "changed" for that reason - "set"
+        /// would read as a row count and make a correct no-op look like a failed import.
+        /// </remarks>
         public int RowsApplied { get; set; }
 
         public int RowsCleared { get; set; }

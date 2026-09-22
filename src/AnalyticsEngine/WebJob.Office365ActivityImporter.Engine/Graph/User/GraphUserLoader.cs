@@ -190,49 +190,60 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             try
             {
-                return await LoadUsersPageByPage(_orgSelection).ConfigureAwait(false);
+                return await LoadWithTokenRecovery(_orgSelection).ConfigureAwait(false);
             }
             catch (GraphHttpException ex)
             {
-                if (_lastLoadUsedStoredToken && IsTokenRejection(ex))
-                {
-                    // Graph will not accept the stored token: expired, or minted for a different query.
-                    // Discard it and re-read everything under the SAME selection.
-                    //
-                    // Without this the token is never cleared, so every later cycle sends it, gets the
-                    // same rejection, and the import quietly does nothing - permanently. That is
-                    // reachable simply by turning the last organisation type off, which snaps the cache
-                    // key back to one that has not been written since before the feature was enabled.
-                    _logger.LogWarning(
-                        $"User import - Microsoft Graph rejected the stored delta token (HTTP {(int)ex.StatusCode}). "
-                        + "Discarding it and re-reading every user once. This cycle will take longer than usual.");
-
-                    await _deltaValueProvider.ClearDeltaToken().ConfigureAwait(false);
-
-                    try
-                    {
-                        return await LoadUsersPageByPage(_orgSelection).ConfigureAwait(false);
-                    }
-                    catch (GraphHttpException retryEx) when (!_orgSelection.IsEmpty)
-                    {
-                        // Rejected again with no token in play, so the selection is what is left.
-                        return await FallBackWithoutOrgAttributes(retryEx).ConfigureAwait(false);
-                    }
-                }
-
                 if (!_orgSelection.IsEmpty)
                 {
                     return await FallBackWithoutOrgAttributes(ex).ConfigureAwait(false);
                 }
 
-                // No organisation attributes, and not a token Graph refused: a transient failure with
-                // nothing to fall back to. Returning an empty result is precisely what this method did
-                // before this feature existed - no delta link was reached, so no token is committed and
-                // the next cycle simply tries again.
+                // No organisation attributes and nothing left to try. Returning an empty result is
+                // precisely what this method did before this feature existed - no delta link was
+                // reached, so no token is committed and the next cycle simply tries again.
                 _logger.LogWarning(
                     $"User import - reading users from Graph failed with HTTP {(int)ex.StatusCode}. No delta token "
                     + "will be committed, so the next cycle retries.");
                 return new List<GraphUser>();
+            }
+        }
+
+        /// <summary>
+        /// Loads under one selection, recovering by itself from a delta token Graph refuses.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Graph answers a token it will not accept - expired, or minted for a different query - with a
+        /// 400 or 410. Without clearing it the token is sent again every cycle, rejected every cycle,
+        /// and the import quietly does nothing forever.
+        /// </para>
+        /// <para>
+        /// This has to apply to <b>every</b> selection the cycle tries, not just the first. The fallback
+        /// path switches to the unqualified cache key, which on a tenant that has had organisations
+        /// configured for a while holds a token nobody has written since before the feature was enabled
+        /// - so it is precisely the load most likely to meet a dead token. An earlier version recovered
+        /// only on the first attempt and let the fallback's own rejection escape, which killed the whole
+        /// user import instead of completing it without organisation values.
+        /// </para>
+        /// </remarks>
+        private async Task<List<GraphUser>> LoadWithTokenRecovery(GraphUserOrgSelection selection)
+        {
+            try
+            {
+                return await LoadUsersPageByPage(selection).ConfigureAwait(false);
+            }
+            catch (GraphHttpException ex) when (_lastLoadUsedStoredToken && IsTokenRejection(ex))
+            {
+                _logger.LogWarning(
+                    $"User import - Microsoft Graph rejected the stored delta token (HTTP {(int)ex.StatusCode}). "
+                    + "Discarding it and re-reading every user once. This cycle will take longer than usual.");
+
+                await _deltaValueProvider.ClearDeltaToken().ConfigureAwait(false);
+
+                // No token this time, so a further failure is genuinely about the query or the service
+                // and is left for the caller to interpret.
+                return await LoadUsersPageByPage(selection).ConfigureAwait(false);
             }
         }
 
@@ -260,10 +271,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// edit at runtime, and Graph fails the WHOLE request over one of them - which would otherwise
         /// stop licences, managers and department metadata importing as well.
         ///
-        /// The retry is deliberately not restricted to a 400. The fallback load is lenient (see
-        /// <see cref="LoadUsersPageByPage"/>), which is exactly what this method did before org
-        /// attributes existed, so falling back on any HTTP failure leaves behaviour identical to the
-        /// old behaviour in every non-400 case instead of newly propagating a transient 500.
+        /// Falling back is deliberately not restricted to a 400: any failure of the org-carrying request
+        /// is worth one attempt without it, because the alternative is importing nothing at all. The
+        /// fallback goes through <see cref="LoadWithTokenRecovery"/> because it switches to the
+        /// unqualified cache key, which is the one most likely to be holding a token nobody has written
+        /// since before organisations were configured. If even that fails there is nothing left to try,
+        /// so an empty result is returned - the same outcome this method produced before org attributes
+        /// existed, and one that commits no token.
         /// </remarks>
         private async Task<List<GraphUser>> FallBackWithoutOrgAttributes(GraphHttpException ex)
         {
@@ -290,7 +304,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // while querying without the org properties.
             _deltaValueProvider.SetKeyQualifier(GraphUserOrgSelection.None.DeltaKeyQualifier);
 
-            return await LoadUsersPageByPage(GraphUserOrgSelection.None).ConfigureAwait(false);
+            try
+            {
+                return await LoadWithTokenRecovery(GraphUserOrgSelection.None).ConfigureAwait(false);
+            }
+            catch (GraphHttpException fallbackEx)
+            {
+                _logger.LogWarning(
+                    $"User import - reading users without the organisation attributes also failed with HTTP "
+                    + $"{(int)fallbackEx.StatusCode}. No delta token will be committed, so the next cycle retries.");
+                return new List<GraphUser>();
+            }
         }
 
         private async Task<List<GraphUser>> LoadUsersPageByPage(GraphUserOrgSelection orgSelection)

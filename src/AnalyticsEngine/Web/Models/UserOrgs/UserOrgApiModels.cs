@@ -74,6 +74,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         [JsonProperty("rowsTotal")]
         public int RowsTotal { get; set; }
 
+        /// <summary>Assignments created or changed. Re-importing an identical file reports zero.</summary>
         [JsonProperty("rowsApplied")]
         public int RowsApplied { get; set; }
 

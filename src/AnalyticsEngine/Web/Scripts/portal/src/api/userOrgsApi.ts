@@ -105,8 +105,11 @@ export function importCsv(
   orgTypeId: number,
   mode: UserOrgImportMode,
   file: File,
+  confirmClear = false,
 ): Promise<UserOrgImportQueued> {
-  const url = `${baseUrl()}/import-csv?orgTypeId=${orgTypeId}&mode=${encodeURIComponent(mode)}`;
+  const url =
+    `${baseUrl()}/import-csv?orgTypeId=${orgTypeId}&mode=${encodeURIComponent(mode)}` +
+    `&confirmClear=${confirmClear ? 'true' : 'false'}`;
   return send<UserOrgImportQueued>(url, fileBody(file));
 }
 

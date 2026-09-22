@@ -130,7 +130,7 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
     setBusy(true);
     setError(null);
     try {
-      const queued = await importCsv(orgType.id, mode, file);
+      const queued = await importCsv(orgType.id, mode, file, confirmedClear);
       setJob({
         id: queued.jobId,
         orgTypeId: orgType.id,
@@ -384,7 +384,7 @@ function JobProgress({
       </MessageBar>
       <div className={styles.counts}>
         <Badge appearance="tint" color="brand">
-          {job.rowsApplied.toLocaleString()} set
+          {job.rowsApplied.toLocaleString()} changed
         </Badge>
         <Badge appearance="tint" color="informative">
           {job.rowsCleared.toLocaleString()} cleared
