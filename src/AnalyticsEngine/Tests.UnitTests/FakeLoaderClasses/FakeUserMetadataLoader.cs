@@ -43,6 +43,21 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// </summary>
         public List<GraphUser> DeltaUsersOverride { get; set; }
 
+        /// <summary>The org selection the updater declared, so tests can assert what was requested.</summary>
+        public GraphUserOrgSelection OrgSelection { get; private set; } = GraphUserOrgSelection.None;
+
+        /// <summary>
+        /// Set by a test to simulate Graph rejecting the configured org attributes, which must stop org
+        /// values being written (an org-less response would otherwise read as "every value was cleared").
+        /// </summary>
+        public bool OrgSelectionWasRejected { get; set; }
+
+        public void SetOrgSelection(GraphUserOrgSelection orgSelection)
+        {
+            OrgSelection = orgSelection ?? GraphUserOrgSelection.None;
+            _deltaProvider.SetKeyQualifier(OrgSelection.DeltaKeyQualifier);
+        }
+
         public FakeUserMetadataLoader(
             List<GraphUser> fakeUsers = null,
             List<SubscribedSku> fakeSkus = null,
@@ -155,6 +170,14 @@ namespace Tests.UnitTests.FakeLoaderClasses
     public class FakeDeltaValueProvider : IDeltaValueProvider
     {
         private string _deltaToken;
+
+        /// <summary>The qualifier most recently pushed in by the loader, so tests can assert on it.</summary>
+        public string KeyQualifier { get; private set; } = string.Empty;
+
+        public void SetKeyQualifier(string qualifier)
+        {
+            KeyQualifier = string.IsNullOrEmpty(qualifier) ? string.Empty : qualifier;
+        }
 
         public Task ClearDeltaToken(CancellationToken cancellationToken = default)
         {

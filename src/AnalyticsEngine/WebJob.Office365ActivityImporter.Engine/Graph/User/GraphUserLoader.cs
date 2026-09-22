@@ -76,6 +76,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private string _pendingDeltaToken;
         private bool _hasPendingDeltaToken;
 
+        /// <summary>
+        /// The extra Graph properties this tenant's configured user-org types need. Defaults to
+        /// <see cref="GraphUserOrgSelection.None"/>, so a caller that never configures orgs issues
+        /// exactly the request this product has always issued.
+        /// </summary>
+        private GraphUserOrgSelection _orgSelection = GraphUserOrgSelection.None;
+
+        /// <summary>
+        /// Set when a request carrying the org properties was rejected, so the retry - and the rest of
+        /// the cycle - runs without them.
+        /// </summary>
+        private bool _orgSelectionRejected;
+
         public GraphUserLoader(ManualGraphCallClient httpClient, IDeltaValueProvider deltaValueProvider, ILogger logger, GraphServiceClient graphServiceClient)
         {
             this._httpClient = httpClient;
@@ -86,41 +99,69 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         public IDeltaValueProvider DeltaValueProvider => _deltaValueProvider;
 
+        /// <summary>
+        /// Declares which org attributes this cycle should read.
+        /// </summary>
+        /// <remarks>
+        /// This is the single place the <c>$select</c> and the delta-token cache key are derived from
+        /// the same object. Pushing the qualifier into the provider here - rather than leaving the
+        /// caller to do it - is what makes it impossible for the two to drift apart and have a token
+        /// minted under one selection reused under another.
+        /// </remarks>
+        public void SetOrgSelection(GraphUserOrgSelection orgSelection)
+        {
+            _orgSelection = orgSelection ?? GraphUserOrgSelection.None;
+            _orgSelectionRejected = false;
+            _deltaValueProvider.SetKeyQualifier(_orgSelection.DeltaKeyQualifier);
+
+            if (_orgSelection.UnparseableAttributeNames.Count > 0)
+            {
+                _logger.LogError(
+                    $"User import - {_orgSelection.UnparseableAttributeNames.Count} configured organisation "
+                    + "attribute(s) could not be understood and will be skipped. Re-save them on the User "
+                    + "organisations page to correct them.");
+            }
+
+            if (!_orgSelection.IsEmpty)
+            {
+                _logger.LogInformation(
+                    $"User import - also reading organisation attributes from Graph: {_orgSelection}.");
+            }
+        }
+
+        /// <summary>Whether Graph rejected the configured org properties during this cycle.</summary>
+        public bool OrgSelectionWasRejected => _orgSelectionRejected;
+
         public async Task<List<GraphUser>> LoadAllActiveUsers()
         {
-            // Cache delta using tenant ID
-            var usersQueryDelta = await _deltaValueProvider.GetDeltaToken();
-            var initialDeltaUrl = $"https://graph.microsoft.com:443/v1.0/users/delta" +
-                $"?$select={GraphUserDeltaQuery.Select}" +
-                "&$expand=manager";
-            if (!string.IsNullOrEmpty(usersQueryDelta))
+            List<GraphUser> results;
+
+            try
             {
-                initialDeltaUrl += $"&$deltatoken={usersQueryDelta}";
+                results = await LoadUsersPageByPage(_orgSelection).ConfigureAwait(false);
             }
-
-            // Reset any previously buffered token before a new load.
-            _pendingDeltaToken = null;
-            _hasPendingDeltaToken = false;
-
-            var results = await _httpClient.LoadAllPagesPlusDeltaWithThrottleRetries<GraphUser>(initialDeltaUrl, _logger,
-                (deltaLink) =>
-                {
-                    // Buffer the new delta in memory. It will only be persisted to
-                    // the underlying provider when CommitDeltaTokenAsync is called
-                    // after the rest of the import succeeds.
-                    _pendingDeltaToken = StringUtils.ExtractCodeFromGraphUrl(deltaLink);
-                    _hasPendingDeltaToken = true;
-                    return Task.CompletedTask;
-                });
-
-
-            if (string.IsNullOrEmpty(usersQueryDelta))
+            catch (GraphHttpException ex) when (ex.StatusCode == System.Net.HttpStatusCode.BadRequest && !_orgSelection.IsEmpty)
             {
-                _logger.LogInformation($"User import - read {results.Count.ToString("N0")} users (all) from Graph API");
-            }
-            else
-            {
-                _logger.LogInformation($"User import - read {results.Count.ToString("N0")} updated users from Graph API, using last delta.");
+                // Graph rejects an unknown $select property with a 400 that fails the WHOLE request, so
+                // one mistyped org attribute would otherwise stop user metadata importing altogether -
+                // licences, managers, departments and all. The org properties are the only part of this
+                // query an administrator can edit at runtime, so they are overwhelmingly the likely
+                // cause. Drop them and complete the cycle without org values rather than import nothing.
+                //
+                // The attribute is probed against live Graph before an org type can be saved, so
+                // reaching here normally means the attribute was removed from the tenant afterwards.
+                _orgSelectionRejected = true;
+                _logger.LogError(
+                    $"User import - Microsoft Graph rejected the request for the configured organisation "
+                    + $"attributes ({_orgSelection}). Organisation values will NOT be refreshed this cycle, "
+                    + "but the rest of the user import will continue. Check those attributes still exist in "
+                    + "the tenant on the User organisations page. Graph said: " + ex.Message);
+
+                // The token key follows the selection, so falling back has to re-point the provider at
+                // the unqualified key - otherwise this cycle would store a token under the org-qualified
+                // key while querying without the org properties.
+                _deltaValueProvider.SetKeyQualifier(GraphUserOrgSelection.None.DeltaKeyQualifier);
+                results = await LoadUsersPageByPage(GraphUserOrgSelection.None).ConfigureAwait(false);
             }
 
             // Graph for some reason gives duplicates; filter that out.
@@ -143,6 +184,45 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var allActiveGraphUsers = allGraphUsers.Where(u => u.AccountEnabled.HasValue && u.AccountEnabled.Value).ToList();
 
             return allActiveGraphUsers;
+        }
+
+        private async Task<List<GraphUser>> LoadUsersPageByPage(GraphUserOrgSelection orgSelection)
+        {
+            // Cache delta using tenant ID
+            var usersQueryDelta = await _deltaValueProvider.GetDeltaToken();
+            var initialDeltaUrl = $"https://graph.microsoft.com:443/v1.0/users/delta" +
+                $"?$select={orgSelection.BuildSelect(GraphUserDeltaQuery.Select)}" +
+                "&$expand=manager";
+            if (!string.IsNullOrEmpty(usersQueryDelta))
+            {
+                initialDeltaUrl += $"&$deltatoken={usersQueryDelta}";
+            }
+
+            // Reset any previously buffered token before a new load.
+            _pendingDeltaToken = null;
+            _hasPendingDeltaToken = false;
+
+            var results = await _httpClient.LoadAllPagesPlusDeltaWithThrottleRetries<GraphUser>(initialDeltaUrl, _logger,
+                (deltaLink) =>
+                {
+                    // Buffer the new delta in memory. It will only be persisted to
+                    // the underlying provider when CommitDeltaTokenAsync is called
+                    // after the rest of the import succeeds.
+                    _pendingDeltaToken = StringUtils.ExtractCodeFromGraphUrl(deltaLink);
+                    _hasPendingDeltaToken = true;
+                    return Task.CompletedTask;
+                });
+
+            if (string.IsNullOrEmpty(usersQueryDelta))
+            {
+                _logger.LogInformation($"User import - read {results.Count.ToString("N0")} users (all) from Graph API");
+            }
+            else
+            {
+                _logger.LogInformation($"User import - read {results.Count.ToString("N0")} updated users from Graph API, using last delta.");
+            }
+
+            return results;
         }
 
         public async Task CommitDeltaTokenAsync()

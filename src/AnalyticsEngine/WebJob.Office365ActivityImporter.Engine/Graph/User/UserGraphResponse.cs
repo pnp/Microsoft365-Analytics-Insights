@@ -1,4 +1,5 @@
 ﻿using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -48,6 +49,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         [JsonProperty("manager@delta")]
         public List<ManagerInfo> ManagerInfo { get; set; } = new List<ManagerInfo>();
+
+        /// <summary>
+        /// Every property Graph returned that has no typed property above - which is exactly where the
+        /// admin-configured org attributes land.
+        /// </summary>
+        /// <remarks>
+        /// A catch-all rather than a property per attribute, because which properties arrive is decided
+        /// at runtime by the org types an administrator has configured: <c>onPremisesExtensionAttributes</c>,
+        /// <c>employeeOrgData</c>, <c>employeeType</c>, <c>employeeId</c>, a directory extension whose
+        /// name embeds the owning application's id, or a schema extension. None of those can be modelled
+        /// statically.
+        ///
+        /// Deliberately does NOT shadow the typed properties above: <see cref="JsonExtensionData"/> only
+        /// captures what is left over, so <c>department</c> and friends keep flowing through their
+        /// existing mapping untouched. That is also why the built-in properties offered as org sources
+        /// are restricted to ones this class does not already model.
+        /// </remarks>
+        [JsonExtensionData]
+        public IDictionary<string, JToken> AdditionalProperties { get; set; } = new Dictionary<string, JToken>();
 
         [JsonIgnore]
         public ManagerInfo DefaultManagerInfo => ManagerInfo?.FirstOrDefault();
