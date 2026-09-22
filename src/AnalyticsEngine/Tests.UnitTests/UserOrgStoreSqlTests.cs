@@ -848,17 +848,27 @@ DELETE FROM dbo.users;");
         }
 
         [TestMethod]
-        public async Task Apply_DoesNotBlockTheHeartbeat()
+        public async Task Apply_LeavesTheHeartbeatRowWritable()
         {
-            // The apply used to fence itself by holding a transaction-duration UPDLOCK on the job row.
-            // The heartbeat runs on its own connection and writes that same row, so it blocked for the
-            // whole merge - and any import longer than StaleHeartbeatThreshold was then reported to
-            // the admin as interrupted while it was running perfectly.
+            // The apply used to fence itself by holding a transaction-duration UPDLOCK on the job
+            // row. The heartbeat runs on its own connection and writes that same row, so it blocked
+            // for the whole merge - and any import longer than StaleHeartbeatThreshold was then
+            // reported to the admin as interrupted while it was running perfectly.
+            //
+            // What this pins is that a heartbeat issued against a job being applied still lands, and
+            // that neither side deadlocks. It deliberately does NOT assert on elapsed time: the apply
+            // of one staged row is far too quick to observe a block, and an assertion that compared
+            // two SYSUTCDATETIME() readings taken microseconds apart failed on CI, where the system
+            // clock tick is coarse enough for both to land in the same one. The timestamp is
+            // backdated first so the comparison cannot depend on clock granularity at all.
             var user = AddUser("a@contoso.com");
             var typeId = await _types.CreateAsync(CsvType("Team"));
             var jobId = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", "X"));
             await _jobs.TryClaimJobAsync(jobId);
 
+            Execute(
+                "UPDATE dbo.user_org_import_jobs SET heartbeat_utc = DATEADD(MINUTE, -30, SYSUTCDATETIME()) "
+                + $"WHERE id = {jobId}");
             var before = (await _jobs.GetJobAsync(jobId)).HeartbeatUtc;
 
             var apply = _jobs.ApplyAsync(jobId);
@@ -866,7 +876,9 @@ DELETE FROM dbo.users;");
             await apply;
 
             var after = (await _jobs.GetJobAsync(jobId)).HeartbeatUtc;
-            Assert.IsTrue(after > before, "A heartbeat issued while the apply ran must land.");
+            Assert.IsTrue(
+                after > before,
+                "A heartbeat issued while the apply ran must land rather than being lost or deadlocked.");
             Assert.AreEqual("X", (await _assignments.GetForUserAsync(user)).Single().Value);
         }
 
