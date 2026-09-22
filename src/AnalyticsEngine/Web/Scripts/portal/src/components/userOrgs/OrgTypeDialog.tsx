@@ -118,14 +118,21 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
     ];
   }, [catalogue]);
 
-  const needsProof = source === 'entra';
+  // A disabled type is never read, so its attribute cannot break the user import and does not have
+  // to be proved. That matters for recovery rather than convenience: when a directory extension is
+  // deleted from the tenant the import tells the admin to fix the type here, and turning it off is
+  // the only fix that keeps the values - so demanding a successful test first would leave them with
+  // no non-destructive option at all.
+  const needsProof = source === 'entra' && isEnabled;
   const attributeProven =
     !needsProof ||
     (provenAttribute !== null &&
       provenAttribute.trim().toLowerCase() === attribute.trim().toLowerCase());
 
   const canSave =
-    name.trim().length > 0 && (!needsProof || attribute.trim().length > 0) && attributeProven;
+    name.trim().length > 0 &&
+    (source !== 'entra' || attribute.trim().length > 0) &&
+    attributeProven;
 
   const runTest = async () => {
     setTesting(true);

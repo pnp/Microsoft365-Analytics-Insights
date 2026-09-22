@@ -75,6 +75,31 @@ namespace Common.Entities.UserOrgs
         }
 
         /// <summary>
+        /// Whether saving this org type must first prove its attribute is readable from Microsoft
+        /// Graph.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Only an <b>enabled Entra</b> type. The parse check alone is not enough for one: a
+        /// well-formed name can still name a property this tenant does not have, and Graph answers
+        /// that with a 400 that fails the entire <c>/users/delta</c> request - taking licences,
+        /// managers and department metadata down with it until the importer's fallback notices.
+        /// </para>
+        /// <para>
+        /// A <b>disabled</b> type is never read, so its attribute cannot break anything, and
+        /// demanding a probe makes the feature's own recovery advice impossible to follow. When a
+        /// directory extension is deleted from the tenant the import logs an error telling the
+        /// administrator to fix the type on the admin page - and turning it off is the only fix that
+        /// keeps the values, because deleting, repointing and switching to CSV all discard them. A
+        /// probe would refuse precisely that.
+        /// </para>
+        /// </remarks>
+        public static bool RequiresLiveAttributeProof(UserOrgSourceKind sourceKind, bool isEnabled)
+        {
+            return sourceKind == UserOrgSourceKind.EntraAttribute && isEnabled;
+        }
+
+        /// <summary>
         /// Normalises a UPN for matching against <c>dbo.users.user_name</c>, or <c>null</c> when the
         /// value is unusable.
         /// </summary>

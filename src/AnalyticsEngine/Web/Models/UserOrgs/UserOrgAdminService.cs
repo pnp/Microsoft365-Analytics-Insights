@@ -117,6 +117,13 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         /// The probe therefore runs here, on the server, rather than relying on the dialog having done
         /// it. A gate that lives only in the browser is not a gate: the API is reachable directly, and a
         /// future UI change could quietly drop it.
+        ///
+        /// It is skipped for a type being saved as <b>disabled</b>, because a disabled type is never
+        /// read and so cannot break anything. Probing one anyway makes the feature's own recovery
+        /// advice impossible to follow: when a directory extension is deleted from the tenant, the
+        /// import logs an error telling the admin to go and fix the type on this page - and the only
+        /// non-destructive fix, turning it off, would be refused by the very check that objected to
+        /// it. Every other option (delete, repoint, switch to CSV) discards the values.
         /// </remarks>
         private async Task<UserOrgType> ValidateAndProbeAsync(UserOrgTypeSaveModel model, CancellationToken cancellationToken)
         {
@@ -153,7 +160,12 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 throw new UserOrgValidationException(attributeError);
             }
 
-            await ProveAttributeIsReadableAsync(spec, cancellationToken).ConfigureAwait(false);
+            // Parsed and normalised either way, so what is stored is always canonical; only the live
+            // probe is conditional. See UserOrgRules.RequiresLiveAttributeProof for why.
+            if (UserOrgRules.RequiresLiveAttributeProof(type.SourceKind, type.IsEnabled))
+            {
+                await ProveAttributeIsReadableAsync(spec, cancellationToken).ConfigureAwait(false);
+            }
 
             type.EntraAttributeName = spec.Canonical;
             return type;

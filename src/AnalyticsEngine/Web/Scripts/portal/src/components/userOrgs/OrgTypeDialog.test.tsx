@@ -187,6 +187,31 @@ describe('OrgTypeDialog', () => {
     );
   });
 
+  it('lets a broken Entra type be disabled without proving its attribute first', async () => {
+    // The recovery path. When a directory extension is deleted from the tenant, the import tells the
+    // admin to fix the type here - and turning it off is the only fix that keeps the values, since
+    // deleting, repointing or switching to CSV all discard them. Demanding a successful test first
+    // would leave them with no non-destructive option at all.
+    testEntraAttribute.mockResolvedValue(
+      testResult({ succeeded: false, message: 'Microsoft Graph does not recognise the property.' }),
+    );
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    renderWithProvider(<OrgTypeDialog open editing={null} onDismiss={vi.fn()} onSave={onSave} />);
+
+    await typeInto(/^Name/, 'Cost Centre');
+    typeAttribute('extension_00000000000000000000000000000000_gone');
+
+    // Enabled and unproven: refused, which is the behaviour a live type must keep.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled());
+
+    fireEvent.click(screen.getByRole('switch'));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ isEnabled: false }));
+  });
+
   it('does not force a re-test when editing an existing type whose attribute is unchanged', async () => {
     renderWithProvider(<OrgTypeDialog open editing={saved} onDismiss={vi.fn()} onSave={vi.fn()} />);
 

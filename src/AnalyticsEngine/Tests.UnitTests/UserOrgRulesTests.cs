@@ -67,6 +67,30 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void OnlyAnEnabledEntraTypeHasToProveItsAttributeAgainstGraph()
+        {
+            // An enabled Entra type must: a well-formed name can still name a property this tenant
+            // does not have, and Graph answers that with a 400 that fails the ENTIRE /users/delta
+            // request - taking licences, managers and department metadata with it.
+            Assert.IsTrue(
+                UserOrgRules.RequiresLiveAttributeProof(UserOrgSourceKind.EntraAttribute, isEnabled: true));
+
+            // A disabled one must not, and this is recovery rather than convenience. When a directory
+            // extension is deleted from the tenant, the import tells the admin to fix the type on the
+            // admin page - and turning it off is the only fix that keeps the values, because deleting,
+            // repointing and switching to CSV all discard them. Probing would refuse precisely that,
+            // leaving no non-destructive way out.
+            Assert.IsFalse(
+                UserOrgRules.RequiresLiveAttributeProof(UserOrgSourceKind.EntraAttribute, isEnabled: false));
+
+            // A CSV type has no attribute to prove either way.
+            Assert.IsFalse(
+                UserOrgRules.RequiresLiveAttributeProof(UserOrgSourceKind.CsvUpload, isEnabled: true));
+            Assert.IsFalse(
+                UserOrgRules.RequiresLiveAttributeProof(UserOrgSourceKind.CsvUpload, isEnabled: false));
+        }
+
+        [TestMethod]
         public void NormaliseOrgValue_TruncationDoesNotLeaveTrailingWhitespace()
         {
             // SQL Server ignores trailing spaces when comparing, so a value stored with them would
