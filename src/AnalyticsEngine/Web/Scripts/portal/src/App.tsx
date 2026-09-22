@@ -19,7 +19,7 @@ import { SignOut20Regular } from '@fluentui/react-icons';
 import { AppToaster } from './components/toast';
 import Spinner from './components/Spinner';
 import { AREAS, DEFAULT_PATH, ROUTES, areaForPath, groupedRoutesForArea } from './navigation';
-import { PRODUCT_NAME, REPOSITORY_URL, buildLabel } from './product';
+import { PRODUCT_NAME, REPOSITORY_URL, printedBuildText } from './product';
 import { LanguageSwitcher, useT } from './i18n';
 
 const useStyles = makeStyles({
@@ -73,12 +73,6 @@ const useStyles = makeStyles({
     maxWidth: '1120px',
     marginInline: 'auto',
   },
-  // Paper only - see the `data-print` contract in index.css, which repeats this on every printed
-  // page. A printed report gets forwarded and re-read months later, so it has to name the product
-  // that produced it, where that product lives, and the build the figures came out of.
-  printFooter: {
-    display: 'none',
-  },
 });
 
 /**
@@ -121,7 +115,9 @@ function currentRoutePath(committedPath: string): string {
  *
  * The shell is marked up for print with `data-print` attributes (see the `@media print` block in
  * index.css): the brand bar, area switcher and nav rail are dropped, and the layout wrappers are
- * flattened so the page itself gets the whole sheet instead of a 1120px column beside a menu.
+ * flattened so the page itself gets the whole sheet instead of a 1120px column beside a menu. The
+ * report sits inside a layout table whose `<tfoot>` is the running footer, because that is the
+ * only construct a browser repeats on every printed page *and* reserves room for.
  */
 export default function App() {
   const styles = useStyles();
@@ -129,7 +125,7 @@ export default function App() {
   const navigate = useNavigate();
   const t = useT();
   const [navOpen, setNavOpen] = useState(true);
-  const build = buildLabel();
+  const build = printedBuildText();
 
   const currentArea = areaForPath(location.pathname);
   const navGroups = groupedRoutesForArea(currentArea);
@@ -196,62 +192,76 @@ export default function App() {
         </TabList>
       </div>
 
-      <div className={styles.layout} data-print="content">
-        <NavDrawer
-          open={navOpen}
-          type="inline"
-          className={styles.nav}
-          data-print="hide"
-          selectedValue={location.pathname}
-          onNavItemSelect={(_event: unknown, data: { value: unknown }) => goTo(String(data.value))}
-          aria-label={t('app.nav.ariaLabel', {
-            area: t(AREAS.find((a) => a.id === currentArea)?.labelKey ?? AREAS[0].labelKey),
-          })}
-        >
-          <NavDrawerBody>
-            {navGroups.map((bucket, i) => (
-              <div key={bucket.groupKey ?? `ungrouped-${i}`}>
-                {bucket.groupKey && <NavSectionHeader>{t(bucket.groupKey)}</NavSectionHeader>}
-                {bucket.routes.map((route) => (
-                  <NavItem key={route.path} value={route.path} icon={route.icon}>
-                    {t(route.labelKey)}
-                  </NavItem>
-                ))}
+      {/* The printed report's running footer is a <tfoot>, which is why the shell is a table: it is
+          the only construct a browser both repeats on every printed page and reserves the space
+          for, so the last line of a full page cannot print through it. On screen index.css
+          flattens the whole thing back to block flow, so this is layout-neutral there.
+          `role="presentation"` because it is a layout table and has nothing to say to a screen
+          reader; the footer's own text and link stay in the accessibility tree. */}
+      <table role="presentation" data-print="shell">
+        <tbody>
+          <tr>
+            <td>
+              <div className={styles.layout} data-print="content">
+                <NavDrawer
+                  open={navOpen}
+                  type="inline"
+                  className={styles.nav}
+                  data-print="hide"
+                  selectedValue={location.pathname}
+                  onNavItemSelect={(_event: unknown, data: { value: unknown }) => goTo(String(data.value))}
+                  aria-label={t('app.nav.ariaLabel', {
+                    area: t(AREAS.find((a) => a.id === currentArea)?.labelKey ?? AREAS[0].labelKey),
+                  })}
+                >
+                  <NavDrawerBody>
+                    {navGroups.map((bucket, i) => (
+                      <div key={bucket.groupKey ?? `ungrouped-${i}`}>
+                        {bucket.groupKey && <NavSectionHeader>{t(bucket.groupKey)}</NavSectionHeader>}
+                        {bucket.routes.map((route) => (
+                          <NavItem key={route.path} value={route.path} icon={route.icon}>
+                            {t(route.labelKey)}
+                          </NavItem>
+                        ))}
+                      </div>
+                    ))}
+                  </NavDrawerBody>
+                </NavDrawer>
+
+                <main className={styles.content} data-print="content">
+                  <div className={styles.contentInner} data-print="content">
+                    <Suspense
+                      fallback={
+                        <div style={{ textAlign: 'center', padding: '32px' }}>
+                          <Spinner size={80} label={t('common.state.loading')} />
+                        </div>
+                      }
+                    >
+                      <Routes>
+                        <Route path="/" element={<Navigate to={DEFAULT_PATH} replace />} />
+                        {ROUTES.map((route) => (
+                          <Route key={route.path} path={route.path} element={route.element} />
+                        ))}
+                        <Route path="*" element={<Navigate to={DEFAULT_PATH} replace />} />
+                      </Routes>
+                    </Suspense>
+                  </div>
+                </main>
               </div>
-            ))}
-          </NavDrawerBody>
-        </NavDrawer>
-
-        <main className={styles.content} data-print="content">
-          <div className={styles.contentInner} data-print="content">
-            <Suspense
-              fallback={
-                <div style={{ textAlign: 'center', padding: '32px' }}>
-                  <Spinner size={80} label={t('common.state.loading')} />
-                </div>
-              }
-            >
-              <Routes>
-                <Route path="/" element={<Navigate to={DEFAULT_PATH} replace />} />
-                {ROUTES.map((route) => (
-                  <Route key={route.path} path={route.path} element={route.element} />
-                ))}
-                <Route path="*" element={<Navigate to={DEFAULT_PATH} replace />} />
-              </Routes>
-            </Suspense>
-          </div>
-        </main>
-      </div>
-
-      {/* Repeated at the foot of every printed page - see the `data-print` contract in index.css.
-          The repository URL is a real link so it stays clickable in a PDF, and is shown in full
-          rather than as link text, because on paper the href is not recoverable. */}
-      <div className={styles.printFooter} data-print="footer">
-        {PRODUCT_NAME}
-        {build && ` \u00b7 ${build}`}
-        {' \u00b7 '}
-        <a href={REPOSITORY_URL}>{REPOSITORY_URL}</a>
-      </div>
+            </td>
+          </tr>
+        </tbody>
+        {/* The repository URL is a real link so it stays clickable in a PDF, and is spelled out in
+            full rather than hidden behind link text, because on paper an href is not recoverable. */}
+        <tfoot data-print="footer">
+          <tr>
+            <td>
+              {`${PRODUCT_NAME} (${build}) \u00b7 `}
+              <a href={REPOSITORY_URL}>{REPOSITORY_URL}</a>
+            </td>
+          </tr>
+        </tfoot>
+      </table>
     </>
   );
 }

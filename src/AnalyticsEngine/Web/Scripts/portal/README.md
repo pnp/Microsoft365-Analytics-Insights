@@ -106,13 +106,17 @@ auth cookie, so a token in the request body would be ignored.
 | _(none - origin-relative)_ | `api/WebActivity` | SharePoint web activity: source availability, and one endpoint per tab (`/overview`, `/visits`, `/pages`, `/journeys`, `/geography`, `/search`, `/technology`) plus `/export/{section}` CSVs. |
 
 `window.o365AnalyticsBuildLabel` is not an endpoint: it is the running build's label
-(`Common.Entities.BuildConstants.BuildLabel`), substituted into `index.html` by
-`HomeController.InjectBuildLabel` when it serves the page. The SPA prints it in the footer of a
-printed report, which has to exist *before* `window.print()` runs - so it cannot be fetched; and
-`api/SystemStatus`, which carries the same label elsewhere, `COUNT(*)`s whole tables and is far too
-expensive to call on every page just to name a version. `npm run dev` serves `index.html` straight
-from disk, so the placeholder survives; the SPA reads that, and `DEV_BUILD`, as "unknown build" and
-prints no version rather than a fake one.
+(`Common.Entities.BuildConstants.BuildLabel`, stamped as `Build <number>` by ci.yml), substituted
+into `index.html` by `HomeController.InjectBuildLabel` when it serves the page. The SPA prints it in
+the footer of a printed report, which has to exist *before* `window.print()` runs - so it cannot be
+fetched; and `api/SystemStatus`, which carries the same label elsewhere, `COUNT(*)`s whole tables
+and is far too expensive to call on every page just to name a version.
+
+The footer reads `Microsoft 365 Advanced Analytics (build 1836) · https://github.com/...`, and the
+parenthesis is never empty. `npm run dev` serves `index.html` straight from disk, so the placeholder
+survives; the SPA reads that, and `DEV_BUILD`, as an unstamped build and prints
+`(development build)`. It prints neither a fake version nor - as it once did - nothing at all, which
+made a report run off a developer's machine indistinguishable on paper from one off a release.
 
 ## Printing
 
@@ -132,7 +136,16 @@ stylesheet):
 | `data-print="page-break"` | Starts a new sheet, and keeps its own content with it. |
 | `data-print="keep-with-next"` | Never left stranded at the foot of a page with its content overleaf. |
 | `data-print="only"` | Rendered on paper only. |
-| `data-print="footer"` | Repeated at the foot of every printed page. |
+| `data-print="shell"` | The layout table that carries the running footer. Block flow on screen. |
+| `data-print="footer"` | The `<tfoot>` repeated at the foot of every printed page. |
+
+The footer is a real `<tfoot>` inside a layout `<table>` wrapping the report, and that is load-bearing.
+A running footer must repeat on every page *and* have room reserved for it; `position: fixed` gives
+only the first, so it overprints the last line of a full page, and Chromium mis-resolves the negative
+`bottom` meant to lift it into the page margin - it lands the footer across the *top* of each sheet.
+A table section is the only construct that does both, the same mechanism that repeats a long report
+table's header row. On screen `src/index.css` flattens the table back to block flow and hides the
+footer, so it costs nothing there.
 
 `src/printStyles.test.ts` asserts the stylesheet half - Vitest runs with `css: false`, so a
 component test can prove an attribute is present but never that it does anything. It also fails on

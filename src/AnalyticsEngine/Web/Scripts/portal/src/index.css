@@ -10,6 +10,42 @@ body {
 }
 
 /*
+ * The print shell.
+ *
+ * A running footer has to do two things: repeat on every printed page, and have room reserved for
+ * it so the page's last line does not print through it. In Chromium only one construct does both -
+ * a real <table> with a <tfoot> - so the app shell wraps the report in one. See the `@media print`
+ * block below for why the obvious alternative does not work.
+ *
+ * None of that is wanted on screen, where the table would shrink-to-fit the report instead of
+ * filling the window and the footer would repeat a build number the Health page already shows. So
+ * the table is flattened back to ordinary block flow here, and the footer is hidden. Written in
+ * this stylesheet rather than as a Griffel rule because the print half lives here too, and
+ * splitting a mechanism across two files is how the two halves drift apart.
+ */
+[data-print='shell'],
+[data-print='shell'] > tbody,
+[data-print='shell'] > tbody > tr,
+[data-print='shell'] > tbody > tr > td {
+  display: block;
+}
+
+[data-print='shell'] {
+  width: 100%;
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+
+/* A <td> carries a default padding in every UA, which would inset the whole app by a pixel. */
+[data-print='shell'] > tbody > tr > td {
+  padding: 0;
+}
+
+[data-print='shell'] > tfoot {
+  display: none;
+}
+
+/*
  * Print layout.
  *
  * On screen the app is a shell: a brand bar, an area switcher, a nav rail and a report centred in
@@ -38,14 +74,16 @@ body {
  *                         - starts a new sheet, and keeps its own content with it.
  *   data-print="keep-with-next"
  *                         - never left stranded at the foot of a page with its content overleaf.
+ *   data-print="shell"    - the layout table that carries the running footer (see below).
  *   data-print="footer"   - repeated at the foot of every printed page.
  */
 @media print {
   @page {
-    /* Sides and top are slightly tighter than the usual browser default of half an inch, which
-       buys back most of a KPI column on A4 without running into a printer's unprintable edge. The
-       bottom is deeper on purpose: it is the strip the running footer sits in. */
-    margin: 10mm 10mm 16mm;
+    /* Slightly tighter than the usual browser default of half an inch, which buys back most of a
+       KPI column on A4 without running into a printer's unprintable edge. The bottom is a little
+       deeper so the running footer's rule is not crowded by the browser's own page-number line,
+       which prints in the margin below it. */
+    margin: 10mm 10mm 12mm;
   }
 
   html,
@@ -118,17 +156,51 @@ body {
   }
 
   /* The running footer: product, build and repository at the foot of every page.
-     `position: fixed` is what makes a browser repeat an element on each printed page. Such an
-     element is laid out inside the page area, so at `bottom: 0` the report would flow underneath
-     it - hence the deeper bottom @page margin above and the negative offset that puts the footer
-     down into it. (Chromium and WebKit repeat it on every page; Firefox prints it on the first
-     only, which is a smaller footer, not a broken layout.) */
+   *
+   * This is a <tfoot>, and it has to be. The obvious implementation - `position: fixed` with the
+   * element pushed down into a deep bottom @page margin - was what shipped first, and it is wrong
+   * twice over. A fixed element is laid out inside the page area and reserves no space, so at
+   * `bottom: 0` it overprints the last line of every full page; and a *negative* `bottom`, the
+   * trick meant to lift it clear into the margin, is mis-resolved by Chromium in paged media - it
+   * lands the footer near the TOP of each sheet, printed straight through the section heading.
+   * Measured in Chromium 153 by printing to PDF and reading back the text positions: with
+   * `bottom: -11mm` the footer sat 50pt from the top of the page; with `bottom: 0` it sat correctly
+   * at the foot but the last body line ran to 743.6pt underneath a footer starting at 737.7pt.
+   * `transform: translateY()` to shift it into the margin puts it back at the top, and
+   * `display: table-footer-group` on a plain <div> prints once, at the end, without repeating.
+   *
+   * A real table section is the only construct that both repeats and reserves the space: the same
+   * mechanism as `thead` below, which is why the report's own long tables keep their header row on
+   * every page. */
+  [data-print='shell'] {
+    display: table !important;
+    width: 100% !important;
+  }
+
+  [data-print='shell'] > tbody {
+    display: table-row-group !important;
+  }
+
+  [data-print='shell'] > tbody > tr {
+    display: table-row !important;
+    /* Exempt from the `tr` rule at the foot of this block. That rule keeps a report table's rows
+       whole; this row is the entire report, and telling the browser not to break it would forbid
+       the one break every page after the first depends on. */
+    page-break-inside: auto !important;
+    break-inside: auto !important;
+  }
+
+  [data-print='shell'] > tbody > tr > td {
+    display: table-cell !important;
+    padding: 0 !important;
+  }
+
   [data-print='footer'] {
-    display: block !important;
-    position: fixed;
-    bottom: -11mm;
-    left: 0;
-    right: 0;
+    display: table-footer-group !important;
+  }
+
+  /* The cell, not the section: a table-footer-group is not a box that takes padding or a border. */
+  [data-print='footer'] td {
     padding-top: 2mm;
     border-top: 0.3mm solid #c8c6c4;
     font-size: 8pt;
