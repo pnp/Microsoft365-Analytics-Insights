@@ -186,6 +186,15 @@ describe('print stylesheet', () => {
     expect(declarations).toMatch(/page-break-inside:\s*auto\s*!important/);
   });
 
+  it('hides the running footer on screen, where it would sit under every page', () => {
+    // Hidden by the *screen* half of the stylesheet, not by `@media print` - so it has to be
+    // asserted outside the print block. App.test.tsx cannot cover this: Vitest runs with
+    // `css: false`, so from there the footer looks visible whatever the stylesheet says.
+    const css = stylesheet();
+    const screenHalf = css.slice(0, css.indexOf('@media print'));
+    expect(screenHalf).toMatch(/\[data-print='shell'\]\s*>\s*tfoot\s*\{[^}]*display:\s*none/);
+  });
+
   it('has a rule for every data-print value the components use', () => {
     // The drift guard: an attribute the stylesheet has never heard of is dead markup, and reads in
     // review as though printing has been handled when it has not.

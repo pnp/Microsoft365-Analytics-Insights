@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PRODUCT_NAME, REPOSITORY_URL, buildLabel } from './product';
+import { PRODUCT_NAME, REPOSITORY_URL, buildLabel, printedBuildText } from './product';
 
 const PORTAL_DIR = process.cwd();
 
@@ -60,5 +60,47 @@ describe('product identity', () => {
   it('names the product and its repository', () => {
     expect(PRODUCT_NAME).toBe('Microsoft 365 Advanced Analytics');
     expect(REPOSITORY_URL).toBe('https://github.com/pnp/Microsoft365-Analytics-Insights');
+  });
+});
+
+/**
+ * What the footer's parenthesis says - "Microsoft 365 Advanced Analytics (build 1836)".
+ *
+ * Never empty, which is the point. The footer used to drop the segment for an unstamped build, so
+ * a report printed from a developer's machine named no build at all and read exactly like one from
+ * a release - the case where knowing the build matters most.
+ */
+describe('printed build text', () => {
+  afterEach(() => {
+    delete (window as Partial<Window>).o365AnalyticsBuildLabel;
+  });
+
+  it('lower-cases the label the pipeline stamps so it reads inside the parenthesis', () => {
+    // ci.yml stamps `BuildLabel: Build <number>`, so this is the shape that actually ships.
+    window.o365AnalyticsBuildLabel = 'Build 1841';
+    expect(printedBuildText()).toBe('build 1841');
+  });
+
+  it('keeps the word "build" in front of a label that arrives as a bare number', () => {
+    // A bare "1841" in a parenthesis is a number with nothing saying what it counts.
+    window.o365AnalyticsBuildLabel = '1841';
+    expect(printedBuildText()).toBe('build 1841');
+  });
+
+  it('says so, out loud, when the pipeline never stamped a build', () => {
+    for (const notARelease of ['DEV_BUILD', '__BuildLabel__', '', '   ', 'Build']) {
+      window.o365AnalyticsBuildLabel = notARelease;
+      expect(printedBuildText(), `"${notARelease}" has no build number`).toBe('development build');
+    }
+
+    delete (window as Partial<Window>).o365AnalyticsBuildLabel;
+    expect(printedBuildText()).toBe('development build');
+  });
+
+  it('never prints a label that is not a release as though it were a version', () => {
+    for (const notARelease of ['DEV_BUILD', '__BuildLabel__']) {
+      window.o365AnalyticsBuildLabel = notARelease;
+      expect(printedBuildText()).not.toContain(notARelease);
+    }
   });
 });

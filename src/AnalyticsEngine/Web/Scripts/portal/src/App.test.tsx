@@ -281,8 +281,7 @@ describe('Printed footer', () => {
     renderAt('/insights/reports');
     await screen.findByLabelText('Insights navigation');
 
-    expect(footer()?.textContent).toContain('Microsoft 365 Advanced Analytics');
-    expect(footer()?.textContent).toContain('Build 1841');
+    expect(footer()?.textContent).toContain('Microsoft 365 Advanced Analytics (build 1841) · ');
     // Spelled out in full, not hidden behind link text: on paper an href is not recoverable. It is
     // still a real link, so it stays clickable in a PDF.
     const repo = footer()?.querySelector('a');
@@ -290,22 +289,25 @@ describe('Printed footer', () => {
     expect(repo).toHaveAttribute('href', 'https://github.com/pnp/Microsoft365-Analytics-Insights');
   });
 
-  it('says nothing about the version when this is not a released build', async () => {
-    // Better an unversioned footer than one asserting "DEV_BUILD", which reads as a real label and
-    // sends the reader looking for a release that does not exist.
+  it('says "development build" rather than nothing when this is not a released build', async () => {
+    // Two separate points. It must not print "DEV_BUILD", which reads as a real label and sends the
+    // reader looking for a release that does not exist. But it must not print *nothing* either:
+    // the segment used to vanish entirely, so a report run off a developer's machine or an
+    // unreleased test deployment was indistinguishable on paper from one off a release.
     window.o365AnalyticsBuildLabel = 'DEV_BUILD';
     renderAt('/insights/reports');
     await screen.findByLabelText('Insights navigation');
 
-    expect(footer()?.textContent).toContain('Microsoft 365 Advanced Analytics');
+    expect(footer()?.textContent).toContain('Microsoft 365 Advanced Analytics (development build)');
     expect(footer()?.textContent).not.toContain('DEV_BUILD');
   });
 
-  it('never shows on screen, and is not inside anything the printout hides', async () => {
+  it('is not inside anything the printout hides', async () => {
+    // It is hidden on screen by index.css, outside the print block - asserted there, because
+    // Vitest runs with `css: false` and cannot see it from here.
     renderAt('/insights/reports');
     await screen.findByLabelText('Insights navigation');
 
-    expect(screen.queryByText(/Microsoft 365 Advanced Analytics · /)).not.toBeInTheDocument();
     expect(footer()?.closest('[data-print="hide"]')).toBeNull();
   });
 
