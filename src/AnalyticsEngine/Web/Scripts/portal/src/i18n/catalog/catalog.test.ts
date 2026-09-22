@@ -48,11 +48,14 @@ describe('Translation catalog', () => {
     expect(Object.keys(ES_CATALOG).sort()).toEqual(Object.keys(EN_CATALOG).sort());
   });
 
-  it('has no empty translations', () => {
-    const empty = Object.entries(ES_CATALOG)
-      .filter(([, value]) => value.trim().length === 0)
-      .map(([key]) => key);
-    expect(empty, `Empty Spanish text for: ${empty.join(', ')}`).toEqual([]);
+  it('has no empty translations, in either language', () => {
+    const empty = [
+      ...Object.entries(EN_CATALOG).map(([key, value]) => ['en', key, value] as const),
+      ...Object.entries(ES_CATALOG).map(([key, value]) => ['es', key, value] as const),
+    ]
+      .filter(([, , value]) => value.trim().length === 0)
+      .map(([language, key]) => `${language} ${key}`);
+    expect(empty, `Empty text for: ${empty.join(', ')}`).toEqual([]);
   });
 
   it('namespaces every key by its module, so two areas cannot claim the same key', () => {
@@ -191,7 +194,7 @@ describe('Translation catalog', () => {
    * Decode them: `&quot;` to `"`, `&apos;` to `'`, `&#8217;` to the right single quote.
    */
   it('contains no HTML entities, which would be shown to the reader as-is', () => {
-    const entity = /&(?:[a-zA-Z]+|#\d+);/;
+    const entity = /&(?:[a-zA-Z]+|#\d+|#x[0-9a-fA-F]+);/;
     const offenders = [
       ...Object.entries(EN_CATALOG).map(([key, value]) => ['en', key, value] as const),
       ...Object.entries(ES_CATALOG).map(([key, value]) => ['es', key, value] as const),

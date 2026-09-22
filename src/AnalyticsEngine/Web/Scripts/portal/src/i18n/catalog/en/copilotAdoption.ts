@@ -45,7 +45,12 @@ export const copilotAdoption = {
   'copilotAdoption.page.scopeBanner.scope': 'Showing {domain} only.',
   'copilotAdoption.page.scopeBanner.message': '{scope} Every figure below describes the people on that email domain, not the whole tenant.{unscoped} {link}',
   'copilotAdoption.page.scopeBanner.unscopedSections': '{v0} stay tenant-wide, because they come from totals that carry no per-person detail to narrow.',
-  'copilotAdoption.page.scopeBanner.showAllDomains': 'Show all domains',
+  'copilotAdoption.page.scopeBanner.showAllDomains': 'Show all domains',  'copilotAdoption.page.errors.checkAvailability': 'Failed to check Copilot adoption availability.',
+  'copilotAdoption.page.errors.loadSummary': 'Failed to load the adoption summary.',
+  'copilotAdoption.page.controls.excelTooltipReady': 'The whole report - every figure, table and chart - as an Excel workbook with live, editable charts. Run it before and after an enablement programme to compare like for like.',
+  'copilotAdoption.page.controls.excelTooltipLoading': 'Available once the analysis has finished loading.',
+
+
   'copilotAdoption.noLicences.title': 'No Copilot licences found',
   'copilotAdoption.noLicences.completedEmpty': 'The analysis ran and completed - it found no users holding a Microsoft 365 Copilot licence, so there is nothing to report on yet.',
   'copilotAdoption.noLicences.reasonIntro': 'This is almost always one of the following. They are listed in the order they are worth checking.',
@@ -57,7 +62,11 @@ export const copilotAdoption = {
   'copilotAdoption.noLicences.licenceOpportunitiesTab': 'Licence opportunities',
   'copilotAdoption.noLicences.reason.noTenantLicences.body': '{heading} In that case the {tab} tab is the useful one: it ranks unlicensed users by how strong a business case each of them would have for a licence, using their existing Microsoft 365 activity.',
   'copilotAdoption.noLicences.unlicensedActivityWarning': 'Copilot activity was found for {v0} users who do not appear to hold a licence. That combination usually means the licence import is incomplete rather than that Copilot is unlicensed - see point 1 above.',
-  'copilotAdoption.page.whereWeStand': 'Where we stand',
+  'copilotAdoption.page.whereWeStand': 'Where we stand',  'copilotAdoption.page.executive.whereWeStandBlurb': 'Seats, adoption, habit, reclaim confidence and reassignment opportunity without the diagnostics.',
+  'copilotAdoption.page.gauge.activeOfLicensed': '{active} of {total} licensed users',
+  'copilotAdoption.page.gauge.establishedOrChampion': '{count} established or champion users',
+
+
   'copilotAdoption.page.licencePosition': 'Licence position',
   'copilotAdoption.page.theBoardPackViewManySeatsUseManyBecome': 'The board-pack view: how many seats are in use, how many have become habit, and what can be reclaimed or reassigned.',
   'copilotAdoption.page.licencePosition2': 'Licence position',
@@ -80,7 +89,9 @@ export const copilotAdoption = {
   'copilotAdoption.page.review': 'Review',
   'copilotAdoption.page.excluded': 'Excluded',
   'copilotAdoption.page.noSeatsCurrentlyMeetCertainProbableReclaimRules': 'No seats currently meet the Certain or Probable reclaim rules.',
-  'copilotAdoption.page.whereWorkingFailing': 'Where it is working and failing',
+  'copilotAdoption.page.whereWorkingFailing': 'Where it is working and failing',  'copilotAdoption.page.executive.workingFailingBlurb': 'The departments to start with, and the funnel stage where value drops out.',
+
+
   'copilotAdoption.page.departmentLeagueTable': 'Department league table',
   'copilotAdoption.page.lowestHabitRateDepartmentsCappedTopDepartmentsAboveSeat': 'Lowest habit-rate departments, capped to the top {v0} departments above the seat threshold, with unused seats and recommended candidates shown as numbers rather than colour alone.',
   'copilotAdoption.page.departmentLeagueTable2': 'Department league table',
@@ -99,7 +110,9 @@ export const copilotAdoption = {
   'copilotAdoption.page.copilotAdoptionEachEmailDomainTenantPracticeEachOrganisations': 'Copilot adoption for each email domain in the tenant - in practice, for each of the organisations sharing it.',
   'copilotAdoption.page.theDomainTakenEachPersonSignNameDomainNeeds': 'The domain is taken from each person\'s sign-in name. A domain needs at least {v0} people, licensed or unlicensed, to appear. Invited guests are counted under their own home domain rather than this tenant\'s, and flagged External.',
   'copilotAdoption.page.worthReadingAlongsideDepartmentTableInsteadTenantBuiltAcquisition': 'Worth reading alongside the department table rather than instead of it: on a tenant built by acquisition a department spans every company, so its average hides exactly the difference this table shows.',
-  'copilotAdoption.page.whatWeDoingAbout': 'What we are doing about it',
+  'copilotAdoption.page.whatWeDoingAbout': 'What we are doing about it',  'copilotAdoption.page.executive.enablementBlurb': 'The enablement workload, with each row drilling through to the exact users counted.',
+
+
   'copilotAdoption.page.enablementPlan': 'Enablement plan',
   'copilotAdoption.page.everyLicensedUserNeedsExactlyOneNextStepClick': 'Every licensed user needs exactly one next step. Click a row to open the matching user list.',
   'copilotAdoption.page.enablementPlan2': 'Enablement plan',
@@ -117,7 +130,15 @@ export const copilotAdoption = {
   'copilotAdoption.page.moreCandidatesNeverUsedSeats': '{v0} more candidates than never-used seats',
   'copilotAdoption.page.moreNeverUsedSeatsCandidates': '{v0} more never-used seats than candidates',
   'copilotAdoption.page.balanced': 'Balanced',
-  'copilotAdoption.page.whereStand': 'Where you stand',
+  'copilotAdoption.page.whereStand': 'Where you stand',  'copilotAdoption.page.analyst.whereStandBlurb': 'The headline position: how many licences are earning their keep, and where the drop-off is.',
+  'copilotAdoption.page.population.analysed': 'analysed',
+  'copilotAdoption.page.population.licensed': 'licensed',
+  'copilotAdoption.page.gauge.usersTouchedCopilot': '{active} of {total} {population} users touched Copilot',
+  'copilotAdoption.page.gauge.madePartWorkingWeek': '{count} have made it part of the working week',
+  'copilotAdoption.page.gauge.eligibleUsedCowork': '{count} eligible users have used Cowork',
+  'copilotAdoption.page.gauge.readyForCoworkScope': '{ready} of {total} scored seat holders are ready to be scoped for Cowork',
+
+
   'copilotAdoption.page.whereStand2': 'Where you stand',
   'copilotAdoption.page.theRatesDecideWhetherLicencesEarningKeepAgainstScale': 'The rates that decide whether the licences are earning their keep, against the scale this tool judges them on.',
   'copilotAdoption.page.whereStand3': 'Where you stand',
@@ -135,7 +156,9 @@ export const copilotAdoption = {
   'copilotAdoption.page.licensedHoldersCopilotLicenceSkuEverUsedCountedActive': 'Licensed = holders of a Copilot licence SKU. Ever used = counted as active in the period, or Dormant - not counted as active in the period but with earlier use on record. Active this period = counted as having at least one interaction inside the selected period. Habitual = engagement of {v0} or more. Champions = {v1} or more. The percentage on the right is the conversion from the stage above, not from the top - a 90% that follows a 40% is still a healthy step. The red "lost here" counts are drop-offs worth acting on; the final step is grey because reaching Champion is not expected of everyone - habitual users are already established and the action plan says they need no action.',
   'copilotAdoption.page.licensedCountsComeImportedLicenceAssignmentsEveryActivityStage': 'Licensed counts come from the imported licence assignments; every activity stage comes from the Copilot audit log, falling back to Microsoft’s per-user usage report where the audit import has nothing for that user - and that report covers Microsoft’s own window rather than exactly the period selected here.',
   'copilotAdoption.page.sqlBehindTheseFigures': 'SQL behind these figures',
-  'copilotAdoption.page.whatNext': 'What to do next',
+  'copilotAdoption.page.whatNext': 'What to do next',  'copilotAdoption.page.analyst.whatNextBlurb': 'The work this creates, how big each job is, and which departments to start with.',
+
+
   'copilotAdoption.page.departmentLeagueTable4': 'Department league table',
   'copilotAdoption.page.theExecutiveDepartmentSummaryRepeatedHereHabitRateUnused': 'The executive department summary repeated here so its habit rate, unused-seat and candidate counts can be checked next to the detailed diagnostics.',
   'copilotAdoption.page.departmentLeagueTable5': 'Department league table',
@@ -174,7 +197,9 @@ export const copilotAdoption = {
   'copilotAdoption.page.readAgainstDepartmentAdoptionTableDepartmentAppearsBothLicences': 'Read against the department adoption table: a department that appears in both has licences going unused and people who would use them, which is a reassignment rather than a purchase.',
   'copilotAdoption.page.sqlBehindChart': 'SQL behind this chart',
   'copilotAdoption.page.candidates2': 'Candidates',
-  'copilotAdoption.page.howCopilotBeingUsed': 'How Copilot is being used',
+  'copilotAdoption.page.howCopilotBeingUsed': 'How Copilot is being used',  'copilotAdoption.page.analyst.evidenceBlurb': 'The evidence behind those recommendations: how often, how deeply, in which apps, and by whom.',
+
+
   'copilotAdoption.page.howOftenPeopleOpenCopilot': 'How often people open Copilot',
   'copilotAdoption.page.ofLicensedUsersUsedCopilotAllManyDaysMonth': 'Of the licensed users who used Copilot at all, how many days a month do they actually open it? Raw days only - no scoring, no weighting.',
   'copilotAdoption.page.howOftenPeopleOpenCopilot2': 'How often people open Copilot',
@@ -183,7 +208,8 @@ export const copilotAdoption = {
   'copilotAdoption.page.dayspermonthRoundActivedays': 'daysPerMonth = round(activeDays x {v0} / {v1})',
   'copilotAdoption.page.thisDeliberatelySameMeasureHabitRateTopPageOne': 'This is deliberately not the same measure as the "habit rate" at the top of the page. That one is the weighted engagement score, which also accounts for how much someone does each time and how many Copilot surfaces they use. This card is the unweighted frequency alone, so the two can be read against each other: a large "Daily" tile with a low habit rate means people open Copilot constantly but do very little with it. Percentages are of active users, not of all licences - calling someone who never opened Copilot "infrequent" would hide the more expensive problem.',
   'copilotAdoption.page.engagementMix': 'Engagement mix',
-  'copilotAdoption.page.everyLicensedUserExactlyOneBandNeverUsedDormant': 'Every licensed user in exactly one band. "Never used" and "Dormant" together are the idle seats. The reclaimable-licences figure is the certain and probable tiers, which is not the same set: dormant seats are review-only, admin exclusions are held back, and a disabled account that was still active is a certain reclaim without being idle at all.',
+  'copilotAdoption.page.everyLicensedUserExactlyOneBandNeverUsedDormant': 'Every licensed user in exactly one band. "Never used" and "Dormant" together are the idle seats. The reclaimable-licences figure is the certain and probable tiers, which is not the same set: dormant seats are review-only, admin exclusions are held back, and a disabled account that was still active is a certain reclaim without being idle at all.',  'copilotAdoption.page.licensedUsersCentreLabel': 'licensed users',
+
   'copilotAdoption.page.engagementMix2': 'Engagement mix',
   'copilotAdoption.page.theWholeLicensedPopulationSplitSixMutuallyExclusiveEngagement': 'The whole licensed population split into six mutually exclusive engagement bands.',
   'copilotAdoption.page.championEstablishedDevelopingTriallingAnyoneNoActivityPeriodScored': 'Champion {v0}+, Established {v1}+, Developing {v2}+, Trialling below that. Anyone with no activity in the period is not scored: they are Dormant if they used Copilot at some point in the last {v3} days, Never used otherwise.',
@@ -206,7 +232,9 @@ export const copilotAdoption = {
   'copilotAdoption.page.twoDepartmentsSameAdoptionRateSitOppositeCornersChart': 'Two departments on the same adoption rate can sit in opposite corners of this chart, and need opposite interventions.',
   'copilotAdoption.page.usageFrequencyIntensity2': 'Usage frequency and intensity',
   'copilotAdoption.page.eachDepartmentPlottedOftenUsersOpenCopilotHorizontalAgainst': 'Each department plotted by how often its users open Copilot (horizontal) against how much they do each time (vertical), with the bubble sized by licences held and coloured by average engagement.',
-  'copilotAdoption.page.onlyUsersWereActiveLeastOnceAveragedUnusedLicences': 'Only users who were active at least once are averaged, so unused licences do not drag a department towards the origin - they are counted in the reclaim figures instead. Active days are normalised to a {v0}-day month so the axis does not change meaning with the period. Departments with fewer than {v1} licences are omitted.',
+  'copilotAdoption.page.onlyUsersWereActiveLeastOnceAveragedUnusedLicences': 'Only users who were active at least once are averaged, so unused licences do not drag a department towards the origin - they are counted in the reclaim figures instead. Active days are normalised to a {v0}-day month so the axis does not change meaning with the period. Departments with fewer than {v1} licences are omitted.',  'copilotAdoption.page.intensityFormula': 'x = mean(activeDays of active users) x {normalisationDays} / {windowDays}\ny = sum(interactions of active users) / sum(activeDays of active users)',
+
+
   'copilotAdoption.page.bottomRightFrequentButShallowThoseUsersNeedRicher': 'Bottom-right is frequent but shallow - those users need richer scenarios. Top-left is deep but occasional - those users need a reason to come back tomorrow.',
   'copilotAdoption.page.howConcentratedUsage': 'How concentrated usage is',
   'copilotAdoption.page.shareAllCopilotActivityCohortActiveLicensedUsersHeaviest': 'Share of all Copilot activity by cohort of active licensed users, heaviest first.',
@@ -229,7 +257,9 @@ export const copilotAdoption = {
   'copilotAdoption.page.readGroupsSeparatelyOneRankingOnlyTenantContentAnswers': 'Read the groups separately, not as one ranking. Only "Tenant content" answers what Copilot is working on, and it undercounts: a file Copilot cited is typed CITATION rather than by its file type, so those references are counted under "How it was used" instead. "Grounding from outside the tenant" is not your content at all.',
   'copilotAdoption.page.microsoftPublishesNoListPossibleValuesFieldPurviewDocumentation': 'Microsoft publishes no list of possible values for this field - the Purview documentation says it "can contain values like the filetype extension (pptx, docx, etc.) or describe the type of resource (for non-SharePoint resources)" - and can add new ones at any time. Anything this version does not recognise, and any reference whose type was empty, is shown as Unclassified rather than being counted as content.',
   'copilotAdoption.page.sqlBehindChart3': 'SQL behind this chart',
-  'copilotAdoption.page.trendWiderReach': 'Trend and wider reach',
+  'copilotAdoption.page.trendWiderReach': 'Trend and wider reach',  'copilotAdoption.page.analyst.trendBlurb': 'Whether it is moving in the right direction, and what is happening beyond the licensed population.',
+
+
   'copilotAdoption.page.weeklyActiveLicensedUsers': 'Weekly active licensed users',
   'copilotAdoption.page.singleAdoptionRateCannotShowWhetherEnablementProgrammeWorking': 'A single adoption rate cannot show whether an enablement programme is working. This can. Licence membership is evaluated as of today until closed-period seat snapshots land.{v0}',
   'copilotAdoption.page.theSecondLineTracksMicrosoftCopilotCoworkAdoption': 'The second line tracks Microsoft 365 Copilot Cowork adoption.',
@@ -252,7 +282,8 @@ export const copilotAdoption = {
   'copilotAdoption.page.forEachDepartmentMuchCopilotLicencesUsedMuchCopilot': 'For each department: how much its Copilot licences are used, and how much Copilot the people without licences are doing anyway.',
   'copilotAdoption.page.bothInteractionsPerUserColumnsNormalisedDayMonthLicensed': 'Both "interactions per user" columns are normalised to a {v0}-day month. The licensed one divides by all licences held, including idle ones - that is deliberate, because an idle licence is exactly what the comparison is meant to surface. The unlicensed one divides by people who were actually active, since there is no such thing as an idle non-licence. Departments with fewer than {v1} of either population are omitted.',
   'copilotAdoption.page.theShadingMarksOutliersEachColumnLookDepartmentRight': 'The shading marks the outliers in each column. Look for a department where the right-hand number beats the left-hand one.',
-  'copilotAdoption.page.adoptionCountry': 'Adoption by country',
+  'copilotAdoption.page.adoptionCountry': 'Adoption by country',  'copilotAdoption.page.country': 'Country',
+
   'copilotAdoption.page.theSameMeasuresDepartmentTableOrganisationsRunEnablementRegionally': 'The same measures as the department table, for organisations that run enablement regionally.',
   'copilotAdoption.page.notEnoughLicensedUsersAnyAccountableGroupBreakDown': 'Not enough licensed users in any accountable group to break down reliably.',
   'copilotAdoption.page.seats2': 'Seats',
@@ -391,11 +422,18 @@ export const copilotAdoption = {
   'copilotAdoption.page.unknown2': 'Unknown',
   'copilotAdoption.page.yes': 'Yes',
   'copilotAdoption.page.no': 'No',
-  'copilotAdoption.page.copilotLicences': 'Copilot licences',
+  'copilotAdoption.page.copilotLicences': 'Copilot licences',  'copilotAdoption.page.kpi.denominatorCappedNote': 'Rates are of the {scored} users this analysis could score, not all {total} licences - see the warning at the top of the page.',
+  'copilotAdoption.page.kpi.licensedHintCapped': '{scored} of them analysed - {skus} licence SKU(s) counted',
+  'copilotAdoption.page.kpi.licensedHint': '{skus} licence SKU(s) counted',
+
+
   'copilotAdoption.page.peopleHoldingLeastOneLicenceToolClassifiedMicrosoftCopilot': 'People holding at least one licence that this tool classified as a Microsoft 365 Copilot licence. It is the denominator for every percentage on this page.',
   'copilotAdoption.page.countedImportedLicenceAssignmentsDeDuplicatedPerUserSomeone': 'Counted from the imported licence assignments, de-duplicated per user - someone holding two Copilot SKUs counts once. Microsoft ships Copilot-branded SKUs that are not a Copilot licence (Copilot Studio, Copilot for Sales), so the classification is listed in full, with the ones that were excluded, under "How this is calculated".',
   'copilotAdoption.page.needsUserMetadataImportLicenceAssignmentCountPurchaseCount': 'Needs the user metadata import. It is a licence-assignment count, not a purchase count, so unassigned licences you are paying for do not appear here.',
-  'copilotAdoption.page.purchasedSeats': 'Purchased seats',
+  'copilotAdoption.page.purchasedSeats': 'Purchased seats',  'copilotAdoption.page.kpi.grantOrganizationReadAll': 'Grant Organization.Read.All and rerun the user import',
+  'copilotAdoption.page.kpi.unassignedSeats': '{count} unassigned',
+
+
   'copilotAdoption.page.microsoftCopilotSeatsPurchasedTenantGraphSubscribedskusPrepaidunitsSeparate': 'Microsoft 365 Copilot seats purchased for the tenant, from Graph subscribedSkus prepaidUnits. This is separate from assigned seats.',
   'copilotAdoption.page.purchasedEnabledWarningSuspendedPrepaidUnitsSkusClassifiedMicrosoft': 'Purchased is enabled + warning + suspended prepaid units for the SKUs classified as Microsoft 365 Copilot seats. Unassigned is purchased minus assigned, per SKU, never below zero.',
   'copilotAdoption.page.adoptionRate3': 'Adoption rate',
@@ -414,7 +452,10 @@ export const copilotAdoption = {
   'copilotAdoption.page.certainProbableReviewExcluded': '{v0} certain, {v1} probable, {v2} review, {v3} excluded',
   'copilotAdoption.page.licencesSafeEnoughIncludeActionableReclaimTotalDisabledAccounts': 'Licences safe enough to include in the actionable reclaim total. Disabled accounts are certain. Enabled, long-tenured never-used accounts are probable. Dormant, too-new and unknown-tenure accounts are review-only.',
   'copilotAdoption.page.newUserProtectedDaysUsingGraphUserCreateddatetimeAccount': 'A new user is protected for {v0} days using Graph user.createdDateTime as the account-age proxy until true seat-tenure history exists. Active new users have their expected active days prorated; inactive new users are "too new to judge". {v1}',
+
   'copilotAdoption.page.certainProbableReclaimableReviewOnlyExcludedUsersStillRemain': '{v0} certain + {v1} probable{v2} = {v3} reclaimable. {v4} review-only and {v5} excluded users still remain in the licensed denominator. Reconciles against the band breakdown as {v6} never used + {v7} dormant + {v8} disabled-but-active = {v9} reclaimable{v10} + {v11} held back for review or exclusion.',
+  'copilotAdoption.page.reclaimWindowMismatchDeduction': '{count} probable seats held back because Microsoft\'s usage-report period does not match this window',
+  'copilotAdoption.page.reclaimWindowMismatchAddBack': '{count} held back for window mismatch',
   'copilotAdoption.page.drillThroughLicensedUsersTabReclaimTierFilterEach': 'Drill through on the Licensed users tab with the Reclaim tier filter; each tier uses the same reclaimEligibility key counted here. Expired exclusions are shown for re-review rather than silently honoured forever.',
   'copilotAdoption.page.disabledSeats': 'Disabled seats',
   'copilotAdoption.page.disabledAccountsStillHoldingCopilotLicence': 'Disabled accounts still holding a Copilot licence',
@@ -429,6 +470,15 @@ export const copilotAdoption = {
   'copilotAdoption.page.meanMedian': 'mean = {v0}, median = {v1}',
   'copilotAdoption.page.theMedianShownNextMeanHandfulChampionsPullMean': 'The median is shown next to the mean because a handful of Champions pull the mean up. When the mean is well above the median, the population is a small group of heavy users plus a long tail - a different problem from uniformly light use.',
   'copilotAdoption.page.microsoftCoworkUsageReportSuppliesTaskCountsAvailableAudit': 'Microsoft\'s Cowork usage report supplies task counts where available. Audit-derived interactions are retained separately for reconciliation and are not comparable with tasks.',
+  'copilotAdoption.page.kpi.purchasedSeatsSourceImported': 'Imported by the user metadata job from Graph subscribedSkus.',
+  'copilotAdoption.page.kpi.purchasedSeatsSourceUnknown': 'Unknown because Graph subscribedSkus is unavailable or Organization.Read.All has not been granted; this is deliberately not shown as zero.',
+  'copilotAdoption.page.kpi.coworkUsageObserved': 'Cowork usage observed',
+  'copilotAdoption.page.kpi.coworkTasksHint': '{tasks} Cowork tasks in Microsoft\'s usage report; {interactions} audit interactions kept for reconciliation',
+  'copilotAdoption.page.kpi.coworkAuditHint': '{interactions} audit interactions (not Microsoft task count)',
+  'copilotAdoption.page.kpi.coworkWhatUnknownEligibility': 'Cowork users are shown, but the adoption percentage is suppressed because spending-policy eligibility is unknown.',
+  'copilotAdoption.page.kpi.coworkWhatKnownEligibility': 'Cowork users as a share of known Cowork spending-policy eligibility.',
+
+
   'copilotAdoption.page.coworkEligibilityControlledSpendingPolicyScopeDeprecatedCoworkAgent': 'Cowork eligibility is controlled by spending-policy scope, not by the deprecated Cowork agent entry or by the Microsoft 365 Copilot licence count.',
   'copilotAdoption.page.usingCopilotUnlicensed': 'Using Copilot unlicensed',
   'copilotAdoption.page.provenDemandAlreadyUsingCopilotChatNoLicence': 'Proven demand - already using Copilot Chat with no licence',

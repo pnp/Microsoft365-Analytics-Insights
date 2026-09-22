@@ -96,12 +96,23 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.dataSource.show': 'Mostrar orígenes de datos',
 
   // Date range
+  'licenceActivity.dateRange.preset.lastSettledWeek': 'Última semana asentada',
+  'licenceActivity.dateRange.preset.last4FullySettledWeeks': 'Últimas 4 semanas completamente asentadas',
+  'licenceActivity.dateRange.preset.last90SettledDays': 'Últimos 90 días asentados',
+  'licenceActivity.dateRange.preset.last180SettledDays': 'Últimos 180 días asentados',
   'licenceActivity.dateRange.customRange': 'Intervalo personalizado',
   'licenceActivity.dateRange.daysEnding': '{days} días hasta {date}',
   'licenceActivity.dateRange.from': 'Desde',
   'licenceActivity.dateRange.startDate': 'Fecha de inicio',
   'licenceActivity.dateRange.to': 'Hasta',
   'licenceActivity.dateRange.endDate': 'Fecha de finalización',
+  'licenceActivity.dateRange.error.enterBothDates': 'Especifique una fecha de inicio y una fecha de finalización.',
+  'licenceActivity.dateRange.error.earliestSupportedDate': 'La fecha mínima admitida es {date}.',
+  'licenceActivity.dateRange.error.startOnOrBeforeEnd': 'La fecha de inicio debe ser igual o anterior a la fecha de finalización.',
+  'licenceActivity.dateRange.error.endBeforeToday':
+    'La fecha de finalización debe ser anterior a hoy (los informes cubren días pasados completos).',
+  'licenceActivity.dateRange.error.rangeAtLeastDays': 'El intervalo debe ser de al menos {days} días.',
+  'licenceActivity.dateRange.error.rangeNoLongerThanDays': 'El intervalo no puede ser de más de {days} días.',
 
   // Overview and selected licence
   'licenceActivity.overview.peopleWithLicence': 'Personas con licencia',

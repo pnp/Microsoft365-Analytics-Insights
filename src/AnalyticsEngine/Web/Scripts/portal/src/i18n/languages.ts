@@ -76,6 +76,23 @@ export function browserLanguages(
 }
 
 /**
+ * The browser's storage, or undefined when it cannot be reached.
+ *
+ * `window.localStorage` is a *getter*, and in a browser with site data blocked - or on a restricted
+ * origin - reading the property itself throws `SecurityError`, before any method on it is called.
+ * Wrapping only `getItem` is therefore not enough: the throw happens on the way to the wrapper.
+ * `main.tsx` calls `detectLanguage()` before the first render, so an unguarded read here is a
+ * blank portal for a reader whose only crime is blocking cookies.
+ */
+function safeStorage(): Storage | undefined {
+  try {
+    return typeof window === 'undefined' ? undefined : window.localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Reads a previously chosen language.
  *
  * Wrapped because `localStorage` throws outright when cookies/site data are blocked, which is a
@@ -101,6 +118,11 @@ export function storeLanguage(
   }
 }
 
+/** The browser's storage for the caller to pass to `storedLanguage`/`storeLanguage`, or undefined. */
+export function browserStorage(): Storage | undefined {
+  return safeStorage();
+}
+
 /**
  * The language to open in: an explicit earlier choice, else the browser's preference, else English.
  *
@@ -111,8 +133,7 @@ export function detectLanguage(options?: {
   storage?: Pick<Storage, 'getItem'>;
   navigator?: Pick<Navigator, 'languages' | 'language'>;
 }): Language {
-  const storage =
-    options?.storage ?? (typeof window === 'undefined' ? undefined : window.localStorage);
+  const storage = options?.storage ?? safeStorage();
   const nav = options?.navigator ?? (typeof navigator === 'undefined' ? undefined : navigator);
 
   return storedLanguage(storage) ?? matchLanguage(browserLanguages(nav)) ?? DEFAULT_LANGUAGE;

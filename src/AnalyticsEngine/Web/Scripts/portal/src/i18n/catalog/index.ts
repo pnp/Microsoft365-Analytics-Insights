@@ -15,6 +15,7 @@ import enWebActivity from './en/webActivity';
 import enLicenceActivity from './en/licenceActivity';
 import enAgentCosts from './en/agentCosts';
 import enDlp from './en/dlp';
+import enErrors from './en/errors';
 import enHealth from './en/health';
 import enAdmin from './en/admin';
 
@@ -58,6 +59,7 @@ export const EN_MODULES = {
   licenceActivity: enLicenceActivity,
   agentCosts: enAgentCosts,
   dlp: enDlp,
+  errors: enErrors,
   health: enHealth,
   admin: enAdmin,
 } as const;
@@ -114,6 +116,7 @@ const LOADERS: Record<Exclude<Language, 'en'>, () => Promise<Catalog>> = {
           import('./es/licenceActivity'),
           import('./es/agentCosts'),
           import('./es/dlp'),
+          import('./es/errors'),
           import('./es/health'),
           import('./es/admin'),
         ])
@@ -123,6 +126,7 @@ const LOADERS: Record<Exclude<Language, 'en'>, () => Promise<Catalog>> = {
 
 const loaded = new Map<Language, Catalog>([['en', EN_CATALOG]]);
 const inFlight = new Map<Language, Promise<Catalog>>();
+const failed = new Set<Language>();
 
 /**
  * Fetches a language's catalog, once.
@@ -148,8 +152,13 @@ export function loadCatalog(language: Language): Promise<Catalog> {
     })
     .catch((error: unknown) => {
       // A failed chunk fetch - an offline reader, or a stale index.html after a redeploy. English
-      // is already in memory, so the portal stays usable in the wrong language rather than blank.
+      // is already in memory, so the portal stays usable rather than blank. It is deliberately
+      // NOT recorded as loaded: `isCatalogLoaded` stays false, which is how the provider knows to
+      // fall the whole language back to English rather than show English text while claiming to
+      // be Spanish - `<html lang="es-ES">` over English prose makes a screen reader read English
+      // with Spanish phonetics, and the numbers would still be grouped the Spanish way.
       console.error(`[portal i18n] Could not load the ${language} translations.`, error);
+      failed.add(language);
       return EN_CATALOG;
     })
     .finally(() => {
@@ -165,6 +174,11 @@ export function isCatalogLoaded(language: Language): boolean {
   return loaded.has(language);
 }
 
+/** True when a language's catalog was attempted and could not be fetched. */
+export function catalogFailed(language: Language): boolean {
+  return failed.has(language);
+}
+
 /** The catalog to render with now. Falls back to English until the language has loaded. */
 export function catalogFor(language: Language): Catalog {
   return loaded.get(language) ?? EN_CATALOG;
@@ -175,4 +189,5 @@ export function resetLoadedCatalogs(): void {
   loaded.clear();
   loaded.set('en', EN_CATALOG);
   inFlight.clear();
+  failed.clear();
 }

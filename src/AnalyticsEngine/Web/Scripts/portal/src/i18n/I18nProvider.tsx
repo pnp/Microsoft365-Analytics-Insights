@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useState,
   type ReactNode,
@@ -10,14 +11,22 @@ import {
 
 import {
   DEFAULT_LANGUAGE,
+  browserStorage,
   detectLanguage,
   languageDefinition,
   localeFor,
   storeLanguage,
   type Language,
 } from './languages';
-import { setActiveLanguage } from './locale';
-import { catalogFor, EN_CATALOG, isCatalogLoaded, loadCatalog, type TranslationKey } from './catalog';
+import { setActiveLanguage } from './runtime';
+import {
+  catalogFailed,
+  catalogFor,
+  EN_CATALOG,
+  isCatalogLoaded,
+  loadCatalog,
+  type TranslationKey,
+} from './catalog';
 import {
   interpolate,
   interpolateNodes,
@@ -74,14 +83,39 @@ export function I18nProvider({
   /** Overrides detection. Tests use it; the app leaves it unset so the browser decides. */
   initialLanguage?: Language;
 }) {
-  const [language, setLanguageState] = useState<Language>(
+  const [requested, setRequestedLanguage] = useState<Language>(
     () => initialLanguage ?? detectLanguage(),
   );
-  // Bumped when a catalog fetch lands, to re-render with text that was not available before.
+  // Bumped when a catalog fetch settles, to re-render with text that was not available before.
   const [catalogRevision, setCatalogRevision] = useState(0);
+
+  /**
+   * The language actually in use.
+   *
+   * Not the same as the one requested, when a chunk fetch failed: `loadCatalog` falls the text
+   * back to English, and everything else has to follow it. Rendering English prose under
+   * `<html lang="es-ES">`, with Spanish thousands separators and a picker still saying "Espanol",
+   * would be worse than the honest fallback - a screen reader would read English with Spanish
+   * phonetics, and the numbers would be grouped the wrong way round.
+   */
+  const language: Language =
+    requested !== DEFAULT_LANGUAGE && catalogFailed(requested) ? DEFAULT_LANGUAGE : requested;
 
   // Render-time, not effect-time: see the note above.
   setActiveLanguage(language);
+
+  /**
+   * Re-assert after commit.
+   *
+   * The render-time call above is what makes the *first* paint of a language change use the right
+   * locale. But React may start a render and abandon it, and the formatters read module state, so
+   * an abandoned render could leave the committed tree formatting in a language it is not showing.
+   * A layout effect runs only for the render that actually committed, and before paint, so
+   * re-asserting here means the last write always matches what is on screen.
+   */
+  useLayoutEffect(() => {
+    setActiveLanguage(language);
+  }, [language]);
 
   useEffect(() => {
     if (typeof document !== 'undefined') {
@@ -101,9 +135,11 @@ export function I18nProvider({
   }, [language]);
 
   const setLanguage = useCallback((next: Language) => {
+    // State first: storage can throw on a browser with site data blocked (the property getter
+    // itself does), and a language change must not be lost to a failed attempt to remember it.
+    setRequestedLanguage(next);
     setActiveLanguage(next);
-    storeLanguage(typeof window === 'undefined' ? undefined : window.localStorage, next);
-    setLanguageState(next);
+    storeLanguage(browserStorage(), next);
   }, []);
 
   const value = useMemo<I18nContextValue>(() => {

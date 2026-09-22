@@ -1,3 +1,5 @@
+import { translateActive } from '../i18n/runtime';
+import type { TranslationKey } from '../i18n/catalog';
 import { apiFetch } from './http';
 import type {
   AgentCostAvailability,
@@ -38,7 +40,7 @@ async function readServerMessage(response: Response): Promise<string | null> {
   }
 }
 
-async function getJson<T>(path: string, what: string, signal?: AbortSignal): Promise<T> {
+async function getJson<T>(path: string, failureKey: TranslationKey, signal?: AbortSignal): Promise<T> {
   const response = await apiFetch(`${baseUrl()}${path}`, {
     method: 'GET',
     headers: { Accept: 'application/json' },
@@ -46,7 +48,7 @@ async function getJson<T>(path: string, what: string, signal?: AbortSignal): Pro
   });
 
   if (!response.ok) {
-    const message = (await readServerMessage(response)) ?? `Couldn't load ${what} (${response.status}).`;
+    const message = (await readServerMessage(response)) ?? translateActive(failureKey, { status: response.status });
     throw new AgentCostsApiError(response.status, message);
   }
 
@@ -71,15 +73,15 @@ function filterQuery(filters: AgentCostFilters): URLSearchParams {
 }
 
 export function fetchAvailability(signal?: AbortSignal): Promise<AgentCostAvailability> {
-  return getJson<AgentCostAvailability>('/availability', 'the agent cost availability', signal);
+  return getJson<AgentCostAvailability>('/availability', 'errors.agentCosts.availabilityFailed', signal);
 }
 
 export function fetchSummary(filters: AgentCostFilters, signal?: AbortSignal): Promise<AgentCostSummary> {
-  return getJson<AgentCostSummary>(`/summary?${filterQuery(filters)}`, 'the agent cost summary', signal);
+  return getJson<AgentCostSummary>(`/summary?${filterQuery(filters)}`, 'errors.agentCosts.summaryFailed', signal);
 }
 
 export function fetchTrend(filters: AgentCostFilters, signal?: AbortSignal): Promise<AgentCostDailyPoint[]> {
-  return getJson<AgentCostDailyPoint[]>(`/trend?${filterQuery(filters)}`, 'the daily credit trend', signal);
+  return getJson<AgentCostDailyPoint[]>(`/trend?${filterQuery(filters)}`, 'errors.agentCosts.trendFailed', signal);
 }
 
 export function fetchBreakdown(
@@ -91,7 +93,7 @@ export function fetchBreakdown(
   const qs = filterQuery(filters);
   qs.set('dimension', dimension);
   qs.set('top', String(top));
-  return getJson<AgentCostBreakdownRow[]>(`/breakdown?${qs}`, 'the credit breakdown', signal);
+  return getJson<AgentCostBreakdownRow[]>(`/breakdown?${qs}`, 'errors.agentCosts.breakdownFailed', signal);
 }
 
 export interface DetailParams extends AgentCostFilters {
@@ -107,7 +109,7 @@ export function fetchDetail(params: DetailParams, signal?: AbortSignal): Promise
   qs.set('pageSize', String(params.pageSize));
   qs.set('sort', params.sort);
   qs.set('direction', params.direction);
-  return getJson<AgentCostDetailPage>(`/detail?${qs}`, 'the detailed credit rows', signal);
+  return getJson<AgentCostDetailPage>(`/detail?${qs}`, 'errors.agentCosts.detailFailed', signal);
 }
 
 export function fetchAzureBreakdown(
@@ -117,7 +119,7 @@ export function fetchAzureBreakdown(
   signal?: AbortSignal,
 ): Promise<AzureCostBreakdownRow[]> {
   const qs = new URLSearchParams({ from: filters.from, to: filters.to, dimension, top: String(top) });
-  return getJson<AzureCostBreakdownRow[]>(`/azure?${qs}`, 'the Azure cost breakdown', signal);
+  return getJson<AzureCostBreakdownRow[]>(`/azure?${qs}`, 'errors.agentCosts.azureBreakdownFailed', signal);
 }
 
 /**
@@ -131,12 +133,12 @@ export function fetchTopUsers(
 ): Promise<AgentCostUserRow[]> {
   const qs = new URLSearchParams({ from: filters.from, to: filters.to, top: String(top) });
   if (filters.environmentId) qs.set('environmentId', filters.environmentId);
-  return getJson<AgentCostUserRow[]>(`/users?${qs}`, 'the per-user credit consumption', signal);
+  return getJson<AgentCostUserRow[]>(`/users?${qs}`, 'errors.agentCosts.topUsersFailed', signal);
 }
 
 export function fetchFilterOptions(filters: AgentCostFilters, signal?: AbortSignal): Promise<AgentCostFilterOptions> {
   const qs = new URLSearchParams({ from: filters.from, to: filters.to });
-  return getJson<AgentCostFilterOptions>(`/filters?${qs}`, 'the available filters', signal);
+  return getJson<AgentCostFilterOptions>(`/filters?${qs}`, 'errors.agentCosts.filtersFailed', signal);
 }
 
 /**

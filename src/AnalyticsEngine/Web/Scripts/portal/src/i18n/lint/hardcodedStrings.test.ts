@@ -63,7 +63,9 @@ function describeFindings(findings: Finding[]): string {
 }
 
 describe('Untranslated text', () => {
-  it('finds no user-facing string outside the translation catalog', () => {
+  // Parsing ~130 files with the TypeScript compiler takes a few seconds on a loaded CI runner,
+  // and the default 5s timeout has been reached there.
+  it('finds no user-facing string outside the translation catalog', { timeout: 30000 }, () => {
     const findings = scanPortal();
 
     expect(
@@ -117,6 +119,62 @@ describe('The untranslated-text check itself', () => {
     expect(findings.map((f) => f.text)).toEqual(['Saved your changes']);
   });
 
+  /**
+   * The values handed to `t()` are interpolated straight into the translated sentence, so an
+   * English word passed as one puts English in the middle of a Spanish paragraph. Exempting
+   * everything beneath a `t()` call - the obvious implementation - hides exactly that, and did:
+   * `t('key', { v0: 'analysed' })` was live in this portal and invisible to the check.
+   */
+  it('catches an English word passed as a value to t(), while ignoring the key itself', () => {
+    const findings = scan(
+      "export const A = ({ n }) => <Text>{t('copilotAdoption.page.rates', { word: 'analysed users' })}</Text>;",
+    );
+    expect(findings.map((f) => f.text)).toEqual(['analysed users']);
+  });
+
+  it('ignores both key arguments of plural(), which are keys and not text', () => {
+    expect(
+      scan(
+        "export const A = ({ n }) => <Text>{t(plural(n, 'common.unit.user.one', 'common.unit.user.other'), { count: n })}</Text>;",
+      ),
+    ).toEqual([]);
+  });
+
+  /**
+   * The catch-all. The position-based rules only see text somewhere the checker already knows
+   * about; this is what covers a sentence assembled inside a helper and returned as a string,
+   * which is how `describeBands()` put an English clause inside a Spanish sentence.
+   */
+  it('catches a phrase built inside a helper and returned', () => {
+    const findings = scan(
+      'export function describeBands(b) { return `below ${b.upTo}% needs attention`; }',
+    );
+    expect(findings.map((f) => f.kind)).toEqual(['phrase']);
+  });
+
+  it('catches a phrase given to a prop nobody thought to whitelist', () => {
+    const findings = scan('export const A = () => <SectionHead blurb="The departments to start with." />;');
+    expect(findings.map((f) => f.text)).toEqual(['The departments to start with.']);
+  });
+
+  it('stays quiet on a Griffel style value, which reads like a phrase to a word counter', () => {
+    const findings = scan(
+      "const s = makeStyles({ grid: { gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', transition: 'width 250ms ease', padding: '12px 14px 14px 34px' } });",
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('stays quiet on a console diagnostic, which is for a developer', () => {
+    expect(
+      scan("export const A = () => { console.warn('[portal] No hash route found - nav is degraded.'); };"),
+    ).toEqual([]);
+  });
+
+  it('reports a string satisfying two rules only once', () => {
+    const findings = scan('export const A = () => <Button aria-label="Hide these warnings" />;');
+    expect(findings).toHaveLength(1);
+  });
+
   it('catches a literal rendered through a ternary', () => {
     const findings = scan('export const A = ({ on }) => <Text>{on ? "Switched on" : "Switched off"}</Text>;');
     expect(findings.map((f) => f.text).sort()).toEqual(['Switched off', 'Switched on']);
@@ -157,6 +215,17 @@ describe('The untranslated-text check itself', () => {
     expect(shouldScan('i18n/catalog/en/common.ts')).toBe(false);
     expect(shouldScan('pages/HealthPage.test.tsx')).toBe(false);
     expect(shouldScan('test/renderWithProvider.tsx')).toBe(false);
+  });
+
+  /**
+   * The language picker lives in `src/i18n/`, which is otherwise mostly catalog data. Excluding
+   * that whole directory - the obvious way to skip the catalog - would stop checking a real
+   * component, and any future picker or load-failure UI added beside it.
+   */
+  it('still scans the components that live inside src/i18n', () => {
+    expect(shouldScan('i18n/LanguageSwitcher.tsx')).toBe(true);
+    expect(shouldScan('i18n/I18nProvider.tsx')).toBe(true);
+    expect(shouldScan('i18n/lint/hardcodedStrings.ts')).toBe(false);
   });
 
   it('reads every page and component in the portal, so nothing is skipped by accident', () => {

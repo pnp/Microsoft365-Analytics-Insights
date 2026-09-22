@@ -62,9 +62,10 @@ export default function MeetingsPanel({
   const t = useT();
   const { kpis, quality } = data;
 
-  const workingHours = `${String(data.workingDayStartHour).padStart(2, '0')}:00\u2013${String(
-    data.workingDayEndHour,
-  ).padStart(2, '0')}:00 UTC`;
+  const workingHours = t('teamsExplorer.meetings.workingHoursUtc', {
+    start: String(data.workingDayStartHour).padStart(2, '0'),
+    end: String(data.workingDayEndHour).padStart(2, '0'),
+  });
 
   const utcCaveat =
     t('teamsExplorer.meetings.utcCaveat');

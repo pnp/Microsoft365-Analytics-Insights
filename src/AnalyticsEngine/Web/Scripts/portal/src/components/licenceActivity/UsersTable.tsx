@@ -224,7 +224,7 @@ export default function UsersTable({
   workloadLabel,
   showRank,
   startRank = 1,
-  emptyText = 'Nobody to show for this selection.',
+  emptyText,
 }: UsersTableProps) {
   const styles = useStyles();
   const table = useLaTableStyles();
@@ -240,7 +240,7 @@ export default function UsersTable({
     });
 
   if (rows.length === 0) {
-    return <div className={styles.empty}>{emptyText}</div>;
+    return <div className={styles.empty}>{emptyText ?? t('licenceActivity.users.nobodyToShow')}</div>;
   }
 
   const colSpan = 7 + (showRank ? 1 : 0);

@@ -1,4 +1,4 @@
-import { formatDateParts, formatNumber, type TFunction, type TranslationKey } from '../../i18n';
+import { formatDateParts, formatNumber, translateActive, type TFunction, type TranslationKey } from '../../i18n';
 import type { AgentCostDetailRow, AzureDimension, CreditDimension } from '../../types/agentCosts';
 
 /** Shown for a dimension the billing API did not report for a row. */
@@ -70,12 +70,6 @@ const HARNESS_LABEL_KEYS: Record<string, TranslationKey> = {
   NotAssessed: 'agentCosts.harness.noFeatureReported',
 };
 
-const ENGLISH_HARNESS_LABELS: Record<string, string> = {
-  StandardOrCopilotChat: 'Standard / Copilot Chat',
-  Unknown: 'Unrecognised feature',
-  NotAssessed: 'No feature reported',
-};
-
 /**
  * A display label for a stored harness value.
  *
@@ -85,7 +79,7 @@ const ENGLISH_HARNESS_LABELS: Record<string, string> = {
  */
 export function harnessLabel(value: string | null | undefined, t?: TFunction): string {
   const key = value ? HARNESS_LABEL_KEYS[value] : undefined;
-  if (key) return t ? t(key) : ENGLISH_HARNESS_LABELS[value as string];
+  if (key) return (t ?? translateActive)(key);
   if (value === 'GitHubCopilot') return 'GitHub Copilot';
   return value || (t ? t('agentCosts.state.notReported') : NOT_REPORTED);
 }

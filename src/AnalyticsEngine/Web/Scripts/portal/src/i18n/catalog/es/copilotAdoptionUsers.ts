@@ -110,6 +110,9 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
   'copilotAdoptionUsers.licensed.microsoftWindow': 'Ventana de Microsoft',
   'copilotAdoptionUsers.licensed.sourceComparison': 'Auditoría D{windowDays}: {auditInteractions} interacciones, {auditDays} días. Informe de Microsoft {reportPeriod}{snapshotDate}: {prompts} avisos, {reportDays} días.',
   'copilotAdoptionUsers.licensed.sourceComparisonSnapshotDate': ', {date}',
+  'copilotAdoptionUsers.licensed.engagementFormula.unitWeight': 'frecuencia = min(1, diasActivos / diasActivosEsperados)\nconfianza  = min(1, diasActivos / {depthMinDays})\nprofundidad = min(1, interacciones / diasActivos / {depthTarget}) x confianza\namplitud   = min(1, appsUsadas / {breadthTarget})\npuntuacion = (frecuencia x {frequencyWeight} + profundidad x {depthWeight} + amplitud x {breadthWeight}) x 100',
+  'copilotAdoptionUsers.licensed.engagementFormula.weighted': 'frecuencia = min(1, diasActivos / diasActivosEsperados)\nconfianza  = min(1, diasActivos / {depthMinDays})\nprofundidad = min(1, interacciones / diasActivos / {depthTarget}) x confianza\namplitud   = min(1, appsUsadas / {breadthTarget})\npuntuacion = (frecuencia x {frequencyWeight} + profundidad x {depthWeight} + amplitud x {breadthWeight})\n             / {weightSum} x 100',
+
 
   // Opportunities panel
   'copilotAdoptionUsers.opportunities.searchAria': 'Buscar candidatos a licencia',
@@ -185,6 +188,8 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
   'copilotAdoptionUsers.opportunities.justificationHow': 'Escrita por usuario en lugar de por banda: no hay dos candidatos que lleguen a la misma puntuación por la misma vía, así que realmente varía de una fila a otra.',
   'copilotAdoptionUsers.opportunities.justificationSource': 'Se puede pegar directamente en una solicitud de licencia. También aparece completa en la exportación CSV.',
   'copilotAdoptionUsers.opportunities.showingCandidates': 'Mostrando {start}-{end} de {total} candidatos',
+  'copilotAdoptionUsers.opportunities.businessCaseFormula': 'copilot     = min(1, interaccionesCopilotSinLicencia / ({copilotTarget}))\ncolaboracion = min(1, (mensajesTeams + reunionesTeams) / {collaborationTarget})\ncorreo      = min(1, (correosEnviados + correosLeidos) / {emailTarget})\ndocumentos  = min(1, archivosVistosOEditados / {documentTarget})\npuntuacion = copilot*{copilotWeight} + colaboracion*{collaborationWeight} + correo*{emailWeight} + documentos*{documentWeight}\n\nrecomendado cuando diasActivosCopilotSinLicencia >= {provenDemandDays}\n               o puntuacion >= {recommendScore}',
+
 
   // Unlicensed panel
   'copilotAdoptionUsers.unlicensed.emptyTitle': 'Sin uso de Copilot sin licencia en este periodo',

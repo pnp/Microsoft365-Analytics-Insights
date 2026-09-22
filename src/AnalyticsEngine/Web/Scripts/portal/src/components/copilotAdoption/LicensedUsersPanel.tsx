@@ -268,7 +268,7 @@ export default function LicensedUsersPanel({
           <option value="">{t('copilotAdoptionUsers.licensed.allRecommendedActions')}</option>
           {actionPlan.map((a) => (
             <option key={a.code} value={a.code}>
-              {a.label} ({a.users.toLocaleString()})
+              {a.label} ({formatCount(a.users)})
             </option>
           ))}
         </Select>
@@ -421,15 +421,20 @@ export default function LicensedUsersPanel({
                         <p>{t('copilotAdoptionUsers.licensed.newAccountsFrequency')}</p>
                       </>
                     ),
-                    formula:
-                      'frequency  = min(1, activeDays / expectedActiveDays)\n' +
-                      `confidence = min(1, activeDays / ${options.depthMinActiveDays})\n` +
-                      `depth      = min(1, interactions / activeDays / ${options.depthTargetInteractionsPerActiveDay}) x confidence\n` +
-                      `breadth    = min(1, appsUsed / ${options.breadthTargetApps})\n` +
-                      `score      = (frequency x ${options.frequencyWeight} + depth x ${options.depthWeight} + breadth x ${options.breadthWeight})` +
-                      (Math.abs(weightSum - 1) < 1e-9
-                        ? ' x 100'
-                        : `\n             / ${weightSum} x 100`),
+                    formula: t(
+                      Math.abs(weightSum - 1) < 1e-9
+                        ? 'copilotAdoptionUsers.licensed.engagementFormula.unitWeight'
+                        : 'copilotAdoptionUsers.licensed.engagementFormula.weighted',
+                      {
+                        depthMinDays: options.depthMinActiveDays,
+                        depthTarget: options.depthTargetInteractionsPerActiveDay,
+                        breadthTarget: options.breadthTargetApps,
+                        frequencyWeight: options.frequencyWeight,
+                        depthWeight: options.depthWeight,
+                        breadthWeight: options.breadthWeight,
+                        weightSum,
+                      },
+                    ),
                     source: t('copilotAdoptionUsers.licensed.engagementScoreSource'),
                   }}
                 >

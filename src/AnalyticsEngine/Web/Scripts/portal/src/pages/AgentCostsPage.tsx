@@ -404,7 +404,10 @@ export default function AgentCostsPage() {
 
   const exportPage = useCallback(() => {
     if (!detail) return;
-    saveCsv(detailRowsToCsv(detail.rows, t), `agent-credits-${filters.from}-to-${filters.to}-page${detail.page}.csv`);
+    saveCsv(
+      detailRowsToCsv(detail.rows, t),
+      t('agentCosts.export.pageFilename', { from: filters.from, to: filters.to, page: detail.page }),
+    );
   }, [detail, filters.from, filters.to, t]);
 
   const exportAll = useCallback(async () => {
@@ -412,7 +415,10 @@ export default function AgentCostsPage() {
     setNotice(null);
     try {
       const result = await fetchAllDetailRows(filters, sort, direction);
-      saveCsv(detailRowsToCsv(result.rows, t), `agent-credits-${filters.from}-to-${filters.to}-filtered.csv`);
+      saveCsv(
+        detailRowsToCsv(result.rows, t),
+        t('agentCosts.export.filteredFilename', { from: filters.from, to: filters.to }),
+      );
       setNotice(
         result.truncated
           ? t('agentCosts.notice.exportedTruncated', {

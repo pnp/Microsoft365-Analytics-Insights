@@ -108,6 +108,9 @@ export const copilotAdoptionUsers = {
   'copilotAdoptionUsers.licensed.microsoftWindow': 'Microsoft window',
   'copilotAdoptionUsers.licensed.sourceComparison': 'Audit D{windowDays}: {auditInteractions} interactions, {auditDays} days. Microsoft report {reportPeriod}{snapshotDate}: {prompts} prompts, {reportDays} days.',
   'copilotAdoptionUsers.licensed.sourceComparisonSnapshotDate': ', {date}',
+  'copilotAdoptionUsers.licensed.engagementFormula.unitWeight': 'frequency  = min(1, activeDays / expectedActiveDays)\nconfidence = min(1, activeDays / {depthMinDays})\ndepth      = min(1, interactions / activeDays / {depthTarget}) x confidence\nbreadth    = min(1, appsUsed / {breadthTarget})\nscore      = (frequency x {frequencyWeight} + depth x {depthWeight} + breadth x {breadthWeight}) x 100',
+  'copilotAdoptionUsers.licensed.engagementFormula.weighted': 'frequency  = min(1, activeDays / expectedActiveDays)\nconfidence = min(1, activeDays / {depthMinDays})\ndepth      = min(1, interactions / activeDays / {depthTarget}) x confidence\nbreadth    = min(1, appsUsed / {breadthTarget})\nscore      = (frequency x {frequencyWeight} + depth x {depthWeight} + breadth x {breadthWeight})\n             / {weightSum} x 100',
+
 
   // Opportunities panel
   'copilotAdoptionUsers.opportunities.searchAria': 'Search licence candidates',
@@ -183,6 +186,8 @@ export const copilotAdoptionUsers = {
   'copilotAdoptionUsers.opportunities.justificationHow': 'Written per user rather than per band - no two candidates reach the same score by the same route, so this genuinely differs from row to row.',
   'copilotAdoptionUsers.opportunities.justificationSource': 'Safe to paste directly into a licence request. It is also in the CSV export, in full.',
   'copilotAdoptionUsers.opportunities.showingCandidates': 'Showing {start}-{end} of {total} candidates',
+  'copilotAdoptionUsers.opportunities.businessCaseFormula': 'copilot     = min(1, unlicensedCopilotInteractions / ({copilotTarget}))\ncollab      = min(1, (teamsMessages + teamsMeetings) / {collaborationTarget})\nemail       = min(1, (emailsSent + emailsRead) / {emailTarget})\ndocuments   = min(1, filesViewedOrEdited / {documentTarget})\nscore = copilot*{copilotWeight} + collab*{collaborationWeight} + email*{emailWeight} + documents*{documentWeight}\n\nrecommended when unlicensedCopilotActiveDays >= {provenDemandDays}\n               or score >= {recommendScore}',
+
 
   // Unlicensed panel
   'copilotAdoptionUsers.unlicensed.emptyTitle': 'No unlicensed Copilot use in this period',

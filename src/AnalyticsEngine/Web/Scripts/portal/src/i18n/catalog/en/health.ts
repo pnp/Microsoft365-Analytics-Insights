@@ -8,6 +8,7 @@ export const health = {
   // Shared health UI
   'health.action.refresh': 'Refresh',
   'health.action.refreshing': 'Refreshing...',
+  'health.section.failedToLoad': 'Failed to load.',
   'health.section.loaded': 'loaded {when}',
   'health.section.loading': 'Loading {title}...',
   'health.status.checking': 'Checking...',

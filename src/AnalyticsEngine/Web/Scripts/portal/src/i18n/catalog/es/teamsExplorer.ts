@@ -190,6 +190,7 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.adoption.valueLabel.usersLower': 'usuarios',
 
   'teamsExplorer.meetings.utcCaveat': 'Las horas de llamada se registran en UTC y la base de datos no contiene zona horaria por usuario, por lo que una organización realmente global mostrará alta actividad fuera del horario laboral. Compare departamentos entre sí en lugar de contra un objetivo absoluto.',
+  'teamsExplorer.meetings.workingHoursUtc': 'de {start}:00 a {end}:00 UTC',
   'teamsExplorer.meetings.source.graphCallRecords': 'Registros de llamadas de Graph.',
   'teamsExplorer.meetings.source.graphCallRecordsSessions': 'Registros de llamadas de Graph y sus sesiones por asistente.',
   'teamsExplorer.meetings.kpi.calls.label': 'Llamadas',
@@ -205,7 +206,7 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.meetings.kpi.averageAttendees.what': 'El número medio de asistentes por llamada.',
   'teamsExplorer.meetings.kpi.outOfHours.label': 'Fuera de horario',
   'teamsExplorer.meetings.kpi.outOfHours.hint': '{pct} en fin de semana',
-  'teamsExplorer.meetings.kpi.outOfHours.what': 'Llamadas que empiezan fuera de {workingHours}, o en sábado o domingo.',
+  'teamsExplorer.meetings.kpi.outOfHours.what': 'Llamadas que empiezan fuera del intervalo {workingHours}, o en sábado o domingo.',
   'teamsExplorer.meetings.kpi.outOfHours.formula': 'llamadas fuera de horario / todas las llamadas x 100',
   'teamsExplorer.meetings.kpi.organiserConcentration.label': 'Concentración de organizadores',
   'teamsExplorer.meetings.kpi.organiserConcentration.hint': 'Proporción de reuniones dirigidas por la décima parte de organizadores con más actividad',

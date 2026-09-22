@@ -22,7 +22,8 @@ export type FindingKind =
   | 'jsx-attribute'
   | 'jsx-expression'
   | 'object-property'
-  | 'notification';
+  | 'notification'
+  | 'phrase';
 
 export interface Finding {
   /** Path relative to the portal's `src`, using forward slashes. */
@@ -50,18 +51,26 @@ const USER_FACING_ATTRIBUTES = new Set([
   'aria-placeholder',
   'aria-roledescription',
   'aria-valuetext',
+  'blurb',
   'buttonLabel',
   'caption',
+  'centreLabel',
   'content',
   'description',
+  'emptyMessage',
+  'gapNote',
   'header',
   'heading',
   'hint',
   'label',
+  'note',
   'placeholder',
+  'segmentLabel',
+  'sublabel',
   'subtitle',
   'title',
   'tooltip',
+  'unit',
   'valueLabel',
 ]);
 
@@ -109,12 +118,51 @@ const NOTIFICATION_CALLEES = new Set([
  * Without this, `t('common.action.print')` would be reported as a hardcoded string - the key looks
  * like prose to any check that only sees characters.
  */
-const TRANSLATION_CALLEES = new Set(['plural', 't', 'tNode', 'translateStatic']);
+const TRANSLATION_CALLEES = new Set(['plural', 't', 'tNode', 'translateStatic', 'translateActive']);
+
+/**
+ * Calls whose string arguments are for a developer, not a reader.
+ *
+ * Console diagnostics are read in devtools by whoever is debugging the portal, and translating
+ * them would make a stack trace harder to search, not easier.
+ */
+const IGNORED_CALLEES = new Set([
+  'console.debug',
+  'console.error',
+  'console.info',
+  'console.log',
+  'console.trace',
+  'console.warn',
+  // The i18n layer's own de-duplicated console warning.
+  'warnOnce',
+]);
 
 const CATALOG_KEYS = new Set(Object.keys(EN_CATALOG));
 
 /** Two consecutive letters somewhere - the cheapest test for "a human would read this". */
 const HAS_WORD = /\p{L}\p{L}/u;
+
+/** Three or more whitespace-separated runs: a phrase, not an identifier or a token. */
+const IS_PHRASE = /(?:\S+\s+){2,}\S+/;
+
+/**
+ * Strings that look like prose to a word-counter but are not text.
+ *
+ * Almost all of them are CSS: this portal uses Griffel, so `gridTemplateColumns`, `transition`,
+ * `boxShadow`, `clipPath` and `background` values are ordinary string literals sitting in the same
+ * files as the labels. A phrase rule without these would report a hundred `repeat(auto-fit,
+ * minmax(240px, 1fr))` values and be switched off the same day.
+ */
+const NOT_PROSE = [
+  // CSS lengths, shorthand and functions.
+  /^[\d\s.,%/()-]+$/,
+  /\d(?:px|rem|em|vh|vw|fr|ms|s|deg|%)\b/,
+  /\b(?:repeat|minmax|calc|rgba?|hsla?|var|url|translate[XY]?|rotate|scale|clamp|cubic-bezier|linear-gradient|repeating-linear-gradient|radial-gradient|rect|inset|blur)\(/,
+  /\b(?:ease|ease-in|ease-out|ease-in-out|auto|inherit|initial|unset|nowrap|monospace|sans-serif|serif|transparent|currentColor)\b\s*[,;]?\s*$/,
+  /^(?:[a-z-]+\s+)*(?:auto|1fr|max-content|min-content)(?:\s+[a-z0-9-]+)*$/,
+  // SQL shown verbatim so an admin can reproduce a figure - the same in every language.
+  /^\s*(?:SELECT|INSERT|UPDATE|DELETE|WITH|DECLARE|EXEC)\b/i,
+];
 
 /**
  * Is this string one a reader would see as text?
@@ -141,6 +189,29 @@ export function looksLikeText(raw: string): boolean {
   return true;
 }
 
+/**
+ * Is this a phrase - something written for a person to read, wherever it happens to sit?
+ *
+ * The position-based rules below only see text in a place the checker already knows about: a JSX
+ * child, a whitelisted prop, a known property name. That leaves the shape that actually got
+ * through during this feature's own development - a sentence assembled inside a helper and
+ * returned as a string, and a sentence passed to a prop nobody had thought to whitelist. Both were
+ * real: `describeBands()` in GaugeRing built "below 40% needs attention, 40-70% is progressing"
+ * and handed it to an otherwise-translated Spanish sentence, and seven `blurb=` section
+ * descriptions rendered in English on the Spanish page.
+ *
+ * So anything three words or longer is treated as text no matter where it is written. That is a
+ * blunt rule, which is why `NOT_PROSE` exists - but blunt in the safe direction: the cost of a
+ * false positive is one line in the allow-list, and the cost of a false negative is an English
+ * paragraph in the middle of a Spanish page.
+ */
+export function looksLikePhrase(raw: string): boolean {
+  const value = raw.trim();
+  if (!IS_PHRASE.test(value)) return false;
+  if (NOT_PROSE.some((pattern) => pattern.test(value))) return false;
+  return looksLikeText(value);
+}
+
 function collapse(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
@@ -161,10 +232,39 @@ function calleeName(node: ts.CallExpression): string {
   return '';
 }
 
-/** True when the node sits inside a `t(...)`/`plural(...)` call, so its strings are keys. */
-function insideTranslationCall(node: ts.Node): boolean {
+/**
+ * True when the node is a translation **key** argument, so it is machinery rather than text.
+ *
+ * Scoped to the key positions on purpose. Exempting everything beneath a `t()` call - which is the
+ * obvious implementation - creates a hole big enough to drive the whole feature through: the
+ * *values* passed to `t()` are interpolated straight into the translated sentence, so
+ * `t('key', { word: 'analysed' })` puts an English word into the middle of a Spanish paragraph and
+ * the checker never sees it. That is not hypothetical; it is what was found in this portal.
+ *
+ * `t`/`tNode`/`translateActive` take the key first. `plural(count, oneKey, otherKey)` takes two
+ * keys, in the second and third positions. `translateStatic(language, key, values)` takes the
+ * language first and the key second.
+ */
+function isTranslationKeyArgument(node: ts.Node): boolean {
+  for (let current: ts.Node = node; current.parent; current = current.parent) {
+    const parent: ts.Node = current.parent;
+    if (!ts.isCallExpression(parent)) continue;
+
+    const callee = calleeName(parent);
+    const index = parent.arguments.indexOf(current as ts.Expression);
+    if (index < 0) continue;
+
+    if (callee === 'plural') return index === 1 || index === 2;
+    if (callee === 'translateStatic') return index === 1;
+    if (TRANSLATION_CALLEES.has(callee)) return index === 0;
+  }
+  return false;
+}
+
+/** True when the node sits inside a call whose text is for a developer, such as `console.warn`. */
+function insideIgnoredCall(node: ts.Node): boolean {
   for (let current: ts.Node | undefined = node.parent; current; current = current.parent) {
-    if (ts.isCallExpression(current) && TRANSLATION_CALLEES.has(calleeName(current))) return true;
+    if (ts.isCallExpression(current) && IGNORED_CALLEES.has(calleeName(current))) return true;
   }
   return false;
 }
@@ -244,7 +344,7 @@ export function findHardcodedStrings(sourceText: string, fileName: string): Find
           ts.isJsxExpression(initializer) &&
           initializer.expression &&
           ts.isTemplateLiteral(initializer.expression) &&
-          !insideTranslationCall(initializer.expression) &&
+          !isTranslationKeyArgument(initializer.expression) &&
           looksLikeText(templateText(initializer.expression))
         ) {
           report(
@@ -261,7 +361,7 @@ export function findHardcodedStrings(sourceText: string, fileName: string): Find
     // 3. A literal rendered through an expression container: {'Yes'} or {`${n} users`}.
     if (
       (ts.isStringLiteral(node) || ts.isTemplateLiteral(node)) &&
-      !insideTranslationCall(node) &&
+      !isTranslationKeyArgument(node) &&
       isRenderedExpression(node)
     ) {
       const text = ts.isStringLiteral(node) ? node.text : templateText(node);
@@ -272,7 +372,7 @@ export function findHardcodedStrings(sourceText: string, fileName: string): Find
     if (ts.isPropertyAssignment(node)) {
       const name = propertyName(node);
       const value = node.initializer;
-      if (name && USER_FACING_PROPERTIES.has(name) && !insideTranslationCall(value)) {
+      if (name && USER_FACING_PROPERTIES.has(name) && !isTranslationKeyArgument(value)) {
         if (ts.isStringLiteral(value) && looksLikeText(value.text)) {
           report(value, 'object-property', value.text, name);
         } else if (ts.isTemplateLiteral(value) && looksLikeText(templateText(value))) {
@@ -284,7 +384,7 @@ export function findHardcodedStrings(sourceText: string, fileName: string): Find
     // 5. A toast, which is text with no JSX anywhere near it.
     if (ts.isCallExpression(node) && NOTIFICATION_CALLEES.has(calleeName(node))) {
       for (const argument of node.arguments) {
-        if (insideTranslationCall(argument)) continue;
+        if (isTranslationKeyArgument(argument)) continue;
         if (ts.isStringLiteral(argument) && looksLikeText(argument.text)) {
           report(argument, 'notification', argument.text, calleeName(node));
         } else if (ts.isTemplateLiteral(argument) && looksLikeText(templateText(argument))) {
@@ -293,16 +393,53 @@ export function findHardcodedStrings(sourceText: string, fileName: string): Find
       }
     }
 
+    // 6. An English literal passed as a *value* to a translation call.
+    //
+    // The values are interpolated straight into the translated sentence, so a literal here puts
+    // English in the middle of a Spanish paragraph. It needs its own rule rather than relying on
+    // the phrase rule below, because these are usually one or two words - `{ word: 'analysed' }` -
+    // and a word count cannot tell them from an identifier.
+    if (ts.isCallExpression(node)) {
+      const callee = calleeName(node);
+      if (TRANSLATION_CALLEES.has(callee)) {
+        const values = node.arguments[node.arguments.length - 1];
+        if (values && ts.isObjectLiteralExpression(values)) {
+          for (const property of values.properties) {
+            if (!ts.isPropertyAssignment(property)) continue;
+            const value = property.initializer;
+            if (ts.isStringLiteral(value) && looksLikeText(value.text)) {
+              report(value, 'jsx-expression', value.text, `${callee}() value`);
+            } else if (ts.isTemplateLiteral(value) && looksLikeText(templateText(value))) {
+              report(value, 'jsx-expression', templateText(value), `${callee}() value`);
+            }
+          }
+        }
+      }
+    }
+
+    // 7. A phrase anywhere at all - the catch-all for text in a place no rule above knows about.
+    if (
+      (ts.isStringLiteral(node) ||
+        ts.isNoSubstitutionTemplateLiteral(node) ||
+        ts.isTemplateExpression(node)) &&
+      !isTranslationKeyArgument(node) &&
+      !insideIgnoredCall(node)
+    ) {
+      const text = ts.isTemplateExpression(node) ? templateText(node) : node.text;
+      if (looksLikePhrase(text)) report(node, 'phrase', text);
+    }
+
     ts.forEachChild(node, visit);
   };
 
   ts.forEachChild(source, visit);
 
-  // A literal can satisfy two rules at once - an attribute that is also an expression container,
-  // a template both rendered and assigned. One line in the report per place in the file.
+  // A literal can satisfy two rules at once - a whitelisted attribute that is also a phrase, a
+  // template both rendered and assigned. Keep the first, which is the most specific: the rules run
+  // in order, and the phrase rule is deliberately last because it is the catch-all.
   const seen = new Set<string>();
   const unique = findings.filter((finding) => {
-    const id = `${finding.line}|${finding.kind}|${finding.text}`;
+    const id = `${finding.line}|${finding.text}`;
     if (seen.has(id)) return false;
     seen.add(id);
     return true;

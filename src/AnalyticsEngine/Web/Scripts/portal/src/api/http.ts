@@ -1,3 +1,5 @@
+import { translateActive } from '../i18n/runtime';
+
 /**
  * Shared fetch wrapper for the portal's calls to the site's own `[Authorize]`'d API.
  *
@@ -50,7 +52,7 @@ const NEVER_SETTLES: Promise<Response> = new Promise<Response>(() => {});
 /** Thrown when the session has expired and re-authenticating has already been tried once. */
 export class SessionExpiredError extends Error {
   constructor() {
-    super('Your session has expired. Reload the page to sign in again.');
+    super(translateActive('errors.http.sessionExpired'));
     this.name = 'SessionExpiredError';
   }
 }

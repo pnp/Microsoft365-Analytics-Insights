@@ -1,5 +1,5 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
-import { formatNumber, useT, type TranslationKey } from '../../i18n';
+import { formatNumber, translateActive, useT, type TFunction, type TranslationKey } from '../../i18n';
 
 /**
  * Sentiment, drawn as a traffic light.
@@ -67,15 +67,15 @@ export function sentimentLamp(value: number): Lamp {
  *
  * Kept as text rather than a percentage on purpose: see the note on the scale above.
  */
-export function formatSentiment(value: number | null | undefined): string {
+export function formatSentiment(value: number | null | undefined, t?: TFunction): string {
   if (value === null || value === undefined) return '\u2014';
-  return `${value.toFixed(2)} (${sentimentLabel(value)})`;
+  return `${value.toFixed(2)} (${(t ?? translateActive)(SENTIMENT_LABEL_KEYS[sentimentLabel(value)])})`;
 }
 
 /** Explains the sentiment scale wherever it is shown. */
-export const SENTIMENT_SCALE_NOTE =
-  'Sentiment runs 0 (negative) to 1 (positive), weighted by message count, and 0.5 is neutral. '
-  + 'It is not a percentage of positive messages.';
+export function sentimentScaleNote(t: TFunction = translateActive): string {
+  return t('common.sentiment.scaleNote');
+}
 
 const useStyles = makeStyles({
   root: {

@@ -4,7 +4,7 @@ import type { DateRange } from '../../types/licenceActivity';
 import { useT } from '../../i18n';
 import {
   PRESETS,
-  PRESET_LABELS,
+  PRESET_LABEL_KEYS,
   diffDaysInclusive,
   latestEndString,
   matchPreset,
@@ -106,7 +106,7 @@ export default function DateRangeControl({
   };
 
   const applyCustom = (): void => {
-    const result = validateRange(draft, { now, minDays, maxDays });
+    const result = validateRange(draft, { now, minDays, maxDays, t });
     if (!result.ok) {
       setError(result.error);
       return;
@@ -127,7 +127,7 @@ export default function DateRangeControl({
             aria-pressed={activePreset === p && !customOpen}
             onClick={() => applyPreset(p)}
           >
-            {PRESET_LABELS[p]}
+            {t(PRESET_LABEL_KEYS[p])}
           </Button>
         ))}
         <Button

@@ -1,3 +1,4 @@
+import { translateActive } from '../i18n/runtime';
 import { apiFetch } from './http';
 import type { InstallLogEntry } from '../types/installLog';
 
@@ -12,7 +13,7 @@ export async function fetchInstallLog(): Promise<InstallLogEntry[]> {
   });
 
   if (!response.ok) {
-    throw new Error(`Couldn't load the install log (${response.status}).`);
+    throw new Error(translateActive('errors.installLog.loadFailed', { status: response.status }));
   }
 
   return response.json() as Promise<InstallLogEntry[]>;

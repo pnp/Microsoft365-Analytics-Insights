@@ -18,11 +18,11 @@ import SentimentLight from '../shared/SentimentLight';
 import type { TeamsConversations } from '../../types/teamsExplorer';
 import { useT } from '../../i18n';
 import {
-  SENTIMENT_SCALE_NOTE,
   SectionCard,
   WindowNote,
   formatCount,
   queryFor,
+  sentimentScaleNote,
   toCategories,
   useTeamsStyles,
 } from './teamsShared';
@@ -51,6 +51,7 @@ export default function ConversationsPanel({ data }: { data: TeamsConversations 
   const styles = useStyles();
   const shared = useTeamsStyles();
   const t = useT();
+  const sentimentScaleNoteText = sentimentScaleNote(t);
 
   if (!data.cognitiveAvailable) {
     return (
@@ -102,7 +103,7 @@ export default function ConversationsPanel({ data }: { data: TeamsConversations 
           query={queryFor(data.queries, 'conv-sentiment-trend')}
           isEmpty={data.sentimentTrend.every((p) => p.sentiment === null)}
           emptyMessage={t('teamsExplorer.conversations.sentimentOverTime.empty')}
-          note={SENTIMENT_SCALE_NOTE}
+          note={sentimentScaleNoteText}
         >
           <TimeSeriesChart series={sentimentSeries} valueLabel={t('teamsExplorer.column.sentiment')} height={220} />
         </SectionCard>
@@ -123,7 +124,7 @@ export default function ConversationsPanel({ data }: { data: TeamsConversations 
           description={t('teamsExplorer.conversations.sentimentByTeam.description')}
           query={queryFor(data.queries, 'conv-sentiment-team')}
           isEmpty={data.sentimentByTeam.length === 0}
-          note={SENTIMENT_SCALE_NOTE}
+          note={sentimentScaleNoteText}
         >
           <div className={shared.tableWrap}>
             <Table size="small" aria-label={t('teamsExplorer.conversations.sentimentByTeam.aria')}>
@@ -152,7 +153,7 @@ export default function ConversationsPanel({ data }: { data: TeamsConversations 
           description={t('teamsExplorer.conversations.sentimentByChannel.description')}
           query={queryFor(data.queries, 'conv-sentiment-channel')}
           isEmpty={data.sentimentByChannel.length === 0}
-          note={SENTIMENT_SCALE_NOTE}
+          note={sentimentScaleNoteText}
         >
           <div className={shared.tableWrap}>
             <Table size="small" aria-label={t('teamsExplorer.conversations.sentimentByChannel.aria')}>

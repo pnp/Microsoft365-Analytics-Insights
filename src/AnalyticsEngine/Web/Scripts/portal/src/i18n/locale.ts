@@ -20,8 +20,14 @@ import { DEFAULT_LANGUAGE, localeFor, type Language } from './languages';
 
 let activeLocaleTag: string = localeFor(DEFAULT_LANGUAGE);
 
-/** Set by `I18nProvider`; tests may call it directly. */
-export function setActiveLanguage(language: Language): void {
+/**
+ * Points the formatters at a language's locale.
+ *
+ * Call `setActiveLanguage` in `runtime.ts` rather than this directly - it sets the language and
+ * the locale together, and letting the two drift apart is how a portal ends up saying "Cargando"
+ * while formatting 1.234 as 1,234.
+ */
+export function setActiveLocale(language: Language): void {
   activeLocaleTag = localeFor(language);
 }
 

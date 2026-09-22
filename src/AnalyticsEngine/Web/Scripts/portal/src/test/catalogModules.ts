@@ -16,6 +16,7 @@ import esWebActivity from '../i18n/catalog/es/webActivity';
 import esLicenceActivity from '../i18n/catalog/es/licenceActivity';
 import esAgentCosts from '../i18n/catalog/es/agentCosts';
 import esDlp from '../i18n/catalog/es/dlp';
+import esErrors from '../i18n/catalog/es/errors';
 import esHealth from '../i18n/catalog/es/health';
 import esAdmin from '../i18n/catalog/es/admin';
 
@@ -45,6 +46,7 @@ const ES_MODULES = {
   licenceActivity: esLicenceActivity,
   agentCosts: esAgentCosts,
   dlp: esDlp,
+  errors: esErrors,
   health: esHealth,
   admin: esAdmin,
 } as const;

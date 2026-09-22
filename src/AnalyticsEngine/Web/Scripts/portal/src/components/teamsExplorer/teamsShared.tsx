@@ -76,7 +76,7 @@ export function formatRange(fromIso: string, toIso: string): string {
  * `components/shared/SentimentLight.tsx` for why this is not a percentage - it is the single easiest
  * figure on this page to misread, so every caller goes through there.
  */
-export { formatSentiment, sentimentLabel, SENTIMENT_SCALE_NOTE } from '../shared/SentimentLight';
+export { formatSentiment, sentimentLabel, sentimentScaleNote } from '../shared/SentimentLight';
 
 /** Named counts -> bar/treemap/word-cloud categories. */
 export function toCategories(rows: TeamsNamedCount[]): ReportCategory[] {

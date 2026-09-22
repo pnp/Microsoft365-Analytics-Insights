@@ -104,6 +104,8 @@ export const agentCosts = {
   'agentCosts.detail.exporting': 'Exporting...',
   'agentCosts.detail.exportAllRows': 'Export all {rows} rows',
   'agentCosts.detail.empty': 'No billed lines match the current filters.',
+  'agentCosts.export.pageFilename': 'agent-credits-{from}-to-{to}-page{page}.csv',
+  'agentCosts.export.filteredFilename': 'agent-credits-{from}-to-{to}-filtered.csv',
 
   // Tables and paging
   'agentCosts.table.value': 'Value',

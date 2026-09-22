@@ -114,6 +114,11 @@ export const ALLOWED_LITERALS = new Set<string>([
   'No',
   'Total',
   'Error',
+  // A bootstrap failure thrown before React mounts, so there is no UI it could ever be shown in -
+  // it reaches a developer through the console and nowhere else. Every other thrown message in
+  // this portal IS shown (the api layer's errors are rendered in an error bar), which is why this
+  // is one named exception rather than a rule about `throw`.
+  'Root container #root not found',
 ]);
 
 /**
@@ -123,12 +128,17 @@ export const ALLOWED_LITERALS = new Set<string>([
  * a module with no rendered text in it.
  */
 export const IGNORED_FILE_PATTERNS: RegExp[] = [
-  // The catalog and the checker that reads it.
-  /^i18n\//,
+  // The catalog itself (English text is the whole point) and the checker that reads it.
+  // Deliberately narrow: `^i18n/` would also exclude `LanguageSwitcher.tsx`, which is a real
+  // component with real text in it, and any future language-picker or load-failure UI added
+  // beside it. Excluding a directory because most of it is data is how a component stops being
+  // checked without anybody deciding that it should.
+  /^i18n\/catalog\//,
+  /^i18n\/lint\//,
   // Tests assert on English text on purpose, and fixtures carry synthetic data.
   /\.test\.tsx?$/,
   /^test\//,
-  // API response shapes and request/response plumbing: types and fetch calls, no rendered text.
+  // API response shapes: types only, no rendered text.
   /^types\//,
   // Vite/TypeScript ambient declarations.
   /^vite-env\.d\.ts$/,

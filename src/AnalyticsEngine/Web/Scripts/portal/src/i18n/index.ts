@@ -61,11 +61,12 @@ export {
 
 export {
   activeLocale,
-  setActiveLanguage,
   formatNumber,
   formatDateParts,
   compareStrings,
 } from './locale';
+
+export { setActiveLanguage, activeLanguage, translateActive } from './runtime';
 
 export {
   interpolate,

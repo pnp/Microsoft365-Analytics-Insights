@@ -24,6 +24,9 @@ const charts: Record<keyof typeof en, string> = {
   'charts.gauge.needsAttention': 'Requiere atención',
   'charts.gauge.progressing': 'En curso',
   'charts.gauge.healthy': 'Correcto',
+  'charts.gauge.band.below': 'por debajo del {upTo} % es {label}',
+  'charts.gauge.band.above': 'por encima del {from} % es {label}',
+  'charts.gauge.band.range': 'del {from} al {upTo} % es {label}',
 
   // Heatmap chart
   'charts.heatmap.cellTitle': '{day} {hour}:00 - {value} {valueLabel}',

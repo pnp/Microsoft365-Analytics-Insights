@@ -448,14 +448,18 @@ export default function OpportunitiesPanel({
                       emailWeight: options.opportunityEmailWeight,
                       documentWeight: options.opportunityDocumentWeight,
                     }),
-                    formula:
-                      `copilot     = min(1, unlicensedCopilotInteractions / (${opportunityCopilotTargetExpression}))\n` +
-                      `collab      = min(1, (teamsMessages + teamsMeetings) / ${options.opportunityCollaborationTarget})\n` +
-                      `email       = min(1, (emailsSent + emailsRead) / ${options.opportunityEmailTarget})\n` +
-                      `documents   = min(1, filesViewedOrEdited / ${options.opportunityDocumentTarget})\n` +
-                      `score = copilot*${options.opportunityUnlicensedCopilotWeight} + collab*${options.opportunityCollaborationWeight} + email*${options.opportunityEmailWeight} + documents*${options.opportunityDocumentWeight}\n\n` +
-                      `recommended when unlicensedCopilotActiveDays >= ${options.opportunityProvenDemandMinActiveDays}\n` +
-                      `               or score >= ${options.opportunityRecommendScore}`,
+                    formula: t('copilotAdoptionUsers.opportunities.businessCaseFormula', {
+                      copilotTarget: opportunityCopilotTargetExpression,
+                      collaborationTarget: options.opportunityCollaborationTarget,
+                      emailTarget: options.opportunityEmailTarget,
+                      documentTarget: options.opportunityDocumentTarget,
+                      copilotWeight: options.opportunityUnlicensedCopilotWeight,
+                      collaborationWeight: options.opportunityCollaborationWeight,
+                      emailWeight: options.opportunityEmailWeight,
+                      documentWeight: options.opportunityDocumentWeight,
+                      provenDemandDays: options.opportunityProvenDemandMinActiveDays,
+                      recommendScore: options.opportunityRecommendScore,
+                    }),
                     source: t('copilotAdoptionUsers.opportunities.businessCaseSource', {
                       target: options.opportunityCopilotTarget,
                       basisDays: options.opportunityCopilotTargetBasisDays,
@@ -588,7 +592,7 @@ export default function OpportunitiesPanel({
                               <DetailStat
                                 label={t('copilotAdoptionUsers.opportunities.emailsSent')}
                                 value={formatCount(row.emailsSent)}
-                                sub={`${t('copilotAdoptionUsers.opportunities.readAbbrev', { count: formatCount(row.emailsRead) })} \u00b7 target ${options.opportunityEmailTarget}`}
+                                sub={t('copilotAdoptionUsers.opportunities.readTarget', { read: formatCount(row.emailsRead), target: options.opportunityEmailTarget })}
                               />
                               <DetailStat
                                 label={t('copilotAdoptionUsers.opportunities.files')}

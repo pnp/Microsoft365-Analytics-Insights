@@ -106,6 +106,8 @@ const agentCosts: Record<keyof typeof en, string> = {
   'agentCosts.detail.exporting': 'Exportando...',
   'agentCosts.detail.exportAllRows': 'Exportar las {rows} filas',
   'agentCosts.detail.empty': 'No hay líneas facturadas que coincidan con los filtros actuales.',
+  'agentCosts.export.pageFilename': 'creditos-agentes-{from}-a-{to}-pagina{page}.csv',
+  'agentCosts.export.filteredFilename': 'creditos-agentes-{from}-a-{to}-filtrado.csv',
 
   // Tablas y paginación
   'agentCosts.table.value': 'Valor',

@@ -94,12 +94,23 @@ export const licenceActivity = {
   'licenceActivity.dataSource.show': 'Show data sources',
 
   // Date range
+  'licenceActivity.dateRange.preset.lastSettledWeek': 'Last settled week',
+  'licenceActivity.dateRange.preset.last4FullySettledWeeks': 'Last 4 fully settled weeks',
+  'licenceActivity.dateRange.preset.last90SettledDays': 'Last 90 settled days',
+  'licenceActivity.dateRange.preset.last180SettledDays': 'Last 180 settled days',
   'licenceActivity.dateRange.customRange': 'Custom range',
   'licenceActivity.dateRange.daysEnding': '{days} days ending {date}',
   'licenceActivity.dateRange.from': 'From',
   'licenceActivity.dateRange.startDate': 'Start date',
   'licenceActivity.dateRange.to': 'To',
   'licenceActivity.dateRange.endDate': 'End date',
+  'licenceActivity.dateRange.error.enterBothDates': 'Enter both a start and end date.',
+  'licenceActivity.dateRange.error.earliestSupportedDate': 'The earliest supported date is {date}.',
+  'licenceActivity.dateRange.error.startOnOrBeforeEnd': 'The start date must be on or before the end date.',
+  'licenceActivity.dateRange.error.endBeforeToday':
+    'The end date must be before today (reporting covers whole past days).',
+  'licenceActivity.dateRange.error.rangeAtLeastDays': 'The range must be at least {days} days.',
+  'licenceActivity.dateRange.error.rangeNoLongerThanDays': 'The range cannot be longer than {days} days.',
 
   // Overview and selected licence
   'licenceActivity.overview.peopleWithLicence': 'People with a licence',

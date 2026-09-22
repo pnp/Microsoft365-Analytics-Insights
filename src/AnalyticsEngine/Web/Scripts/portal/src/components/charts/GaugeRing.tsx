@@ -1,5 +1,5 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
-import { formatNumber, useT, type TFunction } from '../../i18n';
+import { formatNumber, translateActive, useT, type TFunction } from '../../i18n';
 
 const useStyles = makeStyles({
   root: {
@@ -49,15 +49,16 @@ export function bandTone(value: number, bands: GaugeBand[] = ADOPTION_BANDS): 'c
 }
 
 /** The scale in words, for an explanation that cannot drift from the colours it describes. */
-export function describeBands(bands: GaugeBand[] = ADOPTION_BANDS): string {
+export function describeBands(t: TFunction = translateActive, bands: GaugeBand[] = ADOPTION_BANDS): string {
   return bands
     .map((band, i) => {
       const from = i === 0 ? 0 : bands[i - 1].upTo;
+      const label = bandLabel(band.label, t).toLowerCase();
       return i === 0
-        ? `below ${band.upTo}% ${band.label.toLowerCase()}`
+        ? t('charts.gauge.band.below', { upTo: band.upTo, label })
         : i === bands.length - 1
-          ? `above ${from}% is ${band.label.toLowerCase()}`
-          : `${from}-${band.upTo}% is ${band.label.toLowerCase()}`;
+          ? t('charts.gauge.band.above', { from, label })
+          : t('charts.gauge.band.range', { from, upTo: band.upTo, label });
     })
     .join(', ');
 }

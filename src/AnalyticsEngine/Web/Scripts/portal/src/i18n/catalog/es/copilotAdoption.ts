@@ -47,7 +47,12 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.scopeBanner.scope': 'Mostrando solo {domain}.',
   'copilotAdoption.page.scopeBanner.message': '{scope} Cada cifra siguiente describe a las personas de ese dominio de correo electrónico, no a todo el inquilino.{unscoped} {link}',
   'copilotAdoption.page.scopeBanner.unscopedSections': '{v0} permanecen a nivel de inquilino, porque proceden de totales sin detalle por persona que permita acotarlos.',
-  'copilotAdoption.page.scopeBanner.showAllDomains': 'Mostrar todos los dominios',
+  'copilotAdoption.page.scopeBanner.showAllDomains': 'Mostrar todos los dominios',  'copilotAdoption.page.errors.checkAvailability': 'No se pudo comprobar la disponibilidad de la adopción de Copilot.',
+  'copilotAdoption.page.errors.loadSummary': 'No se pudo cargar el resumen de adopción.',
+  'copilotAdoption.page.controls.excelTooltipReady': 'Todo el informe (cada cifra, tabla y gráfico) como libro de Excel con gráficos activos y editables. Ejecútelo antes y después de un programa de habilitación para comparar de forma equivalente.',
+  'copilotAdoption.page.controls.excelTooltipLoading': 'Disponible cuando el análisis termine de cargarse.',
+
+
   'copilotAdoption.noLicences.title': 'No se encontraron licencias Copilot',
   'copilotAdoption.noLicences.completedEmpty': 'El análisis se ejecutó y completó: no encontró usuarios que posean una licencia Microsoft 365 Copilot, por lo que aún no hay nada que informar.',
   'copilotAdoption.noLicences.reasonIntro': 'Esto casi siempre es uno de los siguientes. Se enumeran en el orden en que vale la pena revisarlos.',
@@ -59,7 +64,11 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.noLicences.licenceOpportunitiesTab': 'Oportunidades de licencia',
   'copilotAdoption.noLicences.reason.noTenantLicences.body': '{heading} En ese caso, la pestaña {tab} es la útil: clasifica a los usuarios sin licencia por la solidez del caso de negocio que tendría cada uno para una licencia, usando su actividad existente de Microsoft 365.',
   'copilotAdoption.noLicences.unlicensedActivityWarning': 'Se encontró actividad de Copilot para {v0} usuarios que no parecen tener licencia. Esa combinación suele indicar que la importación de licencias está incompleta, más que un uso de Copilot sin licencia; consulte el punto 1 anterior.',
-  'copilotAdoption.page.whereWeStand': 'Dónde estamos',
+  'copilotAdoption.page.whereWeStand': 'Dónde estamos',  'copilotAdoption.page.executive.whereWeStandBlurb': 'Puestos, adopción, hábito, confianza de recuperación y oportunidad de reasignación sin los diagnósticos.',
+  'copilotAdoption.page.gauge.activeOfLicensed': '{active} de {total} usuarios con licencia',
+  'copilotAdoption.page.gauge.establishedOrChampion': '{count} usuarios consolidados o campeones',
+
+
   'copilotAdoption.page.licencePosition': 'Posición de licencias',
   'copilotAdoption.page.theBoardPackViewManySeatsUseManyBecome': 'La vista del paquete de la junta: cuántos asientos están en uso, cuántos se han convertido en hábito y qué se puede recuperar o reasignar.',
   'copilotAdoption.page.licencePosition2': 'Posición de licencias',
@@ -82,7 +91,9 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.review': 'Revisión',
   'copilotAdoption.page.excluded': 'Excluido',
   'copilotAdoption.page.noSeatsCurrentlyMeetCertainProbableReclaimRules': 'Actualmente ningún asiento cumple con las reglas de recuperación Cierta o Probable.',
-  'copilotAdoption.page.whereWorkingFailing': 'Dónde está funcionando y fallando',
+  'copilotAdoption.page.whereWorkingFailing': 'Dónde está funcionando y fallando',  'copilotAdoption.page.executive.workingFailingBlurb': 'Los departamentos por los que empezar y la etapa del embudo donde se pierde valor.',
+
+
   'copilotAdoption.page.departmentLeagueTable': 'Tabla comparativa de departamentos',
   'copilotAdoption.page.lowestHabitRateDepartmentsCappedTopDepartmentsAboveSeat': 'Departamentos con menor tasa de hábito, limitados a los {v0} primeros departamentos por encima del umbral de puestos, con los puestos sin usar y los candidatos recomendados mostrados como números y no solo como color.',
   'copilotAdoption.page.departmentLeagueTable2': 'Tabla comparativa de departamentos',
@@ -101,7 +112,9 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.copilotAdoptionEachEmailDomainTenantPracticeEachOrganisations': 'Adopción de Copilot para cada dominio de correo electrónico en el inquilino: en la práctica, para cada una de las organizaciones que lo comparten.',
   'copilotAdoption.page.theDomainTakenEachPersonSignNameDomainNeeds': 'El dominio se toma del nombre de inicio de sesión de cada persona. Un dominio necesita al menos {v0} personas, con o sin licencia, para aparecer. Los invitados se cuentan en su propio dominio de origen, no en el de este inquilino, y se marcan como Externos.',
   'copilotAdoption.page.worthReadingAlongsideDepartmentTableInsteadTenantBuiltAcquisition': 'Vale la pena leer junto a la tabla del departamento en lugar de en lugar de ella: en un inquilino construido por adquisición, un departamento abarca todas las empresas, por lo que su promedio oculta exactamente la diferencia que muestra esta tabla.',
-  'copilotAdoption.page.whatWeDoingAbout': 'Lo que estamos haciendo al respecto',
+  'copilotAdoption.page.whatWeDoingAbout': 'Lo que estamos haciendo al respecto',  'copilotAdoption.page.executive.enablementBlurb': 'La carga de trabajo de habilitación, con cada fila abriendo los usuarios exactos contados.',
+
+
   'copilotAdoption.page.enablementPlan': 'Plan de habilitación',
   'copilotAdoption.page.everyLicensedUserNeedsExactlyOneNextStepClick': 'Cada usuario con licencia necesita exactamente un siguiente paso. Haga clic en una fila para abrir la lista de usuarios correspondiente.',
   'copilotAdoption.page.enablementPlan2': 'Plan de habilitación',
@@ -119,7 +132,15 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.moreCandidatesNeverUsedSeats': '{v0} candidatos más que puestos nunca usados',
   'copilotAdoption.page.moreNeverUsedSeatsCandidates': '{v0} puestos nunca usados más que candidatos',
   'copilotAdoption.page.balanced': 'Equilibrado',
-  'copilotAdoption.page.whereStand': 'Dónde estás',
+  'copilotAdoption.page.whereStand': 'Dónde estás',  'copilotAdoption.page.analyst.whereStandBlurb': 'La posición principal: cuántas licencias están rindiendo y dónde está la caída.',
+  'copilotAdoption.page.population.analysed': 'analizados',
+  'copilotAdoption.page.population.licensed': 'con licencia',
+  'copilotAdoption.page.gauge.usersTouchedCopilot': '{active} de {total} usuarios {population} tocaron Copilot',
+  'copilotAdoption.page.gauge.madePartWorkingWeek': '{count} lo han incorporado a la semana laboral',
+  'copilotAdoption.page.gauge.eligibleUsedCowork': '{count} usuarios aptos han usado Cowork',
+  'copilotAdoption.page.gauge.readyForCoworkScope': '{ready} de {total} titulares de puesto puntuados están listos para incluirse en el ámbito de Cowork',
+
+
   'copilotAdoption.page.whereStand2': 'Dónde estás',
   'copilotAdoption.page.theRatesDecideWhetherLicencesEarningKeepAgainstScale': 'Las tasas que deciden si las licencias están rindiendo lo suficiente, según la escala en la que esta herramienta las evalúa.',
   'copilotAdoption.page.whereStand3': 'Dónde estás',
@@ -137,7 +158,9 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.licensedHoldersCopilotLicenceSkuEverUsedCountedActive': 'Con licencia = titulares de una licencia Copilot SKU. Usado alguna vez = contado como activo en el período, o Inactivo - no contado como activo en el período pero con uso anterior registrado. Activo en este período = contado como teniendo al menos una interacción dentro del período seleccionado. Habitual = compromiso de {v0} o más. Campeones = {v1} o más. El porcentaje a la derecha es la conversión desde la etapa anterior, no desde el inicio; un 90% que sigue a un 40% sigue siendo un paso saludable. Los conteos en rojo "perdidos aquí" son abandonos que vale la pena abordar; el paso final está en gris porque no se espera que todos alcancen la categoría de Campeón: los usuarios habituales ya están establecidos y el plan de acción indica que no necesitan acción.',
   'copilotAdoption.page.licensedCountsComeImportedLicenceAssignmentsEveryActivityStage': 'Los recuentos con licencia provienen de las asignaciones de licencias importadas; cada etapa de actividad proviene del registro de auditoría Copilot, recurriendo al informe de uso por usuario de Microsoft cuando la importación de auditoría no tiene nada para ese usuario, y ese informe cubre la ventana de Microsoft en lugar del período exactamente seleccionado aquí.',
   'copilotAdoption.page.sqlBehindTheseFigures': 'SQL detrás de estas cifras',
-  'copilotAdoption.page.whatNext': 'Qué hacer a continuación',
+  'copilotAdoption.page.whatNext': 'Qué hacer a continuación',  'copilotAdoption.page.analyst.whatNextBlurb': 'El trabajo que esto crea, el tamaño de cada tarea y por qué departamentos empezar.',
+
+
   'copilotAdoption.page.departmentLeagueTable4': 'Tabla comparativa de departamentos',
   'copilotAdoption.page.theExecutiveDepartmentSummaryRepeatedHereHabitRateUnused': 'El resumen del departamento ejecutivo se repite aquí para que su tasa de hábito, los asientos no utilizados y los conteos de candidatos puedan verificarse junto con los diagnósticos detallados.',
   'copilotAdoption.page.departmentLeagueTable5': 'Tabla comparativa de departamentos',
@@ -176,7 +199,9 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.readAgainstDepartmentAdoptionTableDepartmentAppearsBothLicences': 'Lea contra la tabla de adopción del departamento: un departamento que aparece en ambos tiene licencias que no se utilizan y personas que las usarían, lo cual es una reasignación en lugar de una compra.',
   'copilotAdoption.page.sqlBehindChart': 'SQL detrás de este gráfico',
   'copilotAdoption.page.candidates2': 'Candidatos',
-  'copilotAdoption.page.howCopilotBeingUsed': 'Cómo se usa Copilot',
+  'copilotAdoption.page.howCopilotBeingUsed': 'Cómo se usa Copilot',  'copilotAdoption.page.analyst.evidenceBlurb': 'La evidencia detrás de esas recomendaciones: con qué frecuencia, con qué profundidad, en qué aplicaciones y por quién.',
+
+
   'copilotAdoption.page.howOftenPeopleOpenCopilot': 'Con qué frecuencia se abre Copilot',
   'copilotAdoption.page.ofLicensedUsersUsedCopilotAllManyDaysMonth': 'De los usuarios con licencia que usaron Copilot en algún momento, ¿cuántos días al mes lo abren realmente? Solo días en bruto, sin puntuación ni ponderación.',
   'copilotAdoption.page.howOftenPeopleOpenCopilot2': 'Con qué frecuencia se abre Copilot',
@@ -185,7 +210,8 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.dayspermonthRoundActivedays': 'daysPerMonth = redondear(díasActivos x {v0} / {v1})',
   'copilotAdoption.page.thisDeliberatelySameMeasureHabitRateTopPageOne': 'Esta no es deliberadamente la misma medida que la "tasa de hábito" en la parte superior de la página. Esa es la puntuación de compromiso ponderada, que también tiene en cuenta cuánto hace alguien cada vez y cuántas superficies Copilot utiliza. Esta tarjeta es solo la frecuencia no ponderada, por lo que se pueden leer ambas en relación: un gran recuadro de "Diario" con una baja tasa de hábito significa que la gente abre Copilot constantemente pero hace muy poco con ello. Los porcentajes son de usuarios activos, no de todas las licencias; llamar "poco frecuente" a alguien que nunca abrió Copilot ocultaría un problema más costoso.',
   'copilotAdoption.page.engagementMix': 'Combinación de interacción',
-  'copilotAdoption.page.everyLicensedUserExactlyOneBandNeverUsedDormant': 'Cada usuario licenciado en exactamente una banda. "Nunca usado" y "Inactivo" juntos son los asientos inactivos. La cifra de licencias recuperables son los niveles ciertos y probables, que no es el mismo conjunto: los asientos inactivos son solo de revisión, las exclusiones de administrador se retienen, y una cuenta deshabilitada que aún estaba activa es una recuperación segura sin estar inactiva en absoluto.',
+  'copilotAdoption.page.everyLicensedUserExactlyOneBandNeverUsedDormant': 'Cada usuario licenciado en exactamente una banda. "Nunca usado" y "Inactivo" juntos son los asientos inactivos. La cifra de licencias recuperables son los niveles ciertos y probables, que no es el mismo conjunto: los asientos inactivos son solo de revisión, las exclusiones de administrador se retienen, y una cuenta deshabilitada que aún estaba activa es una recuperación segura sin estar inactiva en absoluto.',  'copilotAdoption.page.licensedUsersCentreLabel': 'usuarios con licencia',
+
   'copilotAdoption.page.engagementMix2': 'Combinación de interacción',
   'copilotAdoption.page.theWholeLicensedPopulationSplitSixMutuallyExclusiveEngagement': 'Toda la población con licencia se dividió en seis bandas de compromiso mutuamente excluyentes.',
   'copilotAdoption.page.championEstablishedDevelopingTriallingAnyoneNoActivityPeriodScored': 'Campeón {v0}+, Establecido {v1}+, En desarrollo {v2}+, En prueba por debajo de eso. Cualquiera sin actividad en el período no recibe puntuación: está Inactivo si usó Copilot en algún momento en los últimos {v3} días, Nunca usado de lo contrario.',
@@ -208,7 +234,9 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.twoDepartmentsSameAdoptionRateSitOppositeCornersChart': 'Dos departamentos con la misma tasa de adopción pueden estar en esquinas opuestas de este gráfico, y necesitar intervenciones opuestas.',
   'copilotAdoption.page.usageFrequencyIntensity2': 'Frecuencia e intensidad de uso',
   'copilotAdoption.page.eachDepartmentPlottedOftenUsersOpenCopilotHorizontalAgainst': 'Cada departamento se representó gráficamente según la frecuencia con la que sus usuarios abren Copilot (horizontal) frente a cuánto hacen cada vez (vertical), con el tamaño de la burbuja determinado por las licencias que poseen y el color según el compromiso promedio.',
-  'copilotAdoption.page.onlyUsersWereActiveLeastOnceAveragedUnusedLicences': 'Solo se promedian los usuarios que estuvieron activos al menos una vez, por lo que las licencias no utilizadas no arrastran a un departamento hacia el origen; en su lugar, se cuentan en las cifras de recuperación. Los días activos se normalizan a un mes de {v0} días para que el eje no cambie de significado con el período. Se omiten los departamentos con menos de {v1} licencias.',
+  'copilotAdoption.page.onlyUsersWereActiveLeastOnceAveragedUnusedLicences': 'Solo se promedian los usuarios que estuvieron activos al menos una vez, por lo que las licencias no utilizadas no arrastran a un departamento hacia el origen; en su lugar, se cuentan en las cifras de recuperación. Los días activos se normalizan a un mes de {v0} días para que el eje no cambie de significado con el período. Se omiten los departamentos con menos de {v1} licencias.',  'copilotAdoption.page.intensityFormula': 'x = media(diasActivos de usuarios activos) x {normalisationDays} / {windowDays}\ny = suma(interacciones de usuarios activos) / suma(diasActivos de usuarios activos)',
+
+
   'copilotAdoption.page.bottomRightFrequentButShallowThoseUsersNeedRicher': 'Abajo a la derecha es frecuente pero superficial: esos usuarios necesitan escenarios más ricos. Arriba a la izquierda es profundo pero ocasional: esos usuarios necesitan un motivo para volver mañana.',
   'copilotAdoption.page.howConcentratedUsage': 'Concentración del uso',
   'copilotAdoption.page.shareAllCopilotActivityCohortActiveLicensedUsersHeaviest': 'Participación de toda la actividad Copilot por cohorte de usuarios con licencia activos, primero los de mayor actividad.',
@@ -231,7 +259,9 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.readGroupsSeparatelyOneRankingOnlyTenantContentAnswers': 'Lea los grupos por separado, no como un solo ranking. Solo "Contenido del inquilino" responde a en qué está trabajando Copilot, y subestima: un archivo citado por Copilot está tipeado como CITATION en lugar de por su tipo de archivo, por lo que esas referencias se cuentan bajo "Cómo se utilizó" en su lugar. "Fundamentación desde fuera del inquilino" no es tu contenido en absoluto.',
   'copilotAdoption.page.microsoftPublishesNoListPossibleValuesFieldPurviewDocumentation': 'Microsoft no publica ninguna lista de posibles valores para este campo; la documentación de Purview dice que "puede contener valores como la extensión de archivo (pptx, docx, etc.) o describir el tipo de recurso (para recursos que no sean SharePoint)" y puede agregar nuevos en cualquier momento. Cualquier cosa que esta versión no reconozca, y cualquier referencia cuyo tipo estuviera vacío, se muestra como No Clasificado en lugar de contarse como contenido.',
   'copilotAdoption.page.sqlBehindChart3': 'SQL detrás de este gráfico',
-  'copilotAdoption.page.trendWiderReach': 'Tendencia y alcance más amplio',
+  'copilotAdoption.page.trendWiderReach': 'Tendencia y alcance más amplio',  'copilotAdoption.page.analyst.trendBlurb': 'Si se mueve en la dirección correcta y qué ocurre más allá de la población con licencia.',
+
+
   'copilotAdoption.page.weeklyActiveLicensedUsers': 'Usuarios con licencia activos semanalmente',
   'copilotAdoption.page.singleAdoptionRateCannotShowWhetherEnablementProgrammeWorking': 'Una sola tasa de adopción no puede mostrar si un programa de habilitación está funcionando. Esto sí puede. La pertenencia a licencias se evalúa a fecha de hoy hasta que estén disponibles las instantáneas de puestos de periodos cerrados.{v0}',
   'copilotAdoption.page.theSecondLineTracksMicrosoftCopilotCoworkAdoption': 'La segunda línea sigue la adopción de Microsoft 365 Copilot Cowork.',
@@ -254,7 +284,8 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.forEachDepartmentMuchCopilotLicencesUsedMuchCopilot': 'Para cada departamento: cuánto se usan sus licencias Copilot, y cuánto Copilot están haciendo las personas sin licencias de todos modos.',
   'copilotAdoption.page.bothInteractionsPerUserColumnsNormalisedDayMonthLicensed': 'Ambas columnas de "interacciones por usuario" están normalizadas a un mes de {v0} días. La columna de usuarios con licencia divide entre todas las licencias poseídas, incluyendo las inactivas; eso es deliberado, porque una licencia inactiva es exactamente lo que la comparación pretende mostrar. La columna de usuarios sin licencia divide entre las personas que estuvieron realmente activas, ya que no existe algo como una no-licencia inactiva. Se omiten los departamentos con menos de {v1} de cualquiera de las dos poblaciones.',
   'copilotAdoption.page.theShadingMarksOutliersEachColumnLookDepartmentRight': 'El sombreado marca los valores atípicos en cada columna. Busca un departamento donde el número de la derecha supere al de la izquierda.',
-  'copilotAdoption.page.adoptionCountry': 'Adopción por país',
+  'copilotAdoption.page.adoptionCountry': 'Adopción por país',  'copilotAdoption.page.country': 'País',
+
   'copilotAdoption.page.theSameMeasuresDepartmentTableOrganisationsRunEnablementRegionally': 'Las mismas medidas que la tabla del departamento, para las organizaciones que gestionan la habilitación a nivel regional.',
   'copilotAdoption.page.notEnoughLicensedUsersAnyAccountableGroupBreakDown': 'No hay suficientes usuarios con licencia en ningún grupo responsable para desglosar de manera confiable.',
   'copilotAdoption.page.seats2': 'Puestos',
@@ -393,11 +424,18 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.unknown2': 'Desconocido',
   'copilotAdoption.page.yes': 'Sí',
   'copilotAdoption.page.no': 'Negativo',
-  'copilotAdoption.page.copilotLicences': 'Licencias de Copilot',
+  'copilotAdoption.page.copilotLicences': 'Licencias de Copilot',  'copilotAdoption.page.kpi.denominatorCappedNote': 'Las tasas se calculan sobre los {scored} usuarios que este análisis pudo puntuar, no sobre las {total} licencias; consulte la advertencia en la parte superior de la página.',
+  'copilotAdoption.page.kpi.licensedHintCapped': '{scored} de ellos analizados; {skus} SKU de licencia contadas',
+  'copilotAdoption.page.kpi.licensedHint': '{skus} SKU de licencia contadas',
+
+
   'copilotAdoption.page.peopleHoldingLeastOneLicenceToolClassifiedMicrosoftCopilot': 'Personas que poseen al menos una licencia que esta herramienta clasificó como licencia Microsoft 365 Copilot. Es el denominador de cada porcentaje en esta página.',
   'copilotAdoption.page.countedImportedLicenceAssignmentsDeDuplicatedPerUserSomeone': 'Contado a partir de las asignaciones de licencias importadas, eliminando duplicados por usuario: alguien que posee dos SKUs Copilot cuenta solo una vez. Microsoft envía SKUs con la marca Copilot que no son una licencia Copilot (Copilot Studio, Copilot para ventas), por lo que la clasificación se muestra completa, con los que fueron excluidos, bajo “Cómo se calcula esto”.',
   'copilotAdoption.page.needsUserMetadataImportLicenceAssignmentCountPurchaseCount': 'Necesita la importación de metadatos del usuario. Es un recuento de asignación de licencias, no un recuento de compras, por lo que las licencias no asignadas por las que está pagando no aparecen aquí.',
-  'copilotAdoption.page.purchasedSeats': 'Puestos comprados',
+  'copilotAdoption.page.purchasedSeats': 'Puestos comprados',  'copilotAdoption.page.kpi.grantOrganizationReadAll': 'Conceda Organization.Read.All y vuelva a ejecutar la importación de usuarios',
+  'copilotAdoption.page.kpi.unassignedSeats': '{count} sin asignar',
+
+
   'copilotAdoption.page.microsoftCopilotSeatsPurchasedTenantGraphSubscribedskusPrepaidunitsSeparate': 'Se han comprado Microsoft 365 Copilot asientos para el inquilino, de Graph unidades prepago de suscripciones suscritas. Esto es independiente de los asientos asignados.',
   'copilotAdoption.page.purchasedEnabledWarningSuspendedPrepaidUnitsSkusClassifiedMicrosoft': 'Comprado está habilitado + advertencia + unidades prepago suspendidas para los SKUs clasificados como asientos Microsoft 365 Copilot. No asignado es comprado menos asignado, por SKU, nunca por debajo de cero.',
   'copilotAdoption.page.adoptionRate3': 'Tasa de adopción',
@@ -416,7 +454,10 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.certainProbableReviewExcluded': '{v0} ciertas, {v1} probables, {v2} revisión, {v3} excluidas',
   'copilotAdoption.page.licencesSafeEnoughIncludeActionableReclaimTotalDisabledAccounts': 'Licencias lo suficientemente seguras como para incluir en el total recuperable accionable. Las cuentas deshabilitadas son ciertas. Las cuentas habilitadas, de larga antigüedad y nunca usadas son probables. Las cuentas inactivas, demasiado nuevas y de antigüedad desconocida son solo para revisión.',
   'copilotAdoption.page.newUserProtectedDaysUsingGraphUserCreateddatetimeAccount': 'Un nuevo usuario está protegido durante {v0} días usando Graph user.createdDateTime como el proxy de antigüedad de la cuenta hasta que exista un historial real de permanencia en el puesto. Los nuevos usuarios activos tienen sus días activos esperados prorrateados; los nuevos usuarios inactivos son "demasiado nuevos para juzgar". {v1}',
-  'copilotAdoption.page.certainProbableReclaimableReviewOnlyExcludedUsersStillRemain': '{v0} ciertos + {v1} probables{v2} = {v3} recuperables. {v4} solo para revisión y {v5} usuarios excluidos todavía permanecen en el denominador con licencia. Se concilia contra la distribución por bandas como {v6} nunca usado + {v7} inactivo + {v8} deshabilitado-pero-activo = {v9} recuperable{v10} + {v11} retenido para revisión o exclusión.',
+
+  'copilotAdoption.page.certainProbableReclaimableReviewOnlyExcludedUsersStillRemain': '{v0} seguros + {v1} probables{v2} = {v3} recuperables. {v4} solo para revisión y {v5} usuarios excluidos todavía permanecen en el denominador con licencia. Se concilia contra la distribución por bandas como {v6} nunca usado + {v7} inactivo + {v8} deshabilitado-pero-activo = {v9} recuperable{v10} + {v11} retenido para revisión o exclusión.',
+  'copilotAdoption.page.reclaimWindowMismatchDeduction': '{count} puestos probables retenidos porque el periodo del informe de uso de Microsoft no coincide con esta ventana',
+  'copilotAdoption.page.reclaimWindowMismatchAddBack': '{count} retenidos por discrepancia de ventana',
   'copilotAdoption.page.drillThroughLicensedUsersTabReclaimTierFilterEach': 'Perfora en la pestaña de Usuarios con licencia con el filtro de nivel de Reclamación; cada nivel usa la misma clave reclaimEligibility contada aquí. Las exclusiones expiradas se muestran para una nueva revisión en lugar de ser automáticamente respetadas para siempre.',
   'copilotAdoption.page.disabledSeats': 'Puestos deshabilitados',
   'copilotAdoption.page.disabledAccountsStillHoldingCopilotLicence': 'Cuentas deshabilitadas que aún tienen una licencia de Copilot',
@@ -430,7 +471,15 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.eachUserScoreOutCombinesFrequencyDepthBreadthUnused': 'La puntuación de cada usuario sobre 100 combina frecuencia ({v0}), profundidad ({v1}) y amplitud ({v2}). Las licencias no usadas se incluyen en la media de forma intencionada: excluirlas haría que un inquilino con la mitad de sus licencias inactivas pareciera idéntico a otro sin ninguna.',
   'copilotAdoption.page.meanMedian': 'media = {v0}, mediana = {v1}',
   'copilotAdoption.page.theMedianShownNextMeanHandfulChampionsPullMean': 'La mediana se muestra junto a la media porque un puñado de Campeones eleva la media. Cuando la media está muy por encima de la mediana, la población es un pequeño grupo de usuarios intensivos más una larga cola: un problema diferente al uso ligero uniforme.',
-  'copilotAdoption.page.microsoftCoworkUsageReportSuppliesTaskCountsAvailableAudit': 'El informe de uso de Cowork de Microsoft proporciona recuentos de tareas cuando están disponibles. Las interacciones derivadas de auditoría se conservan por separado para conciliación y no son comparables con las tareas.',
+  'copilotAdoption.page.microsoftCoworkUsageReportSuppliesTaskCountsAvailableAudit': 'El informe de uso de Cowork de Microsoft proporciona recuentos de tareas cuando están disponibles. Las interacciones derivadas de auditoría se conservan por separado para conciliación y no son comparables con las tareas.',  'copilotAdoption.page.kpi.purchasedSeatsSourceImported': 'Importado por el trabajo de metadatos de usuario desde Graph subscribedSkus.',
+  'copilotAdoption.page.kpi.purchasedSeatsSourceUnknown': 'Desconocido porque Graph subscribedSkus no está disponible o no se ha concedido Organization.Read.All; deliberadamente no se muestra como cero.',
+  'copilotAdoption.page.kpi.coworkUsageObserved': 'Uso de Cowork observado',
+  'copilotAdoption.page.kpi.coworkTasksHint': '{tasks} tareas de Cowork en el informe de uso de Microsoft; {interactions} interacciones de auditoría conservadas para conciliación',
+  'copilotAdoption.page.kpi.coworkAuditHint': '{interactions} interacciones de auditoría (no el recuento de tareas de Microsoft)',
+  'copilotAdoption.page.kpi.coworkWhatUnknownEligibility': 'Se muestran los usuarios de Cowork, pero se suprime el porcentaje de adopción porque se desconoce la elegibilidad de la directiva de consumo.',
+  'copilotAdoption.page.kpi.coworkWhatKnownEligibility': 'Usuarios de Cowork como proporción de la elegibilidad conocida de la directiva de consumo de Cowork.',
+
+
   'copilotAdoption.page.coworkEligibilityControlledSpendingPolicyScopeDeprecatedCoworkAgent': 'La elegibilidad de Cowork está controlada por el alcance de la política de gastos, no por la entrada de agente Cowork obsoleta ni por el recuento de licencias Microsoft 365 Copilot.',
   'copilotAdoption.page.usingCopilotUnlicensed': 'Uso de Copilot sin licencia',
   'copilotAdoption.page.provenDemandAlreadyUsingCopilotChatNoLicence': 'Demanda demostrada - ya usa Copilot Chat sin licencia',

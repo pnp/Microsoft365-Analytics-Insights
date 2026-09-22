@@ -10,6 +10,7 @@ const health: Record<keyof typeof en, string> = {
   // Shared health UI
   'health.action.refresh': 'Actualizar',
   'health.action.refreshing': 'Actualizando...',
+  'health.section.failedToLoad': 'No se pudo cargar.',
   'health.section.loaded': 'cargado {when}',
   'health.section.loading': 'Cargando {title}...',
   'health.status.checking': 'Comprobando...',

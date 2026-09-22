@@ -18,6 +18,7 @@ import {
   Sparkle20Regular,
 } from '@fluentui/react-icons';
 import type { NamedCount } from '../../types/systemStatus';
+import { formatNumber } from '../../i18n';
 
 /**
  * Icon per figure, keyed off the server's stable `key` rather than the display label - renaming a
@@ -106,7 +107,7 @@ export default function DataKpiTiles({ counts }: { counts: NamedCount[] }) {
           {/* mergeClasses, not string concatenation: both rules set `color`, and only Griffel's
               merge resolves that deterministically. */}
           <span className={mergeClasses(styles.value, c.count === 0 && styles.valueEmpty)}>
-            {c.count.toLocaleString()}
+            {formatNumber(c.count)}
           </span>
           {c.hint && (
             <Text size={200} className={styles.hint}>

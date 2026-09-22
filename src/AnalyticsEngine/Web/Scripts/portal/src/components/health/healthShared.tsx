@@ -10,7 +10,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import Spinner from '../Spinner';
-import { formatDateParts, formatNumber, useT, type TFunction } from '../../i18n';
+import { formatDateParts, formatNumber, translateActive, useT, type TFunction } from '../../i18n';
 import type { HealthSectionBase, HealthStatusName, HourCount } from '../../types/health';
 
 export type BadgeColor = 'success' | 'warning' | 'danger' | 'informative' | 'subtle';
@@ -154,7 +154,7 @@ export function useHealthSection<T>(fetcher: () => Promise<T>, active: boolean):
       setData(d);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load.');
+      setError(e instanceof Error ? e.message : translateActive('health.section.failedToLoad'));
     } finally {
       setLoading(false);
       setRefreshing(false);

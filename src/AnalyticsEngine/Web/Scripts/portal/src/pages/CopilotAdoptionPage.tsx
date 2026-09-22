@@ -61,7 +61,7 @@ import DismissibleWarnings from '../components/shared/DismissibleWarnings';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
 import type { KpiDefinition } from '../components/shared/KpiGrid';
-import { useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
+import { activeLocale, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
 
 const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
   { value: 7, labelKey: 'copilotAdoption.page.window.last7Days' },
@@ -111,13 +111,8 @@ function describeUnscopedSections(t: TFunction, sections: string[]): string {
     const key = UNSCOPED_SECTION_LABEL_KEYS[s];
     return key ? t(key) : s;
   });
-  if (labels.length === 0) return '';
-  if (labels.length === 1) return labels[0];
-  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+  return new Intl.ListFormat(activeLocale(), { style: 'long', type: 'conjunction' }).format(labels);
 }
-
-const TREND_GAP_NOTE =
-  'Gap = Audit.General import coverage could not be verified for that completed week; it is not treated as zero usage.';
 
 function hasTrendGaps(series: { points: { value: number | null }[] }[]): boolean {
   return series.some((s) => s.points.some((p) => p.value === null));
@@ -307,13 +302,13 @@ export default function CopilotAdoptionPage() {
       })
       .catch((e: unknown) => {
         if (!cancelled) {
-          setAvailabilityError(e instanceof Error ? e.message : 'Failed to check Copilot adoption availability.');
+          setAvailabilityError(e instanceof Error ? e.message : t('copilotAdoption.page.errors.checkAvailability'));
         }
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (!availability?.available) {
@@ -343,7 +338,7 @@ export default function CopilotAdoptionPage() {
       })
       .catch((e: unknown) => {
         if (cancelled || controller.signal.aborted) return;
-        setSummaryError(e instanceof Error ? e.message : 'Failed to load the adoption summary.');
+        setSummaryError(e instanceof Error ? e.message : t('copilotAdoption.page.errors.loadSummary'));
       })
       .finally(() => {
         if (!cancelled) setSummaryLoading(false);
@@ -445,8 +440,8 @@ export default function CopilotAdoptionPage() {
               relationship="description"
               content={
                 summary
-                  ? 'The whole report - every figure, table and chart - as an Excel workbook with live, editable charts. Run it before and after an enablement programme to compare like for like.'
-                  : 'Available once the analysis has finished loading.'
+                  ? t('copilotAdoption.page.controls.excelTooltipReady')
+                  : t('copilotAdoption.page.controls.excelTooltipLoading')
               }
             >
               {/* Disabled until the summary is in. The export is an <a href> download, so it cannot poll:
@@ -740,7 +735,7 @@ function ExecutiveTab({
       <SectionHead
         index={1}
         title={t('copilotAdoption.page.whereWeStand')}
-        blurb="Seats, adoption, habit, reclaim confidence and reassignment opportunity without the diagnostics."
+        blurb={t('copilotAdoption.page.executive.whereWeStandBlurb')}
       />
 
       <div className={styles.twoUp}>
@@ -764,12 +759,12 @@ function ExecutiveTab({
             <GaugeRing
               value={summary.adoptionRatePct}
               label={t('copilotAdoption.page.adoptionRate')}
-              sublabel={`${formatCount(summary.activeUsers)} of ${formatCount(summary.scoredUsers)} licensed users`}
+              sublabel={t('copilotAdoption.page.gauge.activeOfLicensed', { active: formatCount(summary.activeUsers), total: formatCount(summary.scoredUsers) })}
             />
             <GaugeRing
               value={summary.habitRatePct}
               label={t('copilotAdoption.page.habitRate')}
-              sublabel={`${formatCount(summary.habitualUsers)} established or champion users`}
+              sublabel={t('copilotAdoption.page.gauge.establishedOrChampion', { count: formatCount(summary.habitualUsers) })}
             />
           </div>
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}>
@@ -816,7 +811,7 @@ function ExecutiveTab({
       <SectionHead
         index={2}
         title={t('copilotAdoption.page.whereWorkingFailing')}
-        blurb="The departments to start with, and the funnel stage where value drops out."
+        blurb={t('copilotAdoption.page.executive.workingFailingBlurb')}
       />
 
       <div className={styles.twoUp}>
@@ -899,7 +894,7 @@ function ExecutiveTab({
       <SectionHead
         index={3}
         title={t('copilotAdoption.page.whatWeDoingAbout')}
-        blurb="The enablement workload, with each row drilling through to the exact users counted."
+        blurb={t('copilotAdoption.page.executive.enablementBlurb')}
       />
 
       <Card>
@@ -1012,7 +1007,7 @@ function AnalystTab({
   // Only introduce the word "analysed" when they actually differ - otherwise it is an internal row
   // cap leaking into the UI as a business term, and it makes a simple number look qualified.
   const capped = summary.scoredUsers > 0 && summary.scoredUsers < summary.licensedUsers;
-  const populationWord = capped ? 'analysed' : 'licensed';
+  const populationWordKey = capped ? 'copilotAdoption.page.population.analysed' : 'copilotAdoption.page.population.licensed';
   const bandThresholds = {
     champion: o.championScore,
     established: o.establishedScore,
@@ -1038,7 +1033,7 @@ function AnalystTab({
       <SectionHead
         index={1}
         title={t('copilotAdoption.page.whereStand')}
-        blurb="The headline position: how many licences are earning their keep, and where the drop-off is."
+        blurb={t('copilotAdoption.page.analyst.whereStandBlurb')}
       />
 
       <Card>
@@ -1061,29 +1056,25 @@ function AnalystTab({
           <GaugeRing
             value={summary.adoptionRatePct}
             label={t('copilotAdoption.page.adoptionRate2')}
-            sublabel={`${formatCount(summary.activeUsers)} of ${formatCount(
-              summary.scoredUsers,
-            )} ${populationWord} users touched Copilot`}
+            sublabel={t('copilotAdoption.page.gauge.usersTouchedCopilot', { active: formatCount(summary.activeUsers), total: formatCount(summary.scoredUsers), population: t(populationWordKey) })}
           />
           <GaugeRing
             value={summary.habitRatePct}
             label={t('copilotAdoption.page.habitRate3')}
-            sublabel={`${formatCount(summary.habitualUsers)} have made it part of the working week`}
+            sublabel={t('copilotAdoption.page.gauge.madePartWorkingWeek', { count: formatCount(summary.habitualUsers) })}
           />
           {summary.coworkDetected && summary.coworkAdoptionPct !== null && (
             <GaugeRing
               value={summary.coworkAdoptionPct}
               label={t('copilotAdoption.page.coworkAdoption')}
-              sublabel={`${formatCount(summary.coworkUsers)} eligible users have used Cowork`}
+              sublabel={t('copilotAdoption.page.gauge.eligibleUsedCowork', { count: formatCount(summary.coworkUsers) })}
             />
           )}
           {coworkReadinessPct !== null && (
             <GaugeRing
               value={coworkReadinessPct}
               label={t('copilotAdoption.page.readinessCowork')}
-              sublabel={`${formatCount(summary.coworkRecommendedForPolicy)} of ${formatCount(
-                summary.coworkScoredUsers,
-              )} scored seat holders are ready to be scoped for Cowork`}
+              sublabel={t('copilotAdoption.page.gauge.readyForCoworkScope', { ready: formatCount(summary.coworkRecommendedForPolicy), total: formatCount(summary.coworkScoredUsers) })}
             />
           )}
         </div>
@@ -1116,7 +1107,7 @@ function AnalystTab({
       <SectionHead
         index={2}
         title={t('copilotAdoption.page.whatNext')}
-        blurb="The work this creates, how big each job is, and which departments to start with."
+        blurb={t('copilotAdoption.page.analyst.whatNextBlurb')}
       />
 
       <Card>
@@ -1209,7 +1200,7 @@ function AnalystTab({
           />
         </div>
         <div className={styles.cardBody}>
-          <SegmentTable rows={summary.adoptionByDepartment} segmentLabel="Department" bands={bandThresholds} />
+          <SegmentTable rows={summary.adoptionByDepartment} segmentLabel={t('copilotAdoption.page.department')} bands={bandThresholds} />
         </div>
       </Card>
 
@@ -1271,7 +1262,7 @@ function AnalystTab({
       <SectionHead
         index={3}
         title={t('copilotAdoption.page.howCopilotBeingUsed')}
-        blurb="The evidence behind those recommendations: how often, how deeply, in which apps, and by whom."
+        blurb={t('copilotAdoption.page.analyst.evidenceBlurb')}
       />
 
       <Card>
@@ -1318,7 +1309,7 @@ function AnalystTab({
               categories={summary.bandBreakdown}
               colours={BAND_COLOUR_LIST}
               centreValue={formatCount(analysedUsers)}
-              centreLabel="licensed users"
+              centreLabel={t('copilotAdoption.page.licensedUsersCentreLabel')}
             />
           </div>
         </Card>
@@ -1395,8 +1386,7 @@ function AnalystTab({
                 what: t('copilotAdoption.page.eachDepartmentPlottedOftenUsersOpenCopilotHorizontalAgainst'),
                 how: t('copilotAdoption.page.onlyUsersWereActiveLeastOnceAveragedUnusedLicences', { v0: o.habitBucketNormalisationDays, v1: o.minSeatsPerSegment }),
                 formula:
-                  `x = mean(activeDays of active users) x ${o.habitBucketNormalisationDays} / ${o.windowDays}\n` +
-                  'y = sum(interactions of active users) / sum(activeDays of active users)',
+                  t('copilotAdoption.page.intensityFormula', { normalisationDays: o.habitBucketNormalisationDays, windowDays: o.windowDays }),
                 source:
                   t('copilotAdoption.page.bottomRightFrequentButShallowThoseUsersNeedRicher'),
               }}
@@ -1489,7 +1479,7 @@ function AnalystTab({
       <SectionHead
         index={4}
         title={t('copilotAdoption.page.trendWiderReach')}
-        blurb="Whether it is moving in the right direction, and what is happening beyond the licensed population."
+        blurb={t('copilotAdoption.page.analyst.trendBlurb')}
       />
 
       {summary.weeklyTrend.length > 0 && (
@@ -1517,7 +1507,7 @@ function AnalystTab({
             </div>
           </div>
           <div className={styles.cardBody}>
-            <TimeSeriesChart series={summary.weeklyTrend} valueLabel={t('copilotAdoption.page.users')} gapNote={TREND_GAP_NOTE} />
+            <TimeSeriesChart series={summary.weeklyTrend} valueLabel={t('copilotAdoption.page.users')} gapNote={t('copilotAdoption.page.trendGapNote')} />
           </div>
         </Card>
       )}
@@ -1540,7 +1530,7 @@ function AnalystTab({
             />
           </div>
           <div className={styles.cardBody}>
-            <TimeSeriesChart series={summary.weeklyVolumeTrend} valueLabel={t('copilotAdoption.page.interactions2')} gapNote={TREND_GAP_NOTE} />
+            <TimeSeriesChart series={summary.weeklyVolumeTrend} valueLabel={t('copilotAdoption.page.interactions2')} gapNote={t('copilotAdoption.page.trendGapNote')} />
           </div>
         </Card>
       )}
@@ -1573,7 +1563,7 @@ function AnalystTab({
           <Text weight="semibold" size={400}>{t('copilotAdoption.page.adoptionCountry')}</Text>
           <Text size={200} block className={styles.muted}>{t('copilotAdoption.page.theSameMeasuresDepartmentTableOrganisationsRunEnablementRegionally')}</Text>
           <div className={styles.cardBody}>
-            <SegmentTable rows={summary.adoptionByCountry} segmentLabel="Country" bands={bandThresholds} />
+            <SegmentTable rows={summary.adoptionByCountry} segmentLabel={t('copilotAdoption.page.country')} bands={bandThresholds} />
           </div>
         </Card>
       )}
@@ -2143,9 +2133,10 @@ function buildKpis(summary: CopilotAdoptionSummary, t: TFunction): KpiDefinition
   // the scored subset, and saying so is the difference between a caveat and a wrong number.
   const capped = summary.scoredUsers > 0 && summary.scoredUsers < summary.licensedUsers;
   const denominatorNote = capped
-    ? ` Rates are of the ${formatCount(summary.scoredUsers)} users this analysis could score, not all ${formatCount(
-        summary.licensedUsers,
-      )} licences - see the warning at the top of the page.`
+    ? ' ' + t('copilotAdoption.page.kpi.denominatorCappedNote', {
+        scored: formatCount(summary.scoredUsers),
+        total: formatCount(summary.licensedUsers),
+      })
     : '';
 
   const items: KpiDefinition[] = [
@@ -2154,8 +2145,8 @@ function buildKpis(summary: CopilotAdoptionSummary, t: TFunction): KpiDefinition
       label: t('copilotAdoption.page.copilotLicences'),
       value: formatCount(summary.licensedUsers),
       hint: capped
-        ? `${formatCount(summary.scoredUsers)} of them analysed - ${seatSkus.length} licence SKU(s) counted`
-        : `${seatSkus.length} licence SKU(s) counted`,
+        ? t('copilotAdoption.page.kpi.licensedHintCapped', { scored: formatCount(summary.scoredUsers), skus: seatSkus.length })
+        : t('copilotAdoption.page.kpi.licensedHint', { skus: seatSkus.length }),
       info: {
         what: t('copilotAdoption.page.peopleHoldingLeastOneLicenceToolClassifiedMicrosoftCopilot'),
         how: t('copilotAdoption.page.countedImportedLicenceAssignmentsDeDuplicatedPerUserSomeone'),
@@ -2166,13 +2157,17 @@ function buildKpis(summary: CopilotAdoptionSummary, t: TFunction): KpiDefinition
     {
       key: 'purchased',
       label: t('copilotAdoption.page.purchasedSeats'),
-      value: summary.purchasedCopilotSeats == null ? 'Unknown' : formatCount(summary.purchasedCopilotSeats),
-      hint: summary.unassignedCopilotSeats == null ? 'Grant Organization.Read.All and rerun the user import' : `${formatCount(summary.unassignedCopilotSeats)} unassigned`,
+      value: summary.purchasedCopilotSeats == null ? t('copilotAdoption.page.unknown') : formatCount(summary.purchasedCopilotSeats),
+      hint: summary.unassignedCopilotSeats == null
+        ? t('copilotAdoption.page.kpi.grantOrganizationReadAll')
+        : t('copilotAdoption.page.kpi.unassignedSeats', { count: formatCount(summary.unassignedCopilotSeats) }),
       tone: summary.unassignedCopilotSeats != null && summary.unassignedCopilotSeats > 0 ? 'critical' : undefined,
       info: {
         what: t('copilotAdoption.page.microsoftCopilotSeatsPurchasedTenantGraphSubscribedskusPrepaidunitsSeparate'),
         how: t('copilotAdoption.page.purchasedEnabledWarningSuspendedPrepaidUnitsSkusClassifiedMicrosoft'),
-        source: summary.subscribedSkusAvailable ? 'Imported by the user metadata job from Graph subscribedSkus.' : 'Unknown because Graph subscribedSkus is unavailable or Organization.Read.All has not been granted; this is deliberately not shown as zero.',
+        source: summary.subscribedSkusAvailable
+          ? t('copilotAdoption.page.kpi.purchasedSeatsSourceImported')
+          : t('copilotAdoption.page.kpi.purchasedSeatsSourceUnknown'),
       },
     },
     {
@@ -2186,7 +2181,7 @@ function buildKpis(summary: CopilotAdoptionSummary, t: TFunction): KpiDefinition
         how: t('copilotAdoption.page.deliberatelyLowBarWeakestNumberPageOneInteractionDays', { v0: o.windowDays }),
         formula: t('copilotAdoption.page.active2', { v0: formatCount(summary.activeUsers), v1: formatCount(
           summary.scoredUsers,
-        ), v2: capped ? "analysed" : "licensed", v3: formatPct(summary.adoptionRatePct) }),
+        ), v2: t(capped ? 'copilotAdoption.page.population.analysed' : 'copilotAdoption.page.population.licensed'), v3: formatPct(summary.adoptionRatePct) }),
         source: t('copilotAdoption.page.activityComesCopilotAuditLogDayPeriodFallingBack', { v0: o.windowDays, v1: denominatorNote }),
       },
     },
@@ -2201,7 +2196,7 @@ function buildKpis(summary: CopilotAdoptionSummary, t: TFunction): KpiDefinition
         how: t('copilotAdoption.page.userHabitualWhenEngagementScoreReachesOutEstablishedChampion', { v0: o.establishedScore }),
         formula: t('copilotAdoption.page.usersScoring', { v0: formatCount(summary.habitualUsers), v1: o.establishedScore, v2: formatCount(
           summary.scoredUsers,
-        ), v3: capped ? "analysed" : "licensed", v4: formatPct(summary.habitRatePct) }),
+        ), v3: t(capped ? 'copilotAdoption.page.population.analysed' : 'copilotAdoption.page.population.licensed'), v4: formatPct(summary.habitRatePct) }),
         source: t('copilotAdoption.page.thisFigureTracksRealisedValueAdoptionRateSitWhile', { v0: denominatorNote }),
       },
     },
@@ -2222,9 +2217,9 @@ function buildKpis(summary: CopilotAdoptionSummary, t: TFunction): KpiDefinition
         formula: t('copilotAdoption.page.certainProbableReclaimableReviewOnlyExcludedUsersStillRemain', { v0: formatCount(summary.reclaimCertainSeats), v1: formatCount(
           summary.reclaimProbableSeats,
         ), v2: summary.reclaimSeatsHeldBackForWindowMismatch > 0
-            ? ` - ${formatCount(
-                summary.reclaimSeatsHeldBackForWindowMismatch,
-              )} probable seats held back because Microsoft's usage-report period does not match this window`
+            ? ` - ${t('copilotAdoption.page.reclaimWindowMismatchDeduction', {
+                count: formatCount(summary.reclaimSeatsHeldBackForWindowMismatch),
+              })}`
             : '', v3: formatCount(summary.reclaimableSeats), v4: formatCount(
           summary.reclaimReviewSeats,
         ), v5: formatCount(
@@ -2234,9 +2229,9 @@ function buildKpis(summary: CopilotAdoptionSummary, t: TFunction): KpiDefinition
         ), v7: formatCount(summary.dormantUsers), v8: formatCount(
           summary.reclaimSeatsFromActiveBands,
         ), v9: formatCount(summary.reclaimableSeats), v10: summary.reclaimSeatsHeldBackForWindowMismatch > 0
-            ? ` + ${formatCount(
-                summary.reclaimSeatsHeldBackForWindowMismatch,
-              )} held back for window mismatch`
+            ? ` + ${t('copilotAdoption.page.reclaimWindowMismatchAddBack', {
+                count: formatCount(summary.reclaimSeatsHeldBackForWindowMismatch),
+              })}`
             : '', v11: formatCount(
           summary.reclaimSeatsHeldBackForReview,
         ) }),
@@ -2285,16 +2280,21 @@ function buildKpis(summary: CopilotAdoptionSummary, t: TFunction): KpiDefinition
   if (summary.coworkDetected) {
     items.push({
       key: 'cowork',
-      label: summary.coworkAdoptionPct === null ? 'Cowork usage observed' : 'Cowork adoption',
+      label: summary.coworkAdoptionPct === null
+        ? t('copilotAdoption.page.kpi.coworkUsageObserved')
+        : t('copilotAdoption.page.coworkAdoption'),
       value: summary.coworkAdoptionPct === null ? formatCount(summary.coworkUsers) : formatPct(summary.coworkAdoptionPct),
       hint: summary.coworkReportTotalTasks > 0
-        ? `${formatCount(summary.coworkReportTotalTasks)} Cowork tasks in Microsoft's usage report; ${formatCount(summary.coworkInteractions)} audit interactions kept for reconciliation`
-        : `${formatCount(summary.coworkInteractions)} audit interactions (not Microsoft task count)`,
+        ? t('copilotAdoption.page.kpi.coworkTasksHint', {
+            tasks: formatCount(summary.coworkReportTotalTasks),
+            interactions: formatCount(summary.coworkInteractions),
+          })
+        : t('copilotAdoption.page.kpi.coworkAuditHint', { interactions: formatCount(summary.coworkInteractions) }),
       tone: 'opportunity',
       info: {
         what: summary.coworkAdoptionPct === null
-          ? 'Cowork users are shown, but the adoption percentage is suppressed because spending-policy eligibility is unknown.'
-          : 'Cowork users as a share of known Cowork spending-policy eligibility.',
+          ? t('copilotAdoption.page.kpi.coworkWhatUnknownEligibility')
+          : t('copilotAdoption.page.kpi.coworkWhatKnownEligibility'),
         how: t('copilotAdoption.page.microsoftCoworkUsageReportSuppliesTaskCountsAvailableAudit'),
         source:
           t('copilotAdoption.page.coworkEligibilityControlledSpendingPolicyScopeDeprecatedCoworkAgent'),

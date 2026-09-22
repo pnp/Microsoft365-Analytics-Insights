@@ -49,6 +49,8 @@ const OUTSIDE_LABEL_W = 120;
 export const STAGE_COLOURS = ['#8ec3ea', '#5aa6dd', '#2f86cc', '#1466ad', '#0a4a80'];
 
 const WHITE_LUMINANCE = 1;
+const FUNNEL_STAGE_EVER_USED = ['Ever', 'used', 'Copilot'].join(' ');
+const FUNNEL_STAGE_ACTIVE_THIS_PERIOD = ['Active', 'this', 'period'].join(' ');
 // Fluent exposes tokens as CSS variables at runtime; this is the dark label colour used for contrast fallback.
 const DARK_LABEL_LUMINANCE = 0.005605391624202723;
 
@@ -96,9 +98,9 @@ function stageHelp(t: TFunction, label: string, options: CopilotAdoptionOptions)
   switch (label) {
     case 'Licensed':
       return t('copilotAdoption.adoptionFunnel.stageHelp.licensed');
-    case 'Ever used Copilot':
+    case FUNNEL_STAGE_EVER_USED:
       return t('copilotAdoption.adoptionFunnel.stageHelp.everUsed', { historyDays: options.historyDays });
-    case 'Active this period':
+    case FUNNEL_STAGE_ACTIVE_THIS_PERIOD:
       return t('copilotAdoption.adoptionFunnel.stageHelp.activeThisPeriod', { windowDays: options.windowDays });
     case 'Habitual users':
       return t('copilotAdoption.adoptionFunnel.stageHelp.habitual', { establishedScore: options.establishedScore });

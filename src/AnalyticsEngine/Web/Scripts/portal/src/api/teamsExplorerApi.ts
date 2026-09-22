@@ -1,3 +1,5 @@
+import { translateActive } from '../i18n/runtime';
+import type { TranslationKey } from '../i18n/catalog';
 import { apiFetch } from './http';
 import type {
   TeamsAdoption,
@@ -13,7 +15,15 @@ import type {
 
 const baseUrl = (): string => `${window.location.origin}/api/TeamsExplorer`;
 
-async function getJson<T>(path: string, what: string, signal?: AbortSignal): Promise<T> {
+const TEAMS_EXPORT_FAILURE_KEYS: Record<TeamsExportSection, TranslationKey> = {
+  people: 'errors.teamsExplorer.exportPeopleFailed',
+  dormant: 'errors.teamsExplorer.exportDormantFailed',
+  teams: 'errors.teamsExplorer.exportTeamsFailed',
+  channels: 'errors.teamsExplorer.exportChannelsFailed',
+  adoption: 'errors.teamsExplorer.exportAdoptionFailed',
+};
+
+async function getJson<T>(path: string, failureKey: TranslationKey, signal?: AbortSignal): Promise<T> {
   const response = await apiFetch(`${baseUrl()}/${path}`, {
     method: 'GET',
     headers: { Accept: 'application/json' },
@@ -21,7 +31,7 @@ async function getJson<T>(path: string, what: string, signal?: AbortSignal): Pro
   });
 
   if (!response.ok) {
-    throw new Error(`Couldn't load ${what} (${response.status}).`);
+    throw new Error(translateActive(failureKey, { status: response.status }));
   }
 
   return response.json() as Promise<T>;
@@ -29,11 +39,11 @@ async function getJson<T>(path: string, what: string, signal?: AbortSignal): Pro
 
 /** Which Teams data sources are switched on, and what to tell the admin about the ones that are not. */
 export function fetchTeamsAvailability(signal?: AbortSignal): Promise<TeamsAvailability> {
-  return getJson<TeamsAvailability>('availability', 'the Teams data sources', signal);
+  return getJson<TeamsAvailability>('availability', 'errors.teamsExplorer.dataSourcesFailed', signal);
 }
 
 export function fetchTeamsOverview(days: number, signal?: AbortSignal): Promise<TeamsOverview> {
-  return getJson<TeamsOverview>(`overview?days=${days}`, 'the Teams overview', signal);
+  return getJson<TeamsOverview>(`overview?days=${days}`, 'errors.teamsExplorer.overviewFailed', signal);
 }
 
 export function fetchTeamsAdoption(
@@ -42,23 +52,23 @@ export function fetchTeamsAdoption(
   signal?: AbortSignal,
 ): Promise<TeamsAdoption> {
   const qs = new URLSearchParams({ days: String(days), groupBy });
-  return getJson<TeamsAdoption>(`adoption?${qs}`, 'Teams adoption', signal);
+  return getJson<TeamsAdoption>(`adoption?${qs}`, 'errors.teamsExplorer.adoptionFailed', signal);
 }
 
 export function fetchTeamsMeetings(days: number, signal?: AbortSignal): Promise<TeamsMeetings> {
-  return getJson<TeamsMeetings>(`meetings?days=${days}`, 'Teams meetings and calls', signal);
+  return getJson<TeamsMeetings>(`meetings?days=${days}`, 'errors.teamsExplorer.meetingsFailed', signal);
 }
 
 export function fetchTeamsCollaboration(days: number, signal?: AbortSignal): Promise<TeamsCollaboration> {
-  return getJson<TeamsCollaboration>(`collaboration?days=${days}`, 'teams and channels', signal);
+  return getJson<TeamsCollaboration>(`collaboration?days=${days}`, 'errors.teamsExplorer.collaborationFailed', signal);
 }
 
 export function fetchTeamsConversations(days: number, signal?: AbortSignal): Promise<TeamsConversations> {
-  return getJson<TeamsConversations>(`conversations?days=${days}`, 'conversation insights', signal);
+  return getJson<TeamsConversations>(`conversations?days=${days}`, 'errors.teamsExplorer.conversationsFailed', signal);
 }
 
 export function fetchTeamsPeople(days: number, signal?: AbortSignal): Promise<TeamsPeople> {
-  return getJson<TeamsPeople>(`people?days=${days}`, 'Teams people', signal);
+  return getJson<TeamsPeople>(`people?days=${days}`, 'errors.teamsExplorer.peopleFailed', signal);
 }
 
 /**
@@ -85,7 +95,7 @@ export async function downloadTeamsExport(
   });
 
   if (!response.ok) {
-    throw new Error(`Couldn't export ${section} (${response.status}).`);
+    throw new Error(translateActive(TEAMS_EXPORT_FAILURE_KEYS[section], { status: response.status }));
   }
 
   const blob = await response.blob();

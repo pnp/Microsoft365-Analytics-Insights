@@ -22,6 +22,9 @@ export const charts = {
   'charts.gauge.needsAttention': 'Needs attention',
   'charts.gauge.progressing': 'Progressing',
   'charts.gauge.healthy': 'Healthy',
+  'charts.gauge.band.below': 'below {upTo}% {label}',
+  'charts.gauge.band.above': 'above {from}% is {label}',
+  'charts.gauge.band.range': '{from}-{upTo}% is {label}',
 
   // Heatmap chart
   'charts.heatmap.cellTitle': '{day} {hour}:00 - {value} {valueLabel}',

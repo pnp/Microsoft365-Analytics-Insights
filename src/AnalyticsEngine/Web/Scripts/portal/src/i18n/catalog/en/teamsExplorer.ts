@@ -188,6 +188,7 @@ export const teamsExplorer = {
   'teamsExplorer.adoption.valueLabel.usersLower': 'users',
 
   'teamsExplorer.meetings.utcCaveat': 'Call times are recorded in UTC and the database holds no per-user timezone, so a genuinely global organisation will read high on out-of-hours activity. Compare departments against each other rather than against an absolute target.',
+  'teamsExplorer.meetings.workingHoursUtc': '{start}:00\u2013{end}:00 UTC',
   'teamsExplorer.meetings.source.graphCallRecords': 'Graph call records.',
   'teamsExplorer.meetings.source.graphCallRecordsSessions': 'Graph call records and their per-attendee sessions.',
   'teamsExplorer.meetings.kpi.calls.label': 'Calls',

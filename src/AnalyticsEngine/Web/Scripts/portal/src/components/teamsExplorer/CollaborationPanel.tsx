@@ -22,12 +22,12 @@ import SentimentLight from '../shared/SentimentLight';
 import type { TeamsCollaboration } from '../../types/teamsExplorer';
 import { useT, useTNode } from '../../i18n';
 import {
-  SENTIMENT_SCALE_NOTE,
   SectionCard,
   WindowNote,
   bucketsToCategories,
   formatCount,
   queryFor,
+  sentimentScaleNote,
   toCategories,
   useTeamsStyles,
 } from './teamsShared';
@@ -71,6 +71,7 @@ export default function CollaborationPanel({
   const shared = useTeamsStyles();
   const t = useT();
   const tNode = useTNode();
+  const sentimentScaleNoteText = sentimentScaleNote(t);
   const { kpis } = data;
 
   const kpiItems: KpiDefinition[] = [
@@ -180,7 +181,7 @@ export default function CollaborationPanel({
           description={t('teamsExplorer.collaboration.teamLeaderboard.description')}
           query={queryFor(data.queries, 'collab-teams')}
           isEmpty={data.teams.length === 0}
-          note={SENTIMENT_SCALE_NOTE}
+          note={sentimentScaleNoteText}
         >
           <div className={styles.exportRow}>
             <Button
@@ -244,7 +245,7 @@ export default function CollaborationPanel({
           description={t('teamsExplorer.collaboration.channelLeaderboard.description')}
           query={queryFor(data.queries, 'collab-channels')}
           isEmpty={data.channels.length === 0}
-          note={SENTIMENT_SCALE_NOTE}
+          note={sentimentScaleNoteText}
         >
           <div className={styles.exportRow}>
             <Button

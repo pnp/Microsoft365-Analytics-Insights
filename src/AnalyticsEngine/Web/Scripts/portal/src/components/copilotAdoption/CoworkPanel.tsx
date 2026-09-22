@@ -819,12 +819,16 @@ export default function CoworkPanel({
                             messages: options.coworkCollaborationWeight,
                             documents: options.coworkDocumentWeight,
                           }),
-                          formula:
-                            `meetings  = min(1, meetingsPerActiveDay / ${options.coworkMeetingTarget})\n` +
-                            `email     = min(1, (sent + read) / ${options.coworkEmailTarget})\n` +
-                            `messages  = min(1, teamsMessages / ${options.coworkCollaborationTarget})\n` +
-                            `documents = min(1, filesViewedOrEdited / ${options.coworkDocumentTarget})\n` +
-                            `load = meetings*${options.coworkMeetingWeight} + email*${options.coworkEmailWeight} + messages*${options.coworkCollaborationWeight} + documents*${options.coworkDocumentWeight}`,
+                          formula: t('copilotAdoptionCowork.metric.coordinationLoadInfo.formula', {
+                            meetingTarget: options.coworkMeetingTarget,
+                            emailTarget: options.coworkEmailTarget,
+                            collaborationTarget: options.coworkCollaborationTarget,
+                            documentTarget: options.coworkDocumentTarget,
+                            meetingWeight: options.coworkMeetingWeight,
+                            emailWeight: options.coworkEmailWeight,
+                            collaborationWeight: options.coworkCollaborationWeight,
+                            documentWeight: options.coworkDocumentWeight,
+                          }),
                           source: t('copilotAdoptionCowork.metric.coordinationLoadInfo.source'),
                         }}
                       />
