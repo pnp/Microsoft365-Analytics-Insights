@@ -44,8 +44,19 @@ namespace Common.Entities.UserOrgs
         /// the stored values were read from somewhere that is no longer this dimension's source of
         /// truth. Atomic with the update on purpose: see the note on the implementation.
         /// </param>
+        /// <param name="bumpGeneration">
+        /// Whether a delta token minted under the old configuration stops being safe to reuse. True
+        /// for every change that makes the Entra merge fence a type's updates out - the values being
+        /// discarded, the source kind changing, <b>and</b> the type being disabled. A type disabled
+        /// mid-cycle has its updates dropped but the cycle still commits its token, so without this
+        /// re-enabling would rebuild the same cache key and resume past the users it skipped.
+        /// </param>
         /// <exception cref="UserOrgValidationException">The name is already taken, or the configuration is invalid.</exception>
-        Task UpdateAsync(UserOrgType type, bool clearAssignments, CancellationToken cancellationToken = default(CancellationToken));
+        Task UpdateAsync(
+            UserOrgType type,
+            bool clearAssignments,
+            bool bumpGeneration,
+            CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>
         /// Deletes an org type and everything hanging off it - assignments, values, import jobs and any

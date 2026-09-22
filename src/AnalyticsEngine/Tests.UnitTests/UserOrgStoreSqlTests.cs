@@ -172,7 +172,7 @@ DELETE FROM dbo.users;");
 
             type.Name = "Renamed";
             type.IsEnabled = false;
-            await _types.UpdateAsync(type, false);
+            await _types.UpdateAsync(type, false, false);
 
             var loaded = await _types.GetAsync(id);
             Assert.AreEqual("Renamed", loaded.Name);
@@ -198,7 +198,7 @@ DELETE FROM dbo.users;");
             var type = await _types.GetAsync(typeId);
             type.SourceKind = UserOrgSourceKind.CsvUpload;
             type.EntraAttributeName = null;
-            await _types.UpdateAsync(type, true);
+            await _types.UpdateAsync(type, true, true);
 
             Assert.AreEqual(
                 0,
@@ -223,6 +223,7 @@ DELETE FROM dbo.users;");
             {
                 await _types.UpdateAsync(
                     new UserOrgType { Id = 987654, Name = "Ghost", SourceKind = UserOrgSourceKind.CsvUpload },
+                    true,
                     true);
                 Assert.Fail("Updating a deleted type should be reported.");
             }
@@ -243,7 +244,7 @@ DELETE FROM dbo.users;");
                     Id = 987654,
                     Name = "Ghost",
                     SourceKind = UserOrgSourceKind.CsvUpload,
-                }, false);
+                }, false, false);
                 Assert.Fail("Updating a deleted type should be reported.");
             }
             catch (UserOrgValidationException ex)
@@ -595,12 +596,12 @@ DELETE FROM dbo.users;");
             var type = await _types.GetAsync(typeId);
             type.SourceKind = UserOrgSourceKind.EntraAttribute;
             type.EntraAttributeName = "extensionAttribute1";
-            await _types.UpdateAsync(type, true);
+            await _types.UpdateAsync(type, true, true);
 
             type = await _types.GetAsync(typeId);
             type.SourceKind = UserOrgSourceKind.CsvUpload;
             type.EntraAttributeName = null;
-            await _types.UpdateAsync(type, true);
+            await _types.UpdateAsync(type, true, true);
 
             try
             {
@@ -656,7 +657,7 @@ DELETE FROM dbo.users;");
 
             var type = await _types.GetAsync(typeId);
             type.EntraAttributeName = "extensionAttribute2";
-            await _types.UpdateAsync(type, true);
+            await _types.UpdateAsync(type, true, true);
 
             var result = await _assignments.MergeAsync(
                 new[] { new UserOrgAssignmentUpdate(user, typeId, "Read from the old attribute") },
@@ -809,13 +810,13 @@ DELETE FROM dbo.users;");
 
             var type = await _types.GetAsync(typeId);
             type.Name = "Renamed";
-            await _types.UpdateAsync(type, false);
+            await _types.UpdateAsync(type, false, false);
             Assert.AreEqual(1, (await _types.GetAsync(typeId)).SourceGeneration, "A rename must not bump it.");
 
             type = await _types.GetAsync(typeId);
             type.SourceKind = UserOrgSourceKind.EntraAttribute;
             type.EntraAttributeName = "extensionAttribute1";
-            await _types.UpdateAsync(type, true);
+            await _types.UpdateAsync(type, true, true);
             Assert.AreEqual(2, (await _types.GetAsync(typeId)).SourceGeneration, "Discarding values must bump it.");
         }
 
@@ -885,6 +886,88 @@ DELETE FROM dbo.users;");
                 0,
                 Count($"SELECT COUNT(*) FROM dbo.user_org_import_staging WHERE job_id = {jobId}"),
                 "The staged rows go with the job through the foreign key's cascade.");
+        }
+
+        [TestMethod]
+        public async Task Update_BumpsTheSourceGenerationWhenATypeIsDisabled()
+        {
+            // Not obvious, and it is the whole point. Disabling discards nothing - the values stay on
+            // user lookup - but it DOES make the Entra merge fence that type's updates out, while the
+            // cycle still commits its delta token. If the generation did not move, re-enabling would
+            // rebuild the same cache key and resume from a token that has already advanced past those
+            // users, so they would never be re-read and would stay stale indefinitely.
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(new UserOrgType
+            {
+                Name = "Cost Centre",
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "extensionAttribute1",
+                IsEnabled = true,
+            });
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, typeId, "Retail") });
+
+            var type = await _types.GetAsync(typeId);
+            type.IsEnabled = false;
+            await _types.UpdateAsync(type, false, true);
+
+            var disabled = await _types.GetAsync(typeId);
+            Assert.AreEqual(2, disabled.SourceGeneration, "Disabling must invalidate the stored delta token.");
+            Assert.AreEqual(
+                1,
+                (await _assignments.GetForUserAsync(user)).Count,
+                "Disabling must not discard the values - only deleting or repointing the type does that.");
+
+            type = await _types.GetAsync(typeId);
+            type.IsEnabled = true;
+            await _types.UpdateAsync(type, false, true);
+
+            Assert.AreEqual(3, (await _types.GetAsync(typeId)).SourceGeneration);
+        }
+
+        [TestMethod]
+        public async Task Merge_ReportsWhatItFencedOutSoTheTokenCanBeWithheld()
+        {
+            // A silent drop is the dangerous shape here: the users whose updates were discarded will
+            // not appear in a delta again unless they change, so a cycle that commits its token after
+            // discarding them strands them with stale values. The count is what lets the caller
+            // withhold the token instead.
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(new UserOrgType
+            {
+                Name = "Cost Centre",
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "extensionAttribute1",
+                IsEnabled = true,
+            });
+
+            Execute($"UPDATE dbo.user_org_types SET is_enabled = 0 WHERE id = {typeId}");
+
+            var result = await _assignments.MergeAsync(
+                new[] { new UserOrgAssignmentUpdate(user, typeId, "Retail") },
+                UserOrgSourceKind.EntraAttribute);
+
+            Assert.AreEqual(1, result.FencedOut);
+            Assert.AreEqual(0, result.Applied);
+        }
+
+        [TestMethod]
+        public async Task Merge_ReportsNothingFencedWhenEverythingApplies()
+        {
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(new UserOrgType
+            {
+                Name = "Cost Centre",
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "extensionAttribute1",
+                IsEnabled = true,
+            });
+
+            var result = await _assignments.MergeAsync(
+                new[] { new UserOrgAssignmentUpdate(user, typeId, "Retail") },
+                UserOrgSourceKind.EntraAttribute);
+
+            Assert.AreEqual(0, result.FencedOut);
+            Assert.AreEqual(1, result.Applied);
         }
 
         [TestMethod]

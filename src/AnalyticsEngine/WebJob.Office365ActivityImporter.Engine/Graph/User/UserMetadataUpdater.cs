@@ -604,6 +604,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     $"User import - user organisations: {result.Applied.ToString("N0")} assignment(s) set, "
                     + $"{result.Cleared.ToString("N0")} cleared, {result.ValuesCreated.ToString("N0")} new organisation value(s) "
                     + $"across {parsed.Count} organisation type(s).");
+
+                if (result.FencedOut > 0)
+                {
+                    // An org type was reconfigured while this cycle was loading users from Graph, so
+                    // its updates were dropped rather than applied over the top of the change. The
+                    // token is withheld because those users will not appear in a delta again unless
+                    // they change: committing it would strand them with stale values indefinitely.
+                    _logger.LogWarning(
+                        $"User import - {result.FencedOut.ToString("N0")} organisation update(s) were skipped because "
+                        + "their organisation type was reconfigured while this cycle was running. The delta token "
+                        + "will not be committed, so the next cycle re-reads them.");
+
+                    phaseResults.UserOrgsSucceeded = false;
+                }
             }
             catch (Exception ex)
             {

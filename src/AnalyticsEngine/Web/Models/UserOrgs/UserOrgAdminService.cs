@@ -88,7 +88,14 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 || (type.SourceKind == UserOrgSourceKind.EntraAttribute
                     && !string.Equals(existing.EntraAttributeName, type.EntraAttributeName, StringComparison.OrdinalIgnoreCase));
 
-            await _types.UpdateAsync(type, sourceChanged, cancellationToken).ConfigureAwait(false);
+            // Disabling does not discard anything - the values stay visible on user lookup until the
+            // type is deleted - but it does make the Entra merge fence that type out, while the cycle
+            // still commits its delta token. Re-enabling must therefore not land back on the same
+            // token, or the users skipped in that cycle are never re-read.
+            var enabledChanged = existing.IsEnabled != type.IsEnabled;
+
+            await _types.UpdateAsync(type, sourceChanged, sourceChanged || enabledChanged, cancellationToken)
+                .ConfigureAwait(false);
 
             return ToModel(new UserOrgTypeSummary { Type = type });
         }

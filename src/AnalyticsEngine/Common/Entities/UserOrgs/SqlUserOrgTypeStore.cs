@@ -227,6 +227,7 @@ VALUES (@name, @sourceKind, @attr, @enabled, SYSUTCDATETIME());";
         public async Task UpdateAsync(
             UserOrgType type,
             bool clearAssignments,
+            bool bumpGeneration,
             CancellationToken cancellationToken = default(CancellationToken))
         {
             Validate(type);
@@ -256,13 +257,13 @@ SET name = @name,
     entra_attribute_name = @attr,
     is_enabled = @enabled,
     modified_utc = SYSUTCDATETIME(),
-    -- Bumped only when the values are being discarded, which is exactly when a delta token minted
-    -- for the old configuration stops being safe to reuse. The Graph delta-token cache key is
-    -- derived from the configured attributes, so without this an admin who repointed a type from
-    -- one attribute to another and back again would land on the FIRST key - and Microsoft Graph
-    -- would answer its stored token with only the users that changed since, leaving everybody else
-    -- permanently unassigned in a type whose values had just been cleared.
-    source_generation = source_generation + CASE WHEN @clearAssignments = 1 THEN 1 ELSE 0 END
+    -- Bumped whenever this cycle's stored delta token stops being safe to reuse, which is any change
+    -- that makes the merge fence a type's updates out: the values being discarded, the source kind
+    -- changing, or the type being disabled. The last one is not obvious. A type disabled mid-cycle
+    -- has its updates dropped by the merge, but the cycle still commits its delta token - so if the
+    -- generation did not move, re-enabling would rebuild the SAME cache key and resume from a token
+    -- that has already advanced past those users. They would never be re-read.
+    source_generation = source_generation + CASE WHEN @bumpGeneration = 1 THEN 1 ELSE 0 END
 WHERE id = @id;
 
 SET @affected = @@ROWCOUNT;
@@ -290,6 +291,7 @@ SELECT @affected;";
                         AddTypeParameters(cmd, type);
                         cmd.Parameters.Add("@id", SqlDbType.Int).Value = type.Id;
                         cmd.Parameters.Add("@clearAssignments", SqlDbType.Bit).Value = clearAssignments;
+                        cmd.Parameters.Add("@bumpGeneration", SqlDbType.Bit).Value = bumpGeneration;
 
                         affected = Convert.ToInt32(
                             await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));

@@ -131,6 +131,17 @@ namespace Common.Entities.UserOrgs
         public int ValuesCreated { get; set; }
 
         /// <summary>
+        /// Updates dropped because their org type was reconfigured while this batch was being built.
+        /// </summary>
+        /// <remarks>
+        /// Any of: the type switched source, was disabled, or had its values discarded. The caller
+        /// must treat a non-zero count as a reason to withhold the Graph delta token - the users
+        /// whose values were dropped will not appear in a delta again unless they change, so
+        /// committing the token would strand them until they do.
+        /// </remarks>
+        public int FencedOut { get; set; }
+
+        /// <summary>
         /// Updates discarded because a later update in the same batch targeted the same user and org
         /// type. Reported rather than hidden: for a CSV this means the file listed a user twice.
         /// </summary>

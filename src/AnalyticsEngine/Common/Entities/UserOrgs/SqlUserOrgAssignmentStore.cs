@@ -60,7 +60,7 @@ CREATE TABLE " + TempTableName + @" (
         internal const string MergeSql = @"
 SET NOCOUNT ON;
 
-DECLARE @valuesCreated INT = 0, @cleared INT = 0, @applied INT = 0;
+DECLARE @valuesCreated INT = 0, @cleared INT = 0, @applied INT = 0, @fenced INT = 0;
 
 -- 0. Drop anything whose org type is no longer sourced the way the caller believed when it built
 --    this batch. A user-metadata cycle reads its org types at the start and can then spend many
@@ -93,6 +93,7 @@ BEGIN
                         AND t.source_kind = @expectedSourceKind
                         AND t.is_enabled = 1
                         AND (u.expected_generation IS NULL OR t.source_generation = u.expected_generation));
+    SET @fenced = @@ROWCOUNT;
 END
 
 -- 1. Register any org value we have not seen before. Matching uses the database collation, which is
@@ -134,7 +135,7 @@ WHERE u.org_value IS NOT NULL
                   WHERE a.user_id = u.user_id AND a.org_type_id = u.org_type_id);
 SET @applied = @applied + @@ROWCOUNT;
 
-SELECT @applied AS applied, @cleared AS cleared, @valuesCreated AS values_created;";
+SELECT @applied AS applied, @cleared AS cleared, @valuesCreated AS values_created, @fenced AS fenced;";
 
         public async Task<UserOrgMergeResult> MergeAsync(
             IReadOnlyList<UserOrgAssignmentUpdate> updates,
@@ -191,6 +192,7 @@ SELECT @applied AS applied, @cleared AS cleared, @valuesCreated AS values_create
                                 result.Applied = reader.GetInt32(0);
                                 result.Cleared = reader.GetInt32(1);
                                 result.ValuesCreated = reader.GetInt32(2);
+                                result.FencedOut = reader.GetInt32(3);
                             }
                         }
                     }
