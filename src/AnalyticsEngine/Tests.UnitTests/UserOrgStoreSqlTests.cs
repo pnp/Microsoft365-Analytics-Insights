@@ -566,6 +566,7 @@ DELETE FROM dbo.users;");
 
         private async Task<int> QueueJob(int typeId, UserOrgImportMode mode, bool confirmClear, params UserOrgStagedRow[] rows)
         {
+            var type = await _types.GetAsync(typeId);
             return await _jobs.CreateJobWithRowsAsync(
                 new UserOrgImportJob
                 {
@@ -574,8 +575,119 @@ DELETE FROM dbo.users;");
                     StartedBy = "admin@contoso.com",
                     FileName = "orgs.csv",
                     ConfirmClear = confirmClear,
+                    ExpectedGeneration = type == null ? (int?)null : type.SourceGeneration,
                 },
                 rows);
+        }
+
+        [TestMethod]
+        public async Task Apply_RefusesAFileQueuedBeforeTheTypeWasResetAndRestored()
+        {
+            // The ABA case. Switching a type to Entra and back leaves it CSV-sourced and enabled, so a
+            // check on source kind alone passes - but the values were deliberately discarded in
+            // between, and letting the older file land afterwards silently puts them back.
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", "Old"));
+            await _jobs.TryClaimJobAsync(jobId);
+
+            // Away and back, exactly as two saves on the admin page would leave it.
+            var type = await _types.GetAsync(typeId);
+            type.SourceKind = UserOrgSourceKind.EntraAttribute;
+            type.EntraAttributeName = "extensionAttribute1";
+            await _types.UpdateAsync(type, true);
+
+            type = await _types.GetAsync(typeId);
+            type.SourceKind = UserOrgSourceKind.CsvUpload;
+            type.EntraAttributeName = null;
+            await _types.UpdateAsync(type, true);
+
+            try
+            {
+                await _jobs.ApplyAsync(jobId);
+                Assert.Fail("A file queued before the type was reset must not apply.");
+            }
+            catch (UserOrgValidationException ex)
+            {
+                StringAssert.Contains(ex.Message, "reconfigured");
+            }
+
+            Assert.AreEqual(0, (await _assignments.GetForUserAsync(user)).Count);
+        }
+
+        [TestMethod]
+        public async Task Apply_RefusesAJobWhoseTypeWasDisabled()
+        {
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", "X"));
+            await _jobs.TryClaimJobAsync(jobId);
+
+            Execute($"UPDATE dbo.user_org_types SET is_enabled = 0 WHERE id = {typeId}");
+
+            try
+            {
+                await _jobs.ApplyAsync(jobId);
+                Assert.Fail("A disabled type must not receive a queued import.");
+            }
+            catch (UserOrgValidationException)
+            {
+            }
+
+            Assert.AreEqual(0, (await _assignments.GetForUserAsync(user)).Count);
+        }
+
+        [TestMethod]
+        public async Task Merge_SkipsATypeRepointedAtADifferentAttributeMidCycle()
+        {
+            // A repoint leaves the type enabled and Entra-sourced the whole time, so the source-kind
+            // check passes and a batch read from the OLD attribute writes back exactly the values the
+            // repoint had just discarded. Only the generation catches it.
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(new UserOrgType
+            {
+                Name = "Cost Centre",
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "extensionAttribute1",
+                IsEnabled = true,
+            });
+
+            var generationWhenTheCycleStarted = (await _types.GetAsync(typeId)).SourceGeneration;
+
+            var type = await _types.GetAsync(typeId);
+            type.EntraAttributeName = "extensionAttribute2";
+            await _types.UpdateAsync(type, true);
+
+            var result = await _assignments.MergeAsync(
+                new[] { new UserOrgAssignmentUpdate(user, typeId, "Read from the old attribute") },
+                UserOrgSourceKind.EntraAttribute,
+                new Dictionary<int, int> { { typeId, generationWhenTheCycleStarted } });
+
+            Assert.AreEqual(0, result.Applied);
+            Assert.AreEqual(0, (await _assignments.GetForUserAsync(user)).Count);
+        }
+
+        [TestMethod]
+        public async Task Merge_AppliesWhenTheGenerationStillMatches()
+        {
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(new UserOrgType
+            {
+                Name = "Cost Centre",
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "extensionAttribute1",
+                IsEnabled = true,
+            });
+
+            var generation = (await _types.GetAsync(typeId)).SourceGeneration;
+
+            var result = await _assignments.MergeAsync(
+                new[] { new UserOrgAssignmentUpdate(user, typeId, "Retail") },
+                UserOrgSourceKind.EntraAttribute,
+                new Dictionary<int, int> { { typeId, generation } });
+
+            Assert.AreEqual(1, result.Applied);
+            Assert.AreEqual("Retail", (await _assignments.GetForUserAsync(user)).Single().Value);
         }
 
         [TestMethod]
@@ -726,8 +838,9 @@ DELETE FROM dbo.users;");
                 await _jobs.ApplyAsync(jobId);
                 Assert.Fail("A CSV job must not apply to a type that is no longer CSV-sourced.");
             }
-            catch (UserOrgJobSupersededException)
+            catch (UserOrgValidationException ex)
             {
+                StringAssert.Contains(ex.Message, "reconfigured");
             }
 
             Assert.AreEqual(0, (await _assignments.GetForUserAsync(user)).Count);

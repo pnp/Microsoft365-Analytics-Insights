@@ -206,6 +206,18 @@ namespace Common.Entities.UserOrgs
         /// </remarks>
         public bool ConfirmClear { get; set; }
 
+        /// <summary>
+        /// The org type's source generation when this file was staged, or <c>null</c> for a job
+        /// created before generations existed.
+        /// </summary>
+        /// <remarks>
+        /// The apply refuses unless it still matches. "Still CSV-sourced" is a weaker question and
+        /// not the one that matters: a type switched to Entra and back is CSV-sourced again, with its
+        /// values deliberately discarded in between, so a file queued before the switch would
+        /// silently restore exactly what the admin threw away.
+        /// </remarks>
+        public int? ExpectedGeneration { get; set; }
+
         public string ErrorMessage { get; set; }
     }
 

@@ -76,6 +76,7 @@ namespace Common.Entities.UserOrgs
         Task<UserOrgMergeResult> MergeAsync(
             IReadOnlyList<UserOrgAssignmentUpdate> updates,
             UserOrgSourceKind? expectedSourceKind = null,
+            IReadOnlyDictionary<int, int> expectedGenerations = null,
             CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>Every org value held by one user, ordered by org type name.</summary>

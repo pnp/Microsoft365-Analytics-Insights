@@ -527,6 +527,64 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task ADeclinedJobIsRecordedRatherThanLeftRunningForever()
+        {
+            // A job refused by the apply fence has no replacement to carry its verdict - the type was
+            // simply reconfigured, or the lock was held. Leaving it Running means the portal reports
+            // it as interrupted and its staged rows sit in the database indefinitely.
+            var store = new DeclineOnApplyJobStore();
+
+            var job = await new UserOrgImportRunner(store).RunAsync(1);
+
+            Assert.AreEqual(UserOrgImportStatus.Failed, store.CompletedStatus);
+            StringAssert.Contains(store.CompletedError, "overtaken");
+            Assert.IsNotNull(job);
+        }
+
+        private sealed class DeclineOnApplyJobStore : IUserOrgImportJobStore
+        {
+            private readonly UserOrgImportJob _job = new UserOrgImportJob
+            {
+                Id = 1,
+                OrgTypeId = 10,
+                Mode = UserOrgImportMode.Merge,
+                Status = UserOrgImportStatus.Pending,
+            };
+
+            public UserOrgImportStatus? CompletedStatus;
+            public string CompletedError;
+
+            public Task<int> CreateJobWithRowsAsync(UserOrgImportJob job, IReadOnlyList<UserOrgStagedRow> rows, CancellationToken cancellationToken = default(CancellationToken))
+                => Task.FromResult(_job.Id);
+
+            public Task<UserOrgImportJob> GetJobAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
+                => Task.FromResult(_job);
+
+            public Task<bool> TryClaimJobAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
+            {
+                _job.Status = UserOrgImportStatus.Running;
+                return Task.FromResult(true);
+            }
+
+            public Task HeartbeatAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
+                => Task.CompletedTask;
+
+            public Task<UserOrgImportJob> ApplyAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
+                => throw new UserOrgJobSupersededException("declined", new InvalidOperationException());
+
+            public Task CompleteJobAsync(int jobId, UserOrgImportStatus status, string errorMessage, CancellationToken cancellationToken = default(CancellationToken))
+            {
+                CompletedStatus = status;
+                CompletedError = errorMessage;
+                _job.Status = status;
+                return Task.CompletedTask;
+            }
+
+            public Task<UserOrgImportJob> GetActiveJobForTypeAsync(int orgTypeId, CancellationToken cancellationToken = default(CancellationToken))
+                => Task.FromResult<UserOrgImportJob>(null);
+        }
+
+        [TestMethod]
         public async Task AnImportThatAppliedIsNeverReportedAsFailed()
         {
             // The file is applied in its own committed transaction and the job is marked finished

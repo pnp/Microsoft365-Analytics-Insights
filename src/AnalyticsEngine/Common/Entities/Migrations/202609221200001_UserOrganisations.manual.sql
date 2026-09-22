@@ -218,6 +218,11 @@ BEGIN
         -- DELETE happens later, in the background worker's transaction - and that is the only place
         -- the answer can be authoritative. A second admin's import can finish in between.
         [confirm_clear] bit NOT NULL CONSTRAINT [DF_user_org_import_jobs_confirm_clear] DEFAULT (0),
+        -- The org type's source generation when this file was staged. The apply refuses unless it
+        -- still matches, because a type being CSV-sourced is not the same question: one switched to
+        -- Entra and back is CSV-sourced again, with its values deliberately discarded in between,
+        -- and letting a file queued before that land afterwards silently restores them.
+        [expected_generation] int NULL,
         [error_message] nvarchar(2000) NULL,
         CONSTRAINT [PK_user_org_import_jobs] PRIMARY KEY CLUSTERED ([id] ASC),
         CONSTRAINT [FK_user_org_import_jobs_type] FOREIGN KEY ([org_type_id])

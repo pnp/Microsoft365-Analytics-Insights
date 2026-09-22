@@ -408,6 +408,15 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                     + "Change its source to CSV upload first.");
             }
 
+            if (!type.IsEnabled)
+            {
+                // The admin page labels a disabled type as not imported. Accepting a file into one
+                // anyway would make that label a lie, and the values would appear on user lookup with
+                // nothing ever refreshing them.
+                throw new UserOrgValidationException(
+                    $"'{type.Name}' is disabled, so a file cannot be imported into it. Enable it first.");
+            }
+
             var active = await _jobs.GetActiveJobForTypeAsync(orgTypeId, cancellationToken).ConfigureAwait(false);
             if (active != null && !UserOrgImportRunner.LooksInterrupted(active, _utcNow()))
             {
@@ -471,6 +480,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                     StartedBy = startedBy,
                     RowsInvalid = parsed.Problems.Count,
                     ConfirmClear = confirmClear,
+                    ExpectedGeneration = type.SourceGeneration,
                 },
                 parsed.Rows,
                 cancellationToken).ConfigureAwait(false);

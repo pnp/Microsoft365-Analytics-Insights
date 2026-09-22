@@ -27,7 +27,8 @@ namespace Common.Entities.UserOrgs
         /// </remarks>
         internal const string JobColumns =
             "id, org_type_id, mode, status, file_name, started_by, queued_utc, started_utc, finished_utc, "
-            + "heartbeat_utc, rows_total, rows_applied, rows_cleared, rows_unknown_upn, rows_invalid, confirm_clear, error_message";
+            + "heartbeat_utc, rows_total, rows_applied, rows_cleared, rows_unknown_upn, rows_invalid, confirm_clear, "
+            + "expected_generation, error_message";
 
         /// <summary>The same columns, qualified with a table alias for a query that needs one.</summary>
         internal static string JobColumnsFor(string alias)
@@ -73,11 +74,13 @@ BEGIN
     RETURN;
 END
 
--- The org type must still be CSV-sourced. It is checked in the caller too, but that happens before
--- a file of up to half a million rows is parsed, so an admin switching the type to Entra in the
--- meantime would otherwise have a CSV import land on it afterwards. Re-checked here because this
--- is inside the transaction that admits the job.
-IF NOT EXISTS (SELECT 1 FROM dbo.user_org_types WHERE id = @orgTypeId AND source_kind = 2)
+-- The org type must still be CSV-sourced and enabled, and must not have been reset since. It is
+-- checked in the caller too, but that happens before a file of up to half a million rows is parsed,
+-- so an admin reconfiguring the type in the meantime would otherwise have a CSV import land on it
+-- afterwards. Re-checked here because this is inside the transaction that admits the job.
+IF NOT EXISTS (SELECT 1 FROM dbo.user_org_types
+               WHERE id = @orgTypeId AND source_kind = 2 AND is_enabled = 1
+                 AND (@expectedGeneration IS NULL OR source_generation = @expectedGeneration))
 BEGIN
     RAISERROR('USERORG_NOT_CSV_SOURCED', 16, 1);
     RETURN;
@@ -122,9 +125,9 @@ FROM dbo.user_org_import_staging s
 WHERE EXISTS (SELECT 1 FROM @superseded x WHERE x.id = s.job_id);
 
 INSERT INTO dbo.user_org_import_jobs
-    (org_type_id, mode, status, file_name, started_by, queued_utc, rows_total, rows_invalid, confirm_clear)
+    (org_type_id, mode, status, file_name, started_by, queued_utc, rows_total, rows_invalid, confirm_clear, expected_generation)
 OUTPUT INSERTED.id
-VALUES (@orgTypeId, @mode, @status, @fileName, @startedBy, SYSUTCDATETIME(), @rowsTotal, @rowsInvalid, @confirmClear);";
+VALUES (@orgTypeId, @mode, @status, @fileName, @startedBy, SYSUTCDATETIME(), @rowsTotal, @rowsInvalid, @confirmClear, @expectedGeneration);";
 
             using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
             using (var tx = connection.BeginTransaction())
@@ -140,6 +143,8 @@ VALUES (@orgTypeId, @mode, @status, @fileName, @startedBy, SYSUTCDATETIME(), @ro
                     cmd.Parameters.Add("@rowsTotal", SqlDbType.Int).Value = rows == null ? 0 : rows.Count;
                     cmd.Parameters.Add("@rowsInvalid", SqlDbType.Int).Value = job.RowsInvalid;
                     cmd.Parameters.Add("@confirmClear", SqlDbType.Bit).Value = job.ConfirmClear;
+                    cmd.Parameters.Add("@expectedGeneration", SqlDbType.Int).Value =
+                        job.ExpectedGeneration.HasValue ? (object)job.ExpectedGeneration.Value : DBNull.Value;
                     cmd.Parameters.Add("@pendingStaleSecs", SqlDbType.Int).Value =
                         (int)UserOrgImportRunner.StalePendingThreshold.TotalSeconds;
                     cmd.Parameters.Add("@runningStaleSecs", SqlDbType.Int).Value =
@@ -296,6 +301,13 @@ WHERE id = @id AND status = 1;";
                             "This import was overtaken by a later one for the same organisation type, so it was not applied.",
                             ex);
                     }
+                    catch (SqlException ex) when (ex.Message.IndexOf("USERORG_NOT_CSV_SOURCED", StringComparison.Ordinal) >= 0)
+                    {
+                        throw new UserOrgValidationException(
+                            "This organisation type was reconfigured after the file was uploaded, so the file was "
+                            + "not imported. Check the type's settings and upload it again if it is still the file "
+                            + "you want.", ex);
+                    }
                     catch (SqlException ex) when (ex.Message.IndexOf("USERORG_UNCONFIRMED_CLEAR", StringComparison.Ordinal) >= 0)
                     {
                         throw new UserOrgValidationException(
@@ -364,7 +376,7 @@ DELETE FROM dbo.user_org_import_staging WHERE job_id = @id;";
         internal const string ApplySql = @"
 SET NOCOUNT ON;
 
-DECLARE @orgTypeId INT, @mode TINYINT, @confirmClear BIT, @lockResult INT, @lockName NVARCHAR(255);
+DECLARE @orgTypeId INT, @mode TINYINT, @confirmClear BIT, @expectedGeneration INT, @lockResult INT, @lockName NVARCHAR(255);
 
 -- Read the org type first, unlocked, purely to name the lock. The authoritative read happens below,
 -- once the lock is held.
@@ -399,26 +411,35 @@ BEGIN
     RETURN;
 END
 
--- Authoritative now the lock is held: still Running, and the type still takes CSV imports. The
--- status test is the fence against a worker that went quiet, was superseded and had its staged rows
--- deleted underneath it - applying anyway means a Replace matches nobody, so it deletes EVERY
--- assignment for the org type. The source test is the fence against an admin switching the type to
--- Entra between the upload and the worker running, which clears the assignments the switch was
--- meant to discard and would otherwise be silently undone by this file.
+-- Still Running? That is the fence against a worker that went quiet, was superseded and had its
+-- staged rows deleted underneath it - applying anyway means a Replace matches nobody, so it deletes
+-- EVERY assignment for the org type.
 --
 -- Reset first. A SELECT that matches no rows leaves its assignment variables at whatever they
 -- already held, so without this @orgTypeId would keep the value the unlocked read above put in it
 -- and the fence would pass in exactly the cases it exists to catch.
 SET @orgTypeId = NULL;
 
-SELECT @orgTypeId = j.org_type_id, @mode = j.mode, @confirmClear = j.confirm_clear
-FROM dbo.user_org_import_jobs j
-JOIN dbo.user_org_types t ON t.id = j.org_type_id AND t.source_kind = 2
-WHERE j.id = @jobId AND j.status = 2;
+SELECT @orgTypeId = org_type_id, @mode = mode, @confirmClear = confirm_clear, @expectedGeneration = expected_generation
+FROM dbo.user_org_import_jobs
+WHERE id = @jobId AND status = 2;
 
 IF @orgTypeId IS NULL
 BEGIN
     RAISERROR('USERORG_JOB_NOT_RUNNABLE', 16, 1);
+    RETURN;
+END
+
+-- And is the type still the one this file was uploaded for? An admin can reconfigure it between the
+-- upload and the worker running. Source kind alone is too weak a question: a type switched to Entra
+-- and back is CSV-sourced again, with its values deliberately discarded in between, so the
+-- generation is what actually says the mapping is unchanged. Reported separately from the fence
+-- above because nothing has retired this job - the caller has to record the outcome itself.
+IF NOT EXISTS (SELECT 1 FROM dbo.user_org_types
+               WHERE id = @orgTypeId AND source_kind = 2 AND is_enabled = 1
+                 AND (@expectedGeneration IS NULL OR source_generation = @expectedGeneration))
+BEGIN
+    RAISERROR('USERORG_NOT_CSV_SOURCED', 16, 1);
     RETURN;
 END
 
@@ -565,7 +586,8 @@ DROP TABLE #user_org_matched;";
                 RowsUnknownUpn = reader.GetInt32(13),
                 RowsInvalid = reader.GetInt32(14),
                 ConfirmClear = reader.GetBoolean(15),
-                ErrorMessage = ReadString(reader, 16),
+                ExpectedGeneration = reader.IsDBNull(16) ? (int?)null : reader.GetInt32(16),
+                ErrorMessage = ReadString(reader, 17),
             };
         }
 

@@ -309,6 +309,13 @@ SELECT @affected;";
                 throw new UserOrgValidationException(
                     $"An organisation type called '{type.Name}' already exists.", ex);
             }
+            catch (SqlException ex) when (ex.Message.IndexOf("USERORG_ACTIVE_JOB", StringComparison.Ordinal) >= 0)
+            {
+                // Same marker DeleteAsync translates. Without this the admin waits out the lock
+                // timeout and then gets a generic 500 instead of being told an import is running.
+                throw new UserOrgValidationException(
+                    $"An import for '{type.Name}' is running. Wait for it to finish before changing the type.", ex);
+            }
         }
 
         public async Task DeleteAsync(int id, CancellationToken cancellationToken = default(CancellationToken))
@@ -317,13 +324,16 @@ SELECT @affected;";
             // carries the one cascade path SQL Server allows it (from dbo.users). One transaction, so a
             // failure part-way cannot leave values orphaned from their type.
             //
-            // The application lock is the same one the import job store takes, so this cannot run
-            // alongside a queue or an apply for this org type. Jobs are deleted BEFORE their staged
-            // rows go with them via the foreign key's cascade: deleting staging first took locks in
-            // the opposite order to the apply, which locks the job and then reads staging, and two
-            // orders is how you get a deadlock between deleting a type and importing into it.
+            // Two orderings are load-bearing here. The application lock is the same one the import job
+            // store takes, so this cannot run alongside a queue or an apply for this org type. And the
+            // TYPE row is locked first, before any child, which is the order every other writer uses -
+            // the Entra merge holds the type row while it writes values and assignments, and the type
+            // update changes the type row before clearing its children. Deleting the children first
+            // and reaching the type row last is the reverse of that, which is how an org-type delete
+            // and a user-metadata merge for the same type deadlock. The application lock does not
+            // cover it, because the merge is the one writer that does not take one.
             const string sql = @"
-DECLARE @lockResult INT, @lockName NVARCHAR(255) = N'user_org_type_' + CAST(@id AS NVARCHAR(20));
+DECLARE @lockResult INT, @locked INT, @lockName NVARCHAR(255) = N'user_org_type_' + CAST(@id AS NVARCHAR(20));
 
 EXEC @lockResult = sp_getapplock
     @Resource = @lockName, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 30000;
@@ -333,6 +343,9 @@ BEGIN
     RAISERROR('USERORG_ACTIVE_JOB', 16, 1);
     RETURN;
 END
+
+-- Take the type row before any of its children, and hold it for the transaction.
+SELECT @locked = id FROM dbo.user_org_types WITH (UPDLOCK, HOLDLOCK) WHERE id = @id;
 
 DELETE FROM dbo.user_org_import_jobs WHERE org_type_id = @id;
 DELETE FROM dbo.user_org_assignments WHERE org_type_id = @id;

@@ -136,10 +136,24 @@ namespace Common.Entities.UserOrgs
                 catch (UserOrgJobSupersededException)
                 {
                     // Not a failure: this job was correctly declined because a later import for the
-                    // same org type replaced it. Nothing was changed, and the replacement already
-                    // carries the verdict, so recording anything here would write over it.
+                    // same org type replaced it, or because the lock it needs is held by a live
+                    // worker. Nothing was changed.
                     heartbeatStop.Cancel();
                     await SwallowAsync(heartbeat).ConfigureAwait(false);
+
+                    // Recorded anyway, because "declined" and "left Running forever" look identical
+                    // to an admin otherwise - the portal reports a job that stops reporting progress
+                    // as interrupted, and its staged rows would sit in the database indefinitely.
+                    // CompleteJobAsync only rewrites a job that is still Pending or Running, so this
+                    // cannot overwrite the verdict of a replacement that already retired this one.
+                    try
+                    {
+                        await _jobs.CompleteJobAsync(jobId, UserOrgImportStatus.Failed, SupersededMessage, CancellationToken.None)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception)
+                    {
+                    }
 
                     return await _jobs.GetJobAsync(jobId, cancellationToken).ConfigureAwait(false);
                 }

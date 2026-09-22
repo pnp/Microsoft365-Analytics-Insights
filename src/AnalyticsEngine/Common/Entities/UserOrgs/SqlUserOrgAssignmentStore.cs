@@ -41,6 +41,7 @@ CREATE TABLE " + TempTableName + @" (
     user_id     INT            NOT NULL,
     org_type_id INT            NOT NULL,
     org_value   NVARCHAR(200)  NULL,
+    expected_generation INT    NULL,
     PRIMARY KEY CLUSTERED (user_id, org_type_id)
 );";
 
@@ -63,16 +64,26 @@ DECLARE @valuesCreated INT = 0, @cleared INT = 0, @applied INT = 0;
 
 -- 0. Drop anything whose org type is no longer sourced the way the caller believed when it built
 --    this batch. A user-metadata cycle reads its org types at the start and can then spend many
---    minutes loading 200,000 users from Graph; an administrator who switches a type to CSV, or
---    disables it, during that window would otherwise have their change quietly undone by values
---    read from the attribute they just stopped using - and a later CSV Merge never touches users
---    the file does not mention, so those values would then survive indefinitely.
+--    minutes loading 200,000 users from Graph; an administrator who switches a type to CSV,
+--    disables it, or repoints it at a different attribute during that window would otherwise have
+--    their change quietly undone by values read from the attribute they just stopped using - and a
+--    later CSV Merge never touches users the file does not mention, so those values would then
+--    survive indefinitely.
+--
+--    The generation is checked as well as the source kind, because source kind alone is too weak:
+--    repointing a type from one attribute to another leaves it enabled and Entra-sourced the whole
+--    time, so a batch loaded from the OLD attribute passes that test and writes back exactly the
+--    values the repoint had just discarded.
 --
 --    UPDLOCK, HOLDLOCK rather than a plain read. Under READ COMMITTED an ordinary shared lock is
 --    released the moment this statement ends, so a reconfiguration could commit between here and
 --    the writes below and be undone by them anyway - the check would look right and prove nothing.
---    Holding the lock for the transaction is what actually fences it, and it takes the type rows
---    before the values and assignments, which is the same order the type store uses.
+--    Holding the lock for the transaction is what actually fences it.
+--
+--    It also puts this in step with the rest of the feature's lock ordering: every writer takes the
+--    TYPE row before that type's values and assignments. This merge is the one writer that does not
+--    take the per-type application lock - it can span many types at once - so row-lock ordering is
+--    all that stands between it and a concurrent org-type delete.
 IF @expectedSourceKind IS NOT NULL
 BEGIN
     DELETE u
@@ -80,7 +91,8 @@ BEGIN
     WHERE NOT EXISTS (SELECT 1 FROM dbo.user_org_types t WITH (UPDLOCK, HOLDLOCK)
                       WHERE t.id = u.org_type_id
                         AND t.source_kind = @expectedSourceKind
-                        AND t.is_enabled = 1);
+                        AND t.is_enabled = 1
+                        AND (u.expected_generation IS NULL OR t.source_generation = u.expected_generation));
 END
 
 -- 1. Register any org value we have not seen before. Matching uses the database collation, which is
@@ -127,6 +139,7 @@ SELECT @applied AS applied, @cleared AS cleared, @valuesCreated AS values_create
         public async Task<UserOrgMergeResult> MergeAsync(
             IReadOnlyList<UserOrgAssignmentUpdate> updates,
             UserOrgSourceKind? expectedSourceKind = null,
+            IReadOnlyDictionary<int, int> expectedGenerations = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
             int duplicatesCollapsed;
@@ -138,7 +151,7 @@ SELECT @applied AS applied, @cleared AS cleared, @valuesCreated AS values_create
                 return result;
             }
 
-            var batch = BuildBatchTable(deduplicated);
+            var batch = BuildBatchTable(deduplicated, expectedGenerations);
 
             using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
             {
@@ -155,6 +168,7 @@ SELECT @applied AS applied, @cleared AS cleared, @valuesCreated AS values_create
                     bulkCopy.ColumnMappings.Add("user_id", "user_id");
                     bulkCopy.ColumnMappings.Add("org_type_id", "org_type_id");
                     bulkCopy.ColumnMappings.Add("org_value", "org_value");
+                    bulkCopy.ColumnMappings.Add("expected_generation", "expected_generation");
 
                     await bulkCopy.WriteToServerAsync(batch, cancellationToken).ConfigureAwait(false);
                 }
@@ -348,12 +362,15 @@ ORDER BY t.name;";
         /// Builds the <see cref="DataTable"/> that is bulk-copied up. Column order and types must match
         /// <see cref="CreateTempTableSql"/>.
         /// </summary>
-        internal static DataTable BuildBatchTable(IReadOnlyList<UserOrgAssignmentUpdate> updates)
+        internal static DataTable BuildBatchTable(
+            IReadOnlyList<UserOrgAssignmentUpdate> updates,
+            IReadOnlyDictionary<int, int> expectedGenerations = null)
         {
             var table = new DataTable();
             table.Columns.Add("user_id", typeof(int));
             table.Columns.Add("org_type_id", typeof(int));
             table.Columns.Add("org_value", typeof(string));
+            table.Columns.Add("expected_generation", typeof(int));
 
             foreach (var update in updates)
             {
@@ -361,10 +378,16 @@ ORDER BY t.name;";
                 // reaches an nvarchar(200) column, and a caller that skipped normalisation would
                 // otherwise get a truncation error from SQL Server instead of a stored value.
                 var value = UserOrgRules.NormaliseOrgValue(update.OrgValue);
+
+                var generation = 0;
+                var haveGeneration = expectedGenerations != null
+                    && expectedGenerations.TryGetValue(update.OrgTypeId, out generation);
+
                 table.Rows.Add(
                     update.UserId,
                     update.OrgTypeId,
-                    value == null ? (object)DBNull.Value : value);
+                    value == null ? (object)DBNull.Value : value,
+                    haveGeneration ? (object)generation : DBNull.Value);
             }
 
             return table;

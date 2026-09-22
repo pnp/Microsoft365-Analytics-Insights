@@ -585,12 +585,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     return;
                 }
 
-                // The expected source kind is passed so the merge can drop anything whose org type has
-                // been switched away from Entra, or disabled, since this cycle read its configuration.
-                // That read happened before 200,000 users were loaded from Graph, which is minutes of
-                // window in which an admin can change it - and undoing their change would leave values
-                // no later import ever corrects.
-                var result = await _orgAssignmentStore.MergeAsync(updates, UserOrgSourceKind.EntraAttribute);
+                // The expected source kind and per-type generation are passed so the merge can drop
+                // anything whose org type has been switched away from Entra, disabled, or repointed
+                // at a different attribute since this cycle read its configuration. That read happened
+                // before 200,000 users were loaded from Graph, which is minutes of window in which an
+                // admin can change it - and undoing their change would leave values no later import
+                // ever corrects. Source kind alone is not enough: a repoint leaves the type enabled
+                // and Entra-sourced throughout, so only the generation catches it.
+                var expectedGenerations = orgTypes
+                    .Where(t => t != null)
+                    .GroupBy(t => t.Id)
+                    .ToDictionary(g => g.Key, g => g.First().SourceGeneration);
+
+                var result = await _orgAssignmentStore.MergeAsync(
+                    updates, UserOrgSourceKind.EntraAttribute, expectedGenerations);
 
                 _logger.LogInformation(
                     $"User import - user organisations: {result.Applied.ToString("N0")} assignment(s) set, "

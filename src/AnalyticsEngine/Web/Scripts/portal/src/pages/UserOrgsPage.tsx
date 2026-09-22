@@ -101,7 +101,9 @@ export default function UserOrgsPage() {
     );
   }
 
-  const csvTypes = (types ?? []).filter((t) => t.source === 'csv');
+  // Disabled types are deliberately excluded: the toggle is labelled "not imported", and the server
+  // refuses an upload into a disabled type, so offering the panel would only produce an error.
+  const csvTypes = (types ?? []).filter((t) => t.source === 'csv' && t.isEnabled);
 
   return (
     <div>
