@@ -1,4 +1,4 @@
-﻿using DataUtils;
+using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
@@ -89,6 +89,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </summary>
         private bool _orgSelectionRejected;
 
+        /// <summary>
+        /// Whether the most recent attempt actually sent a stored delta token.
+        /// </summary>
+        /// <remarks>
+        /// Load-bearing for telling a dead token apart from an unusable <c>$select</c>: Graph answers
+        /// 400 for both, and mistaking one for the other leaves organisation values permanently stale.
+        /// </remarks>
+        private bool _lastLoadUsedStoredToken;
+
         public GraphUserLoader(ManualGraphCallClient httpClient, IDeltaValueProvider deltaValueProvider, ILogger logger, GraphServiceClient graphServiceClient)
         {
             this._httpClient = httpClient;
@@ -134,35 +143,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         public async Task<List<GraphUser>> LoadAllActiveUsers()
         {
-            List<GraphUser> results;
-
-            try
-            {
-                results = await LoadUsersPageByPage(_orgSelection).ConfigureAwait(false);
-            }
-            catch (GraphHttpException ex) when (ex.StatusCode == System.Net.HttpStatusCode.BadRequest && !_orgSelection.IsEmpty)
-            {
-                // Graph rejects an unknown $select property with a 400 that fails the WHOLE request, so
-                // one mistyped org attribute would otherwise stop user metadata importing altogether -
-                // licences, managers, departments and all. The org properties are the only part of this
-                // query an administrator can edit at runtime, so they are overwhelmingly the likely
-                // cause. Drop them and complete the cycle without org values rather than import nothing.
-                //
-                // The attribute is probed against live Graph before an org type can be saved, so
-                // reaching here normally means the attribute was removed from the tenant afterwards.
-                _orgSelectionRejected = true;
-                _logger.LogError(
-                    $"User import - Microsoft Graph rejected the request for the configured organisation "
-                    + $"attributes ({_orgSelection}). Organisation values will NOT be refreshed this cycle, "
-                    + "but the rest of the user import will continue. Check those attributes still exist in "
-                    + "the tenant on the User organisations page. Graph said: " + ex.Message);
-
-                // The token key follows the selection, so falling back has to re-point the provider at
-                // the unqualified key - otherwise this cycle would store a token under the org-qualified
-                // key while querying without the org properties.
-                _deltaValueProvider.SetKeyQualifier(GraphUserOrgSelection.None.DeltaKeyQualifier);
-                results = await LoadUsersPageByPage(GraphUserOrgSelection.None).ConfigureAwait(false);
-            }
+            var results = await LoadWithOrgFallback().ConfigureAwait(false);
 
             // Graph for some reason gives duplicates; filter that out.
             // HashSet pre-allocated to results.Count avoids the per-Grouping allocation that
@@ -186,10 +167,104 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             return allActiveGraphUsers;
         }
 
+        /// <summary>
+        /// Loads the users, distinguishing a stale delta token from an unusable <c>$select</c>.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Graph answers a 400 both for a property it does not recognise <b>and</b> for a delta token
+        /// it will not accept - an expired one, or one minted under a different query. Treating every
+        /// 400 as "the administrator's attribute is wrong" was a genuine trap: the retry would drop
+        /// the org properties, commit a fresh token under the <i>unqualified</i> key, and leave the
+        /// stale token sitting on the qualified key forever. Every later cycle would pick that stale
+        /// token up again, 400 again, and fall back again - so organisation values would never update
+        /// again while the user import looked perfectly healthy.
+        /// </para>
+        /// <para>
+        /// So a token is ruled out first. If one was sent, it is discarded and the <b>same</b>
+        /// selection retried, which is a full enumeration and the correct response to a dead token.
+        /// Only a request that carried no token can blame the selection.
+        /// </para>
+        /// </remarks>
+        private async Task<List<GraphUser>> LoadWithOrgFallback()
+        {
+            try
+            {
+                return await LoadUsersPageByPage(_orgSelection).ConfigureAwait(false);
+            }
+            catch (GraphHttpException ex) when (!_orgSelection.IsEmpty)
+            {
+                if (_lastLoadUsedStoredToken)
+                {
+                    _logger.LogWarning(
+                        $"User import - Microsoft Graph rejected the request (HTTP {(int)ex.StatusCode}) while a stored "
+                        + "delta token was in use. Discarding the token and re-reading every user once, keeping the "
+                        + "configured organisation attributes. If the attributes themselves are the problem, the retry "
+                        + "will say so.");
+
+                    await _deltaValueProvider.ClearDeltaToken().ConfigureAwait(false);
+
+                    try
+                    {
+                        return await LoadUsersPageByPage(_orgSelection).ConfigureAwait(false);
+                    }
+                    catch (GraphHttpException retryEx)
+                    {
+                        return await FallBackWithoutOrgAttributes(retryEx).ConfigureAwait(false);
+                    }
+                }
+
+                return await FallBackWithoutOrgAttributes(ex).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Drops the org properties and reloads, so the rest of the user import still completes.
+        /// </summary>
+        /// <remarks>
+        /// Reached only once a stale delta token has been ruled out, so the selection really is the
+        /// remaining suspect. The org properties are the only part of this query an administrator can
+        /// edit at runtime, and Graph fails the WHOLE request over one of them - which would otherwise
+        /// stop licences, managers and department metadata importing as well.
+        ///
+        /// The retry is deliberately not restricted to a 400. The fallback load is lenient (see
+        /// <see cref="LoadUsersPageByPage"/>), which is exactly what this method did before org
+        /// attributes existed, so falling back on any HTTP failure leaves behaviour identical to the
+        /// old behaviour in every non-400 case instead of newly propagating a transient 500.
+        /// </remarks>
+        private async Task<List<GraphUser>> FallBackWithoutOrgAttributes(GraphHttpException ex)
+        {
+            _orgSelectionRejected = true;
+
+            if (ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
+            {
+                _logger.LogError(
+                    $"User import - Microsoft Graph rejected the configured organisation attributes "
+                    + $"({_orgSelection}). Organisation values will NOT be refreshed this cycle, but the rest of the "
+                    + "user import will continue. Check those attributes still exist in the tenant on the User "
+                    + "organisations page. Graph said: " + ex.Message);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    $"User import - the request carrying the configured organisation attributes ({_orgSelection}) "
+                    + $"failed with HTTP {(int)ex.StatusCode}. Retrying without them so the rest of the user import "
+                    + "can continue. Organisation values will NOT be refreshed this cycle.");
+            }
+
+            // The token key follows the selection, so falling back has to re-point the provider at the
+            // unqualified key - otherwise this cycle would store a token under the org-qualified key
+            // while querying without the org properties.
+            _deltaValueProvider.SetKeyQualifier(GraphUserOrgSelection.None.DeltaKeyQualifier);
+
+            return await LoadUsersPageByPage(GraphUserOrgSelection.None).ConfigureAwait(false);
+        }
+
         private async Task<List<GraphUser>> LoadUsersPageByPage(GraphUserOrgSelection orgSelection)
         {
             // Cache delta using tenant ID
             var usersQueryDelta = await _deltaValueProvider.GetDeltaToken();
+            _lastLoadUsedStoredToken = !string.IsNullOrEmpty(usersQueryDelta);
             var initialDeltaUrl = $"https://graph.microsoft.com:443/v1.0/users/delta" +
                 $"?$select={orgSelection.BuildSelect(GraphUserDeltaQuery.Select)}" +
                 "&$expand=manager";
@@ -211,7 +286,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     _pendingDeltaToken = StringUtils.ExtractCodeFromGraphUrl(deltaLink);
                     _hasPendingDeltaToken = true;
                     return Task.CompletedTask;
-                });
+                },
+                // Strict ONLY while org attributes are in play. LoadAllPagesPlusDeltaWithThrottleRetries
+                // otherwise swallows a non-transient HTTP failure, logs a warning and returns the rows
+                // gathered so far - so a 400 from an unrecognised $select property would come back as an
+                // empty user list rather than an exception, the fallback above would never run, and the
+                // import would quietly do nothing every cycle with only a warning to show for it.
+                //
+                // Left lenient when there are no org attributes, which is the behaviour every existing
+                // deployment has today: this code path must not change for them.
+                throwOnHttpError: !orgSelection.IsEmpty);
 
             if (string.IsNullOrEmpty(usersQueryDelta))
             {

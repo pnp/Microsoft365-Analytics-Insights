@@ -64,29 +64,41 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
 
   const running = job !== null && (job.status === 'pending' || job.status === 'running');
 
-  // Poll while the import is in flight. The effect owns the timer so a component unmounted mid-import
-  // (the admin navigating away) stops polling instead of leaking a timer and setting state on a dead
-  // component - the import itself carries on server-side regardless.
+  // Poll while the import is in flight. setTimeout-after-settle rather than setInterval: an interval
+  // fires another request every two seconds whether or not the previous one has come back, so under
+  // SQL latency or an outage the requests pile up on a page that is already struggling. The effect
+  // owns the timer and an AbortController, so a component unmounted mid-import (the admin navigating
+  // away) stops polling and cancels the request in flight instead of leaking both and setting state
+  // on a dead component - the import itself carries on server-side regardless.
   useEffect(() => {
     if (!running || job === null) return;
 
     let cancelled = false;
-    const timer = window.setInterval(async () => {
+    let timer = 0;
+    const controller = new AbortController();
+
+    const poll = async () => {
       try {
-        const latest = await fetchImportJob(job.id);
+        const latest = await fetchImportJob(job.id, controller.signal);
         if (cancelled) return;
         setJob(latest);
         if (latest.status !== 'pending' && latest.status !== 'running') {
           onImportFinished();
+          return;
         }
       } catch {
         // A transient poll failure is not worth surfacing; the next tick will retry.
+        if (cancelled) return;
       }
-    }, POLL_INTERVAL_MS);
+      timer = window.setTimeout(poll, POLL_INTERVAL_MS);
+    };
+
+    timer = window.setTimeout(poll, POLL_INTERVAL_MS);
 
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
+      controller.abort();
     };
   }, [running, job, onImportFinished]);
 

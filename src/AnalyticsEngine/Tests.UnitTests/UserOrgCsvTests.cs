@@ -198,6 +198,60 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void PrefersTheDelimiterThatLeavesAUsableUserPrincipalName()
+        {
+            // A semicolon-separated file whose organisation names contain commas splits just as
+            // consistently on the comma. Breaking that tie by the order the candidates happen to be
+            // listed in produced UPNs like "a@contoso.com;Retail" - which match nobody, and in a
+            // Replace import "matches nobody" means every user in the file loses their value.
+            var result = Parse("a@contoso.com;Retail, North\r\nb@contoso.com;Wholesale, South\r\n");
+
+            Assert.AreEqual(';', result.Delimiter);
+            Assert.AreEqual(2, result.Rows.Count);
+            Assert.AreEqual("a@contoso.com", result.Rows[0].Upn);
+            Assert.AreEqual("Retail, North", result.Rows[0].OrgValue);
+        }
+
+        [TestMethod]
+        public void AMisreadDelimiterIsReportedRatherThanStagedAsGarbage()
+        {
+            // Belt and braces for the case above: even if detection somehow picked the wrong separator,
+            // the resulting value cannot be an Entra UPN, so the row is refused rather than staged.
+            var result = Parse("UPN,OrgName\r\na@contoso.com;Retail\r\n");
+
+            Assert.AreEqual(0, result.Rows.Count);
+            Assert.AreEqual(1, result.Problems.Count);
+        }
+
+        [TestMethod]
+        public void AUserColumnWithNoAtSignIsRefused()
+        {
+            var result = Parse("UPN,OrgName\r\nCONTOSO\\adele,Retail\r\n");
+
+            Assert.AreEqual(0, result.Rows.Count);
+            StringAssert.Contains(result.Problems.Single().Reason, "user principal name");
+        }
+
+        [TestMethod]
+        public void AnUnterminatedQuoteIsReportedInsteadOfSwallowingTheRestOfTheFile()
+        {
+            // A missing closing quote pulls every later line into one value. Accepting that would make
+            // all those users look absent - and in a Replace import absent means their value is cleared.
+            var result = Parse("UPN,OrgName\r\na@contoso.com,\"Retail\r\nb@contoso.com,Ops\r\nc@contoso.com,Finance\r\n");
+
+            Assert.IsTrue(result.UnterminatedQuote, "The caller refuses the import on this flag.");
+        }
+
+        [TestMethod]
+        public void AWellFormedFileIsNotFlaggedAsUnterminated()
+        {
+            var result = Parse("UPN,OrgName\r\na@contoso.com,\"Retail, North\"\r\nb@contoso.com,Ops\r\n");
+
+            Assert.IsFalse(result.UnterminatedQuote);
+            Assert.AreEqual(2, result.Rows.Count);
+        }
+
+        [TestMethod]
         public void SkipsTrailingBlankLinesWithoutReportingThem()
         {
             var result = Parse("UPN,OrgName\r\na@contoso.com,Retail\r\n\r\n\r\n");
@@ -222,6 +276,56 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(10, result.Rows.Count);
             Assert.IsTrue(result.Truncated, "Hitting the cap must be reported, not silently ignored.");
+        }
+
+        [TestMethod]
+        public void AFileOfExactlyTheAllowedRowsIsNotReportedAsTruncated()
+        {
+            // The header must not eat one row of the allowance. Reporting truncation here would make
+            // the import refuse a file of exactly the supported size with a message saying it was too
+            // big - which is both wrong and impossible for the admin to act on.
+            var builder = new StringBuilder("UPN,OrgName\r\n");
+            for (var i = 0; i < 10; i++)
+            {
+                builder.Append("user").Append(i).Append("@contoso.com,Org").Append(i).Append("\r\n");
+            }
+
+            var result = Parse(builder.ToString(), maxRows: 10);
+
+            Assert.AreEqual(10, result.Rows.Count);
+            Assert.IsFalse(result.Truncated, "Exactly the allowance is not over the allowance.");
+        }
+
+        [TestMethod]
+        public void OneRowPastTheAllowanceIsReportedAsTruncated()
+        {
+            var builder = new StringBuilder("UPN,OrgName\r\n");
+            for (var i = 0; i < 11; i++)
+            {
+                builder.Append("user").Append(i).Append("@contoso.com,Org").Append(i).Append("\r\n");
+            }
+
+            var result = Parse(builder.ToString(), maxRows: 10);
+
+            Assert.AreEqual(10, result.Rows.Count);
+            Assert.IsTrue(result.Truncated);
+        }
+
+        [TestMethod]
+        public void BlankLinesDoNotConsumeTheRowAllowance()
+        {
+            // Counting blank lines against the cap would let a file padded with them silently lose real
+            // rows off the end.
+            var builder = new StringBuilder("UPN,OrgName\r\n");
+            for (var i = 0; i < 10; i++)
+            {
+                builder.Append("user").Append(i).Append("@contoso.com,Org").Append(i).Append("\r\n\r\n");
+            }
+
+            var result = Parse(builder.ToString(), maxRows: 10);
+
+            Assert.AreEqual(10, result.Rows.Count, "Every real row must survive.");
+            Assert.IsFalse(result.Truncated);
         }
 
         [TestMethod]
@@ -368,12 +472,20 @@ namespace Tests.UnitTests
                 await new UserOrgImportRunner(store).RunAsync(1);
                 Assert.Fail("The original fault must still surface.");
             }
-            catch (InvalidOperationException)
+            catch (InvalidOperationException ex)
             {
+                Assert.AreEqual("merge exploded", ex.Message, "The real exception goes to the service logs intact.");
             }
 
             Assert.AreEqual(UserOrgImportStatus.Failed, store.CompletedStatus);
-            StringAssert.Contains(store.CompletedError, "merge exploded");
+
+            // A fixed message, not the exception text. This is rendered verbatim in the portal, and a
+            // SQL or Graph exception can carry object names, index names, duplicate key values and
+            // identities.
+            Assert.IsFalse(
+                store.CompletedError.Contains("merge exploded"),
+                "The raw exception message must not reach the browser.");
+            StringAssert.Contains(store.CompletedError, "could not be completed");
         }
 
         [TestMethod]
@@ -399,9 +511,28 @@ namespace Tests.UnitTests
             Assert.IsFalse(UserOrgImportRunner.LooksInterrupted(null, now));
             Assert.IsFalse(UserOrgImportRunner.LooksInterrupted(
                 new UserOrgImportJob { Status = UserOrgImportStatus.Succeeded, HeartbeatUtc = now.AddDays(-1) }, now));
-            Assert.IsFalse(UserOrgImportRunner.LooksInterrupted(
-                new UserOrgImportJob { Status = UserOrgImportStatus.Pending }, now),
-                "A job that has not started has nothing to be stale about.");
+            Assert.IsFalse(
+                UserOrgImportRunner.LooksInterrupted(
+                    new UserOrgImportJob { Status = UserOrgImportStatus.Pending, QueuedUtc = now.AddSeconds(-5) }, now),
+                "A job queued moments ago is simply waiting to be picked up.");
+        }
+
+        [TestMethod]
+        public void LooksInterrupted_CatchesAPendingJobNobodyEverClaimed()
+        {
+            // The rows are staged and the job row committed BEFORE the background worker is dispatched,
+            // so an App Service recycle in that window leaves a job nobody will ever claim. Because a
+            // pending job also counts as active, it would otherwise block every later upload for that
+            // organisation type permanently, with the portal polling a job that can never move.
+            var now = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+
+            var stranded = new UserOrgImportJob
+            {
+                Status = UserOrgImportStatus.Pending,
+                QueuedUtc = now - UserOrgImportRunner.StalePendingThreshold.Add(TimeSpan.FromMinutes(1)),
+            };
+
+            Assert.IsTrue(UserOrgImportRunner.LooksInterrupted(stranded, now));
         }
 
         [TestMethod]

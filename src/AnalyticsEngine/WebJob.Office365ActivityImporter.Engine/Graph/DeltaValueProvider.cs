@@ -288,7 +288,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         public void SetKeyQualifier(string qualifier)
         {
-            _keyQualifier = string.IsNullOrEmpty(qualifier) ? string.Empty : qualifier;
+            var normalised = string.IsNullOrEmpty(qualifier) ? string.Empty : qualifier;
+            if (normalised == _keyQualifier)
+            {
+                return;
+            }
+
+            _keyQualifier = normalised;
+
+            // The in-process safety net holds the last token this process committed, and it is returned
+            // when Redis cannot be read. That token was minted under the PREVIOUS selection, so keeping
+            // it across a qualifier change would hand a later cycle a token for a different query -
+            // exactly what qualifying the key exists to prevent, arriving through the outage path.
+            _lastKnownCommittedDeltaToken = null;
         }
     }
 }

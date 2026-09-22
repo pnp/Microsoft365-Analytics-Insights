@@ -35,6 +35,30 @@ namespace Common.Entities.UserOrgs
         /// </remarks>
         public static readonly TimeSpan StaleHeartbeatThreshold = TimeSpan.FromSeconds(60);
 
+        /// <summary>
+        /// How long a job may sit <see cref="UserOrgImportStatus.Pending"/> before it is treated as
+        /// abandoned.
+        /// </summary>
+        /// <remarks>
+        /// Generous, because a busy web instance can legitimately take a little while to pick a job up,
+        /// and declaring a live job abandoned would let a second import start alongside it. Five minutes
+        /// is far longer than any healthy dispatch and far shorter than "blocked forever", which is what
+        /// the alternative amounts to.
+        /// </remarks>
+        public static readonly TimeSpan StalePendingThreshold = TimeSpan.FromMinutes(5);
+
+        /// <summary>
+        /// What an administrator is told when an import fails.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately fixed and detail-free. It is rendered verbatim in the portal, and a raw SQL or
+        /// Graph exception message can carry object names, index names, duplicate key values and
+        /// identities. The real exception goes to Application Insights, which is where it belongs.
+        /// </remarks>
+        internal const string FailureMessage =
+            "The import could not be completed. No partial changes were kept. Check the service logs for details, "
+            + "then try again.";
+
         private readonly IUserOrgImportJobStore _jobs;
 
         public UserOrgImportRunner(IUserOrgImportJobStore jobs)
@@ -102,9 +126,14 @@ namespace Common.Entities.UserOrgs
                     // Recorded on the job rather than only thrown, because the request that queued this
                     // has long since returned and nothing else is awaiting the task. Without this the
                     // admin would see a job that stopped at "Running" and never learn why.
+                    //
+                    // A fixed message, not ex.Message. This text is rendered verbatim in the portal, and
+                    // a SQL or Graph exception can carry object names, index names, duplicate key values
+                    // and identities. The full exception still reaches Application Insights through the
+                    // caller, which is where an engineer should be reading it.
                     try
                     {
-                        await _jobs.CompleteJobAsync(jobId, UserOrgImportStatus.Failed, ex.Message, CancellationToken.None)
+                        await _jobs.CompleteJobAsync(jobId, UserOrgImportStatus.Failed, FailureMessage, CancellationToken.None)
                             .ConfigureAwait(false);
                     }
                     catch (Exception)
@@ -155,17 +184,36 @@ namespace Common.Entities.UserOrgs
         }
 
         /// <summary>
-        /// Whether a job looks abandoned: still <see cref="UserOrgImportStatus.Running"/>, but its
-        /// heartbeat has not moved for <see cref="StaleHeartbeatThreshold"/>.
+        /// Whether a job looks abandoned: either still <see cref="UserOrgImportStatus.Running"/> with a
+        /// heartbeat that has stopped moving, or still <see cref="UserOrgImportStatus.Pending"/> long
+        /// after it was queued.
         /// </summary>
         /// <remarks>
-        /// A pure decision so the portal, the API and the tests all answer it the same way. Reported
-        /// rather than acted on automatically: an admin re-uploading is a safer resolution than this
-        /// code guessing how far a partially-applied Replace got.
+        /// <para>
+        /// Both states matter, and the pending one is the easier to overlook. The rows are staged and
+        /// the job row committed <b>before</b> the background worker is dispatched, so an App Service
+        /// recycle in that window leaves a job nobody will ever claim. Because a pending job also
+        /// counts as active, it would then block every later upload for that organisation type -
+        /// permanently, with the portal polling a job that can never move.
+        /// </para>
+        /// <para>
+        /// Reported rather than acted on automatically: an admin re-uploading is a safer resolution
+        /// than this code guessing how far a partially-applied Replace got.
+        /// </para>
         /// </remarks>
         public static bool LooksInterrupted(UserOrgImportJob job, DateTime utcNow)
         {
-            if (job == null || job.Status != UserOrgImportStatus.Running)
+            if (job == null)
+            {
+                return false;
+            }
+
+            if (job.Status == UserOrgImportStatus.Pending)
+            {
+                return utcNow - job.QueuedUtc > StalePendingThreshold;
+            }
+
+            if (job.Status != UserOrgImportStatus.Running)
             {
                 return false;
             }

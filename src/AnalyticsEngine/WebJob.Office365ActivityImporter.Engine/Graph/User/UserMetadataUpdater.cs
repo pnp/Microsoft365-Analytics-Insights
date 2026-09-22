@@ -445,7 +445,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Apply the org values last, once every Graph user is guaranteed to have a dbo.users row
                 // (the insert phase above creates the missing ones) so their ids can be resolved.
-                await ApplyUserOrgValues(allActiveGraphUsers, entraOrgTypes, dbUsersByUpn);
+                await ApplyUserOrgValues(allActiveGraphUsers, entraOrgTypes, dbUsersByUpn, phaseResults);
 
                 _logger.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - complete. Inserted {insertedDbUsers.Count.ToString("N0")} new users, updated metadata for {existingUsersUpdated.ToString("N0")} existing users (from {allActiveGraphUsers.Count.ToString("N0")} Graph users)");
 
@@ -532,7 +532,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private async Task ApplyUserOrgValues(
             List<GraphUser> graphUsers,
             IReadOnlyList<Common.Entities.UserOrgs.UserOrgType> orgTypes,
-            Dictionary<string, Common.Entities.User> dbUsersByUpn)
+            Dictionary<string, Common.Entities.User> dbUsersByUpn,
+            UserImportPhaseResults phaseResults)
         {
             if (orgTypes == null || orgTypes.Count == 0 || _orgAssignmentStore == null)
             {
@@ -541,6 +542,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             if (_userLoader.OrgSelectionWasRejected)
             {
+                // Not a failure of this phase - there was simply nothing to apply, and withholding the
+                // delta token would re-read the whole tenant every cycle for as long as the attribute
+                // stayed broken without ever making progress.
                 _logger.LogWarning(
                     "User import - skipping user organisation values this cycle: Graph rejected the configured "
                     + "attributes, so the response does not contain them. Existing organisation values are left "
@@ -591,9 +595,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
             catch (Exception ex)
             {
+                // The rest of the import keeps its results - this must never fail the user import. But
+                // the delta token is withheld, because committing it would throw away the very
+                // enumeration these values needed. See UserImportPhaseResults.UserOrgsSucceeded.
+                phaseResults.UserOrgsSucceeded = false;
+
                 _logger.LogError(
                     $"User import - failed to apply user organisation values ({ex.Message}). The rest of the user "
-                    + "import completed; organisation values will be retried on the next cycle.");
+                    + "import completed, but the Graph delta token will NOT be committed, so the next cycle re-reads "
+                    + "the users needed to populate them.");
             }
         }
 

@@ -111,6 +111,6 @@ export function importCsv(
 }
 
 /** Import progress. */
-export function fetchImportJob(jobId: number): Promise<UserOrgImportJob> {
-  return send<UserOrgImportJob>(`${baseUrl()}/jobs/${jobId}`, json('GET'));
+export function fetchImportJob(jobId: number, signal?: AbortSignal): Promise<UserOrgImportJob> {
+  return send<UserOrgImportJob>(`${baseUrl()}/jobs/${jobId}`, { ...json('GET'), signal });
 }

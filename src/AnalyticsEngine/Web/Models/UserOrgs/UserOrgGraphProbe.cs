@@ -28,6 +28,18 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         /// <summary>True when the request worked but the user simply has no value.</summary>
         public bool HasNoValue { get; set; }
 
+        /// <summary>
+        /// True only when Graph rejected the <b>property</b> itself, as opposed to failing for a reason
+        /// that says nothing about the attribute (user not found, throttled, no permission, offline).
+        /// </summary>
+        /// <remarks>
+        /// This is the distinction that decides whether a configuration may be saved. Refusing a save
+        /// because a tenant was briefly throttled would be both wrong and impossible for an
+        /// administrator to act on; allowing one for a property Graph will not accept breaks the user
+        /// import.
+        /// </remarks>
+        public bool RejectedTheProperty { get; set; }
+
         /// <summary>An operator-facing explanation when it failed.</summary>
         public string Message { get; set; }
     }
@@ -75,6 +87,20 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
         private readonly AppConfig _config;
 
+        /// <summary>
+        /// The app's Entra credential, reused across probes.
+        /// </summary>
+        /// <remarks>
+        /// Azure Identity caches an acquired token on the credential <b>instance</b>, so building a
+        /// fresh one per call meant a token-endpoint round trip for every attribute test and every
+        /// catalogue load - on an admin page where several probes in a row are the normal way to use
+        /// it. One instance lets it reuse the roughly hour-long token and serialise concurrent
+        /// acquisition itself.
+        /// </remarks>
+        private static readonly object CredentialGate = new object();
+        private static TokenCredential _cachedCredential;
+        private static string _cachedCredentialKey;
+
         public UserOrgGraphProbe(AppConfig config)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
@@ -118,7 +144,15 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
                     if (!response.IsSuccessStatusCode)
                     {
-                        return new UserOrgProbeOutcome { Message = DescribeFailure(response.StatusCode, body, spec) };
+                        return new UserOrgProbeOutcome
+                        {
+                            Message = DescribeFailure(response.StatusCode, body, spec),
+
+                            // Graph validates $select before it resolves the user, so a 400 means the
+                            // property is unusable while a 404 only means this particular person does
+                            // not exist. Only the former may block a configuration from being saved.
+                            RejectedTheProperty = response.StatusCode == HttpStatusCode.BadRequest,
+                        };
                     }
 
                     IDictionary<string, JToken> properties;
@@ -333,15 +367,40 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         /// </summary>
         private async Task<TokenCredential> BuildCredentialAsync()
         {
+            // Keyed on the identity it was built for, so a configuration change is picked up rather
+            // than being masked by the cache for the life of the process.
+            var key = _config.TenantGUID + "|" + _config.ClientID + "|" + (_config.UseClientCertificate ? "cert" : "secret");
+
+            lock (CredentialGate)
+            {
+                if (_cachedCredential != null && _cachedCredentialKey == key)
+                {
+                    return _cachedCredential;
+                }
+            }
+
+            TokenCredential built;
             if (_config.UseClientCertificate)
             {
                 var cert = await AuthHelper
                     .RetrieveKeyVaultCertificate(AuthHelper.CertificateName, _config.KeyVaultUrl, AnalyticsLogger.ConsoleOnlyTracer())
                     .ConfigureAwait(false);
-                return new ClientCertificateCredential(_config.TenantGUID.ToString(), _config.ClientID, cert);
+                built = new ClientCertificateCredential(_config.TenantGUID.ToString(), _config.ClientID, cert);
+            }
+            else
+            {
+                built = new ClientSecretCredential(_config.TenantGUID.ToString(), _config.ClientID, _config.ClientSecret);
             }
 
-            return new ClientSecretCredential(_config.TenantGUID.ToString(), _config.ClientID, _config.ClientSecret);
+            lock (CredentialGate)
+            {
+                // A race here only means two credentials were built and one is discarded, which is
+                // harmless - far cheaper than holding the lock across a Key Vault round trip.
+                _cachedCredential = built;
+                _cachedCredentialKey = key;
+            }
+
+            return built;
         }
     }
 }

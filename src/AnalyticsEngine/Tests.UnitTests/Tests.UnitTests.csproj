@@ -52,6 +52,8 @@
     <Compile Include="UserOrgRulesTests.cs" />
     <Compile Include="UserOrgImportTests.cs" />
     <Compile Include="UserOrgCsvTests.cs" />
+    <Compile Include="UserOrgImportFailureTests.cs" />
+    <Compile Include="UserOrgMigrationScriptTests.cs" />
     <Compile Include="UserOrgStoreSqlTests.cs" />
     <Compile Include="CopilotEventManagerAccessedResourcesTests.cs" />
     <Compile Include="CopilotEventManagerEdgeCaseTests.cs" />

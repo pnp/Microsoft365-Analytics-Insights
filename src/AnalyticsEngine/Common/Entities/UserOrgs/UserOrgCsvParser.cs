@@ -43,6 +43,16 @@ namespace Common.Entities.UserOrgs
 
         /// <summary>Whether reading stopped at a cap rather than at the end of the file.</summary>
         public bool Truncated { get; set; }
+
+        /// <summary>
+        /// Whether the file ended inside a quoted field, meaning a closing quote is missing.
+        /// </summary>
+        /// <remarks>
+        /// Treated as unreadable rather than salvaged: everything after the stray quote is swallowed
+        /// into one value, so in a Replace import all those users would look absent - and absent means
+        /// their value is cleared.
+        /// </remarks>
+        public bool UnterminatedQuote { get; set; }
     }
 
     /// <summary>
@@ -113,7 +123,11 @@ namespace Common.Entities.UserOrgs
             // this wrong is how non-Latin organisation names turn into mojibake.
             using (var reader = new StreamReader(stream, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: true, bufferSize: 8192, leaveOpen: true))
             {
-                var lines = ReadRecords(reader, maxDataLines + 1, out var hitCap);
+                // One more than a header plus the full allowance, so "is there anything beyond the cap?"
+                // can be answered exactly rather than inferred from having filled the buffer.
+                UnterminatedQuote = false;
+                var lines = ReadRecords(reader, maxDataLines + 2);
+                result.UnterminatedQuote = UnterminatedQuote;
 
                 if (lines.Count == 0)
                 {
@@ -144,26 +158,19 @@ namespace Common.Entities.UserOrgs
                     orgIndex = 1;
                 }
 
-                var startIndex = headerDetected ? 1 : 0;
+                var firstDataIndex = headerDetected ? 1 : 0;
+                var dataRecordCount = lines.Count - firstDataIndex;
+
+                // Truncated means there is genuinely a row past the allowance - not merely that the read
+                // buffer filled up. A file of exactly maxDataLines rows plus a header fills the buffer
+                // while dropping nothing, and must not be reported (or rejected) as over-length.
+                result.Truncated = dataRecordCount > maxDataLines;
+
                 var dataLinesRead = 0;
-
-                for (var i = startIndex; i < lines.Count; i++)
+                for (var i = firstDataIndex; i < lines.Count && dataLinesRead < maxDataLines; i++)
                 {
-                    if (dataLinesRead >= maxDataLines)
-                    {
-                        result.Truncated = true;
-                        break;
-                    }
-
                     var line = lines[i];
                     dataLinesRead++;
-
-                    if (string.IsNullOrWhiteSpace(line.Text))
-                    {
-                        // A trailing newline is normal, not a problem worth reporting.
-                        dataLinesRead--;
-                        continue;
-                    }
 
                     var fields = SplitRecord(line.Text, delimiter);
 
@@ -183,10 +190,13 @@ namespace Common.Entities.UserOrgs
                     if (!IsPlausibleUpn(upn))
                     {
                         // Entra restricts a UPN to a known ASCII set, so a value outside it cannot match
-                        // any user. Saying so beats letting it fail silently as an unknown UPN later.
+                        // any user. Saying so beats letting it fail silently as an unknown UPN later -
+                        // and it is the signal that the delimiter was guessed wrongly, which in a
+                        // Replace import is the difference between a reported problem and a silent wipe.
                         problems.Add(new UserOrgCsvRowProblem(
                             line.LineNumber,
-                            "the user column contains characters that cannot appear in a Microsoft Entra user principal name"));
+                            "the user column is not a valid Microsoft Entra user principal name - check the file's "
+                            + "column separator and that the user column really holds user principal names"));
                         continue;
                     }
 
@@ -195,10 +205,6 @@ namespace Common.Entities.UserOrgs
                 }
 
                 result.DataLinesRead = dataLinesRead;
-                if (hitCap && !result.Truncated)
-                {
-                    result.Truncated = true;
-                }
             }
 
             result.Rows = rows;
@@ -210,26 +216,54 @@ namespace Common.Entities.UserOrgs
         /// Whether a value could be a Microsoft Entra user principal name.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// Entra restricts a UPN to <c>A-Z a-z 0-9 ' . - _ ! # ^ ~ @</c> and explicitly disallows
         /// accented characters; non-Latin names live in the display name instead. That is also why
-        /// <c>dbo.users.user_name</c> is <c>varchar(250)</c> and why that is not a bug. Checking here
-        /// means the admin is told their file has an unusable value, rather than the row being silently
-        /// counted as an unknown user.
-        ///
+        /// <c>dbo.users.user_name</c> is <c>varchar(250)</c> and why that is not a bug.
+        /// </para>
+        /// <para>
+        /// The character set is checked rather than just the ASCII range, and that is load-bearing
+        /// rather than pedantic. If the delimiter is guessed wrongly - a semicolon-separated file read
+        /// as comma-separated, say - the first field becomes something like
+        /// <c>someone@contoso.com;Retail</c>. Accepting it would stage a UPN that matches nobody, and a
+        /// Replace import would then clear the value of every user the file was supposed to keep.
+        /// Rejecting it turns a silent wipe into a reported, actionable problem row.
+        /// </para>
+        /// <para>
         /// Note this is the one place in this feature where ASCII is assumed, and it is assumed about a
         /// UPN specifically - never about an organisation name, which is Unicode throughout.
+        /// </para>
         /// </remarks>
         internal static bool IsPlausibleUpn(string value)
         {
+            var seenAt = false;
+
             foreach (var c in value)
             {
                 if (c > 127)
                 {
                     return false;
                 }
+
+                if (c == '@')
+                {
+                    seenAt = true;
+                    continue;
+                }
+
+                var allowed = (c >= 'A' && c <= 'Z')
+                    || (c >= 'a' && c <= 'z')
+                    || (c >= '0' && c <= '9')
+                    || c == '\'' || c == '.' || c == '-' || c == '_'
+                    || c == '!' || c == '#' || c == '^' || c == '~';
+
+                if (!allowed)
+                {
+                    return false;
+                }
             }
 
-            return true;
+            return seenAt;
         }
 
         private struct Record
@@ -259,16 +293,30 @@ namespace Common.Entities.UserOrgs
 
             foreach (var candidate in CandidateDelimiters)
             {
-                var counts = sample.Select(t => SplitRecord(t, candidate).Count).ToList();
-                var fieldCount = counts[0];
+                var split = sample.Select(t => SplitRecord(t, candidate)).ToList();
+                var fieldCount = split[0].Count;
                 if (fieldCount < 2)
                 {
                     continue;
                 }
 
                 // Reward a delimiter that yields the same number of fields on every sampled line.
-                var consistent = counts.Count(c => c == fieldCount);
-                var score = (consistent * 100) + Math.Min(fieldCount, 10);
+                var consistent = split.Count(f => f.Count == fieldCount);
+
+                // ...and, decisively, one that leaves something that could actually be a user principal
+                // name in one of the columns. Consistency alone is not enough to choose between
+                // candidates: a semicolon-separated file whose organisation names contain commas splits
+                // just as consistently on the comma, and ties were previously broken by the order the
+                // candidates happen to be listed in. That silently produced UPNs like
+                // "someone@contoso.com;Retail", which match nobody - and in a Replace import
+                // "matches nobody" means every user in the file loses their value.
+                var plausible = split.Count(fields => fields.Any(f =>
+                {
+                    var upn = UserOrgRules.NormaliseUpn(f);
+                    return upn != null && IsPlausibleUpn(upn);
+                }));
+
+                var score = (plausible * 10000) + (consistent * 100) + Math.Min(fieldCount, 10);
 
                 if (score > bestScore)
                 {
@@ -283,14 +331,19 @@ namespace Common.Entities.UserOrgs
         /// <summary>
         /// Reads logical CSV records, honouring quoted fields that span physical lines.
         /// </summary>
-        private static List<Record> ReadRecords(TextReader reader, int maxRecords, out bool hitCap)
+        /// <remarks>
+        /// Blank records are dropped rather than returned. A trailing newline is normal and is not a
+        /// row, and each record carries its own line number, so nothing is lost by skipping them - but
+        /// counting them against <paramref name="maxRecords"/> would let a file padded with blank lines
+        /// silently lose real rows off the end.
+        /// </remarks>
+        private static List<Record> ReadRecords(TextReader reader, int maxRecords)
         {
             var records = new List<Record>();
             var current = new StringBuilder();
             var inQuotes = false;
             var physicalLine = 0;
             var recordStartLine = 1;
-            hitCap = false;
 
             string line;
             while ((line = reader.ReadLine()) != null)
@@ -317,24 +370,45 @@ namespace Common.Entities.UserOrgs
                 }
 
                 current.Append(line);
-                records.Add(new Record { Text = current.ToString(), LineNumber = recordStartLine });
+                var text = current.ToString();
                 current.Clear();
+
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    continue;
+                }
+
+                records.Add(new Record { Text = text, LineNumber = recordStartLine });
 
                 if (records.Count >= maxRecords)
                 {
-                    hitCap = true;
                     return records;
                 }
             }
 
-            if (current.Length > 0)
+            if (current.Length > 0 && !string.IsNullOrWhiteSpace(current.ToString()))
             {
-                // An unterminated quote at end of file - take what there is rather than discarding it.
+                // An unterminated quote ran to the end of the file, swallowing every remaining line
+                // into one value. Taking it silently would be genuinely dangerous: in a Replace import
+                // all those swallowed users look absent, and absent means "clear their value". It is
+                // kept (so the admin sees the row) but flagged, and the caller turns the flag into a
+                // refusal rather than importing a file it cannot read.
+                UnterminatedQuote = true;
                 records.Add(new Record { Text = current.ToString(), LineNumber = recordStartLine });
             }
 
             return records;
         }
+
+        /// <summary>
+        /// Set by the most recent <see cref="ReadRecords"/> when the file ended inside a quoted field.
+        /// </summary>
+        /// <remarks>
+        /// A field rather than an out parameter only because <see cref="ReadRecords"/> already has
+        /// several exits; it is read immediately by <see cref="Parse"/> on the same call.
+        /// </remarks>
+        [ThreadStatic]
+        private static bool UnterminatedQuote;
 
         /// <summary>
         /// Picks the delimiter by seeing which candidate splits the sampled records most consistently.

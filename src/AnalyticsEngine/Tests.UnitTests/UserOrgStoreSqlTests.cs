@@ -266,6 +266,11 @@ DELETE FROM dbo.users;");
             var firstJob = await _jobs.CreateJobWithRowsAsync(
                 new UserOrgImportJob { OrgTypeId = typeId, Mode = UserOrgImportMode.Merge, StartedBy = "admin" },
                 new UserOrgStagedRow[0]);
+
+            // Finished before the next one is queued: a job that is still pending or running now blocks
+            // a second import for the same org type, which is the point of that guard.
+            await _jobs.CompleteJobAsync(firstJob, UserOrgImportStatus.Succeeded, null);
+
             var latestJob = await _jobs.CreateJobWithRowsAsync(
                 new UserOrgImportJob { OrgTypeId = typeId, Mode = UserOrgImportMode.Replace, StartedBy = "admin" },
                 new UserOrgStagedRow[0]);
@@ -721,6 +726,62 @@ DELETE FROM dbo.users;");
             var job = await _jobs.GetJobAsync(jobId);
             Assert.AreEqual(UserOrgImportStatus.Failed, job.Status);
             Assert.AreEqual(2000, job.ErrorMessage.Length);
+        }
+
+        [TestMethod]
+        public async Task QueueingASecondJobForTheSameTypeIsRefusedAtomically()
+        {
+            // The check and the insert happen in one transaction holding a range lock, because the
+            // caller's pre-check had the whole CSV parse between it and the insert - a window wide
+            // enough for two admins uploading at once to both see no active job and queue competing
+            // imports for the same org type.
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            await QueueJob(typeId, UserOrgImportMode.Merge);
+
+            try
+            {
+                await QueueJob(typeId, UserOrgImportMode.Replace);
+                Assert.Fail("A second concurrent import for the same org type must be refused.");
+            }
+            catch (UserOrgValidationException ex)
+            {
+                StringAssert.Contains(ex.Message, "already in progress");
+            }
+
+            Assert.AreEqual(
+                1,
+                Count($"SELECT COUNT(*) FROM dbo.user_org_import_jobs WHERE org_type_id = {typeId}"),
+                "The refused job must not have been created.");
+        }
+
+        [TestMethod]
+        public async Task AnotherOrgTypeCanBeImportedAtTheSameTime()
+        {
+            var one = await _types.CreateAsync(CsvType("One"));
+            var two = await _types.CreateAsync(CsvType("Two"));
+
+            await QueueJob(one, UserOrgImportMode.Merge);
+            await QueueJob(two, UserOrgImportMode.Merge);
+
+            Assert.AreEqual(2, Count("SELECT COUNT(*) FROM dbo.user_org_import_jobs"));
+        }
+
+        [TestMethod]
+        public async Task AStrandedPendingJobDoesNotBlockLaterImportsForever()
+        {
+            // The rows are staged and the job committed before the worker is dispatched, so a recycle
+            // in that window leaves a job nobody will ever claim. Because pending counts as active, it
+            // would otherwise block every later upload for this org type permanently.
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var stranded = await QueueJob(typeId, UserOrgImportMode.Merge);
+
+            _db.Execute(
+                "UPDATE dbo.user_org_import_jobs SET queued_utc = DATEADD(HOUR, -2, SYSUTCDATETIME()) "
+                + $"WHERE id = {stranded};");
+
+            var replacement = await QueueJob(typeId, UserOrgImportMode.Merge);
+
+            Assert.AreNotEqual(stranded, replacement, "A new import must be allowed once the old one is clearly dead.");
         }
 
         [TestMethod]

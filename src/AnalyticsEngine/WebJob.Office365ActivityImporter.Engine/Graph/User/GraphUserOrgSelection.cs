@@ -30,13 +30,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     {
         /// <summary>No org attributes configured - the selection and the token key are unchanged.</summary>
         public static readonly GraphUserOrgSelection None =
-            new GraphUserOrgSelection(new string[0], new string[0]);
+            new GraphUserOrgSelection(new string[0], new string[0], new string[0]);
 
-        private GraphUserOrgSelection(IReadOnlyList<string> selectFragments, IReadOnlyList<string> unparseable)
+        private GraphUserOrgSelection(
+            IReadOnlyList<string> selectFragments,
+            IReadOnlyList<string> canonicalAttributeNames,
+            IReadOnlyList<string> unparseable)
         {
             SelectFragments = selectFragments;
+            CanonicalAttributeNames = canonicalAttributeNames;
             UnparseableAttributeNames = unparseable;
-            DeltaKeyQualifier = BuildQualifier(selectFragments);
+            DeltaKeyQualifier = BuildQualifier(canonicalAttributeNames);
         }
 
         /// <summary>
@@ -44,6 +48,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// containing a sub-path.
         /// </summary>
         public IReadOnlyList<string> SelectFragments { get; }
+
+        /// <summary>
+        /// The canonical names of the attributes whose values are actually <b>extracted</b>, ordered
+        /// and de-duplicated.
+        /// </summary>
+        /// <remarks>
+        /// This - not <see cref="SelectFragments"/> - is what the delta-token qualifier is derived
+        /// from, and the distinction is the whole reason the property exists. All fifteen
+        /// <c>extensionAttributeN</c> slots share a single <c>$select</c> property, so adding a second
+        /// slot changes nothing about the request. It changes a great deal about the result: the new
+        /// slot is only read for users who happen to appear in a delta, so without invalidating the
+        /// token the new organisation type would stay empty for everyone who does not otherwise
+        /// change - which on an established tenant is almost everybody. Exactly the failure this
+        /// design exists to prevent, arriving through a different door.
+        /// </remarks>
+        public IReadOnlyList<string> CanonicalAttributeNames { get; }
 
         /// <summary>
         /// Stored attribute names that no longer parse. Reported rather than thrown, so one bad row of
@@ -75,7 +95,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 return None;
             }
 
-            return new GraphUserOrgSelection(fragments, unparseable);
+            return new GraphUserOrgSelection(fragments, CanonicalNames(specs), unparseable);
         }
 
         /// <summary>
@@ -83,8 +103,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </summary>
         public static GraphUserOrgSelection FromSpecs(IEnumerable<EntraOrgAttributeSpec> specs)
         {
-            var fragments = EntraOrgAttributeSpec.BuildSelectFragments(specs);
-            return fragments.Count == 0 ? None : new GraphUserOrgSelection(fragments, new string[0]);
+            var materialised = (specs ?? Enumerable.Empty<EntraOrgAttributeSpec>()).Where(s => s != null).ToList();
+            var fragments = EntraOrgAttributeSpec.BuildSelectFragments(materialised);
+            return fragments.Count == 0
+                ? None
+                : new GraphUserOrgSelection(fragments, CanonicalNames(materialised), new string[0]);
+        }
+
+        private static IReadOnlyList<string> CanonicalNames(IEnumerable<EntraOrgAttributeSpec> specs)
+        {
+            return specs
+                .Where(s => s != null)
+                .Select(s => s.Canonical)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(n => n, StringComparer.Ordinal)
+                .ToList();
         }
 
         /// <summary>
@@ -119,28 +152,35 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         /// <summary>
-        /// A short, stable hash of the selected properties.
+        /// A short, stable hash of the <b>attributes whose values are extracted</b>.
         /// </summary>
         /// <remarks>
-        /// A hash rather than the property names themselves because a directory extension name is 60-odd
+        /// Derived from the canonical attribute names rather than the <c>$select</c> fragments. Those
+        /// are not the same set, and using the fragments was a real defect: all fifteen
+        /// <c>extensionAttributeN</c> slots - and both <c>employeeOrgData</c> sub-properties, and every
+        /// property of one schema extension - collapse to a single fragment, so adding a second slot
+        /// left the qualifier unchanged, the delta token intact, and the new organisation type empty
+        /// for every user who did not otherwise change.
+        ///
+        /// A hash rather than the names themselves because a directory extension name is 60-odd
         /// characters and several of them would make an unwieldy cache key. Truncated to 8 bytes: this
-        /// is a cache-invalidation tag, not a security boundary, and a collision would only mean reusing
-        /// a delta token for a different selection - which a full re-enumeration on the next
-        /// configuration change would correct anyway.
+        /// is a cache-invalidation tag, not a security boundary, and a collision would only mean
+        /// reusing a delta token for a different selection - which the next configuration change would
+        /// correct anyway.
         ///
         /// SHA-256 rather than <see cref="string.GetHashCode()"/>, which is randomised per process on
         /// modern .NET and would therefore invalidate the token on every web-job restart.
         /// </remarks>
-        private static string BuildQualifier(IReadOnlyList<string> fragments)
+        private static string BuildQualifier(IReadOnlyList<string> canonicalAttributeNames)
         {
-            if (fragments == null || fragments.Count == 0)
+            if (canonicalAttributeNames == null || canonicalAttributeNames.Count == 0)
             {
                 return string.Empty;
             }
 
             using (var sha = SHA256.Create())
             {
-                var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(string.Join(",", fragments)));
+                var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(string.Join(",", canonicalAttributeNames)));
                 var builder = new StringBuilder(18);
                 builder.Append("-o");
                 for (var i = 0; i < 8; i++)

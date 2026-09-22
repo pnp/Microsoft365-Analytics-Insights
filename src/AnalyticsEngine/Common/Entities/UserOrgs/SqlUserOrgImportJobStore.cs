@@ -36,6 +36,28 @@ namespace Common.Entities.UserOrgs
             }
 
             const string insertJobSql = @"
+SET NOCOUNT ON;
+
+-- The active-job check happens HERE, inside the transaction and holding a range lock, rather than in
+-- the caller. Checking first and inserting afterwards left a window wide enough to drive a lorry
+-- through - the whole CSV parse sat between them - so two admins uploading at once could both see no
+-- active job and queue competing imports for the same organisation type, producing a nondeterministic
+-- winner or a deadlock.
+IF EXISTS (SELECT 1 FROM dbo.user_org_import_jobs WITH (UPDLOCK, HOLDLOCK)
+           WHERE org_type_id = @orgTypeId
+             AND (
+                  -- Pending, but only while it could still plausibly be picked up. A job whose
+                  -- dispatch was lost to an App Service recycle after the rows were staged would
+                  -- otherwise block every later upload for this organisation type forever.
+                  (status = 1 AND queued_utc > DATEADD(SECOND, -@pendingStaleSecs, SYSUTCDATETIME()))
+                  -- Running, and still reporting progress.
+               OR (status = 2 AND ISNULL(heartbeat_utc, started_utc) > DATEADD(SECOND, -@runningStaleSecs, SYSUTCDATETIME()))
+             ))
+BEGIN
+    RAISERROR('USERORG_ACTIVE_JOB', 16, 1);
+    RETURN;
+END
+
 INSERT INTO dbo.user_org_import_jobs
     (org_type_id, mode, status, file_name, started_by, queued_utc, rows_total, rows_invalid)
 OUTPUT INSERTED.id
@@ -54,8 +76,30 @@ VALUES (@orgTypeId, @mode, @status, @fileName, @startedBy, SYSUTCDATETIME(), @ro
                     cmd.Parameters.Add("@startedBy", SqlDbType.NVarChar, 256).Value = job.StartedBy ?? string.Empty;
                     cmd.Parameters.Add("@rowsTotal", SqlDbType.Int).Value = rows == null ? 0 : rows.Count;
                     cmd.Parameters.Add("@rowsInvalid", SqlDbType.Int).Value = job.RowsInvalid;
+                    cmd.Parameters.Add("@pendingStaleSecs", SqlDbType.Int).Value =
+                        (int)UserOrgImportRunner.StalePendingThreshold.TotalSeconds;
+                    cmd.Parameters.Add("@runningStaleSecs", SqlDbType.Int).Value =
+                        (int)UserOrgImportRunner.StaleHeartbeatThreshold.TotalSeconds;
 
-                    jobId = Convert.ToInt32(await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
+                    object id;
+                    try
+                    {
+                        id = await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (SqlException ex) when (ex.Message.IndexOf("USERORG_ACTIVE_JOB", StringComparison.Ordinal) >= 0)
+                    {
+                        throw new UserOrgValidationException(
+                            "An import for this organisation type is already in progress. Wait for it to finish "
+                            + "before starting another.", ex);
+                    }
+
+                    if (id == null || id == DBNull.Value)
+                    {
+                        throw new UserOrgValidationException(
+                            "The import could not be queued. Try again in a moment.");
+                    }
+
+                    jobId = Convert.ToInt32(id);
                 }
 
                 if (rows != null && rows.Count > 0)

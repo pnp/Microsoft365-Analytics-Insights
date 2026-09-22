@@ -78,15 +78,58 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void TwoSlotsOfTheSameContainerDoNotChangeTheKey()
+        public void TwoSlotsOfTheSameContainerStillChangeTheKey()
         {
-            // All fifteen extensionAttribute slots arrive under one Graph property, so switching from
-            // slot 3 to slot 9 does not change what is requested - and must not throw the token away.
+            // The qualifier must follow what is EXTRACTED, not what is requested. All fifteen
+            // extensionAttribute slots arrive under one Graph property, so switching from slot 3 to
+            // slot 9 leaves $select identical - but the value now being read is different, and it is
+            // only read for users who happen to appear in a delta. Without invalidating the token the
+            // new organisation type would stay empty for everyone who does not otherwise change, which
+            // on an established tenant is almost everybody. That is precisely the failure this whole
+            // design exists to prevent, arriving through a different door.
             var three = GraphUserOrgSelection.FromAttributeNames(new[] { "extensionAttribute3" });
             var nine = GraphUserOrgSelection.FromAttributeNames(new[] { "extensionAttribute9" });
 
-            Assert.AreEqual(three.DeltaKeyQualifier, nine.DeltaKeyQualifier);
-            Assert.AreEqual(three.BuildSelect("id"), nine.BuildSelect("id"));
+            Assert.AreEqual(
+                three.BuildSelect("id"),
+                nine.BuildSelect("id"),
+                "The Graph request really is identical - which is exactly why the key cannot be derived from it.");
+            Assert.AreNotEqual(three.DeltaKeyQualifier, nine.DeltaKeyQualifier);
+        }
+
+        [TestMethod]
+        public void AddingASecondSlotOfTheSameContainerChangesTheKey()
+        {
+            var one = GraphUserOrgSelection.FromAttributeNames(new[] { "extensionAttribute3" });
+            var two = GraphUserOrgSelection.FromAttributeNames(new[] { "extensionAttribute3", "extensionAttribute9" });
+
+            Assert.AreEqual(one.BuildSelect("id"), two.BuildSelect("id"));
+            Assert.AreNotEqual(
+                one.DeltaKeyQualifier,
+                two.DeltaKeyQualifier,
+                "A second org type on the same container must still force the re-read that populates it.");
+        }
+
+        [TestMethod]
+        public void BothEmployeeOrgDataPropertiesAreDistinguished()
+        {
+            // Same trap, different container.
+            var costCentre = GraphUserOrgSelection.FromAttributeNames(new[] { "employeeOrgData.costCenter" });
+            var division = GraphUserOrgSelection.FromAttributeNames(new[] { "employeeOrgData.division" });
+
+            Assert.AreEqual(costCentre.BuildSelect("id"), division.BuildSelect("id"));
+            Assert.AreNotEqual(costCentre.DeltaKeyQualifier, division.DeltaKeyQualifier);
+        }
+
+        [TestMethod]
+        public void RenamingAnOrgTypeDoesNotChangeTheKey()
+        {
+            // The qualifier is derived from the attributes, not from anything the admin can relabel, so
+            // a rename must not cost a full tenant re-enumeration.
+            var a = GraphUserOrgSelection.FromAttributeNames(new[] { "extensionAttribute3", "employeeType" });
+            var b = GraphUserOrgSelection.FromAttributeNames(new[] { "employeeType", "extensionAttribute3" });
+
+            Assert.AreEqual(a.DeltaKeyQualifier, b.DeltaKeyQualifier);
         }
 
         [TestMethod]

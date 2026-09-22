@@ -136,15 +136,24 @@ SELECT @applied AS applied, @cleared AS cleared, @valuesCreated AS values_create
                     await bulkCopy.WriteToServerAsync(batch, cancellationToken).ConfigureAwait(false);
                 }
 
-                using (var cmd = Command(connection, MergeSql))
-                using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+                // One transaction around the four statements. They are not independent: the clear
+                // happens before the upsert, so a failure between them would leave the batch torn -
+                // users whose value was being changed left with none at all. The CSV path is already
+                // transactional for the same reason.
+                using (var tx = connection.BeginTransaction())
                 {
-                    if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    using (var cmd = Command(connection, MergeSql, tx))
+                    using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
                     {
-                        result.Applied = reader.GetInt32(0);
-                        result.Cleared = reader.GetInt32(1);
-                        result.ValuesCreated = reader.GetInt32(2);
+                        if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                        {
+                            result.Applied = reader.GetInt32(0);
+                            result.Cleared = reader.GetInt32(1);
+                            result.ValuesCreated = reader.GetInt32(2);
+                        }
                     }
+
+                    tx.Commit();
                 }
 
                 using (var cmd = Command(connection, "DROP TABLE " + TempTableName))

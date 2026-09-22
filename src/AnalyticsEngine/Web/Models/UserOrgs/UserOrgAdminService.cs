@@ -100,10 +100,14 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         /// Validates a submitted org type and, for an Entra one, proves the attribute actually works.
         /// </summary>
         /// <remarks>
-        /// The parse check alone is not enough. A perfectly well-formed directory extension name can
-        /// still name a property that does not exist in this tenant, and Graph answers that with a 400
-        /// that fails the entire <c>/users/delta</c> request. Saving it would therefore break the user
-        /// import until the importer's fallback noticed. The probe is what stops that reaching disk.
+        /// The parse check alone is not enough, and neither is the portal's own test. A perfectly
+        /// well-formed directory extension name can still name a property that does not exist in this
+        /// tenant, and Graph answers that with a 400 that fails the entire <c>/users/delta</c> request -
+        /// so saving it would break the user import until the importer's fallback noticed.
+        ///
+        /// The probe therefore runs here, on the server, rather than relying on the dialog having done
+        /// it. A gate that lives only in the browser is not a gate: the API is reachable directly, and a
+        /// future UI change could quietly drop it.
         /// </remarks>
         private async Task<UserOrgType> ValidateAndProbeAsync(UserOrgTypeSaveModel model, CancellationToken cancellationToken)
         {
@@ -140,9 +144,53 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 throw new UserOrgValidationException(attributeError);
             }
 
+            await ProveAttributeIsReadableAsync(spec, cancellationToken).ConfigureAwait(false);
+
             type.EntraAttributeName = spec.Canonical;
             return type;
         }
+
+        /// <summary>
+        /// Asks Graph for the property against an arbitrary user, and refuses the save if it will not
+        /// answer.
+        /// </summary>
+        /// <remarks>
+        /// Only a rejection of the <b>property</b> blocks the save. A user that cannot be found, a
+        /// throttled tenant or a network problem says nothing about whether the attribute is valid, and
+        /// refusing the configuration over one of those would be both wrong and impossible for an
+        /// administrator to act on.
+        /// </remarks>
+        private async Task ProveAttributeIsReadableAsync(EntraOrgAttributeSpec spec, CancellationToken cancellationToken)
+        {
+            UserOrgProbeOutcome outcome;
+            try
+            {
+                outcome = await _probe.ResolveAsync(spec, ProbeUpn, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Graph being unreachable must not stop an administrator configuring the product. The
+                // importer's own fallback still protects the user import if the attribute turns out bad.
+                return;
+            }
+
+            if (outcome != null && !outcome.Succeeded && outcome.RejectedTheProperty)
+            {
+                throw new UserOrgValidationException(outcome.Message);
+            }
+        }
+
+        /// <summary>
+        /// The user the server-side probe asks about.
+        /// </summary>
+        /// <remarks>
+        /// A synthetic principal that will not exist. That is deliberate and sufficient: Graph
+        /// validates <c>$select</c> before it looks the user up, so an unknown property is rejected
+        /// with a 400 while a valid one produces a 404 - which is all this check needs to tell apart.
+        /// Picking a real user would mean choosing one, and any choice could be the one user the
+        /// caller lacks permission to read.
+        /// </remarks>
+        private const string ProbeUpn = "userorg-attribute-probe@invalid.invalid";
 
         internal static UserOrgSourceKind ParseSource(string source)
         {
@@ -306,6 +354,17 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             }
 
             var parsed = UserOrgCsvParser.Parse(content);
+
+            if (parsed.UnterminatedQuote)
+            {
+                // Refused outright rather than imported partially. Everything after the stray quote was
+                // swallowed into one value, so those users look absent - and in Replace mode absent
+                // means their value is cleared. Importing a file we cannot read is the one outcome
+                // worse than not importing it.
+                throw new UserOrgValidationException(
+                    "That file has a quotation mark that is never closed, so the rest of it could not be read as "
+                    + "rows. Fix the quoting and upload it again.");
+            }
 
             if (parsed.Truncated)
             {
