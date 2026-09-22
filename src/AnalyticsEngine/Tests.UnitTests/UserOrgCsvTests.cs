@@ -356,6 +356,26 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void CountsTruncationSoItIsNotSilent()
+        {
+            // Shortening beats dropping the user from the organisation, but it cannot be silent: two
+            // names that differ only after the cut-off collapse into ONE organisation, and nothing
+            // else in the preview or the import summary would ever reveal that.
+            var prefix = new string('x', UserOrgRules.MaxOrgValueLength);
+            var result = Parse(
+                "UPN,OrgName\r\n"
+                + "a@contoso.com," + prefix + "Alpha\r\n"
+                + "b@contoso.com," + prefix + "Beta\r\n"
+                + "c@contoso.com,Retail\r\n");
+
+            Assert.AreEqual(2, result.TruncatedValueCount);
+            Assert.AreEqual(
+                result.Rows[0].OrgValue,
+                result.Rows[1].OrgValue,
+                "These two really do become one organisation - which is exactly why it has to be reported.");
+        }
+
+        [TestMethod]
         public void ARowMissingItsOrganisationColumnClearsRatherThanFails()
         {
             var result = Parse("UPN,OrgName\r\na@contoso.com\r\n");
@@ -386,6 +406,11 @@ namespace Tests.UnitTests
             public int ApplyCalls;
             public int HeartbeatCalls;
             public Exception ApplyThrows;
+            public TimeSpan ApplyDelay = TimeSpan.Zero;
+            public int FailHeartbeatNumber;
+            public int FailCompleteCallsUpTo;
+            public Exception CompleteThrows;
+            public int CompleteCalls;
             public UserOrgImportStatus? CompletedStatus;
             public string CompletedError;
 
@@ -408,22 +433,35 @@ namespace Tests.UnitTests
             public Task HeartbeatAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
             {
                 HeartbeatCalls++;
+                if (HeartbeatCalls == FailHeartbeatNumber)
+                {
+                    throw new InvalidOperationException("transient heartbeat failure");
+                }
                 return Task.CompletedTask;
             }
 
-            public Task<UserOrgImportJob> ApplyAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
+            public async Task<UserOrgImportJob> ApplyAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
             {
                 ApplyCalls++;
                 if (ApplyThrows != null)
                 {
                     throw ApplyThrows;
                 }
+                if (ApplyDelay > TimeSpan.Zero)
+                {
+                    await Task.Delay(ApplyDelay).ConfigureAwait(false);
+                }
                 Job.RowsApplied = 3;
-                return Task.FromResult(Job);
+                return Job;
             }
 
             public Task CompleteJobAsync(int jobId, UserOrgImportStatus status, string errorMessage, CancellationToken cancellationToken = default(CancellationToken))
             {
+                CompleteCalls++;
+                if (CompleteThrows != null || CompleteCalls <= FailCompleteCallsUpTo)
+                {
+                    throw CompleteThrows ?? new InvalidOperationException("status write failed");
+                }
                 CompletedStatus = status;
                 CompletedError = errorMessage;
                 Job.Status = status;
@@ -486,6 +524,71 @@ namespace Tests.UnitTests
                 store.CompletedError.Contains("merge exploded"),
                 "The raw exception message must not reach the browser.");
             StringAssert.Contains(store.CompletedError, "could not be completed");
+        }
+
+        [TestMethod]
+        public async Task AnImportThatAppliedIsNeverReportedAsFailed()
+        {
+            // The file is applied in its own committed transaction and the job is marked finished
+            // afterwards. If that second step fails, the import really did happen - so reporting
+            // "Failed. No partial changes were kept." would be a flat lie that invites the admin to
+            // upload again, which for a Replace is another full clear-and-repopulate.
+            var store = new FakeJobStore { CompleteThrows = new InvalidOperationException("status write failed") };
+
+            try
+            {
+                await new UserOrgImportRunner(store).RunAsync(1);
+                Assert.Fail("The fault must still reach the service logs.");
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            Assert.AreEqual(1, store.ApplyCalls, "The file was applied.");
+            Assert.AreNotEqual(
+                UserOrgImportStatus.Failed,
+                store.CompletedStatus,
+                "Applied work must never be recorded as a failure.");
+        }
+
+        [TestMethod]
+        public async Task ARecoveredStatusWriteSaysTheDataIsFineRatherThanClaimingFailure()
+        {
+            var store = new FakeJobStore { FailCompleteCallsUpTo = 1 };
+
+            try
+            {
+                await new UserOrgImportRunner(store).RunAsync(1);
+                Assert.Fail("The fault must still reach the service logs.");
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            Assert.AreEqual(UserOrgImportStatus.Succeeded, store.CompletedStatus);
+            StringAssert.Contains(store.CompletedError, "no further action is needed");
+        }
+
+        [TestMethod]
+        public async Task OneLostHeartbeatDoesNotStopTheRest()
+        {
+            // The catch used to sit outside the while loop, so a single transient SQL error stopped a
+            // perfectly healthy import reporting progress for the rest of a merge. After
+            // StaleHeartbeatThreshold that makes it look abandoned, which lets a SECOND import for the
+            // same org type start alongside it.
+            var store = new FakeJobStore
+            {
+                ApplyDelay = TimeSpan.FromMilliseconds(
+                    UserOrgImportRunner.HeartbeatInterval.TotalMilliseconds * 2.5),
+                FailHeartbeatNumber = 1,
+            };
+
+            await new UserOrgImportRunner(store).RunAsync(1);
+
+            Assert.IsTrue(
+                store.HeartbeatCalls >= 2,
+                $"The loop must keep beating after a failed beat, but it stopped at {store.HeartbeatCalls}.");
+            Assert.AreEqual(UserOrgImportStatus.Succeeded, store.CompletedStatus);
         }
 
         [TestMethod]

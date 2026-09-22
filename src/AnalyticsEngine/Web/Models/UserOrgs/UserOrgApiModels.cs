@@ -212,6 +212,13 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         /// <summary>How many existing users the file gives a value to.</summary>
         [JsonProperty("matchedUserCount")]
         public int MatchedUserCount { get; set; }
+
+        /// <summary>
+        /// How many rows carry an organisation name too long for the column, which will be stored
+        /// shortened.
+        /// </summary>
+        [JsonProperty("truncatedValueCount")]
+        public int TruncatedValueCount { get; set; }
     }
 
     public class UserOrgCsvPreviewRowModel

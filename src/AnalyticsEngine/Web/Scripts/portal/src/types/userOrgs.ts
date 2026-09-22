@@ -107,6 +107,8 @@ export interface UserOrgCsvPreview {
   currentlyAssignedCount: number;
   /** How many existing users the file gives a value to. */
   matchedUserCount: number;
+  /** Rows whose organisation name is too long for the column and will be stored shortened. */
+  truncatedValueCount: number;
 }
 
 export interface UserOrgImportQueued {

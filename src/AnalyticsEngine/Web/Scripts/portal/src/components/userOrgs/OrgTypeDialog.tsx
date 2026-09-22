@@ -181,7 +181,7 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
               <Field
                 label="Name"
                 required
-                hint="How this grouping appears in reports, for example Cost Centre."
+                hint="The label this grouping is shown under on the user lookup page, for example Cost Centre. Organisation types are not yet available as a filter on the reports."
               >
                 <Input value={name} onChange={(_e, d) => setName(d.value)} maxLength={100} />
               </Field>
@@ -201,6 +201,21 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
                   <Radio value="csv" label="A CSV file uploaded here" />
                 </RadioGroup>
               </Field>
+
+              {editing &&
+                editing.assignedUserCount > 0 &&
+                (source !== editing.source ||
+                  (source === 'entra' && attribute.trim() !== (editing.entraAttributeName ?? ''))) && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      Saving this discards the {editing.assignedUserCount.toLocaleString()} value
+                      {editing.assignedUserCount === 1 ? '' : 's'} this type holds today. They were read
+                      from a source that will no longer be the source of truth for it, so leaving them
+                      would show stale values indefinitely — a CSV Merge in particular never touches
+                      users the file does not mention.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
 
               {source === 'entra' && (
                 <>

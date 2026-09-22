@@ -76,17 +76,19 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
             var type = await ValidateAndProbeAsync(model, cancellationToken).ConfigureAwait(false);
             type.Id = id;
-            await _types.UpdateAsync(type, cancellationToken).ConfigureAwait(false);
 
-            // Repointing an Entra type at a different attribute invalidates every value it holds: they
-            // were read from a property that is no longer the source of truth for this dimension.
-            // Leaving them would show stale values indefinitely for any user who never changes again.
-            if (existing.SourceKind == UserOrgSourceKind.EntraAttribute
-                && type.SourceKind == UserOrgSourceKind.EntraAttribute
-                && !string.Equals(existing.EntraAttributeName, type.EntraAttributeName, StringComparison.OrdinalIgnoreCase))
-            {
-                await _assignments.ClearAllForTypeAsync(id, cancellationToken).ConfigureAwait(false);
-            }
+            // Changing where a type's values come from invalidates every value it holds: they were read
+            // from somewhere that is no longer the source of truth for this dimension. That covers both
+            // repointing an Entra type at a different attribute and switching a type between Entra and
+            // CSV - the latter matters just as much, because a CSV Merge deliberately leaves users it
+            // does not mention alone, so values left over from the old Entra attribute would survive
+            // every subsequent import and show as current indefinitely.
+            var sourceChanged =
+                existing.SourceKind != type.SourceKind
+                || (type.SourceKind == UserOrgSourceKind.EntraAttribute
+                    && !string.Equals(existing.EntraAttributeName, type.EntraAttributeName, StringComparison.OrdinalIgnoreCase));
+
+            await _types.UpdateAsync(type, sourceChanged, cancellationToken).ConfigureAwait(false);
 
             return ToModel(new UserOrgTypeSummary { Type = type });
         }
@@ -351,6 +353,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             preview.WouldClearCount = await CountWouldClearAsync(orgTypeId, parsed.Rows, cancellationToken)
                 .ConfigureAwait(false);
             preview.MatchedUserCount = matchedWithValue.Count;
+            preview.TruncatedValueCount = parsed.TruncatedValueCount;
 
             var shown = parsed.Rows.Take(PreviewRowCount).ToList();
             preview.Rows = shown.Select(r => new UserOrgCsvPreviewRowModel

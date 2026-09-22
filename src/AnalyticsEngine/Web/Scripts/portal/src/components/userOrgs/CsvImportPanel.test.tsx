@@ -50,6 +50,7 @@ function preview(over: Partial<UserOrgCsvPreview> = {}): UserOrgCsvPreview {
     wouldClearCount: 0,
     currentlyAssignedCount: 1200,
     matchedUserCount: 1,
+    truncatedValueCount: 0,
     ...over,
   };
 }
@@ -99,7 +100,64 @@ describe('CsvImportPanel', () => {
     await waitFor(() => expect(screen.getByText('a@contoso.com')).toBeInTheDocument());
     expect(screen.getByText('ghost@contoso.com')).toBeInTheDocument();
     // The unmatched row is the thing an admin most needs to notice before a Replace.
-    expect(screen.getByText(/do not match a user in this database/i)).toBeInTheDocument();
+    expect(screen.getByText(/match no user in this database/i)).toBeInTheDocument();
+  });
+
+  it('reports matches over the whole file, not just the rows on screen', async () => {
+    // A truncated export whose first ten user principal names happen to exist looks perfectly clean
+    // in the table. Judging the preview by the displayed rows is how a Merge of half a file gets
+    // waved through, so the counts have to come from the whole file.
+    previewCsv.mockResolvedValue(
+      preview({
+        rows: [
+          {
+            lineNumber: 2,
+            upn: 'a@contoso.com',
+            orgValue: 'Retail',
+            userExists: true,
+            clearsValue: false,
+          },
+        ],
+        moreRowsExist: true,
+        totalRows: 40000,
+        unknownUpnCount: 39000,
+      }),
+    );
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+
+    await chooseFile();
+
+    await waitFor(() =>
+      expect(screen.getByText(/1,000 of the 40,000 rows in the file/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/39,000 rows in the file match no user/i)).toBeInTheDocument();
+  });
+
+  it('says when organisation names will be stored shortened', async () => {
+    // Two names identical for their first 200 characters silently become ONE organisation, and
+    // nothing else in the preview or the import summary would reveal it.
+    previewCsv.mockResolvedValue(preview({ truncatedValueCount: 3 }));
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+
+    await chooseFile();
+
+    await waitFor(() => expect(screen.getByText(/stored shortened/i)).toBeInTheDocument());
+  });
+
+  it('shows an import left running by a recycle, even in a session that did not start it', async () => {
+    // The panel used to start empty, so after a refresh a live or interrupted import looked like
+    // nothing was happening - and the next upload was rejected with "already in progress" next to
+    // an idle-looking panel.
+    renderWithProvider(
+      <CsvImportPanel
+        orgType={orgType({ lastImport: job({ status: 'interrupted' }) })}
+        onImportFinished={vi.fn()}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/stopped reporting progress/i)).toBeInTheDocument(),
+    );
   });
 
   it('shows a row with no organisation as clearing the value rather than as blank', async () => {

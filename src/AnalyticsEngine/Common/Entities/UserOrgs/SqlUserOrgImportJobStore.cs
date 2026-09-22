@@ -58,6 +58,24 @@ BEGIN
     RETURN;
 END
 
+-- Retire whatever the check above decided was no longer alive, in the SAME transaction that admits
+-- the replacement. Leaving it Pending would let a late dispatch claim and apply a file the admin has
+-- already superseded; TryClaimJobAsync only accepts status = 1, so moving it off Pending here is what
+-- actually fences that. Leaving it Running would also leave the portal reporting two live imports.
+DECLARE @superseded TABLE (id INT NOT NULL);
+
+UPDATE dbo.user_org_import_jobs
+SET status = 4,
+    finished_utc = SYSUTCDATETIME(),
+    error_message = @supersededMessage
+OUTPUT INSERTED.id INTO @superseded (id)
+WHERE org_type_id = @orgTypeId
+  AND status IN (1, 2);
+
+DELETE s
+FROM dbo.user_org_import_staging s
+WHERE EXISTS (SELECT 1 FROM @superseded x WHERE x.id = s.job_id);
+
 INSERT INTO dbo.user_org_import_jobs
     (org_type_id, mode, status, file_name, started_by, queued_utc, rows_total, rows_invalid)
 OUTPUT INSERTED.id
@@ -80,6 +98,8 @@ VALUES (@orgTypeId, @mode, @status, @fileName, @startedBy, SYSUTCDATETIME(), @ro
                         (int)UserOrgImportRunner.StalePendingThreshold.TotalSeconds;
                     cmd.Parameters.Add("@runningStaleSecs", SqlDbType.Int).Value =
                         (int)UserOrgImportRunner.StaleHeartbeatThreshold.TotalSeconds;
+                    cmd.Parameters.Add("@supersededMessage", SqlDbType.NVarChar, 2000).Value =
+                        UserOrgImportRunner.SupersededMessage;
 
                     object id;
                     try
@@ -240,12 +260,19 @@ WHERE id = @id AND status = 1;";
             // The staged rows are deleted on completion: they are a work queue, not a record. The job
             // row keeps the counts, so the audit trail survives without carrying a copy of every UPN in
             // the customer's file around forever.
+            //
+            // Only a job that is still live (Pending or Running) can be completed. A job that has
+            // already reached a terminal status must not be rewritten - specifically, a worker that was
+            // superseded because it went quiet (see CreateJobWithRowsAsync) must not be able to report
+            // its own outcome over the top of that and leave the portal claiming two finished imports
+            // raced to the same result. The staging delete is deliberately left unconditional so the
+            // rows are cleaned up either way.
             const string sql = @"
 UPDATE dbo.user_org_import_jobs
 SET status = @status,
     finished_utc = SYSUTCDATETIME(),
     error_message = @error
-WHERE id = @id;
+WHERE id = @id AND status IN (1, 2);
 
 DELETE FROM dbo.user_org_import_staging WHERE job_id = @id;";
 

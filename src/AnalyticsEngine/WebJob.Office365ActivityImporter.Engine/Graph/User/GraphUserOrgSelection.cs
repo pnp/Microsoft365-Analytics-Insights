@@ -191,9 +191,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
         }
 
+        /// <summary>
+        /// The attributes, as an operator would recognise them.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately the canonical attribute names rather than the <c>$select</c> fragments. Every
+        /// <c>extensionAttributeN</c> collapses to the single fragment
+        /// <c>onPremisesExtensionAttributes</c>, so a log line built from fragments tells an admin with
+        /// two org types on that container precisely nothing about which one it means.
+        /// </remarks>
         public override string ToString()
         {
-            return IsEmpty ? "(no org attributes)" : string.Join(",", SelectFragments);
+            return IsEmpty ? "(no org attributes)" : string.Join(", ", CanonicalAttributeNames);
         }
     }
 }

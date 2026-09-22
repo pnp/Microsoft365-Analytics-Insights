@@ -59,6 +59,32 @@ namespace Common.Entities.UserOrgs
             "The import could not be completed. No partial changes were kept. Check the service logs for details, "
             + "then try again.";
 
+        /// <summary>
+        /// What an administrator is told about a job that was overtaken by a later one.
+        /// </summary>
+        /// <remarks>
+        /// A job stops being eligible once it has gone quiet for longer than
+        /// <see cref="StaleHeartbeatThreshold"/> (or sat unclaimed past <see cref="StalePendingThreshold"/>),
+        /// at which point a fresh upload for the same org type is allowed to take over. Saying so
+        /// explicitly is the difference between an admin understanding that their second upload won and
+        /// an admin looking at a job that simply stopped.
+        /// </remarks>
+        internal const string SupersededMessage =
+            "This import was overtaken by a later one for the same organisation type after it stopped reporting "
+            + "progress. The later import is the one that counts.";
+
+        /// <summary>
+        /// What an administrator is told when the changes landed but recording the outcome did not.
+        /// </summary>
+        /// <remarks>
+        /// The file is applied in its own transaction, and the job is only marked finished afterwards.
+        /// If that second step fails the import really did happen, so telling the admin it failed -
+        /// and, worse, that nothing was kept - would be a lie that invites them to re-upload.
+        /// </remarks>
+        internal const string AppliedButNotRecordedMessage =
+            "The file was imported successfully, but recording the result afterwards failed. The organisation "
+            + "values are up to date; no further action is needed.";
+
         private readonly IUserOrgImportJobStore _jobs;
 
         public UserOrgImportRunner(IUserOrgImportJobStore jobs)
@@ -101,24 +127,13 @@ namespace Common.Entities.UserOrgs
             using (var heartbeatStop = new CancellationTokenSource())
             {
                 var heartbeat = HeartbeatUntilStopped(jobId, heartbeatStop.Token);
+                UserOrgImportJob applied;
 
                 try
                 {
-                    var applied = await _jobs.ApplyAsync(jobId, cancellationToken).ConfigureAwait(false);
-                    heartbeatStop.Cancel();
-                    await SwallowAsync(heartbeat).ConfigureAwait(false);
-
-                    await _jobs.CompleteJobAsync(jobId, UserOrgImportStatus.Succeeded, null, cancellationToken)
-                        .ConfigureAwait(false);
-
-                    if (applied != null)
-                    {
-                        applied.Status = UserOrgImportStatus.Succeeded;
-                    }
-
-                    return applied ?? await _jobs.GetJobAsync(jobId, cancellationToken).ConfigureAwait(false);
+                    applied = await _jobs.ApplyAsync(jobId, cancellationToken).ConfigureAwait(false);
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
                     heartbeatStop.Cancel();
                     await SwallowAsync(heartbeat).ConfigureAwait(false);
@@ -143,6 +158,44 @@ namespace Common.Entities.UserOrgs
 
                     throw;
                 }
+
+                heartbeatStop.Cancel();
+                await SwallowAsync(heartbeat).ConfigureAwait(false);
+
+                // Past this point the file HAS been applied and committed. Nothing that goes wrong from
+                // here may be reported as a failed import: the assignments really did change, and
+                // FailureMessage promises the opposite. Telling an admin their import failed when it
+                // succeeded invites them to upload it again, which for a Replace means another full
+                // clear-and-repopulate of the org type.
+                try
+                {
+                    await _jobs.CompleteJobAsync(jobId, UserOrgImportStatus.Succeeded, null, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    try
+                    {
+                        await _jobs.CompleteJobAsync(
+                            jobId, UserOrgImportStatus.Succeeded, AppliedButNotRecordedMessage, CancellationToken.None)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception)
+                    {
+                        // Both attempts failed, so the row stays on "Running" and the portal will report
+                        // it as interrupted once the heartbeat goes stale. Misleading, but it is the
+                        // conservative direction: it does not claim the data was discarded.
+                    }
+
+                    throw;
+                }
+
+                if (applied != null)
+                {
+                    applied.Status = UserOrgImportStatus.Succeeded;
+                }
+
+                return applied ?? await _jobs.GetJobAsync(jobId, cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -158,7 +211,18 @@ namespace Common.Entities.UserOrgs
                         return;
                     }
 
-                    await _jobs.HeartbeatAsync(jobId, CancellationToken.None).ConfigureAwait(false);
+                    try
+                    {
+                        await _jobs.HeartbeatAsync(jobId, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch (Exception)
+                    {
+                        // One lost beat must not end the loop. The catch used to sit outside the while,
+                        // so a single transient SQL error stopped the job reporting progress for the
+                        // rest of a merge that was still perfectly healthy - and after
+                        // StaleHeartbeatThreshold that makes a live import look abandoned, which lets a
+                        // second import for the same org type start alongside it.
+                    }
                 }
             }
             catch (OperationCanceledException)

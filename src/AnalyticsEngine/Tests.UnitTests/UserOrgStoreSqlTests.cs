@@ -84,6 +84,11 @@ DELETE FROM dbo.users;");
             return Convert.ToInt32(_db.Scalar(sql));
         }
 
+        private void Execute(string sql)
+        {
+            _db.Execute(sql);
+        }
+
         #region Org type CRUD
 
         [TestMethod]
@@ -167,12 +172,65 @@ DELETE FROM dbo.users;");
 
             type.Name = "Renamed";
             type.IsEnabled = false;
-            await _types.UpdateAsync(type);
+            await _types.UpdateAsync(type, false);
 
             var loaded = await _types.GetAsync(id);
             Assert.AreEqual("Renamed", loaded.Name);
             Assert.IsFalse(loaded.IsEnabled);
             Assert.IsNotNull(loaded.ModifiedUtc);
+        }
+
+        [TestMethod]
+        public async Task Update_WithClearDiscardsEverythingTheOldSourcePutThere()
+        {
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(new UserOrgType
+            {
+                Name = "Cost Centre",
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "extensionAttribute1",
+                IsEnabled = true,
+            });
+
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, typeId, "From Entra") });
+            Assert.AreEqual(1, (await _assignments.GetForUserAsync(user)).Count);
+
+            var type = await _types.GetAsync(typeId);
+            type.SourceKind = UserOrgSourceKind.CsvUpload;
+            type.EntraAttributeName = null;
+            await _types.UpdateAsync(type, true);
+
+            Assert.AreEqual(
+                0,
+                (await _assignments.GetForUserAsync(user)).Count,
+                "Values read from a source that is no longer the source of truth must not survive the switch.");
+            Assert.AreEqual(
+                0,
+                Count($"SELECT COUNT(*) FROM dbo.user_org_values WHERE org_type_id = {typeId}"),
+                "The old source's value list would otherwise keep offering organisations nothing is in.");
+            Assert.AreEqual(UserOrgSourceKind.CsvUpload, (await _types.GetAsync(typeId)).SourceKind);
+        }
+
+        [TestMethod]
+        public async Task Update_OfAMissingTypeClearsNothing()
+        {
+            // The clear and the update are one transaction precisely so neither can happen alone.
+            var user = AddUser("a@contoso.com");
+            var survivor = await _types.CreateAsync(CsvType("Survivor"));
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, survivor, "Kept") });
+
+            try
+            {
+                await _types.UpdateAsync(
+                    new UserOrgType { Id = 987654, Name = "Ghost", SourceKind = UserOrgSourceKind.CsvUpload },
+                    true);
+                Assert.Fail("Updating a deleted type should be reported.");
+            }
+            catch (UserOrgValidationException)
+            {
+            }
+
+            Assert.AreEqual(1, (await _assignments.GetForUserAsync(user)).Count);
         }
 
         [TestMethod]
@@ -185,7 +243,7 @@ DELETE FROM dbo.users;");
                     Id = 987654,
                     Name = "Ghost",
                     SourceKind = UserOrgSourceKind.CsvUpload,
-                });
+                }, false);
                 Assert.Fail("Updating a deleted type should be reported.");
             }
             catch (UserOrgValidationException ex)
@@ -726,6 +784,58 @@ DELETE FROM dbo.users;");
             var job = await _jobs.GetJobAsync(jobId);
             Assert.AreEqual(UserOrgImportStatus.Failed, job.Status);
             Assert.AreEqual(2000, job.ErrorMessage.Length);
+        }
+
+        [TestMethod]
+        public async Task CompleteJob_CannotRewriteAJobThatHasAlreadyFinished()
+        {
+            // A worker that was superseded because it stopped reporting progress must not be able to
+            // report its own outcome over the top of that verdict. Without this a job declared dead -
+            // and whose replacement has already been admitted and may already have run - could still
+            // flip itself to Succeeded, leaving the portal claiming two finished imports for the same
+            // org type with no way to tell which one the data came from.
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge);
+
+            await _jobs.CompleteJobAsync(jobId, UserOrgImportStatus.Failed, "the first verdict");
+            await _jobs.CompleteJobAsync(jobId, UserOrgImportStatus.Succeeded, null);
+
+            var job = await _jobs.GetJobAsync(jobId);
+            Assert.AreEqual(UserOrgImportStatus.Failed, job.Status);
+            Assert.AreEqual("the first verdict", job.ErrorMessage);
+        }
+
+        [TestMethod]
+        public async Task QueueingOverAStaleJobRetiresItRatherThanLeavingTwoLive()
+        {
+            // The guard lets a new import through once the previous one has gone quiet for longer than
+            // StaleHeartbeatThreshold. Leaving that one Pending would let a late dispatch still claim
+            // and apply a file the admin has already superseded, because TryClaimJobAsync accepts any
+            // job that is still Pending. Moving it off Pending here is what actually fences that.
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var stale = await QueueJob(typeId, UserOrgImportMode.Replace, new UserOrgStagedRow(1, "a@contoso.com", "X"));
+
+            Execute(
+                "UPDATE dbo.user_org_import_jobs SET queued_utc = DATEADD(MINUTE, -30, SYSUTCDATETIME()) "
+                + $"WHERE id = {stale}");
+
+            var replacement = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", "Y"));
+
+            var staleJob = await _jobs.GetJobAsync(stale);
+            Assert.AreEqual(UserOrgImportStatus.Failed, staleJob.Status, "The abandoned job must not stay claimable.");
+            StringAssert.Contains(staleJob.ErrorMessage, "overtaken");
+            Assert.IsFalse(
+                await _jobs.TryClaimJobAsync(stale),
+                "A superseded job must not be claimable by a late dispatch.");
+
+            Assert.AreEqual(
+                0,
+                Count($"SELECT COUNT(*) FROM dbo.user_org_import_staging WHERE job_id = {stale}"),
+                "The superseded job's staged rows are dead weight and must go with it.");
+            Assert.AreEqual(
+                1,
+                Count($"SELECT COUNT(*) FROM dbo.user_org_import_staging WHERE job_id = {replacement}"),
+                "The replacement's own rows must survive.");
         }
 
         [TestMethod]

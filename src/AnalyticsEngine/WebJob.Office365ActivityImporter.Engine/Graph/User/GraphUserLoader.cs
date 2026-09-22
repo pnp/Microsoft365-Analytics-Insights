@@ -125,10 +125,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             if (_orgSelection.UnparseableAttributeNames.Count > 0)
             {
+                // The names are printed, not just counted. An admin reading this log has to know WHICH
+                // organisation type to go and re-save, and every extensionAttributeN collapses to the
+                // same $select fragment - so the fragment list identifies nothing.
                 _logger.LogError(
                     $"User import - {_orgSelection.UnparseableAttributeNames.Count} configured organisation "
-                    + "attribute(s) could not be understood and will be skipped. Re-save them on the User "
-                    + "organisations page to correct them.");
+                    + "attribute(s) could not be understood and will be skipped: "
+                    + string.Join(", ", _orgSelection.UnparseableAttributeNames)
+                    + ". Re-save them on the User organisations page to correct them.");
             }
 
             if (!_orgSelection.IsEmpty)

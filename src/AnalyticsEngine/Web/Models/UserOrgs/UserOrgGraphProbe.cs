@@ -124,11 +124,18 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             {
                 token = await GetTokenAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
+                // Fixed text, not ex.Message. An Azure.Identity or Key Vault failure message carries
+                // authority URLs, client and tenant identifiers and vault names, and this string is
+                // rendered verbatim in the portal. None of it is something the admin can act on -
+                // the actionable part is which credential to check - and the full exception still
+                // reaches Application Insights.
                 return new UserOrgProbeOutcome
                 {
-                    Message = "Could not authenticate to Microsoft Graph: " + ex.Message,
+                    Message = "Could not authenticate to Microsoft Graph. Check the app registration's client "
+                        + "secret or certificate has not expired, and that it has the User.Read.All application "
+                        + "permission with admin consent granted. The service logs have the detail.",
                 };
             }
 
@@ -195,11 +202,12 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             {
                 token = await GetTokenAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 catalogue.DiscoveryWarning =
-                    "Could not authenticate to Microsoft Graph to look for directory extensions (" + ex.Message
-                    + "). You can still type a directory extension name in full and test it.";
+                    "Could not authenticate to Microsoft Graph to look for directory extensions. Check the app "
+                    + "registration's credentials and permissions; the service logs have the detail. You can still "
+                    + "type a directory extension name in full and test it.";
                 return catalogue;
             }
 
@@ -275,11 +283,11 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                         }
                     }
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
                     catalogue.DiscoveryWarning =
-                        "Could not reach Microsoft Graph to list directory extensions (" + ex.Message
-                        + "). You can still type a directory extension name in full and test it.";
+                        "Could not reach Microsoft Graph to list directory extensions. The service logs have the "
+                        + "detail. You can still type a directory extension name in full and test it.";
                 }
             }
 

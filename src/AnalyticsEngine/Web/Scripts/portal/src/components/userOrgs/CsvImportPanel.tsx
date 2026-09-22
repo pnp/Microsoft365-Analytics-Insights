@@ -63,6 +63,21 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<UserOrgImportJob | null>(null);
 
+  // Seeded from the type's last import so a refresh, or coming back to the page later, still shows an
+  // import that is in flight or was interrupted. Without this the panel looks idle, the good "upload
+  // it again" copy is only ever visible to the session that started the import, and a second upload
+  // is rejected with "already in progress" next to a panel showing nothing happening.
+  const [seeded, setSeeded] = useState(false);
+  useEffect(() => {
+    if (seeded) return;
+    setSeeded(true);
+
+    const last = orgType.lastImport;
+    if (last && (last.status === 'pending' || last.status === 'running' || last.status === 'interrupted')) {
+      setJob(last);
+    }
+  }, [orgType.lastImport, seeded]);
+
   // Re-armed whenever the file or the mode changes, so a confirmation can never carry over to a
   // different file or a different blast radius.
   const [confirmedClear, setConfirmedClear] = useState(false);
@@ -261,7 +276,10 @@ function PreviewTable({
   preview: UserOrgCsvPreview;
   styles: ReturnType<typeof useStyles>;
 }) {
-  const unmatched = preview.rows.filter((r) => !r.userExists).length;
+  // Deliberately the whole-file counts, not the ten rows on screen. A truncated export whose first
+  // ten user principal names happen to exist looks perfectly clean in the table, and a Merge of it
+  // then quietly applies a handful of rows - the counts are the only thing that reveals it.
+  const matchedRows = preview.totalRows - preview.unknownUpnCount;
 
   return (
     <div>
@@ -271,11 +289,18 @@ function PreviewTable({
           : `No header row recognised, so the first column is treated as the user and the second as the organisation. ${preview.delimiter}-separated.`}
       </Text>
 
-      {unmatched > 0 && (
+      <Text size={200} className={styles.muted} block>
+        {matchedRows.toLocaleString()} of the {preview.totalRows.toLocaleString()} rows in the file
+        match a user in this database.
+      </Text>
+
+      {preview.unknownUpnCount > 0 && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            {unmatched} of the {preview.rows.length} rows shown below do not match a user in this database.
-            Check the file uses the same user principal names the product imports.
+            {preview.unknownUpnCount.toLocaleString()} row
+            {preview.unknownUpnCount === 1 ? '' : 's'} in the file match no user in this database and
+            will be skipped. Check the file uses the same user principal names the product imports,
+            and that it is not a partial export.
           </MessageBarBody>
         </MessageBar>
       )}
@@ -325,6 +350,17 @@ function PreviewTable({
         </Text>
       )}
 
+      {preview.truncatedValueCount > 0 && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            {preview.truncatedValueCount.toLocaleString()} organisation name
+            {preview.truncatedValueCount === 1 ? ' is' : 's are'} longer than 200 characters and will
+            be stored shortened. Names that are identical for their first 200 characters become one
+            organisation.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
       {preview.problems.length > 0 && (
         <MessageBar intent="warning">
           <MessageBarBody>
@@ -361,7 +397,9 @@ function JobProgress({
       <MessageBar intent="warning">
         <MessageBarBody>
           This import stopped reporting progress, which usually means the web app restarted while it was
-          running. Some rows may have been applied. Upload the file again to be sure.
+          running. It was either applied in full or not at all — the file is applied in a single
+          transaction, so it cannot have been left half done — but which of those happened is not
+          recorded. Upload the file again to be sure; importing the same file twice is harmless.
         </MessageBarBody>
       </MessageBar>
     );

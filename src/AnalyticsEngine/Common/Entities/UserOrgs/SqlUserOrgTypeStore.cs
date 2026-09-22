@@ -221,33 +221,66 @@ VALUES (@name, @sourceKind, @attr, @enabled, SYSUTCDATETIME());";
             }
         }
 
-        public async Task UpdateAsync(UserOrgType type, CancellationToken cancellationToken = default(CancellationToken))
+        public async Task UpdateAsync(
+            UserOrgType type,
+            bool clearAssignments,
+            CancellationToken cancellationToken = default(CancellationToken))
         {
             Validate(type);
 
+            // The clear is in the same statement batch, and therefore the same transaction, as the
+            // update. Done as two round trips the pair is not atomic, and the failure is one-way: a
+            // committed repoint whose clear did not run leaves values from the OLD source in place,
+            // and a retry no longer clears them because the stored configuration already matches what
+            // the admin is submitting. The stale values then never go away.
             const string sql = @"
+DECLARE @affected INT;
+
 UPDATE dbo.user_org_types
 SET name = @name,
     source_kind = @sourceKind,
     entra_attribute_name = @attr,
     is_enabled = @enabled,
     modified_utc = SYSUTCDATETIME()
-WHERE id = @id;";
+WHERE id = @id;
+
+SET @affected = @@ROWCOUNT;
+
+IF @affected > 0 AND @clearAssignments = 1
+BEGIN
+    -- Assignments first: they are what points at the values.
+    DELETE FROM dbo.user_org_assignments WHERE org_type_id = @id;
+    -- The values go too. They are labels read out of a source that is no longer this dimension's
+    -- source of truth, so leaving them would keep offering an admin a list of organisations that
+    -- nothing is in and nothing will ever repopulate.
+    DELETE FROM dbo.user_org_values WHERE org_type_id = @id;
+END
+
+SELECT @affected;";
 
             try
             {
                 using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
-                using (var cmd = Command(connection, sql))
+                using (var tx = connection.BeginTransaction())
                 {
-                    AddTypeParameters(cmd, type);
-                    cmd.Parameters.Add("@id", SqlDbType.Int).Value = type.Id;
+                    int affected;
+                    using (var cmd = Command(connection, sql, tx))
+                    {
+                        AddTypeParameters(cmd, type);
+                        cmd.Parameters.Add("@id", SqlDbType.Int).Value = type.Id;
+                        cmd.Parameters.Add("@clearAssignments", SqlDbType.Bit).Value = clearAssignments;
 
-                    var affected = await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                        affected = Convert.ToInt32(
+                            await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
+                    }
+
                     if (affected == 0)
                     {
                         throw new UserOrgValidationException(
                             "That organisation type no longer exists - it may have been deleted in another session.");
                     }
+
+                    tx.Commit();
                 }
             }
             catch (SqlException ex) when (IsDuplicateKey(ex))

@@ -45,6 +45,17 @@ namespace Common.Entities.UserOrgs
         public bool Truncated { get; set; }
 
         /// <summary>
+        /// Rows whose organisation name was longer than the column and was therefore shortened.
+        /// </summary>
+        /// <remarks>
+        /// Reported rather than rejected. An over-length name is stored shortened because dropping the
+        /// user from the organisation entirely would be the worse outcome - but it has to be said out
+        /// loud, because two names that differ only after the cut-off silently become one organisation,
+        /// and nothing else in the import summary would reveal that.
+        /// </remarks>
+        public int TruncatedValueCount { get; set; }
+
+        /// <summary>
         /// Whether the file ended inside a quoted field, meaning a closing quote is missing.
         /// </summary>
         /// <remarks>
@@ -202,6 +213,11 @@ namespace Common.Entities.UserOrgs
                     }
 
                     var orgValue = orgIndex >= 0 && orgIndex < fields.Count ? fields[orgIndex] : null;
+                    if (UserOrgRules.WouldTruncate(orgValue))
+                    {
+                        result.TruncatedValueCount++;
+                    }
+
                     rows.Add(new UserOrgStagedRow(line.LineNumber, upn, UserOrgRules.NormaliseOrgValue(orgValue)));
                 }
 

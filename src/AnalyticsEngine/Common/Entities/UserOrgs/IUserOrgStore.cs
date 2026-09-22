@@ -35,10 +35,17 @@ namespace Common.Entities.UserOrgs
         Task<int> CreateAsync(UserOrgType type, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>
-        /// Updates an org type's name, attribute and enabled flag.
+        /// Updates an org type's name, attribute and enabled flag, optionally discarding everything it
+        /// currently holds in the same transaction.
         /// </summary>
+        /// <param name="clearAssignments">
+        /// Whether the values this type holds are invalidated by the change. They are whenever the
+        /// source changes - a different Entra attribute, or a switch between Entra and CSV - because
+        /// the stored values were read from somewhere that is no longer this dimension's source of
+        /// truth. Atomic with the update on purpose: see the note on the implementation.
+        /// </param>
         /// <exception cref="UserOrgValidationException">The name is already taken, or the configuration is invalid.</exception>
-        Task UpdateAsync(UserOrgType type, CancellationToken cancellationToken = default(CancellationToken));
+        Task UpdateAsync(UserOrgType type, bool clearAssignments, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>
         /// Deletes an org type and everything hanging off it - assignments, values, import jobs and any

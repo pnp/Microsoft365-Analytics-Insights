@@ -296,9 +296,11 @@ namespace Web.AnalyticsWeb.Controllers
                     file = new UploadedFile { Content = new MemoryStream(bytes), FileName = "upload.csv" };
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return Failed(Content(HttpStatusCode.BadRequest, new ApiErrorModel("The upload could not be read: " + ex.Message)));
+                return Failed(Content(
+                    HttpStatusCode.BadRequest,
+                    new ApiErrorModel("The upload could not be read. Check the file is a plain CSV and try again.")));
             }
 
             // Re-checked after reading, because Content-Length is absent on a chunked upload.
@@ -360,6 +362,18 @@ namespace Web.AnalyticsWeb.Controllers
             catch (UserOrgNotFoundException ex)
             {
                 return Content(HttpStatusCode.NotFound, new ApiErrorModel(ex.Message));
+            }
+            catch (Exception ex)
+            {
+                // Anything else is a fault, not a message for the admin. Without this it would reach
+                // the Web API pipeline, and this site ships with customErrors off - so a SQL exception
+                // would arrive in the browser carrying object names, index names and key values. The
+                // exception still goes to Application Insights, which is where an engineer reads it.
+                WebExceptionTelemetry.Report(ex, "UserOrgAPI");
+
+                return Content(
+                    HttpStatusCode.InternalServerError,
+                    new ApiErrorModel("Something went wrong handling that request. Check the service logs for details."));
             }
         }
 

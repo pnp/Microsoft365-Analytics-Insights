@@ -232,9 +232,11 @@ export default function UserOrgsPage() {
             <CardHeader header={<Subtitle2>How Entra-sourced types are kept up to date</Subtitle2>} />
             <Text block>
               These are read during the normal user import, so values appear after the next import
-              cycle. Adding an Entra organisation type, or pointing one at a different attribute, makes
-              the next cycle re-read every user once so the new attribute is populated for people who
-              have not otherwise changed - that one cycle takes longer than usual.
+              cycle. Any change to which Entra attributes are in use - adding or deleting a type,
+              enabling or disabling one, pointing one at a different attribute, or switching one to
+              CSV - makes the next cycle re-read every user once so the new set is populated for
+              people who have not otherwise changed. That one cycle takes longer than usual, and on a
+              large tenant noticeably so.
             </Text>
           </Card>
         )}
