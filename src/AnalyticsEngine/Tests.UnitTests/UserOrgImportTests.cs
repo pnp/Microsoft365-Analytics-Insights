@@ -293,6 +293,37 @@ namespace Tests.UnitTests
     {
         private const string GreekOrgName = "Καλημέρα κόσμε";
 
+        [TestMethod]
+        public void ExtensionDataKeepsOrgAttributesAndNothingElse()
+        {
+            // The delta query selects assignedLicenses and assignedPlans as defence-in-depth for
+            // change detection; nothing reads their contents. Before extension data existed
+            // Newtonsoft dropped them. Left unmodelled they would now be retained as JToken trees on
+            // every GraphUser, and the loader holds the whole enumeration until the organisation
+            // merge at the end of the cycle - so at 200,000 users, where one E5 mailbox carries
+            // scores of service plans, that is millions of retained objects. It would hit every
+            // deployment, including those with no organisation types configured at all.
+            const string json = @"{
+                ""userPrincipalName"": ""a@contoso.com"",
+                ""department"": ""Retail"",
+                ""assignedLicenses"": [ { ""skuId"": ""00000000-0000-0000-0000-000000000000"" } ],
+                ""assignedPlans"": [ { ""service"": ""exchange"", ""capabilityStatus"": ""Enabled"" } ],
+                ""onPremisesExtensionAttributes"": { ""extensionAttribute1"": ""CC-1042"" }
+            }";
+
+            var user = Newtonsoft.Json.JsonConvert.DeserializeObject<GraphUser>(json);
+
+            Assert.AreEqual("a@contoso.com", user.UserPrincipalName);
+            Assert.AreEqual("Retail", user.Department, "Typed properties must keep their existing mapping.");
+
+            CollectionAssert.AreEquivalent(
+                new[] { "onPremisesExtensionAttributes" },
+                user.AdditionalProperties.Keys.ToList(),
+                "Extension data must retain the organisation attributes and nothing else. Anything "
+                + "added to the delta query's $select that organisations do not need has to be "
+                + "modelled on GraphUser, or it is kept for every user in the tenant.");
+        }
+
         private static GraphUser User(string upn, string extensionAttributesJson = null)
         {
             var user = new GraphUser { UserPrincipalName = upn };
