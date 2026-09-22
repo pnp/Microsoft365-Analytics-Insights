@@ -58,6 +58,19 @@ namespace Common.Entities.UserOrgs
         /// </summary>
         public bool IsEnabled { get; set; } = true;
 
+        /// <summary>
+        /// How many times this type's values have been discarded because its source changed.
+        /// </summary>
+        /// <remarks>
+        /// Part of the Microsoft Graph delta-token cache key, so a token minted under a previous
+        /// configuration can never be reused once the values it produced have been thrown away. The
+        /// attribute names alone are not enough: repointing a type from one attribute to another and
+        /// back again, or deleting and recreating it, returns to a key that already has a stored
+        /// token - and Graph would answer that token with only the users changed since, leaving
+        /// everybody else permanently unassigned in a type that had just been emptied.
+        /// </remarks>
+        public int SourceGeneration { get; set; } = 1;
+
         public DateTime CreatedUtc { get; set; }
 
         public DateTime? ModifiedUtc { get; set; }

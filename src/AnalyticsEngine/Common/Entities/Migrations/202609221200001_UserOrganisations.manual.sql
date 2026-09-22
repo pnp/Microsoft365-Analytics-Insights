@@ -64,6 +64,11 @@ BEGIN
         [source_kind] tinyint NOT NULL,
         [entra_attribute_name] nvarchar(200) NULL,
         [is_enabled] bit NOT NULL CONSTRAINT [DF_user_org_types_is_enabled] DEFAULT (1),
+        -- Bumped whenever the type's values are discarded because its source changed. It feeds the
+        -- Microsoft Graph delta-token cache key, so a token minted under the old configuration can
+        -- never be reused after the values it produced have been thrown away - which is otherwise
+        -- reachable simply by repointing a type at a different attribute and then back again.
+        [source_generation] int NOT NULL CONSTRAINT [DF_user_org_types_source_generation] DEFAULT (1),
         [created_utc] datetime2(7) NOT NULL CONSTRAINT [DF_user_org_types_created_utc] DEFAULT SYSUTCDATETIME(),
         [modified_utc] datetime2(7) NULL,
         CONSTRAINT [PK_user_org_types] PRIMARY KEY CLUSTERED ([id] ASC),

@@ -144,6 +144,86 @@ namespace Tests.UnitTests
                 "A genuinely new property must invalidate the token, or it would never be populated.");
         }
 
+        private static UserOrgType EntraType(int id, string attribute, int generation = 1)
+        {
+            return new UserOrgType
+            {
+                Id = id,
+                Name = "Type " + id,
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = attribute,
+                IsEnabled = true,
+                SourceGeneration = generation,
+            };
+        }
+
+        [TestMethod]
+        public void NoOrgTypesStillProducesTheLegacyKey_FromTypes()
+        {
+            Assert.AreEqual(string.Empty, GraphUserOrgSelection.FromTypes(null).DeltaKeyQualifier);
+            Assert.AreEqual(string.Empty, GraphUserOrgSelection.FromTypes(new UserOrgType[0]).DeltaKeyQualifier);
+        }
+
+        [TestMethod]
+        public void RepointingATypeAwayAndBackDoesNotReuseTheOriginalToken()
+        {
+            // The attribute names alone cannot tell "still mapped this way" from "mapped this way
+            // again, after the values were thrown away". Both look identical, so the second one lands
+            // on the FIRST key - which still holds a delta token. Graph answers that token with only
+            // the users changed since it was minted, so everybody else stays permanently unassigned in
+            // a type that had just been emptied. The source generation is what separates them.
+            var before = GraphUserOrgSelection.FromTypes(new[] { EntraType(1, "extensionAttribute1", generation: 1) });
+            var afterRepointingAway = GraphUserOrgSelection.FromTypes(new[] { EntraType(1, "extensionAttribute2", generation: 2) });
+            var afterComingBack = GraphUserOrgSelection.FromTypes(new[] { EntraType(1, "extensionAttribute1", generation: 3) });
+
+            Assert.AreNotEqual(before.DeltaKeyQualifier, afterRepointingAway.DeltaKeyQualifier);
+            Assert.AreNotEqual(
+                before.DeltaKeyQualifier,
+                afterComingBack.DeltaKeyQualifier,
+                "Coming back to an attribute must not come back to its old delta token.");
+        }
+
+        [TestMethod]
+        public void RecreatingADeletedTypeDoesNotReuseItsOldToken()
+        {
+            // Same trap by a different route: the replacement has the same attribute but a new
+            // identity, and no assignments at all.
+            var original = GraphUserOrgSelection.FromTypes(new[] { EntraType(1, "extensionAttribute1") });
+            var recreated = GraphUserOrgSelection.FromTypes(new[] { EntraType(2, "extensionAttribute1") });
+
+            Assert.AreNotEqual(original.DeltaKeyQualifier, recreated.DeltaKeyQualifier);
+        }
+
+        [TestMethod]
+        public void AnUnchangedConfigurationKeepsItsToken()
+        {
+            // The other half of the contract. If the mapping has not changed, the key must not move -
+            // otherwise every import cycle would re-enumerate the whole tenant.
+            var a = GraphUserOrgSelection.FromTypes(new[] { EntraType(1, "extensionAttribute1"), EntraType(2, "employeeType") });
+            var b = GraphUserOrgSelection.FromTypes(new[] { EntraType(2, "employeeType"), EntraType(1, "extensionAttribute1") });
+
+            Assert.AreEqual(a.DeltaKeyQualifier, b.DeltaKeyQualifier, "Order out of the database must not matter.");
+
+            var renamed = EntraType(1, "extensionAttribute1");
+            renamed.Name = "Something else entirely";
+            var c = GraphUserOrgSelection.FromTypes(new[] { renamed, EntraType(2, "employeeType") });
+
+            Assert.AreEqual(a.DeltaKeyQualifier, c.DeltaKeyQualifier, "A rename must not cost a re-enumeration.");
+        }
+
+        [TestMethod]
+        public void FromTypes_SelectsTheSamePropertiesAsFromAttributeNames()
+        {
+            var fromTypes = GraphUserOrgSelection.FromTypes(
+                new[] { EntraType(1, "extensionAttribute3"), EntraType(2, "employeeOrgData.costCenter") });
+            var fromNames = GraphUserOrgSelection.FromAttributeNames(
+                new[] { "extensionAttribute3", "employeeOrgData.costCenter" });
+
+            CollectionAssert.AreEqual(fromNames.SelectFragments.ToList(), fromTypes.SelectFragments.ToList());
+            CollectionAssert.AreEqual(
+                fromNames.CanonicalAttributeNames.ToList(), fromTypes.CanonicalAttributeNames.ToList());
+        }
+
         [TestMethod]
         public void BuildSelect_DoesNotDuplicateAPropertyTheBaseQueryAlreadyNames()
         {

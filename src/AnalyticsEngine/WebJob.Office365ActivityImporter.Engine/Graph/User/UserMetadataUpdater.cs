@@ -183,8 +183,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // the only thing that populates a newly selected property for users who have not
                 // otherwise changed. See GraphUserOrgSelection.
                 var entraOrgTypes = await LoadEnabledEntraOrgTypes();
-                _userLoader.SetOrgSelection(
-                    GraphUserOrgSelection.FromAttributeNames(entraOrgTypes.Select(t => t.EntraAttributeName)));
+                _userLoader.SetOrgSelection(GraphUserOrgSelection.FromTypes(entraOrgTypes));
 
                 // Load from Graph & update delta code once done
                 var allActiveGraphUsers = await _userLoader.LoadAllActiveUsers();

@@ -99,7 +99,7 @@ namespace Common.Entities.UserOrgs
     internal sealed class SqlUserOrgTypeStore : SqlUserOrgStoreBase, IUserOrgTypeStore
     {
         private const string SelectColumns =
-            "id, name, source_kind, entra_attribute_name, is_enabled, created_utc, modified_utc";
+            "id, name, source_kind, entra_attribute_name, is_enabled, source_generation, created_utc, modified_utc";
 
         public SqlUserOrgTypeStore(string connectionString) : base(connectionString)
         {
@@ -140,8 +140,11 @@ namespace Common.Entities.UserOrgs
             // assignment table is the largest of the three.
             // The job columns come from the job store so the two lists cannot drift: a hand-written
             // copy here is exactly how a newly added column turns into a null-read inside ReadJob.
+            // The column list is shared with the single-row reads so ReadType's ordinals cannot drift
+            // from what any one query selects - a duplicated list is how the last added column turned
+            // into a null-read deep inside a reader.
             var sql = @"
-SELECT id, name, source_kind, entra_attribute_name, is_enabled, created_utc, modified_utc
+SELECT " + SelectColumns + @"
 FROM dbo.user_org_types
 ORDER BY name;
 
@@ -234,14 +237,32 @@ VALUES (@name, @sourceKind, @attr, @enabled, SYSUTCDATETIME());";
             // and a retry no longer clears them because the stored configuration already matches what
             // the admin is submitting. The stale values then never go away.
             const string sql = @"
-DECLARE @affected INT;
+DECLARE @affected INT, @lockResult INT, @lockName NVARCHAR(255) = N'user_org_type_' + CAST(@id AS NVARCHAR(20));
+
+-- Same application lock as the import paths, so a reconfiguration cannot interleave with a queue or
+-- an apply for this org type.
+EXEC @lockResult = sp_getapplock
+    @Resource = @lockName, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 30000;
+
+IF @lockResult < 0
+BEGIN
+    RAISERROR('USERORG_ACTIVE_JOB', 16, 1);
+    RETURN;
+END
 
 UPDATE dbo.user_org_types
 SET name = @name,
     source_kind = @sourceKind,
     entra_attribute_name = @attr,
     is_enabled = @enabled,
-    modified_utc = SYSUTCDATETIME()
+    modified_utc = SYSUTCDATETIME(),
+    -- Bumped only when the values are being discarded, which is exactly when a delta token minted
+    -- for the old configuration stops being safe to reuse. The Graph delta-token cache key is
+    -- derived from the configured attributes, so without this an admin who repointed a type from
+    -- one attribute to another and back again would land on the FIRST key - and Microsoft Graph
+    -- would answer its stored token with only the users that changed since, leaving everybody else
+    -- permanently unassigned in a type whose values had just been cleared.
+    source_generation = source_generation + CASE WHEN @clearAssignments = 1 THEN 1 ELSE 0 END
 WHERE id = @id;
 
 SET @affected = @@ROWCOUNT;
@@ -295,10 +316,24 @@ SELECT @affected;";
             // Children are deleted explicitly, innermost first, because the assignments table already
             // carries the one cascade path SQL Server allows it (from dbo.users). One transaction, so a
             // failure part-way cannot leave values orphaned from their type.
+            //
+            // The application lock is the same one the import job store takes, so this cannot run
+            // alongside a queue or an apply for this org type. Jobs are deleted BEFORE their staged
+            // rows go with them via the foreign key's cascade: deleting staging first took locks in
+            // the opposite order to the apply, which locks the job and then reads staging, and two
+            // orders is how you get a deadlock between deleting a type and importing into it.
             const string sql = @"
-DELETE s FROM dbo.user_org_import_staging s
-    JOIN dbo.user_org_import_jobs j ON j.id = s.job_id
-    WHERE j.org_type_id = @id;
+DECLARE @lockResult INT, @lockName NVARCHAR(255) = N'user_org_type_' + CAST(@id AS NVARCHAR(20));
+
+EXEC @lockResult = sp_getapplock
+    @Resource = @lockName, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 30000;
+
+IF @lockResult < 0
+BEGIN
+    RAISERROR('USERORG_ACTIVE_JOB', 16, 1);
+    RETURN;
+END
+
 DELETE FROM dbo.user_org_import_jobs WHERE org_type_id = @id;
 DELETE FROM dbo.user_org_assignments WHERE org_type_id = @id;
 DELETE FROM dbo.user_org_values WHERE org_type_id = @id;
@@ -310,7 +345,17 @@ DELETE FROM dbo.user_org_types WHERE id = @id;";
                 using (var cmd = Command(connection, sql, tx))
                 {
                     cmd.Parameters.Add("@id", SqlDbType.Int).Value = id;
-                    await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+                    try
+                    {
+                        await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (SqlException ex) when (ex.Message.IndexOf("USERORG_ACTIVE_JOB", StringComparison.Ordinal) >= 0)
+                    {
+                        throw new UserOrgValidationException(
+                            "An import for this organisation type is running. Wait for it to finish before "
+                            + "deleting the type.", ex);
+                    }
                 }
 
                 tx.Commit();
@@ -398,8 +443,9 @@ DELETE FROM dbo.user_org_types WHERE id = @id;";
                 SourceKind = (UserOrgSourceKind)reader.GetByte(2),
                 EntraAttributeName = ReadString(reader, 3),
                 IsEnabled = reader.GetBoolean(4),
-                CreatedUtc = reader.GetDateTime(5),
-                ModifiedUtc = ReadNullableDate(reader, 6),
+                SourceGeneration = reader.GetInt32(5),
+                CreatedUtc = reader.GetDateTime(6),
+                ModifiedUtc = ReadNullableDate(reader, 7),
             };
         }
     }

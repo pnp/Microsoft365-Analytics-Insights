@@ -1,6 +1,7 @@
 using Common.Entities.UserOrgs;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
@@ -30,17 +31,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     {
         /// <summary>No org attributes configured - the selection and the token key are unchanged.</summary>
         public static readonly GraphUserOrgSelection None =
-            new GraphUserOrgSelection(new string[0], new string[0], new string[0]);
+            new GraphUserOrgSelection(new string[0], new string[0], new string[0], new string[0]);
 
         private GraphUserOrgSelection(
             IReadOnlyList<string> selectFragments,
             IReadOnlyList<string> canonicalAttributeNames,
+            IReadOnlyList<string> qualifierInputs,
             IReadOnlyList<string> unparseable)
         {
             SelectFragments = selectFragments;
             CanonicalAttributeNames = canonicalAttributeNames;
             UnparseableAttributeNames = unparseable;
-            DeltaKeyQualifier = BuildQualifier(canonicalAttributeNames);
+            DeltaKeyQualifier = BuildQualifier(qualifierInputs);
         }
 
         /// <summary>
@@ -95,7 +97,45 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 return None;
             }
 
-            return new GraphUserOrgSelection(fragments, CanonicalNames(specs), unparseable);
+            var canonical = CanonicalNames(specs);
+            return new GraphUserOrgSelection(fragments, canonical, canonical, unparseable);
+        }
+
+        /// <summary>
+        /// Builds a selection from the configured org types, so the delta-token key follows the
+        /// mapping and not merely the set of attribute names.
+        /// </summary>
+        /// <remarks>
+        /// Preferred over <see cref="FromAttributeNames"/> wherever the types themselves are to hand.
+        /// The attribute names alone cannot distinguish "the same attributes, still mapped the same
+        /// way" from "the same attributes, but this type's values have been thrown away since" - and
+        /// the difference matters, because a stored delta token is only safe to reuse in the first
+        /// case. Repointing a type from one attribute to another and back, or deleting and recreating
+        /// it, both return to a key that already holds a token; Graph would answer it with only the
+        /// users changed since, leaving everybody else permanently unassigned in a type that had just
+        /// been emptied. Including each type's id and source generation makes those keys distinct.
+        /// </remarks>
+        public static GraphUserOrgSelection FromTypes(IEnumerable<UserOrgType> types)
+        {
+            var materialised = (types ?? Enumerable.Empty<UserOrgType>()).Where(t => t != null).ToList();
+
+            IReadOnlyList<string> unparseable;
+            var specs = UserOrgRules.ParseSpecs(materialised.Select(t => t.EntraAttributeName), out unparseable);
+            var fragments = EntraOrgAttributeSpec.BuildSelectFragments(specs);
+
+            if (fragments.Count == 0 && unparseable.Count == 0)
+            {
+                return None;
+            }
+
+            var qualifierInputs = materialised
+                .Select(t => t.Id.ToString(CultureInfo.InvariantCulture)
+                    + ":" + (t.EntraAttributeName ?? string.Empty)
+                    + ":" + t.SourceGeneration.ToString(CultureInfo.InvariantCulture))
+                .OrderBy(s => s, StringComparer.Ordinal)
+                .ToList();
+
+            return new GraphUserOrgSelection(fragments, CanonicalNames(specs), qualifierInputs, unparseable);
         }
 
         /// <summary>
@@ -105,9 +145,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             var materialised = (specs ?? Enumerable.Empty<EntraOrgAttributeSpec>()).Where(s => s != null).ToList();
             var fragments = EntraOrgAttributeSpec.BuildSelectFragments(materialised);
-            return fragments.Count == 0
-                ? None
-                : new GraphUserOrgSelection(fragments, CanonicalNames(materialised), new string[0]);
+            if (fragments.Count == 0)
+            {
+                return None;
+            }
+
+            var canonical = CanonicalNames(materialised);
+            return new GraphUserOrgSelection(fragments, canonical, canonical, new string[0]);
         }
 
         private static IReadOnlyList<string> CanonicalNames(IEnumerable<EntraOrgAttributeSpec> specs)
@@ -152,17 +196,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         /// <summary>
-        /// A short, stable hash of the <b>attributes whose values are extracted</b>.
+        /// A short, stable hash of <b>which org types are mapped to which attributes, and how many
+        /// times each of those mappings has been reset</b>.
         /// </summary>
         /// <remarks>
-        /// Derived from the canonical attribute names rather than the <c>$select</c> fragments. Those
-        /// are not the same set, and using the fragments was a real defect: all fifteen
+        /// Not derived from the <c>$select</c> fragments, which was a real defect: all fifteen
         /// <c>extensionAttributeN</c> slots - and both <c>employeeOrgData</c> sub-properties, and every
         /// property of one schema extension - collapse to a single fragment, so adding a second slot
         /// left the qualifier unchanged, the delta token intact, and the new organisation type empty
         /// for every user who did not otherwise change.
         ///
-        /// A hash rather than the names themselves because a directory extension name is 60-odd
+        /// Not derived from the attribute names alone either, which was the next defect along: those
+        /// cannot distinguish a mapping that is still intact from one whose values have since been
+        /// discarded. Repointing a type at a different attribute and back, or deleting and recreating
+        /// it, both return to a key that already holds a token - and Graph answers a token with only
+        /// the users changed since it, so everybody else stays unassigned in a type that had just been
+        /// emptied. Including the type id and its source generation makes those keys distinct.
+        ///
+        /// A hash rather than the inputs themselves because a directory extension name is 60-odd
         /// characters and several of them would make an unwieldy cache key. Truncated to 8 bytes: this
         /// is a cache-invalidation tag, not a security boundary, and a collision would only mean
         /// reusing a delta token for a different selection - which the next configuration change would
@@ -171,16 +222,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// SHA-256 rather than <see cref="string.GetHashCode()"/>, which is randomised per process on
         /// modern .NET and would therefore invalidate the token on every web-job restart.
         /// </remarks>
-        private static string BuildQualifier(IReadOnlyList<string> canonicalAttributeNames)
+        private static string BuildQualifier(IReadOnlyList<string> qualifierInputs)
         {
-            if (canonicalAttributeNames == null || canonicalAttributeNames.Count == 0)
+            if (qualifierInputs == null || qualifierInputs.Count == 0)
             {
                 return string.Empty;
             }
 
             using (var sha = SHA256.Create())
             {
-                var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(string.Join(",", canonicalAttributeNames)));
+                var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(string.Join(",", qualifierInputs)));
                 var builder = new StringBuilder(18);
                 builder.Append("-o");
                 for (var i = 0; i < 8; i++)

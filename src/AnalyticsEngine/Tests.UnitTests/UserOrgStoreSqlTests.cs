@@ -686,6 +686,95 @@ DELETE FROM dbo.users;");
         }
 
         [TestMethod]
+        public async Task Update_BumpsTheSourceGenerationOnlyWhenValuesAreDiscarded()
+        {
+            // The generation feeds the Graph delta-token cache key. Bumping it when nothing was
+            // discarded would cost a 200,000-user re-enumeration for a rename; not bumping it when
+            // values WERE discarded lets a later configuration land back on a key that still holds a
+            // token, leaving the emptied type permanently unpopulated.
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            Assert.AreEqual(1, (await _types.GetAsync(typeId)).SourceGeneration);
+
+            var type = await _types.GetAsync(typeId);
+            type.Name = "Renamed";
+            await _types.UpdateAsync(type, false);
+            Assert.AreEqual(1, (await _types.GetAsync(typeId)).SourceGeneration, "A rename must not bump it.");
+
+            type = await _types.GetAsync(typeId);
+            type.SourceKind = UserOrgSourceKind.EntraAttribute;
+            type.EntraAttributeName = "extensionAttribute1";
+            await _types.UpdateAsync(type, true);
+            Assert.AreEqual(2, (await _types.GetAsync(typeId)).SourceGeneration, "Discarding values must bump it.");
+        }
+
+        [TestMethod]
+        public async Task Apply_RefusesAJobWhoseTypeStoppedBeingCsvSourced()
+        {
+            // An admin can switch the type between the upload and the worker running. That switch
+            // clears the assignments; letting the queued file land afterwards silently undoes it.
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", "X"));
+            await _jobs.TryClaimJobAsync(jobId);
+
+            Execute(
+                "UPDATE dbo.user_org_types SET source_kind = 1, entra_attribute_name = 'extensionAttribute1' "
+                + $"WHERE id = {typeId}");
+
+            try
+            {
+                await _jobs.ApplyAsync(jobId);
+                Assert.Fail("A CSV job must not apply to a type that is no longer CSV-sourced.");
+            }
+            catch (UserOrgJobSupersededException)
+            {
+            }
+
+            Assert.AreEqual(0, (await _assignments.GetForUserAsync(user)).Count);
+        }
+
+        [TestMethod]
+        public async Task Apply_DoesNotBlockTheHeartbeat()
+        {
+            // The apply used to fence itself by holding a transaction-duration UPDLOCK on the job row.
+            // The heartbeat runs on its own connection and writes that same row, so it blocked for the
+            // whole merge - and any import longer than StaleHeartbeatThreshold was then reported to
+            // the admin as interrupted while it was running perfectly.
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", "X"));
+            await _jobs.TryClaimJobAsync(jobId);
+
+            var before = (await _jobs.GetJobAsync(jobId)).HeartbeatUtc;
+
+            var apply = _jobs.ApplyAsync(jobId);
+            await _jobs.HeartbeatAsync(jobId);
+            await apply;
+
+            var after = (await _jobs.GetJobAsync(jobId)).HeartbeatUtc;
+            Assert.IsTrue(after > before, "A heartbeat issued while the apply ran must land.");
+            Assert.AreEqual("X", (await _assignments.GetForUserAsync(user)).Single().Value);
+        }
+
+        [TestMethod]
+        public async Task DeletingATypeWhileAJobIsRunningIsRefusedRatherThanDeadlocking()
+        {
+            // Deleting used to take staging before jobs, the opposite order to the apply, which is how
+            // a deadlock between deleting a type and importing into it becomes possible. Both now take
+            // the same per-type application lock, so one waits rather than racing.
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", "X"));
+
+            await _types.DeleteAsync(typeId);
+
+            Assert.IsNull(await _jobs.GetJobAsync(jobId), "Deleting the type takes its jobs with it.");
+            Assert.AreEqual(
+                0,
+                Count($"SELECT COUNT(*) FROM dbo.user_org_import_staging WHERE job_id = {jobId}"),
+                "The staged rows go with the job through the foreign key's cascade.");
+        }
+
+        [TestMethod]
         public async Task Merge_SkipsTypesThatChangedSourceWhileTheImportWasRunning()
         {
             // A user-metadata cycle reads its org types, then spends minutes loading 200,000 users

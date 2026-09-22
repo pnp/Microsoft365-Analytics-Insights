@@ -66,13 +66,18 @@ DECLARE @valuesCreated INT = 0, @cleared INT = 0, @applied INT = 0;
 --    minutes loading 200,000 users from Graph; an administrator who switches a type to CSV, or
 --    disables it, during that window would otherwise have their change quietly undone by values
 --    read from the attribute they just stopped using - and a later CSV Merge never touches users
---    the file does not mention, so those values would then survive indefinitely. Evaluated inside
---    the merge transaction, so the answer cannot go stale between the check and the write.
+--    the file does not mention, so those values would then survive indefinitely.
+--
+--    UPDLOCK, HOLDLOCK rather than a plain read. Under READ COMMITTED an ordinary shared lock is
+--    released the moment this statement ends, so a reconfiguration could commit between here and
+--    the writes below and be undone by them anyway - the check would look right and prove nothing.
+--    Holding the lock for the transaction is what actually fences it, and it takes the type rows
+--    before the values and assignments, which is the same order the type store uses.
 IF @expectedSourceKind IS NOT NULL
 BEGIN
     DELETE u
     FROM " + TempTableName + @" u
-    WHERE NOT EXISTS (SELECT 1 FROM dbo.user_org_types t
+    WHERE NOT EXISTS (SELECT 1 FROM dbo.user_org_types t WITH (UPDLOCK, HOLDLOCK)
                       WHERE t.id = u.org_type_id
                         AND t.source_kind = @expectedSourceKind
                         AND t.is_enabled = 1);

@@ -253,6 +253,7 @@ CREATE TABLE [dbo].[user_org_types] (
     [source_kind] tinyint NOT NULL,
     [entra_attribute_name] nvarchar(200) NULL,
     [is_enabled] bit NOT NULL CONSTRAINT [DF_user_org_types_is_enabled] DEFAULT (1),
+    [source_generation] int NOT NULL CONSTRAINT [DF_user_org_types_source_generation] DEFAULT (1),
     [created_utc] datetime2(7) NOT NULL CONSTRAINT [DF_user_org_types_created_utc] DEFAULT SYSUTCDATETIME(),
     [modified_utc] datetime2(7) NULL,
     CONSTRAINT [PK_user_org_types] PRIMARY KEY CLUSTERED ([id] ASC),

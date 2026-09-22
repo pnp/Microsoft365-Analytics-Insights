@@ -57,6 +57,22 @@ namespace Common.Entities.UserOrgs
             const string insertJobSql = @"
 SET NOCOUNT ON;
 
+DECLARE @lockResult INT, @lockName NVARCHAR(255) = N'user_org_type_' + CAST(@orgTypeId AS NVARCHAR(20));
+
+-- The same application lock the apply takes, so queueing and applying for one org type cannot
+-- interleave. Taken before anything is read, so the checks below see a settled state. A short
+-- timeout on purpose: this runs inside an administrator's HTTP request, and 'an import is already
+-- in progress' is the honest answer when a live worker holds the lock - far better than hanging the
+-- upload for the ten minutes a large merge may take.
+EXEC @lockResult = sp_getapplock
+    @Resource = @lockName, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 15000;
+
+IF @lockResult < 0
+BEGIN
+    RAISERROR('USERORG_ACTIVE_JOB', 16, 1);
+    RETURN;
+END
+
 -- The org type must still be CSV-sourced. It is checked in the caller too, but that happens before
 -- a file of up to half a million rows is parsed, so an admin switching the type to Entra in the
 -- meantime would otherwise have a CSV import land on it afterwards. Re-checked here because this
@@ -348,18 +364,57 @@ DELETE FROM dbo.user_org_import_staging WHERE job_id = @id;";
         internal const string ApplySql = @"
 SET NOCOUNT ON;
 
-DECLARE @orgTypeId INT, @mode TINYINT, @confirmClear BIT;
+DECLARE @orgTypeId INT, @mode TINYINT, @confirmClear BIT, @lockResult INT, @lockName NVARCHAR(255);
 
--- UPDLOCK, and the status test, are the fence. A worker that stopped reporting progress can have
--- been superseded (see CreateJobWithRowsAsync) while it was still alive - a long pause, a stalled
--- connection - and its staged rows deleted underneath it. Applying anyway would be catastrophic:
--- a Replace with no staged rows matches nobody, so it would DELETE every assignment for the org
--- type, and if that commits after the replacement's own apply it silently empties a type the
--- portal is simultaneously reporting as freshly imported. The lock also serialises this against a
--- concurrent CreateJobWithRowsAsync, so the two cannot interleave on the same org type.
-SELECT @orgTypeId = org_type_id, @mode = mode, @confirmClear = confirm_clear
-FROM dbo.user_org_import_jobs WITH (UPDLOCK)
-WHERE id = @jobId AND status = 2;
+-- Read the org type first, unlocked, purely to name the lock. The authoritative read happens below,
+-- once the lock is held.
+SELECT @orgTypeId = org_type_id FROM dbo.user_org_import_jobs WHERE id = @jobId;
+
+IF @orgTypeId IS NULL
+BEGIN
+    RAISERROR('USERORG_JOB_NOT_RUNNABLE', 16, 1);
+    RETURN;
+END
+
+SET @lockName = N'user_org_type_' + CAST(@orgTypeId AS NVARCHAR(20));
+
+-- An application lock, not a lock on the job row. Everything that queues, applies, reconfigures or
+-- deletes work for one org type takes this same lock, so those operations cannot interleave - but
+-- the job row itself stays writable, which matters because the heartbeat runs on its own connection
+-- and must keep reporting progress for the whole merge. Holding a transaction-duration UPDLOCK on
+-- the job row instead blocked every heartbeat until the apply committed, so any import taking
+-- longer than StaleHeartbeatThreshold was reported to the admin as interrupted while it was in fact
+-- running perfectly. It also inverted the lock order against deleting an org type, which took
+-- staging before jobs.
+--
+-- If the lock cannot be taken, a live worker holds it. That is the right answer to refuse on: a
+-- worker that has genuinely died releases it when its connection is torn down and its transaction
+-- rolls back.
+EXEC @lockResult = sp_getapplock
+    @Resource = @lockName, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 600000;
+
+IF @lockResult < 0
+BEGIN
+    RAISERROR('USERORG_JOB_NOT_RUNNABLE', 16, 1);
+    RETURN;
+END
+
+-- Authoritative now the lock is held: still Running, and the type still takes CSV imports. The
+-- status test is the fence against a worker that went quiet, was superseded and had its staged rows
+-- deleted underneath it - applying anyway means a Replace matches nobody, so it deletes EVERY
+-- assignment for the org type. The source test is the fence against an admin switching the type to
+-- Entra between the upload and the worker running, which clears the assignments the switch was
+-- meant to discard and would otherwise be silently undone by this file.
+--
+-- Reset first. A SELECT that matches no rows leaves its assignment variables at whatever they
+-- already held, so without this @orgTypeId would keep the value the unlocked read above put in it
+-- and the fence would pass in exactly the cases it exists to catch.
+SET @orgTypeId = NULL;
+
+SELECT @orgTypeId = j.org_type_id, @mode = j.mode, @confirmClear = j.confirm_clear
+FROM dbo.user_org_import_jobs j
+JOIN dbo.user_org_types t ON t.id = j.org_type_id AND t.source_kind = 2
+WHERE j.id = @jobId AND j.status = 2;
 
 IF @orgTypeId IS NULL
 BEGIN
