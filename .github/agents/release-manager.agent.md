@@ -116,10 +116,12 @@ in the diff.** That file is the only way to make the gate ignore a string, so an
 either a genuine language-neutral term (a Microsoft product name, a file format, a unit) or an
 attempt to get an untranslated string through. Challenge anything that is an ordinary English word.
 
-**Finally, the one thing neither check can see: a reworded English string.** If a release *changes*
-an existing English value rather than adding a new key, the key still exists in both languages, so
-`tsc` and the gate both stay green while the Spanish is now a translation of the old sentence. Diff
-the English catalog and confirm each changed value's Spanish was updated too:
+**Finally, the two things neither check can see.**
+
+*A reworded English string.* If a release *changes* an existing English value rather than adding a
+new key, the key still exists in both languages, so `tsc` and the gate both stay green while the
+Spanish is now a translation of the old sentence. Diff the English catalog and confirm each changed
+value's Spanish was updated too:
 
 ```powershell
 git --no-pager diff origin/main origin/dev -- "src/AnalyticsEngine/Web/Scripts/portal/src/i18n/catalog/en"
@@ -128,6 +130,19 @@ git --no-pager diff origin/main origin/dev -- "src/AnalyticsEngine/Web/Scripts/p
 
 Every key whose English changed should appear in both diffs. One that appears only in the first is
 a stale translation — a blocker, and one that will otherwise ship silently.
+
+*Display text authored by the .NET API.* A string the server writes and the SPA renders verbatim is
+invisible to the untranslated-text check, because from the SPA's side there is no string. The rule
+is that the API sends a stable key beside the text and the SPA translates from the key;
+`src/i18n/lint/serverAuthoredText.test.ts` reads the C# and fails when they drift. So if the
+release adds or renames anything in an API controller that the portal *displays* — a KPI figure, a
+chart, a judgement, an availability reason — check its catalog entry landed too:
+
+```powershell
+git --no-pager diff --name-only origin/main origin/dev | Select-String -Pattern "Web/Controllers/|Web/Models/"
+```
+
+If that touches a controller the portal renders from, and `catalog/` is unchanged, ask why.
 
 If a new **language** was added in the release, say so in the admin notes, and check the language
 appears in the portal's language picker (`LANGUAGES` in `src/i18n/languages.ts`).

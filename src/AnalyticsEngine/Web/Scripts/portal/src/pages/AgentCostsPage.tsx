@@ -134,6 +134,51 @@ const useStyles = makeStyles({
   empty: { color: tokens.colorNeutralForeground3, padding: '24px 0', textAlign: 'center' },
 });
 
+
+function availabilityMessages(availability: AgentCostAvailability, t: TFunction): string[] {
+  const messages: string[] = [];
+  if (!availability.copilotStudioCreditsEnabled && !availability.azureCostsEnabled) {
+    messages.push(t('agentCosts.availability.message.noImports'));
+  }
+
+  if (availability.copilotStudioCreditsEnabled && !availability.hasCopilotStudioCreditData) {
+    if (availability.copilotStudioCreditsLastError) {
+      messages.push(t('agentCosts.availability.message.copilotImportFailing', { error: availability.copilotStudioCreditsLastError }));
+    } else if (availability.copilotStudioCreditsHasRunCleanly) {
+      messages.push(t('agentCosts.availability.message.copilotNoUsage'));
+    } else {
+      messages.push(t('agentCosts.availability.message.copilotNotStoredYet'));
+    }
+  }
+
+  if (availability.azureCostsEnabled && !availability.hasAzureCostData) {
+    if (availability.azureCostsLastError) {
+      messages.push(t('agentCosts.availability.message.azureImportFailing', { error: availability.azureCostsLastError }));
+    } else if (availability.azureCostsHaveRunCleanly) {
+      messages.push(t('agentCosts.availability.message.azureNoSpend'));
+    } else {
+      messages.push(t('agentCosts.availability.message.azureNotStoredYet'));
+    }
+  }
+
+  if (availability.copilotStudioCreditsEnabled
+    && !availability.copilotStudioCreditsLastError
+    && availability.perUserCreditsLastError) {
+    messages.push(t('agentCosts.availability.message.perUserNotUpdating', { error: availability.perUserCreditsLastError }));
+  }
+
+  if (availability.copilotStudioCreditsEnabled
+    && !availability.copilotStudioCreditsLastError
+    && availability.capacityLastError) {
+    messages.push(t('agentCosts.availability.message.capacityNotUpdating', { error: availability.capacityLastError }));
+  }
+
+  messages.push(t('agentCosts.availability.message.creditEndpointMismatch'));
+  messages.push(t('agentCosts.availability.message.azureNoPeople'));
+  messages.push(t('agentCosts.availability.message.azureEstimates'));
+  return messages;
+}
+
 /** Reads a filter value from a Select/Input, mapping the "any" sentinel back to undefined. */
 function orUndefined(value: string): string | undefined {
   return value === '' ? undefined : value;
@@ -495,7 +540,7 @@ export default function AgentCostsPage() {
               </MessageBarBody>
             </MessageBar>
           )}
-          {availability.messages.map((m) => (
+          {availabilityMessages(availability, t).map((m) => (
             <MessageBar key={m} intent="info">
               <MessageBarBody>{m}</MessageBarBody>
             </MessageBar>

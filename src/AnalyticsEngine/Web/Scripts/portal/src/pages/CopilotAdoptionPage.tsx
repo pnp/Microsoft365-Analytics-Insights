@@ -62,6 +62,7 @@ import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/ad
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
 import type { KpiDefinition } from '../components/shared/KpiGrid';
 import { activeLocale, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
+import { adoptionBandLabel, availabilityMessages, scoreProfileLabel } from '../components/copilotAdoption/serverText';
 
 const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
   { value: 7, labelKey: 'copilotAdoption.page.window.last7Days' },
@@ -495,7 +496,7 @@ export default function CopilotAdoptionPage() {
       {availability?.available && (
         <>
           {availability.messages.length > 0 && (
-            <DismissibleWarnings messages={availability.messages} style={{ marginTop: '16px' }} />
+            <DismissibleWarnings messages={availabilityMessages(t, availability)} style={{ marginTop: '16px' }} />
           )}
 
           <div className={styles.subTabs} data-print="hide">
@@ -913,7 +914,7 @@ function ExecutiveTab({
           />
         </div>
         <div className={styles.cardBody}>
-          <ActionPlan actions={summary.actionPlan} onSelect={onDrillToAction} />
+          <ActionPlan actions={summary.actionPlan} options={o} onSelect={onDrillToAction} />
         </div>
       </Card>
     </>
@@ -1148,7 +1149,7 @@ function AnalystTab({
           />
         </div>
         <div className={styles.cardBody}>
-          <ActionPlan actions={summary.actionPlan} onSelect={onDrillToAction} />
+          <ActionPlan actions={summary.actionPlan} options={o} onSelect={onDrillToAction} />
         </div>
       </Card>
 
@@ -1283,7 +1284,7 @@ function AnalystTab({
           />
         </div>
         <div className={styles.cardBody}>
-          <HabitStrip buckets={summary.habitBuckets} />
+          <HabitStrip buckets={summary.habitBuckets} options={o} />
         </div>
       </Card>
 
@@ -1306,7 +1307,7 @@ function AnalystTab({
           </div>
           <div className={styles.cardBody}>
             <DonutChart
-              categories={summary.bandBreakdown}
+              categories={summary.bandBreakdown.map((b) => ({ ...b, label: adoptionBandLabel(t, b.label, b.label) }))}
               colours={BAND_COLOUR_LIST}
               centreValue={formatCount(analysedUsers)}
               centreLabel={t('copilotAdoption.page.licensedUsersCentreLabel')}
@@ -1364,7 +1365,7 @@ function AnalystTab({
             <RadarChart
               axes={['Frequency', 'Depth', 'Breadth']}
               series={summary.scoreProfiles.map((p, i) => ({
-                name: `${p.label} (${formatCount(p.users)})`,
+                name: `${scoreProfileLabel(t, p.label)} (${formatCount(p.users)})`,
                 colour: i === 0 ? '#0f6cbd' : '#107c10',
                 values: [p.frequencyScore, p.depthScore, p.breadthScore],
               }))}
@@ -1824,7 +1825,7 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
           <AccordionPanel>
             <div className={styles.method}>
               <Text>{t('copilotAdoption.page.everyLicensedUserGetsExactlyOneRecommendedActionCounts')}</Text>
-              <ActionPlan actions={summary.actionPlan} />
+              <ActionPlan actions={summary.actionPlan} options={o} />
               <Text className={styles.muted}>{t('copilotAdoption.page.onScreenEachUserCarriesTwoWordTagMeaning')}</Text>
             </div>
           </AccordionPanel>

@@ -71,6 +71,9 @@ namespace Common.Entities.TeamsExplorer
         /// <summary>Teams call records are being imported.</summary>
         public bool CallsAvailable { get; set; }
 
+        /// <summary>A Service Bus connection is configured for the Teams calls webhook queue.</summary>
+        public bool ServiceBusAvailable { get; set; }
+
         /// <summary>Teams deep analytics (teams, channels, tabs, reactions) is being imported.</summary>
         public bool TeamsAnalyticsAvailable { get; set; }
 
@@ -114,6 +117,7 @@ namespace Common.Entities.TeamsExplorer
             {
                 UsageReportsAvailable = sources.UsageReports,
                 CallsAvailable = sources.Calls,
+                ServiceBusAvailable = sources.ServiceBus,
                 TeamsAnalyticsAvailable = sources.TeamsAnalytics,
                 CognitiveAvailable = sources.Cognitive,
                 UserMetadataAvailable = sources.UserMetadata,

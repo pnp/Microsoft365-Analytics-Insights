@@ -5,6 +5,33 @@
  * makes a missing one a build failure.
  */
 export const webActivity = {
+  // Server-authored bucket labels.
+
+  'webActivity.bucket.visitorSegment.Daily.label': 'Daily',
+  'webActivity.bucket.visitorSegment.Regular.label': 'Regular',
+  'webActivity.bucket.visitorSegment.Occasional.label': 'Occasional',
+  'webActivity.bucket.visitorSegment.Rare.label': 'Rare',
+  'webActivity.bucket.visitorSegment.One-off.label': 'One-off',
+  'webActivity.bucket.visitDepth.1 page.label': '1 page',
+  'webActivity.bucket.visitDepth.2 pages.label': '2 pages',
+  'webActivity.bucket.visitDepth.3-5 pages.label': '3-5 pages',
+  'webActivity.bucket.visitDepth.6-10 pages.label': '6-10 pages',
+  'webActivity.bucket.visitDepth.11-20 pages.label': '11-20 pages',
+  'webActivity.bucket.visitDepth.21+ pages.label': '21+ pages',
+  'webActivity.bucket.day.0.label': 'Monday',
+  'webActivity.bucket.day.1.label': 'Tuesday',
+  'webActivity.bucket.day.2.label': 'Wednesday',
+  'webActivity.bucket.day.3.label': 'Thursday',
+  'webActivity.bucket.day.4.label': 'Friday',
+  'webActivity.bucket.day.5.label': 'Saturday',
+  'webActivity.bucket.day.6.label': 'Sunday',
+  'webActivity.bucket.period.afterMidnight.label': 'After midnight',
+  'webActivity.bucket.period.earlyMorning.label': 'Early morning',
+  'webActivity.bucket.period.lateMorning.label': 'Late morning',
+  'webActivity.bucket.period.afternoon.label': 'Afternoon',
+  'webActivity.bucket.period.evening.label': 'Evening',
+  'webActivity.bucket.period.lateNight.label': 'Late night',
+
   'webActivity.page.window.last7Days': 'Last 7 days',
   'webActivity.page.window.last28Days': 'Last 28 days',
   'webActivity.page.window.last90Days': 'Last 90 days',

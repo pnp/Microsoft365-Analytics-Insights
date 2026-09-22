@@ -21,6 +21,7 @@ import {
   WindowNote,
   bounceTone,
   bucketsToCategories,
+  translatedBucketsToCategories,
   formatCount,
   formatDecimal,
   formatDuration,
@@ -293,7 +294,7 @@ export default function JourneysPanel({
           query={queryFor(data.queries, 'journeys-depth')}
           isEmpty={data.depth.every((b) => b.count === 0)}
         >
-          <CategoryBarChart categories={bucketsToCategories(data.depth)} valueLabel={t('webActivity.common.visits')} showShare />
+          <CategoryBarChart categories={translatedBucketsToCategories(t, 'visitDepth', data.depth)} valueLabel={t('webActivity.common.visits')} showShare />
         </SectionCard>
 
         <SectionCard

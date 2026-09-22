@@ -19,6 +19,7 @@ import {
   SectionCard,
   WindowNote,
   bucketsToCategories,
+  translatedBucketsToCategories,
   formatCount,
   formatDecimal,
   formatPct,
@@ -183,7 +184,7 @@ export default function SearchPanel({
           query={queryFor(data.queries, 'search-day-hour')}
           isEmpty={data.byDay.every((b) => b.count === 0)}
         >
-          <CategoryBarChart categories={bucketsToCategories(data.byDay)} valueLabel={t('webActivity.common.searches')} showShare />
+          <CategoryBarChart categories={translatedBucketsToCategories(t, 'day', data.byDay)} valueLabel={t('webActivity.common.searches')} showShare />
         </SectionCard>
 
         <SectionCard
@@ -192,7 +193,7 @@ export default function SearchPanel({
           query={queryFor(data.queries, 'search-day-hour')}
           isEmpty={data.byPeriodOfDay.every((b) => b.count === 0)}
         >
-          <CategoryBarChart categories={bucketsToCategories(data.byPeriodOfDay)} valueLabel={t('webActivity.common.searches')} showShare />
+          <CategoryBarChart categories={translatedBucketsToCategories(t, 'period', data.byPeriodOfDay)} valueLabel={t('webActivity.common.searches')} showShare />
         </SectionCard>
 
         <SectionCard

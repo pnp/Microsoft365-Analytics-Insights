@@ -14,6 +14,7 @@ import {
   WindowNote,
   bounceTone,
   bucketsToCategories,
+  translatedBucketsToCategories,
   formatCount,
   formatDecimal,
   formatDuration,
@@ -114,7 +115,7 @@ export default function OverviewPanel({
     },
   ];
 
-  const segmentCategories = bucketsToCategories(data.visitorSegments).filter((c) => c.value > 0);
+  const segmentCategories = translatedBucketsToCategories(t, 'visitorSegment', data.visitorSegments).filter((c) => c.value > 0);
 
   return (
     <div>
@@ -180,7 +181,7 @@ export default function OverviewPanel({
           isEmpty={data.visitDepth.every((b) => b.count === 0)}
         >
           <CategoryBarChart
-            categories={bucketsToCategories(data.visitDepth)}
+            categories={translatedBucketsToCategories(t, 'visitDepth', data.visitDepth)}
             valueLabel={t('webActivity.common.visits')}
             showShare
           />

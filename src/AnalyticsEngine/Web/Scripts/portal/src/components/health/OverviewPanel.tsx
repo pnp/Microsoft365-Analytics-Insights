@@ -14,9 +14,17 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import Spinner from '../Spinner';
-import { useT } from '../../i18n';
+import { useT, type TFunction, type TranslationKey } from '../../i18n';
 import type { HealthSummary } from '../../types/health';
-import { type SectionState, SectionReasons, healthStatusText, statusColor, useHealthStyles } from './healthShared';
+import { type SectionState, SectionReasons, healthStatusText, statusColor, translateHealthReasonText, useHealthStyles } from './healthShared';
+
+
+function sectionLabel(t: TFunction, key: string, fallback: string): string {
+  if (!key) return fallback;
+  const catalogKey = `health.section.${key}.label` as TranslationKey;
+  const translated = t(catalogKey);
+  return translated === catalogKey ? fallback : translated;
+}
 
 const useStyles = makeStyles({
   reasons: {
@@ -76,7 +84,7 @@ export default function OverviewPanel({
         <ul className={styles.reasons}>
           {data.overallReasons.map((r, i) => (
             <li key={i}>
-              <Text size={200}>{r}</Text>
+              <Text size={200}>{translateHealthReasonText(r, t)}</Text>
             </li>
           ))}
         </ul>
@@ -105,14 +113,14 @@ export default function OverviewPanel({
         <TableBody>
           {data.sections.map((s) => (
             <TableRow key={s.key}>
-              <TableCell>{s.label}</TableCell>
+              <TableCell>{sectionLabel(t, s.key, s.label)}</TableCell>
               <TableCell>
                 <Badge appearance="filled" color={statusColor(s.status)}>
                   {healthStatusText(s.status, t)}
                 </Badge>
               </TableCell>
               <TableCell>
-                <SectionReasons reasons={s.reasons} />
+                <SectionReasons reasons={s.reasons.map((reason) => translateHealthReasonText(reason, t))} />
               </TableCell>
               <TableCell>
                 <Button size="small" appearance="subtle" onClick={() => onOpenSection(s.key)}>

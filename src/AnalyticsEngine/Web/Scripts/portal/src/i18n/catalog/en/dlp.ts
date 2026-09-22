@@ -16,6 +16,11 @@ export const dlp = {
   'dlp.loading': 'Loading DLP data...',
   'dlp.error.loadData': 'Failed to load DLP data.',
 
+  // Server-authored availability reasons
+
+  'dlp.availability.reason.copilotImportOff': "The Microsoft 365 Copilot audit import is switched off, so there is no per-agent DLP data. Enable 'Copilot interactions' in the installer. This does NOT need the DLP permission - Copilot DLP blocks are carried on the Copilot interaction records themselves.",
+  'dlp.availability.reason.tenantImportOff': "The Data Loss Prevention import (DLP.All) is switched off, so tenant-wide policy activity for Exchange, SharePoint/OneDrive and Endpoint is not shown. Enable 'DLP policy events' in the installer and grant the runtime app the 'ActivityFeed.ReadDlp' application permission, which is separate from 'ActivityFeed.Read' and needs its own admin consent.",
+
   // Common table columns and empty states
   'dlp.table.empty': 'Nothing in this period.',
   'dlp.column.agent': 'Agent',

@@ -118,7 +118,7 @@ export default function UnlicensedPanel({
           />
         </div>
         <div className={styles.cardBody}>
-          <HabitStrip buckets={unlicensed.habitBuckets} />
+          <HabitStrip buckets={unlicensed.habitBuckets} options={options} />
         </div>
       </Card>
 

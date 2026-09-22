@@ -23,6 +23,7 @@ import { KpiGrid, formatCount, formatDate } from '../shared/KpiGrid';
 import type { KpiDefinition } from '../shared/KpiGrid';
 import { useAdoptionTableStyles } from './adoptionShared';
 import { useT, type TFunction } from '../../i18n';
+import { agentHealthReason } from './serverText';
 
 /**
  * Health colours run from "delete this" to "this is working", matching the engagement-band palette
@@ -443,7 +444,7 @@ export default function AgentsPanel({
                           )}
                         </td>
                         <td className={table.td}>
-                          <Tooltip relationship="description" content={agent.healthReason}>
+                          <Tooltip relationship="description" content={agentHealthReason(t, agent, options)}>
                             <div>
                               <AgentHealthBadge health={agent.health} name={healthLabel(agent.health, t)} />
                             </div>

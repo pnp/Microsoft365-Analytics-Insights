@@ -115,6 +115,16 @@ const copilotAdoptionAgents: Record<keyof typeof en, string> = {
   'copilotAdoptionAgents.resourceTypes.group.unclassified.explanation': 'Valores que esta versión no reconoce y referencias cuyo tipo estaba vacío. Microsoft no publica ninguna lista de valores posibles y puede agregar otros nuevos en cualquier momento, por lo que se muestran tal cual en lugar de contarlos como contenido.',
   'copilotAdoptionAgents.resourceTypes.empty': 'No hay datos para este periodo.',
   'copilotAdoptionAgents.resourceTypes.referenceTitle': '{label}: {count} referencias',
+
+  // Razones de veredicto de agente creadas por el servidor
+  'copilotAdoptionAgents.server.healthReason.new': 'Visto por primera vez en los últimos {days} días. Demasiado nuevo para evaluarlo: dele tiempo para ganar adopción antes de revisarlo.',
+  'copilotAdoptionAgents.server.healthReason.retire.withDays': 'Sin uso durante {days} días ({retireDays}+ es la línea de retirada). Confírmelo con su propietario y después retírelo.',
+  'copilotAdoptionAgents.server.healthReason.retire.noUse': 'Sin uso registrado. Confírmelo con su propietario y después retírelo.',
+  'copilotAdoptionAgents.server.healthReason.review.quiet': 'Se está apagando: último uso hace {days} días. Merece la pena preguntar si sigue siendo necesario antes de que derive a la pila de retirada.',
+  'copilotAdoptionAgents.server.healthReason.review.fewUsers': 'Sigue en uso, pero solo por {users} {people}: por debajo de los {minUsers} necesarios para llamarlo adoptado. A menudo es su autor probándolo o un agente que nunca se anunció a las personas para las que se creó.',
+  'copilotAdoptionAgents.server.healthReason.person': 'persona',
+  'copilotAdoptionAgents.server.healthReason.people': 'personas',
+  'copilotAdoptionAgents.server.healthReason.keep': 'Usado en los últimos {reviewDays} días por {users} personas. Está adoptado realmente: siga dándole soporte.',
 };
 
 export default copilotAdoptionAgents;

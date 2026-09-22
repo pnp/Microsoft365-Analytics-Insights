@@ -20,7 +20,16 @@ import {
   howLongAgo,
   overallColor,
   statusColor,
+  translateHealthReasonText,
 } from '../health/healthShared';
+
+
+function sectionLabel(t: TFunction, key: string, fallback: string): string {
+  if (!key) return fallback;
+  const catalogKey = `health.section.${key}.label` as TranslationKey;
+  const translated = t(catalogKey);
+  return translated === catalogKey ? fallback : translated;
+}
 
 const useStyles = makeStyles({
   card: {
@@ -173,7 +182,7 @@ export default function HealthSnapshot({
         <div className={styles.sections}>
           {summary.sections.map((s) => (
             <span key={s.key} className={styles.chip}>
-              <Text size={200}>{s.label}</Text>
+              <Text size={200}>{sectionLabel(t, s.key, s.label)}</Text>
               <Badge appearance="filled" size="small" color={statusColor(s.status)}>
                 {overviewStatusText(s.status, t)}
               </Badge>
@@ -186,7 +195,7 @@ export default function HealthSnapshot({
         <ul className={styles.reasons}>
           {summary.overallReasons.slice(0, 4).map((r, i) => (
             <li key={i}>
-              <Text size={200}>{r}</Text>
+              <Text size={200}>{translateHealthReasonText(r, t)}</Text>
             </li>
           ))}
         </ul>

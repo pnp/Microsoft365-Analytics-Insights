@@ -207,6 +207,16 @@ export function bucketsToCategories(buckets: WebActivityBucket[]): ReportCategor
   return buckets.map((bucket) => ({ label: bucket.label, value: bucket.count }));
 }
 
+export function translatedBucketLabel(t: TFunction, group: string, bucket: WebActivityBucket): string {
+  const catalogKey = (`webActivity.bucket.` + `${group}.${bucket.key}.label`) as TranslationKey;
+  const translated = t(catalogKey);
+  return translated === catalogKey ? bucket.label : translated;
+}
+
+export function translatedBucketsToCategories(t: TFunction, group: string, buckets: WebActivityBucket[]): ReportCategory[] {
+  return buckets.map((bucket) => ({ label: translatedBucketLabel(t, group, bucket), value: bucket.count }));
+}
+
 /**
  * Stacked weekly points -> one series per name, over the union of every week present.
  *

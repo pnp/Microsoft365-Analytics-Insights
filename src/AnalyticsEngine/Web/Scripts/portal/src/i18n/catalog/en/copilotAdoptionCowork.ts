@@ -44,6 +44,18 @@ export const copilotAdoptionCowork = {
   'copilotAdoptionCowork.intro.policyScope': 'Cowork has {noLicence}. It requires a Microsoft 365 Copilot licence as a prerequisite, and is then billed by usage against Copilot Credits with access granted by a {policyScope}. So this is not a list of licences to buy - it is a list of people to {addTo} that policy. Merge the CSV into your existing policy scope; never replace the scope with it. This product observes usage, not policy assignments, so someone already scoped who simply had no Cowork activity in the selected period will not appear here, and replacing the scope would revoke their access.',
   'copilotAdoptionCowork.intro.twoAxes': 'Two things have to be true before enabling someone is worthwhile: they must carry real {coordinationLoad} (meetings, mail and document churn - the multi-step work Cowork absorbs), and they must have enough {copilotFluency} to trust an agent with it. Neither is sufficient alone, which is why this tab scores them as two separate axes rather than blending them into one number that could not tell the two failure modes apart.',
   'copilotAdoptionCowork.tiers.filterInstruction': 'Click a tier to filter the list below to exactly the people counted in it.',
+  'copilotAdoptionCowork.tier.established.label': 'Established',
+  'copilotAdoptionCowork.tier.established.description': 'Using Cowork on at least {days} separate days in this period. These people have already made it part of how they work - keep them in scope, and use them as the reference for what good looks like.',
+  'copilotAdoptionCowork.tier.trialling.label': 'Trialling',
+  'copilotAdoptionCowork.tier.trialling.description': 'Has used Cowork, but not yet regularly enough to call it a habit. Usually a prompt problem rather than a fit problem: they need a worked example on a task they actually own. Keep them in scope.',
+  'copilotAdoptionCowork.tier.primeCandidate.label': 'Prime candidate',
+  'copilotAdoptionCowork.tier.primeCandidate.description': 'Not yet using Cowork, but fluent with Copilot and carrying a heavy coordination load - the combination Cowork is built for. This is the rollout target: enable these people first.',
+  'copilotAdoptionCowork.tier.buildFluencyFirst.label': 'Build fluency first',
+  'copilotAdoptionCowork.tier.buildFluencyFirst.description': 'Has the workload Cowork would help with, but has not yet formed a Copilot habit. Enabling Cowork now would spend credits on someone unlikely to delegate to it. Bring them up on everyday Copilot first, then revisit.',
+  'copilotAdoptionCowork.tier.lowCoordinationLoad.label': 'Low coordination load',
+  'copilotAdoptionCowork.tier.lowCoordinationLoad.description': 'Comfortable with Copilot, but little of the multi-step coordination work Cowork takes on. Not a bad user - just not where this capability pays back. Revisit if their role changes.',
+  'copilotAdoptionCowork.tier.notIndicated.label': 'Not indicated',
+  'copilotAdoptionCowork.tier.notIndicated.description': 'Neither a Copilot habit nor a heavy coordination load in this period. No case for Cowork on current evidence.',
 
   // Department readiness
   'copilotAdoptionCowork.departmentReadiness.title': 'Readiness by department',
@@ -84,6 +96,12 @@ export const copilotAdoptionCowork = {
   'copilotAdoptionCowork.estimate.hoursRange': '{low}-{high} hours',
   'copilotAdoptionCowork.estimate.perMonthAcrossRecommended': 'a month across {users} recommended users',
   'copilotAdoptionCowork.estimate.observedAddressableWork': 'Observed addressable work a month: {meetings} meetings, {emails} emails, {documents} document touches.',
+  'copilotAdoptionCowork.estimate.assumption.saves': 'Assumes Cowork saves {meetingMinutes} minutes per meeting, {emailMinutes} per email and {documentMinutes} per document.',
+  'copilotAdoptionCowork.estimate.assumption.lowerBound': 'The lower bound applies {percent}% of those assumptions; the upper bound applies them in full.',
+  'copilotAdoptionCowork.estimate.assumption.volumes.one': "Volumes are observed from Microsoft's usage reports for {users} user, restated over {workingDays} working days a month.",
+  'copilotAdoptionCowork.estimate.assumption.volumes.other': "Volumes are observed from Microsoft's usage reports for {users} users, restated over {workingDays} working days a month.",
+  'copilotAdoptionCowork.estimate.assumption.notMeasured': 'Time saved is NOT measured by this product and cannot be. These figures are a model for sizing a rollout, not a result.',
+  'copilotAdoptionCowork.estimate.assumption.noMoney': 'No monetary value is shown. Pricing a modelled saving would state a figure this product cannot evidence, and it has no defensible fully-loaded hourly rate to price it with. This report reports seats, people and hours - never money.',
 
   // Filters and actions
   'copilotAdoptionCowork.filters.searchPlaceholder': 'Search name, email, department, job title or manager',

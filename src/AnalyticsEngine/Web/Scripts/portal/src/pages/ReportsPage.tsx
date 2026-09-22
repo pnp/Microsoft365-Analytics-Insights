@@ -25,7 +25,7 @@ import TimeSeriesChart from '../components/charts/TimeSeriesChart';
 import CategoryBarChart from '../components/charts/CategoryBarChart';
 import MatrixChart from '../components/charts/MatrixChart';
 import WordCloud from '../components/charts/WordCloud';
-import { formatDateParts, formatNumber, useT, useTNode, type TranslationKey } from '../i18n';
+import { EN_CATALOG, formatDateParts, formatNumber, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
 
 /** The report areas in display order, with the enabled-flag they map to and their friendly copy. */
 const AREA_DEFS: { flag: keyof ReportAreas; key: ReportAreaKey; labelKey: TranslationKey; blurbKey: TranslationKey }[] = [
@@ -284,6 +284,78 @@ function chartHasData(chart: ReportChart): boolean {
   return false;
 }
 
+function chartText(
+  t: TFunction,
+  key: string,
+  field: 'title' | 'description' | 'valueLabel' | 'warning' | 'rowLabel' | 'columnLabel',
+  fallback: string,
+): string {
+  if (!key) return fallback;
+  const catalogKey = chartTranslationKey(key, field, fallback);
+  const translated = t(catalogKey);
+  return translated === catalogKey ? fallback : translated;
+}
+
+function chartTranslationKey(
+  key: string,
+  field: 'title' | 'description' | 'valueLabel' | 'warning' | 'rowLabel' | 'columnLabel',
+  fallback: string,
+): TranslationKey {
+  if (
+    key === 'office-apps-department-adoption' &&
+    field === 'description' &&
+    fallback === EN_CATALOG['reports.chart.office-apps-department-adoption.description.groupFiltered']
+  ) {
+    return 'reports.chart.office-apps-department-adoption.description.groupFiltered';
+  }
+
+  const copilotAttachConfirmFailedParts = EN_CATALOG['reports.chart.office-apps-copilot-attach.warning.confirmFailed'].split('{error}');
+  if (
+    key === 'office-apps-copilot-attach' &&
+    field === 'warning' &&
+    fallback.startsWith(copilotAttachConfirmFailedParts[0])
+  ) {
+    return 'reports.chart.office-apps-copilot-attach.warning.confirmFailed';
+  }
+
+  if (
+    key === 'office-apps-copilot-attach' &&
+    field === 'warning' &&
+    fallback === EN_CATALOG['reports.chart.office-apps-copilot-attach.warning.noReportRows']
+  ) {
+    return 'reports.chart.office-apps-copilot-attach.warning.noReportRows';
+  }
+
+  return `reports.chart.${key}.${field}` as TranslationKey;
+}
+
+function chartWarningText(t: TFunction, chart: ReportChart): string | null {
+  if (!chart.warning) return null;
+
+  const usageWarningParts = EN_CATALOG['reports.chart.usage-active-users.warning'].split('{details}');
+  if (chart.key === 'usage-active-users' && chart.warning.startsWith(usageWarningParts[0]) && chart.warning.endsWith(usageWarningParts[1])) {
+    const details = chart.warning.slice(usageWarningParts[0].length, -usageWarningParts[1].length);
+    const catalogKey = 'reports.chart.usage-active-users.warning' as TranslationKey;
+    const translated = t(catalogKey, { details });
+    return translated === catalogKey ? chart.warning : translated;
+  }
+
+  if (chart.key === 'office-apps-copilot-attach') {
+    const [prefix, suffix] = EN_CATALOG['reports.chart.office-apps-copilot-attach.warning.confirmFailed'].split('{error}');
+    if (chart.warning.startsWith(prefix) && chart.warning.endsWith(suffix)) {
+      const error = chart.warning.slice(prefix.length, -suffix.length);
+      const catalogKey = 'reports.chart.office-apps-copilot-attach.warning.confirmFailed' as TranslationKey;
+      const translated = t(catalogKey, { error });
+      return translated === catalogKey ? chart.warning : translated;
+    }
+  }
+
+  const catalogKey = chartTranslationKey(chart.key, 'warning', chart.warning);
+  if (chart.warning !== EN_CATALOG[catalogKey]) return chart.warning;
+  const translated = t(catalogKey);
+  return translated === catalogKey ? chart.warning : translated;
+}
+
 /** Fetches and renders the charts for a single report area over the chosen window. */
 function ReportAreaView({
   area,
@@ -404,15 +476,28 @@ function ReportAreaView({
         </MessageBar>
       )}
 
-      {data.charts.map((chart) => (
+      {data.charts.map((chart) => {
+        const title = chartText(t, chart.key, 'title', chart.title);
+        const description = chartText(t, chart.key, 'description', chart.description);
+        const valueLabel = chartText(t, chart.key, 'valueLabel', chart.valueLabel);
+        const warning = chartWarningText(t, chart);
+        const matrix = chart.matrix
+          ? {
+              ...chart.matrix,
+              rowLabel: chartText(t, chart.key, 'rowLabel', chart.matrix.rowLabel),
+              columnLabel: chartText(t, chart.key, 'columnLabel', chart.matrix.columnLabel),
+            }
+          : null;
+
+        return (
         <Card key={chart.key} className={styles.chartCard}>
           <div className={styles.chartHead}>
             <div>
               <Text weight="semibold" size={400}>
-                {chart.title}
+                {title}
               </Text>
               <Text size={200} block className={styles.muted}>
-                {chart.description}
+                {description}
               </Text>
             </div>
             <SqlPopover sql={chart.sql} title={t('reports.chart.sqlTitle')} />
@@ -427,7 +512,7 @@ function ReportAreaView({
               <>
                 {chart.warning && (
                   <MessageBar intent="warning">
-                    <MessageBarBody>{chart.warning}</MessageBarBody>
+                    <MessageBarBody>{warning}</MessageBarBody>
                   </MessageBar>
                 )}
                 {/*
@@ -439,18 +524,18 @@ function ReportAreaView({
                 {(!chart.warning || chartHasData(chart)) && (
                   <>
                     {chart.type === 'timeseries' && chart.series ? (
-                      <TimeSeriesChart series={chart.series} valueLabel={chart.valueLabel} />
+                      <TimeSeriesChart series={chart.series} valueLabel={valueLabel} />
                     ) : chart.type === 'bar' && chart.categories ? (
                       <CategoryBarChart
                         categories={chart.categories}
-                        valueLabel={chart.valueLabel}
+                        valueLabel={valueLabel}
                         showShare={chart.showShare}
                         valueSuffix={chart.valueSuffix}
                       />
-                    ) : chart.type === 'matrix' && chart.matrix ? (
-                      <MatrixChart matrix={chart.matrix} valueLabel={chart.valueLabel} />
+                    ) : chart.type === 'matrix' && matrix ? (
+                      <MatrixChart matrix={matrix} valueLabel={valueLabel} />
                     ) : chart.type === 'wordcloud' && chart.categories ? (
-                      <WordCloud categories={chart.categories} valueLabel={chart.valueLabel} />
+                      <WordCloud categories={chart.categories} valueLabel={valueLabel} />
                     ) : (
                       <Text className={styles.muted}>{t('reports.chart.noData')}</Text>
                     )}
@@ -460,7 +545,8 @@ function ReportAreaView({
             )}
           </div>
         </Card>
-      ))}
+        );
+      })}
     </div>
   );
 }

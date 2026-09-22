@@ -33,6 +33,13 @@ import { BandBadge, ScoreBar, scoreColour, SortableTh, useAdoptionTableStyles } 
 import { formatCount, formatDate, formatPct, weightSharePct } from '../shared/KpiGrid';
 import ActionPlan, { ActionBadge } from './ActionPlan';
 import { useT, useTNode, type TFunction } from '../../i18n';
+import {
+  adoptionBandLabel,
+  actionLabel,
+  recommendedActionText,
+  reclaimEligibilityLabel,
+  reclaimEligibilityReason,
+} from './serverText';
 
 const PAGE_SIZE = 50;
 
@@ -255,7 +262,7 @@ export default function LicensedUsersPanel({
           <option value="">{t('copilotAdoptionUsers.licensed.allEngagementBands')}</option>
           {(filterOptions?.bands ?? []).map((b) => (
             <option key={b.value} value={b.value}>
-              {b.name}
+              {adoptionBandLabel(t, b.value, b.name)}
             </option>
           ))}
         </Select>
@@ -268,7 +275,7 @@ export default function LicensedUsersPanel({
           <option value="">{t('copilotAdoptionUsers.licensed.allRecommendedActions')}</option>
           {actionPlan.map((a) => (
             <option key={a.code} value={a.code}>
-              {a.label} ({formatCount(a.users)})
+              {actionLabel(t, a.code, a.label)} ({formatCount(a.users)})
             </option>
           ))}
         </Select>
@@ -352,7 +359,7 @@ export default function LicensedUsersPanel({
               <AccordionItem value="actions">
                 <AccordionHeader>{t('copilotAdoptionUsers.licensed.actionsLegendTitle')}</AccordionHeader>
                 <AccordionPanel>
-                  <ActionPlan actions={visibleActions} showCounts={false} />
+                  <ActionPlan actions={visibleActions} options={options} showCounts={false} />
                 </AccordionPanel>
               </AccordionItem>
             </Accordion>
@@ -583,7 +590,7 @@ export default function LicensedUsersPanel({
                     </Tooltip>
                   </td>
                   <td className={`${table.td} ${table.tdNoWrap}`}>
-                    <BandBadge band={row.band} name={row.bandName} />
+                    <BandBadge band={row.band} name={adoptionBandLabel(t, row.band, row.bandName)} />
                   </td>
                   <td className={`${table.td} ${table.tdNoWrap}`}>
                     <Text size={200}>{sourceLabel(t, row.signalSource)}</Text>
@@ -617,8 +624,8 @@ export default function LicensedUsersPanel({
                     )}
                   </td>
                   <td className={`${table.td} ${table.tdNoWrap}`}>
-                    <Tooltip relationship="description" content={row.reclaimEligibilityReason || t('copilotAdoptionUsers.licensed.activeSeatNotReclaimable')}>
-                      <Text size={200}>{row.reclaimEligibility || '—'}</Text>
+                    <Tooltip relationship="description" content={reclaimEligibilityReason(t, row, options) || t('copilotAdoptionUsers.licensed.activeSeatNotReclaimable')}>
+                      <Text size={200}>{reclaimEligibilityLabel(t, row.reclaimEligibility)}</Text>
                     </Tooltip>
                     {row.reclaimExclusionExpired && (
                       <Text size={100} block className={table.tdSub}>
@@ -627,7 +634,7 @@ export default function LicensedUsersPanel({
                     )}
                   </td>
                   <td className={`${table.td} ${table.tdNoWrap} ${table.stickyRight}`}>
-                    <Tooltip relationship="description" content={row.recommendedAction}>
+                    <Tooltip relationship="description" content={recommendedActionText(t, row, options)}>
                       <div>
                         <ActionBadge code={row.recommendedActionCode} label={row.recommendedActionLabel} />
                       </div>

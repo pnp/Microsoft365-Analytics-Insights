@@ -7,6 +7,33 @@ import type { webActivity as en } from '../en/webActivity';
  * build rather than reaching a customer as English text inside a Spanish page.
  */
 const webActivity: Record<keyof typeof en, string> = {
+  // Server-authored bucket labels.
+
+  'webActivity.bucket.visitorSegment.Daily.label': 'Diario',
+  'webActivity.bucket.visitorSegment.Regular.label': 'Habitual',
+  'webActivity.bucket.visitorSegment.Occasional.label': 'Ocasional',
+  'webActivity.bucket.visitorSegment.Rare.label': 'Poco frecuente',
+  'webActivity.bucket.visitorSegment.One-off.label': 'Puntual',
+  'webActivity.bucket.visitDepth.1 page.label': '1 página',
+  'webActivity.bucket.visitDepth.2 pages.label': '2 páginas',
+  'webActivity.bucket.visitDepth.3-5 pages.label': '3-5 páginas',
+  'webActivity.bucket.visitDepth.6-10 pages.label': '6-10 páginas',
+  'webActivity.bucket.visitDepth.11-20 pages.label': '11-20 páginas',
+  'webActivity.bucket.visitDepth.21+ pages.label': '21+ páginas',
+  'webActivity.bucket.day.0.label': 'Lunes',
+  'webActivity.bucket.day.1.label': 'Martes',
+  'webActivity.bucket.day.2.label': 'Miércoles',
+  'webActivity.bucket.day.3.label': 'Jueves',
+  'webActivity.bucket.day.4.label': 'Viernes',
+  'webActivity.bucket.day.5.label': 'Sábado',
+  'webActivity.bucket.day.6.label': 'Domingo',
+  'webActivity.bucket.period.afterMidnight.label': 'Después de medianoche',
+  'webActivity.bucket.period.earlyMorning.label': 'Primera hora de la mañana',
+  'webActivity.bucket.period.lateMorning.label': 'Final de la mañana',
+  'webActivity.bucket.period.afternoon.label': 'Tarde',
+  'webActivity.bucket.period.evening.label': 'Noche',
+  'webActivity.bucket.period.lateNight.label': 'Última hora de la noche',
+
   'webActivity.page.window.last7Days': 'Últimos 7 días',
   'webActivity.page.window.last28Days': 'Últimos 28 días',
   'webActivity.page.window.last90Days': 'Últimos 90 días',

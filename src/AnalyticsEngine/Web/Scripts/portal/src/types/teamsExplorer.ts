@@ -53,6 +53,7 @@ export type TeamsBucket = {
 export type TeamsAvailability = {
   usageReportsAvailable: boolean;
   callsAvailable: boolean;
+  serviceBusAvailable: boolean;
   teamsAnalyticsAvailable: boolean;
   cognitiveAvailable: boolean;
   userMetadataAvailable: boolean;

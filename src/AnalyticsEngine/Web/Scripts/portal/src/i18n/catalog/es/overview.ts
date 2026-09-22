@@ -7,6 +7,41 @@ import type { overview as en } from '../en/overview';
  * build rather than reaching a customer as English text inside a Spanish page.
  */
 const overview: Record<keyof typeof en, string> = {
+
+  // Fichas de recuento de datos del resumen. El servidor redacta su propio texto en ingles
+  // (SystemStatusAPIController), asi que la SPA asigna su clave estable a estas entradas.
+  'overview.dataCount.users.name': 'Usuarios',
+  'overview.dataCount.users.hint': 'Personas detectadas por cualquier importación',
+  'overview.dataCount.auditEvents.name': 'Eventos de auditoría',
+  'overview.dataCount.auditEvents.hint': 'Actividad del registro de auditoría unificado',
+  'overview.dataCount.copilotInteractions.name': 'Interacciones de Copilot',
+  'overview.dataCount.copilotInteractions.hint': 'Chats de Copilot del registro de auditoría',
+  'overview.dataCount.copilotAiInteractions.name': 'Interacciones de IA de Copilot',
+  'overview.dataCount.copilotAiInteractions.hint': 'Del historial de interacciones de IA de Graph',
+  'overview.dataCount.webHits.name': 'Visitas a páginas web',
+  'overview.dataCount.webHits.hint': 'Páginas vistas del rastreador de SharePoint',
+  'overview.dataCount.trackedUrls.name': 'URL supervisadas',
+  'overview.dataCount.trackedUrls.hint': 'Páginas distintas detectadas por el rastreador',
+  'overview.dataCount.sharePointSites.name': 'Sitios de SharePoint',
+  'overview.dataCount.sharePointSites.hint': 'Sitios detectados en la actividad o el tráfico web',
+  'overview.dataCount.sentEmails.name': 'Correos enviados',
+  'overview.dataCount.sentEmails.hint': 'Correo enviado, importado desde Graph',
+  'overview.dataCount.teams.name': 'Equipos detectados',
+  'overview.dataCount.teams.hint': 'Equipos encontrados en el inquilino',
+  'overview.dataCount.teamsTracked.name': 'Equipos con seguimiento detallado',
+  'overview.dataCount.teamsTracked.hint': 'Equipos que han concedido análisis por canal',
+  'overview.dataCount.teamsCalls.name': 'Llamadas de Teams',
+  'overview.dataCount.teamsCalls.hint': 'Registros de llamadas de Graph',
+  'overview.dataCount.powerApps.name': 'Power Apps',
+  'overview.dataCount.powerApps.hint': 'Aplicaciones detectadas en la actividad de Power Platform',
+  'overview.dataCount.dlpMatches.name': 'Coincidencias de reglas DLP',
+  'overview.dataCount.dlpMatches.hint': 'Reglas DLP de Purview activadas',
+  'overview.dataCount.licenceTypes.name': 'SKU de licencia',
+  'overview.dataCount.licenceTypes.hint': 'Tipos de licencia asignados en el inquilino',
+  'overview.dataCount.copilotStudioCreditDays.name': 'Días de créditos de Copilot Studio',
+  'overview.dataCount.copilotStudioCreditDays.hint': 'Créditos de agente facturados, por agente y día',
+  'overview.dataCount.azureCostDays.name': 'Días de coste de Azure',
+  'overview.dataCount.azureCostDays.hint': 'Gasto diario de Azure desde Cost Management',
   // Overview page
   'overview.page.loadError': 'No se pudo cargar el resumen de datos.',
   'overview.page.unknownError': 'error desconocido',

@@ -52,6 +52,21 @@ export const agentCosts = {
   'agentCosts.warning.copilotStudioImportFailing': 'Copilot Studio credit import is failing.',
   'agentCosts.warning.azureCostImportFailing': 'Azure cost import is failing.',
 
+  // Server-authored availability messages
+
+  'agentCosts.availability.message.noImports': 'Neither agent cost import is switched on. Ask whoever installed the product to tick "Copilot Studio credits" and/or "Azure costs" in the installer.',
+  'agentCosts.availability.message.copilotImportFailing': 'The Copilot Studio credit import is switched on but is failing. Check the app registration holds a Power Platform role at tenant scope - but if it already does, this is most likely Microsoft refusing application-only access to the licensing API rather than anything left undone here, in which case the import cannot currently succeed and is best switched off. The error was: {error}',
+  'agentCosts.availability.message.copilotNoUsage': 'The Copilot Studio credit import ran successfully but found no billed agent usage. That is the expected result for a tenant with no Copilot Studio agents, or none that have consumed credits yet.',
+  'agentCosts.availability.message.copilotNotStoredYet': 'The Copilot Studio credit import is switched on but has not stored anything yet. It runs once a day, so allow a cycle before expecting figures.',
+  'agentCosts.availability.message.azureImportFailing': 'The Azure cost import is switched on but is failing: {error}',
+  'agentCosts.availability.message.azureNoSpend': 'The Azure cost import ran successfully but the query matched no spend. Check the meter filter against a cost export from the same scope - a filter that matches nothing looks exactly like having no spend.',
+  'agentCosts.availability.message.azureNotStoredYet': 'The Azure cost import is switched on but has not stored anything yet. Check that a scope is set and allow a cycle before expecting figures.',
+  'agentCosts.availability.message.perUserNotUpdating': 'The per-person Copilot Studio figures are not updating: {error} The per-agent figures above are unaffected, but anything shown per person may be out of date.',
+  'agentCosts.availability.message.capacityNotUpdating': 'The Copilot Credits capacity snapshot is not updating: {error} Any remaining-capacity figure shown may be out of date.',
+  'agentCosts.availability.message.creditEndpointMismatch': 'Copilot Studio spend is reported by Microsoft two ways: per agent, and per person. They come from different Microsoft endpoints rather than one being a breakdown of the other, so their totals will not always match exactly. The per-agent user counts are how many different people used an agent - those cannot be added together, because the same person appears under every agent they used.',
+  'agentCosts.availability.message.azureNoPeople': 'Azure costs cannot be attributed to individual people. Azure bills by resource, and no Azure billing report - including the full cost export - records who caused a charge.',
+  'agentCosts.availability.message.azureEstimates': 'Azure costs are estimates until Microsoft closes the billing period, which can take a few days after month end. Figures marked as estimates can still change.',
+
   // Spend summary
   'agentCosts.spend.title': 'Spend in the selected period',
   'agentCosts.spend.importedUtc': 'Imported {when} UTC',

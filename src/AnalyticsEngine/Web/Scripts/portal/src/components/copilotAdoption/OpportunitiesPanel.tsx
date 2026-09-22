@@ -38,6 +38,7 @@ import {
 } from './adoptionShared';
 import { formatCount, formatDate } from '../shared/KpiGrid';
 import { useT, useTNode } from '../../i18n';
+import { opportunityRationale, opportunityTierLabel } from './serverText';
 
 const PAGE_SIZE = 50;
 
@@ -625,7 +626,7 @@ export default function OpportunitiesPanel({
                               <DetailStat
                                 label={t('copilotAdoptionUsers.opportunities.qualifiedBy')}
                                 value={
-                                  row.qualificationTierLabel
+                                  opportunityTierLabel(t, row.qualificationTier, row.qualificationTierLabel)
                                   || (row.recommended ? t('copilotAdoptionUsers.opportunities.recommended') : t('copilotAdoptionUsers.opportunities.notRecommended'))
                                 }
                                 sub={t('copilotAdoptionUsers.opportunities.recommendAt', { score: options.opportunityRecommendScore })}
@@ -642,7 +643,7 @@ export default function OpportunitiesPanel({
                             source: t('copilotAdoptionUsers.opportunities.justificationSource'),
                           }}
                         >
-                          <DetailRationale text={row.rationale} />
+                          <DetailRationale text={opportunityRationale(t, row)} />
                         </DetailSection>
                       </DetailRow>
                     )}

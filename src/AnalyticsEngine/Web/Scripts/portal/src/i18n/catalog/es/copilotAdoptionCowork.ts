@@ -46,6 +46,18 @@ const copilotAdoptionCowork: Record<keyof typeof en, string> = {
   'copilotAdoptionCowork.intro.policyScope': 'Cowork {noLicence}. Requiere una licencia de Microsoft 365 Copilot como requisito previo y después se mide por uso contra Copilot Credits, con el acceso concedido mediante una {policyScope}. Por tanto, esta no es una lista de licencias que comprar: es una lista de personas que se deben {addTo} esa directiva. Combine el CSV con el ámbito de la directiva existente; nunca sustituya el ámbito por él. Este producto observa el uso, no las asignaciones de directivas, por lo que alguien que ya esté incluido en el ámbito y que simplemente no haya tenido actividad de Cowork en el periodo seleccionado no aparecerá aquí; sustituir el ámbito revocaría su acceso.',
   'copilotAdoptionCowork.intro.twoAxes': 'Deben cumplirse dos condiciones para que merezca la pena habilitar a alguien: debe tener una {coordinationLoad} real (reuniones, correo y rotación de documentos: el trabajo de varios pasos que Cowork absorbe) y suficiente {copilotFluency} para confiar ese trabajo a un agente. Ninguna basta por sí sola; por eso esta pestaña las puntúa como dos ejes separados en lugar de mezclarlas en un único número que no podría distinguir los dos modos de fallo.',
   'copilotAdoptionCowork.tiers.filterInstruction': 'Seleccione un nivel para filtrar la lista inferior exactamente a las personas contadas en él.',
+  'copilotAdoptionCowork.tier.established.label': 'Consolidado',
+  'copilotAdoptionCowork.tier.established.description': 'Usa Cowork al menos {days} días separados en este periodo. Estas personas ya lo han incorporado a su forma de trabajar: manténgalas en el ámbito y úselas como referencia de lo que es un buen uso.',
+  'copilotAdoptionCowork.tier.trialling.label': 'En prueba',
+  'copilotAdoptionCowork.tier.trialling.description': 'Ha usado Cowork, pero todavía no con la regularidad suficiente para considerarlo un hábito. Suele ser un problema de indicaciones más que de adecuación: necesitan un ejemplo guiado sobre una tarea que realmente posean. Manténgalas en el ámbito.',
+  'copilotAdoptionCowork.tier.primeCandidate.label': 'Candidato principal',
+  'copilotAdoptionCowork.tier.primeCandidate.description': 'Todavía no usa Cowork, pero tiene fluidez con Copilot y una carga de coordinación alta: la combinación para la que se ha creado Cowork. Este es el objetivo de implementación: habilite a estas personas primero.',
+  'copilotAdoptionCowork.tier.buildFluencyFirst.label': 'Crear fluidez primero',
+  'copilotAdoptionCowork.tier.buildFluencyFirst.description': 'Tiene la carga de trabajo con la que Cowork ayudaría, pero todavía no ha formado un hábito de Copilot. Habilitar Cowork ahora consumiría créditos en alguien que probablemente no delegaría en él. Póngalo al día primero en el uso cotidiano de Copilot y revíselo después.',
+  'copilotAdoptionCowork.tier.lowCoordinationLoad.label': 'Carga de coordinación baja',
+  'copilotAdoptionCowork.tier.lowCoordinationLoad.description': 'Se siente cómodo con Copilot, pero tiene poco del trabajo de coordinación de varios pasos que Cowork asume. No es un mal usuario; simplemente no es donde esta funcionalidad se rentabiliza. Revíselo si cambia su rol.',
+  'copilotAdoptionCowork.tier.notIndicated.label': 'No indicado',
+  'copilotAdoptionCowork.tier.notIndicated.description': 'En este periodo no hay ni un hábito de Copilot ni una carga de coordinación alta. No hay caso para Cowork con la evidencia actual.',
 
   // Department readiness
   'copilotAdoptionCowork.departmentReadiness.title': 'Preparación por departamento',
@@ -86,6 +98,12 @@ const copilotAdoptionCowork: Record<keyof typeof en, string> = {
   'copilotAdoptionCowork.estimate.hoursRange': '{low}-{high} horas',
   'copilotAdoptionCowork.estimate.perMonthAcrossRecommended': 'al mes entre {users} usuarios recomendados',
   'copilotAdoptionCowork.estimate.observedAddressableWork': 'Trabajo direccionable observado al mes: {meetings} reuniones, {emails} correos electrónicos, {documents} acciones sobre documentos.',
+  'copilotAdoptionCowork.estimate.assumption.saves': 'Se asume que Cowork ahorra {meetingMinutes} minutos por reunión, {emailMinutes} por correo electrónico y {documentMinutes} por documento.',
+  'copilotAdoptionCowork.estimate.assumption.lowerBound': 'El límite inferior aplica el {percent} % de esas hipótesis; el límite superior las aplica por completo.',
+  'copilotAdoptionCowork.estimate.assumption.volumes.one': 'Los volúmenes se observan a partir de los informes de uso de Microsoft para {users} usuario, reexpresados sobre {workingDays} días laborables al mes.',
+  'copilotAdoptionCowork.estimate.assumption.volumes.other': 'Los volúmenes se observan a partir de los informes de uso de Microsoft para {users} usuarios, reexpresados sobre {workingDays} días laborables al mes.',
+  'copilotAdoptionCowork.estimate.assumption.notMeasured': 'Este producto NO mide ni puede medir el tiempo ahorrado. Estas cifras son un modelo para dimensionar una implementación, no un resultado.',
+  'copilotAdoptionCowork.estimate.assumption.noMoney': 'No se muestra ningún valor monetario. Poner precio a un ahorro modelado indicaría una cifra que este producto no puede demostrar, y no existe una tarifa horaria totalmente cargada defendible con la que valorarlo. Este informe muestra puestos, personas y horas: nunca dinero.',
 
   // Filters and actions
   'copilotAdoptionCowork.filters.searchPlaceholder': 'Buscar nombre, correo electrónico, departamento, puesto o responsable',
@@ -193,5 +211,3 @@ const copilotAdoptionCowork: Record<keyof typeof en, string> = {
 };
 
 export default copilotAdoptionCowork;
-
-

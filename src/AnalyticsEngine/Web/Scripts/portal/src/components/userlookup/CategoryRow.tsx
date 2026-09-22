@@ -26,7 +26,7 @@ import toast from '../toast';
 import type { UserDataCategory, UserDataDetailRow } from '../../types/userData';
 import { fetchUserDetail } from '../../api/userLookupApi';
 import Spinner from '../Spinner';
-import { formatDateParts, formatNumber, plural, useT } from '../../i18n';
+import { formatDateParts, formatNumber, plural, useT, type TFunction, type TranslationKey } from '../../i18n';
 
 const useStyles = makeStyles({
   row: {
@@ -86,6 +86,33 @@ const useStyles = makeStyles({
   },
 });
 
+
+function serverText(t: TFunction, key: string, field: 'label' | 'description', fallback: string): string {
+  if (!key) return fallback;
+  const catalogKey = `admin.userLookup.category.${key}.${field}` as TranslationKey;
+  const translated = t(catalogKey);
+  return translated === catalogKey ? fallback : translated;
+}
+
+function detailTitle(t: TFunction, categoryKey: string, title: string | null): string | null {
+  if (categoryKey === 'calls-organised' && title === 'Call' + ' / ' + 'meeting') return t('admin.userLookup.detail.callsOrganised.title');
+  if (categoryKey === 'call-sessions' && title === 'Call session' + ' attended') return t('admin.userLookup.detail.callSessions.title');
+  if (categoryKey.startsWith('usage-') && title === 'Activity report' + ' day') return t('admin.userLookup.detail.usage.title');
+  if (title === '(audit event)') return t('admin.userLookup.detail.auditEventFallback.title');
+  return title;
+}
+
+function detailText(t: TFunction, categoryKey: string, detail: string | null): string | null {
+  if (!detail) return detail;
+  if ((categoryKey === 'calls-organised' || categoryKey === 'call-sessions') && detail.startsWith('Ended ')) {
+    return t('admin.userLookup.detail.ended', { date: detail.slice('Ended '.length) });
+  }
+  if (categoryKey.startsWith('usage-') && detail.startsWith('Last activity ')) {
+    return t('admin.userLookup.detail.lastActivity', { date: detail.slice('Last activity '.length) });
+  }
+  return detail;
+}
+
 type CategoryRowProps = {
   upn: string;
   category: UserDataCategory;
@@ -102,6 +129,8 @@ export default function CategoryRow({ upn, category }: CategoryRowProps) {
   const [totalCount, setTotalCount] = useState<number | null>(null);
 
   const canDrill = category.supportsDetail && category.count > 0;
+  const categoryLabel = serverText(t, category.key, 'label', category.label);
+  const categoryDescription = serverText(t, category.key, 'description', category.description);
 
   const toggle = async () => {
     if (expanded) {
@@ -138,9 +167,9 @@ export default function CategoryRow({ upn, category }: CategoryRowProps) {
     <>
       <div className={styles.row}>
         <div className={styles.main}>
-          <Text weight="semibold">{category.label}</Text>
+          <Text weight="semibold">{categoryLabel}</Text>
           <Text size={200} block className={styles.desc}>
-            {category.description}
+            {categoryDescription}
           </Text>
           <div className={styles.source}>
             <Text size={200}>
@@ -221,7 +250,7 @@ export default function CategoryRow({ upn, category }: CategoryRowProps) {
                 </Text>
                 <Table
                   size="small"
-                  aria-label={t('admin.userLookup.categoryRow.recentRowsAriaLabel', { category: category.label })}
+                  aria-label={t('admin.userLookup.categoryRow.recentRowsAriaLabel', { category: categoryLabel })}
                 >
                   <TableHeader>
                     <TableRow>
@@ -241,9 +270,9 @@ export default function CategoryRow({ upn, category }: CategoryRowProps) {
                             : '—'}
                         </TableCell>
                         <TableCell>
-                          {r.title ? <strong>{r.title}</strong> : null}
-                          {r.title && r.detail ? ' — ' : ''}
-                          {r.detail}
+                          {detailTitle(t, category.key, r.title) ? <strong>{detailTitle(t, category.key, r.title)}</strong> : null}
+                          {detailTitle(t, category.key, r.title) && detailText(t, category.key, r.detail) ? ' — ' : ''}
+                          {detailText(t, category.key, r.detail)}
                         </TableCell>
                       </TableRow>
                     ))}

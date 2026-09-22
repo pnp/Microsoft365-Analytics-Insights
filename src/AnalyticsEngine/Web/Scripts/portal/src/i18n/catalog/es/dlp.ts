@@ -18,6 +18,11 @@ const dlp: Record<keyof typeof en, string> = {
   'dlp.loading': 'Cargando datos de DLP...',
   'dlp.error.loadData': 'No se han podido cargar los datos de DLP.',
 
+
+  // Server-authored availability reasons
+  'dlp.availability.reason.copilotImportOff': "La importación de auditoría de Microsoft 365 Copilot está desactivada, por lo que no hay datos de DLP por agente. Habilite 'Interacciones de Copilot' en el instalador. Esto NO necesita el permiso de DLP: los bloqueos de DLP de Copilot se incluyen en los propios registros de interacción de Copilot.",
+  'dlp.availability.reason.tenantImportOff': "La importación de Data Loss Prevention (DLP.All) está desactivada, por lo que no se muestra la actividad de directivas de todo el inquilino para Exchange, SharePoint/OneDrive y Endpoint. Habilite 'Eventos de directiva DLP' en el instalador y conceda a la aplicación en tiempo de ejecución el permiso de aplicación 'ActivityFeed.ReadDlp', que es independiente de 'ActivityFeed.Read' y necesita su propio consentimiento de administrador.",
+
   // Columnas de tabla comunes y estados vacíos
   'dlp.table.empty': 'Nada en este periodo.',
   'dlp.column.agent': 'Agente',

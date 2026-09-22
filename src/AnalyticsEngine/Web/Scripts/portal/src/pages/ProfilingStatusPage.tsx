@@ -26,7 +26,7 @@ import { fetchProfilingStatus, fetchTraceLogs } from '../api/profilingStatusApi'
 import type { DateRangeStat, ProfilingStatus, TraceLogPage } from '../types/profilingStatus';
 import Spinner from '../components/Spinner';
 import SqlPopover from '../components/SqlPopover';
-import { formatDateParts, formatNumber, useT, type TFunction } from '../i18n';
+import { formatDateParts, formatNumber, useT, type TFunction, type TranslationKey } from '../i18n';
 
 const PAGE_SIZES = [25, 50, 100];
 
@@ -77,6 +77,14 @@ function formatDate(d: string | null): string {
   return d ? formatDateParts(new Date(d), { dateStyle: 'short' }) : '—';
 }
 
+
+function rangeLabel(t: TFunction, key: string, fallback: string): string {
+  if (!key) return fallback;
+  const catalogKey = `admin.profiling.range.${key}` as TranslationKey;
+  const translated = t(catalogKey);
+  return translated === catalogKey ? fallback : translated;
+}
+
 /** A titled card with a table of earliest/latest dates for a set of tables. */
 function RangeSection({
   title,
@@ -112,7 +120,7 @@ function RangeSection({
             <TableRow key={s.key}>
               <TableCell>
                 <div>
-                  <Text weight="semibold">{s.label}</Text>
+                  <Text weight="semibold">{rangeLabel(t, s.key, s.label)}</Text>
                   <Text size={200} block className={styles.tableName}>
                     {s.table}
                   </Text>

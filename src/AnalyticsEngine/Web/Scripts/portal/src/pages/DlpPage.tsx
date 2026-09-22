@@ -21,7 +21,7 @@ import { ArrowClockwise16Regular, ChevronDown16Regular, ChevronRight16Regular } 
 import { fetchDlpAvailability, fetchDlpSummary } from '../api/dlpApi';
 import type { DlpAvailability, DlpImpactRow, DlpSummary } from '../types/dlp';
 import Spinner from '../components/Spinner';
-import { formatNumber, useT, type TranslationKey } from '../i18n';
+import { formatNumber, useT, type TFunction, type TranslationKey } from '../i18n';
 
 const WINDOWS = [
   { days: 7, labelKey: 'dlp.period.last7Days' },
@@ -29,6 +29,14 @@ const WINDOWS = [
   { days: 90, labelKey: 'dlp.period.last90Days' },
   { days: 180, labelKey: 'dlp.period.last180Days' },
 ] satisfies { days: number; labelKey: TranslationKey }[];
+
+
+function availabilityReasons(availability: DlpAvailability, t: TFunction): string[] {
+  const reasons: string[] = [];
+  if (!availability.copilotDlpAvailable) reasons.push(t('dlp.availability.reason.copilotImportOff'));
+  if (!availability.tenantDlpAvailable) reasons.push(t('dlp.availability.reason.tenantImportOff'));
+  return reasons;
+}
 
 const useStyles = makeStyles({
   intro: { marginTop: '8px' },
@@ -303,7 +311,7 @@ export default function DlpPage() {
         </MessageBar>
       )}
 
-      {(availability?.reasons ?? []).map((r) => (
+      {(availability ? availabilityReasons(availability, t) : []).map((r) => (
         <MessageBar key={r} intent={availability?.available ? 'info' : 'warning'} style={{ marginTop: '12px' }}>
           <MessageBarBody>{r}</MessageBarBody>
         </MessageBar>

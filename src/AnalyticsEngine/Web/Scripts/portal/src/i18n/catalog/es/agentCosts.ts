@@ -54,6 +54,21 @@ const agentCosts: Record<keyof typeof en, string> = {
   'agentCosts.warning.copilotStudioImportFailing': 'La importación de créditos de Copilot Studio está fallando.',
   'agentCosts.warning.azureCostImportFailing': 'La importación de costes de Azure está fallando.',
 
+
+  // Server-authored availability messages
+  'agentCosts.availability.message.noImports': 'Ninguna importación de costes de agente está activada. Pida a quien instaló el producto que marque "Copilot Studio credits" y/o "Azure costs" en el instalador.',
+  'agentCosts.availability.message.copilotImportFailing': 'La importación de créditos de Copilot Studio está activada, pero produce errores. Compruebe que el registro de aplicación tiene un rol de Power Platform en el ámbito del inquilino; pero, si ya lo tiene, lo más probable es que Microsoft esté rechazando el acceso de solo aplicación a la API de licencias, en lugar de que falte algo por configurar aquí. En ese caso, la importación no puede completarse actualmente y conviene desactivarla. El error fue: {error}',
+  'agentCosts.availability.message.copilotNoUsage': 'La importación de créditos de Copilot Studio se ejecutó correctamente, pero no encontró uso facturado de agentes. Es el resultado esperado para un inquilino sin agentes de Copilot Studio, o sin agentes que hayan consumido créditos todavía.',
+  'agentCosts.availability.message.copilotNotStoredYet': 'La importación de créditos de Copilot Studio está activada, pero aún no ha almacenado nada. Se ejecuta una vez al día, así que espere un ciclo antes de esperar cifras.',
+  'agentCosts.availability.message.azureImportFailing': 'La importación de costes de Azure está activada, pero produce errores: {error}',
+  'agentCosts.availability.message.azureNoSpend': 'La importación de costes de Azure se ejecutó correctamente, pero la consulta no encontró gasto. Compare el filtro de medidor con una exportación de costes del mismo ámbito: un filtro que no coincide con nada tiene exactamente el mismo aspecto que no tener gasto.',
+  'agentCosts.availability.message.azureNotStoredYet': 'La importación de costes de Azure está activada, pero aún no ha almacenado nada. Compruebe que se ha establecido un ámbito y espere un ciclo antes de esperar cifras.',
+  'agentCosts.availability.message.perUserNotUpdating': 'Las cifras de Copilot Studio por persona no se están actualizando: {error} Las cifras por agente anteriores no se ven afectadas, pero cualquier dato mostrado por persona puede estar obsoleto.',
+  'agentCosts.availability.message.capacityNotUpdating': 'La instantánea de capacidad de Copilot Credits no se está actualizando: {error} Cualquier cifra de capacidad restante mostrada puede estar obsoleta.',
+  'agentCosts.availability.message.creditEndpointMismatch': 'Microsoft informa el gasto de Copilot Studio de dos formas: por agente y por persona. Proceden de puntos de conexión de Microsoft diferentes, en lugar de que una sea un desglose de la otra, por lo que sus totales no siempre coincidirán exactamente. Los recuentos de usuarios por agente indican cuántas personas distintas usaron un agente; no se pueden sumar, porque la misma persona aparece bajo cada agente que utilizó.',
+  'agentCosts.availability.message.azureNoPeople': 'Los costes de Azure no se pueden atribuir a personas individuales. Azure factura por recurso y ningún informe de facturación de Azure, incluida la exportación completa de costes, registra quién causó un cargo.',
+  'agentCosts.availability.message.azureEstimates': 'Los costes de Azure son estimaciones hasta que Microsoft cierra el periodo de facturación, lo que puede tardar unos días después del fin de mes. Las cifras marcadas como estimaciones todavía pueden cambiar.',
+
   // Resumen de gasto
   'agentCosts.spend.title': 'Gasto en el periodo seleccionado',
   'agentCosts.spend.importedUtc': 'Importado el {when} UTC',

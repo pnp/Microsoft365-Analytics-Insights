@@ -23,6 +23,24 @@ const health: Record<keyof typeof en, string> = {
   'health.time.justNow': 'ahora mismo',
   'health.time.minutesAgo': 'hace {minutes} min',
   'health.time.never': 'nunca',
+  'health.reason.allChecksPassing': 'Todas las comprobaciones se superan.',
+  'health.reason.databaseReachableOpenDataTab': 'Base de datos accesible (abra la pestaña Datos para ver los recuentos).',
+  'health.reason.databaseQueryFailed': 'Error en la consulta de base de datos: {error}',
+  'health.reason.approximateCountsUnavailable': 'Recuentos aproximados no disponibles: {error}',
+  'health.reason.recentVolumeScanDidntComplete': 'El análisis de volumen reciente no se completó: {error}',
+  'health.reason.copilotUsageIdentitiesConcealed': "El uso de Microsoft 365 Copilot por usuario procedente de Graph no se está importando porque este inquilino oculta las identidades de usuario en los informes de uso de Microsoft 365: Graph devuelve un hash en lugar de cada nombre principal de usuario, que no se puede vincular a un usuario. Los recuentos de usuarios de Copilot en el ámbito del inquilino y la importación de Copilot del registro de auditoría no se ven afectados. Para habilitarlo, desactive 'Display concealed user, group and site names in all reports' en el centro de administración de Microsoft 365 (Settings > Org settings > Reports).",
+  'health.reason.graphCopilotUsageReportImportFailed': 'Error en la importación del informe de uso de Graph Copilot: {error}',
+  'health.reason.applicationInsightsNotConfigured': 'Application Insights no está configurado.',
+  'health.reason.telemetryQueriesFailing': 'Las consultas de telemetría de estado están fallando: consulte las tarjetas afectadas.',
+  'health.reason.someConfigurationCouldntBeRead': 'No se pudo leer parte de la configuración.',
+  'health.reason.componentUnhealthy': '{component} está en estado erróneo: {detail}',
+  'health.reason.componentDegraded': '{component} está degradado: {detail}',
+  'health.reason.runtimeCertificateExpired': 'El certificado en tiempo de ejecución ha EXPIRADO: el flujo de datos se detendrá.',
+  'health.reason.runtimeCertificateValid': "Certificado en tiempo de ejecución '{certificateName}' válido; expira el {expiryDate}.",
+  'health.reason.clientSecretAuthValid': 'Autenticación con secreto de cliente: válida actualmente. La expiración del secreto no es visible en tiempo de ejecución; use autenticación con certificado para obtener una advertencia de expiración o contrólela en el registro de la aplicación.',
+  'health.reason.runtimeCertificateCheckFailed': 'No se pudo comprobar el certificado en tiempo de ejecución: {error}',
+  'health.reason.teamsCallsQueueDepthFailed': 'No se pudo leer la profundidad de la cola de llamadas de Teams: {error}',
+  'health.reason.teamsCallsQueueDepthFailedNetworkBlock': 'No se pudo leer la profundidad de la cola de llamadas de Teams: {error} Esto parece un bloqueo de nivel de red en lugar de un problema de permisos: en una implementación privada (VNet), Service Bus debe estar en la SKU Premium con un punto de conexión privado; de lo contrario, el espacio de nombres no es accesible y las llamadas de Teams no se importarán. Migre el espacio de nombres a Premium o vuelva a habilitar el acceso de red público en él.',
 
   // Health page
   'health.page.title': 'Estado del sistema{buildLabel}',
@@ -45,6 +63,14 @@ const health: Record<keyof typeof en, string> = {
   'health.overview.columnStatus': 'Estado',
   'health.overview.columnNotes': 'Notas',
   'health.overview.open': 'Abrir',
+
+
+  // Etiquetas de secciones de estado redactadas por el servidor.
+  'health.section.data.label': 'Resumen de datos',
+  'health.section.liveness.label': 'Actividad de importación',
+  'health.section.exceptions.label': 'Excepciones',
+  'health.section.components.label': 'Estado de componentes',
+  'health.section.config.label': 'Configuración',
 
   // Import liveness panel
   'health.liveness.title': 'Actividad de importación',

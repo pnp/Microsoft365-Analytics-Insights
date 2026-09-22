@@ -5,6 +5,46 @@
  * makes a missing one a build failure.
  */
 export const overview = {
+
+  // Overview data-count tiles.
+  //
+  // The figures come from api/SystemStatus, which authors its own English 'name' and 'hint'
+  // (SystemStatusAPIController.DataCountDefinition). Server-authored display text cannot be
+  // translated where it is written, so the SPA maps the model's STABLE 'key' - the one it already
+  // uses to choose an icon - to these entries instead, and only falls back to the server's English
+  // for a figure this build has not heard of.
+  'overview.dataCount.users.name': 'Users',
+  'overview.dataCount.users.hint': 'People discovered by any import',
+  'overview.dataCount.auditEvents.name': 'Audit events',
+  'overview.dataCount.auditEvents.hint': 'Activity from the unified audit log',
+  'overview.dataCount.copilotInteractions.name': 'Copilot interactions',
+  'overview.dataCount.copilotInteractions.hint': 'Copilot chats from the audit feed',
+  'overview.dataCount.copilotAiInteractions.name': 'Copilot AI interactions',
+  'overview.dataCount.copilotAiInteractions.hint': 'From Graph AI interaction history',
+  'overview.dataCount.webHits.name': 'Web page hits',
+  'overview.dataCount.webHits.hint': 'Page views from the SharePoint tracker',
+  'overview.dataCount.trackedUrls.name': 'Tracked URLs',
+  'overview.dataCount.trackedUrls.hint': 'Distinct pages seen by the tracker',
+  'overview.dataCount.sharePointSites.name': 'SharePoint sites',
+  'overview.dataCount.sharePointSites.hint': 'Sites seen in activity or web traffic',
+  'overview.dataCount.sentEmails.name': 'Sent emails',
+  'overview.dataCount.sentEmails.hint': 'Mail sent, imported from Graph',
+  'overview.dataCount.teams.name': 'Teams discovered',
+  'overview.dataCount.teams.hint': 'Teams found in the tenant',
+  'overview.dataCount.teamsTracked.name': 'Teams with deep tracking',
+  'overview.dataCount.teamsTracked.hint': 'Teams that granted channel-level analytics',
+  'overview.dataCount.teamsCalls.name': 'Teams calls',
+  'overview.dataCount.teamsCalls.hint': 'Call records from Graph',
+  'overview.dataCount.powerApps.name': 'Power Apps',
+  'overview.dataCount.powerApps.hint': 'Apps seen in Power Platform activity',
+  'overview.dataCount.dlpMatches.name': 'DLP rule matches',
+  'overview.dataCount.dlpMatches.hint': 'Purview DLP rules triggered',
+  'overview.dataCount.licenceTypes.name': 'Licence SKUs',
+  'overview.dataCount.licenceTypes.hint': 'Licence types assigned in the tenant',
+  'overview.dataCount.copilotStudioCreditDays.name': 'Copilot Studio credit days',
+  'overview.dataCount.copilotStudioCreditDays.hint': 'Billed agent credits, per agent per day',
+  'overview.dataCount.azureCostDays.name': 'Azure cost days',
+  'overview.dataCount.azureCostDays.hint': 'Daily Azure spend from Cost Management',
   // Overview page
   'overview.page.loadError': 'Failed to load the data overview.',
   'overview.page.unknownError': 'unknown error',

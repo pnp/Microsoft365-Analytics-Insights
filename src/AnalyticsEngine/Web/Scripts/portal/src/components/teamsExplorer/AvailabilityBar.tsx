@@ -10,7 +10,7 @@ import {
   MessageBarTitle,
 } from '@fluentui/react-components';
 import { ChevronDown16Regular, ChevronRight16Regular } from '@fluentui/react-icons';
-import { useT, type TranslationKey } from '../../i18n';
+import { useT, type TFunction, type TranslationKey } from '../../i18n';
 import type { TeamsAvailability } from '../../types/teamsExplorer';
 
 const useStyles = makeStyles({
@@ -41,6 +41,38 @@ const useStyles = makeStyles({
   },
 });
 
+function availabilityReasonTexts(availability: TeamsAvailability, t: TFunction): string[] {
+  const reasons: string[] = [];
+
+  if (!availability.usageReportsAvailable) {
+    reasons.push(t('teamsExplorer.availability.reason.usageReportsOff'));
+  }
+
+  if (!availability.callsAvailable) {
+    reasons.push(t('teamsExplorer.availability.reason.callsOff'));
+  } else if (!availability.serviceBusAvailable) {
+    reasons.push(t('teamsExplorer.availability.reason.serviceBusMissing'));
+  }
+
+  if (!availability.teamsAnalyticsAvailable) {
+    reasons.push(t('teamsExplorer.availability.reason.teamsAnalyticsOff'));
+  } else if (availability.totalTeams === 0) {
+    reasons.push(t('teamsExplorer.availability.reason.noTeamsDiscovered'));
+  } else if (availability.authorisedTeams === 0) {
+    reasons.push(t('teamsExplorer.availability.reason.noAuthorisedTeams'));
+  }
+
+  if (!availability.cognitiveAvailable) {
+    reasons.push(t('teamsExplorer.availability.reason.cognitiveMissing'));
+  }
+
+  if (!availability.userMetadataAvailable) {
+    reasons.push(t('teamsExplorer.availability.reason.userMetadataOff'));
+  }
+
+  return reasons;
+}
+
 /**
  * The per-source status strip.
  *
@@ -53,6 +85,7 @@ export default function AvailabilityBar({ availability }: { availability: TeamsA
   const styles = useStyles();
   const t = useT();
   const [expanded, setExpanded] = useState(false);
+  const reasons = availabilityReasonTexts(availability, t);
 
   const sources: { labelKey: TranslationKey; on: boolean; detail?: string }[] = [
     { labelKey: 'teamsExplorer.availability.source.usageReports', on: availability.usageReportsAvailable },
@@ -90,7 +123,7 @@ export default function AvailabilityBar({ availability }: { availability: TeamsA
         ))}
       </div>
 
-      {availability.reasons.length > 0 && (
+      {reasons.length > 0 && (
         <>
           <Button
             className={styles.toggle}
@@ -104,7 +137,7 @@ export default function AvailabilityBar({ availability }: { availability: TeamsA
               expanded
                 ? 'teamsExplorer.availability.hideMissing'
                 : 'teamsExplorer.availability.showMissing',
-              { count: availability.reasons.length },
+              { count: reasons.length },
             )}
           </Button>
 
@@ -113,7 +146,7 @@ export default function AvailabilityBar({ availability }: { availability: TeamsA
               <MessageBarBody>
                 <MessageBarTitle>{t('teamsExplorer.availability.missingTitle')}</MessageBarTitle>
                 <ul className={styles.reasons}>
-                  {availability.reasons.map((reason) => (
+                  {reasons.map((reason) => (
                     <li key={reason}>
                       <Text size={200}>{reason}</Text>
                     </li>

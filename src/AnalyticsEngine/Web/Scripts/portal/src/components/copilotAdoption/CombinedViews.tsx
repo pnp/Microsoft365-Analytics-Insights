@@ -4,6 +4,7 @@ import type {
   AdoptionConcentrationBand,
 } from '../../types/copilotAdoption';
 import { useT } from '../../i18n';
+import { concentrationLabel } from './serverText';
 import { formatCount, formatPct } from '../shared/KpiGrid';
 import { useAdoptionTableStyles } from './adoptionShared';
 
@@ -133,6 +134,7 @@ export function ConcentrationBar({ bands }: { bands: AdoptionConcentrationBand[]
       <div className={styles.bar}>
         {bands.map((b, i) => {
           const colour = COHORT_COLOUR[i % COHORT_COLOUR.length];
+          const label = concentrationLabel(t, b.label);
           return (
             <div
               key={b.label}
@@ -145,7 +147,7 @@ export function ConcentrationBar({ bands }: { bands: AdoptionConcentrationBand[]
                 color: readableForeground(...hexToRgb(colour)),
               }}
               title={t('copilotAdoption.combinedViews.concentration.sliceTitle', {
-                label: b.label,
+                label,
                 users: formatCount(b.users),
                 interactions: formatCount(b.interactions),
                 pct: formatPct(b.sharePct),
@@ -167,7 +169,7 @@ export function ConcentrationBar({ bands }: { bands: AdoptionConcentrationBand[]
               aria-hidden="true"
             />
             <Text size={200}>
-              <strong>{b.label}</strong>{' '}
+              <strong>{concentrationLabel(t, b.label)}</strong>{' '}
               <span className={styles.muted}>
                 {t('copilotAdoption.combinedViews.concentration.legendDetail', { users: formatCount(b.users), perUser: b.interactionsPerUser })}
               </span>

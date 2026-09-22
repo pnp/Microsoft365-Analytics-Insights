@@ -11,6 +11,7 @@ import {
   SectionCard,
   WindowNote,
   bucketsToCategories,
+  translatedBucketsToCategories,
   formatCount,
   formatDecimal,
   formatHour,
@@ -174,7 +175,7 @@ export default function VisitsPanel({ data }: { data: WebActivityVisits }) {
           query={queryFor(data.queries, 'visits-heatmap')}
           isEmpty={data.byDay.every((b) => b.count === 0)}
         >
-          <CategoryBarChart categories={bucketsToCategories(data.byDay)} valueLabel={t('webActivity.common.visits')} showShare />
+          <CategoryBarChart categories={translatedBucketsToCategories(t, 'day', data.byDay)} valueLabel={t('webActivity.common.visits')} showShare />
         </SectionCard>
 
         <SectionCard
@@ -183,7 +184,7 @@ export default function VisitsPanel({ data }: { data: WebActivityVisits }) {
           query={queryFor(data.queries, 'visits-heatmap')}
           isEmpty={data.byPeriodOfDay.every((b) => b.count === 0)}
         >
-          <CategoryBarChart categories={bucketsToCategories(data.byPeriodOfDay)} valueLabel={t('webActivity.common.visits')} showShare />
+          <CategoryBarChart categories={translatedBucketsToCategories(t, 'period', data.byPeriodOfDay)} valueLabel={t('webActivity.common.visits')} showShare />
         </SectionCard>
 
         <SectionCard

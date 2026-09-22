@@ -3,6 +3,7 @@ import type { ReportCategory } from '../../types/reports';
 import type { CopilotAdoptionOptions } from '../../types/copilotAdoption';
 import { useT, type TFunction } from '../../i18n';
 import { formatCount, formatPct } from '../shared/KpiGrid';
+import { funnelStageLabel } from './serverText';
 
 const useStyles = makeStyles({
   root: {
@@ -192,9 +193,10 @@ export default function AdoptionFunnel({
           // are already succeeding, so the final step is reported as a neutral "not yet" instead.
           const isTopTier = index === stages.length - 1;
           const help = stageHelp(t, stage.label, options);
-          const previousLabel = previous === null ? null : stages[index - 1].label;
+          const displayLabel = funnelStageLabel(t, stage.label);
+          const previousLabel = previous === null ? null : funnelStageLabel(t, stages[index - 1].label);
           const dropText = isTopTier
-            ? t('copilotAdoption.adoptionFunnel.notYet', { count: formatCount(lost), stage: stage.label })
+            ? t('copilotAdoption.adoptionFunnel.notYet', { count: formatCount(lost), stage: displayLabel })
             : t('copilotAdoption.adoptionFunnel.lostHere', { count: formatCount(lost) });
           const dropColour = isTopTier
             ? tokens.colorNeutralForeground3
@@ -202,8 +204,8 @@ export default function AdoptionFunnel({
           const dropHelp = previous === null
             ? ''
             : isTopTier
-              ? t('copilotAdoption.adoptionFunnel.dropHelp.topTier', { lost: formatCount(lost), previous: formatCount(previous), previousLabel: previousLabel ?? '', stage: stage.label })
-              : t('copilotAdoption.adoptionFunnel.dropHelp.loss', { lost: formatCount(lost), previous: formatCount(previous), previousLabel: previousLabel ?? '', stage: stage.label });
+              ? t('copilotAdoption.adoptionFunnel.dropHelp.topTier', { lost: formatCount(lost), previous: formatCount(previous), previousLabel: previousLabel ?? '', stage: displayLabel })
+              : t('copilotAdoption.adoptionFunnel.dropHelp.loss', { lost: formatCount(lost), previous: formatCount(previous), previousLabel: previousLabel ?? '', stage: displayLabel });
 
           // The narrowest point decides whether the labels fit. A stage holding a handful of users is
           // only a few pixels wide, and white text centred on it lands on the page background where
@@ -227,7 +229,7 @@ export default function AdoptionFunnel({
                 ].join(' ')}
                 fill={`url(#funnel-grad-${index % STAGE_COLOURS.length})`}
               >
-                <title>{t('copilotAdoption.adoptionFunnel.stageTitle', { label: stage.label, count: formatCount(stage.value), pct: formatPct(sharePct) })}</title>
+                <title>{t('copilotAdoption.adoptionFunnel.stageTitle', { label: displayLabel, count: formatCount(stage.value), pct: formatPct(sharePct) })}</title>
               </polygon>
 
               <text
@@ -238,7 +240,7 @@ export default function AdoptionFunnel({
                 fill={tokens.colorNeutralForeground1}
                 style={{ pointerEvents: 'none' }}
               >
-                {stage.label}
+                {displayLabel}
               </text>
               {/* The stage name is the thing a reader questions first ("active by what rule?"), so
                   the whole left gutter is a hit area for its definition rather than just the glyphs.
@@ -252,7 +254,7 @@ export default function AdoptionFunnel({
                   fill="transparent"
                   style={{ pointerEvents: 'all', cursor: 'help' }}
                 >
-                  <title>{`${stage.label}\n\n${help}`}</title>
+                  <title>{`${displayLabel}\n\n${help}`}</title>
                 </rect>
               )}
 

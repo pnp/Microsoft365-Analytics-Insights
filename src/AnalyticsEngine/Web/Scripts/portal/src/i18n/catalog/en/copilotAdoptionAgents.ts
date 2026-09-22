@@ -113,6 +113,16 @@ export const copilotAdoptionAgents = {
   'copilotAdoptionAgents.resourceTypes.group.unclassified.explanation': 'Values this version does not recognise, and references whose type was empty. Microsoft publishes no list of possible values and can add new ones at any time, so these are shown as-is rather than counted as content.',
   'copilotAdoptionAgents.resourceTypes.empty': 'No data for this period.',
   'copilotAdoptionAgents.resourceTypes.referenceTitle': '{label}: {count} References',
+
+  // Server-authored agent verdict reasons
+  'copilotAdoptionAgents.server.healthReason.new': 'First seen within the last {days} days. Too new to judge - give it time to gain adoption before reviewing it.',
+  'copilotAdoptionAgents.server.healthReason.retire.withDays': 'Not used for {days} days ({retireDays}+ is the retirement line). Confirm with its owner, then remove it.',
+  'copilotAdoptionAgents.server.healthReason.retire.noUse': 'No recorded use at all. Confirm with its owner, then remove it.',
+  'copilotAdoptionAgents.server.healthReason.review.quiet': 'Going quiet - last used {days} days ago. Worth asking whether it is still needed before it drifts into the retire pile.',
+  'copilotAdoptionAgents.server.healthReason.review.fewUsers': 'Still in use, but only by {users} {people} - below the {minUsers} needed to call it adopted. Often this is the author testing it, or an agent that was never announced to the people it was built for.',
+  'copilotAdoptionAgents.server.healthReason.person': 'person',
+  'copilotAdoptionAgents.server.healthReason.people': 'people',
+  'copilotAdoptionAgents.server.healthReason.keep': 'Used within the last {reviewDays} days by {users} people. Genuinely adopted - keep supporting it.',
 } as const;
 
 export default copilotAdoptionAgents;

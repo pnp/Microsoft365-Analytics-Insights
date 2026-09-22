@@ -5,8 +5,8 @@ import GaugeRing from '../charts/GaugeRing';
 import TimeSeriesChart from '../charts/TimeSeriesChart';
 import DonutChart from '../charts/DonutChart';
 import { seriesColor } from '../charts/chartCommon';
-import type { TeamsOverview } from '../../types/teamsExplorer';
-import { useT } from '../../i18n';
+import type { TeamsJudgement, TeamsOverview, TeamsOverviewKpis } from '../../types/teamsExplorer';
+import { formatNumber, useT, type TFunction, type TranslationKey } from '../../i18n';
 import {
   SectionCard,
   WindowNote,
@@ -43,6 +43,132 @@ const useStyles = makeStyles({
     paddingTop: '8px',
   },
 });
+
+
+function judgementText(
+  t: TFunction,
+  key: string,
+  field: 'headline' | 'detail',
+  fallback: string,
+  values?: Record<string, string>,
+  variant?: string,
+): string {
+  if (!key) return fallback;
+  const catalogKey = `teamsExplorer.judgement.${key}.${field}${variant ? `.${variant}` : ''}` as TranslationKey;
+  const translated = t(catalogKey, values);
+  return translated === catalogKey ? fallback : translated;
+}
+
+function adoptionBandLabel(percent: number, t: TFunction): string {
+  if (percent < 40) return t('teamsExplorer.judgement.reach.band.needsAttention');
+  return percent < 70
+    ? t('teamsExplorer.judgement.reach.band.progressing')
+    : t('teamsExplorer.judgement.reach.band.healthy');
+}
+
+function firstPercent(text: string): string | undefined {
+  const match = text.match(/([0-9][0-9.,]*)%/);
+  if (!match) return undefined;
+  const value = Number(match[1].replace(/,/g, ''));
+  return Number.isFinite(value) ? formatPct(value) : match[0];
+}
+
+function serverCount(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  const value = Number(text.replace(/,/g, ''));
+  return Number.isFinite(value) ? formatCount(value) : text;
+}
+
+function formatOneDecimal(value: number): string {
+  return formatNumber(Math.round(value * 10) / 10, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+}
+
+function translatedJudgement(judgement: TeamsJudgement, kpis: TeamsOverviewKpis, t: TFunction) {
+  switch (judgement.key) {
+    case 'reach': {
+      const values = {
+        reach: formatPct(kpis.reachPct),
+        active: formatCount(kpis.activeUsers),
+        known: formatCount(kpis.knownUsers),
+        band: adoptionBandLabel(kpis.reachPct, t).toLowerCase(),
+      };
+      return {
+        headline: judgementText(t, judgement.key, 'headline', judgement.headline, values),
+        detail: judgementText(t, judgement.key, 'detail', judgement.detail, values),
+      };
+    }
+    case 'open-collaboration': {
+      const values = { share: formatPct(kpis.openCollaborationPct) };
+      return {
+        headline: judgementText(t, judgement.key, 'headline', judgement.headline, values),
+        detail: judgementText(
+          t,
+          judgement.key,
+          'detail',
+          judgement.detail,
+          values,
+          judgement.tone === 'warning' ? 'warning' : 'neutral',
+        ),
+      };
+    }
+    case 'after-hours': {
+      const values = { share: firstPercent(judgement.headline) ?? '' };
+      return {
+        headline: judgementText(t, judgement.key, 'headline', judgement.headline, values),
+        detail: judgementText(t, judgement.key, 'detail', judgement.detail, values),
+      };
+    }
+    case 'organiser-concentration': {
+      const values = { share: firstPercent(judgement.headline) ?? '' };
+      return {
+        headline: judgementText(t, judgement.key, 'headline', judgement.headline, values),
+        detail: judgementText(t, judgement.key, 'detail', judgement.detail, values),
+      };
+    }
+    case 'meeting-load': {
+      const values = { meetingsPerActiveUser: formatOneDecimal(kpis.meetingsPerActiveUser) };
+      return {
+        headline: judgementText(t, judgement.key, 'headline', judgement.headline, values),
+        detail: judgementText(t, judgement.key, 'detail', judgement.detail, values),
+      };
+    }
+    case 'ownerless-teams': {
+      const counts = judgement.headline.match(/([0-9][0-9,]*) of ([0-9][0-9,]*)/);
+      const values = {
+        ownerless: serverCount(counts?.[1]) ?? '',
+        total: serverCount(counts?.[2]) ?? formatCount(kpis.totalTeams),
+      };
+      return {
+        headline: judgementText(t, judgement.key, 'headline', judgement.headline, values),
+        detail: judgementText(t, judgement.key, 'detail', judgement.detail, values),
+      };
+    }
+    case 'team-sprawl': {
+      const values = {
+        active: formatCount(kpis.activeTeams),
+        total: formatCount(kpis.totalTeams),
+        share: formatPct(kpis.totalTeams > 0 ? (kpis.activeTeams / kpis.totalTeams) * 100 : 0),
+        dormant: formatCount(kpis.totalTeams - kpis.activeTeams),
+      };
+      return {
+        headline: judgementText(t, judgement.key, 'headline', judgement.headline, values),
+        detail: judgementText(
+          t,
+          judgement.key,
+          'detail',
+          judgement.detail,
+          values,
+          judgement.tone === 'warning' ? 'warning' : 'good',
+        ),
+      };
+    }
+    default:
+      return {
+        headline: judgementText(t, judgement.key, 'headline', judgement.headline),
+        detail: judgementText(t, judgement.key, 'detail', judgement.detail),
+      };
+  }
+}
 
 const TONE_COLOUR: Record<string, string> = {
   good: tokens.colorPaletteGreenBorderActive,
@@ -198,18 +324,21 @@ export default function OverviewPanel({ data }: { data: TeamsOverview }) {
 
       {data.judgements.length > 0 && (
         <div className={styles.judgements}>
-          {data.judgements.map((judgement) => (
+          {data.judgements.map((judgement) => {
+            const text = translatedJudgement(judgement, kpis, t);
+            return (
             <Card
               key={judgement.key}
               className={styles.judgement}
               style={{ borderLeftColor: TONE_COLOUR[judgement.tone] ?? TONE_COLOUR.neutral }}
             >
-              <Text weight="semibold">{judgement.headline}</Text>
+              <Text weight="semibold">{text.headline}</Text>
               <Text size={200} className={styles.muted}>
-                {judgement.detail}
+                {text.detail}
               </Text>
             </Card>
-          ))}
+            );
+          })}
         </div>
       )}
 

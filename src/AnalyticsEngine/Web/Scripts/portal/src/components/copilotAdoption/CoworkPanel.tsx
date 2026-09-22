@@ -39,7 +39,7 @@ import {
   useRowExpansion,
 } from './adoptionShared';
 import { formatCount, formatDate } from '../shared/KpiGrid';
-import { useT, useTNode, type TFunction, type TranslationKey } from '../../i18n';
+import { formatNumber, plural, useT, useTNode, type TFunction, type TranslationKey } from '../../i18n';
 // Credits are fractional and a per-user total over a short window is routinely below 1.
 // formatCount is documented as a WHOLE-number formatter, so it renders a real 0.4 as "0" -
 // the same "we do not know" / "it is nothing" conflation the null path here is careful to
@@ -78,6 +78,46 @@ const SORT_OPTIONS: Array<{ value: string; labelKey: TranslationKey }> = [
   { value: 'department:asc', labelKey: 'copilotAdoptionCowork.sort.departmentAz' },
   { value: 'upn:asc', labelKey: 'copilotAdoptionCowork.sort.userNameAz' },
 ];
+
+const COWORK_TIER_KEYS: Record<CoworkTier, { label: TranslationKey; description: TranslationKey }> = {
+  established: {
+    label: 'copilotAdoptionCowork.tier.established.label',
+    description: 'copilotAdoptionCowork.tier.established.description',
+  },
+  trialling: {
+    label: 'copilotAdoptionCowork.tier.trialling.label',
+    description: 'copilotAdoptionCowork.tier.trialling.description',
+  },
+  primeCandidate: {
+    label: 'copilotAdoptionCowork.tier.primeCandidate.label',
+    description: 'copilotAdoptionCowork.tier.primeCandidate.description',
+  },
+  buildFluencyFirst: {
+    label: 'copilotAdoptionCowork.tier.buildFluencyFirst.label',
+    description: 'copilotAdoptionCowork.tier.buildFluencyFirst.description',
+  },
+  lowCoordinationLoad: {
+    label: 'copilotAdoptionCowork.tier.lowCoordinationLoad.label',
+    description: 'copilotAdoptionCowork.tier.lowCoordinationLoad.description',
+  },
+  notIndicated: {
+    label: 'copilotAdoptionCowork.tier.notIndicated.label',
+    description: 'copilotAdoptionCowork.tier.notIndicated.description',
+  },
+};
+
+function coworkTierText(
+  t: TFunction,
+  code: string,
+  field: 'label' | 'description',
+  fallback: string,
+  days: string,
+): string {
+  if (!(code in COWORK_TIER_KEYS)) return fallback;
+  const catalogKey = COWORK_TIER_KEYS[code as CoworkTier][field];
+  const translated = t(catalogKey, { days });
+  return translated === catalogKey ? fallback : translated;
+}
 
 const useStyles = makeStyles({
   section: {
@@ -369,6 +409,12 @@ export default function CoworkPanel({
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
   const estimate = summary.coworkValueEstimate;
   const credits = summary.coworkCreditPosition;
+  const estimateLowerBoundPercent = Math.min(1, Math.max(0, options.coworkEstimateLowerBoundRatio)) * 100;
+  const estimateWorkingDaysPerMonth = Math.max(
+    1,
+    options.habitBucketNormalisationDays * (options.workingDaysPerWeek / 7),
+  );
+  const coworkRegularMinActiveDays = formatNumber(Math.max(1, options.coworkRegularMinActiveDays));
   // The detail row spans every column the header renders. The credit figures live inside the detail
   // panel rather than in a column, so this is now fixed.
   const detailColSpan = 8;
@@ -441,6 +487,8 @@ export default function CoworkPanel({
         <div className={styles.tierGrid}>
           {summary.coworkTiers.map((tier) => {
             const active = filters.tiers.length === 1 && filters.tiers[0] === tier.code;
+            const label = coworkTierText(t, tier.code, 'label', tier.label, coworkRegularMinActiveDays);
+            const description = coworkTierText(t, tier.code, 'description', tier.description, coworkRegularMinActiveDays);
             return (
               <button
                 key={tier.code}
@@ -450,13 +498,13 @@ export default function CoworkPanel({
               >
                 <div className={styles.tierTop}>
                   <Text size={200} weight="semibold">
-                    {tier.label}
+                    {label}
                   </Text>
                   <BasisBadge basis={tier.basis} />
                 </div>
                 <span className={styles.tierCount}>{formatCount(tier.users)}</span>
                 <Text size={100} className={styles.tierDesc}>
-                  {tier.description}
+                  {description}
                 </Text>
               </button>
             );
@@ -647,11 +695,43 @@ export default function CoworkPanel({
           </Text>
 
           <ul className={styles.assumptionList}>
-            {estimate.assumptions.map((assumption) => (
-              <li key={assumption}>
-                <Text size={100}>{assumption}</Text>
-              </li>
-            ))}
+            <li key="estimate-assumption-saves">
+              <Text size={100}>
+                {t('copilotAdoptionCowork.estimate.assumption.saves', {
+                  meetingMinutes: formatNumber(options.coworkMinutesSavedPerMeeting, { maximumFractionDigits: 15 }),
+                  emailMinutes: formatNumber(options.coworkMinutesSavedPerMailThread, { maximumFractionDigits: 15 }),
+                  documentMinutes: formatNumber(options.coworkMinutesSavedPerDocument, { maximumFractionDigits: 15 }),
+                })}
+              </Text>
+            </li>
+            <li key="estimate-assumption-lowerBound">
+              <Text size={100}>
+                {t('copilotAdoptionCowork.estimate.assumption.lowerBound', {
+                  percent: formatNumber(estimateLowerBoundPercent, { maximumFractionDigits: 15 }),
+                })}
+              </Text>
+            </li>
+            <li key="estimate-assumption-volumes">
+              <Text size={100}>
+                {t(
+                  plural(
+                    estimate.cohortUsers,
+                    'copilotAdoptionCowork.estimate.assumption.volumes.one',
+                    'copilotAdoptionCowork.estimate.assumption.volumes.other',
+                  ),
+                  {
+                    users: formatNumber(estimate.cohortUsers),
+                    workingDays: formatNumber(estimateWorkingDaysPerMonth, { maximumFractionDigits: 15 }),
+                  },
+                )}
+              </Text>
+            </li>
+            <li key="estimate-assumption-notMeasured">
+              <Text size={100}>{t('copilotAdoptionCowork.estimate.assumption.notMeasured')}</Text>
+            </li>
+            <li key="estimate-assumption-noMoney">
+              <Text size={100}>{t('copilotAdoptionCowork.estimate.assumption.noMoney')}</Text>
+            </li>
           </ul>
         </Card>
       )}

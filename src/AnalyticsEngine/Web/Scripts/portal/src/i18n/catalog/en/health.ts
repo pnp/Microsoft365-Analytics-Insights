@@ -21,6 +21,24 @@ export const health = {
   'health.time.justNow': 'just now',
   'health.time.minutesAgo': '{minutes} min ago',
   'health.time.never': 'never',
+  'health.reason.allChecksPassing': 'All checks passing.',
+  'health.reason.databaseReachableOpenDataTab': 'Database reachable (open the Data tab for counts).',
+  'health.reason.databaseQueryFailed': 'Database query failed: {error}',
+  'health.reason.approximateCountsUnavailable': 'Approximate counts unavailable: {error}',
+  'health.reason.recentVolumeScanDidntComplete': "Recent-volume scan didn't complete: {error}",
+  'health.reason.copilotUsageIdentitiesConcealed': "Per-user Microsoft 365 Copilot usage from Graph is not being imported because this tenant conceals user identities in Microsoft 365 usage reports: Graph returns a hash instead of each user principal name, which cannot be linked to a user. Tenant-level Copilot user counts and the audit-log Copilot import are unaffected. To enable it, turn off 'Display concealed user, group and site names in all reports' in the Microsoft 365 admin centre (Settings > Org settings > Reports).",
+  'health.reason.graphCopilotUsageReportImportFailed': 'Graph Copilot usage report import failed - {error}',
+  'health.reason.applicationInsightsNotConfigured': 'Application Insights is not configured.',
+  'health.reason.telemetryQueriesFailing': 'Health telemetry queries are failing - see the affected cards.',
+  'health.reason.someConfigurationCouldntBeRead': "Some configuration couldn't be read.",
+  'health.reason.componentUnhealthy': '{component} is unhealthy: {detail}',
+  'health.reason.componentDegraded': '{component} is degraded: {detail}',
+  'health.reason.runtimeCertificateExpired': 'Runtime certificate has EXPIRED - data flow will stop.',
+  'health.reason.runtimeCertificateValid': "Runtime certificate '{certificateName}' valid; expires {expiryDate}.",
+  'health.reason.clientSecretAuthValid': 'Client-secret auth: currently valid. Secret expiry is not visible at runtime - use certificate auth to get an expiry warning, or track it in the app registration.',
+  'health.reason.runtimeCertificateCheckFailed': "Couldn't check the runtime certificate: {error}",
+  'health.reason.teamsCallsQueueDepthFailed': "Couldn't read the Teams calls queue depth: {error}",
+  'health.reason.teamsCallsQueueDepthFailedNetworkBlock': "Couldn't read the Teams calls queue depth: {error} This looks like a network-level block rather than a permissions problem: in a private (VNet) deployment Service Bus must be on the Premium SKU with a private endpoint, otherwise the namespace is unreachable and Teams calls will not import. Either migrate the namespace to Premium, or re-enable public network access on it.",
 
   // Health page
   'health.page.title': 'System Health{buildLabel}',
@@ -43,6 +61,14 @@ export const health = {
   'health.overview.columnStatus': 'Status',
   'health.overview.columnNotes': 'Notes',
   'health.overview.open': 'Open',
+
+
+  // Server-authored health section labels.
+  'health.section.data.label': 'Data overview',
+  'health.section.liveness.label': 'Import liveness',
+  'health.section.exceptions.label': 'Exceptions',
+  'health.section.components.label': 'Component health',
+  'health.section.config.label': 'Configuration',
 
   // Import liveness panel
   'health.liveness.title': 'Import liveness',
