@@ -1,0 +1,271 @@
+using Newtonsoft.Json;
+using System.Collections.Generic;
+
+namespace Web.AnalyticsWeb.Models.UserOrgs
+{
+    // Every property here carries an explicit [JsonProperty] name. The Web project has no camelCase
+    // contract resolver, so a property without one serialises in PascalCase and the SPA reads
+    // undefined - a failure that shows up as a blank page rather than an error.
+
+    /// <summary>One org type as the admin page sees it.</summary>
+    public class UserOrgTypeModel
+    {
+        [JsonProperty("id")]
+        public int Id { get; set; }
+
+        [JsonProperty("name")]
+        public string Name { get; set; }
+
+        /// <summary>"entra" or "csv".</summary>
+        [JsonProperty("source")]
+        public string Source { get; set; }
+
+        [JsonProperty("entraAttributeName")]
+        public string EntraAttributeName { get; set; }
+
+        [JsonProperty("isEnabled")]
+        public bool IsEnabled { get; set; }
+
+        [JsonProperty("assignedUserCount")]
+        public int AssignedUserCount { get; set; }
+
+        [JsonProperty("distinctValueCount")]
+        public int DistinctValueCount { get; set; }
+
+        [JsonProperty("createdUtc")]
+        public string CreatedUtc { get; set; }
+
+        [JsonProperty("modifiedUtc")]
+        public string ModifiedUtc { get; set; }
+
+        [JsonProperty("lastImport")]
+        public UserOrgImportJobModel LastImport { get; set; }
+    }
+
+    /// <summary>A CSV import job, for progress polling and the audit trail.</summary>
+    public class UserOrgImportJobModel
+    {
+        [JsonProperty("id")]
+        public int Id { get; set; }
+
+        [JsonProperty("orgTypeId")]
+        public int OrgTypeId { get; set; }
+
+        /// <summary>"replace" or "merge".</summary>
+        [JsonProperty("mode")]
+        public string Mode { get; set; }
+
+        /// <summary>"pending", "running", "succeeded", "failed", "cancelled" or "interrupted".</summary>
+        [JsonProperty("status")]
+        public string Status { get; set; }
+
+        [JsonProperty("fileName")]
+        public string FileName { get; set; }
+
+        [JsonProperty("startedBy")]
+        public string StartedBy { get; set; }
+
+        [JsonProperty("queuedUtc")]
+        public string QueuedUtc { get; set; }
+
+        [JsonProperty("finishedUtc")]
+        public string FinishedUtc { get; set; }
+
+        [JsonProperty("rowsTotal")]
+        public int RowsTotal { get; set; }
+
+        [JsonProperty("rowsApplied")]
+        public int RowsApplied { get; set; }
+
+        [JsonProperty("rowsCleared")]
+        public int RowsCleared { get; set; }
+
+        [JsonProperty("rowsUnknownUpn")]
+        public int RowsUnknownUpn { get; set; }
+
+        [JsonProperty("rowsInvalid")]
+        public int RowsInvalid { get; set; }
+
+        [JsonProperty("errorMessage")]
+        public string ErrorMessage { get; set; }
+    }
+
+    /// <summary>A create/update request from the admin page.</summary>
+    public class UserOrgTypeSaveModel
+    {
+        [JsonProperty("name")]
+        public string Name { get; set; }
+
+        [JsonProperty("source")]
+        public string Source { get; set; }
+
+        [JsonProperty("entraAttributeName")]
+        public string EntraAttributeName { get; set; }
+
+        [JsonProperty("isEnabled")]
+        public bool IsEnabled { get; set; } = true;
+    }
+
+    /// <summary>A request to resolve one attribute for one user.</summary>
+    public class UserOrgTestRequestModel
+    {
+        /// <summary>
+        /// The attribute to test. Accepted unsaved, so an admin can validate before committing - which
+        /// is the whole point, since a bad attribute would otherwise break the next user import.
+        /// </summary>
+        [JsonProperty("entraAttributeName")]
+        public string EntraAttributeName { get; set; }
+
+        [JsonProperty("upn")]
+        public string Upn { get; set; }
+    }
+
+    /// <summary>What a test resolved, shown raw and normalised so truncation and trimming are visible.</summary>
+    public class UserOrgTestResultModel
+    {
+        [JsonProperty("succeeded")]
+        public bool Succeeded { get; set; }
+
+        [JsonProperty("upn")]
+        public string Upn { get; set; }
+
+        /// <summary>The canonical attribute name, which may differ from what was typed.</summary>
+        [JsonProperty("attributeName")]
+        public string AttributeName { get; set; }
+
+        /// <summary>The Graph property that was actually requested in $select.</summary>
+        [JsonProperty("graphProperty")]
+        public string GraphProperty { get; set; }
+
+        /// <summary>The value exactly as Graph returned it, or null when the user has none.</summary>
+        [JsonProperty("rawValue")]
+        public string RawValue { get; set; }
+
+        /// <summary>What would be stored: trimmed, and capped at the column width.</summary>
+        [JsonProperty("normalisedValue")]
+        public string NormalisedValue { get; set; }
+
+        [JsonProperty("wouldTruncate")]
+        public bool WouldTruncate { get; set; }
+
+        /// <summary>True when the user exists but simply has no value for this attribute.</summary>
+        [JsonProperty("hasNoValue")]
+        public bool HasNoValue { get; set; }
+
+        [JsonProperty("message")]
+        public string Message { get; set; }
+    }
+
+    /// <summary>The first few parsed rows of an upload, so an admin can sanity-check it.</summary>
+    public class UserOrgCsvPreviewModel
+    {
+        [JsonProperty("fileName")]
+        public string FileName { get; set; }
+
+        [JsonProperty("delimiter")]
+        public string Delimiter { get; set; }
+
+        [JsonProperty("headerDetected")]
+        public bool HeaderDetected { get; set; }
+
+        [JsonProperty("upnColumnName")]
+        public string UpnColumnName { get; set; }
+
+        [JsonProperty("orgColumnName")]
+        public string OrgColumnName { get; set; }
+
+        [JsonProperty("rows")]
+        public List<UserOrgCsvPreviewRowModel> Rows { get; set; } = new List<UserOrgCsvPreviewRowModel>();
+
+        [JsonProperty("problems")]
+        public List<UserOrgCsvProblemModel> Problems { get; set; } = new List<UserOrgCsvProblemModel>();
+
+        /// <summary>Whether more rows exist beyond the sample shown.</summary>
+        [JsonProperty("moreRowsExist")]
+        public bool MoreRowsExist { get; set; }
+    }
+
+    public class UserOrgCsvPreviewRowModel
+    {
+        [JsonProperty("lineNumber")]
+        public int LineNumber { get; set; }
+
+        [JsonProperty("upn")]
+        public string Upn { get; set; }
+
+        [JsonProperty("orgValue")]
+        public string OrgValue { get; set; }
+
+        /// <summary>Whether this UPN matches a user already in the database.</summary>
+        [JsonProperty("userExists")]
+        public bool UserExists { get; set; }
+
+        /// <summary>True when the row will clear the user's value rather than set one.</summary>
+        [JsonProperty("clearsValue")]
+        public bool ClearsValue { get; set; }
+    }
+
+    public class UserOrgCsvProblemModel
+    {
+        [JsonProperty("lineNumber")]
+        public int LineNumber { get; set; }
+
+        [JsonProperty("reason")]
+        public string Reason { get; set; }
+    }
+
+    /// <summary>The outcome of queueing an import.</summary>
+    public class UserOrgImportQueuedModel
+    {
+        [JsonProperty("jobId")]
+        public int JobId { get; set; }
+
+        [JsonProperty("rowsQueued")]
+        public int RowsQueued { get; set; }
+
+        [JsonProperty("rowsInvalid")]
+        public int RowsInvalid { get; set; }
+    }
+
+    /// <summary>A directory extension discovered in the tenant.</summary>
+    public class UserOrgDiscoveredAttributeModel
+    {
+        [JsonProperty("name")]
+        public string Name { get; set; }
+
+        [JsonProperty("dataType")]
+        public string DataType { get; set; }
+
+        [JsonProperty("isSyncedFromOnPremises")]
+        public bool IsSyncedFromOnPremises { get; set; }
+    }
+
+    /// <summary>What attribute discovery found, with an honest account of its limits.</summary>
+    public class UserOrgAttributeCatalogueModel
+    {
+        /// <summary>The fifteen on-premises extension attribute slots - always available.</summary>
+        [JsonProperty("extensionAttributes")]
+        public List<string> ExtensionAttributes { get; set; } = new List<string>();
+
+        /// <summary>Built-in properties offered as org sources.</summary>
+        [JsonProperty("builtInProperties")]
+        public List<string> BuiltInProperties { get; set; } = new List<string>();
+
+        /// <summary>The employeeOrgData sub-properties.</summary>
+        [JsonProperty("employeeOrgDataProperties")]
+        public List<string> EmployeeOrgDataProperties { get; set; } = new List<string>();
+
+        /// <summary>Directory extensions found in the tenant. Best-effort; see <see cref="DiscoveryWarning"/>.</summary>
+        [JsonProperty("directoryExtensions")]
+        public List<UserOrgDiscoveredAttributeModel> DirectoryExtensions { get; set; } = new List<UserOrgDiscoveredAttributeModel>();
+
+        /// <summary>
+        /// Why the directory extension list may be incomplete or empty. Surfaced rather than hidden,
+        /// because Microsoft documents the discovery API as returning nothing at all on tenants with
+        /// more than 1,000 service principals - and an empty list would otherwise read as
+        /// "this tenant has no directory extensions".
+        /// </summary>
+        [JsonProperty("discoveryWarning")]
+        public string DiscoveryWarning { get; set; }
+    }
+}

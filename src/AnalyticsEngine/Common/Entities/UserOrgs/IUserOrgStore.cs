@@ -85,6 +85,21 @@ namespace Common.Entities.UserOrgs
     }
 
     /// <summary>
+    /// Looks up which of a set of UPNs actually exist, so a CSV preview can tell an administrator that
+    /// half their file will not match anybody <b>before</b> they import it.
+    /// </summary>
+    public interface IUserOrgUserLookup
+    {
+        /// <summary>
+        /// The subset of <paramref name="upns"/> that match a row in <c>dbo.users</c>, compared the way
+        /// the database compares them (case-insensitively).
+        /// </summary>
+        Task<IReadOnlyCollection<string>> FindExistingUpnsAsync(
+            IReadOnlyCollection<string> upns,
+            CancellationToken cancellationToken = default(CancellationToken));
+    }
+
+    /// <summary>
     /// Owns the CSV import job lifecycle: staging the parsed rows, claiming a job to run, applying it,
     /// and recording the outcome.
     /// </summary>

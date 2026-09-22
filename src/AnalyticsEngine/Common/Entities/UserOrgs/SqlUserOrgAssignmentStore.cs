@@ -2,6 +2,7 @@ using Microsoft.Data.SqlClient;
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -17,7 +18,7 @@ namespace Common.Entities.UserOrgs
     /// up once via <see cref="SqlBulkCopy"/> and every subsequent step is a single set-based statement
     /// joined against the temp table, mirroring <c>SqlUserBulkUpdateWriter</c>.
     /// </remarks>
-    internal sealed class SqlUserOrgAssignmentStore : SqlUserOrgStoreBase, IUserOrgAssignmentStore
+    internal sealed class SqlUserOrgAssignmentStore : SqlUserOrgStoreBase, IUserOrgAssignmentStore, IUserOrgUserLookup
     {
         internal const string TempTableName = "#user_org_updates";
 
@@ -202,6 +203,64 @@ ORDER BY t.name;";
                 cmd.Parameters.Add("@id", SqlDbType.Int).Value = orgTypeId;
                 return await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
+        }
+
+        /// <summary>
+        /// Which of these UPNs exist.
+        /// </summary>
+        /// <remarks>
+        /// Sent as a table-valued batch through a temp table rather than an IN clause: a preview can
+        /// carry a few hundred UPNs and SQL Server caps a statement at 2,100 parameters, so an IN
+        /// clause would fail on exactly the large file this is most useful for.
+        /// </remarks>
+        public async Task<IReadOnlyCollection<string>> FindExistingUpnsAsync(
+            IReadOnlyCollection<string> upns,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            var found = new List<string>();
+            if (upns == null || upns.Count == 0)
+            {
+                return found;
+            }
+
+            var table = new DataTable();
+            table.Columns.Add("upn", typeof(string));
+            foreach (var upn in upns.Where(u => !string.IsNullOrWhiteSpace(u)).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                table.Rows.Add(upn);
+            }
+
+            if (table.Rows.Count == 0)
+            {
+                return found;
+            }
+
+            using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
+            {
+                using (var cmd = Command(connection, "CREATE TABLE #user_org_upn_probe (upn NVARCHAR(250) NOT NULL);"))
+                {
+                    await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                using (var bulkCopy = new SqlBulkCopy(connection))
+                {
+                    bulkCopy.DestinationTableName = "#user_org_upn_probe";
+                    bulkCopy.BulkCopyTimeout = CommandTimeoutSeconds;
+                    bulkCopy.ColumnMappings.Add("upn", "upn");
+                    await bulkCopy.WriteToServerAsync(table, cancellationToken).ConfigureAwait(false);
+                }
+
+                using (var cmd = Command(connection, "SELECT p.upn FROM #user_org_upn_probe p WHERE EXISTS (SELECT 1 FROM dbo.users u WHERE u.user_name = p.upn);"))
+                using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        found.Add(reader.GetString(0));
+                    }
+                }
+            }
+
+            return found;
         }
 
         /// <summary>

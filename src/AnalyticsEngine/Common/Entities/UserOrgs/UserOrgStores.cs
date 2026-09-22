@@ -23,6 +23,17 @@ namespace Common.Entities.UserOrgs
             return new SqlUserOrgAssignmentStore(Require(connectionString));
         }
 
+        /// <summary>
+        /// The UPN existence lookup. The same object as
+        /// <see cref="CreateAssignmentStore"/> returns - it is one SQL adapter exposed through two
+        /// narrow ports, so a caller that only needs to check UPNs does not gain the ability to write
+        /// assignments.
+        /// </summary>
+        public static IUserOrgUserLookup CreateUserLookup(string connectionString)
+        {
+            return new SqlUserOrgAssignmentStore(Require(connectionString));
+        }
+
         public static IUserOrgImportJobStore CreateImportJobStore(string connectionString)
         {
             return new SqlUserOrgImportJobStore(Require(connectionString));
