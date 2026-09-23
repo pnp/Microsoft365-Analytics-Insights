@@ -413,7 +413,14 @@ export interface CopilotAdoptionSummary {
   coworkQuadrant: CoworkQuadrantPoint[];
   coworkByDepartment: CoworkSegmentRow[];
   coworkCreditPosition: CoworkCreditPosition;
+  /** The modelled time saved for the people ready for Cowork now (the recommended policy cohort). */
   coworkValueEstimate: CoworkValueEstimate;
+  /**
+   * The same model over every scored Copilot seat holder - the potential of full Copilot and Cowork
+   * adoption. Optional only so a fixture written before it existed still type-checks; the server
+   * always sends it.
+   */
+  coworkFullRolloutEstimate?: CoworkValueEstimate;
 
   unlicensedActiveUsers: number;
   recommendedForLicence: number;
@@ -734,10 +741,12 @@ export interface CoworkCreditPosition {
 }
 
 /**
- * The modelled time/cost estimate.
+ * A modelled time-saved estimate for one cohort.
  *
- * The `addressable*` volumes are observed; the hours and money are those volumes multiplied by an
- * assumption. `assumptions` travels with the numbers so no component can render a figure without it.
+ * The `addressable*` volumes are observed; the hours are those volumes multiplied by an assumption.
+ * `assumptions` travels with the numbers so no component can render a figure without it. The portal
+ * recomputes the hours from the volumes whenever the reader enters their own assumptions - see
+ * `components/copilotAdoption/coworkTimeSaved.ts`.
  */
 export interface CoworkValueEstimate {
   isModelled: boolean;
@@ -747,8 +756,9 @@ export interface CoworkValueEstimate {
   addressableDocuments: number;
   hoursPerMonthLow: number;
   hoursPerMonthHigh: number;
-  // No monetary fields: this estimate is modelled, and currency is reported only against idle
-  // licence spend, which is measured. See CoworkValueEstimate in CopilotAdoptionCoworkModels.cs.
+  // No monetary fields, and none anywhere else in this report: the estimate is modelled, and a money
+  // figure derived from it would be quoted as though it were measured. See CoworkValueEstimate in
+  // CopilotAdoptionCoworkModels.cs.
   assumptions: string[];
 }
 

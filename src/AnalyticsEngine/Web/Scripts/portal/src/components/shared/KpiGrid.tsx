@@ -1,4 +1,4 @@
-import { makeStyles, tokens, Text, Card } from '@fluentui/react-components';
+import { makeStyles, mergeClasses, tokens, Text, Card, Badge } from '@fluentui/react-components';
 import type { ReactNode } from 'react';
 import InfoTip from './InfoTip';
 import type { InfoTipContent } from './InfoTip';
@@ -25,11 +25,23 @@ const useStyles = makeStyles({
     borderLeftWidth: '4px',
     borderLeftStyle: 'solid',
   },
+  // A modelled figure among measured ones. Dashed rather than solid, with a badge, so nobody reading
+  // a row of tiles can take the one estimate for another count.
+  modelled: {
+    borderLeftStyle: 'dashed',
+    backgroundColor: tokens.colorBrandBackground2,
+  },
   head: {
     display: 'flex',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: '4px',
+  },
+  labelGroup: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    flexWrap: 'wrap',
   },
   label: {
     color: tokens.colorNeutralForeground3,
@@ -67,6 +79,12 @@ export type KpiDefinition = {
    * this page exists to be checked.
    */
   info: InfoTipContent;
+  /**
+   * Set on a figure that is modelled rather than counted, with the (translated) badge text to show.
+   * The tile is drawn differently as well as badged: a model sitting unmarked in a row of
+   * measurements gets quoted as one.
+   */
+  modelledBadge?: string;
 };
 
 /** A responsive row of headline figures, each carrying its own definition. */
@@ -78,13 +96,20 @@ export function KpiGrid({ items }: { items: KpiDefinition[] }) {
       {items.map((item) => (
         <Card
           key={item.key}
-          className={styles.card}
+          className={mergeClasses(styles.card, item.modelledBadge ? styles.modelled : undefined)}
           style={{ borderLeftColor: TONE_COLOUR[item.tone ?? 'neutral'] }}
         >
           <div className={styles.head}>
-            <Text size={200} className={styles.label}>
-              {item.label}
-            </Text>
+            <span className={styles.labelGroup}>
+              <Text size={200} className={styles.label}>
+                {item.label}
+              </Text>
+              {item.modelledBadge && (
+                <Badge size="small" appearance="outline" color="informative">
+                  {item.modelledBadge}
+                </Badge>
+              )}
+            </span>
             <InfoTip title={item.label} content={item.info} />
           </div>
           <span className={styles.value}>{item.value}</span>

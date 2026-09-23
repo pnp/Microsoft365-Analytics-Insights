@@ -505,9 +505,14 @@ describe('Chart text the SPA matches on', () => {
 
 /**
  * Copilot Adoption's Cowork time-saved estimate still carries server-authored assumption strings
- * for API compatibility, but the SPA renders catalogued wording from the same numeric facts. Keep
- * the counts in lock-step so a future server-side assumption is not silently missing on Spanish
- * pages.
+ * for API compatibility and for the Excel report, but the SPA renders catalogued wording from the
+ * same numeric facts. Keep the counts in lock-step so a future server-side assumption is not
+ * silently missing on Spanish pages.
+ *
+ * The list lives in the time-saved model section, and its facts are the assumptions IN FORCE - the
+ * reader's own figures for the session, or the product defaults - not the raw server options. Wiring
+ * a sentence to `options.*` would state the defaults beside hours computed from the reader's
+ * figures, which is exactly the wrong-value mismatch the third check below exists to catch.
  */
 const COPILOT_ADOPTION_SCORING = join(
   process.cwd(),
@@ -519,7 +524,7 @@ const COPILOT_ADOPTION_SCORING = join(
   'CopilotAdoption',
   'CopilotAdoptionScoring.cs',
 );
-const COWORK_PANEL = join(process.cwd(), 'src', 'components', 'copilotAdoption', 'CoworkPanel.tsx');
+const COWORK_TIME_SAVED_MODEL = join(process.cwd(), 'src', 'components', 'copilotAdoption', 'CoworkTimeSavedModel.tsx');
 const COPILOT_ADOPTION_SERVER_TEXT_MODULE = join(process.cwd(), 'src', 'components', 'copilotAdoption', 'serverText.ts');
 const COWORK_ESTIMATE_ASSUMPTION_CALL = /estimate\.Assumptions\.Add\(/g;
 const COWORK_ESTIMATE_ASSUMPTION_PREFIX = 'copilotAdoptionCowork.estimate.assumption.';
@@ -530,7 +535,7 @@ function coworkEstimateServerAssumptionCount(): number {
 }
 
 function coworkEstimateRenderedAssumptionKeys(): string[] {
-  const source = readFileSync(COWORK_PANEL, 'utf8');
+  const source = readFileSync(COWORK_TIME_SAVED_MODEL, 'utf8');
   const list = source.match(/<ul className=\{styles\.assumptionList\}>([\s\S]*?)<\/ul>/)?.[1] ?? '';
   expect(list, 'Could not find the Cowork estimate assumption list').toBeTruthy();
 
@@ -564,20 +569,21 @@ describe('Copilot Adoption Cowork estimate assumptions', () => {
     expect(
       { renderedIds, catalogIds, serverCount: coworkEstimateServerAssumptionCount() },
       'CopilotAdoptionScoring added or removed an estimate.Assumptions.Add(...) call. Mirror the\n' +
-        'same assumption in CoworkPanel.tsx using copilotAdoptionCowork.estimate.assumption.*\n' +
+        'same assumption in CoworkTimeSavedModel.tsx using copilotAdoptionCowork.estimate.assumption.*\n' +
         'catalog entries in en/es, or deliberately remove the obsolete SPA bullet. Plural catalog\n' +
         'forms count as one assumption.',
     ).toEqual({ renderedIds: catalogIds, catalogIds, serverCount: renderedIds.length });
   });
 
   it('wires each Cowork assumption sentence to the facts that sentence describes', () => {
-    const source = readFileSync(COWORK_PANEL, 'utf8');
+    const source = readFileSync(COWORK_TIME_SAVED_MODEL, 'utf8');
     const list = source.match(/<ul className=\{styles\.assumptionList\}>([\s\S]*?)<\/ul>/)?.[1] ?? '';
 
     const requiredFacts: Record<string, string[]> = {
-      saves: ['options.coworkMinutesSavedPerMeeting', 'options.coworkMinutesSavedPerMailThread', 'options.coworkMinutesSavedPerDocument'],
-      lowerBound: ['estimateLowerBoundPercent'],
-      volumes: ['estimate.cohortUsers', 'estimateWorkingDaysPerMonth'],
+      saves: ['assumptions.meetingMinutes', 'assumptions.emailMinutes', 'assumptions.documentMinutes'],
+      lowerBound: ['conservativePercent'],
+      volumes: ['projection.cohortUsers', 'projection.workingDaysPerMonth'],
+      potential: [],
       notMeasured: [],
       noMoney: [],
     };

@@ -2119,6 +2119,10 @@ namespace Common.Entities.CopilotAdoption
 
             summary.CoworkValueEstimate = CopilotAdoptionScoring.EstimateCoworkValue(
                 rows.Where(r => r.RecommendForPolicy).ToList(), _options);
+
+            // The ceiling: every scored seat holder, not only the people ready today. Same rows, same
+            // options, same arithmetic - so the cohort above can never model more time than this.
+            summary.CoworkFullRolloutEstimate = CopilotAdoptionScoring.EstimateCoworkValue(rows, _options);
         }
 
         /// <summary>

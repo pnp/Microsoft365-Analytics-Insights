@@ -61,8 +61,15 @@ import DismissibleWarnings from '../components/shared/DismissibleWarnings';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
 import type { KpiDefinition } from '../components/shared/KpiGrid';
-import { activeLocale, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
+import { activeLocale, formatNumber, plural, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
 import { adoptionBandLabel, availabilityMessages, scoreProfileLabel } from '../components/copilotAdoption/serverText';
+import {
+  modelledRange,
+  projectTimeSaved,
+  timeSavedExportParams,
+  useTimeSavedAssumptions,
+  type TimeSavedAssumptions,
+} from '../components/copilotAdoption/coworkTimeSaved';
 
 const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
   { value: 7, labelKey: 'copilotAdoption.page.window.last7Days' },
@@ -294,6 +301,8 @@ export default function CopilotAdoptionPage() {
   const [filterOptions, setFilterOptions] = useState<AdoptionFilterOptions | null>(null);
   const [sql, setSql] = useState<Record<string, string> | null>(null);
   const lastSummaryScope = useRef<string | null>(null);
+  // The reader's own time-saved figures, if any, so the Excel report models the hours on screen.
+  const timeSaved = useTimeSavedAssumptions(summary?.options);
 
   useEffect(() => {
     let cancelled = false;
@@ -452,7 +461,7 @@ export default function CopilotAdoptionPage() {
                 appearance="primary"
                 icon={<ArrowDownload16Regular />}
                 as="a"
-                href={summary ? workbookExportUrl(windowDays, undefined, emailDomain) : undefined}
+                href={summary ? workbookExportUrl(windowDays, undefined, emailDomain, timeSavedExportParams(timeSaved)) : undefined}
                 disabled={!summary}
               >{t('copilotAdoption.page.controls.excelReport')}</Button>
             </Tooltip>
@@ -728,7 +737,8 @@ function ExecutiveTab({
   const styles = useStyles();
   const t = useT();
   const o = summary.options;
-  const kpis = buildExecutiveKpis(summary, t);
+  const { assumptions: timeSavedAssumptions } = useTimeSavedAssumptions(o);
+  const kpis = buildExecutiveKpis(summary, t, timeSavedAssumptions);
   return (
     <>
       <KpiGrid items={kpis} />
@@ -994,7 +1004,8 @@ function AnalystTab({
 }) {
   const styles = useStyles();
   const t = useT();
-  const kpis = buildKpis(summary, t);
+  const { assumptions: timeSavedAssumptions } = useTimeSavedAssumptions(summary.options);
+  const kpis = buildKpis(summary, t, timeSavedAssumptions);
   const o = summary.options;
   const accountabilityDimensionLabel = summary.accountabilityDimensionLabel ?? 'Direct manager';
   const accountabilityDimensionDescription = accountabilityDimensionLabel.toLowerCase();
@@ -2116,16 +2127,72 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
 }
 
 /** The Executive view keeps only the board-pack headlines; the Analyst view keeps the full KPI set. */
-function buildExecutiveKpis(summary: CopilotAdoptionSummary, t: TFunction): KpiDefinition[] {
-  const executiveKeys = new Set(['licensed', 'adoption', 'habit', 'reclaim', 'unlicensed', 'candidates']);
-  return buildKpis(summary, t).filter((item) => executiveKeys.has(item.key));
+function buildExecutiveKpis(
+  summary: CopilotAdoptionSummary,
+  t: TFunction,
+  timeSaved: TimeSavedAssumptions,
+): KpiDefinition[] {
+  const executiveKeys = new Set(['licensed', 'adoption', 'habit', 'reclaim', 'unlicensed', 'candidates', 'timeSaved']);
+  return buildKpis(summary, t, timeSaved).filter((item) => executiveKeys.has(item.key));
+}
+
+/**
+ * The modelled time-saved headline, promoted from the Cowork tab so the overview carries it too.
+ *
+ * Built from the same projection, with the same assumptions - the reader's own for this session, or
+ * the product defaults - so the overview can never quote the model differently from the tab that
+ * explains it. Badged and drawn as modelled: it sits among counted figures, and an unmarked estimate
+ * in a row of measurements is how a model gets quoted as a result. Absent when readiness could not be
+ * assessed, rather than shown as a modelled zero.
+ */
+function buildTimeSavedKpi(
+  summary: CopilotAdoptionSummary,
+  t: TFunction,
+  assumptions: TimeSavedAssumptions,
+): KpiDefinition | null {
+  if (!summary.coworkReadinessAvailable) return null;
+  const o = summary.options;
+  const full = projectTimeSaved(summary.coworkFullRolloutEstimate, assumptions, o);
+  const ready = projectTimeSaved(summary.coworkValueEstimate, assumptions, o);
+  const headline = full ?? ready;
+  if (!headline) return null;
+
+  const range = modelledRange(t, formatCount(headline.hoursLow), formatCount(headline.hoursHigh));
+  const readyRange = ready ? modelledRange(t, formatCount(ready.hoursLow), formatCount(ready.hoursHigh)) : null;
+  const scope = full
+    ? t(plural(full.cohortUsers, 'copilotAdoption.page.kpi.timeSaved.hintFull.one', 'copilotAdoption.page.kpi.timeSaved.hintFull.other'), {
+        users: formatCount(full.cohortUsers),
+      })
+    : t(plural(headline.cohortUsers, 'copilotAdoption.page.kpi.timeSaved.hintReady.one', 'copilotAdoption.page.kpi.timeSaved.hintReady.other'), {
+        users: formatCount(headline.cohortUsers),
+      });
+
+  return {
+    key: 'timeSaved',
+    label: t('copilotAdoption.page.kpi.timeSaved.label'),
+    value: t('copilotAdoption.page.kpi.timeSaved.value', { range }),
+    hint: full && readyRange ? t('copilotAdoption.page.kpi.timeSaved.hintWithReady', { scope, ready: readyRange }) : scope,
+    tone: 'opportunity',
+    modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
+    info: {
+      what: t('copilotAdoption.page.kpi.timeSaved.what'),
+      how: t('copilotAdoption.page.kpi.timeSaved.how'),
+      formula: t('copilotAdoption.page.kpi.timeSaved.formula', {
+        meeting: formatNumber(assumptions.meetingMinutes, { maximumFractionDigits: 2 }),
+        email: formatNumber(assumptions.emailMinutes, { maximumFractionDigits: 2 }),
+        document: formatNumber(assumptions.documentMinutes, { maximumFractionDigits: 2 }),
+        percent: formatNumber(assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 }),
+      }),
+      source: t('copilotAdoption.page.kpi.timeSaved.source'),
+    },
+  };
 }
 
 /**
  * The headline figures used by the Analyst view. The Executive view filters this list down to the
  * board-pack subset so the two views cannot drift apart.
  */
-function buildKpis(summary: CopilotAdoptionSummary, t: TFunction): KpiDefinition[] {
+function buildKpis(summary: CopilotAdoptionSummary, t: TFunction, timeSaved: TimeSavedAssumptions): KpiDefinition[] {
   const o = summary.options;
   const seatSkus = (summary.seatLicenceTypes ?? []).filter((l) => l.isCopilotSeat);
   const scoreWeights = [o.frequencyWeight, o.depthWeight, o.breadthWeight];
@@ -2333,6 +2400,10 @@ function buildKpis(summary: CopilotAdoptionSummary, t: TFunction): KpiDefinition
         t('copilotAdoption.page.disabledAccountsUsersNoRecordedActivityAllExcludedMicrosoft'),
     },
   });
+
+  // Last: a model follows the measurements it is built on, never leads them.
+  const timeSavedKpi = buildTimeSavedKpi(summary, t, timeSaved);
+  if (timeSavedKpi) items.push(timeSavedKpi);
 
   return items;
 }

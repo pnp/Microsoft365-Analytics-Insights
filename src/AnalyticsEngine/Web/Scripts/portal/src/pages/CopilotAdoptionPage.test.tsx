@@ -10,6 +10,7 @@ import {
   fetchLicensedUsers,
 } from '../api/copilotAdoptionApi';
 import { AdoptionBand, CopilotResourceTypeKind, type CopilotAdoptionOptions, type CopilotAdoptionSummary } from '../types/copilotAdoption';
+import { TIME_SAVED_STORAGE_KEY, resetTimeSavedStore } from '../components/copilotAdoption/coworkTimeSaved';
 
 vi.mock('../api/copilotAdoptionApi', async (importOriginal) => ({
   ...await importOriginal<typeof import('../api/copilotAdoptionApi')>(),
@@ -732,5 +733,61 @@ describe('CopilotAdoptionPage page breaks', () => {
     for (const heading of document.querySelectorAll('[data-print="page-break"]')) {
       expect(heading.parentElement).toHaveAttribute('data-print', 'flow');
     }
+  });
+});
+
+describe('CopilotAdoptionPage modelled time saved', () => {
+  // 2,000 meetings x 10 + 20,000 emails x 5 + 3,000 documents x 8 = 144,000 minutes = 2,400 hours,
+  // with the conservative end at 50% - under this file's options, not the product defaults.
+  const withEstimate = () =>
+    summary({
+      coworkReadinessAvailable: true,
+      coworkScoredUsers: 100,
+      coworkRecommendedForPolicy: 20,
+      coworkFullRolloutEstimate: {
+        isModelled: true,
+        cohortUsers: 100,
+        addressableMeetings: 2000,
+        addressableMailThreads: 20000,
+        addressableDocuments: 3000,
+        hoursPerMonthLow: 1200,
+        hoursPerMonthHigh: 2400,
+        assumptions: [],
+      },
+    });
+
+  beforeEach(() => resetTimeSavedStore());
+
+  it('promotes the modelled time back to the executive headlines, marked as modelled', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
+
+    await renderPage();
+
+    const label = await screen.findByText('Potential time back');
+    const tile = label.closest('.fui-Card') as HTMLElement;
+    expect(within(tile).getByText('Modelled')).toBeVisible();
+    expect(within(tile).getByText('1,200\u20132,400 h')).toBeVisible();
+    expect(within(tile).getByText(/if all 100 Copilot seat holders used Copilot and Cowork fully/)).toBeVisible();
+  });
+
+  it('claims nothing when Cowork readiness could not be assessed', async () => {
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+
+    expect(screen.queryByText('Potential time back')).not.toBeInTheDocument();
+  });
+
+  it('quotes the reader\u2019s own figures, and sends them with the Excel report', async () => {
+    sessionStorage.setItem(TIME_SAVED_STORAGE_KEY, JSON.stringify({ meetingMinutes: 16 }));
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
+
+    await renderPage();
+
+    // 2,000 x 16 + 100,000 + 24,000 = 156,000 minutes = 2,600 hours.
+    expect(await screen.findByText('1,300\u20132,600 h')).toBeVisible();
+    const excel = screen.getByText('Excel report').closest('a') as HTMLAnchorElement;
+    const url = new URL(excel.href);
+    expect(url.searchParams.get('coworkMinutesSavedPerMeeting')).toBe('16');
+    expect(url.searchParams.has('coworkMinutesSavedPerMailThread')).toBe(false);
   });
 });

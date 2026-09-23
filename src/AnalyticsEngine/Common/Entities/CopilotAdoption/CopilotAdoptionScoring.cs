@@ -1645,6 +1645,16 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
+        /// Working days in the report's month: the multiplier that restates a per-active-day volume as a
+        /// monthly one. The portal divides by the same figure to quote the model per person per day.
+        /// </summary>
+        public static double CoworkWorkingDaysPerMonth(CopilotAdoptionOptions options)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            return Math.Max(1d, o.HabitBucketNormalisationDays * (o.WorkingDaysPerWeek / 7d));
+        }
+
+        /// <summary>
         /// Builds the modelled hours estimate for a cohort.
         ///
         /// <b>Every output is an assumption applied to observed volume.</b> The volumes are real - they
@@ -1653,27 +1663,27 @@ namespace Common.Entities.CopilotAdoption
         /// It deliberately stops at hours: see the note on <see cref="CoworkValueEstimate"/> for why a
         /// monetary figure is not produced.
         /// </summary>
-        /// <param name="cohort">The users the estimate covers - normally the recommended rollout cohort.</param>
+        /// <param name="cohort">
+        /// The users the estimate covers: the recommended rollout cohort for
+        /// <see cref="CopilotAdoptionSummary.CoworkValueEstimate"/>, or every scored seat holder for
+        /// <see cref="CopilotAdoptionSummary.CoworkFullRolloutEstimate"/>.
+        /// </param>
         /// <param name="options">Tuning, including the minutes-saved assumptions.</param>
         public static CoworkValueEstimate EstimateCoworkValue(
             IReadOnlyCollection<CoworkReadinessRow> cohort,
             CopilotAdoptionOptions options = null)
         {
             var o = options ?? CopilotAdoptionOptions.Default;
-            var estimate = new CoworkValueEstimate();
 
             if (cohort == null || cohort.Count == 0)
             {
-                return estimate;
+                return new CoworkValueEstimate();
             }
-
-            estimate.CohortUsers = cohort.Count;
 
             // The per-active-day averages are restated per month on the habit-bucket basis, so the estimate
             // is quoted in the same "a month" units as the rest of the report rather than in whichever
             // window the reader happened to select.
-            var workingDaysPerMonth = Math.Max(1d,
-                o.HabitBucketNormalisationDays * (o.WorkingDaysPerWeek / 7d));
+            var workingDaysPerMonth = CoworkWorkingDaysPerMonth(o);
 
             double meetings = 0, mail = 0, documents = 0;
             foreach (var row in cohort)
@@ -1683,13 +1693,45 @@ namespace Common.Entities.CopilotAdoption
                 documents += row.FilesViewedOrEdited * workingDaysPerMonth;
             }
 
-            estimate.AddressableMeetings = Round(meetings, 0);
-            estimate.AddressableMailThreads = Round(mail, 0);
-            estimate.AddressableDocuments = Round(documents, 0);
+            return ModelCoworkValue(cohort.Count, meetings, mail, documents, o);
+        }
 
-            var minutesHigh = meetings * Math.Max(0d, o.CoworkMinutesSavedPerMeeting)
-                            + mail * Math.Max(0d, o.CoworkMinutesSavedPerMailThread)
-                            + documents * Math.Max(0d, o.CoworkMinutesSavedPerDocument);
+        /// <summary>
+        /// Applies the minutes-saved assumptions to a cohort's observed monthly volumes.
+        ///
+        /// <para>Split out of <see cref="EstimateCoworkValue"/> so an estimate can be restated under a
+        /// reader's own assumptions without re-running the analysis: the volumes are all it needs, and
+        /// the Excel export does exactly that with the figures the reader entered in the portal.</para>
+        ///
+        /// <para><b>The hours are computed from the ROUNDED volumes it publishes</b>, not the unrounded
+        /// sums. The portal recomputes the hours in the browser from those published volumes whenever the
+        /// reader changes an assumption, so the server has to use the same operands for an uncustomised
+        /// page and its Excel report to agree to the hour. The difference is at most a fraction of an
+        /// hour; the disagreement it prevents is a visible one.</para>
+        /// </summary>
+        public static CoworkValueEstimate ModelCoworkValue(
+            int cohortUsers,
+            double meetingsPerMonth,
+            double mailPerMonth,
+            double documentsPerMonth,
+            CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var estimate = new CoworkValueEstimate();
+
+            if (cohortUsers <= 0)
+            {
+                return estimate;
+            }
+
+            estimate.CohortUsers = cohortUsers;
+            estimate.AddressableMeetings = Round(Math.Max(0d, meetingsPerMonth), 0);
+            estimate.AddressableMailThreads = Round(Math.Max(0d, mailPerMonth), 0);
+            estimate.AddressableDocuments = Round(Math.Max(0d, documentsPerMonth), 0);
+
+            var minutesHigh = estimate.AddressableMeetings * Math.Max(0d, o.CoworkMinutesSavedPerMeeting)
+                            + estimate.AddressableMailThreads * Math.Max(0d, o.CoworkMinutesSavedPerMailThread)
+                            + estimate.AddressableDocuments * Math.Max(0d, o.CoworkMinutesSavedPerDocument);
 
             // Clamped to 0..1: a ratio above 1 would make the "low" end exceed the "high" end and render a
             // backwards range, and a negative one would invent a saving out of thin air.
@@ -1698,9 +1740,11 @@ namespace Common.Entities.CopilotAdoption
             estimate.HoursPerMonthHigh = Round(minutesHigh / 60d, 0);
             estimate.HoursPerMonthLow = Round(minutesHigh * lowerRatio / 60d, 0);
 
+            var workingDaysPerMonth = CoworkWorkingDaysPerMonth(o);
+
             estimate.Assumptions.Add(
-                $"Assumes Cowork saves {Num(o.CoworkMinutesSavedPerMeeting)} minutes per meeting, "
-                + $"{Num(o.CoworkMinutesSavedPerMailThread)} per email and "
+                $"Assumes Copilot and Cowork together save {Num(o.CoworkMinutesSavedPerMeeting)} minutes per "
+                + $"meeting, {Num(o.CoworkMinutesSavedPerMailThread)} per email and "
                 + $"{Num(o.CoworkMinutesSavedPerDocument)} per document.");
 
             estimate.Assumptions.Add(
@@ -1708,9 +1752,13 @@ namespace Common.Entities.CopilotAdoption
                 + "applies them in full.");
 
             estimate.Assumptions.Add(
-                $"Volumes are observed from Microsoft's usage reports for {cohort.Count:N0} user"
-                + $"{(cohort.Count == 1 ? string.Empty : "s")}, restated over "
+                $"Volumes are observed from Microsoft's usage reports for {cohortUsers:N0} user"
+                + $"{(cohortUsers == 1 ? string.Empty : "s")}, restated over "
                 + $"{Num(workingDaysPerMonth)} working days a month.");
+
+            estimate.Assumptions.Add(
+                "This is the potential at full use, not the gain over today: people already using Copilot "
+                + "well may be realising part of it now.");
 
             estimate.Assumptions.Add(
                 "Time saved is NOT measured by this product and cannot be. These figures are a model for "
@@ -1722,6 +1770,42 @@ namespace Common.Entities.CopilotAdoption
                 + "This report reports seats, people and hours - never money.");
 
             return estimate;
+        }
+
+        /// <summary>
+        /// The estimate's high-end hours split into meetings, email and documents, in that order.
+        ///
+        /// <para>Rounded by largest remainder so the three parts add up to exactly
+        /// <see cref="CoworkValueEstimate.HoursPerMonthHigh"/>. Rounding each part on its own lets
+        /// "120 + 300 + 181" sit under a total of 600, and a reader checking the sum takes that as an
+        /// arithmetic error in the model. The portal apportions the same way.</para>
+        /// </summary>
+        public static double[] CoworkHoursByActivity(CoworkValueEstimate estimate, CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            if (estimate == null || estimate.CohortUsers <= 0) return new double[3];
+
+            var parts = new[]
+            {
+                estimate.AddressableMeetings * Math.Max(0d, o.CoworkMinutesSavedPerMeeting) / 60d,
+                estimate.AddressableMailThreads * Math.Max(0d, o.CoworkMinutesSavedPerMailThread) / 60d,
+                estimate.AddressableDocuments * Math.Max(0d, o.CoworkMinutesSavedPerDocument) / 60d,
+            };
+
+            var result = parts.Select(p => Math.Floor(Math.Max(0d, p))).ToArray();
+            var leftover = (int)Math.Max(0d, estimate.HoursPerMonthHigh - result.Sum());
+
+            // Largest remainder first; ties go to the earlier activity so the split is deterministic.
+            foreach (var index in Enumerable.Range(0, parts.Length)
+                         .OrderByDescending(i => Math.Max(0d, parts[i]) - Math.Floor(Math.Max(0d, parts[i])))
+                         .ThenBy(i => i))
+            {
+                if (leftover <= 0) break;
+                result[index] += 1;
+                leftover--;
+            }
+
+            return result;
         }
 
         private static string Plural(long count)

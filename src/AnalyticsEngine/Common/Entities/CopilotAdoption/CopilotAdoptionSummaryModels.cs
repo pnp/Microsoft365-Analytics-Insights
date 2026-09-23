@@ -727,11 +727,25 @@ namespace Common.Entities.CopilotAdoption
         public CoworkCreditPosition CoworkCreditPosition { get; set; } = new CoworkCreditPosition();
 
         /// <summary>
-        /// The modelled time/cost estimate for the recommended cohort. Every figure inside is an
-        /// assumption applied to observed volume - see <see cref="CoworkValueEstimate"/>.
+        /// The modelled time-saved estimate for the recommended cohort - the people ready for Cowork now.
+        /// Every figure inside is an assumption applied to observed volume - see
+        /// <see cref="CoworkValueEstimate"/>.
         /// </summary>
         [JsonProperty("coworkValueEstimate")]
         public CoworkValueEstimate CoworkValueEstimate { get; set; } = new CoworkValueEstimate();
+
+        /// <summary>
+        /// The same model over EVERY scored Copilot seat holder: the potential if the whole licensed
+        /// population used Copilot and Cowork fully, rather than only the people ready for it today.
+        /// </summary>
+        /// <remarks>
+        /// The ceiling, published next to <see cref="CoworkValueEstimate"/> so the page can say both
+        /// "where to start" and "how far it goes". Built from the same rows, options and arithmetic, so
+        /// the recommended cohort can never model more time than the population it is drawn from. It is
+        /// every bit as modelled as its sibling and carries the same assumptions.
+        /// </remarks>
+        [JsonProperty("coworkFullRolloutEstimate")]
+        public CoworkValueEstimate CoworkFullRolloutEstimate { get; set; } = new CoworkValueEstimate();
 
         #endregion
 

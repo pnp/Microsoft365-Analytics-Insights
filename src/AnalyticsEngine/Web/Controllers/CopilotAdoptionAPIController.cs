@@ -4,6 +4,7 @@ using Common.Entities.CopilotAdoption;
 using DataUtils;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -718,6 +719,12 @@ namespace Web.AnalyticsWeb.Controllers
         /// The per-user sheets carry the same columns as the CSV exports, from the same definitions.</para>
         ///
         /// Built from the same cached analysis that renders the page, so the two can never disagree.
+        ///
+        /// <para>The four optional <c>coworkMinutesSaved*</c> / <c>coworkEstimateLowerBoundRatio</c>
+        /// parameters carry the time-saved assumptions the reader entered on the Cowork tab. Those figures
+        /// live in the browser only, so the export has to be told them or a customised page would download
+        /// a workbook modelling different hours. They change the modelled estimate and the matching
+        /// Settings rows, never a measured figure, and never the cached analysis itself.</para>
         /// </summary>
         // GET: api/CopilotAdoption/export/workbook?windowDays=28
         [HttpGet]
@@ -726,6 +733,10 @@ namespace Web.AnalyticsWeb.Controllers
             int windowDays = 28,
             string seatLicenceTypeIds = null,
             string emailDomain = null,
+            string coworkMinutesSavedPerMeeting = null,
+            string coworkMinutesSavedPerMailThread = null,
+            string coworkMinutesSavedPerDocument = null,
+            string coworkEstimateLowerBoundRatio = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
             // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
@@ -736,10 +747,16 @@ namespace Web.AnalyticsWeb.Controllers
                 windowDays, seatLicenceTypeIds, emailDomain, ExportWaitBudget, cancellationToken);
             if (analysis == null) return ExportNotReadyResponse();
 
+            var timeSaved = ParseTimeSavedOverrides(
+                coworkMinutesSavedPerMeeting,
+                coworkMinutesSavedPerMailThread,
+                coworkMinutesSavedPerDocument,
+                coworkEstimateLowerBoundRatio);
+
             byte[] bytes;
             try
             {
-                bytes = CopilotAdoptionWorkbook.Build(analysis);
+                bytes = CopilotAdoptionWorkbook.Build(analysis, timeSaved.Any ? timeSaved : null);
             }
             catch (Exception ex)
             {
@@ -789,6 +806,45 @@ namespace Web.AnalyticsWeb.Controllers
         #endregion
 
         #region Parameter handling
+
+        /// <summary>
+        /// The reader's time-saved figures from an export URL, parsed with the INVARIANT culture.
+        /// </summary>
+        /// <remarks>
+        /// Taken as strings and parsed here rather than bound as <c>double?</c>, so the rule is stated
+        /// rather than inherited from the model binder. The portal writes JavaScript numbers ("0.5"),
+        /// and on a server running a European culture a culture-sensitive parse reads the full stop as a
+        /// thousands separator - "0.5" minutes per email would become 5, and the workbook would model
+        /// ten times the saving the reader entered. Anything unparseable is ignored and keeps the
+        /// product default; the bounds are applied by <see cref="CoworkTimeSavedOverrides.ApplyTo"/>.
+        /// </remarks>
+        internal static CoworkTimeSavedOverrides ParseTimeSavedOverrides(
+            string minutesPerMeeting,
+            string minutesPerMailThread,
+            string minutesPerDocument,
+            string lowerBoundRatio)
+        {
+            return new CoworkTimeSavedOverrides
+            {
+                MinutesSavedPerMeeting = ParseInvariantDouble(minutesPerMeeting),
+                MinutesSavedPerMailThread = ParseInvariantDouble(minutesPerMailThread),
+                MinutesSavedPerDocument = ParseInvariantDouble(minutesPerDocument),
+                LowerBoundRatio = ParseInvariantDouble(lowerBoundRatio),
+            };
+        }
+
+        private static double? ParseInvariantDouble(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return null;
+
+            return double.TryParse(
+                value.Trim(),
+                NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint | NumberStyles.AllowExponent,
+                CultureInfo.InvariantCulture,
+                out var parsed)
+                ? parsed
+                : (double?)null;
+        }
 
         /// <summary>
         /// Snaps a requested window to one of the supported values. A free-form window would let a

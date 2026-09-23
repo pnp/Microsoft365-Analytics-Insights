@@ -51,13 +51,21 @@ namespace Common.Entities.CopilotAdoption
         public const int MaxSupportedUserRows = 1000000;
 
         /// <summary>Builds the workbook and returns it as a byte array ready to stream to the browser.</summary>
-        public static byte[] Build(CopilotAdoptionAnalysis analysis)
+        /// <param name="analysis">The cached analysis the page was rendered from. Never modified.</param>
+        /// <param name="timeSaved">
+        /// The reader's own time-saved assumptions from the portal, or null for the configured defaults.
+        /// They change the modelled estimate sheet and the four matching rows of the Settings sheet and
+        /// nothing else: no measured figure depends on them.
+        /// </param>
+        public static byte[] Build(CopilotAdoptionAnalysis analysis, CoworkTimeSavedOverrides timeSaved = null)
         {
             if (analysis == null) throw new ArgumentNullException(nameof(analysis));
 
             using (var workbook = new XlsxWriter())
             {
                 var summary = analysis.Summary;
+                var configured = summary.Options ?? CopilotAdoptionOptions.Default;
+                var modelOptions = timeSaved != null && timeSaved.Any ? timeSaved.ApplyTo(configured) : configured;
 
                 WriteReportSheet(workbook, summary);
                 WriteHeadlineSheet(workbook, summary);
@@ -71,12 +79,12 @@ namespace Common.Entities.CopilotAdoption
                 WriteActionPlanSheet(workbook, summary);
                 WriteLicensedUsersSheet(workbook, analysis);
                 WriteCoworkSheet(workbook, analysis);
-                WriteCoworkEstimateSheet(workbook, summary);
+                WriteCoworkEstimateSheet(workbook, summary, configured, modelOptions);
                 WriteOpportunitiesSheet(workbook, analysis);
                 WriteMethodSheet(workbook, summary);
                 WriteSnapshotFactsSheet(workbook, summary);
                 WriteRunDiagnosticsSheet(workbook, summary);
-                WriteSettingsSheet(workbook, summary);
+                WriteSettingsSheet(workbook, configured, modelOptions);
 
                 return workbook.ToArray();
             }
@@ -1488,55 +1496,166 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
-        /// The modelled value estimate, on its own sheet and nowhere else.
+        /// The modelled time-saved estimate, on its own sheet and nowhere else.
         ///
         /// <para>Deliberately separated from every measured figure in this workbook. The observed volumes
         /// are real; the conversion to hours is an assumption, and a reader who finds an "hours saved"
         /// column sitting beside interaction counts will reasonably assume both were counted. Keeping it
         /// on a sheet that states its assumptions at the top is what makes the number usable without
         /// making it misleading.</para>
+        ///
+        /// <para>Two cohorts side by side - the people ready for Cowork now, and every Copilot seat
+        /// holder - because the portal's headline quotes both: where a rollout starts, and how far full
+        /// adoption goes. When the export carries the reader's own assumptions both are restated under
+        /// them from the published volumes, exactly as the portal does, and the sheet says so on a row
+        /// that is present in every export so the layout never shifts.</para>
         /// </summary>
-        private static void WriteCoworkEstimateSheet(XlsxWriter workbook, CopilotAdoptionSummary summary)
+        private static void WriteCoworkEstimateSheet(
+            XlsxWriter workbook,
+            CopilotAdoptionSummary summary,
+            CopilotAdoptionOptions configured,
+            CopilotAdoptionOptions model)
         {
-            var estimate = summary.CoworkValueEstimate;
-            if (!summary.CoworkReadinessAvailable || estimate == null || estimate.CohortUsers == 0) return;
+            if (!summary.CoworkReadinessAvailable) return;
+
+            var ready = Restate(summary.CoworkValueEstimate, model);
+            var full = Restate(summary.CoworkFullRolloutEstimate, model);
+            if (ready.CohortUsers == 0 && full.CohortUsers == 0) return;
+
+            var customised = !ReferenceEquals(configured, model);
 
             var sheet = workbook.AddSheet("Cowork estimate (modelled)");
-            sheet.SetColumnWidths(38, 18, 62);
+            sheet.SetColumnWidths(40, 16, 22, 62);
 
-            sheet.AddTitle("Cowork value estimate - MODELLED, NOT MEASURED");
+            sheet.AddTitle("Potential time saved with Copilot and Cowork - MODELLED, NOT MEASURED");
             sheet.AddRow(XlsxCell.Wrapped(
                 "This product does not and cannot measure time saved. The volumes below are observed from "
-                + "Microsoft's usage reports; the hours are those volumes multiplied by an editable "
-                + "assumption. Treat this as a way to size a rollout, not as a result. Do not quote the "
-                + "hours or the money without the assumptions listed underneath them."));
+                + "Microsoft's usage reports; the hours are those volumes multiplied by the minutes-saved "
+                + "assumptions listed with them. Treat this as a way to size a rollout, not as a result, and "
+                + "never quote the hours without the assumptions underneath them."));
+            sheet.AddRow(XlsxCell.Wrapped(customised
+                ? "ASSUMPTIONS ENTERED IN THE PORTAL: the minutes-saved figures on this sheet were entered by "
+                  + "the person who downloaded this file, in place of the product defaults of "
+                  + $"{Num(configured.CoworkMinutesSavedPerMeeting)} minutes per meeting, "
+                  + $"{Num(configured.CoworkMinutesSavedPerMailThread)} per email and "
+                  + $"{Num(configured.CoworkMinutesSavedPerDocument)} per document, with a lower bound of "
+                  + $"{Num(LowerBoundRatio(configured) * 100d)}%. The Settings sheet records the same figures."
+                : "Assumptions: the product defaults. The portal's Cowork tab shows the published evidence "
+                  + "behind each one and lets a reader enter their own figures before exporting."));
             sheet.AddBlankRow();
 
-            sheet.AddHeaderRow("Measure", "Value", "What it means");
+            sheet.AddHeaderRow("Measure", "Ready now", "Every Copilot seat holder", "What it means");
 
-            AddMeta(sheet, "Cohort size", estimate.CohortUsers,
-                "People recommended for the Cowork spending policy - prime candidates plus existing users.");
+            AddEstimateRow(sheet, "People covered", ready.CohortUsers, full.CohortUsers,
+                "Ready now: the people recommended for the Cowork spending policy - prime candidates plus "
+                + "everyone already using Cowork. Every Copilot seat holder: the whole scored licensed "
+                + "population, which is the potential of full Copilot and Cowork adoption.");
 
             sheet.AddBlankRow();
-            AddMeta(sheet, "Meetings a month (observed)", estimate.AddressableMeetings,
-                "OBSERVED. Total meetings across the cohort, from Microsoft's Teams usage report.");
-            AddMeta(sheet, "Emails a month (observed)", estimate.AddressableMailThreads,
-                "OBSERVED. Total emails sent and read across the cohort.");
-            AddMeta(sheet, "Document touches a month (observed)", estimate.AddressableDocuments,
+            AddEstimateRow(sheet, "Meetings a month (observed)", ready.AddressableMeetings, full.AddressableMeetings,
+                "OBSERVED. Teams meetings attended across the cohort, from Microsoft's Teams usage report.");
+            AddEstimateRow(sheet, "Emails a month (observed)", ready.AddressableMailThreads, full.AddressableMailThreads,
+                "OBSERVED. Emails sent and read across the cohort, from Microsoft's Outlook usage report.");
+            AddEstimateRow(sheet, "Document touches a month (observed)", ready.AddressableDocuments, full.AddressableDocuments,
                 "OBSERVED. SharePoint and OneDrive files viewed or edited across the cohort.");
 
             sheet.AddBlankRow();
-            AddMeta(sheet, "Modelled hours a month (low)", estimate.HoursPerMonthLow,
-                "MODELLED. The lower bound of the assumption range.");
-            AddMeta(sheet, "Modelled hours a month (high)", estimate.HoursPerMonthHigh,
-                "MODELLED. The upper bound. Quote the range, never a single figure.");
+            // Plain numbers rather than XlsxCell.Number: that style is the whole-number "#,##0", and
+            // half a minute per email would be displayed as 1.
+            AddAssumptionRow(sheet, "Minutes saved per meeting (assumption)",
+                Math.Max(0d, model.CoworkMinutesSavedPerMeeting),
+                "ASSUMPTION. Preparation, notes, recap and follow-up taken off each meeting.");
+            AddAssumptionRow(sheet, "Minutes saved per email (assumption)",
+                Math.Max(0d, model.CoworkMinutesSavedPerMailThread),
+                "ASSUMPTION. Averaged over every email sent or read - triage, thread summaries and drafted replies.");
+            AddAssumptionRow(sheet, "Minutes saved per document (assumption)",
+                Math.Max(0d, model.CoworkMinutesSavedPerDocument),
+                "ASSUMPTION. Drafting, summarising and revising, averaged over every document viewed or edited.");
+            sheet.AddRow(
+                "Lower bound (share of the assumption)",
+                XlsxCell.Percent(LowerBoundRatio(model)),
+                XlsxCell.Percent(LowerBoundRatio(model)),
+                XlsxCell.Wrapped("ASSUMPTION. The conservative end of the range applies this share of the minutes above."));
+
+            var readyByActivity = CopilotAdoptionScoring.CoworkHoursByActivity(ready, model);
+            var fullByActivity = CopilotAdoptionScoring.CoworkHoursByActivity(full, model);
+
+            sheet.AddBlankRow();
+            AddEstimateRow(sheet, "Modelled hours a month - meetings", readyByActivity[0], fullByActivity[0],
+                "MODELLED. Meetings a month x minutes saved per meeting.");
+            AddEstimateRow(sheet, "Modelled hours a month - email", readyByActivity[1], fullByActivity[1],
+                "MODELLED. Emails a month x minutes saved per email.");
+            AddEstimateRow(sheet, "Modelled hours a month - documents", readyByActivity[2], fullByActivity[2],
+                "MODELLED. Document touches a month x minutes saved per document.");
+            AddEstimateRow(sheet, "Modelled hours a month (low)", ready.HoursPerMonthLow, full.HoursPerMonthLow,
+                "MODELLED. The conservative end of the range.");
+            AddEstimateRow(sheet, "Modelled hours a month (high)", ready.HoursPerMonthHigh, full.HoursPerMonthHigh,
+                "MODELLED. The full assumption - the three rows above add up to it. Quote the range, never a single figure.");
 
             sheet.AddBlankRow();
             sheet.AddTitle("Assumptions");
-            foreach (var assumption in estimate.Assumptions)
+            foreach (var assumption in MergeAssumptions(ready.Assumptions, full.Assumptions))
             {
                 sheet.AddRow(XlsxCell.Wrapped(assumption));
             }
+        }
+
+        /// <summary>
+        /// An estimate under the model's assumptions, recomputed from the published volumes exactly as the
+        /// portal recomputes it. Under the configured defaults this reproduces the published figures to the
+        /// hour, because the server derives them from the same rounded volumes.
+        /// </summary>
+        private static CoworkValueEstimate Restate(CoworkValueEstimate estimate, CopilotAdoptionOptions model)
+        {
+            if (estimate == null || estimate.CohortUsers <= 0) return new CoworkValueEstimate();
+
+            return CopilotAdoptionScoring.ModelCoworkValue(
+                estimate.CohortUsers,
+                estimate.AddressableMeetings,
+                estimate.AddressableMailThreads,
+                estimate.AddressableDocuments,
+                model);
+        }
+
+        private static void AddEstimateRow(XlsxSheet sheet, string measure, double ready, double full, string notes)
+        {
+            sheet.AddRow(measure, XlsxCell.Number(ready), XlsxCell.Number(full), XlsxCell.Wrapped(notes));
+        }
+
+        /// <summary>An assumption applies to both cohorts alike, so it is written once per column, unformatted.</summary>
+        private static void AddAssumptionRow(XlsxSheet sheet, string measure, double value, string notes)
+        {
+            sheet.AddRow(measure, value, value, XlsxCell.Wrapped(notes));
+        }
+
+        private static double LowerBoundRatio(CopilotAdoptionOptions options)
+        {
+            return Math.Min(1d, Math.Max(0d, options.CoworkEstimateLowerBoundRatio));
+        }
+
+        /// <summary>
+        /// Both cohorts' assumptions as one list. They differ only in the sentence naming how many people
+        /// the volumes were observed for, so each sentence is written once, in order, with the second
+        /// cohort's version beside the first where they differ.
+        /// </summary>
+        private static IEnumerable<string> MergeAssumptions(IList<string> first, IList<string> second)
+        {
+            var written = new HashSet<string>(StringComparer.Ordinal);
+            var count = Math.Max(first?.Count ?? 0, second?.Count ?? 0);
+
+            for (var i = 0; i < count; i++)
+            {
+                foreach (var list in new[] { first, second })
+                {
+                    if (list == null || i >= list.Count) continue;
+                    if (written.Add(list[i])) yield return list[i];
+                }
+            }
+        }
+
+        private static string Num(double value)
+        {
+            return value.ToString("0.###############", CultureInfo.InvariantCulture);
         }
 
         private static void WriteOpportunitiesSheet(XlsxWriter workbook, CopilotAdoptionAnalysis analysis)
@@ -1965,7 +2084,10 @@ namespace Common.Entities.CopilotAdoption
         /// <para>Reflected over <see cref="CopilotAdoptionOptions"/> for the same reason as the facts
         /// sheet: an option added later is covered without anyone remembering to come back here.</para>
         /// </summary>
-        private static void WriteSettingsSheet(XlsxWriter workbook, CopilotAdoptionSummary summary)
+        private static void WriteSettingsSheet(
+            XlsxWriter workbook,
+            CopilotAdoptionOptions configured,
+            CopilotAdoptionOptions model)
         {
             var sheet = workbook.AddSheet("Settings");
             sheet.SetColumnWidths(46, 26, 46);
@@ -1981,12 +2103,33 @@ namespace Common.Entities.CopilotAdoption
 
             var headerRow = sheet.CurrentRow;
 
-            foreach (var setting in ScalarFacts(summary.Options ?? CopilotAdoptionOptions.Default))
+            // The reader's own time-saved figures replace the defaults in the Value column, and the label
+            // says so. Annotated in place rather than with an extra row, so every export has the same rows
+            // in the same order and a lookup written against one file resolves against the next.
+            var customised = !ReferenceEquals(configured, model);
+            var defaults = customised
+                ? ScalarFacts(configured).ToDictionary(f => f.Key, f => FactText(f.Value), StringComparer.Ordinal)
+                : null;
+
+            foreach (var setting in ScalarFacts(model))
             {
-                sheet.AddRow(setting.Key, setting.Value, setting.Label);
+                var label = setting.Label;
+                if (customised
+                    && defaults.TryGetValue(setting.Key, out var byDefault)
+                    && !string.Equals(byDefault, FactText(setting.Value), StringComparison.Ordinal))
+                {
+                    label += " - entered in the portal for this export; the product default is " + byDefault;
+                }
+
+                sheet.AddRow(setting.Key, setting.Value, label);
             }
 
             sheet.FreezeTopRows(headerRow);
+        }
+
+        private static string FactText(object value)
+        {
+            return Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
         }
 
         /// <summary>One flattened <c>key | value | label</c> row of a reflected object.</summary>

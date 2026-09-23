@@ -439,7 +439,9 @@ namespace Common.Entities.CopilotAdoption
     }
 
     /// <summary>
-    /// The modelled time/cost estimate for enabling Cowork for the recommended cohort.
+    /// The modelled time-saved estimate for one cohort: the people ready for Cowork now
+    /// (<see cref="CopilotAdoptionSummary.CoworkValueEstimate"/>) or every Copilot seat holder
+    /// (<see cref="CopilotAdoptionSummary.CoworkFullRolloutEstimate"/>).
     ///
     /// <b>Every field here is derived from an assumption and none of it is measured.</b> The observed
     /// inputs (<see cref="AddressableMeetings"/> and friends) are real; the conversion to hours is not.
@@ -453,7 +455,7 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("isModelled")]
         public bool IsModelled { get; set; } = true;
 
-        /// <summary>Seat holders the estimate covers (the recommended cohort).</summary>
+        /// <summary>Seat holders the estimate covers.</summary>
         [JsonProperty("cohortUsers")]
         public int CohortUsers { get; set; }
 
@@ -484,13 +486,18 @@ namespace Common.Entities.CopilotAdoption
         public double HoursPerMonthHigh { get; set; }
 
         // Deliberately no monetary figure, and no monetary figure anywhere else in this report either.
-        // Epic #559 rejects an ROI / "hours saved" calculator outright. The idle-licence-spend figure
-        // that #553 once allowed has since been withdrawn as well: it priced idle seats from a per-SKU
-        // price typed into the page header, which is not a source of truth about what a tenant pays, and
-        // a money figure derived from one gets quoted in a renewal negotiation as though it were. This
-        // estimate is modelled from assumed minutes-per-meeting/mail/document, so pricing it would be
-        // worse again. The hours range stays because it is explicitly labelled a rollout-sizing model;
-        // converting it to money is the line the epic draws.
+        // Epic #559 rejected an ROI calculator because a fabricated money figure discredits the measured
+        // ones beside it. The idle-licence-spend figure that #553 once allowed has since been withdrawn
+        // as well: it priced idle seats from a per-SKU price typed into the page header, which is not a
+        // source of truth about what a tenant pays, and a money figure derived from one gets quoted in a
+        // renewal negotiation as though it were. This estimate is modelled from assumed minutes per
+        // meeting, email and document, so pricing it would be worse again.
+        //
+        // The HOURS model is kept, and is now the Cowork tab's headline, on the terms that make it
+        // defensible: it is always labelled as modelled, it is always published as a range, its
+        // assumptions are shown beside it with the published evidence for each, and the reader can
+        // replace any of them with their own figure (CoworkTimeSavedOverrides). Converting it to money is
+        // still the line the epic draws.
 
         #endregion
 
@@ -500,6 +507,77 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         [JsonProperty("assumptions")]
         public List<string> Assumptions { get; set; } = new List<string>();
+    }
+
+    /// <summary>
+    /// A reader's own time-saved assumptions, sent with an Excel export so the workbook models the same
+    /// figures they were looking at in the portal.
+    /// </summary>
+    /// <remarks>
+    /// <para>The portal lets a reader replace any of the minutes-saved assumptions with their own
+    /// figure. Those figures live in that browser tab only - they are never persisted - so an export has
+    /// to carry them, or the Excel report downloaded from a customised page would quietly model
+    /// different hours from the screen it came from.</para>
+    ///
+    /// <para><see cref="ApplyTo"/> returns a COPY. The options it starts from belong to the cached
+    /// analysis every other caller is reading, and writing one reader's figures into them would change
+    /// the model for everybody until the cache expired.</para>
+    ///
+    /// <para>Each figure is clamped to the same bounds the portal enforces, so a hand-edited URL cannot
+    /// turn a rollout-sizing model into a headline of millions of hours.</para>
+    /// </remarks>
+    public class CoworkTimeSavedOverrides
+    {
+        /// <summary>Upper bound for the per-meeting and per-document assumptions, in minutes.</summary>
+        public const double MaxMinutesPerItem = 120;
+
+        /// <summary>Upper bound for the per-email assumption, in minutes.</summary>
+        public const double MaxMinutesPerEmail = 60;
+
+        public double? MinutesSavedPerMeeting { get; set; }
+
+        public double? MinutesSavedPerMailThread { get; set; }
+
+        public double? MinutesSavedPerDocument { get; set; }
+
+        public double? LowerBoundRatio { get; set; }
+
+        /// <summary>True when at least one usable figure was supplied.</summary>
+        public bool Any =>
+            Usable(MinutesSavedPerMeeting)
+            || Usable(MinutesSavedPerMailThread)
+            || Usable(MinutesSavedPerDocument)
+            || Usable(LowerBoundRatio);
+
+        /// <summary>
+        /// A copy of <paramref name="options"/> with the supplied figures in place of the defaults.
+        /// Figures that were not supplied, or are not a finite number, keep the configured default.
+        /// </summary>
+        public CopilotAdoptionOptions ApplyTo(CopilotAdoptionOptions options)
+        {
+            var copy = (options ?? CopilotAdoptionOptions.Default).Clone();
+
+            if (Usable(MinutesSavedPerMeeting))
+                copy.CoworkMinutesSavedPerMeeting = Clamp(MinutesSavedPerMeeting.Value, 0, MaxMinutesPerItem);
+            if (Usable(MinutesSavedPerMailThread))
+                copy.CoworkMinutesSavedPerMailThread = Clamp(MinutesSavedPerMailThread.Value, 0, MaxMinutesPerEmail);
+            if (Usable(MinutesSavedPerDocument))
+                copy.CoworkMinutesSavedPerDocument = Clamp(MinutesSavedPerDocument.Value, 0, MaxMinutesPerItem);
+            if (Usable(LowerBoundRatio))
+                copy.CoworkEstimateLowerBoundRatio = Clamp(LowerBoundRatio.Value, 0, 1);
+
+            return copy;
+        }
+
+        private static bool Usable(double? value)
+        {
+            return value.HasValue && !double.IsNaN(value.Value) && !double.IsInfinity(value.Value);
+        }
+
+        private static double Clamp(double value, double min, double max)
+        {
+            return Math.Min(max, Math.Max(min, value));
+        }
     }
 
     /// <summary>A page of Cowork readiness rows, matching the shape of the other paged endpoints.</summary>

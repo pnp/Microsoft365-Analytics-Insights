@@ -6,6 +6,7 @@ using Newtonsoft.Json;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.IO.Packaging;
@@ -686,6 +687,82 @@ namespace Tests.UnitTests
 
             // The seat inventory itself is still reported - those are counts, not prices.
             StringAssert.Contains(text, "Purchased Copilot seats");
+        }
+
+        /// <summary>
+        /// The portal's headline quotes two cohorts - the people ready for Cowork now and every Copilot
+        /// seat holder - so the workbook has to carry both, with the working that turns volume into hours.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_CoworkEstimateCarriesBothCohortsAndItsWorking()
+        {
+            var analysis = SyntheticAnalysis();
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Cowork estimate (modelled)");
+
+            foreach (var expected in new[]
+            {
+                "Ready now", "Every Copilot seat holder", "People covered",
+                "Meetings a month (observed)", "Minutes saved per meeting (assumption)",
+                "Modelled hours a month - meetings", "Modelled hours a month - email",
+                "Modelled hours a month - documents", "Modelled hours a month (low)", "Modelled hours a month (high)",
+            })
+            {
+                CollectionAssert.Contains(cells, expected, $"The estimate sheet is missing '{expected}'.");
+            }
+
+            var full = analysis.Summary.CoworkFullRolloutEstimate;
+            Assert.IsTrue(full.CohortUsers > 0, "The synthetic analysis must exercise the full-adoption cohort.");
+            AssertFollowedBy(cells, "People covered", analysis.Summary.CoworkValueEstimate.CohortUsers.ToString(CultureInfo.InvariantCulture));
+            CollectionAssert.Contains(cells, full.HoursPerMonthHigh.ToString(CultureInfo.InvariantCulture));
+            Assert.IsTrue(cells.Any(c => c.StartsWith("Assumptions: the product defaults", StringComparison.Ordinal)),
+                "An uncustomised export must say its assumptions are the product defaults.");
+        }
+
+        /// <summary>
+        /// A reader's own time-saved figures live in their browser only, so an export from a customised page
+        /// has to carry them - or the workbook models different hours from the screen it came from.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_AppliesThePortalsTimeSavedFigures_WithoutTouchingTheCachedAnalysis()
+        {
+            var analysis = SyntheticAnalysis();
+            var cachedHours = analysis.Summary.CoworkFullRolloutEstimate.HoursPerMonthHigh;
+            var overrides = new CoworkTimeSavedOverrides { MinutesSavedPerMeeting = 50 };
+
+            var standard = CopilotAdoptionWorkbook.Build(analysis);
+            var customised = CopilotAdoptionWorkbook.Build(analysis, overrides);
+
+            var full = analysis.Summary.CoworkFullRolloutEstimate;
+            var expected = CopilotAdoptionScoring.ModelCoworkValue(
+                full.CohortUsers, full.AddressableMeetings, full.AddressableMailThreads, full.AddressableDocuments,
+                overrides.ApplyTo(analysis.Summary.Options));
+            Assert.AreNotEqual(cachedHours, expected.HoursPerMonthHigh, "The test must change the modelled hours.");
+
+            var cells = SheetCells(customised, "Cowork estimate (modelled)");
+            CollectionAssert.Contains(cells, expected.HoursPerMonthHigh.ToString(CultureInfo.InvariantCulture),
+                "The estimate must be restated under the reader's figures.");
+            Assert.IsTrue(cells.Any(c => c.StartsWith("ASSUMPTIONS ENTERED IN THE PORTAL", StringComparison.Ordinal)),
+                "A customised export must say its figures came from the portal, not from the product.");
+
+            // Nothing the next caller reads may have moved: the analysis is cached and shared.
+            Assert.AreEqual(5d, analysis.Summary.Options.CoworkMinutesSavedPerMeeting);
+            Assert.AreEqual(cachedHours, analysis.Summary.CoworkFullRolloutEstimate.HoursPerMonthHigh);
+
+            // The Settings sheet records the reader's figure against the same key, on the same row, so two
+            // exports still line up for a lookup.
+            var settings = SheetCells(customised, "Settings");
+            Assert.IsTrue(settings.Any(c => c.EndsWith("entered in the portal for this export; the product default is 5", StringComparison.Ordinal)));
+            AssertFollowedBy(settings, "coworkMinutesSavedPerMeeting", "50");
+            CollectionAssert.AreEqual(SettingKeys(standard), SettingKeys(customised),
+                "A customised export must have exactly the same Settings rows, in the same order.");
+        }
+
+        private static List<string> SettingKeys(byte[] bytes)
+        {
+            return SheetCellElements(bytes, "Settings")
+                .Where(c => ((string)c.Attribute("r") ?? string.Empty).StartsWith("A", StringComparison.Ordinal))
+                .Select(c => string.Concat(c.Descendants().Where(d => !d.HasElements).Select(d => d.Value)))
+                .ToList();
         }
 
         /// <summary>
