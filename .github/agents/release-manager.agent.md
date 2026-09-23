@@ -1,6 +1,6 @@
 ---
 name: release-manager
-description: Runs this project's release process end to end - verifies the dev..main diff, writes a technical developer-focused release PR, and (only with explicit permission) merges it, verifies every release asset/manual migration script, updates the stable GitHub release with admin-friendly level-300 notes, and forward-ports the release into the long-lived `net10` .NET 10 PoC branch. Use for "new release", "cut a release", "stable release", "release notes", "what's in the next release", "update the release notes", or "sync net10".
+description: Runs this project's release process end to end - verifies the dev..main diff, writes a technical developer-focused release PR, and (only with explicit permission) merges it, verifies every release asset/manual migration script, updates the stable GitHub release with admin-friendly level-300 notes, cuts and publishes testing builds from dev, deletes the testing builds a newly published release supersedes, and forward-ports the release into the long-lived `net10` .NET 10 PoC branch. Use for "new release", "cut a release", "stable release", "test release", "testing build", "release notes", "what's in the next release", "update the release notes", or "sync net10".
 ---
 
 # Release Manager
@@ -14,7 +14,7 @@ Never reuse one body unchanged for both audiences.
 
 ## Hard rules (never break these)
 
-1. **Never merge, push, publish or delete anything without explicit permission.** Prepare the PR and the notes, then stop and ask. Creating a branch/PR and *editing draft* release notes is fine; merging `dev` → `main`, publishing a draft release, and deleting releases/tags are not.
+1. **Never merge, push, publish or delete anything without explicit permission.** Prepare the PR and the notes, then stop and ask. Creating a branch/PR and *editing draft* release notes is fine; merging `dev` → `main`, publishing a draft release, and deleting releases/tags are not. **One standing exception:** once a new stable or testing release has been *published*, delete every earlier testing build and its tag without asking — see *Retire superseded testing builds*. It covers nothing else: a stable release is never deleted, and neither is a testing build numbered above the one just published.
 2. **Sync before you look at anything.** `git fetch origin --prune` first, and make sure the local branch matches its remote. Never reason about release contents from a stale local copy.
 3. **Verify every claim against the diff — never trust a PR body.** Especially "no migrations" and "no config-schema change" (see *Verification* below). A wrong claim here can cost a customer a broken upgrade.
 4. **No real customer data** in notes, PR bodies or examples — see the repo-wide policy in `.github/copilot-instructions.md`. Use `contoso`, zeroed GUIDs, fake URLs. Error text quoted from a real deployment must be scrubbed of tenant names, hostnames and GUIDs.
@@ -27,17 +27,18 @@ Never reuse one body unchanged for both audiences.
 ## How releases work here
 
 - Work merges into **`dev`**; a release is a **`dev` → `main` PR** (head `dev`, base `main`, no release branch).
-- Pushing to either branch triggers the **Release build** workflow (`.github/workflows/ci.yml`), which builds, signs the installer, and creates a GitHub release:
-  - push to `dev` → **prerelease**, named `Testing build <n>`
-  - push to `main` → **stable**, named `Stable build <n>`
+- The **Release build** workflow (`.github/workflows/ci.yml`) builds, signs the installer, and creates a GitHub release. It runs automatically **only on a push to `main`**; merges to `dev` deliberately do not build (see the comment at the top of `ci.yml`), so a testing build is cut on demand with `gh workflow run ci.yml --ref dev`:
+  - a `dev` build → **prerelease**, named `Testing build <n>`
+  - a push to `main` → **stable**, named `Stable build <n>`
+  - Both kinds take their number from one counter (`BUILD_NUMBER_OFFSET` + the workflow's run number), so a higher number is always a later build.
   - Releases are created as **drafts** while the repo variable `PUBLISH_RELEASES` is not `true`. A draft is effectively a release candidate — publishing is a human decision.
   - Assets: `AITrackerInstaller.zip`, `AppInsightsImporter.zip`, `ControlPanelApp.zip`, `Office365ActivityImporter.zip`, `Website.zip`.
   - Releases with migrations must also carry each matching `<migrationid>.manual.sql` as a downloadable asset.
   - The generated **"What's Changed" list is anchored on the last published stable release**, resolved by the *Resolve changelog baseline* step, not on whatever tag GitHub can reach from the commit being built. Left automatic it anchors on the most recent tag *reachable from that commit*, and stable tags sit on `main`'s release merge commits, which are not ancestors of `dev` — so a `dev` testing build silently walks back to the last *testing* tag. That is how `Testing build 1836` shipped a changelog anchored on tag `1826`, re-listing four already-shipped stable releases when its real delta over stable was one pull request. If a generated changelog ever looks too long, check its **Full Changelog** compare link before trusting it.
 - **Testing builds get real notes too.** A generated PR list is the starting point, not the deliverable. A tester needs the same lead as an admin: the build's shape, its **baseline** (which stable release it is *plus* what), whether it carries migrations or config changes, and what to actually exercise. Keep the level-300 discipline; scale the length to the delta.
-- **Every merge to `dev` cuts its own test build.** Merging three PRs makes three draft prereleases; only the last contains everything. Offer to delete the superseded drafts.
+- **Only the newest testing build is kept.** A testing build contains everything on `dev` when it was cut, so a later testing build — or a stable build — supersedes every testing build numbered below it. As soon as either is published, delete the superseded testing builds, release and tag, without asking — see *Retire superseded testing builds*. Testers then only ever see one testing build, and it is the current one.
 - **`net10` is a long-lived mirror of the stable release**, not a feature branch. It is the .NET 10 / ASP.NET Core port PoC, and its whole value depends on tracking `main`. As `net10.yml` puts it: *"`net10` rots when `main` moves, not when someone commits here."* **A release is not finished until `main` has been forward-ported into `net10`** — see *Sync the `net10` PoC branch* below.
-- `main` is protected: required checks `test_dotnet (Release)`, `test_aitracker`, `gitleaks`, plus one approving review. The PR build/test workflows only trigger on the **`ready_for_review`** event — a PR opened directly as non-draft never fires them. If required checks are missing, toggle the PR draft → ready (`gh pr ready <n> --undo` then `gh pr ready <n>`). Occasionally a job hangs as a zombie (`in_progress` on a completed run); re-run just that job with `gh run rerun <run-id> --job <job-id>`.
+- `main` and `dev` are protected: required checks `test_dotnet (Release)`, `test_aitracker`, `gitleaks`, plus one approving review. The PR build/test workflows run on `opened`, `synchronize`, `reopened` and `ready_for_review` (issue #270), so checks start as soon as a PR is opened; if required checks are still missing, toggle the PR draft → ready (`gh pr ready <n> --undo` then `gh pr ready <n>`). `test_dotnet (Release)` takes 25–35 minutes, most of it the unit-test step — compare step timings with recent runs (`gh run view <run-id> --json jobs`) before treating a long run as hung. Occasionally a job does hang as a zombie (`in_progress` on a completed run); re-run just that job with `gh run rerun <run-id> --job <job-id>`.
 
 ## Method
 
@@ -183,15 +184,15 @@ The auto-generated "What's Changed" list is not acceptable as final notes. Prepa
 ### 5. Ship it
 
 1. Create the technical PR: `gh pr create --base main --head dev --title "..." --body-file <technical-pr-body>`.
-2. Confirm checks are green (see the `ready_for_review` gotcha above). **Ask before merging.**
+2. Confirm checks are green (see the required-check notes above). **Ask before merging.**
 3. After merge, watch the **Release build** and locate the resulting `Stable build <n>` release.
 4. Verify all five standard ZIP assets are present and downloadable.
 5. For every migration in the release diff, verify the matching `<migrationid>.manual.sql` asset is present and byte-identical to the repository source; upload any missing scripts. **Expect them to be missing:** `ci.yml` uploads `**/*.zip` only, so manual scripts are never attached automatically. In the admin notes, state that they must be run in **migration-id order** and name the predecessor of the first — each hard-fails with `RAISERROR` severity 16 if its predecessor is not stamped in `__MigrationHistory`.
 6. Replace the generated release text with the admin notes (`gh release edit <tag> --notes-file ...`), then read the release back to confirm the update stuck.
 7. Close the issues the release brought into `main`, each with a comment naming the build number and summarising what shipped. Leave partially-addressed issues open with a comment stating precisely what remains and why.
-8. Offer to delete superseded draft prereleases. **Never publish a draft** without being asked — the `PUBLISH_RELEASES` gate is deliberate.
+8. **Never publish a draft** without being asked — the `PUBLISH_RELEASES` gate is deliberate. As soon as the stable release is published — by you with permission, or by a maintainer — **delete every testing build numbered below it**, release and tag, without asking: see *Retire superseded testing builds*.
 9. **Forward-port the release into `net10`** — see the next section. The release is not done until this is either completed or explicitly deferred by the user.
-10. Report: build number, draft/published state, standard asset verification, manual SQL asset verification, **portal translation gate result**, issues closed, `net10` sync state, and anything still open.
+10. Report: build number, draft/published state, standard asset verification, manual SQL asset verification, **portal translation gate result**, issues closed, **testing builds deleted**, `net10` sync state, and anything still open.
 
 ### 6. Sync the `net10` PoC branch
 
@@ -225,6 +226,48 @@ Then verify and report:
 
 If the merge is large or conflicted enough to need real porting work, **stop and report** rather than guessing: an unreviewed semantic mismerge here is invisible until someone runs the PoC.
 
+### 7. Cut and publish a testing build
+
+A testing build is `dev` as it stands, for people who want to try unreleased work. It gets the same care as a stable release, minus the release PR and the `net10` forward-port.
+
+1. Sync, then establish what the build carries over the last published stable release: `git --no-pager log --oneline --no-merges origin/main..origin/dev`. Run the *Verification* and translation checks above against `origin/dev` — a half-translated portal is refused in a testing build exactly as in a stable one.
+2. Cut it: `gh workflow run ci.yml --repo pnp/Microsoft365-Analytics-Insights --ref dev`, watch the run (`gh run watch <run-id> --exit-status`), and locate the draft `Testing build <n>` it creates. Check the generated **Full Changelog** link compares against the last stable tag.
+3. Verify the five standard ZIP assets, as for a stable release. If `origin/main..origin/dev` contains migrations, attach every `<migrationid>.manual.sql` exactly as *Ship it* step 5 describes.
+4. Write the notes (see *Testing builds get real notes too*): the build's shape, its **baseline** — the stable release *plus* what — migrations and configuration changes, what it supersedes, and what to test. Keep the generated "What's Changed" list and **Full Changelog** link at the end. Apply them with `gh release edit <n> --title "Testing build <n> - <summary>" --notes-file <file>` and read the release back.
+5. **Publish only when asked**: `gh release edit <n> --repo pnp/Microsoft365-Analytics-Insights --draft=false --prerelease --latest=false`. A testing build is never marked Latest — confirm `gh api repos/pnp/Microsoft365-Analytics-Insights/releases/latest` still names the last stable release.
+6. Then **retire the testing builds it supersedes** — next section.
+
+### 8. Retire superseded testing builds
+
+**Standing permission — do not ask.** Whenever a new stable or testing release has been *published* (not merely created as a draft), delete every earlier testing build: each release named `Testing build <n>` whose build number is below the one just published — **published prereleases and drafts alike** — together with its git tag.
+
+Never delete:
+
+- a stable release, ever;
+- the release just published;
+- a testing build numbered **above** the one just published — it carries `dev` work that release does not.
+
+**First, make the survivor stand alone.** If the notes of the release just published link to, or lean on, a build you are about to delete ("see the Testing build <n> notes", "unchanged from <n>"), fold the needed detail in and name the old build as deleted. A link to a deleted release is a 404, and the sentence that points at it becomes a dead end for the tester.
+
+```powershell
+$published = <n>   # the build number just published
+gh api "repos/pnp/Microsoft365-Analytics-Insights/releases?per_page=100" --paginate `
+  --jq '.[] | select((.name // "") | startswith("Testing build")) | "\(.id) \(.tag_name) \(.draft)"' |
+  ForEach-Object {
+    $id, $tag, $draft = $_ -split ' '
+    if ($tag -match '^\d+$' -and [int]$tag -lt $published) {
+      gh api -X DELETE "repos/pnp/Microsoft365-Analytics-Insights/releases/$id"
+      # A draft's tag is only created when it is published, so a 404 here is expected for a draft.
+      gh api -X DELETE "repos/pnp/Microsoft365-Analytics-Insights/git/refs/tags/$tag" 2>$null
+      "deleted Testing build $tag (draft: $draft)"
+    }
+  }
+```
+
+The tag goes too, as it always has here: a testing tag left on `dev` is exactly the anchor GitHub's automatic release notes fall back to when no stable tag resolves (see the *Resolve changelog baseline* note above), and nothing needs it once its release is gone — the commit stays in `dev`'s history.
+
+Then confirm `gh release list --repo pnp/Microsoft365-Analytics-Insights --limit 10` shows no testing build numbered below the one just published, and that `gh api repos/pnp/Microsoft365-Analytics-Insights/releases/latest` still names the latest stable release. Report each build number you deleted.
+
 ## Useful commands
 
 ```powershell
@@ -234,6 +277,11 @@ gh release list --repo pnp/Microsoft365-Analytics-Insights --limit 5
 gh release view <tag> --repo pnp/Microsoft365-Analytics-Insights --json name,isDraft,isPrerelease,targetCommitish,assets
 gh release upload <tag> <migrationid>.manual.sql --repo pnp/Microsoft365-Analytics-Insights
 gh release edit <tag> --repo pnp/Microsoft365-Analytics-Insights --notes-file <file>
+
+# testing builds: cut one from dev, publish it (only when asked), then retire its predecessors (section 8)
+gh workflow run ci.yml --repo pnp/Microsoft365-Analytics-Insights --ref dev
+gh release edit <n> --repo pnp/Microsoft365-Analytics-Insights --draft=false --prerelease --latest=false
+gh release delete <older-n> --repo pnp/Microsoft365-Analytics-Insights --cleanup-tag --yes
 
 # portal translation gate (only when the diff touches Web/Scripts/portal)
 cd src\AnalyticsEngine\Web\Scripts\portal; npm run lint; npx vitest run src/i18n
