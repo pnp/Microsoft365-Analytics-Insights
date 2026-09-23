@@ -60,7 +60,7 @@ export default function SqlPopover({ sql, title, buttonLabel }: SqlPopoverProps)
   return (
     <Popover withArrow trapFocus>
       <PopoverTrigger disableButtonEnhancement>
-        <Button appearance="subtle" size="small" icon={<Code16Regular />}>
+        <Button appearance="subtle" size="small" icon={<Code16Regular />} data-print="hide">
           {buttonLabel ?? t('common.sql.buttonLabel')}
         </Button>
       </PopoverTrigger>

@@ -42,12 +42,17 @@ import {
   DetailSections,
   DetailStat,
   DetailStats,
+  ExpandAllButton,
   ExpandableUserCell,
+  PartialPrintNote,
+  PrintedFilters,
   ScoreBar,
+  printedSearch,
   revealElement,
   useAdoptionTableStyles,
   useRowExpansion,
 } from './adoptionShared';
+import { usePrintAllRows } from '../shared/printPreparation';
 import { formatCount, formatDate } from '../shared/KpiGrid';
 import { formatNumber, useT, useTNode, type TFunction, type TranslationKey } from '../../i18n';
 // Credits are fractional and a per-user total over a short window is routinely below 1.
@@ -379,7 +384,7 @@ export default function CoworkPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  const { isExpanded, toggle: toggleRow, collapseAll } = useRowExpansion();
+  const { isExpanded, toggle: toggleRow, resetRows, expandAll, collapseAll, allExpanded } = useRowExpansion();
   const [section, setSection] = useState<CoworkSection>('timeSaved');
   const timeSaved = useTimeSavedAssumptions(summary);
   // Requests, not flags: each click must act again, including a second click on a section that is
@@ -397,8 +402,9 @@ export default function CoworkPanel({
   useEffect(() => setPage(0), [filters, windowDays]);
 
   // Paging or re-filtering replaces the rows under an open detail, so the expander would end up
-  // describing whoever happens to land on that line next.
-  useEffect(() => collapseAll(), [filters, windowDays, page, collapseAll]);
+  // describing whoever happens to land on that line next. "Expand all" survives it: that is a
+  // choice about the whole list, not about the rows that happened to be on screen.
+  useEffect(() => resetRows(), [filters, windowDays, page, resetRows]);
 
   useEffect(() => {
     // Nothing to fetch when the analysis did not run: the rows cannot exist, and firing the request
@@ -441,6 +447,20 @@ export default function CoworkPanel({
   );
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
+
+  // The whole list while a print is being produced; the page on screen the rest of the time. Only
+  // while the people section is the one showing: a hidden section is not printed, so its list must
+  // not hold the printout up or refuse it for being long.
+  const printRows = usePrintAllRows<CoworkReadinessRow>({
+    enabled: available && section === 'people' && !loading && data !== null,
+    total: data?.total ?? 0,
+    loadedRows: data?.rows.length ?? 0,
+    loadPage: (skip, take, signal) => fetchCowork(windowDays, filters, skip, take, seatLicenceTypeIds, signal),
+  });
+  const rows = printRows ?? data?.rows ?? [];
+  const selectedTier = summary.coworkTiers.find((tier) => tier.code === filters.tiers[0]);
+  const sortOption = SORT_OPTIONS.find((o) => o.value === sortValue);
+
   const credits = summary.coworkCreditPosition;
   const coworkRegularMinActiveDays = formatNumber(Math.max(1, options.coworkRegularMinActiveDays));
   // The detail row spans every column the header renders. The credit figures live inside the detail
@@ -592,7 +612,7 @@ export default function CoworkPanel({
             );
           })}
         </div>
-        <Text size={100} className={styles.muted}>
+        <Text size={100} className={styles.muted} data-print="hide">
           {t('copilotAdoptionCowork.tiers.openInstruction')}
         </Text>
       </Card>
@@ -768,7 +788,8 @@ export default function CoworkPanel({
           })}
         </Text>
 
-        <div className={styles.filters}>
+        {/* Chrome: nothing here can be used on paper. What it is set to is printed below instead. */}
+        <div className={styles.filters} data-print="hide">
           <Input
             className={styles.grow}
             value={searchDraft}
@@ -858,6 +879,12 @@ export default function CoworkPanel({
 
           <div className={styles.spacer} />
 
+          <ExpandAllButton
+            allExpanded={allExpanded}
+            onExpandAll={expandAll}
+            onCollapseAll={collapseAll}
+            disabled={rows.length === 0}
+          />
           <Button
             size="small"
             appearance="subtle"
@@ -875,6 +902,25 @@ export default function CoworkPanel({
             </Button>
           </Tooltip>
         </div>
+
+        <PrintedFilters
+          filters={[
+            printedSearch(t, filters.search),
+            {
+              label: t('copilotAdoptionCowork.people.verdict'),
+              value: selectedTier
+                ? coworkTierText(t, selectedTier.code, 'label', selectedTier.label, coworkRegularMinActiveDays)
+                : t('copilotAdoptionCowork.filters.allVerdicts'),
+            },
+            {
+              label: t('copilotAdoptionCowork.table.department'),
+              value: filters.department || t('copilotAdoptionCowork.filters.allDepartments'),
+            },
+            sortOption && { label: t('copilotAdoption.shared.printedFilters.sortedBy'), value: t(sortOption.labelKey) },
+            filters.recommendedOnly && { value: t('copilotAdoptionCowork.filters.policyListOnly') },
+            filters.coworkUsersOnly && { value: t('copilotAdoptionCowork.filters.alreadyUsingCowork') },
+          ]}
+        />
 
         {error && (
           <MessageBar intent="error">
@@ -908,6 +954,7 @@ export default function CoworkPanel({
             <Button
               size="small"
               onClick={clearPanelFilters}
+              data-print="hide"
             >
               {t('copilotAdoptionCowork.actions.clearFilters')}
             </Button>
@@ -987,7 +1034,7 @@ export default function CoworkPanel({
                 </tr>
               </thead>
               <tbody>
-                {data.rows.map((row) => {
+                {rows.map((row) => {
                   const open = isExpanded(row.userId);
                   return (
                     <Fragment key={row.userId}>
@@ -1236,28 +1283,33 @@ export default function CoworkPanel({
           <div className={styles.footer}>
             <Text size={200} className={styles.muted}>
               {t('copilotAdoptionCowork.pagination.showingSeatHolders', {
-                start: formatCount(data.skip + 1),
-                end: formatCount(Math.min(data.skip + PAGE_SIZE, data.total)),
+                start: formatCount(printRows ? 1 : data.skip + 1),
+                end: formatCount(printRows ? printRows.length : Math.min(data.skip + PAGE_SIZE, data.total)),
                 total: formatCount(data.total),
               })}
             </Text>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <Button size="small" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
-                {t('copilotAdoptionCowork.pagination.previous')}
-              </Button>
-              <Text size={200} className={styles.muted}>
-                {t('copilotAdoptionCowork.pagination.pageOf', { page: page + 1, totalPages })}
-              </Text>
-              <Button
-                size="small"
-                disabled={page + 1 >= totalPages}
-                onClick={() => setPage((p) => p + 1)}
-              >
-                {t('copilotAdoptionCowork.pagination.next')}
-              </Button>
-            </div>
+            {/* A printout holds the whole list, so there is no page to turn to - and no Next button
+                on paper to turn it with. */}
+            {!printRows && (
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }} data-print="hide">
+                <Button size="small" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
+                  {t('copilotAdoptionCowork.pagination.previous')}
+                </Button>
+                <Text size={200} className={styles.muted}>
+                  {t('copilotAdoptionCowork.pagination.pageOf', { page: page + 1, totalPages })}
+                </Text>
+                <Button
+                  size="small"
+                  disabled={page + 1 >= totalPages}
+                  onClick={() => setPage((p) => p + 1)}
+                >
+                  {t('copilotAdoptionCowork.pagination.next')}
+                </Button>
+              </div>
+            )}
           </div>
         )}
+        {!loading && data && <PartialPrintNote shownRows={rows.length} totalRows={data.total} />}
       </Card>
       </div>
     </div>

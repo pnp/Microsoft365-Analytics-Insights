@@ -57,6 +57,7 @@ import EmailDomainPanel from '../components/copilotAdoption/EmailDomainPanel';
 import { ConcentrationBar, CombinedSegmentTable } from '../components/copilotAdoption/CombinedViews';
 import InfoTip from '../components/shared/InfoTip';
 import PrintButton from '../components/shared/PrintButton';
+import { PRINT_ROW_LIMIT } from '../components/shared/printPreparation';
 import DismissibleWarnings from '../components/shared/DismissibleWarnings';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
@@ -449,7 +450,10 @@ export default function CopilotAdoptionPage() {
           )}
           {availability?.available && (
             <PrintButton
-              tooltip={t('copilotAdoption.page.controls.printTooltip', { v0: t(TAB_LABEL_KEYS[tab]) })}
+              tooltip={t('copilotAdoption.page.controls.printTooltip', {
+                v0: t(TAB_LABEL_KEYS[tab]),
+                limit: formatCount(PRINT_ROW_LIMIT),
+              })}
             />
           )}
           {availability?.available && (
@@ -569,7 +573,11 @@ export default function CopilotAdoptionPage() {
                               v0: describeUnscopedSections(t, summary.unscopedSections ?? []),
                             })}`
                           : '',
-                      link: <Link onClick={() => setEmailDomain(null)}>{t('copilotAdoption.page.scopeBanner.showAllDomains')}</Link>,
+                      link: (
+                        <Link onClick={() => setEmailDomain(null)} data-print="hide">
+                          {t('copilotAdoption.page.scopeBanner.showAllDomains')}
+                        </Link>
+                      ),
                     })}
                   </MessageBarBody>
                 </MessageBar>
@@ -790,7 +798,8 @@ function ExecutiveTab({
               sublabel={t('copilotAdoption.page.gauge.establishedOrChampion', { count: formatCount(summary.habitualUsers) })}
             />
           </div>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}>
+          {/* Drill-through into another tab. On paper there is no other tab to drill into. */}
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }} data-print="hide">
             <Button appearance="secondary" onClick={onShowLicensedDetails}>{t('copilotAdoption.page.reviewLicensedUsers')}</Button>
             {summary.recommendedForLicence > 0 && (
               <Button appearance="secondary" onClick={onShowOpportunityDetails}>{t('copilotAdoption.page.reviewLicenceCandidates')}</Button>

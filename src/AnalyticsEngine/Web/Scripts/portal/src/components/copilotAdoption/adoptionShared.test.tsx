@@ -9,10 +9,15 @@ import {
   DetailSections,
   DetailStat,
   DetailStats,
+  ExpandAllButton,
   ExpandableUserCell,
+  PartialPrintNote,
+  PrintedFilters,
   SortableTh,
+  printedSearch,
   useRowExpansion,
 } from './adoptionShared';
+import { PRINT_ROW_LIMIT } from '../shared/printPreparation';
 
 const INFO = {
   what: 'Distinct days this person had at least one Copilot interaction.',
@@ -211,5 +216,197 @@ describe('expandable rows', () => {
     renderWithProvider(<DetailRationale text="" />);
 
     expect(screen.getByText('\u2014')).toBeInTheDocument();
+  });
+
+  it('keeps its expand chevron off paper, where it cannot be pressed', () => {
+    renderWithProvider(<Row id={7} upn={ALICE} />);
+
+    expect(screen.getByRole('button', { name: /Show the full assessment/ })).toHaveAttribute('data-print', 'hide');
+    // The person the row is about stays on the printout.
+    expect(screen.getByText(ALICE).closest('[data-print="hide"]')).toBeNull();
+  });
+});
+
+describe('expand all', () => {
+  const PEOPLE = [
+    { id: 1, upn: 'demo.user0000001@contoso.example' },
+    { id: 2, upn: 'demo.user0000002@contoso.example' },
+    { id: 3, upn: 'demo.user0000003@contoso.example' },
+  ];
+
+  /**
+   * A list that can change which rows it shows, as paging and filtering do - so the tests can prove
+   * that "expand all" means the whole list and not just the rows it was clicked over.
+   */
+  function List({ ids }: { ids: number[] }) {
+    const { isExpanded, toggle, expandAll, collapseAll, allExpanded, resetRows } = useRowExpansion();
+    return (
+      <>
+        <ExpandAllButton allExpanded={allExpanded} onExpandAll={expandAll} onCollapseAll={collapseAll} />
+        <button type="button" onClick={resetRows}>
+          next page
+        </button>
+        <table>
+          <tbody>
+            {PEOPLE.filter((p) => ids.includes(p.id)).map((p) => (
+              <tr key={p.id}>
+                <ExpandableUserCell open={isExpanded(p.id)} onToggle={() => toggle(p.id)} userPrincipalName={p.upn} />
+                <td>{isExpanded(p.id) ? `detail for ${p.upn}` : ''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </>
+    );
+  }
+
+  const openDetails = () => screen.queryAllByText(/^detail for /).length;
+
+  it('opens every row, and turns into the control that closes them', async () => {
+    const user = userEvent.setup();
+    renderWithProvider(<List ids={[1, 2, 3]} />);
+
+    await user.click(screen.getByRole('button', { name: 'Expand all' }));
+
+    expect(openDetails()).toBe(3);
+    await user.click(screen.getByRole('button', { name: 'Collapse all' }));
+    expect(openDetails()).toBe(0);
+  });
+
+  it('opens rows that were not on screen when it was clicked', async () => {
+    // A mode, not a list of ids: the next page - and a printout, which loads the whole list - has to
+    // arrive open too, or "expand all" only ever meant the fifty rows under the pointer.
+    const user = userEvent.setup();
+    const { rerender } = renderWithProvider(<List ids={[1]} />);
+
+    await user.click(screen.getByRole('button', { name: 'Expand all' }));
+    rerender(<List ids={[1, 2, 3]} />);
+
+    expect(openDetails()).toBe(3);
+  });
+
+  it('lets one row be closed without collapsing the rest', async () => {
+    const user = userEvent.setup();
+    renderWithProvider(<List ids={[1, 2, 3]} />);
+
+    await user.click(screen.getByRole('button', { name: 'Expand all' }));
+    await user.click(screen.getByRole('button', { name: /Hide the full assessment for demo.user0000002/ }));
+
+    expect(openDetails()).toBe(2);
+    expect(screen.queryByText('detail for demo.user0000002@contoso.example')).toBeNull();
+    // No longer everything, so the control offers to open everything again.
+    await user.click(screen.getByRole('button', { name: 'Expand all' }));
+    expect(openDetails()).toBe(3);
+  });
+
+  it('survives a page change, which only forgets rows toggled by hand', async () => {
+    const user = userEvent.setup();
+    renderWithProvider(<List ids={[1, 2, 3]} />);
+
+    await user.click(screen.getByRole('button', { name: 'Expand all' }));
+    await user.click(screen.getByRole('button', { name: /Hide the full assessment for demo.user0000002/ }));
+    await user.click(screen.getByRole('button', { name: 'next page' }));
+
+    expect(openDetails()).toBe(3);
+    expect(screen.getByRole('button', { name: 'Collapse all' })).toBeTruthy();
+  });
+
+  it('closes a row opened by hand when the page changes, as it always has', async () => {
+    const user = userEvent.setup();
+    renderWithProvider(<List ids={[1, 2, 3]} />);
+
+    await user.click(screen.getByRole('button', { name: /Show the full assessment for demo.user0000001/ }));
+    await user.click(screen.getByRole('button', { name: 'next page' }));
+
+    expect(openDetails()).toBe(0);
+  });
+
+  it('is not printed itself', () => {
+    renderWithProvider(<List ids={[1]} />);
+
+    expect(screen.getByRole('button', { name: 'Expand all' })).toHaveAttribute('data-print', 'hide');
+  });
+});
+
+describe('printed filters', () => {
+  it('states each setting on paper, and nothing on screen', () => {
+    renderWithProvider(
+      <PrintedFilters
+        filters={[
+          { label: 'Department', value: 'Customer Support' },
+          { label: 'Sorted by', value: 'Most coordination load' },
+          { value: 'Policy list only' },
+          false,
+          null,
+        ]}
+      />,
+    );
+
+    const line = document.querySelector('[data-print="only"]');
+    expect(line?.textContent).toBe(
+      'Filters: Department: Customer Support \u00b7 Sorted by: Most coordination load \u00b7 Policy list only',
+    );
+  });
+
+  it('prints nothing when there is nothing to state', () => {
+    renderWithProvider(<PrintedFilters filters={[false, null, undefined]} />);
+
+    expect(document.querySelector('[data-print="only"]')).toBeNull();
+  });
+
+  it('quotes an applied search and leaves out an empty one', () => {
+    const t = (key: string, values?: Record<string, unknown>) =>
+      key === 'copilotAdoption.shared.printedFilters.searchTerm' ? `"${values?.term}"` : key;
+
+    expect(printedSearch(t as never, '  finance  ')).toEqual({
+      label: 'copilotAdoption.shared.printedFilters.search',
+      value: '"finance"',
+    });
+    expect(printedSearch(t as never, '   ')).toBeNull();
+  });
+});
+
+describe('partial print note', () => {
+  it('says a printed list is one page of a longer one', () => {
+    renderWithProvider(<PartialPrintNote shownRows={50} totalRows={600} />);
+
+    const note = document.querySelector('[data-print="only"]');
+    expect(note?.textContent).toContain('only the rows that were on screen');
+    expect(note?.textContent).toContain(PRINT_ROW_LIMIT.toLocaleString('en'));
+  });
+
+  it('says nothing when the whole list is on the page', () => {
+    renderWithProvider(<PartialPrintNote shownRows={600} totalRows={600} />);
+
+    expect(document.querySelector('[data-print="only"]')).toBeNull();
+  });
+});
+
+describe('SortableTh on paper', () => {
+  function header(activeKey: string) {
+    return renderWithProvider(
+      <table>
+        <thead>
+          <tr>
+            <SortableTh label="user" sortKey="upn" activeKey={activeKey} descending onSort={vi.fn()}>
+              User
+            </SortableTh>
+          </tr>
+        </thead>
+      </table>,
+    );
+  }
+
+  it('keeps the arrow of the column the list is sorted by, which says how the rows are ordered', () => {
+    const { container } = header('upn');
+
+    expect(container.querySelector('th [aria-hidden="true"]')).not.toHaveAttribute('data-print');
+  });
+
+  it('drops the faint arrows that only say a header is clickable', () => {
+    const { container } = header('score');
+
+    expect(container.querySelector('th [aria-hidden="true"]')).toHaveAttribute('data-print', 'hide');
+    expect(screen.getByText('User').closest('[data-print="hide"]')).toBeNull();
   });
 });

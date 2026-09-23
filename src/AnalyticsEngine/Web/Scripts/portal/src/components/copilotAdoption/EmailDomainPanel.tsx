@@ -155,7 +155,7 @@ export default function EmailDomainPanel({
               />
             </th>
             {showCowork && <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoptionUsers.emailDomain.coworkCandidatesHeader')}</th>}
-            {onSelectDomain && <th className={table.th} aria-label={t('copilotAdoptionUsers.emailDomain.filterAria')} />}
+            {onSelectDomain && <th className={table.th} aria-label={t('copilotAdoptionUsers.emailDomain.filterAria')} data-print="hide" />}
           </tr>
         </thead>
         <tbody>
@@ -225,7 +225,7 @@ export default function EmailDomainPanel({
                   </td>
                 )}
                 {onSelectDomain && (
-                  <td className={table.td}>
+                  <td className={table.td} data-print="hide">
                     <Button
                       size="small"
                       appearance={isSelected ? 'primary' : 'subtle'}

@@ -1,14 +1,20 @@
-import { makeStyles, tokens, Text, Badge, Button } from '@fluentui/react-components';
-import { ChevronDown16Regular, ChevronRight16Regular } from '@fluentui/react-icons';
+import { makeStyles, tokens, Text, Badge, Button, Tooltip } from '@fluentui/react-components';
+import {
+  ArrowCollapseAll16Regular,
+  ArrowExpandAll16Regular,
+  ChevronDown16Regular,
+  ChevronRight16Regular,
+} from '@fluentui/react-icons';
 import { useCallback, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useT } from '../../i18n';
+import { useT, type TFunction } from '../../i18n';
 import { AdoptionBand } from '../../types/copilotAdoption';
 import type { AdoptionSegmentRow } from '../../types/copilotAdoption';
 import { ADOPTION_BANDS } from '../charts/GaugeRing';
 import { formatCount, formatPct } from '../shared/KpiGrid';
 import InfoTip from '../shared/InfoTip';
 import type { InfoTipContent } from '../shared/InfoTip';
+import { PRINT_ROW_LIMIT } from '../shared/printPreparation';
 
 /**
  * Band colours run cold-to-warm with maturity, and the two zero-usage bands are deliberately the
@@ -320,6 +326,12 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
     maxWidth: '900px',
   },
+  /** Paper only: hidden on screen, and shown by the `[data-print='only']` rule in index.css. */
+  printOnly: {
+    display: 'none',
+    marginBottom: '8px',
+    color: tokens.colorNeutralForeground2,
+  },
 });
 
 /** The engagement band as a coloured pill. */
@@ -478,25 +490,159 @@ export function useAdoptionTableStyles() {
  * Per-row expansion state for the seat-holder tables.
  *
  * Keyed by user id rather than by row index, so a re-sort does not leave a different person's
- * detail open. `collapseAll` exists because paging or re-filtering replaces the rows underneath an
- * open detail, and an expander left open over an unrelated person is worse than one that closed.
+ * detail open.
+ *
+ * "Expand all" is a mode rather than a list of ids. It has to open rows that are not on screen when
+ * it is clicked - the next page, and every row of a printout, which loads the whole list at once -
+ * and a list of ids can only name the fifty rows it was built from. A row toggled by hand is
+ * recorded as an exception to the mode, so closing one row of an expanded list leaves the rest open.
+ *
+ * `resetRows` forgets those exceptions and keeps the mode: paging or re-filtering replaces the rows
+ * underneath an open detail, and an expander left open over an unrelated person is worse than one
+ * that closed. `collapseAll` closes every row and ends the mode.
  */
 export function useRowExpansion() {
-  const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set<number>());
+  const [state, setState] = useState<{ all: boolean; toggled: ReadonlySet<number> }>(() => ({
+    all: false,
+    toggled: new Set<number>(),
+  }));
 
   const toggle = useCallback((id: number) => {
-    setExpanded((previous) => {
-      const next = new Set(previous);
-      if (!next.delete(id)) {
-        next.add(id);
+    setState((previous) => {
+      const toggled = new Set(previous.toggled);
+      if (!toggled.delete(id)) {
+        toggled.add(id);
       }
-      return next;
+      return { all: previous.all, toggled };
     });
   }, []);
 
-  const collapseAll = useCallback(() => setExpanded(new Set<number>()), []);
+  const expandAll = useCallback(() => setState({ all: true, toggled: new Set<number>() }), []);
+  const collapseAll = useCallback(() => setState({ all: false, toggled: new Set<number>() }), []);
+  // Returns the same state when there is nothing to forget, so the effects that call this on every
+  // page change do not cost a render each time.
+  const resetRows = useCallback(
+    () =>
+      setState((previous) =>
+        previous.toggled.size === 0 ? previous : { all: previous.all, toggled: new Set<number>() },
+      ),
+    [],
+  );
 
-  return { isExpanded: (id: number) => expanded.has(id), toggle, collapseAll };
+  return {
+    isExpanded: (id: number) => state.all !== state.toggled.has(id),
+    /** Every row is open, including the ones not loaded yet. */
+    allExpanded: state.all && state.toggled.size === 0,
+    toggle,
+    expandAll,
+    collapseAll,
+    resetRows,
+  };
+}
+
+/**
+ * Opens or closes every row of an expandable list at once.
+ *
+ * Exists for the printout as much as for the screen: a printed row cannot be clicked open, so the
+ * full assessment is only on paper if it was open when the page was printed. Expanding fifty rows
+ * one at a time to get there - and then the rest of the list, which printing loads in full - is not
+ * a realistic ask. The button is itself chrome, so it is not printed.
+ */
+export function ExpandAllButton({
+  allExpanded,
+  onExpandAll,
+  onCollapseAll,
+  disabled,
+}: {
+  allExpanded: boolean;
+  onExpandAll: () => void;
+  onCollapseAll: () => void;
+  disabled?: boolean;
+}) {
+  const t = useT();
+  return (
+    <Tooltip relationship="description" content={t('copilotAdoption.shared.expandAll.tooltip')}>
+      <Button
+        size="small"
+        appearance="subtle"
+        icon={allExpanded ? <ArrowCollapseAll16Regular /> : <ArrowExpandAll16Regular />}
+        disabled={disabled}
+        onClick={allExpanded ? onCollapseAll : onExpandAll}
+        data-print="hide"
+      >
+        {allExpanded ? t('copilotAdoption.shared.expandAll.collapse') : t('copilotAdoption.shared.expandAll.expand')}
+      </Button>
+    </Tooltip>
+  );
+}
+
+/** One setting of a list's filter bar, as a printout states it. */
+export type PrintedFilter = {
+  /** What the control sets. Omitted for a ticked box, whose own label is the whole statement. */
+  label?: string;
+  value: string;
+};
+
+/**
+ * A list's filter bar, as a line of text on paper.
+ *
+ * The bar itself is not printed - nobody can open a drop-down or tick a box on a printed page. But
+ * what it was set to is the difference between "every seat holder" and "Finance, policy list only",
+ * and a printed list that does not say which is a list nobody can safely act on. So each drop-down
+ * prints the option it was showing, and each ticked box and any search prints as a statement, in the
+ * place the controls occupied. Unticked boxes are left out: they filter nothing.
+ */
+export function PrintedFilters({ filters }: { filters: Array<PrintedFilter | false | null | undefined> }) {
+  const styles = useStyles();
+  const t = useT();
+  const shown = filters.filter((filter): filter is PrintedFilter => !!filter);
+  if (shown.length === 0) return null;
+
+  return (
+    <div className={styles.printOnly} data-print="only">
+      <Text size={200}>
+        <strong>{t('copilotAdoption.shared.printedFilters.heading')}</strong>{' '}
+        {shown
+          .map((filter) =>
+            filter.label
+              ? t('copilotAdoption.shared.printedFilters.item', { label: filter.label, value: filter.value })
+              : filter.value,
+          )
+          .join(' \u00b7 ')}
+      </Text>
+    </div>
+  );
+}
+
+/** The printed statement of a search box, or nothing when no search has been applied. */
+export function printedSearch(t: TFunction, search: string): PrintedFilter | null {
+  const term = search.trim();
+  return term
+    ? {
+        label: t('copilotAdoption.shared.printedFilters.search'),
+        value: t('copilotAdoption.shared.printedFilters.searchTerm', { term }),
+      }
+    : null;
+}
+
+/**
+ * Says, on paper, that a printed list is one page of a longer one.
+ *
+ * Only reachable when the page was printed from the browser's own menu, which cannot wait for the
+ * rest of the list to load: the Print button loads every row first, or refuses. Without this the
+ * printout would carry fifty rows under a footer saying there are six hundred, and nothing to say
+ * why the other five hundred and fifty are missing or how to get them.
+ */
+export function PartialPrintNote({ shownRows, totalRows }: { shownRows: number; totalRows: number }) {
+  const styles = useStyles();
+  const t = useT();
+  if (shownRows >= totalRows) return null;
+
+  return (
+    <div className={styles.printOnly} data-print="only">
+      <Text size={200}>{t('copilotAdoption.shared.partialPrint', { limit: formatCount(PRINT_ROW_LIMIT) })}</Text>
+    </div>
+  );
 }
 
 /**
@@ -551,6 +697,7 @@ export function ExpandableUserCell({
           aria-expanded={open}
           aria-label={t(open ? 'copilotAdoption.shared.expandableUser.hideAssessment' : 'copilotAdoption.shared.expandableUser.showAssessment', { user: userPrincipalName })}
           onClick={onToggle}
+          data-print="hide"
         />
         <span className={styles.upnStack}>
           <Text size={200} weight="semibold">
@@ -732,9 +879,12 @@ export function SortableTh({
           title={t('copilotAdoption.shared.sortableTh.sortBy', { label })}
         >
           {children ?? label}
+          {/* Only the column the list is sorted by keeps its arrow on paper: that one says how the
+              printed rows are ordered, and the faint idle ones only say "clickable". */}
           <span
             className={`${styles.sortArrow} ${active ? styles.sortArrowActive : styles.sortArrowIdle}`}
             aria-hidden="true"
+            data-print={active ? undefined : 'hide'}
           >
             {active ? (descending ? '\u25BC' : '\u25B2') : '\u25B2'}
           </span>
