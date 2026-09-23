@@ -312,6 +312,7 @@
     <Compile Include="PortalBuildLabelTests.cs" />
     <Compile Include="CopilotAdoptionCoworkTests.cs" />
     <Compile Include="CopilotAdoptionEmailDomainTests.cs" />
+    <Compile Include="CopilotAdoptionLicenceEstimateTests.cs" />
     <Compile Include="CopilotAdoptionSqlIntegrationTests.cs" />
     <Compile Include="CopilotAdoptionSynchronizationContextTests.cs" />
     <Compile Include="CopilotAdoptionTelemetryTests.cs" />

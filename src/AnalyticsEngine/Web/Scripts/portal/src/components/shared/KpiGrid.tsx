@@ -1,5 +1,5 @@
-import { makeStyles, tokens, Text, Card } from '@fluentui/react-components';
-import type { ReactNode } from 'react';
+import { makeStyles, mergeClasses, tokens, Text, Card, Badge, Link } from '@fluentui/react-components';
+import type { CSSProperties, ReactNode } from 'react';
 import InfoTip from './InfoTip';
 import type { InfoTipContent } from './InfoTip';
 import { formatDateParts, formatNumber } from '../../i18n';
@@ -25,11 +25,25 @@ const useStyles = makeStyles({
     borderLeftWidth: '4px',
     borderLeftStyle: 'solid',
   },
+  // A modelled figure among measured ones. Dashed rather than solid, with a badge, so nobody reading
+  // a row of tiles can take the one estimate for another count.
+  modelled: {
+    borderLeftStyle: 'dashed',
+    backgroundColor: tokens.colorBrandBackground2,
+    // The tile its value is sized against - see modelledValue.
+    containerType: 'inline-size',
+  },
   head: {
     display: 'flex',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: '4px',
+  },
+  labelGroup: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    flexWrap: 'wrap',
   },
   label: {
     color: tokens.colorNeutralForeground3,
@@ -42,8 +56,24 @@ const useStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
     fontVariantNumeric: 'tabular-nums',
   },
+  // A modelled range is two numbers and a unit where its neighbours are one number, and at the
+  // 200,000-user design point each can run to five or six digits - "43.750-87.500 h" in Spanish,
+  // which has no shorter compact form. A fixed size wraps it at the dash in the narrowest tiles, so it
+  // takes the largest size up to 26px at which it still fits on one line: 100cqi is the tile's content
+  // width, --kpi-value-chars the value's length and 0.6em a generous average width for digits,
+  // separators and the unit. A browser without container units keeps the fixed 26px.
+  modelledValue: {
+    fontSize: ['26px', 'min(26px, calc(100cqi / (var(--kpi-value-chars, 12) * 0.6)))'],
+    lineHeight: '34px',
+  },
   hint: {
     color: tokens.colorNeutralForeground3,
+  },
+  action: {
+    alignSelf: 'flex-start',
+    marginTop: '4px',
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
   },
 });
 
@@ -67,7 +97,23 @@ export type KpiDefinition = {
    * this page exists to be checked.
    */
   info: InfoTipContent;
+  /**
+   * Set on a figure that is modelled rather than counted, with the (translated) badge text to show.
+   * The tile is drawn differently as well as badged: a model sitting unmarked in a row of
+   * measurements gets quoted as one.
+   */
+  modelledBadge?: string;
+  /**
+   * A link to the tab that explains the figure - for a modelled one, where its assumptions and
+   * evidence are laid out and can be changed. Hidden when printing, where it cannot be followed.
+   */
+  action?: { label: string; onClick: () => void };
 };
+
+/** The custom property modelledValue sizes a modelled range by: its length, in characters. */
+function modelledValueLength(value: string): CSSProperties {
+  return { ['--kpi-value-chars' as string]: String([...value].length) } as CSSProperties;
+}
 
 /** A responsive row of headline figures, each carrying its own definition. */
 export function KpiGrid({ items }: { items: KpiDefinition[] }) {
@@ -78,20 +124,37 @@ export function KpiGrid({ items }: { items: KpiDefinition[] }) {
       {items.map((item) => (
         <Card
           key={item.key}
-          className={styles.card}
+          className={mergeClasses(styles.card, item.modelledBadge ? styles.modelled : undefined)}
           style={{ borderLeftColor: TONE_COLOUR[item.tone ?? 'neutral'] }}
         >
           <div className={styles.head}>
-            <Text size={200} className={styles.label}>
-              {item.label}
-            </Text>
+            <span className={styles.labelGroup}>
+              <Text size={200} className={styles.label}>
+                {item.label}
+              </Text>
+              {item.modelledBadge && (
+                <Badge size="small" appearance="outline" color="informative">
+                  {item.modelledBadge}
+                </Badge>
+              )}
+            </span>
             <InfoTip title={item.label} content={item.info} />
           </div>
-          <span className={styles.value}>{item.value}</span>
+          <span
+            className={mergeClasses(styles.value, item.modelledBadge ? styles.modelledValue : undefined)}
+            style={item.modelledBadge && typeof item.value === 'string' ? modelledValueLength(item.value) : undefined}
+          >
+            {item.value}
+          </span>
           {item.hint && (
             <Text size={200} className={styles.hint}>
               {item.hint}
             </Text>
+          )}
+          {item.action && (
+            <Link as="button" className={styles.action} onClick={item.action.onClick} data-print="hide">
+              {item.action.label}
+            </Link>
           )}
         </Card>
       ))}

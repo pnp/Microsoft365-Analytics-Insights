@@ -727,11 +727,28 @@ namespace Common.Entities.CopilotAdoption
         public CoworkCreditPosition CoworkCreditPosition { get; set; } = new CoworkCreditPosition();
 
         /// <summary>
-        /// The modelled time/cost estimate for the recommended cohort. Every figure inside is an
-        /// assumption applied to observed volume - see <see cref="CoworkValueEstimate"/>.
+        /// The modelled Cowork estimate for the recommended cohort - the people ready for Cowork now, and
+        /// the Cowork tab's headline. Cowork only: the time Cowork could give back on top of what these
+        /// people's Copilot licences already save. Every figure inside is an assumption applied to
+        /// observed volume - see <see cref="CoworkValueEstimate"/>.
         /// </summary>
         [JsonProperty("coworkValueEstimate")]
         public CoworkValueEstimate CoworkValueEstimate { get; set; } = new CoworkValueEstimate();
+
+        /// <summary>
+        /// The same model over EVERY scored Copilot seat holder: the ceiling if every seat holder used
+        /// Cowork, rather than only the people ready for it today.
+        /// </summary>
+        /// <remarks>
+        /// Published next to <see cref="CoworkValueEstimate"/> so the page can say both "where to start"
+        /// and "how far it goes". Built from the same rows, options and task rate, so the recommended
+        /// cohort can never model more time than the population it is drawn from. It overstates rather
+        /// than understates: it projects the tenant's Cowork users' average onto people who are not ready
+        /// for Cowork yet, and those people would likely run fewer tasks. It is every bit as modelled as
+        /// its sibling and carries the same assumptions.
+        /// </remarks>
+        [JsonProperty("coworkFullRolloutEstimate")]
+        public CoworkValueEstimate CoworkFullRolloutEstimate { get; set; } = new CoworkValueEstimate();
 
         #endregion
 
@@ -744,6 +761,25 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Unlicensed users scoring at or above the recommendation threshold.</summary>
         [JsonProperty("recommendedForLicence")]
         public int RecommendedForLicence { get; set; }
+
+        /// <summary>
+        /// The modelled licence estimate: the time Microsoft 365 Copilot could give back to every person
+        /// recommended for a licence, and the Licence opportunities tab's headline. Every figure inside is
+        /// an assumption applied to observed volume - see <see cref="LicenceValueEstimate"/>. Empty when
+        /// nobody is recommended or the Microsoft 365 usage reports are unavailable, rather than a
+        /// modelled zero.
+        /// </summary>
+        [JsonProperty("licenceOpportunityEstimate")]
+        public LicenceValueEstimate LicenceOpportunityEstimate { get; set; } = new LicenceValueEstimate();
+
+        /// <summary>
+        /// The same model over the recommended candidates already using Copilot Chat without a licence -
+        /// the ones the "Already using Copilot" filter shows - published beside
+        /// <see cref="LicenceOpportunityEstimate"/> as the strongest part of the case: demand is observed
+        /// rather than inferred. Some of it may already be realised through Copilot Chat.
+        /// </summary>
+        [JsonProperty("licenceChatUsersEstimate")]
+        public LicenceValueEstimate LicenceChatUsersEstimate { get; set; } = new LicenceValueEstimate();
 
         #endregion
 

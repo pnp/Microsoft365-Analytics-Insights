@@ -111,6 +111,9 @@ export const ALLOWED_LITERALS = new Set<string>([
   'n/a',
   'N/A',
   'OK',
+  // The SI-style abbreviation for minutes. Spanish writes the same three letters (RAE: "min", no
+  // full stop), so a translation that differed would be the wrong one.
+  'min',
   // Spelled the same in Spanish. "No" is the Spanish for "No"; "Total" and "Error" are the same
   // word in both languages.
   'No',

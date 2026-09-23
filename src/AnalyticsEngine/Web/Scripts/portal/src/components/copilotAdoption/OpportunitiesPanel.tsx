@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, Fragment } from 'react';
+import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import {
   makeStyles,
   tokens,
@@ -11,14 +11,22 @@ import {
   Badge,
   MessageBar,
   MessageBarBody,
+  Tab,
+  TabList,
   Tooltip,
 } from '@fluentui/react-components';
-import { ArrowDownload16Regular, ArrowClockwise16Regular } from '@fluentui/react-icons';
+import {
+  ArrowDownload16Regular,
+  ArrowClockwise16Regular,
+  Clock20Regular,
+  PeopleList20Regular,
+} from '@fluentui/react-icons';
 import { fetchOpportunities, opportunitiesExportUrl } from '../../api/copilotAdoptionApi';
 import type {
   AdoptionFilterOptions,
   AdoptionGuidanceLink,
   CopilotAdoptionOptions,
+  CopilotAdoptionSummary,
   LicenceOpportunityPage,
   OpportunityFilters,
 } from '../../types/copilotAdoption';
@@ -33,14 +41,25 @@ import {
   ExpandableUserCell,
   ScoreBar,
   SortableTh,
+  revealElement,
   useAdoptionTableStyles,
   useRowExpansion,
 } from './adoptionShared';
 import { formatCount, formatDate } from '../shared/KpiGrid';
 import { useT, useTNode } from '../../i18n';
 import { opportunityRationale, opportunityTierLabel } from './serverText';
+import LicenceTimeSavedHero from './LicenceTimeSavedHero';
+import LicenceTimeSavedModel from './LicenceTimeSavedModel';
+import { useTimeSavedAssumptions } from './coworkTimeSaved';
 
 const PAGE_SIZE = 50;
+
+/**
+ * The tab's sections. The candidate list is the tab's purpose and opens first; the licence estimate's
+ * working and evidence sit beside it rather than above it, so fifty rows are never pushed below three
+ * evidence cards and a sense check.
+ */
+type OpportunitySection = 'candidates' | 'timeSaved';
 
 /**
  * The default sort. Strongest case first, with proven-demand candidates ahead of merely busy ones.
@@ -50,6 +69,13 @@ const PAGE_SIZE = 50;
 const DEFAULT_SORT_BY = 'score';
 
 const useStyles = makeStyles({
+  sectionNav: {
+    marginBottom: '12px',
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: tokens.colorNeutralStroke2,
+    scrollMarginTop: '12px',
+  },
   filters: {
     display: 'flex',
     flexWrap: 'wrap',
@@ -148,9 +174,14 @@ const DEFAULT_FILTERS: OpportunityFilters = {
  * The "already using Copilot Chat" badge is the single most persuasive thing on this screen - it is
  * evidence of demand rather than an inference from general Microsoft 365 activity - so it is
  * surfaced as its own column and its own filter rather than being buried in the score.
+ *
+ * Above the list sits the time a licence could give back to the people it recommends: the figure a
+ * licence purchase is justified with, and the only place the Copilot minutes are applied. Its working
+ * and the published evidence behind it are one section away.
  */
 export default function OpportunitiesPanel({
   windowDays,
+  summary,
   filterOptions,
   options,
   guidanceLinks,
@@ -158,6 +189,8 @@ export default function OpportunitiesPanel({
   emailDomain,
 }: {
   windowDays: number;
+  /** The analysis the licence estimate is published on, and whose assumptions the reader can change. */
+  summary: CopilotAdoptionSummary;
   filterOptions: AdoptionFilterOptions | null;
   /** The weights and targets actually used, so the score explanation quotes them rather than guessing. */
   options: CopilotAdoptionOptions;
@@ -213,6 +246,32 @@ export default function OpportunitiesPanel({
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const { isExpanded, toggle: toggleRow, collapseAll } = useRowExpansion();
+
+  const timeSaved = useTimeSavedAssumptions(summary);
+  const [section, setSection] = useState<OpportunitySection>('candidates');
+  // Requests, not flags: each click must act again, including a second click on a section that is
+  // already open - which is exactly when a plain setSection() changes nothing the reader can see.
+  const [assumptionFocusRequest, setAssumptionFocusRequest] = useState(0);
+  const [sectionRevealRequest, setSectionRevealRequest] = useState(0);
+  const sectionNavRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (sectionRevealRequest) revealElement(sectionNavRef.current);
+  }, [sectionRevealRequest]);
+
+  /** Shows exactly the people the headline counts: the recommended candidates. */
+  const showRecommended = () => {
+    setSearchDraft('');
+    setFilters((f) => ({ ...f, recommendedOnly: true }));
+    setSection('candidates');
+    setSectionRevealRequest((n) => n + 1);
+  };
+
+  /** Takes the reader to the editable figures - from either section, including the one already open. */
+  const adjustAssumptions = () => {
+    setSection('timeSaved');
+    setAssumptionFocusRequest((n) => n + 1);
+  };
 
   useEffect(() => setPage(0), [filters, windowDays]);
 
@@ -275,7 +334,7 @@ export default function OpportunitiesPanel({
   );
   const unlicensedGuidance = (guidanceLinks ?? []).filter((l) => l.actionCode === 'unlicensed');
 
-  return (
+  const list = (
     <Card>
       <div className={styles.filters}>
         <Input
@@ -678,5 +737,50 @@ export default function OpportunitiesPanel({
         </div>
       )}
     </Card>
+  );
+
+  // No estimate - nobody recommended, or no Microsoft 365 usage reports to model from - means no
+  // headline and nothing to show the working for: the list alone, exactly as before.
+  if (!((summary?.licenceOpportunityEstimate?.cohortUsers ?? 0) > 0)) return list;
+
+  return (
+    <div>
+      {/* ---------- The headline ---------- */}
+      <LicenceTimeSavedHero
+        summary={summary}
+        options={options}
+        timeSaved={timeSaved}
+        onAdjust={adjustAssumptions}
+        onShowRecommended={showRecommended}
+      />
+
+      <div className={styles.sectionNav} data-print="hide" ref={sectionNavRef}>
+        <TabList
+          selectedValue={section}
+          onTabSelect={(_e, d) => setSection(d.value as OpportunitySection)}
+          aria-label={t('copilotAdoptionUsers.opportunities.sections.ariaLabel')}
+        >
+          <Tab value="candidates" icon={<PeopleList20Regular />}>
+            {t('copilotAdoptionUsers.opportunities.sections.candidates')}
+          </Tab>
+          <Tab value="timeSaved" icon={<Clock20Regular />}>
+            {t('copilotAdoptionUsers.opportunities.sections.timeSaved')}
+          </Tab>
+        </TabList>
+      </div>
+
+      <div role="tabpanel" aria-label={t('copilotAdoptionUsers.opportunities.sections.candidates')} hidden={section !== 'candidates'}>
+        {list}
+      </div>
+
+      <div role="tabpanel" aria-label={t('copilotAdoptionUsers.opportunities.sections.timeSaved')} hidden={section !== 'timeSaved'}>
+        <LicenceTimeSavedModel
+          summary={summary}
+          options={options}
+          timeSaved={timeSaved}
+          focusRequest={assumptionFocusRequest}
+        />
+      </div>
+    </div>
   );
 }

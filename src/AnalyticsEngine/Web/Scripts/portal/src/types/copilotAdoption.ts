@@ -173,11 +173,19 @@ export interface CopilotAdoptionOptions {
   coworkRegularMinActiveDays: number;
   coworkAgentFamiliarityUplift: number;
 
-  coworkMinutesSavedPerMeeting: number;
-  coworkMinutesSavedPerMailThread: number;
-  coworkMinutesSavedPerDocument: number;
+  /**
+   * Minutes Microsoft 365 Copilot is assumed to save per meeting, email and document. They drive the
+   * licence estimate. Named `coworkMinutesSavedPer*` until the licence estimate was split out.
+   */
+  copilotMinutesSavedPerMeeting: number;
+  copilotMinutesSavedPerMailThread: number;
+  copilotMinutesSavedPerDocument: number;
+  /** The conservative share of every minutes-saved assumption. Shared by both estimates. */
   coworkEstimateLowerBoundRatio: number;
-  /** Null means no monetary figure is produced at all - there is no defensible default. */
+  /** Minutes Cowork is assumed to save per task, on top of Copilot. No study has measured it. */
+  coworkMinutesSavedPerTask: number;
+  /** Cowork tasks a month per person, used only when no Cowork tasks are observed: a placeholder. */
+  coworkAssumedTasksPerPersonPerMonth: number;
 
   usageReportLagDays: number;
   topSegments: number;
@@ -413,10 +421,27 @@ export interface CopilotAdoptionSummary {
   coworkQuadrant: CoworkQuadrantPoint[];
   coworkByDepartment: CoworkSegmentRow[];
   coworkCreditPosition: CoworkCreditPosition;
+  /**
+   * The modelled Cowork estimate for the people ready for Cowork now (the recommended policy cohort):
+   * the time Cowork could give back on top of what their Copilot licences already save.
+   */
   coworkValueEstimate: CoworkValueEstimate;
+  /**
+   * The same model over every scored Copilot seat holder - the ceiling if everyone used Cowork.
+   * Optional only so a fixture written before it existed still type-checks; the server always sends it.
+   */
+  coworkFullRolloutEstimate?: CoworkValueEstimate;
 
   unlicensedActiveUsers: number;
   recommendedForLicence: number;
+  /**
+   * The modelled licence estimate: the time Microsoft 365 Copilot could give back to every person
+   * recommended for a licence. Empty (no cohort) when nobody is recommended or the Microsoft 365 usage
+   * reports are unavailable. Optional only so older fixtures still type-check.
+   */
+  licenceOpportunityEstimate?: LicenceValueEstimate;
+  /** The same model over the recommended candidates already using Copilot Chat without a licence. */
+  licenceChatUsersEstimate?: LicenceValueEstimate;
 
   funnel: ReportCategory[];
   bandBreakdown: ReportCategory[];
@@ -734,21 +759,67 @@ export interface CoworkCreditPosition {
 }
 
 /**
- * The modelled time/cost estimate.
+ * Where the Cowork task rate a projection uses came from: the average of the people with Cowork tasks
+ * in Microsoft's report, a labelled placeholder because nobody has any, or the reader's own figure.
+ */
+export type CoworkTaskRateBasis = 'observed' | 'assumed' | 'custom';
+
+/**
+ * The modelled Cowork estimate for one cohort: the time Cowork could give back ON TOP of what Microsoft
+ * 365 Copilot already saves - the value of enabling Cowork, paid for in Copilot Credits.
  *
- * The `addressable*` volumes are observed; the hours and money are those volumes multiplied by an
- * assumption. `assumptions` travels with the numbers so no component can render a figure without it.
+ * Cowork tasks - observed where Microsoft's report has them, projected where it does not - times
+ * minutes per task, which no study has measured. There is deliberately no Copilot layer: these people
+ * already hold a licence, and the time it gives back is not Cowork's to claim.
+ *
+ * `assumptions` travels with the numbers so no component can render a figure without it. The portal
+ * recomputes the hours from the published inputs whenever the reader enters their own assumptions -
+ * see `components/copilotAdoption/coworkTimeSaved.ts`.
  */
 export interface CoworkValueEstimate {
   isModelled: boolean;
   cohortUsers: number;
+  /** People in the cohort with Cowork tasks in Microsoft's Cowork report. Observed. */
+  coworkTaskUsers: number;
+  /** Their tasks, restated as a month. Observed. */
+  observedCoworkTasks: number;
+  /** Everyone else in the cohort, projected at the rate below. */
+  projectedCoworkUsers: number;
+  /** The Cowork tasks a month each projected person is assumed to run. */
+  coworkTasksPerPersonPerMonth: number;
+  coworkTaskRateBasis: CoworkTaskRateBasis;
+  /** For an observed rate, how many people it is the average of. */
+  coworkTaskRateUsers: number;
+  /** Observed plus projected Cowork tasks a month. */
+  coworkTasks: number;
+  hoursPerMonthLow: number;
+  hoursPerMonthHigh: number;
+  // No monetary fields, and none anywhere else in this report: the estimate is modelled, and a money
+  // figure derived from it would be quoted as though it were measured. See CoworkValueEstimate in
+  // CopilotAdoptionCoworkModels.cs.
+  assumptions: string[];
+}
+
+/**
+ * The modelled licence estimate: the time Microsoft 365 Copilot could give back to people recommended
+ * for a licence - observed meetings, emails and documents times the minutes Copilot is assumed to save
+ * on each, evidenced by published studies of Microsoft 365 Copilot.
+ *
+ * See `LicenceValueEstimate` in CopilotAdoptionTimeSavedModels.cs. No monetary fields.
+ */
+export interface LicenceValueEstimate {
+  isModelled: boolean;
+  cohortUsers: number;
+  /** Meetings a month across the cohort. Observed. */
   addressableMeetings: number;
+  /** Emails sent and read a month across the cohort. Observed. */
   addressableMailThreads: number;
+  /** SharePoint and OneDrive documents viewed or edited a month across the cohort. Observed. */
   addressableDocuments: number;
   hoursPerMonthLow: number;
   hoursPerMonthHigh: number;
-  // No monetary fields: this estimate is modelled, and currency is reported only against idle
-  // licence spend, which is measured. See CoworkValueEstimate in CopilotAdoptionCoworkModels.cs.
+  /** True when the candidate list reached its row cap, so the figure is a floor. */
+  candidatesCapped: boolean;
   assumptions: string[];
 }
 

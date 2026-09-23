@@ -500,6 +500,24 @@ export function useRowExpansion() {
 }
 
 /**
+ * Scrolls an element to the top of the window - smoothly, unless the reader has asked the system for
+ * reduced motion.
+ *
+ * For controls that move the reader somewhere else on a long page. Switching a section that is
+ * already showing, or one that opens below the fold, otherwise changes nothing the reader can see,
+ * and the control reads as broken. Guarded because jsdom, like any browser without the API, has no
+ * `scrollIntoView`.
+ */
+export function revealElement(element: HTMLElement | null | undefined): void {
+  if (!element || typeof element.scrollIntoView !== 'function') return;
+  const reduceMotion =
+    typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  element.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+}
+
+/**
  * The identity cell, carrying the row's expand control.
  *
  * The chevron lives in this cell rather than in a column of its own because this is the column that
