@@ -634,27 +634,47 @@ namespace Tests.UnitTests
             var estimate = CopilotAdoptionScoring.ModelCoworkValue(1, 1.4, 0, 0, options);
 
             Assert.AreEqual(1d, estimate.AddressableMeetings);
-            Assert.AreEqual(2d, estimate.HoursPerMonthHigh,
+            Assert.AreEqual(2d, estimate.CopilotHoursPerMonthHigh,
                 "Hours must be derived from the volumes the estimate publishes, which is all the portal has.");
         }
 
         /// <summary>
         /// The golden figure shared with the portal's <c>coworkTimeSaved.test.ts</c> ("matches the server
-        /// to the hour"). The browser recomputes these hours from the same volumes whenever a reader
-        /// changes an assumption, so the two implementations are pinned to one answer - change either,
-        /// and this or its TypeScript twin fails.
+        /// to the hour"). The browser recomputes these hours from the same published inputs whenever a
+        /// reader changes an assumption, so the two implementations are pinned to one answer - change
+        /// either, and this or its TypeScript twin fails.
         /// </summary>
         [TestMethod]
         public void Estimate_MatchesThePortalsGoldenFigure()
         {
-            // 1,234 x 5 + 5,678 x 0.5 + 910 x 1 = 9,919 minutes = 165.3 hours; x 50% = 82.7.
-            var estimate = CopilotAdoptionScoring.ModelCoworkValue(10, 1234, 5678, 910, Options());
+            // Copilot: 1,234 x 5 + 5,678 x 0.5 + 910 x 1 = 9,919 minutes = 165.3 hours; x 50% = 82.7.
+            // Cowork: 45 observed + 7 projected x 12.5 (= 87.5, a deliberate midpoint: both languages
+            // must round it up to 88) = 133 tasks x 6 minutes = 798 minutes = 13.3 hours; x 50% = 6.65.
+            var estimate = CopilotAdoptionScoring.ModelCoworkValue(10, 1234, 5678, 910, Options(), GoldenCoworkTasks());
 
-            Assert.AreEqual(165d, estimate.HoursPerMonthHigh);
-            Assert.AreEqual(83d, estimate.HoursPerMonthLow);
+            Assert.AreEqual(165d, estimate.CopilotHoursPerMonthHigh);
+            Assert.AreEqual(83d, estimate.CopilotHoursPerMonthLow);
             CollectionAssert.AreEqual(
                 new[] { 103d, 47d, 15d },
-                CopilotAdoptionScoring.CoworkHoursByActivity(estimate, Options()));
+                CopilotAdoptionScoring.CopilotHoursByActivity(estimate, Options()));
+
+            Assert.AreEqual(7, estimate.ProjectedCoworkUsers);
+            Assert.AreEqual(133d, estimate.CoworkTasks);
+            Assert.AreEqual(13d, estimate.CoworkHoursPerMonthHigh);
+            Assert.AreEqual(7d, estimate.CoworkHoursPerMonthLow);
+
+            Assert.AreEqual(178d, estimate.HoursPerMonthHigh);
+            Assert.AreEqual(90d, estimate.HoursPerMonthLow);
+        }
+
+        private static CoworkTaskInputs GoldenCoworkTasks()
+        {
+            return new CoworkTaskInputs
+            {
+                ObservedUsers = 3,
+                ObservedTasksPerMonth = 45,
+                Rate = new CoworkTaskRate { TasksPerPersonPerMonth = 12.5, Basis = CoworkTaskRateBases.Observed, Users = 3 },
+            };
         }
 
         /// <summary>
@@ -671,20 +691,147 @@ namespace Tests.UnitTests
             Assert.AreEqual(0.5d, options.CoworkMinutesSavedPerMailThread, "Microsoft's 6-minute credit on one email in twelve.");
             Assert.AreEqual(1d, options.CoworkMinutesSavedPerDocument, "Microsoft's 6-minute credit on one document in six.");
             Assert.AreEqual(0.5d, options.CoworkEstimateLowerBoundRatio, "Forrester's standard 50% productivity recapture.");
+            Assert.AreEqual(6d, options.CoworkMinutesSavedPerTask,
+                "The smallest credit Microsoft's Agent Assisted Hours method gives a resolved agent session.");
+            Assert.AreEqual(20d, options.CoworkAssumedTasksPerPersonPerMonth, "About one delegated task a working day.");
         }
 
         [TestMethod]
-        public void Estimate_ByActivity_AddsUpToTheHighFigure()
+        public void Estimate_ByActivity_AddsUpToTheCopilotHighFigure()
         {
             // Rounding each activity on its own lets the parts miss the total by an hour, which a reader
             // checking the sum takes as an arithmetic error in the model.
             var estimate = CopilotAdoptionScoring.ModelCoworkValue(3, 7, 7, 7, Options());
-            var parts = CopilotAdoptionScoring.CoworkHoursByActivity(estimate, Options());
+            var parts = CopilotAdoptionScoring.CopilotHoursByActivity(estimate, Options());
 
             Assert.AreEqual(3, parts.Length);
-            Assert.AreEqual(estimate.HoursPerMonthHigh, parts.Sum(), 1e-9,
-                "Meetings, email and documents must add up to exactly the modelled total.");
+            Assert.AreEqual(estimate.CopilotHoursPerMonthHigh, parts.Sum(), 1e-9,
+                "Meetings, email and documents must add up to exactly the Copilot layer's total.");
             Assert.IsTrue(parts.All(p => p >= 0 && p == Math.Floor(p)), "Each part is a whole number of hours.");
+        }
+
+        /// <summary>
+        /// The defect this guards: the model used to be one blended layer - "Copilot and Cowork together
+        /// save..." - resting entirely on Microsoft 365 Copilot evidence, so the figure used to justify
+        /// Copilot Credits was mostly Copilot's. Each layer is now published on its own and the total is
+        /// exactly their sum.
+        /// </summary>
+        [TestMethod]
+        public void Estimate_PublishesCopilotAndCoworkAsSeparateLayers_ThatAddUpToTheTotal()
+        {
+            var estimate = CopilotAdoptionScoring.ModelCoworkValue(10, 1234, 5678, 910, Options(), GoldenCoworkTasks());
+
+            Assert.IsTrue(estimate.CopilotHoursPerMonthHigh > 0 && estimate.CoworkHoursPerMonthHigh > 0);
+            Assert.AreEqual(estimate.CopilotHoursPerMonthHigh + estimate.CoworkHoursPerMonthHigh, estimate.HoursPerMonthHigh);
+            Assert.AreEqual(estimate.CopilotHoursPerMonthLow + estimate.CoworkHoursPerMonthLow, estimate.HoursPerMonthLow);
+
+            var noCowork = Options().Clone();
+            noCowork.CoworkMinutesSavedPerTask = 0;
+            var copilotOnly = CopilotAdoptionScoring.ModelCoworkValue(10, 1234, 5678, 910, noCowork, GoldenCoworkTasks());
+            Assert.AreEqual(estimate.CopilotHoursPerMonthHigh, copilotOnly.HoursPerMonthHigh,
+                "Cowork's minutes must never leak into the Copilot layer, or vice versa.");
+        }
+
+        [TestMethod]
+        public void Estimate_StatesThatCoworkIsUnmeasured_AndTheCopilotMinutesAreCopilots()
+        {
+            var estimate = CopilotAdoptionScoring.ModelCoworkValue(10, 1234, 5678, 910, Options(), GoldenCoworkTasks());
+
+            Assert.IsTrue(estimate.Assumptions.Any(a => a.StartsWith("Assumes Microsoft 365 Copilot saves", StringComparison.Ordinal)),
+                "The per-item minutes are Copilot's evidence and must be attributed to Copilot alone.");
+            Assert.IsFalse(estimate.Assumptions.Any(a => a.IndexOf("Copilot and Cowork together", StringComparison.Ordinal) >= 0),
+                "The blended attribution credited Cowork with evidence gathered on Copilot.");
+            Assert.IsTrue(estimate.Assumptions.Any(a => a.IndexOf("No study has yet measured Cowork's time savings", StringComparison.Ordinal) >= 0),
+                "The Cowork layer rests on an assumption, and must say so wherever it travels.");
+            Assert.IsTrue(estimate.Assumptions.Any(a => a.IndexOf("the average of the 3 people already running them", StringComparison.Ordinal) >= 0),
+                "An observed rate names how many people it averages.");
+        }
+
+        [TestMethod]
+        public void CoworkTaskRate_IsTheObservedAverage_RestatedAsAMonth()
+        {
+            var rows = new List<CoworkReadinessRow>
+            {
+                new CoworkReadinessRow { UserId = 1, CoworkReportTotalTasks = 10 },
+                new CoworkReadinessRow { UserId = 2, CoworkReportTotalTasks = 20 },
+                // No tasks: neither in the average's numerator nor its denominator.
+                new CoworkReadinessRow { UserId = 3, CoworkReportTotalTasks = null },
+                new CoworkReadinessRow { UserId = 4, CoworkReportTotalTasks = 0 },
+            };
+
+            // 30 tasks over a 7-day report = 120 over the 28-day month, across 2 people = 60 each.
+            var rate = CopilotAdoptionScoring.CoworkTaskRateFor(rows, 7, Options());
+
+            Assert.AreEqual(CoworkTaskRateBases.Observed, rate.Basis);
+            Assert.AreEqual(2, rate.Users);
+            Assert.AreEqual(60d, rate.TasksPerPersonPerMonth);
+        }
+
+        [TestMethod]
+        public void CoworkTaskRate_FallsBackToTheLabelledPlaceholder_WhenNothingIsObserved()
+        {
+            var nobody = CopilotAdoptionScoring.CoworkTaskRateFor(Cohort(3), 28, Options());
+            Assert.AreEqual(CoworkTaskRateBases.Assumed, nobody.Basis);
+            Assert.AreEqual(20d, nobody.TasksPerPersonPerMonth);
+            Assert.AreEqual(0, nobody.Users);
+
+            // Tasks over an unknown period cannot be restated as a month - 180 days of tasks read as one
+            // month would multiply the Cowork layer six-fold - so they do not count as observed.
+            var rows = new List<CoworkReadinessRow> { new CoworkReadinessRow { UserId = 1, CoworkReportTotalTasks = 50 } };
+            Assert.AreEqual(CoworkTaskRateBases.Assumed, CopilotAdoptionScoring.CoworkTaskRateFor(rows, 0, Options()).Basis);
+        }
+
+        [TestMethod]
+        public void Estimate_CountsObservedTasksAsReported_AndProjectsOnlyEveryoneElse()
+        {
+            var cohort = Cohort(4);
+            cohort[0].CoworkReportTotalTasks = 14;
+
+            var rate = new CoworkTaskRate { TasksPerPersonPerMonth = 10, Basis = CoworkTaskRateBases.Observed, Users = 1 };
+            var estimate = CopilotAdoptionScoring.EstimateCoworkValue(cohort, Options(), 28, rate);
+
+            Assert.AreEqual(1, estimate.CoworkTaskUsers);
+            Assert.AreEqual(14d, estimate.ObservedCoworkTasks, "A 28-day report is already a 28-day month.");
+            Assert.AreEqual(3, estimate.ProjectedCoworkUsers);
+            Assert.AreEqual(14d + 3 * 10, estimate.CoworkTasks);
+            Assert.AreEqual(Math.Round((14d + 30) * 6 / 60, MidpointRounding.AwayFromZero), estimate.CoworkHoursPerMonthHigh);
+        }
+
+        [TestMethod]
+        public void FullRolloutAndReadyEstimates_ProjectTheSameTenantWideCoworkRate()
+        {
+            var established = HeavyCoordinator();
+            established.UserId = 1;
+            established.UserPrincipalName = "regular@contoso.com";
+            established.CoworkReportTotalTasks = 12;
+            established.CoworkReportActiveDays = 10;
+
+            var notReady = HeavyCoordinator();
+            notReady.UserId = 2;
+            notReady.UserPrincipalName = "novice@contoso.com";
+
+            var analysis = new CopilotAdoptionAnalysis
+            {
+                CoworkSignals = new List<CoworkReadinessSignalRow> { established, notReady },
+                LicensedUsers = new List<LicensedUserAdoptionRow>
+                {
+                    new LicensedUserAdoptionRow { UserId = 1, UserPrincipalName = "regular@contoso.com", AdoptionScore = 80 },
+                    new LicensedUserAdoptionRow { UserId = 2, UserPrincipalName = "novice@contoso.com", AdoptionScore = 5 },
+                },
+            };
+            analysis.Summary.DataSources.CoworkUsageReportPeriodDays = 28;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            var ready = analysis.Summary.CoworkValueEstimate;
+            var full = analysis.Summary.CoworkFullRolloutEstimate;
+
+            Assert.AreEqual(CoworkTaskRateBases.Observed, full.CoworkTaskRateBasis);
+            Assert.AreEqual(12d, full.CoworkTasksPerPersonPerMonth, "One person's 12 tasks over a 28-day report.");
+            Assert.AreEqual(full.CoworkTasksPerPersonPerMonth, ready.CoworkTasksPerPersonPerMonth,
+                "Both cohorts must project the same rate, or the ready cohort could out-model the ceiling.");
+            Assert.AreEqual(12d, full.ObservedCoworkTasks);
+            Assert.AreEqual(1, full.ProjectedCoworkUsers, "The novice is projected; the regular is observed.");
+            Assert.AreEqual(24d, full.CoworkTasks);
         }
 
         [TestMethod]
@@ -772,6 +919,34 @@ namespace Tests.UnitTests
             Assert.IsFalse(new CoworkTimeSavedOverrides { MinutesSavedPerMeeting = double.NaN }.Any);
         }
 
+        [TestMethod]
+        public void TimeSavedOverrides_ReplaceTheCoworkFigures_WithinTheirOwnBounds()
+        {
+            var published = new CoworkValueEstimate
+            {
+                CohortUsers = 5,
+                CoworkTasksPerPersonPerMonth = 8,
+                CoworkTaskRateBasis = CoworkTaskRateBases.Observed,
+                CoworkTaskRateUsers = 2,
+            };
+
+            var overrides = new CoworkTimeSavedOverrides { MinutesSavedPerTask = 1000, TasksPerPersonPerMonth = 15 };
+            Assert.IsTrue(overrides.Any);
+            Assert.AreEqual(CoworkTimeSavedOverrides.MaxMinutesPerTask, overrides.ApplyTo(Options()).CoworkMinutesSavedPerTask);
+
+            var custom = overrides.TaskRateFor(published);
+            Assert.AreEqual(15d, custom.TasksPerPersonPerMonth);
+            Assert.AreEqual(CoworkTaskRateBases.Custom, custom.Basis, "A reader's rate must never be labelled as observed.");
+
+            Assert.AreEqual(CoworkTimeSavedOverrides.MaxTasksPerPersonPerMonth,
+                new CoworkTimeSavedOverrides { TasksPerPersonPerMonth = 1e9 }.TaskRateFor(published).TasksPerPersonPerMonth);
+
+            var untouched = new CoworkTimeSavedOverrides { MinutesSavedPerMeeting = 9 }.TaskRateFor(published);
+            Assert.AreEqual(8d, untouched.TasksPerPersonPerMonth, "No rate from the reader keeps the published one.");
+            Assert.AreEqual(CoworkTaskRateBases.Observed, untouched.Basis);
+            Assert.AreEqual(2, untouched.Users);
+        }
+
         /// <summary>
         /// The portal writes JavaScript numbers into the export URL. A culture-sensitive parse on a
         /// server running a European culture reads the full stop as a thousands separator, so "0.5"
@@ -785,13 +960,15 @@ namespace Tests.UnitTests
             {
                 CultureInfo.CurrentCulture = new CultureInfo("de-DE");
 
-                var parsed = CopilotAdoptionAPIController.ParseTimeSavedOverrides("12", "0.5", "not a number", "0.3");
+                var parsed = CopilotAdoptionAPIController.ParseTimeSavedOverrides("12", "0.5", "not a number", "0.3", "7.5", "12.5");
 
                 Assert.AreEqual(12d, parsed.MinutesSavedPerMeeting);
                 Assert.AreEqual(0.5d, parsed.MinutesSavedPerMailThread, "A German server must not read '0.5' as 5.");
                 Assert.IsNull(parsed.MinutesSavedPerDocument, "An unparseable figure keeps the product default.");
                 Assert.AreEqual(0.3d, parsed.LowerBoundRatio);
-                Assert.IsFalse(CopilotAdoptionAPIController.ParseTimeSavedOverrides(null, " ", null, null).Any,
+                Assert.AreEqual(7.5d, parsed.MinutesSavedPerTask);
+                Assert.AreEqual(12.5d, parsed.TasksPerPersonPerMonth, "A German server must not read '12.5' as 125.");
+                Assert.IsFalse(CopilotAdoptionAPIController.ParseTimeSavedOverrides(null, " ", null, null, null, null).Any,
                     "An export with no figures of the reader's own must use the product defaults untouched.");
             }
             finally

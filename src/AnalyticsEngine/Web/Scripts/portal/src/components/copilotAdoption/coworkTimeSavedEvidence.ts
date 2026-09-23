@@ -11,8 +11,10 @@ import type { TimeSavedActivity } from './coworkTimeSaved';
  * it. Self-reported figures are labelled as such and never presented as measurements; Microsoft's own
  * lab found self-estimates overstate the measured saving threefold.
  *
- * <b>Nothing here is about Cowork specifically.</b> No study has yet measured Cowork's time savings;
- * the defaults are anchored to Microsoft 365 Copilot evidence, and the page says so.
+ * <b>Everything in the Copilot rationale is about Microsoft 365 Copilot, and says so.</b> No study has
+ * yet measured Cowork's time savings - alone, or for people who already use Copilot - so Cowork has
+ * its own rationale below, and its only anchor is Microsoft's time credit for agent work. It is
+ * presented as the assumption it is, never alongside Copilot's evidence as though it shared it.
  */
 
 /** How a figure was obtained. The single most important thing to know about any time-saved claim. */
@@ -50,11 +52,13 @@ const NBER_FIELD_EXPERIMENT_URL = 'https://www.nber.org/papers/w33795';
 const UK_GOVERNMENT_EXPERIMENT_URL =
   'https://www.gov.uk/government/publications/microsoft-365-copilot-experiment-cross-government-findings-report/microsoft-365-copilot-experiment-cross-government-findings-report-html';
 const FORRESTER_TEI_2025_URL = 'https://tei.forrester.com/go/microsoft/M365Copilot/?lang=en-us';
+const AGENT_ASSISTED_HOURS_URL =
+  'https://learn.microsoft.com/en-us/viva/insights/advanced/analyst/templates/copilot-studio-agents';
 
 /** Microsoft's own documentation of what Cowork does. Linked, never quoted as evidence of time saved. */
 export const COWORK_OVERVIEW_URL = 'https://learn.microsoft.com/en-us/microsoft-365/copilot/cowork/';
 
-/** What Copilot and Cowork do with one kind of work, why the default is what it is, and the evidence. */
+/** What Copilot does with one kind of work, why the default is what it is, and the evidence. */
 export interface ActivityRationale {
   activity: TimeSavedActivity;
   /** The operations that actually save the time. */
@@ -115,7 +119,6 @@ export const ACTIVITY_RATIONALE: ActivityRationale[] = [
     operationKeys: [
       'copilotAdoptionCowork.timeSaved.email.operation.triage',
       'copilotAdoptionCowork.timeSaved.email.operation.draft',
-      'copilotAdoptionCowork.timeSaved.email.operation.send',
     ],
     whyKey: 'copilotAdoptionCowork.timeSaved.email.why',
     evidence: [
@@ -142,7 +145,6 @@ export const ACTIVITY_RATIONALE: ActivityRationale[] = [
     operationKeys: [
       'copilotAdoptionCowork.timeSaved.documents.operation.draft',
       'copilotAdoptionCowork.timeSaved.documents.operation.summarise',
-      'copilotAdoptionCowork.timeSaved.documents.operation.create',
     ],
     whyKey: 'copilotAdoptionCowork.timeSaved.documents.why',
     evidence: [
@@ -165,6 +167,53 @@ export const ACTIVITY_RATIONALE: ActivityRationale[] = [
     testKey: 'copilotAdoptionCowork.timeSaved.documents.test',
   },
 ];
+
+/**
+ * Cowork's rationale: what it does, why its default is what it is, and - pointedly - what evidence
+ * there is, which is none that measured Cowork.
+ *
+ * Kept apart from ACTIVITY_RATIONALE on purpose. Those three cards rest on Microsoft 365 Copilot
+ * studies; this one rests on Microsoft's time credit for Copilot Studio agents, applied to Cowork by
+ * analogy. Putting it in the same list would lend it evidence it does not have, which is exactly the
+ * question a customer asks when the page is used to justify Copilot Credits.
+ */
+export interface CoworkTaskRationale {
+  /** What Cowork actually does, from Microsoft's own description of it. */
+  operationKeys: TranslationKey[];
+  /** How the six-minute default is derived. */
+  whyKey: TranslationKey;
+  /** The nearest published method. Not a study of Cowork. */
+  evidence: EvidenceItem[];
+  /** How a customer measures Cowork's increment over Copilot for themselves. */
+  testKey: TranslationKey;
+}
+
+export const COWORK_TASK_RATIONALE: CoworkTaskRationale = {
+  operationKeys: [
+    'copilotAdoptionCowork.timeSaved.cowork.operation.meetings',
+    'copilotAdoptionCowork.timeSaved.cowork.operation.communication',
+    'copilotAdoptionCowork.timeSaved.cowork.operation.documents',
+    'copilotAdoptionCowork.timeSaved.cowork.operation.automation',
+  ],
+  whyKey: 'copilotAdoptionCowork.timeSaved.cowork.why',
+  evidence: [
+    {
+      id: 'agent-assisted-hours',
+      url: AGENT_ASSISTED_HOURS_URL,
+      sourceKey: 'copilotAdoptionCowork.timeSaved.source.agentAssistedHours',
+      findingKey: 'copilotAdoptionCowork.timeSaved.finding.agentAssistedHours',
+      method: 'vendorModel',
+    },
+    {
+      id: 'wti-agent-basis',
+      url: WORK_TREND_INDEX_2023_URL,
+      sourceKey: 'copilotAdoptionCowork.timeSaved.source.workTrendIndex2023',
+      findingKey: 'copilotAdoptionCowork.timeSaved.finding.agentBasis',
+      method: 'measured',
+    },
+  ],
+  testKey: 'copilotAdoptionCowork.timeSaved.cowork.test',
+};
 
 /** Why the conservative end applies only part of the assumptions. */
 export const CONSERVATIVE_EVIDENCE: EvidenceItem[] = [
@@ -247,12 +296,13 @@ export function benchmarkRange(): { min: number; max: number } {
 export type SenseCheckVerdict = 'below' | 'within' | 'above';
 
 /**
- * Judges the CONSERVATIVE end of the model against the published figures.
+ * Judges the CONSERVATIVE end of the Copilot layer against the published figures.
  *
- * The published figures describe Copilot as people use it today - partly adopted, and without
- * Cowork - so they are the counterpart of the conservative end, not of the full one. A conservative
- * end inside that range is a model that agrees with the evidence; one above it is a model that has
- * to be defended line by line.
+ * The published figures describe Microsoft 365 Copilot as people use it today - partly adopted, and
+ * without Cowork - so they are the counterpart of the Copilot layer's conservative end, not of the
+ * full one and not of the Cowork layer, which no study has measured. A conservative end inside that
+ * range is a model that agrees with the evidence; one above it is a model that has to be defended
+ * line by line.
  */
 export function senseCheck(minutesPerDayLow: number): SenseCheckVerdict {
   const { min, max } = benchmarkRange();

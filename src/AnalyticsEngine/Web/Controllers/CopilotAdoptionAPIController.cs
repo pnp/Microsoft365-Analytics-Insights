@@ -720,11 +720,12 @@ namespace Web.AnalyticsWeb.Controllers
         ///
         /// Built from the same cached analysis that renders the page, so the two can never disagree.
         ///
-        /// <para>The four optional <c>coworkMinutesSaved*</c> / <c>coworkEstimateLowerBoundRatio</c>
-        /// parameters carry the time-saved assumptions the reader entered on the Cowork tab. Those figures
-        /// live in the browser only, so the export has to be told them or a customised page would download
-        /// a workbook modelling different hours. They change the modelled estimate and the matching
-        /// Settings rows, never a measured figure, and never the cached analysis itself.</para>
+        /// <para>The optional <c>coworkMinutesSaved*</c>, <c>coworkEstimateLowerBoundRatio</c> and
+        /// <c>coworkTasksPerPersonPerMonth</c> parameters carry the time-saved assumptions the reader
+        /// entered on the Cowork tab. Those figures live in the browser only, so the export has to be told
+        /// them or a customised page would download a workbook modelling different hours. They change the
+        /// modelled estimate and the matching Settings rows, never a measured figure, and never the cached
+        /// analysis itself.</para>
         /// </summary>
         // GET: api/CopilotAdoption/export/workbook?windowDays=28
         [HttpGet]
@@ -737,6 +738,8 @@ namespace Web.AnalyticsWeb.Controllers
             string coworkMinutesSavedPerMailThread = null,
             string coworkMinutesSavedPerDocument = null,
             string coworkEstimateLowerBoundRatio = null,
+            string coworkMinutesSavedPerTask = null,
+            string coworkTasksPerPersonPerMonth = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
             // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
@@ -751,7 +754,9 @@ namespace Web.AnalyticsWeb.Controllers
                 coworkMinutesSavedPerMeeting,
                 coworkMinutesSavedPerMailThread,
                 coworkMinutesSavedPerDocument,
-                coworkEstimateLowerBoundRatio);
+                coworkEstimateLowerBoundRatio,
+                coworkMinutesSavedPerTask,
+                coworkTasksPerPersonPerMonth);
 
             byte[] bytes;
             try
@@ -816,13 +821,16 @@ namespace Web.AnalyticsWeb.Controllers
         /// and on a server running a European culture a culture-sensitive parse reads the full stop as a
         /// thousands separator - "0.5" minutes per email would become 5, and the workbook would model
         /// ten times the saving the reader entered. Anything unparseable is ignored and keeps the
-        /// product default; the bounds are applied by <see cref="CoworkTimeSavedOverrides.ApplyTo"/>.
+        /// product default; the bounds are applied by <see cref="CoworkTimeSavedOverrides.ApplyTo"/> and
+        /// <see cref="CoworkTimeSavedOverrides.TaskRateFor"/>.
         /// </remarks>
         internal static CoworkTimeSavedOverrides ParseTimeSavedOverrides(
             string minutesPerMeeting,
             string minutesPerMailThread,
             string minutesPerDocument,
-            string lowerBoundRatio)
+            string lowerBoundRatio,
+            string minutesPerTask = null,
+            string tasksPerPersonPerMonth = null)
         {
             return new CoworkTimeSavedOverrides
             {
@@ -830,6 +838,8 @@ namespace Web.AnalyticsWeb.Controllers
                 MinutesSavedPerMailThread = ParseInvariantDouble(minutesPerMailThread),
                 MinutesSavedPerDocument = ParseInvariantDouble(minutesPerDocument),
                 LowerBoundRatio = ParseInvariantDouble(lowerBoundRatio),
+                MinutesSavedPerTask = ParseInvariantDouble(minutesPerTask),
+                TasksPerPersonPerMonth = ParseInvariantDouble(tasksPerPersonPerMonth),
             };
         }
 

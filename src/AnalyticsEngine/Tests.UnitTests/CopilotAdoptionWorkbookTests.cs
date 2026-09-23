@@ -703,8 +703,9 @@ namespace Tests.UnitTests
             {
                 "Ready now", "Every Copilot seat holder", "People covered",
                 "Meetings a month (observed)", "Minutes saved per meeting (assumption)",
-                "Modelled hours a month - meetings", "Modelled hours a month - email",
-                "Modelled hours a month - documents", "Modelled hours a month (low)", "Modelled hours a month (high)",
+                "Copilot hours a month - meetings", "Copilot hours a month - email",
+                "Copilot hours a month - documents", "Copilot hours a month (low)", "Copilot hours a month (high)",
+                "Modelled hours a month (low)", "Modelled hours a month (high)",
             })
             {
                 CollectionAssert.Contains(cells, expected, $"The estimate sheet is missing '{expected}'.");
@@ -719,6 +720,36 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// The Cowork layer is the one a reader uses to justify Copilot Credits, and the one no study has
+        /// measured, so the sheet has to set it apart from Copilot's evidence-backed layer and say so.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_CoworkEstimateSeparatesTheCoworkLayer_AndSaysItIsUnmeasured()
+        {
+            var analysis = SyntheticAnalysis();
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Cowork estimate (modelled)");
+
+            foreach (var expected in new[]
+            {
+                "MICROSOFT 365 COPILOT - the licences already paid for",
+                "COWORK, ON TOP OF COPILOT - paid for in Copilot Credits",
+                "People with Cowork tasks (observed)", "Cowork tasks a month (observed)", "People projected",
+                "Cowork tasks a month for each person projected", "Cowork tasks a month (observed + projected)",
+                "Minutes saved per Cowork task (assumption)", "Cowork hours a month (low)", "Cowork hours a month (high)",
+            })
+            {
+                CollectionAssert.Contains(cells, expected, $"The estimate sheet is missing '{expected}'.");
+            }
+
+            var full = analysis.Summary.CoworkFullRolloutEstimate;
+            Assert.AreEqual(full.CopilotHoursPerMonthHigh + full.CoworkHoursPerMonthHigh, full.HoursPerMonthHigh);
+            Assert.IsTrue(cells.Any(c => c.StartsWith("ASSUMPTION - NO PUBLISHED STUDY", StringComparison.Ordinal)),
+                "The minutes per Cowork task must be labelled as resting on no published study.");
+            Assert.IsFalse(cells.Any(c => c.IndexOf("Copilot and Cowork together", StringComparison.Ordinal) >= 0),
+                "Copilot's evidence must not be presented as Cowork's.");
+        }
+
+        /// <summary>
         /// A reader's own time-saved figures live in their browser only, so an export from a customised page
         /// has to carry them - or the workbook models different hours from the screen it came from.
         /// </summary>
@@ -727,7 +758,7 @@ namespace Tests.UnitTests
         {
             var analysis = SyntheticAnalysis();
             var cachedHours = analysis.Summary.CoworkFullRolloutEstimate.HoursPerMonthHigh;
-            var overrides = new CoworkTimeSavedOverrides { MinutesSavedPerMeeting = 50 };
+            var overrides = new CoworkTimeSavedOverrides { MinutesSavedPerMeeting = 50, TasksPerPersonPerMonth = 40 };
 
             var standard = CopilotAdoptionWorkbook.Build(analysis);
             var customised = CopilotAdoptionWorkbook.Build(analysis, overrides);
@@ -735,14 +766,25 @@ namespace Tests.UnitTests
             var full = analysis.Summary.CoworkFullRolloutEstimate;
             var expected = CopilotAdoptionScoring.ModelCoworkValue(
                 full.CohortUsers, full.AddressableMeetings, full.AddressableMailThreads, full.AddressableDocuments,
-                overrides.ApplyTo(analysis.Summary.Options));
+                overrides.ApplyTo(analysis.Summary.Options),
+                new CoworkTaskInputs
+                {
+                    ObservedUsers = full.CoworkTaskUsers,
+                    ObservedTasksPerMonth = full.ObservedCoworkTasks,
+                    Rate = overrides.TaskRateFor(full),
+                });
             Assert.AreNotEqual(cachedHours, expected.HoursPerMonthHigh, "The test must change the modelled hours.");
+            Assert.AreEqual(CoworkTaskRateBases.Custom, expected.CoworkTaskRateBasis);
 
             var cells = SheetCells(customised, "Cowork estimate (modelled)");
             CollectionAssert.Contains(cells, expected.HoursPerMonthHigh.ToString(CultureInfo.InvariantCulture),
                 "The estimate must be restated under the reader's figures.");
+            CollectionAssert.Contains(cells, expected.CoworkHoursPerMonthHigh.ToString(CultureInfo.InvariantCulture),
+                "The Cowork layer must be restated at the reader's task rate.");
             Assert.IsTrue(cells.Any(c => c.StartsWith("ASSUMPTIONS ENTERED IN THE PORTAL", StringComparison.Ordinal)),
                 "A customised export must say its figures came from the portal, not from the product.");
+            Assert.IsTrue(cells.Any(c => c.StartsWith("ENTERED IN THE PORTAL for this export", StringComparison.Ordinal)),
+                "A reader's task rate must be labelled as theirs, never as observed.");
 
             // Nothing the next caller reads may have moved: the analysis is cached and shared.
             Assert.AreEqual(5d, analysis.Summary.Options.CoworkMinutesSavedPerMeeting);

@@ -8,9 +8,9 @@ import {
   formatModelled,
   modelledRange,
   projectTimeSaved,
+  type CoworkTaskProjection,
   type TimeSavedActivity,
   type TimeSavedAssumptionState,
-  type TimeSavedProjection,
 } from './coworkTimeSaved';
 
 /** One hue per kind of work, used by the headline bar and the model's table so the two read as one. */
@@ -19,6 +19,12 @@ export const TIME_SAVED_ACTIVITY_COLOUR: Record<TimeSavedActivity, string> = {
   email: '#8764b8',
   documents: '#038387',
 };
+
+/**
+ * Cowork's hue - deliberately outside the Copilot family of blues, purple and teal, so the one layer
+ * resting on an assumption rather than on published evidence is never mistaken for part of the others.
+ */
+export const TIME_SAVED_COWORK_COLOUR = '#c239b3';
 
 export const TIME_SAVED_ACTIVITY_LABEL: Record<TimeSavedActivity, TranslationKey> = {
   meetings: 'copilotAdoptionCowork.timeSaved.activity.meetings',
@@ -72,6 +78,47 @@ const useStyles = makeStyles({
     display: 'block',
     marginTop: '2px',
     color: tokens.colorNeutralForeground2,
+  },
+  // The two layers, side by side under the headline: what Copilot gives back on the licences already
+  // paid for, and what Cowork adds on top for Copilot Credits - each with the strength of its evidence.
+  layers: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+    gap: '12px',
+    marginTop: '16px',
+  },
+  layer: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderTopWidth: '4px',
+    borderTopStyle: 'solid',
+    borderRadius: tokens.borderRadiusMedium,
+    padding: '12px 14px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+  },
+  layerHead: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '8px',
+    flexWrap: 'wrap',
+  },
+  layerValue: {
+    fontSize: '30px',
+    lineHeight: '38px',
+    fontWeight: 700,
+    fontVariantNumeric: 'tabular-nums',
+    color: tokens.colorNeutralForeground1,
+  },
+  layerCaption: {
+    color: tokens.colorNeutralForeground2,
+  },
+  evidenceBadge: {
+    color: tokens.colorNeutralForegroundOnBrand,
+    backgroundColor: '#107c10',
+    whiteSpace: 'nowrap',
   },
   stats: {
     display: 'grid',
@@ -184,12 +231,10 @@ const useStyles = makeStyles({
 });
 
 /**
- * The share of the total each kind of work contributes, as whole percentages that add up to 100.
- * Rounded by largest remainder for the same reason the hours are - "33% + 33% + 33%" under a bar
- * that is visibly full reads as a mistake.
+ * Shares of the total as whole percentages that add up to 100. Rounded by largest remainder for the
+ * same reason the hours are - "33% + 33% + 33%" under a bar that is visibly full reads as a mistake.
  */
-function wholeShares(projection: TimeSavedProjection): number[] {
-  const shares = projection.activities.map((a) => a.sharePct);
+function wholeShares(shares: number[]): number[] {
   const total = shares.reduce((sum, s) => sum + s, 0);
   if (total <= 0) return shares.map(() => 0);
   const floors = shares.map((s) => Math.floor(s));
@@ -204,8 +249,29 @@ function wholeShares(projection: TimeSavedProjection): number[] {
   return floors;
 }
 
+/** One slice of the headline bar: a kind of Copilot work, or Cowork's tasks. */
+interface BreakdownSegment {
+  key: string;
+  label: string;
+  colour: string;
+  hours: number;
+  sharePct: number;
+}
+
+/** The label for the Cowork task rate's origin, shown wherever the rate is. */
+export function taskRateBasisKey(basis: CoworkTaskProjection['rateBasis']): TranslationKey {
+  switch (basis) {
+    case 'observed':
+      return 'copilotAdoptionCowork.timeSaved.rateBasis.observed';
+    case 'custom':
+      return 'copilotAdoptionCowork.timeSaved.rateBasis.custom';
+    default:
+      return 'copilotAdoptionCowork.timeSaved.rateBasis.assumed';
+  }
+}
+
 /**
- * The Cowork tab's headline: how much time Copilot and Cowork could give back.
+ * The Cowork tab's headline: how much time Microsoft 365 Copilot and Cowork could give back.
  *
  * Built to be the number an executive remembers and the number that survives a challenge, which
  * pull in opposite directions - so it does both on the same surface. The figure is large, first and
@@ -213,6 +279,11 @@ function wholeShares(projection: TimeSavedProjection): number[] {
  * always badged as modelled, and always printed with the exact assumptions that produced it, one
  * click from the evidence behind them. Observed Cowork use sits underneath with its own badge, so
  * the one real measurement on this panel is never mistaken for part of the model.
+ *
+ * Split into its two layers directly under the total, because the evidence behind them differs and
+ * a reader justifying Copilot Credits needs to see which part they would be buying: Copilot's layer
+ * rests on published Copilot studies and the licences already paid for; Cowork's sits on top, per
+ * task, and no study has measured it. Each carries a badge that says which.
  *
  * Leads with full adoption - every Copilot seat holder - because that is the size of the prize; the
  * people ready now are beside it because that is where a rollout starts.
@@ -241,18 +312,40 @@ export default function CoworkTimeSavedHero({
 
   const hoursLow = formatCount(headline.hoursLow);
   const hoursHigh = formatCount(headline.hoursHigh);
-  const shares = wholeShares(headline);
   const percent = formatNumber(assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 });
   const readyUsers = summary.coworkRecommendedForPolicy;
+  const cowork = headline.cowork;
+
+  const segments: BreakdownSegment[] = [
+    ...headline.activities.map((a) => ({
+      key: a.activity,
+      label: t(TIME_SAVED_ACTIVITY_LABEL[a.activity]),
+      colour: TIME_SAVED_ACTIVITY_COLOUR[a.activity],
+      hours: a.displayHours,
+      sharePct: a.sharePct,
+    })),
+    {
+      key: 'cowork',
+      label: t('copilotAdoptionCowork.timeSaved.activity.coworkTasks'),
+      colour: TIME_SAVED_COWORK_COLOUR,
+      hours: cowork.hoursHigh,
+      sharePct: cowork.sharePct,
+    },
+  ];
+  const shares = wholeShares(segments.map((s) => s.sharePct));
+
+  const figures = {
+    meeting: formatNumber(assumptions.meetingMinutes, { maximumFractionDigits: 2 }),
+    email: formatNumber(assumptions.emailMinutes, { maximumFractionDigits: 2 }),
+    document: formatNumber(assumptions.documentMinutes, { maximumFractionDigits: 2 }),
+    taskMinutes: formatNumber(assumptions.taskMinutes, { maximumFractionDigits: 2 }),
+    rate: formatNumber(cowork.tasksPerPerson, { maximumFractionDigits: 2 }),
+    percent,
+  };
 
   const basis = t(
     isCustomised ? 'copilotAdoptionCowork.timeSaved.hero.basisCustom' : 'copilotAdoptionCowork.timeSaved.hero.basisDefaults',
-    {
-      meeting: formatNumber(assumptions.meetingMinutes, { maximumFractionDigits: 2 }),
-      email: formatNumber(assumptions.emailMinutes, { maximumFractionDigits: 2 }),
-      document: formatNumber(assumptions.documentMinutes, { maximumFractionDigits: 2 }),
-      percent,
-    },
+    figures,
   );
 
   return (
@@ -273,10 +366,7 @@ export default function CoworkTimeSavedHero({
               what: t('copilotAdoptionCowork.timeSaved.hero.info.what'),
               how: t('copilotAdoptionCowork.timeSaved.hero.info.how'),
               formula: t('copilotAdoptionCowork.timeSaved.hero.info.formula', {
-                meeting: formatNumber(assumptions.meetingMinutes, { maximumFractionDigits: 2 }),
-                email: formatNumber(assumptions.emailMinutes, { maximumFractionDigits: 2 }),
-                document: formatNumber(assumptions.documentMinutes, { maximumFractionDigits: 2 }),
-                percent,
+                ...figures,
                 days: formatNumber(headline.workingDaysPerMonth, { maximumFractionDigits: 2 }),
                 hoursPerDay: formatNumber(assumptions.hoursPerDay, { maximumFractionDigits: 2 }),
               }),
@@ -309,6 +399,60 @@ export default function CoworkTimeSavedHero({
             )}
       </Text>
 
+      <div className={styles.layers} role="group" aria-label={t('copilotAdoptionCowork.timeSaved.hero.layersAria')}>
+        <div className={styles.layer} style={{ borderTopColor: TIME_SAVED_ACTIVITY_COLOUR.meetings }}>
+          <div className={styles.layerHead}>
+            <Text size={300} weight="semibold">
+              {t('copilotAdoptionCowork.timeSaved.hero.copilotLayer.title')}
+            </Text>
+            <Tooltip relationship="description" content={t('copilotAdoptionCowork.timeSaved.hero.copilotLayer.badgeTooltip')}>
+              <Badge size="small" className={styles.evidenceBadge}>
+                {t('copilotAdoptionCowork.timeSaved.hero.copilotLayer.badge')}
+              </Badge>
+            </Tooltip>
+          </div>
+          <span className={styles.layerValue}>
+            {t('copilotAdoptionCowork.timeSaved.hero.layerHours', {
+              range: modelledRange(t, formatCount(headline.copilotHoursLow), formatCount(headline.copilotHoursHigh)),
+            })}
+          </span>
+          <Text size={200} className={styles.layerCaption}>
+            {t('copilotAdoptionCowork.timeSaved.hero.copilotLayer.caption')}
+          </Text>
+        </div>
+
+        <div className={styles.layer} style={{ borderTopColor: TIME_SAVED_COWORK_COLOUR }}>
+          <div className={styles.layerHead}>
+            <Text size={300} weight="semibold">
+              {t('copilotAdoptionCowork.timeSaved.hero.coworkLayer.title')}
+            </Text>
+            <Tooltip relationship="description" content={t('copilotAdoptionCowork.timeSaved.hero.coworkLayer.badgeTooltip')}>
+              <Badge size="small" appearance="outline" color="warning">
+                {t('copilotAdoptionCowork.timeSaved.hero.coworkLayer.badge')}
+              </Badge>
+            </Tooltip>
+          </div>
+          <span className={styles.layerValue}>
+            {t('copilotAdoptionCowork.timeSaved.hero.layerHours', {
+              range: modelledRange(t, formatCount(cowork.hoursLow), formatCount(cowork.hoursHigh)),
+            })}
+          </span>
+          <Text size={200} className={styles.layerCaption}>
+            {t(
+              plural(
+                cowork.tasks,
+                'copilotAdoptionCowork.timeSaved.hero.coworkLayer.caption.one',
+                'copilotAdoptionCowork.timeSaved.hero.coworkLayer.caption.other',
+              ),
+              {
+                tasks: formatCount(cowork.tasks),
+                minutes: figures.taskMinutes,
+              },
+            )}
+          </Text>
+        </div>
+      </div>
+
       <div className={styles.stats}>
         <div className={styles.stat}>
           <span className={styles.statValue}>
@@ -340,7 +484,13 @@ export default function CoworkTimeSavedHero({
             {t('copilotAdoptionCowork.timeSaved.hero.perPerson.label')}
           </Text>
           <Text size={100} className={styles.statHint}>
-            {t('copilotAdoptionCowork.timeSaved.hero.perPerson.hint')}
+            {t('copilotAdoptionCowork.timeSaved.hero.perPerson.hint', {
+              range: modelledRange(
+                t,
+                formatModelled(headline.copilotMinutesPerPersonDayLow),
+                formatModelled(headline.copilotMinutesPerPersonDayHigh),
+              ),
+            })}
           </Text>
         </div>
 
@@ -377,16 +527,17 @@ export default function CoworkTimeSavedHero({
             meetings: `${shares[0]}%`,
             email: `${shares[1]}%`,
             documents: `${shares[2]}%`,
+            cowork: `${shares[3]}%`,
           })}>
-            {headline.activities.map((a, i) =>
-              a.sharePct > 0 ? (
+            {segments.map((s, i) =>
+              s.sharePct > 0 ? (
                 <div
-                  key={a.activity}
+                  key={s.key}
                   className={styles.slice}
-                  style={{ width: `${a.sharePct}%`, backgroundColor: TIME_SAVED_ACTIVITY_COLOUR[a.activity] }}
+                  style={{ width: `${s.sharePct}%`, backgroundColor: s.colour }}
                   title={t('copilotAdoptionCowork.timeSaved.hero.sliceTitle', {
-                    activity: t(TIME_SAVED_ACTIVITY_LABEL[a.activity]),
-                    hours: formatCount(a.displayHours),
+                    activity: s.label,
+                    hours: formatCount(s.hours),
                     share: `${shares[i]}%`,
                   })}
                 >
@@ -396,17 +547,13 @@ export default function CoworkTimeSavedHero({
             )}
           </div>
           <div className={styles.legend}>
-            {headline.activities.map((a, i) => (
-              <div key={a.activity} className={styles.legendItem}>
-                <span
-                  className={styles.swatch}
-                  style={{ backgroundColor: TIME_SAVED_ACTIVITY_COLOUR[a.activity] }}
-                  aria-hidden="true"
-                />
+            {segments.map((s, i) => (
+              <div key={s.key} className={styles.legendItem}>
+                <span className={styles.swatch} style={{ backgroundColor: s.colour }} aria-hidden="true" />
                 <Text size={200}>
                   {t('copilotAdoptionCowork.timeSaved.hero.legendEntry', {
-                    activity: t(TIME_SAVED_ACTIVITY_LABEL[a.activity]),
-                    hours: formatCount(a.displayHours),
+                    activity: s.label,
+                    hours: formatCount(s.hours),
                     share: `${shares[i]}%`,
                   })}
                 </Text>
@@ -418,7 +565,8 @@ export default function CoworkTimeSavedHero({
 
       <div className={styles.basis}>
         <Text size={200} className={styles.basisText}>
-          {basis}
+          {basis}{' '}
+          {t(taskRateBasisKey(cowork.rateBasis))}
         </Text>
         <div className={styles.actions} data-print="hide">
           <Button appearance="primary" size="small" icon={<Options16Regular />} onClick={onAdjust}>

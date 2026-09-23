@@ -581,8 +581,15 @@ describe('Copilot Adoption Cowork estimate assumptions', () => {
 
     const requiredFacts: Record<string, string[]> = {
       saves: ['assumptions.meetingMinutes', 'assumptions.emailMinutes', 'assumptions.documentMinutes'],
-      lowerBound: ['conservativePercent'],
       volumes: ['projection.cohortUsers', 'projection.workingDaysPerMonth'],
+      taskMinutes: ['assumptions.taskMinutes'],
+      // The Cowork task rate IN FORCE - the reader's, or the published one - never options.*, and for
+      // an observed rate the number of people it averages.
+      taskRateObserved: ['projection.cowork.tasksPerPerson', 'projection.cowork.rateUsers'],
+      taskRateAssumed: ['projection.cowork.tasksPerPerson'],
+      taskRateCustom: ['projection.cowork.tasksPerPerson'],
+      overlap: [],
+      lowerBound: ['conservativePercent'],
       potential: [],
       notMeasured: [],
       noMoney: [],
@@ -590,9 +597,8 @@ describe('Copilot Adoption Cowork estimate assumptions', () => {
 
     const problems = Object.entries(requiredFacts).flatMap(([id, facts]) => {
       const key = `${COWORK_ESTIMATE_ASSUMPTION_PREFIX}${id}`;
-      const keyPattern = id === 'volumes'
-        ? /copilotAdoptionCowork\.estimate\.assumption\.volumes\.(?:one|other)/
-        : new RegExp(key.replace(/\./g, '\\.'));
+      // Plural forms (.one / .other) count as the one sentence they are.
+      const keyPattern = new RegExp(`${key.replace(/\./g, '\\.')}(?:\\.(?:one|other))?'`);
       const keyIndex = list.search(keyPattern);
       if (keyIndex < 0) return [`${id}: missing rendered key`];
 

@@ -417,8 +417,8 @@ namespace Common.Entities.CopilotAdoption
         #region Cowork value estimate (MODELLED - not measured)
 
         /// <summary>
-        /// Minutes of preparation, note-taking and follow-up that Copilot and Cowork together are assumed
-        /// to take off each Teams meeting.
+        /// Minutes of preparation, note-taking and follow-up that Microsoft 365 Copilot is assumed to take
+        /// off each Teams meeting.
         /// </summary>
         /// <remarks>
         /// <b>This and its siblings are assumptions, not measurements.</b> Nothing in the database observes
@@ -484,9 +484,44 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("coworkEstimateLowerBoundRatio")]
         public double CoworkEstimateLowerBoundRatio { get; set; } = 0.5;
 
+        /// <summary>
+        /// Minutes Cowork is assumed to save on each task it carries out, ON TOP of the Microsoft 365
+        /// Copilot per-item assumptions above.
+        /// </summary>
+        /// <remarks>
+        /// <b>No study has measured Cowork's time savings - alone, or for people who already use Microsoft
+        /// 365 Copilot.</b> Every per-item figure above rests on Copilot evidence, which is why Cowork is
+        /// modelled as its own layer, per task, rather than folded into them: folding it in would credit
+        /// Cowork with evidence gathered on Copilot, and Cowork is the part a tenant pays for separately,
+        /// in Copilot Credits.
+        /// <para>
+        /// The default is Microsoft's own time credit for agent work, the nearest published method. Agent
+        /// Assisted Hours in Viva Insights (the Copilot Studio agents report) credits each knowledge
+        /// source an agent session draws on with a customisable six-minute multiplier, and a session that
+        /// draws on none with six minutes when it is resolved (4.2 when escalated or abandoned). The six
+        /// minutes rests on Microsoft studies of information-retrieval and writing tasks. Six minutes for
+        /// a whole multi-step Cowork task, with nothing for the sources or steps inside it, is the
+        /// smallest credit that method gives a resolved session.
+        /// </para>
+        /// </remarks>
+        [JsonProperty("coworkMinutesSavedPerTask")]
+        public double CoworkMinutesSavedPerTask { get; set; } = 6;
+
+        /// <summary>
+        /// Cowork tasks a month assumed for each person, used ONLY when nobody in the tenant has Cowork
+        /// tasks in Microsoft's Cowork usage report - so there is no observed rate to project from.
+        /// </summary>
+        /// <remarks>
+        /// About one delegated task a working day. A placeholder, and labelled as one wherever it is used:
+        /// as soon as the report shows tasks for anyone, the average of the people running them replaces
+        /// it, and the reader can replace either with their own expectation.
+        /// </remarks>
+        [JsonProperty("coworkAssumedTasksPerPersonPerMonth")]
+        public double CoworkAssumedTasksPerPersonPerMonth { get; set; } = 20;
+
         // There is deliberately no loaded-hourly-cost or currency option here, and none anywhere else in
-        // these options. The Cowork estimate is a model built from assumed minutes per meeting, email and
-        // document, and epic #559 rejected an ROI calculator precisely because a fabricated money figure
+        // these options. The Cowork estimate is a model built from assumed minutes per meeting, email,
+        // document and Cowork task, and epic #559 rejected an ROI calculator precisely because a fabricated money figure
         // discredits the measured ones beside it. The per-SKU seat prices that used to live here, feeding
         // an idle-licence-spend figure, have been withdrawn for the same reason: a price typed into a
         // report header is not a source of truth about what a tenant pays. The hours model is kept -

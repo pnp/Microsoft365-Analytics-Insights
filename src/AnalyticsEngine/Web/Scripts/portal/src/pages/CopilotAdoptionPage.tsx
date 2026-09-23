@@ -302,7 +302,7 @@ export default function CopilotAdoptionPage() {
   const [sql, setSql] = useState<Record<string, string> | null>(null);
   const lastSummaryScope = useRef<string | null>(null);
   // The reader's own time-saved figures, if any, so the Excel report models the hours on screen.
-  const timeSaved = useTimeSavedAssumptions(summary?.options);
+  const timeSaved = useTimeSavedAssumptions(summary);
 
   useEffect(() => {
     let cancelled = false;
@@ -737,7 +737,7 @@ function ExecutiveTab({
   const styles = useStyles();
   const t = useT();
   const o = summary.options;
-  const { assumptions: timeSavedAssumptions } = useTimeSavedAssumptions(o);
+  const { assumptions: timeSavedAssumptions } = useTimeSavedAssumptions(summary);
   const kpis = buildExecutiveKpis(summary, t, timeSavedAssumptions);
   return (
     <>
@@ -1004,7 +1004,7 @@ function AnalystTab({
 }) {
   const styles = useStyles();
   const t = useT();
-  const { assumptions: timeSavedAssumptions } = useTimeSavedAssumptions(summary.options);
+  const { assumptions: timeSavedAssumptions } = useTimeSavedAssumptions(summary);
   const kpis = buildKpis(summary, t, timeSavedAssumptions);
   const o = summary.options;
   const accountabilityDimensionLabel = summary.accountabilityDimensionLabel ?? 'Direct manager';
@@ -1971,6 +1971,7 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                   meetingMinutes: o.coworkMinutesSavedPerMeeting,
                   mailMinutes: o.coworkMinutesSavedPerMailThread,
                   documentMinutes: o.coworkMinutesSavedPerDocument,
+                  taskMinutes: o.coworkMinutesSavedPerTask,
                 })}
               </Text>
               <Text>
@@ -2142,8 +2143,9 @@ function buildExecutiveKpis(
  * Built from the same projection, with the same assumptions - the reader's own for this session, or
  * the product defaults - so the overview can never quote the model differently from the tab that
  * explains it. Badged and drawn as modelled: it sits among counted figures, and an unmarked estimate
- * in a row of measurements is how a model gets quoted as a result. Absent when readiness could not be
- * assessed, rather than shown as a modelled zero.
+ * in a row of measurements is how a model gets quoted as a result. Its hint splits the total into
+ * Copilot's layer and Cowork's, because they rest on different evidence and are paid for differently.
+ * Absent when readiness could not be assessed, rather than shown as a modelled zero.
  */
 function buildTimeSavedKpi(
   summary: CopilotAdoptionSummary,
@@ -2158,7 +2160,6 @@ function buildTimeSavedKpi(
   if (!headline) return null;
 
   const range = modelledRange(t, formatCount(headline.hoursLow), formatCount(headline.hoursHigh));
-  const readyRange = ready ? modelledRange(t, formatCount(ready.hoursLow), formatCount(ready.hoursHigh)) : null;
   const scope = full
     ? t(plural(full.cohortUsers, 'copilotAdoption.page.kpi.timeSaved.hintFull.one', 'copilotAdoption.page.kpi.timeSaved.hintFull.other'), {
         users: formatCount(full.cohortUsers),
@@ -2171,7 +2172,11 @@ function buildTimeSavedKpi(
     key: 'timeSaved',
     label: t('copilotAdoption.page.kpi.timeSaved.label'),
     value: t('copilotAdoption.page.kpi.timeSaved.value', { range }),
-    hint: full && readyRange ? t('copilotAdoption.page.kpi.timeSaved.hintWithReady', { scope, ready: readyRange }) : scope,
+    hint: t('copilotAdoption.page.kpi.timeSaved.hintSplit', {
+      scope,
+      copilot: modelledRange(t, formatCount(headline.copilotHoursLow), formatCount(headline.copilotHoursHigh)),
+      cowork: modelledRange(t, formatCount(headline.cowork.hoursLow), formatCount(headline.cowork.hoursHigh)),
+    }),
     tone: 'opportunity',
     modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
     info: {
@@ -2181,6 +2186,8 @@ function buildTimeSavedKpi(
         meeting: formatNumber(assumptions.meetingMinutes, { maximumFractionDigits: 2 }),
         email: formatNumber(assumptions.emailMinutes, { maximumFractionDigits: 2 }),
         document: formatNumber(assumptions.documentMinutes, { maximumFractionDigits: 2 }),
+        taskMinutes: formatNumber(assumptions.taskMinutes, { maximumFractionDigits: 2 }),
+        rate: formatNumber(headline.cowork.tasksPerPerson, { maximumFractionDigits: 2 }),
         percent: formatNumber(assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 }),
       }),
       source: t('copilotAdoption.page.kpi.timeSaved.source'),

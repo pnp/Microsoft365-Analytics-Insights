@@ -73,6 +73,8 @@ const options: CopilotAdoptionOptions = {
   coworkMinutesSavedPerMailThread: 5,
   coworkMinutesSavedPerDocument: 8,
   coworkEstimateLowerBoundRatio: 0.5,
+  coworkMinutesSavedPerTask: 6,
+  coworkAssumedTasksPerPersonPerMonth: 20,
   usageReportLagDays: 3,
   topSegments: 10,
   minSeatsPerSegment: 5,
@@ -741,8 +743,10 @@ describe('CopilotAdoptionPage page breaks', () => {
 });
 
 describe('CopilotAdoptionPage modelled time saved', () => {
-  // 2,000 meetings x 10 + 20,000 emails x 5 + 3,000 documents x 8 = 144,000 minutes = 2,400 hours,
-  // with the conservative end at 50% - under this file's options, not the product defaults.
+  // Copilot: 2,000 meetings x 10 + 20,000 emails x 5 + 3,000 documents x 8 = 144,000 minutes =
+  // 2,400 hours, 1,200 at the 50% conservative end - under this file's options, not the defaults.
+  // Cowork: 150 observed + 90 projected x 15 = 1,500 tasks x 6 minutes = 9,000 minutes = 150 hours,
+  // 75 conservative. Total: 1,275-2,550 hours.
   const withEstimate = () =>
     summary({
       coworkReadinessAvailable: true,
@@ -754,8 +758,14 @@ describe('CopilotAdoptionPage modelled time saved', () => {
         addressableMeetings: 2000,
         addressableMailThreads: 20000,
         addressableDocuments: 3000,
-        hoursPerMonthLow: 1200,
-        hoursPerMonthHigh: 2400,
+        coworkTaskUsers: 10,
+        observedCoworkTasks: 150,
+        projectedCoworkUsers: 90,
+        coworkTasksPerPersonPerMonth: 15,
+        coworkTaskRateBasis: 'observed',
+        coworkTaskRateUsers: 10,
+        hoursPerMonthLow: 1275,
+        hoursPerMonthHigh: 2550,
         assumptions: [],
       },
     });
@@ -770,8 +780,18 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     const label = await screen.findByText('Potential time back');
     const tile = label.closest('.fui-Card') as HTMLElement;
     expect(within(tile).getByText('Modelled')).toBeVisible();
-    expect(within(tile).getByText('1,200\u20132,400 h')).toBeVisible();
+    expect(within(tile).getByText('1,275\u20132,550 h')).toBeVisible();
     expect(within(tile).getByText(/if all 100 Copilot seat holders used Copilot and Cowork fully/)).toBeVisible();
+  });
+
+  it('splits the headline into Copilot\u2019s part and Cowork\u2019s, so neither is quoted as the other', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
+
+    await renderPage();
+
+    const label = await screen.findByText('Potential time back');
+    const tile = label.closest('.fui-Card') as HTMLElement;
+    expect(within(tile).getByText(/: 1,200\u20132,400 h from Copilot, plus 75\u2013150 h from Cowork$/)).toBeVisible();
   });
 
   it('claims nothing when Cowork readiness could not be assessed', async () => {
@@ -787,11 +807,24 @@ describe('CopilotAdoptionPage modelled time saved', () => {
 
     await renderPage();
 
-    // 2,000 x 16 + 100,000 + 24,000 = 156,000 minutes = 2,600 hours.
-    expect(await screen.findByText('1,300\u20132,600 h')).toBeVisible();
+    // Copilot: 2,000 x 16 + 100,000 + 24,000 = 156,000 minutes = 2,600 hours; plus Cowork's 150.
+    expect(await screen.findByText('1,375\u20132,750 h')).toBeVisible();
     const excel = screen.getByText('Excel report').closest('a') as HTMLAnchorElement;
     const url = new URL(excel.href);
     expect(url.searchParams.get('coworkMinutesSavedPerMeeting')).toBe('16');
     expect(url.searchParams.has('coworkMinutesSavedPerMailThread')).toBe(false);
+  });
+
+  it('sends the reader\u2019s own Cowork task rate with the Excel report', async () => {
+    sessionStorage.setItem(TIME_SAVED_STORAGE_KEY, JSON.stringify({ tasksPerPerson: 25 }));
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
+
+    await renderPage();
+
+    // Cowork: 150 observed + 90 x 25 = 2,400 tasks x 6 = 14,400 minutes = 240 hours, 120 conservative.
+    expect(await screen.findByText('1,320\u20132,640 h')).toBeVisible();
+    const url = new URL((screen.getByText('Excel report').closest('a') as HTMLAnchorElement).href);
+    expect(url.searchParams.get('coworkTasksPerPersonPerMonth')).toBe('25');
+    expect(url.searchParams.has('coworkMinutesSavedPerTask')).toBe(false);
   });
 });

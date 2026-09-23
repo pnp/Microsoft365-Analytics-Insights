@@ -736,7 +736,8 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>
         /// The same model over EVERY scored Copilot seat holder: the potential if the whole licensed
-        /// population used Copilot and Cowork fully, rather than only the people ready for it today.
+        /// population used Microsoft 365 Copilot and Cowork fully, rather than only the people ready for
+        /// Cowork today.
         /// </summary>
         /// <remarks>
         /// The ceiling, published next to <see cref="CoworkValueEstimate"/> so the page can say both

@@ -2117,12 +2117,19 @@ namespace Common.Entities.CopilotAdoption
             summary.CoworkByDepartment = BuildCoworkSegments(rows);
             summary.CoworkQuadrant = BuildCoworkQuadrant(summary.CoworkByDepartment);
 
+            // One Cowork task rate for the whole tenant - the average of everyone with tasks in Microsoft's
+            // Cowork report, or the labelled placeholder when nobody has any - shared by both cohorts so
+            // they project the same rate.
+            var coworkReportPeriodDays = summary.DataSources?.CoworkUsageReportPeriodDays ?? 0;
+            var coworkTaskRate = CopilotAdoptionScoring.CoworkTaskRateFor(rows, coworkReportPeriodDays, _options);
+
             summary.CoworkValueEstimate = CopilotAdoptionScoring.EstimateCoworkValue(
-                rows.Where(r => r.RecommendForPolicy).ToList(), _options);
+                rows.Where(r => r.RecommendForPolicy).ToList(), _options, coworkReportPeriodDays, coworkTaskRate);
 
             // The ceiling: every scored seat holder, not only the people ready today. Same rows, same
             // options, same arithmetic - so the cohort above can never model more time than this.
-            summary.CoworkFullRolloutEstimate = CopilotAdoptionScoring.EstimateCoworkValue(rows, _options);
+            summary.CoworkFullRolloutEstimate = CopilotAdoptionScoring.EstimateCoworkValue(
+                rows, _options, coworkReportPeriodDays, coworkTaskRate);
         }
 
         /// <summary>

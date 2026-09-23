@@ -177,6 +177,10 @@ export interface CopilotAdoptionOptions {
   coworkMinutesSavedPerMailThread: number;
   coworkMinutesSavedPerDocument: number;
   coworkEstimateLowerBoundRatio: number;
+  /** Minutes Cowork is assumed to save per task, on top of Copilot. No study has measured it. */
+  coworkMinutesSavedPerTask: number;
+  /** Cowork tasks a month per person, used only when no Cowork tasks are observed: a placeholder. */
+  coworkAssumedTasksPerPersonPerMonth: number;
   /** Null means no monetary figure is produced at all - there is no defensible default. */
 
   usageReportLagDays: number;
@@ -741,12 +745,22 @@ export interface CoworkCreditPosition {
 }
 
 /**
- * A modelled time-saved estimate for one cohort.
+ * Where the Cowork task rate a projection uses came from: the average of the people with Cowork tasks
+ * in Microsoft's report, a labelled placeholder because nobody has any, or the reader's own figure.
+ */
+export type CoworkTaskRateBasis = 'observed' | 'assumed' | 'custom';
+
+/**
+ * A modelled time-saved estimate for one cohort, in two layers.
  *
- * The `addressable*` volumes are observed; the hours are those volumes multiplied by an assumption.
+ * The Microsoft 365 Copilot layer converts observed meetings, emails and documents into hours with
+ * minutes derived from published Copilot evidence. The Cowork layer sits on top: Cowork tasks -
+ * observed where Microsoft's report has them, projected where it does not - times minutes per task,
+ * which no study has measured. The total is the two layers added together.
+ *
  * `assumptions` travels with the numbers so no component can render a figure without it. The portal
- * recomputes the hours from the volumes whenever the reader enters their own assumptions - see
- * `components/copilotAdoption/coworkTimeSaved.ts`.
+ * recomputes the hours from the published inputs whenever the reader enters their own assumptions -
+ * see `components/copilotAdoption/coworkTimeSaved.ts`.
  */
 export interface CoworkValueEstimate {
   isModelled: boolean;
@@ -754,7 +768,28 @@ export interface CoworkValueEstimate {
   addressableMeetings: number;
   addressableMailThreads: number;
   addressableDocuments: number;
+  // The Cowork layer. Optional only so a fixture written before the two layers were split still
+  // type-checks: the server always sends every field, and a missing one reads as zero.
+  /** People in the cohort with Cowork tasks in Microsoft's Cowork report. Observed. */
+  coworkTaskUsers?: number;
+  /** Their tasks, restated as a month. Observed. */
+  observedCoworkTasks?: number;
+  /** Everyone else in the cohort, projected at the rate below. */
+  projectedCoworkUsers?: number;
+  /** The Cowork tasks a month each projected person is assumed to run. */
+  coworkTasksPerPersonPerMonth?: number;
+  coworkTaskRateBasis?: CoworkTaskRateBasis;
+  /** For an observed rate, how many people it is the average of. */
+  coworkTaskRateUsers?: number;
+  /** Observed plus projected Cowork tasks a month. */
+  coworkTasks?: number;
+  copilotHoursPerMonthLow?: number;
+  copilotHoursPerMonthHigh?: number;
+  coworkHoursPerMonthLow?: number;
+  coworkHoursPerMonthHigh?: number;
+  /** Both layers' low ends added together. */
   hoursPerMonthLow: number;
+  /** Both layers' high ends added together. */
   hoursPerMonthHigh: number;
   // No monetary fields, and none anywhere else in this report: the estimate is modelled, and a money
   // figure derived from it would be quoted as though it were measured. See CoworkValueEstimate in

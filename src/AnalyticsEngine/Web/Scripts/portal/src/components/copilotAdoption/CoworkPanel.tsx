@@ -381,7 +381,7 @@ export default function CoworkPanel({
   const [reloadKey, setReloadKey] = useState(0);
   const { isExpanded, toggle: toggleRow, collapseAll } = useRowExpansion();
   const [section, setSection] = useState<CoworkSection>('timeSaved');
-  const timeSaved = useTimeSavedAssumptions(options);
+  const timeSaved = useTimeSavedAssumptions(summary);
   // Requests, not flags: each click must act again, including a second click on a section that is
   // already open - which is exactly when a plain setSection() changes nothing the reader can see.
   const [assumptionFocusRequest, setAssumptionFocusRequest] = useState(0);

@@ -415,10 +415,10 @@ describe('CoworkPanel', () => {
 
     expect(screen.getAllByText('Modelled, not measured').length).toBeGreaterThan(0);
     expect(
-      screen.getByText('Assumes Copilot and Cowork together save 5 minutes per meeting, 1 per email and 3 per document.'),
+      screen.getByText('Assumes Microsoft 365 Copilot saves 5 minutes per meeting, 1 per email and 3 per document.'),
     ).toBeTruthy();
     expect(
-      screen.getByText('The lower bound applies 50% of those assumptions; the upper bound applies them in full.'),
+      screen.getByText("The lower bound applies 50% of every assumption, Copilot's and Cowork's; the upper bound applies them in full."),
     ).toBeTruthy();
     expect(
       screen.getByText("Volumes are observed from Microsoft's usage reports for 40 users, restated over 20 working days a month."),
@@ -480,7 +480,7 @@ describe('CoworkPanel time-saved assumptions', () => {
 
     // 4,800 x 10 + 64,000 x 1 + 9,600 x 3 = 140,800 minutes = 2,347 hours.
     expect(await screen.findByText('1,173\u20132,347 hours a month')).toBeTruthy();
-    expect(screen.getByText(/^Using your figures: 10 min per meeting/)).toBeTruthy();
+    expect(screen.getByText(/^Using your figures\. Copilot: 10 min per meeting/)).toBeTruthy();
     expect(JSON.parse(sessionStorage.getItem(TIME_SAVED_STORAGE_KEY) ?? '{}')).toEqual({ meetingMinutes: 10 });
 
     await user.click(screen.getByRole('button', { name: 'Reset every figure to the product default' }));
@@ -530,6 +530,108 @@ describe('CoworkPanel time-saved assumptions', () => {
     expect(screen.getAllByText('Measured').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Self-reported').length).toBeGreaterThan(0);
     expect(screen.getByText(/no statistically significant change in how long documents took/)).toBeTruthy();
+  });
+});
+
+describe('CoworkPanel Copilot and Cowork layers', () => {
+  // The server always sends the Cowork options; most fixtures above predate them, so their Cowork
+  // layer is zero and their figures are Copilot's alone.
+  const coworkOptions = { ...OPTIONS, coworkMinutesSavedPerTask: 6, coworkAssumedTasksPerPersonPerMonth: 20 } as CopilotAdoptionOptions;
+
+  // Copilot, as ESTIMATE: 116,800 minutes = 1,947 hours, 973 at the conservative end.
+  // Cowork: 60 observed + 36 projected x 10 = 420 tasks x 6 minutes = 2,520 minutes = 42 hours, 21 conservative.
+  const layered = {
+    ...ESTIMATE,
+    coworkTaskUsers: 4,
+    observedCoworkTasks: 60,
+    projectedCoworkUsers: 36,
+    coworkTasksPerPersonPerMonth: 10,
+    coworkTaskRateBasis: 'observed' as const,
+    coworkTaskRateUsers: 4,
+  };
+
+  function renderLayered() {
+    const s = summary({ options: coworkOptions, coworkValueEstimate: layered });
+    return renderWithProvider(<CoworkPanel windowDays={28} summary={s} filterOptions={null} options={s.options} />);
+  }
+
+  beforeEach(() => {
+    fetchCowork.mockReset();
+    fetchCowork.mockResolvedValue(page([row({})]));
+    resetTimeSavedStore();
+  });
+
+  /**
+   * The defect this guards: the headline used to be one blended "Copilot and Cowork together"
+   * figure, every minute of it resting on Microsoft 365 Copilot evidence - so the number quoted to
+   * justify Copilot Credits was mostly Copilot's. Each layer is now shown on its own, with the
+   * strength of the evidence behind it.
+   */
+  it('splits the headline into Copilot and Cowork, each badged with the strength of its evidence', async () => {
+    renderLayered();
+
+    expect(screen.getByText('994\u20131,989 hours a month')).toBeTruthy();
+    const layers = screen.getByRole('group', { name: 'The headline split into Microsoft 365 Copilot and Cowork' });
+    expect(within(layers).getByText('973\u20131,947 h a month')).toBeTruthy();
+    expect(within(layers).getByText('21\u201342 h a month')).toBeTruthy();
+    expect(within(layers).getByText('Backed by published studies')).toBeTruthy();
+    expect(within(layers).getByText('Assumption - not yet studied')).toBeTruthy();
+    expect(within(layers).getByText('420 Cowork tasks a month at 6 min each - the part paid for in Copilot Credits.')).toBeTruthy();
+  });
+
+  it('says no study has measured Cowork, and never credits Cowork with Copilot\u2019s evidence', async () => {
+    renderLayered();
+
+    expect(screen.getByText(/^No published study has measured Cowork\u2019s time savings/)).toBeTruthy();
+    expect(screen.getByText(/Assumes each Cowork task saves a further 6 minutes on top of Copilot\. No study has yet measured/)).toBeTruthy();
+    expect(
+      screen.getByText(/Everyone else is projected at 10 tasks a month each: the average of the 4 people already running them/),
+    ).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/Copilot and Cowork together/);
+    // The Copilot cards describe what Copilot does; Cowork's operations live on Cowork's own card.
+    expect(screen.queryByText(/^Before: Cowork/)).toBeNull();
+    expect(screen.getByText(/^Communication: drafts and sends emails and follow-ups/)).toBeTruthy();
+  });
+
+  it('compares only the Copilot layer with published studies', async () => {
+    renderLayered();
+
+    // 116,800 Copilot minutes over 40 people x 20 working days: 146 a day, 73 at the conservative end.
+    expect(screen.getByText(/Your Copilot assumptions give the average Copilot seat holder 73\u2013146 minutes a working day/)).toBeTruthy();
+    expect(screen.getByText(/^Cowork\u2019s layer is left out of this comparison/)).toBeTruthy();
+  });
+
+  it('recomputes the Cowork layer from the reader\u2019s own task rate, and labels it as theirs', async () => {
+    const user = userEvent.setup();
+    renderLayered();
+
+    const input = screen.getByRole('spinbutton', { name: 'Cowork tasks a month for each person not yet running them' });
+    await user.clear(input);
+    await user.type(input, '30');
+
+    // 60 observed + 36 x 30 = 1,140 tasks x 6 = 6,840 minutes = 114 hours, 57 conservative.
+    expect(await screen.findByText('1,030\u20132,061 hours a month')).toBeTruthy();
+    expect(screen.getByText(/Everyone else is projected at 30 tasks a month each: your own figure\./)).toBeTruthy();
+    expect(JSON.parse(sessionStorage.getItem(TIME_SAVED_STORAGE_KEY) ?? '{}')).toEqual({ tasksPerPerson: 30 });
+  });
+
+  it('says so plainly when the task rate is a placeholder because no Cowork use is observed', async () => {
+    const s = summary({
+      options: coworkOptions,
+      coworkValueEstimate: {
+        ...layered,
+        coworkTaskUsers: 0,
+        observedCoworkTasks: 0,
+        projectedCoworkUsers: 40,
+        coworkTasksPerPersonPerMonth: 20,
+        coworkTaskRateBasis: 'assumed' as const,
+        coworkTaskRateUsers: 0,
+      },
+    });
+    renderWithProvider(<CoworkPanel windowDays={28} summary={s} filterOptions={null} options={s.options} />);
+
+    expect(screen.getByText(/so everyone is projected at 20 tasks a month each: a placeholder until real use is observed\./)).toBeTruthy();
+    expect(screen.getByText('placeholder - no Cowork tasks seen yet')).toBeTruthy();
   });
 });
 

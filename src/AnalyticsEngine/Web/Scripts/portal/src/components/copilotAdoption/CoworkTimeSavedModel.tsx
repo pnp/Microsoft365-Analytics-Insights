@@ -33,6 +33,7 @@ import {
   ACTIVITY_RATIONALE,
   CONSERVATIVE_EVIDENCE,
   COWORK_OVERVIEW_URL,
+  COWORK_TASK_RATIONALE,
   EVIDENCE_METHOD_LABEL,
   EVIDENCE_METHOD_TOOLTIP,
   SELF_REPORT_CAVEAT,
@@ -41,7 +42,12 @@ import {
   senseCheck,
   type EvidenceItem,
 } from './coworkTimeSavedEvidence';
-import { TIME_SAVED_ACTIVITY_COLOUR, TIME_SAVED_ACTIVITY_LABEL } from './CoworkTimeSavedHero';
+import {
+  TIME_SAVED_ACTIVITY_COLOUR,
+  TIME_SAVED_ACTIVITY_LABEL,
+  TIME_SAVED_COWORK_COLOUR,
+  taskRateBasisKey,
+} from './CoworkTimeSavedHero';
 import { revealElement } from './adoptionShared';
 
 const ACTIVITY_ASSUMPTION: Record<TimeSavedActivity, TimeSavedAssumptionKey> = {
@@ -169,6 +175,26 @@ const useStyles = makeStyles({
   },
   totalRow: {
     fontWeight: tokens.fontWeightSemibold,
+  },
+  // A layer's heading inside the calculator: Copilot's rows, then Cowork's, each labelled with the
+  // strength of the evidence behind it so the table itself says which figures a study stands behind.
+  groupCell: {
+    padding: '14px 10px 6px',
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: tokens.colorNeutralStroke2,
+  },
+  groupHead: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    flexWrap: 'wrap',
+  },
+  subtotalRow: {
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  noStudy: {
+    marginTop: '4px',
   },
   bigHours: {
     fontSize: tokens.fontSizeBase400,
@@ -345,6 +371,7 @@ function AssumptionInput({
   label,
   unit,
   scale = 1,
+  defaultLabel,
   onCommit,
   onReset,
 }: {
@@ -356,6 +383,11 @@ function AssumptionInput({
   unit: ReactNode;
   /** Display multiplier: the conservative ratio is edited as a percentage. */
   scale?: number;
+  /**
+   * What an unchanged figure is. "Product default" for everything the product configures; the Cowork
+   * task rate says instead where it came from, because it is usually observed rather than configured.
+   */
+  defaultLabel?: string;
   onCommit: (field: TimeSavedAssumptionKey, value: number) => void;
   onReset: (field: TimeSavedAssumptionKey) => void;
 }) {
@@ -423,7 +455,7 @@ function AssumptionInput({
         </>
       ) : (
         <Text size={100} className={styles.sub}>
-          {t('copilotAdoptionCowork.timeSaved.input.productDefault')}
+          {defaultLabel ?? t('copilotAdoptionCowork.timeSaved.input.productDefault')}
         </Text>
       )}
       {invalid && (
@@ -523,14 +555,17 @@ export default function CoworkTimeSavedModel({
   const conservativePercent = formatNumber(assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 });
   const range = benchmarkRange();
   // Published figures are averages across everybody licensed, so the average seat holder - the full
-  // adoption cohort - is the like-for-like comparison, not the heavier people ready now.
+  // adoption cohort - is the like-for-like comparison, not the heavier people ready now. And they
+  // measured Microsoft 365 Copilot, so they are compared with the Copilot layer alone: no study has
+  // measured Cowork, so there is nothing to check its layer against.
   const averageFigure = full ?? projection;
-  const verdict = senseCheck(averageFigure.minutesPerPersonDayLow);
+  const verdict = senseCheck(averageFigure.copilotMinutesPerPersonDayLow);
   const benchmarkScale = Math.max(
     range.max,
-    averageFigure.minutesPerPersonDayHigh,
-    ready?.minutesPerPersonDayHigh ?? 0,
+    averageFigure.copilotMinutesPerPersonDayHigh,
+    ready?.copilotMinutesPerPersonDayHigh ?? 0,
   ) * 1.1;
+  const cowork = projection.cowork;
 
   const commit = (field: TimeSavedAssumptionKey, value: number) => setAssumption(field, value);
 
@@ -587,6 +622,18 @@ export default function CoworkTimeSavedModel({
               </tr>
             </thead>
             <tbody>
+              <tr>
+                <td className={styles.groupCell} colSpan={5}>
+                  <span className={styles.groupHead}>
+                    <Text size={300} weight="semibold">
+                      {t('copilotAdoptionCowork.timeSaved.table.copilotGroup')}
+                    </Text>
+                    <Badge size="small" className={styles.measured}>
+                      {t('copilotAdoptionCowork.timeSaved.hero.copilotLayer.badge')}
+                    </Badge>
+                  </span>
+                </td>
+              </tr>
               {projection.activities.map((a) => {
                 const field = ACTIVITY_ASSUMPTION[a.activity];
                 return (
@@ -634,6 +681,113 @@ export default function CoworkTimeSavedModel({
                   </tr>
                 );
               })}
+              <tr className={mergeClasses(styles.totalRow, styles.subtotalRow)}>
+                <td className={styles.td} colSpan={3}>
+                  {t('copilotAdoptionCowork.timeSaved.table.copilotSubtotal')}
+                </td>
+                <td className={mergeClasses(styles.td, styles.tdNumeric)}>
+                  {t('copilotAdoptionCowork.timeSaved.table.hoursValue', { hours: formatCount(projection.copilotHoursHigh) })}
+                </td>
+                <td className={styles.td} />
+              </tr>
+
+              <tr>
+                <td className={styles.groupCell} colSpan={5}>
+                  <span className={styles.groupHead}>
+                    <Text size={300} weight="semibold">
+                      {t('copilotAdoptionCowork.timeSaved.table.coworkGroup')}
+                    </Text>
+                    <Badge size="small" appearance="outline" color="warning">
+                      {t('copilotAdoptionCowork.timeSaved.hero.coworkLayer.badge')}
+                    </Badge>
+                  </span>
+                </td>
+              </tr>
+              <tr>
+                <td className={styles.td}>
+                  <span className={styles.activityCell}>
+                    <span className={styles.swatch} style={{ backgroundColor: TIME_SAVED_COWORK_COLOUR }} aria-hidden="true" />
+                    <span>
+                      <Text size={300} weight="semibold">
+                        {t('copilotAdoptionCowork.timeSaved.activity.coworkTasks')}
+                      </Text>
+                      <Text size={100} className={styles.sub}>
+                        {t(
+                          plural(
+                            cowork.projectedUsers,
+                            'copilotAdoptionCowork.timeSaved.volume.coworkTasks.one',
+                            'copilotAdoptionCowork.timeSaved.volume.coworkTasks.other',
+                          ),
+                          {
+                            observed: formatCount(cowork.observedTasks),
+                            users: formatCount(cowork.projectedUsers),
+                            rate: formatNumber(cowork.tasksPerPerson, { maximumFractionDigits: 2 }),
+                          },
+                        )}
+                      </Text>
+                    </span>
+                  </span>
+                </td>
+                <td className={mergeClasses(styles.td, styles.tdNumeric)}>{formatCount(cowork.tasks)}</td>
+                <td className={styles.td}>
+                  <AssumptionInput
+                    field="taskMinutes"
+                    value={assumptions.taskMinutes}
+                    defaultValue={defaults.taskMinutes}
+                    customised={customised.includes('taskMinutes')}
+                    label={t('copilotAdoptionCowork.timeSaved.input.taskMinutes')}
+                    unit={t('copilotAdoptionCowork.timeSaved.unit.minutes')}
+                    onCommit={commit}
+                    onReset={resetAssumption}
+                  />
+                </td>
+                <td className={mergeClasses(styles.td, styles.tdNumeric)}>
+                  {t('copilotAdoptionCowork.timeSaved.table.hoursValue', { hours: formatCount(cowork.hoursHigh) })}
+                </td>
+                <td className={styles.td}>
+                  <div className={styles.shareBar} title={`${formatNumber(cowork.sharePct, { maximumFractionDigits: 0 })}%`}>
+                    <div
+                      style={{
+                        width: `${Math.max(0, Math.min(100, cowork.sharePct))}%`,
+                        height: '100%',
+                        backgroundColor: TIME_SAVED_COWORK_COLOUR,
+                      }}
+                    />
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td className={styles.td} colSpan={2}>
+                  <Text size={200}>
+                    {t(
+                      plural(
+                        cowork.projectedUsers,
+                        'copilotAdoptionCowork.timeSaved.table.tasksPerPerson.one',
+                        'copilotAdoptionCowork.timeSaved.table.tasksPerPerson.other',
+                      ),
+                      { users: formatCount(cowork.projectedUsers) },
+                    )}
+                  </Text>
+                </td>
+                <td className={styles.td} colSpan={3}>
+                  <AssumptionInput
+                    field="tasksPerPerson"
+                    value={assumptions.tasksPerPerson}
+                    defaultValue={defaults.tasksPerPerson}
+                    customised={customised.includes('tasksPerPerson')}
+                    label={t('copilotAdoptionCowork.timeSaved.input.tasksPerPerson')}
+                    unit={t('copilotAdoptionCowork.timeSaved.unit.tasks')}
+                    defaultLabel={t(
+                      cowork.rateBasis === 'observed'
+                        ? 'copilotAdoptionCowork.timeSaved.input.rateDefault.observed'
+                        : 'copilotAdoptionCowork.timeSaved.input.rateDefault.assumed',
+                    )}
+                    onCommit={commit}
+                    onReset={resetAssumption}
+                  />
+                </td>
+              </tr>
+
               <tr className={styles.totalRow}>
                 <td className={styles.td} colSpan={3}>
                   {t('copilotAdoptionCowork.timeSaved.table.fullAssumption')}
@@ -704,19 +858,13 @@ export default function CoworkTimeSavedModel({
       </Card>
       </div>
 
-      {/* ---------- Why each figure ---------- */}
+      {/* ---------- Why each figure: Microsoft 365 Copilot ---------- */}
       <div>
         <Text weight="semibold" size={400} className={styles.sectionTitle}>
           {t('copilotAdoptionCowork.timeSaved.rationale.title')}
         </Text>
         <Text size={200} className={styles.note}>
-          {tNode('copilotAdoptionCowork.timeSaved.rationale.intro', {
-            cowork: (
-              <Link href={COWORK_OVERVIEW_URL} target="_blank" rel="noopener noreferrer">
-                {t('copilotAdoptionCowork.timeSaved.rationale.coworkLink')}
-              </Link>
-            ),
-          })}
+          {t('copilotAdoptionCowork.timeSaved.rationale.intro')}
         </Text>
       </div>
 
@@ -777,6 +925,114 @@ export default function CoworkTimeSavedModel({
         })}
       </div>
 
+      {/* ---------- Why each figure: Cowork, on top ---------- */}
+      <div>
+        <Text weight="semibold" size={400} className={styles.sectionTitle}>
+          {t('copilotAdoptionCowork.timeSaved.cowork.title')}
+        </Text>
+        <Text size={200} className={styles.note}>
+          {tNode('copilotAdoptionCowork.timeSaved.cowork.intro', {
+            cowork: (
+              <Link href={COWORK_OVERVIEW_URL} target="_blank" rel="noopener noreferrer">
+                {t('copilotAdoptionCowork.timeSaved.rationale.coworkLink')}
+              </Link>
+            ),
+          })}
+        </Text>
+      </div>
+
+      <div className={styles.grid}>
+        <Card className={styles.card} style={{ borderTopColor: TIME_SAVED_COWORK_COLOUR }}>
+          <div className={styles.cardHead}>
+            <Text weight="semibold" size={400}>
+              {t('copilotAdoptionCowork.timeSaved.card.coworkTasks', {
+                minutes: formatNumber(defaults.taskMinutes, { maximumFractionDigits: 2 }),
+              })}
+            </Text>
+            {customised.includes('taskMinutes') && (
+              <Badge size="small" appearance="tint" color="brand">
+                {t('copilotAdoptionCowork.timeSaved.input.usingYours', {
+                  minutes: formatNumber(assumptions.taskMinutes, { maximumFractionDigits: 2 }),
+                })}
+              </Badge>
+            )}
+          </div>
+          <MessageBar intent="warning" className={styles.noStudy}>
+            <MessageBarBody>{t('copilotAdoptionCowork.timeSaved.cowork.noStudy')}</MessageBarBody>
+          </MessageBar>
+          <div>
+            <Text size={100} weight="semibold" className={styles.label}>
+              {t('copilotAdoptionCowork.timeSaved.cowork.whatItDoes')}
+            </Text>
+            <ul className={styles.list}>
+              {COWORK_TASK_RATIONALE.operationKeys.map((key) => (
+                <li key={key}>
+                  <Text size={200}>{t(key)}</Text>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <Text size={100} weight="semibold" className={styles.label}>
+              {t('copilotAdoptionCowork.timeSaved.rationale.whyThisFigure', {
+                minutes: formatNumber(defaults.taskMinutes, { maximumFractionDigits: 2 }),
+              })}
+            </Text>
+            <Text size={200}>{t(COWORK_TASK_RATIONALE.whyKey)}</Text>
+          </div>
+          <div>
+            <Text size={100} weight="semibold" className={styles.label}>
+              {t('copilotAdoptionCowork.timeSaved.cowork.nearestEvidence')}
+            </Text>
+            <ul className={styles.evidenceList}>
+              {COWORK_TASK_RATIONALE.evidence.map((item) => (
+                <EvidenceEntry key={item.id} item={item} />
+              ))}
+            </ul>
+          </div>
+          <div className={styles.test}>
+            <Text size={100} weight="semibold" className={styles.label}>
+              {t('copilotAdoptionCowork.timeSaved.rationale.testIt')}
+            </Text>
+            <Text size={200}>{t(COWORK_TASK_RATIONALE.testKey)}</Text>
+          </div>
+        </Card>
+
+        <Card className={styles.card} style={{ borderTopColor: TIME_SAVED_COWORK_COLOUR }}>
+          <div className={styles.cardHead}>
+            <Text weight="semibold" size={400}>
+              {t('copilotAdoptionCowork.timeSaved.cowork.volumeTitle', {
+                rate: formatNumber(cowork.tasksPerPerson, { maximumFractionDigits: 2 }),
+              })}
+            </Text>
+          </div>
+          <Text size={200}>
+            {cowork.rateBasis === 'observed'
+              ? t(
+                  plural(
+                    cowork.rateUsers,
+                    'copilotAdoptionCowork.timeSaved.cowork.volume.observed.one',
+                    'copilotAdoptionCowork.timeSaved.cowork.volume.observed.other',
+                  ),
+                  { users: formatCount(cowork.rateUsers) },
+                )
+              : t(
+                  cowork.rateBasis === 'custom'
+                    ? 'copilotAdoptionCowork.timeSaved.cowork.volume.custom'
+                    : 'copilotAdoptionCowork.timeSaved.cowork.volume.assumed',
+                )}
+          </Text>
+          <Text size={200}>{t('copilotAdoptionCowork.timeSaved.cowork.volume.counted')}</Text>
+          <Text size={200}>{t('copilotAdoptionCowork.timeSaved.cowork.overlap')}</Text>
+          <div className={styles.test}>
+            <Text size={100} weight="semibold" className={styles.label}>
+              {t('copilotAdoptionCowork.timeSaved.rationale.testIt')}
+            </Text>
+            <Text size={200}>{t('copilotAdoptionCowork.timeSaved.cowork.volume.test')}</Text>
+          </div>
+        </Card>
+      </div>
+
       <div className={styles.grid}>
         {/* ---------- The conservative end ---------- */}
         <Card className={styles.card} style={{ borderTopColor: tokens.colorNeutralStroke1 }}>
@@ -800,8 +1056,8 @@ export default function CoworkTimeSavedModel({
             {t('copilotAdoptionCowork.timeSaved.senseCheck.intro', {
               range: modelledRange(
                 t,
-                formatModelled(averageFigure.minutesPerPersonDayLow),
-                formatModelled(averageFigure.minutesPerPersonDayHigh),
+                formatModelled(averageFigure.copilotMinutesPerPersonDayLow),
+                formatModelled(averageFigure.copilotMinutesPerPersonDayHigh),
               ),
             })}
           </Text>
@@ -811,8 +1067,8 @@ export default function CoworkTimeSavedModel({
               {
                 id: 'model-full',
                 label: t('copilotAdoptionCowork.timeSaved.senseCheck.yourModelAverage'),
-                minutes: averageFigure.minutesPerPersonDayHigh,
-                low: averageFigure.minutesPerPersonDayLow,
+                minutes: averageFigure.copilotMinutesPerPersonDayHigh,
+                low: averageFigure.copilotMinutesPerPersonDayLow,
                 model: true,
               },
               ...(full && ready
@@ -820,8 +1076,8 @@ export default function CoworkTimeSavedModel({
                     {
                       id: 'model-ready',
                       label: t('copilotAdoptionCowork.timeSaved.senseCheck.yourModelReady'),
-                      minutes: ready.minutesPerPersonDayHigh,
-                      low: ready.minutesPerPersonDayLow,
+                      minutes: ready.copilotMinutesPerPersonDayHigh,
+                      low: ready.copilotMinutesPerPersonDayLow,
                       model: true,
                     },
                   ]
@@ -898,6 +1154,9 @@ export default function CoworkTimeSavedModel({
             </Text>
           )}
           <Text size={100} className={styles.sub}>
+            {t('copilotAdoptionCowork.timeSaved.senseCheck.coworkExcluded')}
+          </Text>
+          <Text size={100} className={styles.sub}>
             {t(SELF_REPORT_CAVEAT.findingKey)}{' '}
             <Link href={SELF_REPORT_CAVEAT.url} target="_blank" rel="noopener noreferrer">
               {t(SELF_REPORT_CAVEAT.sourceKey)}
@@ -922,13 +1181,6 @@ export default function CoworkTimeSavedModel({
                 })}
               </Text>
             </li>
-            <li key="estimate-assumption-lowerBound">
-              <Text size={200}>
-                {t('copilotAdoptionCowork.estimate.assumption.lowerBound', {
-                  percent: conservativePercent,
-                })}
-              </Text>
-            </li>
             <li key="estimate-assumption-volumes">
               <Text size={200}>
                 {t(
@@ -942,6 +1194,46 @@ export default function CoworkTimeSavedModel({
                     workingDays: formatNumber(projection.workingDaysPerMonth, { maximumFractionDigits: 15 }),
                   },
                 )}
+              </Text>
+            </li>
+            <li key="estimate-assumption-taskMinutes">
+              <Text size={200}>
+                {t('copilotAdoptionCowork.estimate.assumption.taskMinutes', {
+                  minutes: formatNumber(assumptions.taskMinutes, { maximumFractionDigits: 15 }),
+                })}
+              </Text>
+            </li>
+            <li key="estimate-assumption-taskRate">
+              <Text size={200}>
+                {cowork.rateBasis === 'observed'
+                  ? t(
+                      plural(
+                        cowork.rateUsers,
+                        'copilotAdoptionCowork.estimate.assumption.taskRateObserved.one',
+                        'copilotAdoptionCowork.estimate.assumption.taskRateObserved.other',
+                      ),
+                      {
+                        rate: formatNumber(projection.cowork.tasksPerPerson, { maximumFractionDigits: 15 }),
+                        users: formatNumber(projection.cowork.rateUsers),
+                      },
+                    )
+                  : cowork.rateBasis === 'custom'
+                    ? t('copilotAdoptionCowork.estimate.assumption.taskRateCustom', {
+                        rate: formatNumber(projection.cowork.tasksPerPerson, { maximumFractionDigits: 15 }),
+                      })
+                    : t('copilotAdoptionCowork.estimate.assumption.taskRateAssumed', {
+                        rate: formatNumber(projection.cowork.tasksPerPerson, { maximumFractionDigits: 15 }),
+                      })}
+              </Text>
+            </li>
+            <li key="estimate-assumption-overlap">
+              <Text size={200}>{t('copilotAdoptionCowork.estimate.assumption.overlap')}</Text>
+            </li>
+            <li key="estimate-assumption-lowerBound">
+              <Text size={200}>
+                {t('copilotAdoptionCowork.estimate.assumption.lowerBound', {
+                  percent: conservativePercent,
+                })}
               </Text>
             </li>
             <li key="estimate-assumption-potential">
@@ -963,6 +1255,9 @@ export default function CoworkTimeSavedModel({
           <ol className={styles.steps}>
             <li>
               <Text size={200}>{t('copilotAdoptionCowork.timeSaved.own.pilot')}</Text>
+            </li>
+            <li>
+              <Text size={200}>{t('copilotAdoptionCowork.timeSaved.own.coworkIncrement')}</Text>
             </li>
             <li>
               <Text size={200}>{t('copilotAdoptionCowork.timeSaved.own.askPerItem')}</Text>
