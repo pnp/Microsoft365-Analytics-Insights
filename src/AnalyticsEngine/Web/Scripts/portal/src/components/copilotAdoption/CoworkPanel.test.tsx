@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../../test/renderWithProvider';
+import { PRINT_ROW_LIMIT, requestPrint, resetPrintPreparation } from '../shared/printPreparation';
 import type {
   CopilotAdoptionOptions,
   CopilotAdoptionSummary,
@@ -808,5 +809,194 @@ describe('CoworkPanel email-domain scope', () => {
     for (const call of fetchCowork.mock.calls) {
       expect((call[1] as { emailDomain: string }).emailDomain).toBe('fabrikam.com');
     }
+  });
+});
+
+/**
+ * The people list on paper.
+ *
+ * A printed page cannot be clicked, so three things the screen does with controls have to be done
+ * before the printout exists: every row of the list is on it rather than one page of fifty, each
+ * row's full assessment is on it when the reader asked for it with "Expand all", and the filter bar
+ * - which is not printed - is replaced by a line saying what it was set to.
+ */
+// Rendering a hundred-odd rows through Fluent in jsdom takes seconds, not milliseconds, and a CI
+// runner is slower still - so these carry a longer timeout than the suite's default.
+describe('CoworkPanel printing', { timeout: 30000 }, () => {
+  const upn = (id: number) => `demo.user${String(id).padStart(7, '0')}@contoso.example`;
+
+  /** A server holding `total` seat holders, paging and clamping exactly as the API does. */
+  function serve(total: number) {
+    fetchCowork.mockImplementation(async (_windowDays: number, _filters: unknown, skip: number, take: number) => {
+      const count = Math.max(0, Math.min(take, 500, total - skip));
+      return {
+        total,
+        skip,
+        take,
+        warnings: [],
+        rows: Array.from({ length: count }, (_, i) => row({ userId: skip + i + 1, userPrincipalName: upn(skip + i + 1) })),
+      };
+    });
+  }
+
+  const listed = (people: HTMLElement) => within(people).queryAllByText(/^demo\.user\d+@contoso\.example$/).length;
+
+  async function openPeople(total: number) {
+    serve(total);
+    const user = userEvent.setup();
+    render(summary());
+    const people = await openSection(user, /People to enable/);
+    await waitFor(() => expect(listed(people)).toBe(Math.min(total, 50)));
+    return { user, people };
+  }
+
+  /** What the browser would have captured: the document as it stood when window.print ran. */
+  function capturePrint(people: HTMLElement) {
+    const captured = { rows: -1, details: -1, footer: '' };
+    vi.spyOn(window, 'print').mockImplementation(() => {
+      captured.rows = listed(people);
+      captured.details = within(people).queryAllByText('Justification').length;
+      captured.footer = within(people).getByText(/^Showing /).textContent ?? '';
+    });
+    return captured;
+  }
+
+  beforeEach(() => {
+    fetchCowork.mockReset();
+    resetTimeSavedStore();
+    resetPrintPreparation();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetPrintPreparation();
+  });
+
+  it('prints every seat holder rather than the page on screen, then returns to that page', async () => {
+    const { people } = await openPeople(120);
+    const printed = capturePrint(people);
+
+    await act(async () => {
+      await expect(requestPrint()).resolves.toEqual({ kind: 'printed' });
+    });
+
+    expect(printed.rows).toBe(120);
+    expect(printed.footer).toBe('Showing 1-120 of 120 seat holders');
+    expect(listed(people)).toBe(50);
+    // Loaded with the list's own filters and sort, so the printout is the list on screen - all of it.
+    const last = fetchCowork.mock.calls.at(-1)!;
+    expect([last[2], last[3]]).toEqual([0, 120]);
+    expect(last[1]).toBe(fetchCowork.mock.calls[0][1]);
+  });
+
+  it('prints every row open when every row was expanded - including the ones on later pages', async () => {
+    // Sixty rows: one full page of fifty on screen, and ten more that only the printout loads.
+    const { user, people } = await openPeople(60);
+    await user.click(within(people).getByRole('button', { name: 'Expand all' }));
+    expect(within(people).getAllByText('Justification')).toHaveLength(50);
+
+    const printed = capturePrint(people);
+    await act(async () => {
+      await requestPrint();
+    });
+
+    expect(printed.details).toBe(60);
+  });
+
+  it('prints rows collapsed unless the reader opened them', async () => {
+    const { people } = await openPeople(120);
+    const printed = capturePrint(people);
+
+    await act(async () => {
+      await requestPrint();
+    });
+
+    expect(printed.details).toBe(0);
+  });
+
+  it('keeps expand-all when the page is turned', async () => {
+    const { user, people } = await openPeople(60);
+    await user.click(within(people).getByRole('button', { name: 'Expand all' }));
+
+    await user.click(within(people).getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(within(people).getByText(upn(51))).toBeTruthy());
+
+    expect(within(people).getAllByText('Justification')).toHaveLength(10);
+    expect(within(people).getByRole('button', { name: 'Collapse all' })).toBeTruthy();
+  });
+
+  it('refuses, rather than printing one page, when the list is longer than can be printed', async () => {
+    const { people } = await openPeople(PRINT_ROW_LIMIT + 1);
+    const calls = fetchCowork.mock.calls.length;
+    capturePrint(people);
+
+    await expect(requestPrint()).resolves.toMatchObject({ kind: 'tooManyRows', rows: PRINT_ROW_LIMIT + 1 });
+
+    expect(window.print).not.toHaveBeenCalled();
+    expect(fetchCowork.mock.calls.length).toBe(calls);
+  });
+
+  it('does not hold up a print of another section, however long the list', async () => {
+    // The tab opens on the time-saved section. The list is not on that printout, so it must not
+    // be loaded for it - or refuse it for being long.
+    serve(PRINT_ROW_LIMIT * 5);
+    render(summary());
+    await waitFor(() => expect(fetchCowork).toHaveBeenCalled());
+    const calls = fetchCowork.mock.calls.length;
+    vi.spyOn(window, 'print').mockImplementation(() => {});
+
+    await expect(requestPrint()).resolves.toEqual({ kind: 'printed' });
+    expect(fetchCowork.mock.calls.length).toBe(calls);
+  });
+
+  it('keeps the filter bar, the pager and every expander off paper', async () => {
+    const { people } = await openPeople(120);
+    const onPaper = (element: Element) => element.closest('[data-print="hide"]') === null;
+
+    for (const control of within(people).getAllByRole('combobox')) expect(onPaper(control)).toBe(false);
+    for (const control of within(people).getAllByRole('checkbox')) expect(onPaper(control)).toBe(false);
+    for (const name of ['Search', 'Expand all', 'Refresh', 'Previous', 'Next']) {
+      expect(onPaper(within(people).getByRole('button', { name }))).toBe(false);
+    }
+    expect(onPaper(within(people).getByText('Export CSV'))).toBe(false);
+    for (const expander of within(people).getAllByRole('button', { name: /Show the full assessment/ })) {
+      expect(onPaper(expander)).toBe(false);
+    }
+    // The count stays: a printout should still say how many people it lists.
+    expect(onPaper(within(people).getByText(/^Showing 1-50 of 120/))).toBe(true);
+  });
+
+  it('prints what the filter bar was set to, in its place', async () => {
+    const { user, people } = await openPeople(3);
+    const printedFilters = () => people.querySelector('[data-print="only"]')?.textContent;
+
+    expect(printedFilters()).toBe(
+      'Filters: Verdict: All verdicts \u00b7 Department: All departments \u00b7 Sorted by: Most coordination load',
+    );
+
+    await user.selectOptions(
+      within(people).getByRole('combobox', { name: 'Filter Cowork candidates by verdict' }),
+      'primeCandidate',
+    );
+    await user.click(within(people).getByRole('checkbox', { name: 'Already using Cowork' }));
+    await user.type(within(people).getByRole('textbox', { name: 'Search Cowork candidates' }), 'finance{Enter}');
+
+    await waitFor(() =>
+      expect(printedFilters()).toBe(
+        'Filters: Search: \u201cfinance\u201d \u00b7 Verdict: Prime candidate \u00b7 Department: All departments'
+          + ' \u00b7 Sorted by: Most coordination load \u00b7 Already using Cowork',
+      ),
+    );
+  });
+
+  it('says on paper when only the page on screen was printed', async () => {
+    // A print from the browser's own menu cannot wait for the rest of the list to load, so it
+    // carries the fifty rows on screen - and must not pass them off as the whole list.
+    const { people } = await openPeople(120);
+
+    const note = [...people.querySelectorAll('[data-print="only"]')].find((n) =>
+      n.textContent?.includes('only the rows that were on screen'),
+    );
+    expect(note).toBeTruthy();
   });
 });

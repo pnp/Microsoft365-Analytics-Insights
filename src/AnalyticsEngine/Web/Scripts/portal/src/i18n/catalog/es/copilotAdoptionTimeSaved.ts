@@ -37,6 +37,7 @@ const copilotAdoptionTimeSaved: Record<keyof typeof en, string> = {
 
   // Común: la calculadora
   'copilotAdoptionTimeSaved.scenarioLabel': 'Mostrar el cálculo para',
+  'copilotAdoptionTimeSaved.scenarioPrinted': 'Cálculo mostrado para: {scenario}',
   'copilotAdoptionTimeSaved.table.work': 'Trabajo',
   'copilotAdoptionTimeSaved.table.observed': 'Volumen al mes',
   'copilotAdoptionTimeSaved.table.minutesEach': 'Minutos ahorrados en cada uno',

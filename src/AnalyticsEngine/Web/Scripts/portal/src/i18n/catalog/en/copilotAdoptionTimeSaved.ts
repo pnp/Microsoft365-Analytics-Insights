@@ -36,6 +36,7 @@ export const copilotAdoptionTimeSaved = {
 
   // Shared: the calculator
   'copilotAdoptionTimeSaved.scenarioLabel': 'Show the working for',
+  'copilotAdoptionTimeSaved.scenarioPrinted': 'Working shown for: {scenario}',
   'copilotAdoptionTimeSaved.table.work': 'Work',
   'copilotAdoptionTimeSaved.table.observed': 'Volume a month',
   'copilotAdoptionTimeSaved.table.minutesEach': 'Minutes saved on each',

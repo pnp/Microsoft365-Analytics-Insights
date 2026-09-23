@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import { loadCatalog } from '../../i18n';
+import { PRINT_ROW_LIMIT, requestPrint, resetPrintPreparation } from '../shared/printPreparation';
 import type {
   CopilotAdoptionOptions,
   CopilotAdoptionSummary,
@@ -409,5 +410,151 @@ describe('OpportunitiesPanel licence model', () => {
     expect(
       within(model).getByText(/^The conservative share and the hours in a working day apply to both time-saved estimates/),
     ).toBeTruthy();
+  });
+
+  it('prints each assumption as the figure it is set to, since the box is not printed', async () => {
+    const user = userEvent.setup();
+    await renderPanel(summary());
+    const model = await openTimeSaved(user);
+
+    const box = within(model).getByRole('spinbutton', { name: 'Minutes saved per meeting' });
+    expect(box.closest('[data-print="hide"]')).not.toBeNull();
+    const printed = [...model.querySelectorAll('[data-print="only"]')].map((n) => n.textContent);
+    expect(printed).toContain('5 min');
+  });
+
+  it('prints which cohort the working is shown for, since the radio buttons are not printed', async () => {
+    const user = userEvent.setup();
+    await renderPanel(summary());
+    const model = await openTimeSaved(user);
+
+    expect(within(model).getByRole('radiogroup').closest('[data-print="hide"]')).not.toBeNull();
+    const printed = [...model.querySelectorAll('[data-print="only"]')].map((n) => n.textContent);
+    expect(printed).toContain('Working shown for: All 10 people recommended');
+  });
+});
+
+// Rendering a hundred-odd rows through Fluent in jsdom takes seconds, and a CI runner is slower.
+describe('OpportunitiesPanel printing', { timeout: 30000 }, () => {
+  const upn = (id: number) => `demo.user${String(id).padStart(7, '0')}@contoso.example`;
+
+  function candidate(id: number) {
+    return {
+      userId: id,
+      userPrincipalName: upn(id),
+      mail: null,
+      department: 'Finance',
+      jobTitle: null,
+      country: null,
+      officeLocation: null,
+      companyName: null,
+      manager: null,
+      unlicensedCopilotInteractions: 0,
+      unlicensedCopilotActiveDays: 0,
+      lastCopilotInteractionUtc: null,
+      teamsMessages: 10,
+      teamsMeetings: 2,
+      emailsSent: 5,
+      emailsRead: 9,
+      filesViewedOrEdited: 3,
+      lastM365ActivityUtc: null,
+      opportunityScore: 70,
+      copilotDemandScore: 0,
+      collaborationScore: 60,
+      emailScore: 50,
+      documentScore: 40,
+      recommended: true,
+      qualificationTier: null,
+      qualificationTierLabel: null,
+      rationale: 'Workload inferred.',
+    };
+  }
+
+  /** A server holding `total` candidates, paging and clamping exactly as the API does. */
+  function serve(total: number) {
+    fetchOpportunities.mockImplementation(async (_windowDays: number, _filters: unknown, skip: number, take: number) => {
+      const count = Math.max(0, Math.min(take, 500, total - skip));
+      return {
+        total,
+        skip,
+        take,
+        warnings: [],
+        rows: Array.from({ length: count }, (_, i) => candidate(skip + i + 1)),
+      };
+    });
+  }
+
+  const candidates = () => screen.getByRole('tabpanel', { name: 'Candidates' });
+  const listed = () => within(candidates()).queryAllByText(/^demo\.user\d+@contoso\.example$/).length;
+
+  beforeEach(() => resetPrintPreparation());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetPrintPreparation();
+  });
+
+  it('prints every candidate rather than the page on screen, open when every row was expanded', async () => {
+    serve(60);
+    const user = userEvent.setup();
+    await renderPanel(summary());
+    await waitFor(() => expect(listed()).toBe(50));
+    await user.click(within(candidates()).getByRole('button', { name: 'Expand all' }));
+
+    const printed = { rows: -1, details: -1 };
+    vi.spyOn(window, 'print').mockImplementation(() => {
+      printed.rows = listed();
+      printed.details = within(candidates()).queryAllByText('Justification').length;
+    });
+    await act(async () => {
+      await expect(requestPrint()).resolves.toEqual({ kind: 'printed' });
+    });
+
+    expect(printed).toEqual({ rows: 60, details: 60 });
+    expect(listed()).toBe(50);
+  });
+
+  it('refuses, rather than printing one page, when the list is longer than can be printed', async () => {
+    serve(PRINT_ROW_LIMIT * 3);
+    await renderPanel(summary());
+    await waitFor(() => expect(listed()).toBe(50));
+    vi.spyOn(window, 'print').mockImplementation(() => {});
+
+    await expect(requestPrint()).resolves.toMatchObject({ kind: 'tooManyRows' });
+    expect(window.print).not.toHaveBeenCalled();
+  });
+
+  it('does not hold up a print of the time-saved section', async () => {
+    serve(PRINT_ROW_LIMIT * 3);
+    const user = userEvent.setup();
+    await renderPanel(summary());
+    await waitFor(() => expect(listed()).toBe(50));
+    await openTimeSaved(user);
+    vi.spyOn(window, 'print').mockImplementation(() => {});
+
+    await expect(requestPrint()).resolves.toEqual({ kind: 'printed' });
+  });
+
+  it('keeps the filter bar and the pager off paper, and prints what the bar was set to', async () => {
+    serve(130);
+    const user = userEvent.setup();
+    await renderPanel(summary());
+    await waitFor(() => expect(listed()).toBe(50));
+    const list = candidates();
+
+    for (const control of [
+      within(list).getByRole('combobox', { name: 'Filter candidates by department' }),
+      within(list).getByRole('checkbox', { name: 'Recommended only' }),
+      within(list).getByRole('button', { name: 'Expand all' }),
+      within(list).getByRole('button', { name: 'Next' }),
+    ]) {
+      expect(control.closest('[data-print="hide"]')).not.toBeNull();
+    }
+
+    await user.click(within(list).getByRole('checkbox', { name: 'Recommended only' }));
+    await waitFor(() =>
+      expect(list.querySelector('[data-print="only"]')?.textContent).toBe(
+        'Filters: Department: All departments \u00b7 Recommended only',
+      ),
+    );
   });
 });

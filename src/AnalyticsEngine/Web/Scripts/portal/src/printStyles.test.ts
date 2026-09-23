@@ -1,6 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createElement } from 'react';
+import { render } from '@testing-library/react';
+import {
+  Accordion,
+  AccordionHeader,
+  AccordionItem,
+  AccordionPanel,
+  FluentProvider,
+} from '@fluentui/react-components';
 
 /**
  * The print stylesheet contract.
@@ -21,6 +30,10 @@ import { join } from 'node:path';
 // vitest.config.ts lives), which makes this stable.
 const SRC_DIR = join(process.cwd(), 'src');
 const CSS_PATH = join(SRC_DIR, 'index.css');
+
+/** The print rule for an accordion section that is closed on screen, as the stylesheet writes it. */
+const CLOSED_ACCORDION_ITEM =
+  ".fui-AccordionItem:has(> .fui-AccordionHeader > .fui-AccordionHeader__button[aria-expanded='false'])";
 
 /** index.css with comments removed and quotes normalised, so selectors compare by meaning. */
 function stylesheet(): string {
@@ -205,5 +218,45 @@ describe('print stylesheet', () => {
       expect(printDeclarationsFor(`[data-print='${value}']`), `No @media print rule for data-print="${value}"`)
         .not.toBe('');
     }
+  });
+
+  it('leaves a closed accordion section off paper, and the chevron of an open one', () => {
+    // Fluent does not render a closed panel at all, so a closed section prints as a heading with
+    // nothing under it. What is open is what gets printed - the same rule as a list's rows.
+    expect(printDeclarationsFor(CLOSED_ACCORDION_ITEM)).toMatch(/display:\s*none\s*!important/);
+    expect(printDeclarationsFor('.fui-AccordionHeader__expandIcon')).toMatch(/display:\s*none\s*!important/);
+  });
+
+  it('recognises a closed accordion section by the markup Fluent actually renders', () => {
+    // The rule is written against Fluent's class names and ARIA, so it is only as good as its guess
+    // at their markup. Rendered here rather than assumed: if Fluent restructures the header, this
+    // fails instead of every closed section quietly reappearing on paper.
+    const { container } = render(
+      createElement(
+        FluentProvider,
+        null,
+        createElement(
+          Accordion,
+          { multiple: true, collapsible: true, defaultOpenItems: ['open'] },
+          createElement(
+            AccordionItem,
+            { value: 'open' },
+            createElement(AccordionHeader, null, 'Open section'),
+            createElement(AccordionPanel, null, 'Printed'),
+          ),
+          createElement(
+            AccordionItem,
+            { value: 'closed' },
+            createElement(AccordionHeader, null, 'Closed section'),
+            createElement(AccordionPanel, null, 'Not rendered'),
+          ),
+        ),
+      ),
+    );
+
+    const [open, closed] = [...container.querySelectorAll('.fui-AccordionItem')];
+    expect(closed.matches(CLOSED_ACCORDION_ITEM)).toBe(true);
+    expect(open.matches(CLOSED_ACCORDION_ITEM)).toBe(false);
+    expect(open.querySelector('.fui-AccordionHeader__expandIcon')).not.toBeNull();
   });
 });

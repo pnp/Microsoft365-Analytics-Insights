@@ -135,9 +135,36 @@ stylesheet):
 | `data-print="flow"` | A flex/grid stack of sections, returned to block flow so page breaks take effect. |
 | `data-print="page-break"` | Starts a new sheet, and keeps its own content with it. |
 | `data-print="keep-with-next"` | Never left stranded at the foot of a page with its content overleaf. |
-| `data-print="only"` | Rendered on paper only. |
+| `data-print="only"` | Rendered on paper only - standing in for a control that is not: the line stating a list's filters, the figure typed into an assumption box. |
 | `data-print="shell"` | The layout table that carries the running footer. Block flow on screen. |
 | `data-print="footer"` | The `<tfoot>` repeated at the foot of every printed page. |
+
+Nothing that can only be clicked is printed. A filter bar is hidden and replaced by a line naming what
+each drop-down is set to, plus any ticked box and applied search; row expanders, sort arrows other
+than the active one, info buttons and SQL buttons are hidden; and an accordion section prints only if
+it is open (a closed one is left out altogether, since Fluent does not render its panel).
+
+### Paged lists print in full
+
+A stylesheet cannot print rows that are not on the page, so the server-paged lists (licensed users,
+licence candidates, Cowork people) register with `src/components/shared/printPreparation.ts` while
+they are showing. The **Print** button - and Ctrl+P/Cmd+P while that button is on the page - goes
+through `requestPrint`, which loads every row of each such list in pages of 500 (the API's `MaxTake`),
+commits them with `flushSync`, calls `window.print()`, and then puts each list back to its page.
+
+- **Lists longer than `PRINT_ROW_LIMIT` (1,000 rows) are refused, not truncated.** The button explains
+  and asks for a narrower filter; the list's CSV export is the way to get every row. These lists grow
+  with the tenant, and laying out tens of thousands of rows to print would stall the tab.
+- **"Expand all" is a mode, not a list of ids**, so it also opens the rows only the printout loads.
+- **A list in a hidden section or tab does not take part**: it is not on the printout, so it must not
+  hold the print up or refuse it for being long.
+- **The browser's own File > Print cannot be delayed** (`beforeprint` is synchronous), so it prints the
+  page on screen, and each list says on paper that it holds only the rows that were on screen.
+
+Wide lists are still clipped at the right-hand edge of the sheet: the Cowork people table lays out
+at about 1,190px against roughly 700px of printable A4 width, and landscape does not recover it. On
+the lists with expandable rows, **Expand all** also prints each clipped column's figure in that row's
+detail.
 
 The footer is a real `<tfoot>` inside a layout `<table>` wrapping the report, and that is load-bearing.
 A running footer must repeat on every page *and* have room reserved for it; `position: fixed` gives

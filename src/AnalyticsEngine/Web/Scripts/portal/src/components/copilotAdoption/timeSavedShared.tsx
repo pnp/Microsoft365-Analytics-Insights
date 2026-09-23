@@ -600,6 +600,15 @@ export const useModelStyles = makeStyles({
   input: {
     width: '110px',
   },
+  /** An assumption's value as text, for paper - where the box it is typed into is not printed. */
+  printedValue: {
+    display: 'none',
+  },
+  /** The scenario picker's choice as text, for paper. Spaced like the picker it stands in for. */
+  printedScenario: {
+    display: 'none',
+    margin: '12px 0 8px',
+  },
 });
 
 export function MethodBadge({ method }: { method: EvidenceItem['method'] }) {
@@ -689,36 +698,44 @@ export function AssumptionInput({
 
   return (
     <span className={styles.inputCell}>
-      <Input
-        className={styles.input}
-        type="number"
-        inputMode="decimal"
-        size="small"
-        value={draft}
-        min={limits.min * scale}
-        max={limits.max * scale}
-        step="any"
-        aria-label={label}
-        aria-invalid={invalid || undefined}
-        aria-describedby={invalid ? messageId : undefined}
-        contentAfter={<Text size={200}>{unit}</Text>}
-        onChange={(_e, data) => {
-          setDraft(data.value);
-          const parsed = data.value.trim() === '' ? Number.NaN : Number(data.value) / scale;
-          if (isValidAssumption(field, parsed)) {
-            setInvalid(false);
-            onCommit(field, parsed);
-          } else {
-            setInvalid(true);
-          }
-        }}
-        onBlur={() => {
-          if (invalid) {
-            setDraft(shown(value));
-            setInvalid(false);
-          }
-        }}
-      />
+      {/* A box to type into is no use on paper, so the printout states the figure instead. The
+          wrapper carries the attribute because Input puts native props on its inner <input>,
+          which would hide the text and leave the empty border behind. */}
+      <span data-print="hide">
+        <Input
+          className={styles.input}
+          type="number"
+          inputMode="decimal"
+          size="small"
+          value={draft}
+          min={limits.min * scale}
+          max={limits.max * scale}
+          step="any"
+          aria-label={label}
+          aria-invalid={invalid || undefined}
+          aria-describedby={invalid ? messageId : undefined}
+          contentAfter={<Text size={200}>{unit}</Text>}
+          onChange={(_e, data) => {
+            setDraft(data.value);
+            const parsed = data.value.trim() === '' ? Number.NaN : Number(data.value) / scale;
+            if (isValidAssumption(field, parsed)) {
+              setInvalid(false);
+              onCommit(field, parsed);
+            } else {
+              setInvalid(true);
+            }
+          }}
+          onBlur={() => {
+            if (invalid) {
+              setDraft(shown(value));
+              setInvalid(false);
+            }
+          }}
+        />
+      </span>
+      <Text size={200} weight="semibold" className={styles.printedValue} data-print="only">
+        {formatAssumption(value * scale)} {unit}
+      </Text>
       {customised ? (
         <>
           <Badge size="small" appearance="tint" color="brand">
@@ -789,22 +806,32 @@ export function ScenarioPicker<T extends string>({
 }) {
   const styles = useModelStyles();
   const t = useT();
+  const selected = options.find((option) => option.value === value);
   return (
-    <div className={styles.scenario} data-print="hide">
-      <Text size={200} weight="semibold">
-        {t('copilotAdoptionTimeSaved.scenarioLabel')}
-      </Text>
-      <RadioGroup
-        layout="horizontal"
-        value={value}
-        onChange={(_e, data) => onChange(data.value as T)}
-        aria-label={t('copilotAdoptionTimeSaved.scenarioLabel')}
-      >
-        {options.map((option) => (
-          <Radio key={option.value} value={option.value} label={option.label} />
-        ))}
-      </RadioGroup>
-    </div>
+    <>
+      <div className={styles.scenario} data-print="hide">
+        <Text size={200} weight="semibold">
+          {t('copilotAdoptionTimeSaved.scenarioLabel')}
+        </Text>
+        <RadioGroup
+          layout="horizontal"
+          value={value}
+          onChange={(_e, data) => onChange(data.value as T)}
+          aria-label={t('copilotAdoptionTimeSaved.scenarioLabel')}
+        >
+          {options.map((option) => (
+            <Radio key={option.value} value={option.value} label={option.label} />
+          ))}
+        </RadioGroup>
+      </div>
+      {/* The radio buttons are not printed, but which cohort the table below is working for is the
+          one thing a reader of the printout cannot otherwise tell. */}
+      {selected && (
+        <Text size={200} weight="semibold" className={styles.printedScenario} data-print="only">
+          {t('copilotAdoptionTimeSaved.scenarioPrinted', { scenario: selected.label })}
+        </Text>
+      )}
+    </>
   );
 }
 
