@@ -414,10 +414,11 @@ namespace Common.Entities.CopilotAdoption
 
         #endregion
 
-        #region Cowork value estimate (MODELLED - not measured)
+        #region Time-saved estimates (MODELLED - not measured)
 
         /// <summary>
-        /// Minutes of preparation, note-taking and follow-up that Cowork is assumed to absorb per meeting.
+        /// Minutes of preparation, note-taking and follow-up that Microsoft 365 Copilot is assumed to take
+        /// off each Teams meeting.
         /// </summary>
         /// <remarks>
         /// <b>This and its siblings are assumptions, not measurements.</b> Nothing in the database observes
@@ -425,26 +426,64 @@ namespace Common.Entities.CopilotAdoption
         /// volume of delegable work - meetings, mail threads, document touches - and these constants turn
         /// that observed volume into an illustrative range.
         /// <para>
+        /// They drive the LICENCE estimate (<see cref="CopilotAdoptionSummary.LicenceOpportunityEstimate"/>):
+        /// the time a Copilot licence could give back to the people recommended for one. That is the
+        /// decision the published Copilot studies measured - the largest of them randomised who received a
+        /// licence. They were named <c>coworkMinutesSavedPer*</c> until the Cowork estimate was split out,
+        /// which is why an older export or snapshot may carry that name.
+        /// </para>
+        /// <para>
         /// Everything derived from them must be labelled as modelled, must be rendered with the assumption
         /// visible on the same surface, and must never be mixed into a figure presented as evidence. The
         /// rest of this report is defensible because it shows its working; an unlabelled hours-saved number
         /// quoted in a board pack would discredit all of it.
         /// </para>
+        /// <para>
+        /// These are the DEFAULTS. The portal's Licence opportunities tab shows the published evidence
+        /// behind each one and lets a reader replace it with their own figure for their browser session;
+        /// an Excel export taken from that page carries the reader's figures (see
+        /// <see cref="TimeSavedOverrides"/>).
+        /// </para>
+        /// <para>
+        /// <b>How the defaults are derived.</b> Each is Microsoft's own published "Copilot assisted
+        /// hours" credit (Copilot Dashboard in Viva Insights) spread across every item observed, because
+        /// the usage reports count every meeting attended, email read and file opened - not only the
+        /// ones Copilot was used on. Microsoft credits the whole duration of a meeting Copilot recaps;
+        /// 5 minutes is that credit on one half-hour meeting in six.
+        /// </para>
         /// </remarks>
-        [JsonProperty("coworkMinutesSavedPerMeeting")]
-        public double CoworkMinutesSavedPerMeeting { get; set; } = 5;
+        [JsonProperty("copilotMinutesSavedPerMeeting")]
+        public double CopilotMinutesSavedPerMeeting { get; set; } = 5;
 
-        /// <summary>Minutes assumed saved per mail thread Cowork drafts, triages or summarises.</summary>
-        [JsonProperty("coworkMinutesSavedPerMailThread")]
-        public double CoworkMinutesSavedPerMailThread { get; set; } = 1;
+        /// <summary>
+        /// Minutes assumed saved per email sent or read - triaged, summarised or drafted.
+        /// </summary>
+        /// <remarks>
+        /// Microsoft credits 6 minutes per Copilot email action (summarising a thread, drafting or
+        /// rewriting a reply); half a minute is that credit on one email in twelve. It was 1 minute until
+        /// the evidence behind it was written down: applied to every email read, a minute each credits
+        /// someone handling forty emails a day with forty minutes from email alone - more than any
+        /// published whole-job saving - while the largest measured study (a randomised trial across
+        /// 7,137 workers) found 1.4 hours a week less on email, about 17 minutes a day.
+        /// </remarks>
+        [JsonProperty("copilotMinutesSavedPerMailThread")]
+        public double CopilotMinutesSavedPerMailThread { get; set; } = 0.5;
 
-        /// <summary>Minutes assumed saved per document Cowork drafts, revises or summarises.</summary>
-        [JsonProperty("coworkMinutesSavedPerDocument")]
-        public double CoworkMinutesSavedPerDocument { get; set; } = 3;
+        /// <summary>
+        /// Minutes assumed saved per document viewed or edited - drafted, revised or summarised.
+        /// </summary>
+        /// <remarks>
+        /// Microsoft credits 6 minutes per Copilot drafting or summarising action; 1 minute is that credit
+        /// on one document touch in six. It was 3 minutes, which would credit half an hour a day for
+        /// merely opening ten files. The weakest-evidenced of the three: the same randomised trial found
+        /// no statistically significant change in document time.
+        /// </remarks>
+        [JsonProperty("copilotMinutesSavedPerDocument")]
+        public double CopilotMinutesSavedPerDocument { get; set; } = 1;
 
         /// <summary>
         /// Fraction of the assumption applied to produce the <b>low</b> end of the reported range; the high
-        /// end uses the assumption as stated.
+        /// end uses the assumption as stated. Shared by the licence estimate and the Cowork estimate.
         ///
         /// The estimate is published as a range rather than a single number because a point estimate
         /// invites precision that does not exist. A reader who sees "120-240 hours a month" understands
@@ -453,13 +492,51 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("coworkEstimateLowerBoundRatio")]
         public double CoworkEstimateLowerBoundRatio { get; set; } = 0.5;
 
+        /// <summary>
+        /// Minutes Cowork is assumed to save on each task it carries out, ON TOP of what Microsoft 365
+        /// Copilot already saves: Cowork's increment over Copilot alone.
+        /// </summary>
+        /// <remarks>
+        /// <b>No study has measured Cowork's time savings - alone, or for people who already use Microsoft
+        /// 365 Copilot.</b> The Copilot per-item figures above rest on Copilot evidence, which is why
+        /// Cowork is modelled on its own, per task, in its own estimate
+        /// (<see cref="CopilotAdoptionSummary.CoworkValueEstimate"/>): it is the value of enabling Cowork,
+        /// which a tenant pays for separately in Copilot Credits, for people who already hold a Copilot
+        /// licence. Folding Copilot's minutes into that figure would credit Cowork with time the licence
+        /// already gives back.
+        /// <para>
+        /// The default is Microsoft's own time credit for agent work, the nearest published method. Agent
+        /// Assisted Hours in Viva Insights (the Copilot Studio agents report) credits each knowledge
+        /// source an agent session draws on with a customisable six-minute multiplier, and a session that
+        /// draws on none with six minutes when it is resolved (4.2 when escalated or abandoned). The six
+        /// minutes rests on Microsoft studies of information-retrieval and writing tasks. Six minutes for
+        /// a whole multi-step Cowork task, with nothing for the sources or steps inside it, is the
+        /// smallest credit that method gives a resolved session.
+        /// </para>
+        /// </remarks>
+        [JsonProperty("coworkMinutesSavedPerTask")]
+        public double CoworkMinutesSavedPerTask { get; set; } = 6;
+
+        /// <summary>
+        /// Cowork tasks a month assumed for each person, used ONLY when nobody in the tenant has Cowork
+        /// tasks in Microsoft's Cowork usage report - so there is no observed rate to project from.
+        /// </summary>
+        /// <remarks>
+        /// About one delegated task a working day. A placeholder, and labelled as one wherever it is used:
+        /// as soon as the report shows tasks for anyone, the average of the people running them replaces
+        /// it, and the reader can replace either with their own expectation.
+        /// </remarks>
+        [JsonProperty("coworkAssumedTasksPerPersonPerMonth")]
+        public double CoworkAssumedTasksPerPersonPerMonth { get; set; } = 20;
+
         // There is deliberately no loaded-hourly-cost or currency option here, and none anywhere else in
-        // these options. The Cowork estimate is a model built from assumed minutes-per-meeting/mail/
-        // document, and epic #559 rejects an ROI / "hours saved" calculator precisely because a
+        // these options. The time-saved estimates are models built from assumed minutes per meeting,
+        // email, document and Cowork task, and epic #559 rejected an ROI calculator precisely because a
         // fabricated money figure discredits the measured ones beside it. The per-SKU seat prices that
         // used to live here, feeding an idle-licence-spend figure, have been withdrawn for the same
         // reason: a price typed into a report header is not a source of truth about what a tenant pays.
-        // This report reports seats, people and hours.
+        // The hours models are kept - labelled, ranged, evidenced and editable by the reader - but this
+        // report reports seats, people and hours, never money.
 
         #endregion
 
@@ -580,6 +657,19 @@ namespace Common.Entities.CopilotAdoption
         }
 
         public static CopilotAdoptionOptions Default => new CopilotAdoptionOptions();
+
+        /// <summary>
+        /// A copy that can be changed without touching this instance.
+        ///
+        /// A shallow copy is a complete one: every option is a value type or an immutable string. The
+        /// instance a cached analysis carries is shared by every request reading that analysis, so
+        /// anything that needs to vary an option for one caller - an export applying a reader's own
+        /// time-saved assumptions - must work on a copy.
+        /// </summary>
+        public CopilotAdoptionOptions Clone()
+        {
+            return (CopilotAdoptionOptions)MemberwiseClone();
+        }
     }
 
     /// <summary>Allowed accountability dimensions. Used as an allow-list before anything reaches SQL.</summary>

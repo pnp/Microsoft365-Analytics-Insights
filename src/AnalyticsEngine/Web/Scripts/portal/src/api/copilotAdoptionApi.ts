@@ -287,13 +287,19 @@ export function coworkExportUrl(
  * The file records the period, every threshold and the product build that produced it, and carries
  * a machine-readable "Snapshot facts" sheet so the two can be diffed with a formula rather than by
  * eye.
+ *
+ * `timeSaved` carries the reader's own Cowork time-saved assumptions (see
+ * `timeSavedExportParams`). They live in the browser only, so without them a customised page would
+ * download a workbook modelling different hours from the ones on screen.
  */
 export function workbookExportUrl(
   windowDays: number,
   seatLicenceTypeIds?: number[],
   emailDomain?: string | null,
+  timeSaved?: Record<string, string>,
 ): string {
   const params = scopeParams(windowDays, seatLicenceTypeIds);
   if (emailDomain) params.set('emailDomain', emailDomain);
+  for (const [name, value] of Object.entries(timeSaved ?? {})) params.set(name, value);
   return `${baseUrl()}/export/workbook?${params}`;
 }

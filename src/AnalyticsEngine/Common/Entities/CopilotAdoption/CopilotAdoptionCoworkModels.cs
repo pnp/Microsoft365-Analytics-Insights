@@ -439,58 +439,111 @@ namespace Common.Entities.CopilotAdoption
     }
 
     /// <summary>
-    /// The modelled time/cost estimate for enabling Cowork for the recommended cohort.
+    /// The modelled Cowork estimate for one cohort: the time Cowork could give back ON TOP of what
+    /// Microsoft 365 Copilot already saves, for the people ready for Cowork now
+    /// (<see cref="CopilotAdoptionSummary.CoworkValueEstimate"/>) or every Copilot seat holder
+    /// (<see cref="CopilotAdoptionSummary.CoworkFullRolloutEstimate"/>).
     ///
     /// <b>Every field here is derived from an assumption and none of it is measured.</b> The observed
-    /// inputs (<see cref="AddressableMeetings"/> and friends) are real; the conversion to hours is not.
-    /// <see cref="Assumptions"/> travels with the numbers so no surface can render a figure without the
-    /// assumption that produced it, and <see cref="IsModelled"/> exists so a consumer cannot mistake this
-    /// for evidence.
+    /// inputs (<see cref="CoworkTaskUsers"/> and <see cref="ObservedCoworkTasks"/>) are real; the
+    /// projection and the conversion to hours are not. <see cref="Assumptions"/> travels with the
+    /// numbers so no surface can render a figure without the assumption that produced it, and
+    /// <see cref="IsModelled"/> exists so a consumer cannot mistake this for evidence.
     /// </summary>
+    /// <remarks>
+    /// <para><b>Cowork only, on purpose.</b> This is the figure a tenant uses to justify Copilot
+    /// Credits: the value of enabling Cowork for people who already hold a Copilot licence. It used to
+    /// carry a Microsoft 365 Copilot layer as well - meetings, email and documents - and most of the
+    /// headline was that layer, for people whose licence already gives it back. Enabling Cowork does
+    /// not unlock it, so it does not belong in a figure that justifies Cowork, and for existing seat
+    /// holders no decision hangs on it at all. The Copilot minutes now size the decision they belong
+    /// to - buying licences - in <see cref="LicenceValueEstimate"/>.</para>
+    ///
+    /// <para>No study has measured Cowork's time savings, alone or for people who already use
+    /// Copilot, so every hour here rests on an assumed number of minutes per task, and every surface
+    /// that shows it says so.</para>
+    /// </remarks>
     public class CoworkValueEstimate
     {
         /// <summary>Always true. Present so serialised consumers carry the caveat with the payload.</summary>
         [JsonProperty("isModelled")]
         public bool IsModelled { get; set; } = true;
 
-        /// <summary>Seat holders the estimate covers (the recommended cohort).</summary>
+        /// <summary>Seat holders the estimate covers.</summary>
         [JsonProperty("cohortUsers")]
         public int CohortUsers { get; set; }
 
         #region Observed inputs
 
-        /// <summary>Meetings per month across the cohort, from the usage reports. Observed, not modelled.</summary>
-        [JsonProperty("addressableMeetings")]
-        public double AddressableMeetings { get; set; }
+        /// <summary>
+        /// People in the cohort with Cowork tasks in Microsoft's Cowork usage report. Observed.
+        /// </summary>
+        [JsonProperty("coworkTaskUsers")]
+        public int CoworkTaskUsers { get; set; }
 
-        /// <summary>Mail volume per month across the cohort. Observed, not modelled.</summary>
-        [JsonProperty("addressableMailThreads")]
-        public double AddressableMailThreads { get; set; }
+        /// <summary>
+        /// Their Cowork tasks, restated from the report's period as a month. Observed, not modelled.
+        /// </summary>
+        [JsonProperty("observedCoworkTasks")]
+        public double ObservedCoworkTasks { get; set; }
 
-        /// <summary>Document touches per month across the cohort. Observed, not modelled.</summary>
-        [JsonProperty("addressableDocuments")]
-        public double AddressableDocuments { get; set; }
+        #endregion
+
+        #region Cowork projection (assumed)
+
+        /// <summary>People in the cohort with no Cowork tasks in the report, who are projected instead.</summary>
+        [JsonProperty("projectedCoworkUsers")]
+        public int ProjectedCoworkUsers { get; set; }
+
+        /// <summary>The Cowork tasks a month each projected person is assumed to run.</summary>
+        [JsonProperty("coworkTasksPerPersonPerMonth")]
+        public double CoworkTasksPerPersonPerMonth { get; set; }
+
+        /// <summary>
+        /// Where <see cref="CoworkTasksPerPersonPerMonth"/> came from - see <see cref="CoworkTaskRateBases"/>.
+        /// </summary>
+        [JsonProperty("coworkTaskRateBasis")]
+        public string CoworkTaskRateBasis { get; set; } = CoworkTaskRateBases.Assumed;
+
+        /// <summary>
+        /// For an observed rate, how many people it is the average of: everyone in the tenant with Cowork
+        /// tasks in the report, not only this cohort's. Zero otherwise.
+        /// </summary>
+        [JsonProperty("coworkTaskRateUsers")]
+        public int CoworkTaskRateUsers { get; set; }
+
+        /// <summary>Observed plus projected Cowork tasks a month across the cohort.</summary>
+        [JsonProperty("coworkTasks")]
+        public double CoworkTasks { get; set; }
 
         #endregion
 
         #region Modelled outputs
 
-        /// <summary>Low end of the modelled monthly hours saved across the cohort.</summary>
+        /// <summary>
+        /// Low end of the modelled monthly hours Cowork could give back across the cohort, on top of
+        /// Copilot: the high end at the conservative share of the assumptions.
+        /// </summary>
         [JsonProperty("hoursPerMonthLow")]
         public double HoursPerMonthLow { get; set; }
 
-        /// <summary>High end of the modelled monthly hours saved across the cohort.</summary>
+        /// <summary>High end of the modelled monthly hours: Cowork tasks a month x minutes saved per task.</summary>
         [JsonProperty("hoursPerMonthHigh")]
         public double HoursPerMonthHigh { get; set; }
 
         // Deliberately no monetary figure, and no monetary figure anywhere else in this report either.
-        // Epic #559 rejects an ROI / "hours saved" calculator outright. The idle-licence-spend figure
-        // that #553 once allowed has since been withdrawn as well: it priced idle seats from a per-SKU
-        // price typed into the page header, which is not a source of truth about what a tenant pays, and
-        // a money figure derived from one gets quoted in a renewal negotiation as though it were. This
-        // estimate is modelled from assumed minutes-per-meeting/mail/document, so pricing it would be
-        // worse again. The hours range stays because it is explicitly labelled a rollout-sizing model;
-        // converting it to money is the line the epic draws.
+        // Epic #559 rejected an ROI calculator because a fabricated money figure discredits the measured
+        // ones beside it. The idle-licence-spend figure that #553 once allowed has since been withdrawn
+        // as well: it priced idle seats from a per-SKU price typed into the page header, which is not a
+        // source of truth about what a tenant pays, and a money figure derived from one gets quoted in a
+        // renewal negotiation as though it were. This estimate is modelled from an assumed number of
+        // minutes per Cowork task, so pricing it would be worse again.
+        //
+        // The HOURS model is kept, and is the Cowork tab's headline, on the terms that make it
+        // defensible: it is always labelled as modelled, it is always published as a range, its
+        // assumptions are shown beside it - with the plain statement that no study has measured Cowork -
+        // and the reader can replace any of them with their own figure (TimeSavedOverrides). Converting
+        // it to money is still the line the epic draws.
 
         #endregion
 
@@ -500,6 +553,50 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         [JsonProperty("assumptions")]
         public List<string> Assumptions { get; set; } = new List<string>();
+    }
+
+    /// <summary>Where the Cowork task rate a projection uses came from.</summary>
+    public static class CoworkTaskRateBases
+    {
+        /// <summary>
+        /// The average of the people with Cowork tasks in Microsoft's Cowork usage report. Measured, but
+        /// from early adopters, who tend to use a new tool more than the people who follow them.
+        /// </summary>
+        public const string Observed = "observed";
+
+        /// <summary>
+        /// <see cref="CopilotAdoptionOptions.CoworkAssumedTasksPerPersonPerMonth"/>: a placeholder, used
+        /// only because nobody's Cowork tasks were in the report.
+        /// </summary>
+        public const string Assumed = "assumed";
+
+        /// <summary>A figure the reader entered in the portal, carried with an Excel export.</summary>
+        public const string Custom = "custom";
+    }
+
+    /// <summary>The Cowork tasks a month the model projects each not-yet-observed person at, and why.</summary>
+    public class CoworkTaskRate
+    {
+        public double TasksPerPersonPerMonth { get; set; }
+
+        /// <summary>See <see cref="CoworkTaskRateBases"/>.</summary>
+        public string Basis { get; set; } = CoworkTaskRateBases.Assumed;
+
+        /// <summary>For an observed rate, the number of people it is the average of.</summary>
+        public int Users { get; set; }
+    }
+
+    /// <summary>One cohort's Cowork task inputs to the model: what was observed, and the rate for everyone else.</summary>
+    public class CoworkTaskInputs
+    {
+        /// <summary>People in the cohort with Cowork tasks in the report.</summary>
+        public int ObservedUsers { get; set; }
+
+        /// <summary>Their tasks, restated as a month.</summary>
+        public double ObservedTasksPerMonth { get; set; }
+
+        /// <summary>The rate everyone else in the cohort is projected at.</summary>
+        public CoworkTaskRate Rate { get; set; }
     }
 
     /// <summary>A page of Cowork readiness rows, matching the shape of the other paged endpoints.</summary>

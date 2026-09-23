@@ -4,6 +4,7 @@ using Common.Entities.CopilotAdoption;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using Newtonsoft.Json.Linq;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot;
@@ -556,11 +557,10 @@ namespace Tests.UnitTests
         [TestMethod]
         public void Estimate_NeverProducesAMonetaryFigure()
         {
-            // Epic #559 rejects an ROI / "hours saved" calculator, and #553 confines currency to idle
-            // licence spend - a measured price for a seat we can prove is unused. This estimate is
-            // modelled from assumed minutes per meeting/mail/document, so pricing it would put a
-            // fabricated number in a board pack beside measured ones. The hours range survives because
-            // it is labelled a rollout-sizing model; the money does not.
+            // Epic #559 rejects an ROI calculator, and the idle-licence-spend figure #553 once allowed has
+            // since been withdrawn. This estimate is modelled from an assumed number of minutes per Cowork
+            // task, so pricing it would put a fabricated number in a board pack beside measured ones. The
+            // hours range survives because it is labelled a rollout-sizing model; the money does not.
             var estimate = CopilotAdoptionScoring.EstimateCoworkValue(Cohort(5), Options());
 
             // Assert on the serialised FIELD NAMES, not the whole payload: the assumption prose
@@ -603,16 +603,376 @@ namespace Tests.UnitTests
             Assert.IsTrue(estimate.HoursPerMonthLow <= estimate.HoursPerMonthHigh);
         }
 
+        /// <summary>
+        /// The Cowork estimate is the value of enabling Cowork for people who already hold a Copilot
+        /// licence, so it carries no Copilot layer at all.
+        /// </summary>
+        /// <remarks>
+        /// The defect this guards: the headline used to add a Microsoft 365 Copilot layer for existing
+        /// seat holders - meetings, email and documents - and that layer was most of the figure used to
+        /// justify Copilot Credits. Enabling Cowork does not unlock it, the licence already did.
+        /// </remarks>
         [TestMethod]
-        public void Estimate_ReportsObservedVolumesSeparatelyFromModelledHours()
+        public void Estimate_IsCoworkOnly_AndNeverMovesWithTheCopilotMinutes()
         {
-            var estimate = CopilotAdoptionScoring.EstimateCoworkValue(Cohort(10), Options());
+            var fields = JObject.FromObject(CopilotAdoptionScoring.ModelCoworkValue(10, Options(), GoldenCoworkTasks()))
+                .Properties().Select(p => p.Name).ToList();
 
-            Assert.IsTrue(estimate.AddressableMeetings > 0,
-                "The volumes are observed from the usage reports and must be reportable on their own, so a "
-                + "reader who distrusts the model can still see the addressable work.");
-            Assert.IsTrue(estimate.AddressableMailThreads > 0);
-            Assert.IsTrue(estimate.AddressableDocuments > 0);
+            Assert.IsFalse(fields.Any(n => n.StartsWith("addressable", StringComparison.Ordinal)
+                                           || n.StartsWith("copilot", StringComparison.Ordinal)),
+                "The Cowork estimate must carry no Copilot volumes or hours. Found: " + string.Join(", ", fields));
+
+            var heavierCopilot = Options().Clone();
+            heavierCopilot.CopilotMinutesSavedPerMeeting = 120;
+            heavierCopilot.CopilotMinutesSavedPerMailThread = 60;
+            heavierCopilot.CopilotMinutesSavedPerDocument = 120;
+
+            Assert.AreEqual(
+                CopilotAdoptionScoring.ModelCoworkValue(10, Options(), GoldenCoworkTasks()).HoursPerMonthHigh,
+                CopilotAdoptionScoring.ModelCoworkValue(10, heavierCopilot, GoldenCoworkTasks()).HoursPerMonthHigh,
+                "Copilot's minutes must never leak into the figure that justifies Copilot Credits.");
+        }
+
+        /// <summary>
+        /// The portal recomputes the hours in the browser, from the PUBLISHED task count, whenever the
+        /// reader enters their own assumptions - so the server has to use the same operands, or an
+        /// uncustomised page and the Excel report downloaded from it can disagree by an hour.
+        /// </summary>
+        [TestMethod]
+        public void Estimate_ComputesItsHoursFromThePublishedRoundedTaskCount()
+        {
+            var options = Options().Clone();
+            options.CoworkMinutesSavedPerTask = 120;
+
+            // 10.4 observed tasks publish as 10. From the unrounded 10.4 the model would say 20.8 -> 21
+            // hours; from the published 10 it says 20. The page can only ever see the 10.
+            var estimate = CopilotAdoptionScoring.ModelCoworkValue(1, options, new CoworkTaskInputs
+            {
+                ObservedUsers = 1,
+                ObservedTasksPerMonth = 10.4,
+                Rate = new CoworkTaskRate { TasksPerPersonPerMonth = 5, Basis = CoworkTaskRateBases.Observed, Users = 1 },
+            });
+
+            Assert.AreEqual(10d, estimate.ObservedCoworkTasks);
+            Assert.AreEqual(20d, estimate.HoursPerMonthHigh,
+                "Hours must be derived from the task count the estimate publishes, which is all the portal has.");
+        }
+
+        /// <summary>
+        /// The golden figure shared with the portal's <c>coworkTimeSaved.test.ts</c> ("matches the server
+        /// to the hour"). The browser recomputes these hours from the same published inputs whenever a
+        /// reader changes an assumption, so the two implementations are pinned to one answer - change
+        /// either, and this or its TypeScript twin fails. The licence estimate's twin is
+        /// <see cref="CopilotAdoptionLicenceEstimateTests.Estimate_MatchesThePortalsGoldenFigure"/>.
+        /// </summary>
+        [TestMethod]
+        public void Estimate_MatchesThePortalsGoldenFigure()
+        {
+            // 45 observed + 7 projected x 12.5 (= 87.5, a deliberate midpoint: both languages must round
+            // it up to 88) = 133 tasks x 6 minutes = 798 minutes = 13.3 hours; x 50% = 6.65.
+            var estimate = CopilotAdoptionScoring.ModelCoworkValue(10, Options(), GoldenCoworkTasks());
+
+            Assert.AreEqual(7, estimate.ProjectedCoworkUsers);
+            Assert.AreEqual(133d, estimate.CoworkTasks);
+            Assert.AreEqual(13d, estimate.HoursPerMonthHigh);
+            Assert.AreEqual(7d, estimate.HoursPerMonthLow);
+        }
+
+        private static CoworkTaskInputs GoldenCoworkTasks()
+        {
+            return new CoworkTaskInputs
+            {
+                ObservedUsers = 3,
+                ObservedTasksPerMonth = 45,
+                Rate = new CoworkTaskRate { TasksPerPersonPerMonth = 12.5, Basis = CoworkTaskRateBases.Observed, Users = 3 },
+            };
+        }
+
+        /// <summary>
+        /// The shipped defaults are derived from Microsoft's published per-action credits and sit inside
+        /// what published studies report. Changing one is a product decision that has to be made on
+        /// purpose - with the evidence on the Cowork tab updated to match - never as a drive-by edit.
+        /// </summary>
+        [TestMethod]
+        public void TimeSavedDefaults_AreTheEvidencedFigures()
+        {
+            var options = CopilotAdoptionOptions.Default;
+
+            Assert.AreEqual(5d, options.CopilotMinutesSavedPerMeeting, "Microsoft's recap credit on one half-hour meeting in six.");
+            Assert.AreEqual(0.5d, options.CopilotMinutesSavedPerMailThread, "Microsoft's 6-minute credit on one email in twelve.");
+            Assert.AreEqual(1d, options.CopilotMinutesSavedPerDocument, "Microsoft's 6-minute credit on one document in six.");
+            Assert.AreEqual(0.5d, options.CoworkEstimateLowerBoundRatio, "Forrester's standard 50% productivity recapture.");
+            Assert.AreEqual(6d, options.CoworkMinutesSavedPerTask,
+                "The smallest credit Microsoft's Agent Assisted Hours method gives a resolved agent session.");
+            Assert.AreEqual(20d, options.CoworkAssumedTasksPerPersonPerMonth, "About one delegated task a working day.");
+        }
+
+        /// <summary>
+        /// The Copilot minutes drive the licence estimate now, so they carry Copilot's name. They were
+        /// <c>coworkMinutesSavedPer*</c>; the old keys must not linger, or a Settings sheet would carry
+        /// two keys for one assumption and a diff of two exports would never line up.
+        /// </summary>
+        [TestMethod]
+        public void TimeSavedOptions_AreNamedForTheEstimateTheyDrive()
+        {
+            var keys = JObject.FromObject(Options()).Properties().Select(p => p.Name).ToList();
+
+            CollectionAssert.IsSubsetOf(
+                new[]
+                {
+                    "copilotMinutesSavedPerMeeting", "copilotMinutesSavedPerMailThread", "copilotMinutesSavedPerDocument",
+                    "coworkMinutesSavedPerTask", "coworkAssumedTasksPerPersonPerMonth", "coworkEstimateLowerBoundRatio",
+                },
+                keys);
+            Assert.IsFalse(keys.Any(k => k.StartsWith("coworkMinutesSavedPerM", StringComparison.Ordinal)
+                                         || k == "coworkMinutesSavedPerDocument"),
+                "The Copilot minutes must not keep their historical Cowork names.");
+        }
+
+        [TestMethod]
+        public void Estimate_StatesThatCoworkIsUnmeasured_AndIsItsIncrementOverCopilot()
+        {
+            var estimate = CopilotAdoptionScoring.ModelCoworkValue(10, Options(), GoldenCoworkTasks());
+
+            Assert.IsTrue(estimate.Assumptions.Any(a => a.IndexOf("No study has yet measured Cowork's time savings", StringComparison.Ordinal) >= 0),
+                "The Cowork estimate rests on an assumption, and must say so wherever it travels.");
+            Assert.IsTrue(estimate.Assumptions.Any(a => a.IndexOf("Cowork's increment over Copilot alone", StringComparison.Ordinal) >= 0),
+                "The minutes per task are what Cowork adds for people who already use Copilot.");
+            Assert.IsFalse(estimate.Assumptions.Any(a => a.StartsWith("Assumes Microsoft 365 Copilot saves", StringComparison.Ordinal)),
+                "Copilot's per-item minutes size the licence decision, never the Cowork one.");
+            Assert.IsTrue(estimate.Assumptions.Any(a => a.IndexOf("the average of the 3 people already running them", StringComparison.Ordinal) >= 0),
+                "An observed rate names how many people it averages.");
+            Assert.IsTrue(estimate.Assumptions.Any(a => a.IndexOf("Covers 10 Copilot seat holders", StringComparison.Ordinal) >= 0));
+        }
+
+        [TestMethod]
+        public void CoworkTaskRate_IsTheObservedAverage_RestatedAsAMonth()
+        {
+            var rows = new List<CoworkReadinessRow>
+            {
+                new CoworkReadinessRow { UserId = 1, CoworkReportTotalTasks = 10 },
+                new CoworkReadinessRow { UserId = 2, CoworkReportTotalTasks = 20 },
+                // No tasks: neither in the average's numerator nor its denominator.
+                new CoworkReadinessRow { UserId = 3, CoworkReportTotalTasks = null },
+                new CoworkReadinessRow { UserId = 4, CoworkReportTotalTasks = 0 },
+            };
+
+            // 30 tasks over a 7-day report = 120 over the 28-day month, across 2 people = 60 each.
+            var rate = CopilotAdoptionScoring.CoworkTaskRateFor(rows, 7, Options());
+
+            Assert.AreEqual(CoworkTaskRateBases.Observed, rate.Basis);
+            Assert.AreEqual(2, rate.Users);
+            Assert.AreEqual(60d, rate.TasksPerPersonPerMonth);
+        }
+
+        [TestMethod]
+        public void CoworkTaskRate_FallsBackToTheLabelledPlaceholder_WhenNothingIsObserved()
+        {
+            var nobody = CopilotAdoptionScoring.CoworkTaskRateFor(Cohort(3), 28, Options());
+            Assert.AreEqual(CoworkTaskRateBases.Assumed, nobody.Basis);
+            Assert.AreEqual(20d, nobody.TasksPerPersonPerMonth);
+            Assert.AreEqual(0, nobody.Users);
+
+            // Tasks over an unknown period cannot be restated as a month - 180 days of tasks read as one
+            // month would multiply the Cowork layer six-fold - so they do not count as observed.
+            var rows = new List<CoworkReadinessRow> { new CoworkReadinessRow { UserId = 1, CoworkReportTotalTasks = 50 } };
+            Assert.AreEqual(CoworkTaskRateBases.Assumed, CopilotAdoptionScoring.CoworkTaskRateFor(rows, 0, Options()).Basis);
+        }
+
+        [TestMethod]
+        public void Estimate_CountsObservedTasksAsReported_AndProjectsOnlyEveryoneElse()
+        {
+            var cohort = Cohort(4);
+            cohort[0].CoworkReportTotalTasks = 14;
+
+            var rate = new CoworkTaskRate { TasksPerPersonPerMonth = 10, Basis = CoworkTaskRateBases.Observed, Users = 1 };
+            var estimate = CopilotAdoptionScoring.EstimateCoworkValue(cohort, Options(), 28, rate);
+
+            Assert.AreEqual(1, estimate.CoworkTaskUsers);
+            Assert.AreEqual(14d, estimate.ObservedCoworkTasks, "A 28-day report is already a 28-day month.");
+            Assert.AreEqual(3, estimate.ProjectedCoworkUsers);
+            Assert.AreEqual(14d + 3 * 10, estimate.CoworkTasks);
+            Assert.AreEqual(Math.Round((14d + 30) * 6 / 60, MidpointRounding.AwayFromZero), estimate.HoursPerMonthHigh);
+        }
+
+        [TestMethod]
+        public void FullRolloutAndReadyEstimates_ProjectTheSameTenantWideCoworkRate()
+        {
+            var established = HeavyCoordinator();
+            established.UserId = 1;
+            established.UserPrincipalName = "regular@contoso.com";
+            established.CoworkReportTotalTasks = 12;
+            established.CoworkReportActiveDays = 10;
+
+            var notReady = HeavyCoordinator();
+            notReady.UserId = 2;
+            notReady.UserPrincipalName = "novice@contoso.com";
+
+            var analysis = new CopilotAdoptionAnalysis
+            {
+                CoworkSignals = new List<CoworkReadinessSignalRow> { established, notReady },
+                LicensedUsers = new List<LicensedUserAdoptionRow>
+                {
+                    new LicensedUserAdoptionRow { UserId = 1, UserPrincipalName = "regular@contoso.com", AdoptionScore = 80 },
+                    new LicensedUserAdoptionRow { UserId = 2, UserPrincipalName = "novice@contoso.com", AdoptionScore = 5 },
+                },
+            };
+            analysis.Summary.DataSources.CoworkUsageReportPeriodDays = 28;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            var ready = analysis.Summary.CoworkValueEstimate;
+            var full = analysis.Summary.CoworkFullRolloutEstimate;
+
+            Assert.AreEqual(CoworkTaskRateBases.Observed, full.CoworkTaskRateBasis);
+            Assert.AreEqual(12d, full.CoworkTasksPerPersonPerMonth, "One person's 12 tasks over a 28-day report.");
+            Assert.AreEqual(full.CoworkTasksPerPersonPerMonth, ready.CoworkTasksPerPersonPerMonth,
+                "Both cohorts must project the same rate, or the ready cohort could out-model the ceiling.");
+            Assert.AreEqual(12d, full.ObservedCoworkTasks);
+            Assert.AreEqual(1, full.ProjectedCoworkUsers, "The novice is projected; the regular is observed.");
+            Assert.AreEqual(24d, full.CoworkTasks);
+        }
+
+        [TestMethod]
+        public void FullRolloutEstimate_CoversEverySeatHolder_AndBoundsTheReadyCohort()
+        {
+            var ready = HeavyCoordinator();
+            ready.UserId = 1;
+            ready.UserPrincipalName = "prime@contoso.com";
+
+            var notReady = HeavyCoordinator();
+            notReady.UserId = 2;
+            notReady.UserPrincipalName = "novice@contoso.com";
+
+            var analysis = new CopilotAdoptionAnalysis
+            {
+                CoworkSignals = new List<CoworkReadinessSignalRow> { ready, notReady },
+                LicensedUsers = new List<LicensedUserAdoptionRow>
+                {
+                    new LicensedUserAdoptionRow { UserId = 1, UserPrincipalName = "prime@contoso.com", AdoptionScore = 80 },
+                    // Loaded but not yet fluent: "build fluency first", so outside the ready cohort.
+                    new LicensedUserAdoptionRow { UserId = 2, UserPrincipalName = "novice@contoso.com", AdoptionScore = 5 },
+                },
+            };
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            var summary = analysis.Summary;
+
+            Assert.AreEqual(1, summary.CoworkValueEstimate.CohortUsers, "Ready now is the recommended policy cohort.");
+            Assert.AreEqual(2, summary.CoworkFullRolloutEstimate.CohortUsers,
+                "Full adoption covers every scored Copilot seat holder.");
+            Assert.IsTrue(summary.CoworkFullRolloutEstimate.HoursPerMonthHigh > summary.CoworkValueEstimate.HoursPerMonthHigh,
+                "The ceiling must include the time the not-yet-ready seat holders could get back.");
+            Assert.IsTrue(summary.CoworkFullRolloutEstimate.IsModelled);
+            Assert.IsTrue(summary.CoworkFullRolloutEstimate.Assumptions.Any(
+                a => a.IndexOf("NOT measured", StringComparison.OrdinalIgnoreCase) >= 0),
+                "The ceiling is every bit as modelled as the ready cohort and must say so.");
+        }
+
+        [TestMethod]
+        public void FullRolloutEstimate_IsEmpty_WhenCoworkCouldNotBeAssessed()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.IsFalse(analysis.Summary.CoworkReadinessAvailable);
+            Assert.AreEqual(0, analysis.Summary.CoworkFullRolloutEstimate.CohortUsers,
+                "No analysis means nothing to model - never a modelled zero presented as a finding.");
+        }
+
+        [TestMethod]
+        public void TimeSavedOverrides_ApplyToACopy_AndNeverTheCachedOptions()
+        {
+            var cached = Options();
+            var overrides = new TimeSavedOverrides { MinutesSavedPerMeeting = 12, LowerBoundRatio = 0.25 };
+
+            var applied = overrides.ApplyTo(cached);
+
+            Assert.AreNotSame(cached, applied);
+            Assert.AreEqual(12d, applied.CopilotMinutesSavedPerMeeting);
+            Assert.AreEqual(0.25d, applied.CoworkEstimateLowerBoundRatio);
+            Assert.AreEqual(cached.CopilotMinutesSavedPerMailThread, applied.CopilotMinutesSavedPerMailThread,
+                "A figure the reader did not supply keeps the configured default.");
+            Assert.AreEqual(5d, cached.CopilotMinutesSavedPerMeeting,
+                "The cached analysis's options are shared by every caller and must never be written to.");
+        }
+
+        [TestMethod]
+        public void TimeSavedOverrides_ClampToTheSameBoundsAsThePortal()
+        {
+            var applied = new TimeSavedOverrides
+            {
+                MinutesSavedPerMeeting = 100000,
+                MinutesSavedPerMailThread = -3,
+                MinutesSavedPerDocument = double.NaN,
+                LowerBoundRatio = 7,
+            }.ApplyTo(Options());
+
+            Assert.AreEqual(TimeSavedOverrides.MaxMinutesPerItem, applied.CopilotMinutesSavedPerMeeting,
+                "A hand-edited URL must not turn a sizing model into a headline of millions of hours.");
+            Assert.AreEqual(0d, applied.CopilotMinutesSavedPerMailThread, "A negative saving is not a saving.");
+            Assert.AreEqual(Options().CopilotMinutesSavedPerDocument, applied.CopilotMinutesSavedPerDocument,
+                "A figure that is not a number keeps the default rather than poisoning the estimate.");
+            Assert.AreEqual(1d, applied.CoworkEstimateLowerBoundRatio);
+            Assert.IsFalse(new TimeSavedOverrides { MinutesSavedPerMeeting = double.NaN }.Any);
+        }
+
+        [TestMethod]
+        public void TimeSavedOverrides_ReplaceTheCoworkFigures_WithinTheirOwnBounds()
+        {
+            var published = new CoworkValueEstimate
+            {
+                CohortUsers = 5,
+                CoworkTasksPerPersonPerMonth = 8,
+                CoworkTaskRateBasis = CoworkTaskRateBases.Observed,
+                CoworkTaskRateUsers = 2,
+            };
+
+            var overrides = new TimeSavedOverrides { MinutesSavedPerTask = 1000, TasksPerPersonPerMonth = 15 };
+            Assert.IsTrue(overrides.Any);
+            Assert.AreEqual(TimeSavedOverrides.MaxMinutesPerTask, overrides.ApplyTo(Options()).CoworkMinutesSavedPerTask);
+
+            var custom = overrides.TaskRateFor(published);
+            Assert.AreEqual(15d, custom.TasksPerPersonPerMonth);
+            Assert.AreEqual(CoworkTaskRateBases.Custom, custom.Basis, "A reader's rate must never be labelled as observed.");
+
+            Assert.AreEqual(TimeSavedOverrides.MaxTasksPerPersonPerMonth,
+                new TimeSavedOverrides { TasksPerPersonPerMonth = 1e9 }.TaskRateFor(published).TasksPerPersonPerMonth);
+
+            var untouched = new TimeSavedOverrides { MinutesSavedPerMeeting = 9 }.TaskRateFor(published);
+            Assert.AreEqual(8d, untouched.TasksPerPersonPerMonth, "No rate from the reader keeps the published one.");
+            Assert.AreEqual(CoworkTaskRateBases.Observed, untouched.Basis);
+            Assert.AreEqual(2, untouched.Users);
+        }
+
+        /// <summary>
+        /// The portal writes JavaScript numbers into the export URL. A culture-sensitive parse on a
+        /// server running a European culture reads the full stop as a thousands separator, so "0.5"
+        /// minutes per email would become 5 - ten times the saving the reader entered.
+        /// </summary>
+        [TestMethod]
+        public void ExportTimeSavedFigures_ParseInvariantly_WhateverTheServerCulture()
+        {
+            var original = CultureInfo.CurrentCulture;
+            try
+            {
+                CultureInfo.CurrentCulture = new CultureInfo("de-DE");
+
+                var parsed = CopilotAdoptionAPIController.ParseTimeSavedOverrides("12", "0.5", "not a number", "0.3", "7.5", "12.5");
+
+                Assert.AreEqual(12d, parsed.MinutesSavedPerMeeting);
+                Assert.AreEqual(0.5d, parsed.MinutesSavedPerMailThread, "A German server must not read '0.5' as 5.");
+                Assert.IsNull(parsed.MinutesSavedPerDocument, "An unparseable figure keeps the product default.");
+                Assert.AreEqual(0.3d, parsed.LowerBoundRatio);
+                Assert.AreEqual(7.5d, parsed.MinutesSavedPerTask);
+                Assert.AreEqual(12.5d, parsed.TasksPerPersonPerMonth, "A German server must not read '12.5' as 125.");
+                Assert.IsFalse(CopilotAdoptionAPIController.ParseTimeSavedOverrides(null, " ", null, null, null, null).Any,
+                    "An export with no figures of the reader's own must use the product defaults untouched.");
+            }
+            finally
+            {
+                CultureInfo.CurrentCulture = original;
+            }
         }
 
         #endregion

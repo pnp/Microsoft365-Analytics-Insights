@@ -1,6 +1,6 @@
 ---
 name: release-critic
-description: Hardens a release before it ships by running an iterative multi-model critique loop - review, fix blockers, re-review - until a round comes back clean. Verifies every finding against the code before acting, tests every fix in both directions, and keeps the release PR honest. Use for "critique the release", "review the release with several models", "is this release ready", "harden the release", "find what's wrong before we ship", or after a large feature branch lands in `dev`.
+description: Hardens a release before it ships by running an iterative multi-model critique loop - review, fix blockers, re-review - until a round comes back clean. Verifies every finding against the code before acting, tests every fix in both directions, and keeps the release PR honest. Run ONLY when the user explicitly asks - "critique the release", "review the release with several models", "is this release ready", "harden the release", "find what's wrong before we ship". Never invoke it on your own initiative for ordinary feature work, which favours a quick human + AI feedback loop instead.
 ---
 
 # Release Critic

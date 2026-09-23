@@ -1645,7 +1645,308 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
-        /// Builds the modelled hours estimate for a cohort.
+        /// Working days in the report's month: the multiplier that restates a per-active-day volume as a
+        /// monthly one. Both time-saved estimates quote "a month" on this basis, and the portal divides by
+        /// the same figure to quote them per person per working day.
+        /// </summary>
+        public static double WorkingDaysPerMonth(CopilotAdoptionOptions options)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            return Math.Max(1d, o.HabitBucketNormalisationDays * (o.WorkingDaysPerWeek / 7d));
+        }
+
+        /// <summary>
+        /// The share of every minutes-saved assumption the conservative end of a time-saved range applies,
+        /// clamped to 0..1: above 1 the "low" end would exceed the "high" one and print a backwards range,
+        /// and below 0 it would invent a saving out of nothing. Shared by both estimates.
+        /// </summary>
+        public static double TimeSavedLowerBoundRatio(CopilotAdoptionOptions options)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            return Math.Min(1d, NonNegative(o.CoworkEstimateLowerBoundRatio));
+        }
+
+        /// <summary>
+        /// The multiplier that restates a Cowork task count over Microsoft's report period as tasks in the
+        /// same month the rest of the model uses; zero when the period is unknown.
+        ///
+        /// <para>Zero rather than a guess on purpose. A snapshot imported before the period was recorded
+        /// has tasks over an unknown number of days, and treating 180 days of tasks as one month would
+        /// multiply the Cowork layer six-fold. Those tasks are left out of the observed side and the
+        /// people are projected instead, which is labelled.</para>
+        /// </summary>
+        public static double CoworkTasksPerMonthFactor(int reportPeriodDays, CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            if (reportPeriodDays <= 0) return 0d;
+            return Math.Max(1, o.HabitBucketNormalisationDays) / (double)reportPeriodDays;
+        }
+
+        /// <summary>
+        /// The Cowork tasks a month the model projects each not-yet-observed person at: the average of
+        /// everyone with tasks in Microsoft's Cowork usage report, or - when nobody has any - the
+        /// configured placeholder, labelled as one.
+        ///
+        /// <para>Computed once over every scored seat holder and shared by both cohorts, so the ready-now
+        /// and full-adoption figures project the same rate and cannot contradict each other.</para>
+        /// </summary>
+        public static CoworkTaskRate CoworkTaskRateFor(
+            IEnumerable<CoworkReadinessRow> rows,
+            int reportPeriodDays,
+            CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var perMonth = CoworkTasksPerMonthFactor(reportPeriodDays, o);
+
+            if (perMonth > 0 && rows != null)
+            {
+                var users = 0;
+                double tasks = 0;
+                foreach (var row in rows)
+                {
+                    var count = row?.CoworkReportTotalTasks.GetValueOrDefault() ?? 0;
+                    if (count <= 0) continue;
+                    users++;
+                    tasks += count;
+                }
+
+                if (users > 0)
+                {
+                    return new CoworkTaskRate
+                    {
+                        TasksPerPersonPerMonth = Round(tasks * perMonth / users, 1),
+                        Basis = CoworkTaskRateBases.Observed,
+                        Users = users,
+                    };
+                }
+            }
+
+            return new CoworkTaskRate
+            {
+                TasksPerPersonPerMonth = NonNegative(o.CoworkAssumedTasksPerPersonPerMonth),
+                Basis = CoworkTaskRateBases.Assumed,
+            };
+        }
+
+        /// <summary>
+        /// Builds the modelled Cowork estimate for a cohort: the time Cowork could give back on top of what
+        /// these people's Copilot licences already save.
+        ///
+        /// <b>Every output is an assumption applied to observed use.</b> The Cowork tasks already in
+        /// Microsoft's report are real; the projection for everyone else and the conversion to time saved
+        /// are a model, and this method returns the assumptions that produced it so no caller can render a
+        /// number without them. It deliberately stops at hours: see the note on
+        /// <see cref="CoworkValueEstimate"/> for why a monetary figure is not produced.
+        /// </summary>
+        /// <param name="cohort">
+        /// The users the estimate covers: the recommended rollout cohort for
+        /// <see cref="CopilotAdoptionSummary.CoworkValueEstimate"/>, or every scored seat holder for
+        /// <see cref="CopilotAdoptionSummary.CoworkFullRolloutEstimate"/>.
+        /// </param>
+        /// <param name="options">Tuning, including the minutes-saved assumption.</param>
+        /// <param name="coworkReportPeriodDays">
+        /// The period of the Cowork usage-report snapshot the rows' task counts came from; zero when there
+        /// is none, in which case no Cowork task is treated as observed.
+        /// </param>
+        /// <param name="taskRate">
+        /// The tenant-wide rate to project not-yet-observed people at. Computed from
+        /// <paramref name="cohort"/> when omitted.
+        /// </param>
+        public static CoworkValueEstimate EstimateCoworkValue(
+            IReadOnlyCollection<CoworkReadinessRow> cohort,
+            CopilotAdoptionOptions options = null,
+            int coworkReportPeriodDays = 0,
+            CoworkTaskRate taskRate = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+
+            if (cohort == null || cohort.Count == 0)
+            {
+                return new CoworkValueEstimate();
+            }
+
+            // Cowork task counts are totals over the report's period, so they are restated onto the same
+            // month the rest of the report quotes by the ratio of the two.
+            var tasksPerMonth = CoworkTasksPerMonthFactor(coworkReportPeriodDays, o);
+
+            double observedTasks = 0;
+            var observedTaskUsers = 0;
+            foreach (var row in cohort)
+            {
+                var tasks = row.CoworkReportTotalTasks.GetValueOrDefault();
+                if (tasksPerMonth > 0 && tasks > 0)
+                {
+                    observedTaskUsers++;
+                    observedTasks += tasks * tasksPerMonth;
+                }
+            }
+
+            return ModelCoworkValue(
+                cohort.Count,
+                o,
+                new CoworkTaskInputs
+                {
+                    ObservedUsers = observedTaskUsers,
+                    ObservedTasksPerMonth = observedTasks,
+                    Rate = taskRate ?? CoworkTaskRateFor(cohort, coworkReportPeriodDays, o),
+                });
+        }
+
+        /// <summary>
+        /// Applies the Cowork assumptions to a cohort's Cowork tasks: those already in Microsoft's Cowork
+        /// usage report, plus everyone else projected at the tenant's rate, times the minutes each task is
+        /// assumed to save on top of Copilot.
+        ///
+        /// <para>Split out of <see cref="EstimateCoworkValue"/> so an estimate can be restated under a
+        /// reader's own assumptions without re-running the analysis: the task inputs are all it needs, and
+        /// the Excel export does exactly that with the figures the reader entered in the portal.</para>
+        ///
+        /// <para><b>The hours are computed from the ROUNDED task count it publishes</b>, not the unrounded
+        /// sum. The portal recomputes the hours in the browser from the published inputs whenever the
+        /// reader changes an assumption, so the server has to use the same operands for an uncustomised
+        /// page and its Excel report to agree to the hour.</para>
+        ///
+        /// <para><b>Why there is no Copilot layer here.</b> These people already hold a Copilot licence,
+        /// so the time Copilot saves them is the licence's, not Cowork's: enabling Cowork does not unlock
+        /// it, and no decision hangs on it. The minutes per task are Cowork's increment over Copilot alone.
+        /// No study has measured them, alone or for people who already use Copilot, and the assumptions
+        /// say so. The Copilot minutes size the licence decision instead - see
+        /// <see cref="ModelLicenceValue"/>.</para>
+        /// </summary>
+        /// <param name="coworkTasks">
+        /// The cohort's observed Cowork tasks and the rate for everyone else. Null means none observed,
+        /// projected at the configured placeholder.
+        /// </param>
+        public static CoworkValueEstimate ModelCoworkValue(
+            int cohortUsers,
+            CopilotAdoptionOptions options = null,
+            CoworkTaskInputs coworkTasks = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var estimate = new CoworkValueEstimate();
+
+            if (cohortUsers <= 0)
+            {
+                return estimate;
+            }
+
+            estimate.CohortUsers = cohortUsers;
+            var lowerRatio = TimeSavedLowerBoundRatio(o);
+
+            // (observed tasks + projected people x rate) x minutes per task
+            var inputs = coworkTasks ?? new CoworkTaskInputs();
+            var rate = inputs.Rate ?? new CoworkTaskRate
+            {
+                TasksPerPersonPerMonth = NonNegative(o.CoworkAssumedTasksPerPersonPerMonth),
+                Basis = CoworkTaskRateBases.Assumed,
+            };
+
+            estimate.CoworkTaskUsers = Math.Min(cohortUsers, Math.Max(0, inputs.ObservedUsers));
+            estimate.ObservedCoworkTasks = estimate.CoworkTaskUsers > 0
+                ? Round(NonNegative(inputs.ObservedTasksPerMonth), 0)
+                : 0;
+            estimate.ProjectedCoworkUsers = cohortUsers - estimate.CoworkTaskUsers;
+            estimate.CoworkTasksPerPersonPerMonth = NonNegative(rate.TasksPerPersonPerMonth);
+            estimate.CoworkTaskRateBasis = rate.Basis ?? CoworkTaskRateBases.Assumed;
+            estimate.CoworkTaskRateUsers = estimate.CoworkTaskRateBasis == CoworkTaskRateBases.Observed
+                ? Math.Max(0, rate.Users)
+                : 0;
+            estimate.CoworkTasks = estimate.ObservedCoworkTasks
+                + Round(estimate.ProjectedCoworkUsers * estimate.CoworkTasksPerPersonPerMonth, 0);
+
+            var taskMinutes = NonNegative(o.CoworkMinutesSavedPerTask);
+            var minutes = estimate.CoworkTasks * taskMinutes;
+            estimate.HoursPerMonthHigh = Round(minutes / 60d, 0);
+            estimate.HoursPerMonthLow = Round(minutes * lowerRatio / 60d, 0);
+
+            var rateText = Num(estimate.CoworkTasksPerPersonPerMonth);
+
+            estimate.Assumptions.Add(
+                $"Assumes each Cowork task saves {Num(taskMinutes)} minutes on top of what Microsoft 365 "
+                + "Copilot already saves - Cowork's increment over Copilot alone. No study has yet measured "
+                + "Cowork's time savings, alone or for people who already use Copilot, so this figure is an "
+                + "assumption.");
+
+            estimate.Assumptions.Add(
+                $"Covers {cohortUsers:N0} Copilot seat holder{Plural(cohortUsers)}. Cowork tasks from "
+                + "Microsoft's Cowork usage report are restated as a "
+                + $"{Math.Max(1, o.HabitBucketNormalisationDays)}-day month.");
+
+            switch (estimate.CoworkTaskRateBasis)
+            {
+                case CoworkTaskRateBases.Observed:
+                    estimate.Assumptions.Add(
+                        "Cowork tasks already in Microsoft's Cowork usage report are counted as reported. "
+                        + $"Everyone else is projected at {rateText} tasks a month each: the average of the "
+                        + $"{estimate.CoworkTaskRateUsers:N0} "
+                        + (estimate.CoworkTaskRateUsers == 1
+                            ? "person already running them, who as an early adopter"
+                            : "people already running them, who as early adopters")
+                        + " may use Cowork more than those who follow.");
+                    break;
+
+                case CoworkTaskRateBases.Custom:
+                    estimate.Assumptions.Add(
+                        "Cowork tasks already in Microsoft's Cowork usage report are counted as reported. "
+                        + $"Everyone else is projected at {rateText} tasks a month each: your own figure.");
+                    break;
+
+                default:
+                    estimate.Assumptions.Add(
+                        "No Cowork tasks are in Microsoft's Cowork usage report for this period, so everyone "
+                        + $"is projected at {rateText} tasks a month each: a placeholder until real use is "
+                        + "observed.");
+                    break;
+            }
+
+            estimate.Assumptions.Add(
+                "The minutes are Cowork's increment over Copilot alone. For work Copilot already speeds up - a "
+                + "meeting recap, a drafted reply - only the time beyond Copilot's own saving belongs to Cowork.");
+
+            estimate.Assumptions.Add(
+                $"The lower bound applies {Num(lowerRatio * 100d)}% of the minutes saved per task; the upper "
+                + "bound applies them in full.");
+
+            estimate.Assumptions.Add(
+                "This is the potential at full use, not the gain over today: people already using Cowork may be "
+                + "realising part of it now.");
+
+            estimate.Assumptions.Add(
+                "Time saved is NOT measured by this product and cannot be. These figures are a model for "
+                + "sizing a Cowork rollout, not a result.");
+
+            estimate.Assumptions.Add(NoMonetaryValueAssumption);
+
+            return estimate;
+        }
+
+        /// <summary>
+        /// The sentence both time-saved estimates end on. One constant, so the two can never disagree about
+        /// why neither is priced.
+        /// </summary>
+        private const string NoMonetaryValueAssumption =
+            "No monetary value is shown. Pricing a modelled saving would state a figure this product "
+            + "cannot evidence, and it has no defensible fully-loaded hourly rate to price it with. "
+            + "This report reports seats, people and hours - never money.";
+
+        /// <summary>A configured or entered figure, with a non-number or a negative read as zero.</summary>
+        private static double NonNegative(double value)
+        {
+            return double.IsNaN(value) || double.IsInfinity(value) ? 0d : Math.Max(0d, value);
+        }
+
+        private static string Plural(long count)
+        {
+            return count == 1 ? string.Empty : "s";
+        }
+
+        #endregion
+
+        #region Licence value estimate (MODELLED - not measured)
+
+        /// <summary>
+        /// Builds the modelled licence estimate for a set of licence candidates: the time Microsoft 365
+        /// Copilot could give back to them if they were licensed.
         ///
         /// <b>Every output is an assumption applied to observed volume.</b> The volumes are real - they
         /// come from Microsoft's usage reports - but the conversion to time saved is a model, and this
@@ -1653,80 +1954,168 @@ namespace Common.Entities.CopilotAdoption
         /// It deliberately stops at hours: see the note on <see cref="CoworkValueEstimate"/> for why a
         /// monetary figure is not produced.
         /// </summary>
-        /// <param name="cohort">The users the estimate covers - normally the recommended rollout cohort.</param>
-        /// <param name="options">Tuning, including the minutes-saved assumptions.</param>
-        public static CoworkValueEstimate EstimateCoworkValue(
-            IReadOnlyCollection<CoworkReadinessRow> cohort,
-            CopilotAdoptionOptions options = null)
+        /// <param name="candidates">
+        /// The candidates the estimate covers: every recommended candidate for
+        /// <see cref="CopilotAdoptionSummary.LicenceOpportunityEstimate"/>, or those already using Copilot
+        /// Chat for <see cref="CopilotAdoptionSummary.LicenceChatUsersEstimate"/>.
+        /// </param>
+        /// <param name="options">Tuning, including the Copilot minutes-saved assumptions.</param>
+        /// <param name="candidatesCapped">
+        /// True when the candidate query hit <see cref="CopilotAdoptionOptions.MaxOpportunityCandidates"/>,
+        /// so the estimate is a floor rather than a total - and says so.
+        /// </param>
+        public static LicenceValueEstimate EstimateLicenceValue(
+            IReadOnlyCollection<LicenceOpportunityRow> candidates,
+            CopilotAdoptionOptions options = null,
+            bool candidatesCapped = false)
         {
             var o = options ?? CopilotAdoptionOptions.Default;
-            var estimate = new CoworkValueEstimate();
 
-            if (cohort == null || cohort.Count == 0)
+            if (candidates == null || candidates.Count == 0)
             {
-                return estimate;
+                return new LicenceValueEstimate { CandidatesCapped = candidatesCapped };
             }
 
-            estimate.CohortUsers = cohort.Count;
-
-            // The per-active-day averages are restated per month on the habit-bucket basis, so the estimate
-            // is quoted in the same "a month" units as the rest of the report rather than in whichever
-            // window the reader happened to select.
-            var workingDaysPerMonth = Math.Max(1d,
-                o.HabitBucketNormalisationDays * (o.WorkingDaysPerWeek / 7d));
+            // Both the opportunity query and the Cowork readiness query reduce Graph's daily reports to a
+            // per-active-day average (CopilotAdoptionSql.PerActiveDay), so the same working-days multiplier
+            // restates them as the month every modelled figure in this report is quoted in.
+            var workingDaysPerMonth = WorkingDaysPerMonth(o);
 
             double meetings = 0, mail = 0, documents = 0;
-            foreach (var row in cohort)
+            foreach (var row in candidates)
             {
                 meetings += row.TeamsMeetings * workingDaysPerMonth;
                 mail += (row.EmailsSent + row.EmailsRead) * workingDaysPerMonth;
                 documents += row.FilesViewedOrEdited * workingDaysPerMonth;
             }
 
-            estimate.AddressableMeetings = Round(meetings, 0);
-            estimate.AddressableMailThreads = Round(mail, 0);
-            estimate.AddressableDocuments = Round(documents, 0);
-
-            var minutesHigh = meetings * Math.Max(0d, o.CoworkMinutesSavedPerMeeting)
-                            + mail * Math.Max(0d, o.CoworkMinutesSavedPerMailThread)
-                            + documents * Math.Max(0d, o.CoworkMinutesSavedPerDocument);
-
-            // Clamped to 0..1: a ratio above 1 would make the "low" end exceed the "high" end and render a
-            // backwards range, and a negative one would invent a saving out of thin air.
-            var lowerRatio = Math.Min(1d, Math.Max(0d, o.CoworkEstimateLowerBoundRatio));
-
-            estimate.HoursPerMonthHigh = Round(minutesHigh / 60d, 0);
-            estimate.HoursPerMonthLow = Round(minutesHigh * lowerRatio / 60d, 0);
-
-            estimate.Assumptions.Add(
-                $"Assumes Cowork saves {Num(o.CoworkMinutesSavedPerMeeting)} minutes per meeting, "
-                + $"{Num(o.CoworkMinutesSavedPerMailThread)} per email and "
-                + $"{Num(o.CoworkMinutesSavedPerDocument)} per document.");
-
-            estimate.Assumptions.Add(
-                $"The lower bound applies {Num(lowerRatio * 100d)}% of those assumptions; the upper bound "
-                + "applies them in full.");
-
-            estimate.Assumptions.Add(
-                $"Volumes are observed from Microsoft's usage reports for {cohort.Count:N0} user"
-                + $"{(cohort.Count == 1 ? string.Empty : "s")}, restated over "
-                + $"{Num(workingDaysPerMonth)} working days a month.");
-
-            estimate.Assumptions.Add(
-                "Time saved is NOT measured by this product and cannot be. These figures are a model for "
-                + "sizing a rollout, not a result.");
-
-            estimate.Assumptions.Add(
-                "No monetary value is shown. Pricing a modelled saving would state a figure this product "
-                + "cannot evidence, and it has no defensible fully-loaded hourly rate to price it with. "
-                + "This report reports seats, people and hours - never money.");
-
-            return estimate;
+            return ModelLicenceValue(candidates.Count, meetings, mail, documents, o, candidatesCapped);
         }
 
-        private static string Plural(long count)
+        /// <summary>
+        /// Applies the Copilot minutes-saved assumptions to a cohort's observed monthly volumes: meetings,
+        /// emails and documents, each times the minutes Microsoft 365 Copilot is assumed to save on it.
+        ///
+        /// <para>Split out of <see cref="EstimateLicenceValue"/> so an estimate can be restated under a
+        /// reader's own assumptions without re-running the analysis: the volumes are all it needs, and the
+        /// Excel export does exactly that with the figures the reader entered in the portal.</para>
+        ///
+        /// <para><b>The hours are computed from the ROUNDED volumes it publishes</b>, not the unrounded
+        /// sums. The portal recomputes the hours in the browser from those published volumes whenever the
+        /// reader changes an assumption, so the server has to use the same operands for an uncustomised
+        /// page and its Excel report to agree to the hour. The difference is at most a fraction of an
+        /// hour; the disagreement it prevents is a visible one.</para>
+        ///
+        /// <para><b>Why the licence decision gets these minutes.</b> Each default is derived from
+        /// Microsoft's published Copilot credits and checked against published studies of Microsoft 365
+        /// Copilot - the largest of which randomised who received a licence, which is exactly the decision
+        /// this figure sizes.</para>
+        /// </summary>
+        public static LicenceValueEstimate ModelLicenceValue(
+            int cohortUsers,
+            double meetingsPerMonth,
+            double mailPerMonth,
+            double documentsPerMonth,
+            CopilotAdoptionOptions options = null,
+            bool candidatesCapped = false)
         {
-            return count == 1 ? string.Empty : "s";
+            var o = options ?? CopilotAdoptionOptions.Default;
+            var licenceEstimate = new LicenceValueEstimate { CandidatesCapped = candidatesCapped };
+
+            if (cohortUsers <= 0)
+            {
+                return licenceEstimate;
+            }
+
+            licenceEstimate.CohortUsers = cohortUsers;
+            licenceEstimate.AddressableMeetings = Round(NonNegative(meetingsPerMonth), 0);
+            licenceEstimate.AddressableMailThreads = Round(NonNegative(mailPerMonth), 0);
+            licenceEstimate.AddressableDocuments = Round(NonNegative(documentsPerMonth), 0);
+
+            var meetingMinutes = NonNegative(o.CopilotMinutesSavedPerMeeting);
+            var emailMinutes = NonNegative(o.CopilotMinutesSavedPerMailThread);
+            var documentMinutes = NonNegative(o.CopilotMinutesSavedPerDocument);
+            var lowerRatio = TimeSavedLowerBoundRatio(o);
+
+            // Observed items x minutes saved on each.
+            var minutes = licenceEstimate.AddressableMeetings * meetingMinutes
+                        + licenceEstimate.AddressableMailThreads * emailMinutes
+                        + licenceEstimate.AddressableDocuments * documentMinutes;
+
+            licenceEstimate.HoursPerMonthHigh = Round(minutes / 60d, 0);
+            licenceEstimate.HoursPerMonthLow = Round(minutes * lowerRatio / 60d, 0);
+
+            licenceEstimate.Assumptions.Add(
+                $"Assumes Microsoft 365 Copilot saves {Num(meetingMinutes)} minutes per meeting, "
+                + $"{Num(emailMinutes)} per email and {Num(documentMinutes)} per document.");
+
+            licenceEstimate.Assumptions.Add(
+                $"Volumes are observed from Microsoft's usage reports for {cohortUsers:N0} recommended licence "
+                + $"candidate{Plural(cohortUsers)}, restated over {Num(WorkingDaysPerMonth(o))} working days a "
+                + "month.");
+
+            licenceEstimate.Assumptions.Add(
+                "Candidates already using Copilot Chat without a licence may be realising part of this "
+                + "already, so for them a licence adds less than shown.");
+
+            if (candidatesCapped)
+            {
+                licenceEstimate.Assumptions.Add(
+                    $"The candidate list reached its {o.MaxOpportunityCandidates:N0}-candidate limit, so people "
+                    + "beyond it are not counted and the true figure may be higher.");
+            }
+
+            licenceEstimate.Assumptions.Add(
+                $"The lower bound applies {Num(lowerRatio * 100d)}% of each minutes-saved assumption; the "
+                + "upper bound applies them in full.");
+
+            licenceEstimate.Assumptions.Add(
+                "This is the potential at full use of a licence, not a forecast: newly licensed people take "
+                + "time to build the habit, and not all of them will.");
+
+            licenceEstimate.Assumptions.Add(
+                "Time saved is NOT measured by this product and cannot be. These figures are a model for "
+                + "sizing a licence purchase, not a result.");
+
+            licenceEstimate.Assumptions.Add(NoMonetaryValueAssumption);
+
+            return licenceEstimate;
+        }
+
+        /// <summary>
+        /// The licence estimate's high-end hours split into meetings, email and documents, in that order.
+        ///
+        /// <para>Rounded by largest remainder so the three parts add up to exactly
+        /// <see cref="LicenceValueEstimate.HoursPerMonthHigh"/>. Rounding each part on its own lets
+        /// "120 + 300 + 181" sit under a total of 600, and a reader checking the sum takes that as an
+        /// arithmetic error in the model. The portal apportions the same way.</para>
+        /// </summary>
+        public static double[] LicenceHoursByActivity(LicenceValueEstimate estimate, CopilotAdoptionOptions options = null)
+        {
+            var o = options ?? CopilotAdoptionOptions.Default;
+            if (estimate == null || estimate.CohortUsers <= 0) return new double[3];
+
+            var parts = new[]
+            {
+                estimate.AddressableMeetings * NonNegative(o.CopilotMinutesSavedPerMeeting) / 60d,
+                estimate.AddressableMailThreads * NonNegative(o.CopilotMinutesSavedPerMailThread) / 60d,
+                estimate.AddressableDocuments * NonNegative(o.CopilotMinutesSavedPerDocument) / 60d,
+            };
+
+            var result = parts.Select(p => Math.Floor(Math.Max(0d, p))).ToArray();
+            var leftover = (int)Math.Max(0d, estimate.HoursPerMonthHigh - result.Sum());
+
+            // Largest remainder first; ties go to the earlier activity so the split is deterministic.
+            foreach (var index in Enumerable.Range(0, parts.Length)
+                         .OrderByDescending(i => Math.Max(0d, parts[i]) - Math.Floor(Math.Max(0d, parts[i])))
+                         .ThenBy(i => i))
+            {
+                if (leftover <= 0) break;
+                result[index] += 1;
+                leftover--;
+            }
+
+            return result;
         }
 
         #endregion

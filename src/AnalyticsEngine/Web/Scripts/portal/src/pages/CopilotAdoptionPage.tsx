@@ -61,8 +61,16 @@ import DismissibleWarnings from '../components/shared/DismissibleWarnings';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
 import type { KpiDefinition } from '../components/shared/KpiGrid';
-import { activeLocale, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
+import { activeLocale, formatNumber, plural, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
 import { adoptionBandLabel, availabilityMessages, scoreProfileLabel } from '../components/copilotAdoption/serverText';
+import {
+  compactHoursRange,
+  projectCoworkTimeSaved,
+  projectLicenceTimeSaved,
+  timeSavedExportParams,
+  useTimeSavedAssumptions,
+  type TimeSavedAssumptions,
+} from '../components/copilotAdoption/coworkTimeSaved';
 
 const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
   { value: 7, labelKey: 'copilotAdoption.page.window.last7Days' },
@@ -294,6 +302,8 @@ export default function CopilotAdoptionPage() {
   const [filterOptions, setFilterOptions] = useState<AdoptionFilterOptions | null>(null);
   const [sql, setSql] = useState<Record<string, string> | null>(null);
   const lastSummaryScope = useRef<string | null>(null);
+  // The reader's own time-saved figures, if any, so the Excel report models the hours on screen.
+  const timeSaved = useTimeSavedAssumptions(summary);
 
   useEffect(() => {
     let cancelled = false;
@@ -391,6 +401,12 @@ export default function CopilotAdoptionPage() {
     setTab('opportunities');
   };
 
+  /** Where a headline tile's link takes the reader - the tab that explains the figure. */
+  const openTab = (next: AdoptionTab) => {
+    setDrillAction(undefined);
+    setTab(next);
+  };
+
   return (
     <div>
       <div className={styles.header}>
@@ -452,7 +468,7 @@ export default function CopilotAdoptionPage() {
                 appearance="primary"
                 icon={<ArrowDownload16Regular />}
                 as="a"
-                href={summary ? workbookExportUrl(windowDays, undefined, emailDomain) : undefined}
+                href={summary ? workbookExportUrl(windowDays, undefined, emailDomain, timeSavedExportParams(timeSaved)) : undefined}
                 disabled={!summary}
               >{t('copilotAdoption.page.controls.excelReport')}</Button>
             </Tooltip>
@@ -576,6 +592,7 @@ export default function CopilotAdoptionPage() {
                     onDrillToAction={drillToAction}
                     onShowLicensedDetails={showLicensedDetails}
                     onShowOpportunityDetails={showOpportunityDetails}
+                    onOpenTab={openTab}
                     selectedEmailDomain={emailDomain}
                     onSelectEmailDomain={setEmailDomain}
                   />
@@ -586,6 +603,7 @@ export default function CopilotAdoptionPage() {
                   summary={summary}
                   sql={sql}
                   onDrillToAction={drillToAction}
+                  onOpenTab={openTab}
                   selectedEmailDomain={emailDomain}
                   onSelectEmailDomain={setEmailDomain}
                 />
@@ -638,6 +656,7 @@ export default function CopilotAdoptionPage() {
                 <OpportunitiesPanel
                   key={emailDomain ?? 'all'}
                   windowDays={windowDays}
+                  summary={summary}
                   filterOptions={filterOptions}
                   options={summary.options}
                   guidanceLinks={summary.guidanceLinks}
@@ -715,6 +734,7 @@ function ExecutiveTab({
   onDrillToAction,
   onShowLicensedDetails,
   onShowOpportunityDetails,
+  onOpenTab,
   selectedEmailDomain,
   onSelectEmailDomain,
 }: {
@@ -722,13 +742,15 @@ function ExecutiveTab({
   onDrillToAction?: (code: string) => void;
   onShowLicensedDetails: () => void;
   onShowOpportunityDetails: () => void;
+  onOpenTab?: (tab: AdoptionTab) => void;
   selectedEmailDomain?: string | null;
   onSelectEmailDomain?: (domain: string | null) => void;
 }) {
   const styles = useStyles();
   const t = useT();
   const o = summary.options;
-  const kpis = buildExecutiveKpis(summary, t);
+  const { assumptions: timeSavedAssumptions } = useTimeSavedAssumptions(summary);
+  const kpis = buildExecutiveKpis(summary, t, timeSavedAssumptions, onOpenTab);
   return (
     <>
       <KpiGrid items={kpis} />
@@ -983,18 +1005,21 @@ function AnalystTab({
   summary,
   sql,
   onDrillToAction,
+  onOpenTab,
   selectedEmailDomain,
   onSelectEmailDomain,
 }: {
   summary: CopilotAdoptionSummary;
   sql: Record<string, string> | null;
   onDrillToAction?: (code: string) => void;
+  onOpenTab?: (tab: AdoptionTab) => void;
   selectedEmailDomain?: string | null;
   onSelectEmailDomain?: (domain: string | null) => void;
 }) {
   const styles = useStyles();
   const t = useT();
-  const kpis = buildKpis(summary, t);
+  const { assumptions: timeSavedAssumptions } = useTimeSavedAssumptions(summary);
+  const kpis = buildKpis(summary, t, timeSavedAssumptions, onOpenTab);
   const o = summary.options;
   const accountabilityDimensionLabel = summary.accountabilityDimensionLabel ?? 'Direct manager';
   const accountabilityDimensionDescription = accountabilityDimensionLabel.toLowerCase();
@@ -1902,6 +1927,14 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 })}
               </Text>
               <Text>{t('copilotAdoption.page.disabledAccountsExcludedCandidateListHoweverKeptLicensedUser')}</Text>
+              <Text>
+                {tNode('copilotAdoption.page.method.licenceTimeSaved', {
+                  heading: <strong>{t('copilotAdoption.page.method.licenceTimeSavedHeading')}</strong>,
+                  meetingMinutes: formatNumber(o.copilotMinutesSavedPerMeeting, { maximumFractionDigits: 2 }),
+                  mailMinutes: formatNumber(o.copilotMinutesSavedPerMailThread, { maximumFractionDigits: 2 }),
+                  documentMinutes: formatNumber(o.copilotMinutesSavedPerDocument, { maximumFractionDigits: 2 }),
+                })}
+              </Text>
             </div>
           </AccordionPanel>
         </AccordionItem>
@@ -1955,11 +1988,9 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 })}
               </Text>
               <Text>
-                {tNode('copilotAdoption.page.thisProductCannotMeasureTimeSavedMeetingEmailDocument', {
-                  heading: <strong>{t('copilotAdoption.page.theTimeSavedEstimateModelMeasurement')}</strong>,
-                  meetingMinutes: o.coworkMinutesSavedPerMeeting,
-                  mailMinutes: o.coworkMinutesSavedPerMailThread,
-                  documentMinutes: o.coworkMinutesSavedPerDocument,
+                {tNode('copilotAdoption.page.method.coworkTimeSaved', {
+                  heading: <strong>{t('copilotAdoption.page.method.coworkTimeSavedHeading')}</strong>,
+                  taskMinutes: formatNumber(o.coworkMinutesSavedPerTask, { maximumFractionDigits: 2 }),
                 })}
               </Text>
               <Text>
@@ -2116,16 +2147,133 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
 }
 
 /** The Executive view keeps only the board-pack headlines; the Analyst view keeps the full KPI set. */
-function buildExecutiveKpis(summary: CopilotAdoptionSummary, t: TFunction): KpiDefinition[] {
-  const executiveKeys = new Set(['licensed', 'adoption', 'habit', 'reclaim', 'unlicensed', 'candidates']);
-  return buildKpis(summary, t).filter((item) => executiveKeys.has(item.key));
+function buildExecutiveKpis(
+  summary: CopilotAdoptionSummary,
+  t: TFunction,
+  timeSaved: TimeSavedAssumptions,
+  onOpenTab?: (tab: AdoptionTab) => void,
+): KpiDefinition[] {
+  const executiveKeys = new Set([
+    'licensed',
+    'adoption',
+    'habit',
+    'reclaim',
+    'unlicensed',
+    'candidates',
+    'licenceTimeSaved',
+    'coworkTimeSaved',
+  ]);
+  return buildKpis(summary, t, timeSaved, onOpenTab).filter((item) => executiveKeys.has(item.key));
+}
+
+/**
+ * The two modelled time-back figures, promoted to the overview - one tile per decision.
+ *
+ * "Time back from licensing" sizes buying Copilot licences for the people recommended for one, with
+ * minutes evidenced by published Copilot studies. "Time back from Cowork" sizes enabling Cowork, paid
+ * for in Copilot Credits, for the people ready for it now - on top of what their licences already
+ * save, and resting on an assumption no study has tested. They are never added together: they justify
+ * different decisions on different evidence, and a sum would recreate the blended figure that let
+ * Copilot's evidence stand behind Cowork's.
+ *
+ * Built from the same projections and assumptions as the tabs that explain them - the reader's own
+ * for this session, or the product defaults - so the overview can never quote a model differently
+ * from its tab. Each is badged and drawn as modelled, links to its tab, and is absent rather than a
+ * modelled zero when there is nobody to model. The values use compact numbers where they are shorter
+ * in the reader's language, so a seven-digit range still fits the tile and the "h" never wraps onto a
+ * line of its own.
+ */
+function buildTimeSavedKpis(
+  summary: CopilotAdoptionSummary,
+  t: TFunction,
+  assumptions: TimeSavedAssumptions,
+  onOpenTab?: (tab: AdoptionTab) => void,
+): KpiDefinition[] {
+  const o = summary.options;
+  const items: KpiDefinition[] = [];
+  const percent = formatNumber(assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 });
+  const minutes = (value: number) => formatNumber(value, { maximumFractionDigits: 2 });
+
+  const licence = projectLicenceTimeSaved(summary.licenceOpportunityEstimate, assumptions, o);
+  if (licence) {
+    items.push({
+      key: 'licenceTimeSaved',
+      label: t('copilotAdoption.page.kpi.licenceTimeSaved.label'),
+      value: t('copilotAdoption.page.kpi.hoursValue', { range: compactHoursRange(t, licence.hoursLow, licence.hoursHigh) }),
+      hint: t(
+        plural(licence.cohortUsers, 'copilotAdoption.page.kpi.licenceTimeSaved.hint.one', 'copilotAdoption.page.kpi.licenceTimeSaved.hint.other'),
+        { users: formatCount(licence.cohortUsers) },
+      ),
+      tone: 'opportunity',
+      modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
+      action: onOpenTab
+        ? { label: t('copilotAdoption.page.kpi.licenceTimeSaved.open'), onClick: () => onOpenTab('opportunities') }
+        : undefined,
+      info: {
+        what: t('copilotAdoption.page.kpi.licenceTimeSaved.what'),
+        how: t('copilotAdoption.page.kpi.licenceTimeSaved.how'),
+        formula: t('copilotAdoption.page.kpi.licenceTimeSaved.formula', {
+          meeting: minutes(assumptions.meetingMinutes),
+          email: minutes(assumptions.emailMinutes),
+          document: minutes(assumptions.documentMinutes),
+          percent,
+        }),
+        source: t('copilotAdoption.page.kpi.licenceTimeSaved.source'),
+      },
+    });
+  }
+
+  if (summary.coworkReadinessAvailable) {
+    // The people ready now lead, as on the Cowork tab: that is the spending-policy decision. When
+    // nobody is ready, the ceiling stands in - and says it is every seat holder, not the ready few.
+    const ready = projectCoworkTimeSaved(summary.coworkValueEstimate, assumptions, o);
+    const cowork = ready ?? projectCoworkTimeSaved(summary.coworkFullRolloutEstimate, assumptions, o);
+    if (cowork) {
+      items.push({
+        key: 'coworkTimeSaved',
+        label: t('copilotAdoption.page.kpi.coworkTimeSaved.label'),
+        value: t('copilotAdoption.page.kpi.hoursValue', { range: compactHoursRange(t, cowork.hoursLow, cowork.hoursHigh) }),
+        hint: ready
+          ? t(
+              plural(ready.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.other'),
+              { users: formatCount(ready.cohortUsers) },
+            )
+          : t(
+              plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.other'),
+              { users: formatCount(cowork.cohortUsers) },
+            ),
+        tone: 'opportunity',
+        modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
+        action: onOpenTab
+          ? { label: t('copilotAdoption.page.kpi.coworkTimeSaved.open'), onClick: () => onOpenTab('cowork') }
+          : undefined,
+        info: {
+          what: t('copilotAdoption.page.kpi.coworkTimeSaved.what'),
+          how: t('copilotAdoption.page.kpi.coworkTimeSaved.how'),
+          formula: t('copilotAdoption.page.kpi.coworkTimeSaved.formula', {
+            taskMinutes: minutes(assumptions.taskMinutes),
+            rate: minutes(cowork.tasksPerPerson),
+            percent,
+          }),
+          source: t('copilotAdoption.page.kpi.coworkTimeSaved.source'),
+        },
+      });
+    }
+  }
+
+  return items;
 }
 
 /**
  * The headline figures used by the Analyst view. The Executive view filters this list down to the
  * board-pack subset so the two views cannot drift apart.
  */
-function buildKpis(summary: CopilotAdoptionSummary, t: TFunction): KpiDefinition[] {
+function buildKpis(
+  summary: CopilotAdoptionSummary,
+  t: TFunction,
+  timeSaved: TimeSavedAssumptions,
+  onOpenTab?: (tab: AdoptionTab) => void,
+): KpiDefinition[] {
   const o = summary.options;
   const seatSkus = (summary.seatLicenceTypes ?? []).filter((l) => l.isCopilotSeat);
   const scoreWeights = [o.frequencyWeight, o.depthWeight, o.breadthWeight];
@@ -2333,6 +2481,9 @@ function buildKpis(summary: CopilotAdoptionSummary, t: TFunction): KpiDefinition
         t('copilotAdoption.page.disabledAccountsUsersNoRecordedActivityAllExcludedMicrosoft'),
     },
   });
+
+  // Last: a model follows the measurements it is built on, never leads them.
+  items.push(...buildTimeSavedKpis(summary, t, timeSaved, onOpenTab));
 
   return items;
 }

@@ -504,10 +504,20 @@ describe('Chart text the SPA matches on', () => {
 });
 
 /**
- * Copilot Adoption's Cowork time-saved estimate still carries server-authored assumption strings
- * for API compatibility, but the SPA renders catalogued wording from the same numeric facts. Keep
- * the counts in lock-step so a future server-side assumption is not silently missing on Spanish
- * pages.
+ * Copilot Adoption's two time-saved estimates - the licence estimate and the Cowork estimate - still
+ * carry server-authored assumption strings for API compatibility and for the Excel report, but the
+ * SPA renders catalogued wording from the same numeric facts. Keep the counts in lock-step so a future
+ * server-side assumption is not silently missing on Spanish pages.
+ *
+ * Each estimate has its own server function, its own list in its own model component and its own
+ * catalog prefix. The server's sentences are told apart by the local they are written to:
+ * `licenceEstimate` in ModelLicenceValue, `estimate` in ModelCoworkValue - so a sentence added to one
+ * must be mirrored on the surface that shows that estimate, not the other.
+ *
+ * The facts are the assumptions IN FORCE - the reader's own figures for the session, or the product
+ * defaults - not the raw server options. Wiring a sentence to `options.*` would state the defaults
+ * beside hours computed from the reader's figures, which is exactly the wrong-value mismatch the third
+ * check below exists to catch.
  */
 const COPILOT_ADOPTION_SCORING = join(
   process.cwd(),
@@ -519,74 +529,109 @@ const COPILOT_ADOPTION_SCORING = join(
   'CopilotAdoption',
   'CopilotAdoptionScoring.cs',
 );
-const COWORK_PANEL = join(process.cwd(), 'src', 'components', 'copilotAdoption', 'CoworkPanel.tsx');
 const COPILOT_ADOPTION_SERVER_TEXT_MODULE = join(process.cwd(), 'src', 'components', 'copilotAdoption', 'serverText.ts');
-const COWORK_ESTIMATE_ASSUMPTION_CALL = /estimate\.Assumptions\.Add\(/g;
-const COWORK_ESTIMATE_ASSUMPTION_PREFIX = 'copilotAdoptionCowork.estimate.assumption.';
 
-function coworkEstimateServerAssumptionCount(): number {
-  const source = readFileSync(COPILOT_ADOPTION_SCORING, 'utf8');
-  return [...source.matchAll(COWORK_ESTIMATE_ASSUMPTION_CALL)].length;
+interface TimeSavedAssumptionSpec {
+  name: string;
+  /** The model component that renders this estimate's assumption list. */
+  component: string;
+  /** The server's Add() calls for this estimate, told apart by the local they write to. */
+  serverCall: RegExp;
+  prefix: string;
+  requiredFacts: Record<string, string[]>;
 }
 
-function coworkEstimateRenderedAssumptionKeys(): string[] {
-  const source = readFileSync(COWORK_PANEL, 'utf8');
-  const list = source.match(/<ul className=\{styles\.assumptionList\}>([\s\S]*?)<\/ul>/)?.[1] ?? '';
-  expect(list, 'Could not find the Cowork estimate assumption list').toBeTruthy();
+const TIME_SAVED_ASSUMPTION_SPECS: TimeSavedAssumptionSpec[] = [
+  {
+    name: 'licence',
+    component: join(process.cwd(), 'src', 'components', 'copilotAdoption', 'LicenceTimeSavedModel.tsx'),
+    serverCall: /\blicenceEstimate\.Assumptions\.Add\(/g,
+    prefix: 'copilotAdoptionTimeSaved.licence.assumption.',
+    requiredFacts: {
+      saves: ['assumptions.meetingMinutes', 'assumptions.emailMinutes', 'assumptions.documentMinutes'],
+      volumes: ['projection.cohortUsers', 'projection.workingDaysPerMonth'],
+      chatUsers: [],
+      // The cap the list reached - rendered only when it did.
+      capped: ['maxCandidates'],
+      lowerBound: ['conservativePercent'],
+      potential: [],
+      notMeasured: [],
+      noMoney: [],
+    },
+  },
+  {
+    name: 'Cowork',
+    component: join(process.cwd(), 'src', 'components', 'copilotAdoption', 'CoworkTimeSavedModel.tsx'),
+    serverCall: /\bestimate\.Assumptions\.Add\(/g,
+    prefix: 'copilotAdoptionCowork.estimate.assumption.',
+    requiredFacts: {
+      taskMinutes: ['assumptions.taskMinutes'],
+      volumes: ['projection.cohortUsers', 'monthDays'],
+      // The Cowork task rate IN FORCE - the reader's, or the published one - never options.*, and for
+      // an observed rate the number of people it averages.
+      taskRateObserved: ['projection.tasksPerPerson', 'projection.rateUsers'],
+      taskRateAssumed: ['projection.tasksPerPerson'],
+      taskRateCustom: ['projection.tasksPerPerson'],
+      increment: [],
+      lowerBound: ['conservativePercent'],
+      potential: [],
+      notMeasured: [],
+      noMoney: [],
+    },
+  },
+];
+
+function serverAssumptionCount(spec: TimeSavedAssumptionSpec): number {
+  const source = readFileSync(COPILOT_ADOPTION_SCORING, 'utf8');
+  return [...source.matchAll(spec.serverCall)].length;
+}
+
+function renderedAssumptionList(spec: TimeSavedAssumptionSpec): string {
+  const source = readFileSync(spec.component, 'utf8');
+  return source.match(/<ul className=\{styles\.assumptionList\}>([\s\S]*?)<\/ul>/)?.[1] ?? '';
+}
+
+function renderedAssumptionKeys(spec: TimeSavedAssumptionSpec): string[] {
+  const list = renderedAssumptionList(spec);
+  expect(list, `Could not find the ${spec.name} estimate assumption list`).toBeTruthy();
 
   return sortedUnique(
     [...list.matchAll(/'([^']+)'/g)]
       .map((m) => m[1])
-      .filter((key) => key.startsWith(COWORK_ESTIMATE_ASSUMPTION_PREFIX)),
+      .filter((key) => key.startsWith(spec.prefix)),
   );
 }
 
-function coworkEstimateAssumptionIds(keys: string[]): string[] {
-  return sortedUnique(
-    keys.map((key) =>
-      key.slice(COWORK_ESTIMATE_ASSUMPTION_PREFIX.length).replace(/\.(?:one|other)$/, ''),
-    ),
-  );
+function assumptionIds(spec: TimeSavedAssumptionSpec, keys: string[]): string[] {
+  return sortedUnique(keys.map((key) => key.slice(spec.prefix.length).replace(/\.(?:one|other)$/, '')));
 }
 
-describe('Copilot Adoption Cowork estimate assumptions', () => {
+describe.each(TIME_SAVED_ASSUMPTION_SPECS)('Copilot Adoption $name estimate assumptions', (spec) => {
   it('finds the scoring file that still authors the compatibility assumptions', () => {
     expect(() => readFileSync(COPILOT_ADOPTION_SCORING, 'utf8')).not.toThrow();
-    expect(coworkEstimateServerAssumptionCount()).toBeGreaterThan(0);
-    expect(coworkEstimateRenderedAssumptionKeys().length).toBeGreaterThan(0);
+    expect(serverAssumptionCount(spec)).toBeGreaterThan(0);
+    expect(renderedAssumptionKeys(spec).length).toBeGreaterThan(0);
   });
 
   it('renders the same catalogued SPA assumptions the server still authors for compatibility', () => {
-    const renderedKeys = coworkEstimateRenderedAssumptionKeys();
-    const renderedIds = coworkEstimateAssumptionIds(renderedKeys);
-    const catalogIds = coworkEstimateAssumptionIds(catalogKeys(COWORK_ESTIMATE_ASSUMPTION_PREFIX));
+    const renderedIds = assumptionIds(spec, renderedAssumptionKeys(spec));
+    const catalogIds = assumptionIds(spec, catalogKeys(spec.prefix));
 
     expect(
-      { renderedIds, catalogIds, serverCount: coworkEstimateServerAssumptionCount() },
-      'CopilotAdoptionScoring added or removed an estimate.Assumptions.Add(...) call. Mirror the\n' +
-        'same assumption in CoworkPanel.tsx using copilotAdoptionCowork.estimate.assumption.*\n' +
-        'catalog entries in en/es, or deliberately remove the obsolete SPA bullet. Plural catalog\n' +
-        'forms count as one assumption.',
+      { renderedIds, catalogIds, serverCount: serverAssumptionCount(spec) },
+      `CopilotAdoptionScoring added or removed a ${spec.serverCall.source} call. Mirror the same\n` +
+        `assumption in ${spec.component} using ${spec.prefix}* catalog entries in en/es, or\n` +
+        'deliberately remove the obsolete SPA bullet. Plural catalog forms count as one assumption.',
     ).toEqual({ renderedIds: catalogIds, catalogIds, serverCount: renderedIds.length });
   });
 
-  it('wires each Cowork assumption sentence to the facts that sentence describes', () => {
-    const source = readFileSync(COWORK_PANEL, 'utf8');
-    const list = source.match(/<ul className=\{styles\.assumptionList\}>([\s\S]*?)<\/ul>/)?.[1] ?? '';
+  it('wires each assumption sentence to the facts that sentence describes', () => {
+    const list = renderedAssumptionList(spec);
 
-    const requiredFacts: Record<string, string[]> = {
-      saves: ['options.coworkMinutesSavedPerMeeting', 'options.coworkMinutesSavedPerMailThread', 'options.coworkMinutesSavedPerDocument'],
-      lowerBound: ['estimateLowerBoundPercent'],
-      volumes: ['estimate.cohortUsers', 'estimateWorkingDaysPerMonth'],
-      notMeasured: [],
-      noMoney: [],
-    };
-
-    const problems = Object.entries(requiredFacts).flatMap(([id, facts]) => {
-      const key = `${COWORK_ESTIMATE_ASSUMPTION_PREFIX}${id}`;
-      const keyPattern = id === 'volumes'
-        ? /copilotAdoptionCowork\.estimate\.assumption\.volumes\.(?:one|other)/
-        : new RegExp(key.replace(/\./g, '\\.'));
+    const problems = Object.entries(spec.requiredFacts).flatMap(([id, facts]) => {
+      const key = `${spec.prefix}${id}`;
+      // Plural forms (.one / .other) count as the one sentence they are.
+      const keyPattern = new RegExp(`${key.replace(/\./g, '\\.')}(?:\\.(?:one|other))?'`);
       const keyIndex = list.search(keyPattern);
       if (keyIndex < 0) return [`${id}: missing rendered key`];
 
@@ -597,7 +642,7 @@ describe('Copilot Adoption Cowork estimate assumptions', () => {
 
     expect(
       problems,
-      'The Cowork assumption bullets must use the same facts as the server-authored compatibility\n' +
+      `The ${spec.name} assumption bullets must use the same facts as the server-authored compatibility\n` +
         'sentences they replace; a count-only guard cannot catch the right sentence fed by the wrong value.',
     ).toEqual([]);
   });
