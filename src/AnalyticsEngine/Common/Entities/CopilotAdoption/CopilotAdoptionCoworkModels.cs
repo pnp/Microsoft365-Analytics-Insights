@@ -439,24 +439,29 @@ namespace Common.Entities.CopilotAdoption
     }
 
     /// <summary>
-    /// The modelled time-saved estimate for one cohort: the people ready for Cowork now
+    /// The modelled Cowork estimate for one cohort: the time Cowork could give back ON TOP of what
+    /// Microsoft 365 Copilot already saves, for the people ready for Cowork now
     /// (<see cref="CopilotAdoptionSummary.CoworkValueEstimate"/>) or every Copilot seat holder
     /// (<see cref="CopilotAdoptionSummary.CoworkFullRolloutEstimate"/>).
     ///
     /// <b>Every field here is derived from an assumption and none of it is measured.</b> The observed
-    /// inputs (<see cref="AddressableMeetings"/>, <see cref="ObservedCoworkTasks"/> and friends) are real;
-    /// the conversion to hours is not. <see cref="Assumptions"/> travels with the numbers so no surface
-    /// can render a figure without the assumption that produced it, and <see cref="IsModelled"/> exists
-    /// so a consumer cannot mistake this for evidence.
+    /// inputs (<see cref="CoworkTaskUsers"/> and <see cref="ObservedCoworkTasks"/>) are real; the
+    /// projection and the conversion to hours are not. <see cref="Assumptions"/> travels with the
+    /// numbers so no surface can render a figure without the assumption that produced it, and
+    /// <see cref="IsModelled"/> exists so a consumer cannot mistake this for evidence.
     /// </summary>
     /// <remarks>
-    /// <para><b>Two layers, because the evidence behind them is different.</b> The Microsoft 365
-    /// Copilot layer applies minutes per meeting, email and document that are derived from Microsoft's
-    /// published Copilot credits and checked against published Copilot studies. The Cowork layer sits
-    /// ON TOP of it - Cowork tasks times minutes per task - and no study has measured it, alone or for
-    /// people who already have Copilot. Blending the two would let Copilot's evidence stand behind
-    /// Cowork's figure, which is the one a tenant is being asked to buy Copilot Credits for. So each layer
-    /// is published separately and <see cref="HoursPerMonthHigh"/> is simply their sum.</para>
+    /// <para><b>Cowork only, on purpose.</b> This is the figure a tenant uses to justify Copilot
+    /// Credits: the value of enabling Cowork for people who already hold a Copilot licence. It used to
+    /// carry a Microsoft 365 Copilot layer as well - meetings, email and documents - and most of the
+    /// headline was that layer, for people whose licence already gives it back. Enabling Cowork does
+    /// not unlock it, so it does not belong in a figure that justifies Cowork, and for existing seat
+    /// holders no decision hangs on it at all. The Copilot minutes now size the decision they belong
+    /// to - buying licences - in <see cref="LicenceValueEstimate"/>.</para>
+    ///
+    /// <para>No study has measured Cowork's time savings, alone or for people who already use
+    /// Copilot, so every hour here rests on an assumed number of minutes per task, and every surface
+    /// that shows it says so.</para>
     /// </remarks>
     public class CoworkValueEstimate
     {
@@ -469,18 +474,6 @@ namespace Common.Entities.CopilotAdoption
         public int CohortUsers { get; set; }
 
         #region Observed inputs
-
-        /// <summary>Meetings per month across the cohort, from the usage reports. Observed, not modelled.</summary>
-        [JsonProperty("addressableMeetings")]
-        public double AddressableMeetings { get; set; }
-
-        /// <summary>Mail volume per month across the cohort. Observed, not modelled.</summary>
-        [JsonProperty("addressableMailThreads")]
-        public double AddressableMailThreads { get; set; }
-
-        /// <summary>Document touches per month across the cohort. Observed, not modelled.</summary>
-        [JsonProperty("addressableDocuments")]
-        public double AddressableDocuments { get; set; }
 
         /// <summary>
         /// People in the cohort with Cowork tasks in Microsoft's Cowork usage report. Observed.
@@ -527,30 +520,14 @@ namespace Common.Entities.CopilotAdoption
 
         #region Modelled outputs
 
-        /// <summary>Low end of the Microsoft 365 Copilot layer, in hours a month.</summary>
-        [JsonProperty("copilotHoursPerMonthLow")]
-        public double CopilotHoursPerMonthLow { get; set; }
-
-        /// <summary>High end of the Microsoft 365 Copilot layer, in hours a month.</summary>
-        [JsonProperty("copilotHoursPerMonthHigh")]
-        public double CopilotHoursPerMonthHigh { get; set; }
-
-        /// <summary>Low end of the Cowork layer - on top of Copilot - in hours a month.</summary>
-        [JsonProperty("coworkHoursPerMonthLow")]
-        public double CoworkHoursPerMonthLow { get; set; }
-
-        /// <summary>High end of the Cowork layer - on top of Copilot - in hours a month.</summary>
-        [JsonProperty("coworkHoursPerMonthHigh")]
-        public double CoworkHoursPerMonthHigh { get; set; }
-
         /// <summary>
-        /// Low end of the modelled monthly hours saved across the cohort: the two layers' low ends added
-        /// together, so the parts a reader sees always add up to the total they see.
+        /// Low end of the modelled monthly hours Cowork could give back across the cohort, on top of
+        /// Copilot: the high end at the conservative share of the assumptions.
         /// </summary>
         [JsonProperty("hoursPerMonthLow")]
         public double HoursPerMonthLow { get; set; }
 
-        /// <summary>High end of the modelled monthly hours saved: the two layers' high ends added together.</summary>
+        /// <summary>High end of the modelled monthly hours: Cowork tasks a month x minutes saved per task.</summary>
         [JsonProperty("hoursPerMonthHigh")]
         public double HoursPerMonthHigh { get; set; }
 
@@ -559,14 +536,14 @@ namespace Common.Entities.CopilotAdoption
         // ones beside it. The idle-licence-spend figure that #553 once allowed has since been withdrawn
         // as well: it priced idle seats from a per-SKU price typed into the page header, which is not a
         // source of truth about what a tenant pays, and a money figure derived from one gets quoted in a
-        // renewal negotiation as though it were. This estimate is modelled from assumed minutes per
-        // meeting, email, document and Cowork task, so pricing it would be worse again.
+        // renewal negotiation as though it were. This estimate is modelled from an assumed number of
+        // minutes per Cowork task, so pricing it would be worse again.
         //
-        // The HOURS model is kept, and is now the Cowork tab's headline, on the terms that make it
+        // The HOURS model is kept, and is the Cowork tab's headline, on the terms that make it
         // defensible: it is always labelled as modelled, it is always published as a range, its
-        // assumptions are shown beside it with the published evidence for each - or the plain statement
-        // that there is none yet, for Cowork - and the reader can replace any of them with their own
-        // figure (CoworkTimeSavedOverrides). Converting it to money is still the line the epic draws.
+        // assumptions are shown beside it - with the plain statement that no study has measured Cowork -
+        // and the reader can replace any of them with their own figure (TimeSavedOverrides). Converting
+        // it to money is still the line the epic draws.
 
         #endregion
 
@@ -620,127 +597,6 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>The rate everyone else in the cohort is projected at.</summary>
         public CoworkTaskRate Rate { get; set; }
-    }
-
-    /// <summary>
-    /// A reader's own time-saved assumptions, sent with an Excel export so the workbook models the same
-    /// figures they were looking at in the portal.
-    /// </summary>
-    /// <remarks>
-    /// <para>The portal lets a reader replace any of the minutes-saved assumptions with their own
-    /// figure. Those figures live in that browser tab only - they are never persisted - so an export has
-    /// to carry them, or the Excel report downloaded from a customised page would quietly model
-    /// different hours from the screen it came from.</para>
-    ///
-    /// <para><see cref="ApplyTo"/> returns a COPY. The options it starts from belong to the cached
-    /// analysis every other caller is reading, and writing one reader's figures into them would change
-    /// the model for everybody until the cache expired.</para>
-    ///
-    /// <para>Each figure is clamped to the same bounds the portal enforces, so a hand-edited URL cannot
-    /// turn a rollout-sizing model into a headline of millions of hours.</para>
-    /// </remarks>
-    public class CoworkTimeSavedOverrides
-    {
-        /// <summary>Upper bound for the per-meeting and per-document assumptions, in minutes.</summary>
-        public const double MaxMinutesPerItem = 120;
-
-        /// <summary>Upper bound for the per-email assumption, in minutes.</summary>
-        public const double MaxMinutesPerEmail = 60;
-
-        /// <summary>
-        /// Upper bound for the per-Cowork-task assumption, in minutes. Higher than a meeting's: one task
-        /// can be a whole piece of multi-step work.
-        /// </summary>
-        public const double MaxMinutesPerTask = 240;
-
-        /// <summary>Upper bound for the Cowork tasks a month each projected person runs: ten a working day.</summary>
-        public const double MaxTasksPerPersonPerMonth = 200;
-
-        public double? MinutesSavedPerMeeting { get; set; }
-
-        public double? MinutesSavedPerMailThread { get; set; }
-
-        public double? MinutesSavedPerDocument { get; set; }
-
-        public double? LowerBoundRatio { get; set; }
-
-        public double? MinutesSavedPerTask { get; set; }
-
-        /// <summary>
-        /// The Cowork tasks a month the reader expects each not-yet-observed person to run. Not an option:
-        /// it replaces the published rate - observed or placeholder - via <see cref="TaskRateFor"/>.
-        /// </summary>
-        public double? TasksPerPersonPerMonth { get; set; }
-
-        /// <summary>True when at least one usable figure was supplied.</summary>
-        public bool Any =>
-            Usable(MinutesSavedPerMeeting)
-            || Usable(MinutesSavedPerMailThread)
-            || Usable(MinutesSavedPerDocument)
-            || Usable(LowerBoundRatio)
-            || Usable(MinutesSavedPerTask)
-            || Usable(TasksPerPersonPerMonth);
-
-        /// <summary>
-        /// A copy of <paramref name="options"/> with the supplied figures in place of the defaults.
-        /// Figures that were not supplied, or are not a finite number, keep the configured default.
-        /// </summary>
-        public CopilotAdoptionOptions ApplyTo(CopilotAdoptionOptions options)
-        {
-            var copy = (options ?? CopilotAdoptionOptions.Default).Clone();
-
-            if (Usable(MinutesSavedPerMeeting))
-                copy.CoworkMinutesSavedPerMeeting = Clamp(MinutesSavedPerMeeting.Value, 0, MaxMinutesPerItem);
-            if (Usable(MinutesSavedPerMailThread))
-                copy.CoworkMinutesSavedPerMailThread = Clamp(MinutesSavedPerMailThread.Value, 0, MaxMinutesPerEmail);
-            if (Usable(MinutesSavedPerDocument))
-                copy.CoworkMinutesSavedPerDocument = Clamp(MinutesSavedPerDocument.Value, 0, MaxMinutesPerItem);
-            if (Usable(LowerBoundRatio))
-                copy.CoworkEstimateLowerBoundRatio = Clamp(LowerBoundRatio.Value, 0, 1);
-            if (Usable(MinutesSavedPerTask))
-                copy.CoworkMinutesSavedPerTask = Clamp(MinutesSavedPerTask.Value, 0, MaxMinutesPerTask);
-
-            return copy;
-        }
-
-        /// <summary>
-        /// The Cowork task rate to restate <paramref name="published"/> with: the reader's own figure when
-        /// they supplied one, otherwise the rate the estimate was published with, and its basis.
-        /// </summary>
-        public CoworkTaskRate TaskRateFor(CoworkValueEstimate published)
-        {
-            if (Usable(TasksPerPersonPerMonth))
-            {
-                return new CoworkTaskRate
-                {
-                    TasksPerPersonPerMonth = Clamp(TasksPerPersonPerMonth.Value, 0, MaxTasksPerPersonPerMonth),
-                    Basis = CoworkTaskRateBases.Custom,
-                };
-            }
-
-            return PublishedTaskRate(published);
-        }
-
-        /// <summary>The rate, basis and averaged population an estimate was published with.</summary>
-        public static CoworkTaskRate PublishedTaskRate(CoworkValueEstimate published)
-        {
-            return new CoworkTaskRate
-            {
-                TasksPerPersonPerMonth = published?.CoworkTasksPerPersonPerMonth ?? 0,
-                Basis = published?.CoworkTaskRateBasis ?? CoworkTaskRateBases.Assumed,
-                Users = published?.CoworkTaskRateUsers ?? 0,
-            };
-        }
-
-        private static bool Usable(double? value)
-        {
-            return value.HasValue && !double.IsNaN(value.Value) && !double.IsInfinity(value.Value);
-        }
-
-        private static double Clamp(double value, double min, double max)
-        {
-            return Math.Min(max, Math.Max(min, value));
-        }
     }
 
     /// <summary>A page of Cowork readiness rows, matching the shape of the other paged endpoints.</summary>

@@ -1142,6 +1142,10 @@ namespace Common.Entities.CopilotAdoption
                     + "will not appear.");
             }
 
+            // TOP (@maxRows) returned a full page: candidates below the cut were never scored, so every
+            // figure built from this list - the licence estimate above all - is a floor rather than a total.
+            analysis.OpportunitiesCapped = rows.Count >= _options.MaxOpportunityCandidates;
+
             analysis.Opportunities = rows
                 .Select(r => CopilotAdoptionScoring.ScoreOpportunity(r, _options))
                 // Proven demand first. The SQL deliberately sorts proven-demand candidates into the
@@ -1594,14 +1598,33 @@ namespace Common.Entities.CopilotAdoption
             summary.CombinedByDepartment = BuildCombinedSegments(analysis);
 
             var opportunities = analysis.Opportunities ?? new List<LicenceOpportunityRow>();
-            summary.RecommendedForLicence = opportunities.Count(o => o.Recommended);
-            summary.OpportunityByDepartment = opportunities
-                .Where(o => o.Recommended)
+            var recommended = opportunities.Where(o => o.Recommended).ToList();
+            summary.RecommendedForLicence = recommended.Count;
+            summary.OpportunityByDepartment = recommended
                 .GroupBy(o => string.IsNullOrWhiteSpace(o.Department) ? "(no department)" : o.Department.Trim())
                 .Select(g => new AdoptionCategory { Label = g.Key, Value = g.Count() })
                 .OrderByDescending(c => c.Value)
                 .Take(_options.TopSegments)
                 .ToList();
+
+            // The licence estimate: what Microsoft 365 Copilot could give back to the people recommended
+            // for a seat - the figure a licence purchase is justified with, and the only place the Copilot
+            // minutes are applied. Modelled only when the Microsoft 365 usage reports supplied the volumes
+            // it multiplies: without them every candidate has zero meetings, emails and documents, and
+            // "0 hours" would read as a finding about the candidates rather than as a missing import.
+            var volumesObserved = summary.DataSources?.M365UsageReportsAvailable ?? false;
+            summary.LicenceOpportunityEstimate = volumesObserved
+                ? CopilotAdoptionScoring.EstimateLicenceValue(recommended, _options, analysis.OpportunitiesCapped)
+                : new LicenceValueEstimate();
+
+            // Beside it, the candidates already using Copilot Chat without a licence: the same definition
+            // as the list's "Already using Copilot" filter, so a reader can bring up exactly these people.
+            summary.LicenceChatUsersEstimate = volumesObserved
+                ? CopilotAdoptionScoring.EstimateLicenceValue(
+                    recommended.Where(o => o.UnlicensedCopilotInteractions > 0).ToList(),
+                    _options,
+                    analysis.OpportunitiesCapped)
+                : new LicenceValueEstimate();
 
             // Last, because it reads the licensed, unlicensed, opportunity and Cowork populations
             // together - the point of the domain view is that those four answer one question per

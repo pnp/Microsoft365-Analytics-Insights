@@ -670,8 +670,8 @@ namespace Tests.UnitTests
         /// It used to carry an "Idle spend exposure" row and the seat prices behind it, derived from
         /// prices typed into the page header. Those were withdrawn: a typed-in price is not a source of
         /// truth about what a tenant pays, and a workbook cell is exactly where such a figure gets
-        /// re-used as though it were. The Cowork time saving - in hours - is the only value estimate
-        /// this report makes.
+        /// re-used as though it were. The time-saved estimates - licence and Cowork, both in hours - are
+        /// the only value estimates this report makes.
         /// </remarks>
         [TestMethod]
         public void Workbook_QuotesNoMoney()
@@ -690,8 +690,8 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// The portal's headline quotes two cohorts - the people ready for Cowork now and every Copilot
-        /// seat holder - so the workbook has to carry both, with the working that turns volume into hours.
+        /// The Cowork tab's headline quotes two cohorts - the people ready for Cowork now and every Copilot
+        /// seat holder - so the workbook has to carry both, with the working that turns tasks into hours.
         /// </summary>
         [TestMethod]
         public void Workbook_CoworkEstimateCarriesBothCohortsAndItsWorking()
@@ -702,10 +702,9 @@ namespace Tests.UnitTests
             foreach (var expected in new[]
             {
                 "Ready now", "Every Copilot seat holder", "People covered",
-                "Meetings a month (observed)", "Minutes saved per meeting (assumption)",
-                "Copilot hours a month - meetings", "Copilot hours a month - email",
-                "Copilot hours a month - documents", "Copilot hours a month (low)", "Copilot hours a month (high)",
-                "Modelled hours a month (low)", "Modelled hours a month (high)",
+                "People with Cowork tasks (observed)", "Cowork tasks a month (observed)", "People projected",
+                "Cowork tasks a month for each person projected", "Cowork tasks a month (observed + projected)",
+                "Minutes saved per Cowork task (assumption)", "Cowork hours a month (low)", "Cowork hours a month (high)",
             })
             {
                 CollectionAssert.Contains(cells, expected, $"The estimate sheet is missing '{expected}'.");
@@ -720,33 +719,83 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// The Cowork layer is the one a reader uses to justify Copilot Credits, and the one no study has
-        /// measured, so the sheet has to set it apart from Copilot's evidence-backed layer and say so.
+        /// The Cowork sheet justifies Copilot Credits, and nothing on it may be Copilot's: its people
+        /// already hold a licence, and the time the licence gives back is not Cowork's to claim.
         /// </summary>
         [TestMethod]
-        public void Workbook_CoworkEstimateSeparatesTheCoworkLayer_AndSaysItIsUnmeasured()
+        public void Workbook_CoworkEstimateIsCoworkOnly_AndSaysItIsUnmeasured()
         {
-            var analysis = SyntheticAnalysis();
-            var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Cowork estimate (modelled)");
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(SyntheticAnalysis()), "Cowork estimate (modelled)");
 
-            foreach (var expected in new[]
+            foreach (var copilotRow in new[]
             {
-                "MICROSOFT 365 COPILOT - the licences already paid for",
-                "COWORK, ON TOP OF COPILOT - paid for in Copilot Credits",
-                "People with Cowork tasks (observed)", "Cowork tasks a month (observed)", "People projected",
-                "Cowork tasks a month for each person projected", "Cowork tasks a month (observed + projected)",
-                "Minutes saved per Cowork task (assumption)", "Cowork hours a month (low)", "Cowork hours a month (high)",
+                "Meetings a month (observed)", "Minutes saved per meeting (assumption)",
+                "Minutes saved per email (assumption)", "Minutes saved per document (assumption)",
+                "Copilot hours a month (high)", "TOTAL - Copilot plus Cowork",
             })
             {
-                CollectionAssert.Contains(cells, expected, $"The estimate sheet is missing '{expected}'.");
+                CollectionAssert.DoesNotContain(cells, copilotRow,
+                    $"'{copilotRow}' is Copilot's, and belongs on the licence estimate, not the Cowork one.");
             }
 
-            var full = analysis.Summary.CoworkFullRolloutEstimate;
-            Assert.AreEqual(full.CopilotHoursPerMonthHigh + full.CoworkHoursPerMonthHigh, full.HoursPerMonthHigh);
             Assert.IsTrue(cells.Any(c => c.StartsWith("ASSUMPTION - NO PUBLISHED STUDY", StringComparison.Ordinal)),
                 "The minutes per Cowork task must be labelled as resting on no published study.");
+            Assert.IsTrue(cells.Any(c => c.IndexOf("Cowork's increment over Copilot alone", StringComparison.Ordinal) >= 0),
+                "The sheet must say the minutes are what Cowork adds on top of Copilot.");
             Assert.IsFalse(cells.Any(c => c.IndexOf("Copilot and Cowork together", StringComparison.Ordinal) >= 0),
                 "Copilot's evidence must not be presented as Cowork's.");
+        }
+
+        /// <summary>
+        /// The licence estimate sizes the purchase the "Licence opportunities" sheet lists, so it sits
+        /// beside it, covers the recommended candidates, and sets the ones already using Copilot Chat
+        /// apart.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_LicenceEstimateSizesTheRecommendedCandidates()
+        {
+            var analysis = SyntheticAnalysis();
+            var bytes = CopilotAdoptionWorkbook.Build(analysis);
+            var names = WorkbookSheetNames(bytes);
+
+            Assert.AreEqual(names.IndexOf("Licence opportunities") + 1, names.IndexOf("Licence estimate (modelled)"),
+                "The estimate belongs directly after the list it sizes.");
+
+            var cells = SheetCells(bytes, "Licence estimate (modelled)");
+            foreach (var expected in new[]
+            {
+                "Recommended for a licence", "Already using Copilot Chat", "People covered",
+                "Meetings a month (observed)", "Emails a month (observed)", "Document touches a month (observed)",
+                "Minutes saved per meeting (assumption)", "Minutes saved per email (assumption)",
+                "Minutes saved per document (assumption)", "Hours a month - meetings", "Hours a month - email",
+                "Hours a month - documents", "Modelled hours a month (low)", "Modelled hours a month (high)",
+            })
+            {
+                CollectionAssert.Contains(cells, expected, $"The licence estimate sheet is missing '{expected}'.");
+            }
+
+            var recommended = analysis.Summary.LicenceOpportunityEstimate;
+            var chatUsers = analysis.Summary.LicenceChatUsersEstimate;
+            Assert.AreEqual(2, recommended.CohortUsers, "The synthetic analysis recommends two candidates.");
+            Assert.AreEqual(1, chatUsers.CohortUsers, "Only one of them already uses Copilot Chat.");
+            AssertFollowedBy(cells, "People covered", "2");
+            CollectionAssert.Contains(cells, recommended.HoursPerMonthHigh.ToString(CultureInfo.InvariantCulture));
+            Assert.IsTrue(cells.Any(c => c.StartsWith("Assumptions: the product defaults", StringComparison.Ordinal)));
+            Assert.IsTrue(cells.Any(c => c.StartsWith("Assumes Microsoft 365 Copilot saves", StringComparison.Ordinal)),
+                "The Copilot minutes are stated beside the hours they produce.");
+        }
+
+        [TestMethod]
+        public void Workbook_WritesNoLicenceEstimate_WhenNobodyIsRecommended()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Opportunities.Clear();
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            CollectionAssert.DoesNotContain(
+                WorkbookSheetNames(CopilotAdoptionWorkbook.Build(analysis)),
+                "Licence estimate (modelled)",
+                "An empty cohort is not a finding, and must not be written as a modelled zero.");
         }
 
         /// <summary>
@@ -757,46 +806,84 @@ namespace Tests.UnitTests
         public void Workbook_AppliesThePortalsTimeSavedFigures_WithoutTouchingTheCachedAnalysis()
         {
             var analysis = SyntheticAnalysis();
-            var cachedHours = analysis.Summary.CoworkFullRolloutEstimate.HoursPerMonthHigh;
-            var overrides = new CoworkTimeSavedOverrides { MinutesSavedPerMeeting = 50, TasksPerPersonPerMonth = 40 };
+            var cachedCoworkHours = analysis.Summary.CoworkFullRolloutEstimate.HoursPerMonthHigh;
+            var cachedLicenceHours = analysis.Summary.LicenceOpportunityEstimate.HoursPerMonthHigh;
+            var overrides = new TimeSavedOverrides { MinutesSavedPerMeeting = 50, TasksPerPersonPerMonth = 40 };
 
             var standard = CopilotAdoptionWorkbook.Build(analysis);
             var customised = CopilotAdoptionWorkbook.Build(analysis, overrides);
+            var model = overrides.ApplyTo(analysis.Summary.Options);
 
+            // The Copilot minutes restate the licence estimate...
+            var licence = analysis.Summary.LicenceOpportunityEstimate;
+            var expectedLicence = CopilotAdoptionScoring.ModelLicenceValue(
+                licence.CohortUsers, licence.AddressableMeetings, licence.AddressableMailThreads,
+                licence.AddressableDocuments, model);
+            Assert.AreNotEqual(cachedLicenceHours, expectedLicence.HoursPerMonthHigh, "The test must change the licence hours.");
+
+            var licenceCells = SheetCells(customised, "Licence estimate (modelled)");
+            CollectionAssert.Contains(licenceCells, expectedLicence.HoursPerMonthHigh.ToString(CultureInfo.InvariantCulture),
+                "The licence estimate must be restated under the reader's minutes.");
+            Assert.IsTrue(licenceCells.Any(c => c.StartsWith("ASSUMPTIONS ENTERED IN THE PORTAL", StringComparison.Ordinal)));
+
+            // ...and the task rate restates the Cowork estimate.
             var full = analysis.Summary.CoworkFullRolloutEstimate;
-            var expected = CopilotAdoptionScoring.ModelCoworkValue(
-                full.CohortUsers, full.AddressableMeetings, full.AddressableMailThreads, full.AddressableDocuments,
-                overrides.ApplyTo(analysis.Summary.Options),
+            var expectedCowork = CopilotAdoptionScoring.ModelCoworkValue(
+                full.CohortUsers,
+                model,
                 new CoworkTaskInputs
                 {
                     ObservedUsers = full.CoworkTaskUsers,
                     ObservedTasksPerMonth = full.ObservedCoworkTasks,
                     Rate = overrides.TaskRateFor(full),
                 });
-            Assert.AreNotEqual(cachedHours, expected.HoursPerMonthHigh, "The test must change the modelled hours.");
-            Assert.AreEqual(CoworkTaskRateBases.Custom, expected.CoworkTaskRateBasis);
+            Assert.AreNotEqual(cachedCoworkHours, expectedCowork.HoursPerMonthHigh, "The test must change the Cowork hours.");
+            Assert.AreEqual(CoworkTaskRateBases.Custom, expectedCowork.CoworkTaskRateBasis);
 
-            var cells = SheetCells(customised, "Cowork estimate (modelled)");
-            CollectionAssert.Contains(cells, expected.HoursPerMonthHigh.ToString(CultureInfo.InvariantCulture),
-                "The estimate must be restated under the reader's figures.");
-            CollectionAssert.Contains(cells, expected.CoworkHoursPerMonthHigh.ToString(CultureInfo.InvariantCulture),
-                "The Cowork layer must be restated at the reader's task rate.");
-            Assert.IsTrue(cells.Any(c => c.StartsWith("ASSUMPTIONS ENTERED IN THE PORTAL", StringComparison.Ordinal)),
+            var coworkCells = SheetCells(customised, "Cowork estimate (modelled)");
+            CollectionAssert.Contains(coworkCells, expectedCowork.HoursPerMonthHigh.ToString(CultureInfo.InvariantCulture),
+                "The Cowork estimate must be restated at the reader's task rate.");
+            Assert.IsTrue(coworkCells.Any(c => c.StartsWith("ASSUMPTIONS ENTERED IN THE PORTAL", StringComparison.Ordinal)),
                 "A customised export must say its figures came from the portal, not from the product.");
-            Assert.IsTrue(cells.Any(c => c.StartsWith("ENTERED IN THE PORTAL for this export", StringComparison.Ordinal)),
+            Assert.IsTrue(coworkCells.Any(c => c.StartsWith("ENTERED IN THE PORTAL for this export", StringComparison.Ordinal)),
                 "A reader's task rate must be labelled as theirs, never as observed.");
 
             // Nothing the next caller reads may have moved: the analysis is cached and shared.
-            Assert.AreEqual(5d, analysis.Summary.Options.CoworkMinutesSavedPerMeeting);
-            Assert.AreEqual(cachedHours, analysis.Summary.CoworkFullRolloutEstimate.HoursPerMonthHigh);
+            Assert.AreEqual(5d, analysis.Summary.Options.CopilotMinutesSavedPerMeeting);
+            Assert.AreEqual(cachedCoworkHours, analysis.Summary.CoworkFullRolloutEstimate.HoursPerMonthHigh);
+            Assert.AreEqual(cachedLicenceHours, analysis.Summary.LicenceOpportunityEstimate.HoursPerMonthHigh);
 
             // The Settings sheet records the reader's figure against the same key, on the same row, so two
             // exports still line up for a lookup.
             var settings = SheetCells(customised, "Settings");
             Assert.IsTrue(settings.Any(c => c.EndsWith("entered in the portal for this export; the product default is 5", StringComparison.Ordinal)));
-            AssertFollowedBy(settings, "coworkMinutesSavedPerMeeting", "50");
+            AssertFollowedBy(settings, "copilotMinutesSavedPerMeeting", "50");
             CollectionAssert.AreEqual(SettingKeys(standard), SettingKeys(customised),
                 "A customised export must have exactly the same Settings rows, in the same order.");
+        }
+
+        /// <summary>
+        /// Each estimate sheet says it was customised only when the figures IT uses were changed. A reader
+        /// who changed only the Cowork task rate has not touched the case for a licence, and a sheet that
+        /// claimed otherwise would send a reviewer hunting for a change that is not there.
+        /// </summary>
+        [TestMethod]
+        public void Workbook_OnlyTheEstimateWhoseFiguresChangedSaysItWasCustomised()
+        {
+            var analysis = SyntheticAnalysis();
+            var coworkOnly = CopilotAdoptionWorkbook.Build(analysis, new TimeSavedOverrides { TasksPerPersonPerMonth = 40 });
+
+            Assert.IsTrue(SheetCells(coworkOnly, "Cowork estimate (modelled)")
+                .Any(c => c.StartsWith("ASSUMPTIONS ENTERED IN THE PORTAL", StringComparison.Ordinal)));
+            Assert.IsTrue(SheetCells(coworkOnly, "Licence estimate (modelled)")
+                .Any(c => c.StartsWith("Assumptions: the product defaults", StringComparison.Ordinal)));
+
+            var licenceOnly = CopilotAdoptionWorkbook.Build(analysis, new TimeSavedOverrides { MinutesSavedPerDocument = 3 });
+
+            Assert.IsTrue(SheetCells(licenceOnly, "Licence estimate (modelled)")
+                .Any(c => c.StartsWith("ASSUMPTIONS ENTERED IN THE PORTAL", StringComparison.Ordinal)));
+            Assert.IsTrue(SheetCells(licenceOnly, "Cowork estimate (modelled)")
+                .Any(c => c.StartsWith("Assumptions: the product defaults", StringComparison.Ordinal)));
         }
 
         private static List<string> SettingKeys(byte[] bytes)
@@ -1202,6 +1289,9 @@ namespace Tests.UnitTests
             summary.DataSources.CopilotUsageReportDate = new DateTime(2026, 8, 20, 0, 0, 0, DateTimeKind.Utc);
             summary.DataSources.CopilotUsageReportPeriodDays = 28;
             summary.DataSources.UserMetadataAvailable = true;
+            // The licence estimate multiplies the Microsoft 365 usage-report volumes, and is only modelled
+            // when they exist.
+            summary.DataSources.M365UsageReportsAvailable = true;
             summary.Warnings.Add("Synthetic warning containing an ampersand & an <element>.");
 
             summary.SeatLicenceTypes.Add(new LicenceTypeClassification
@@ -1287,6 +1377,24 @@ namespace Tests.UnitTests
                     EmailsSent = 90,
                     EmailsRead = 300,
                     FilesViewedOrEdited = 120,
+                },
+                options));
+
+            // A second recommended candidate, recommended on workload alone and never seen in Copilot Chat,
+            // so the licence estimate's two columns - every recommended candidate, and those already using
+            // Copilot Chat - describe different people.
+            analysis.Opportunities.Add(CopilotAdoptionScoring.ScoreOpportunity(
+                new UnlicensedUserSignalRow
+                {
+                    UserId = 5001,
+                    UserPrincipalName = "busy.candidate@contoso.com",
+                    Department = GreekDepartment,
+                    JobTitle = "Analyst",
+                    TeamsMessages = 300,
+                    TeamsMeetings = 8,
+                    EmailsSent = 60,
+                    EmailsRead = 200,
+                    FilesViewedOrEdited = 80,
                 },
                 options));
 

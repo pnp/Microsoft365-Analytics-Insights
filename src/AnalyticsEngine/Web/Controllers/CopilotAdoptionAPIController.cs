@@ -720,12 +720,15 @@ namespace Web.AnalyticsWeb.Controllers
         ///
         /// Built from the same cached analysis that renders the page, so the two can never disagree.
         ///
-        /// <para>The optional <c>coworkMinutesSaved*</c>, <c>coworkEstimateLowerBoundRatio</c> and
-        /// <c>coworkTasksPerPersonPerMonth</c> parameters carry the time-saved assumptions the reader
-        /// entered on the Cowork tab. Those figures live in the browser only, so the export has to be told
-        /// them or a customised page would download a workbook modelling different hours. They change the
-        /// modelled estimate and the matching Settings rows, never a measured figure, and never the cached
-        /// analysis itself.</para>
+        /// <para>The optional time-saved parameters carry the assumptions the reader entered in the
+        /// portal. <c>copilotMinutesSavedPerMeeting</c>, <c>copilotMinutesSavedPerMailThread</c> and
+        /// <c>copilotMinutesSavedPerDocument</c> restate the licence estimate;
+        /// <c>coworkMinutesSavedPerTask</c> and <c>coworkTasksPerPersonPerMonth</c> restate the Cowork
+        /// estimate; <c>coworkEstimateLowerBoundRatio</c> applies to both. The first three were
+        /// <c>coworkMinutesSaved*</c> until the licence estimate was split out of the Cowork one. Those
+        /// figures live in the browser only, so the export has to be told them or a customised page would
+        /// download a workbook modelling different hours. They change the modelled estimates and the
+        /// matching Settings rows, never a measured figure, and never the cached analysis itself.</para>
         /// </summary>
         // GET: api/CopilotAdoption/export/workbook?windowDays=28
         [HttpGet]
@@ -734,9 +737,9 @@ namespace Web.AnalyticsWeb.Controllers
             int windowDays = 28,
             string seatLicenceTypeIds = null,
             string emailDomain = null,
-            string coworkMinutesSavedPerMeeting = null,
-            string coworkMinutesSavedPerMailThread = null,
-            string coworkMinutesSavedPerDocument = null,
+            string copilotMinutesSavedPerMeeting = null,
+            string copilotMinutesSavedPerMailThread = null,
+            string copilotMinutesSavedPerDocument = null,
             string coworkEstimateLowerBoundRatio = null,
             string coworkMinutesSavedPerTask = null,
             string coworkTasksPerPersonPerMonth = null,
@@ -751,9 +754,9 @@ namespace Web.AnalyticsWeb.Controllers
             if (analysis == null) return ExportNotReadyResponse();
 
             var timeSaved = ParseTimeSavedOverrides(
-                coworkMinutesSavedPerMeeting,
-                coworkMinutesSavedPerMailThread,
-                coworkMinutesSavedPerDocument,
+                copilotMinutesSavedPerMeeting,
+                copilotMinutesSavedPerMailThread,
+                copilotMinutesSavedPerDocument,
                 coworkEstimateLowerBoundRatio,
                 coworkMinutesSavedPerTask,
                 coworkTasksPerPersonPerMonth);
@@ -821,10 +824,10 @@ namespace Web.AnalyticsWeb.Controllers
         /// and on a server running a European culture a culture-sensitive parse reads the full stop as a
         /// thousands separator - "0.5" minutes per email would become 5, and the workbook would model
         /// ten times the saving the reader entered. Anything unparseable is ignored and keeps the
-        /// product default; the bounds are applied by <see cref="CoworkTimeSavedOverrides.ApplyTo"/> and
-        /// <see cref="CoworkTimeSavedOverrides.TaskRateFor"/>.
+        /// product default; the bounds are applied by <see cref="TimeSavedOverrides.ApplyTo"/> and
+        /// <see cref="TimeSavedOverrides.TaskRateFor"/>.
         /// </remarks>
-        internal static CoworkTimeSavedOverrides ParseTimeSavedOverrides(
+        internal static TimeSavedOverrides ParseTimeSavedOverrides(
             string minutesPerMeeting,
             string minutesPerMailThread,
             string minutesPerDocument,
@@ -832,7 +835,7 @@ namespace Web.AnalyticsWeb.Controllers
             string minutesPerTask = null,
             string tasksPerPersonPerMonth = null)
         {
-            return new CoworkTimeSavedOverrides
+            return new TimeSavedOverrides
             {
                 MinutesSavedPerMeeting = ParseInvariantDouble(minutesPerMeeting),
                 MinutesSavedPerMailThread = ParseInvariantDouble(minutesPerMailThread),

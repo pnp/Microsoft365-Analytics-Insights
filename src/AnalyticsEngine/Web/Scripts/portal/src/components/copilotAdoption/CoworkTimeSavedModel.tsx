@@ -1,500 +1,33 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import {
-  makeStyles,
-  mergeClasses,
-  tokens,
-  Text,
-  Card,
-  Input,
-  Button,
-  Badge,
-  Link,
-  Radio,
-  RadioGroup,
-  Tooltip,
-  MessageBar,
-  MessageBarBody,
-} from '@fluentui/react-components';
-import { ArrowCounterclockwise16Regular, Open12Regular } from '@fluentui/react-icons';
+import { useState } from 'react';
+import { mergeClasses, Text, Card, Badge, Link, MessageBar, MessageBarBody } from '@fluentui/react-components';
 import type { CopilotAdoptionOptions, CopilotAdoptionSummary } from '../../types/copilotAdoption';
 import { formatCount } from '../shared/KpiGrid';
-import { formatNumber, plural, useT, useTNode, type TFunction, type TranslationKey } from '../../i18n';
+import { formatNumber, plural, useT, useTNode } from '../../i18n';
+import { projectCoworkTimeSaved, type TimeSavedAssumptionKey, type TimeSavedAssumptionState } from './coworkTimeSaved';
+import { COWORK_OVERVIEW_URL, COWORK_TASK_RATIONALE } from './coworkTimeSavedEvidence';
 import {
-  TIME_SAVED_LIMITS,
-  formatModelled,
-  isValidAssumption,
-  modelledRange,
-  projectTimeSaved,
-  type TimeSavedActivity,
-  type TimeSavedAssumptionKey,
-  type TimeSavedAssumptionState,
-} from './coworkTimeSaved';
-import {
-  ACTIVITY_RATIONALE,
-  CONSERVATIVE_EVIDENCE,
-  COWORK_OVERVIEW_URL,
-  COWORK_TASK_RATIONALE,
-  EVIDENCE_METHOD_LABEL,
-  EVIDENCE_METHOD_TOOLTIP,
-  SELF_REPORT_CAVEAT,
-  TIME_SAVED_BENCHMARKS,
-  benchmarkRange,
-  senseCheck,
-  type EvidenceItem,
-} from './coworkTimeSavedEvidence';
-import {
-  TIME_SAVED_ACTIVITY_COLOUR,
-  TIME_SAVED_ACTIVITY_LABEL,
+  AssumptionBadge,
+  AssumptionInput,
+  CalculatorControls,
+  EvidenceEntry,
+  ScenarioPicker,
   TIME_SAVED_COWORK_COLOUR,
-  taskRateBasisKey,
-} from './CoworkTimeSavedHero';
-import { revealElement } from './adoptionShared';
+  formatAssumption,
+  useCalculatorFocus,
+  useModelStyles,
+} from './timeSavedShared';
 
-const ACTIVITY_ASSUMPTION: Record<TimeSavedActivity, TimeSavedAssumptionKey> = {
-  meetings: 'meetingMinutes',
-  email: 'emailMinutes',
-  documents: 'documentMinutes',
-};
-
-const ACTIVITY_VOLUME_LABEL: Record<TimeSavedActivity, TranslationKey> = {
-  meetings: 'copilotAdoptionCowork.timeSaved.volume.meetings',
-  email: 'copilotAdoptionCowork.timeSaved.volume.email',
-  documents: 'copilotAdoptionCowork.timeSaved.volume.documents',
-};
-
-const ACTIVITY_INPUT_LABEL: Record<TimeSavedActivity, TranslationKey> = {
-  meetings: 'copilotAdoptionCowork.timeSaved.input.meetingMinutes',
-  email: 'copilotAdoptionCowork.timeSaved.input.emailMinutes',
-  documents: 'copilotAdoptionCowork.timeSaved.input.documentMinutes',
-};
-
-const ACTIVITY_CARD_TITLE: Record<TimeSavedActivity, TranslationKey> = {
-  meetings: 'copilotAdoptionCowork.timeSaved.card.meetings',
-  email: 'copilotAdoptionCowork.timeSaved.card.email',
-  documents: 'copilotAdoptionCowork.timeSaved.card.documents',
-};
-
-const useStyles = makeStyles({
-  stack: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '16px',
-  },
-  // The calculator, as the target of "Adjust the assumptions". The ring is what tells the reader the
-  // button worked when the table was already on screen and there was nothing to scroll.
-  calculator: {
-    scrollMarginTop: '12px',
-    borderRadius: tokens.borderRadiusMedium,
-    transitionProperty: 'box-shadow',
-    transitionDuration: tokens.durationSlow,
-    transitionTimingFunction: tokens.curveEasyEase,
-  },
-  calculatorHighlighted: {
-    boxShadow: `0 0 0 3px ${tokens.colorBrandStroke1}`,
-  },
-  sectionTitle: {
-    display: 'block',
-    marginBottom: '4px',
-  },
-  note: {
-    color: tokens.colorNeutralForeground3,
-    display: 'block',
-    maxWidth: '900px',
-  },
-  scenario: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '12px',
-    flexWrap: 'wrap',
-    margin: '12px 0 8px',
-  },
-  tableWrap: {
-    overflowX: 'auto',
-  },
-  table: {
-    width: '100%',
-    borderCollapse: 'collapse',
-    fontSize: tokens.fontSizeBase200,
-    lineHeight: tokens.lineHeightBase200,
-  },
-  th: {
-    textAlign: 'left',
-    fontWeight: tokens.fontWeightSemibold,
-    color: tokens.colorNeutralForeground2,
-    padding: '8px 10px',
-    borderBottomWidth: '2px',
-    borderBottomStyle: 'solid',
-    borderBottomColor: tokens.colorNeutralStroke1,
-    whiteSpace: 'nowrap',
-  },
-  thNumeric: {
-    textAlign: 'right',
-  },
-  td: {
-    padding: '10px',
-    borderBottomWidth: '1px',
-    borderBottomStyle: 'solid',
-    borderBottomColor: tokens.colorNeutralStroke3,
-    verticalAlign: 'middle',
-  },
-  tdNumeric: {
-    textAlign: 'right',
-    fontVariantNumeric: 'tabular-nums',
-    whiteSpace: 'nowrap',
-  },
-  activityCell: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-  },
-  swatch: {
-    width: '12px',
-    height: '12px',
-    borderRadius: '3px',
-    flexShrink: 0,
-  },
-  sub: {
-    display: 'block',
-    color: tokens.colorNeutralForeground3,
-  },
-  inputCell: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px',
-    flexWrap: 'wrap',
-  },
-  input: {
-    width: '110px',
-  },
-  shareBar: {
-    height: '8px',
-    borderRadius: '4px',
-    backgroundColor: tokens.colorNeutralBackground3,
-    overflow: 'hidden',
-    minWidth: '80px',
-  },
-  totalRow: {
-    fontWeight: tokens.fontWeightSemibold,
-  },
-  // A layer's heading inside the calculator: Copilot's rows, then Cowork's, each labelled with the
-  // strength of the evidence behind it so the table itself says which figures a study stands behind.
-  groupCell: {
-    padding: '14px 10px 6px',
-    borderBottomWidth: '1px',
-    borderBottomStyle: 'solid',
-    borderBottomColor: tokens.colorNeutralStroke2,
-  },
-  groupHead: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    flexWrap: 'wrap',
-  },
-  subtotalRow: {
-    backgroundColor: tokens.colorNeutralBackground2,
-  },
-  noStudy: {
-    marginTop: '4px',
-  },
-  bigHours: {
-    fontSize: tokens.fontSizeBase400,
-    fontWeight: 700,
-  },
-  controlsRow: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: '12px',
-    flexWrap: 'wrap',
-    marginTop: '12px',
-  },
-  inline: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    flexWrap: 'wrap',
-  },
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
-    gap: '16px',
-  },
-  card: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '10px',
-    borderTopWidth: '4px',
-    borderTopStyle: 'solid',
-  },
-  cardHead: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: '8px',
-  },
-  label: {
-    color: tokens.colorNeutralForeground3,
-    textTransform: 'uppercase',
-    letterSpacing: '0.04em',
-    display: 'block',
-    marginBottom: '2px',
-  },
-  list: {
-    margin: 0,
-    paddingLeft: '18px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '4px',
-  },
-  evidenceList: {
-    margin: 0,
-    padding: 0,
-    listStyleType: 'none',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px',
-  },
-  evidenceItem: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '2px',
-  },
-  evidenceHead: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px',
-    flexWrap: 'wrap',
-  },
-  measured: {
-    color: tokens.colorNeutralForegroundOnBrand,
-    backgroundColor: '#107c10',
-  },
-  test: {
-    backgroundColor: tokens.colorNeutralBackground2,
-    borderRadius: tokens.borderRadiusMedium,
-    padding: '8px 10px',
-  },
-  benchmarkRow: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(190px, 1.7fr) minmax(90px, 1.3fr) auto',
-    alignItems: 'center',
-    gap: '10px',
-    padding: '6px 0',
-    borderBottomWidth: '1px',
-    borderBottomStyle: 'solid',
-    borderBottomColor: tokens.colorNeutralStroke3,
-  },
-  benchmarkBarTrack: {
-    position: 'relative',
-    height: '10px',
-    borderRadius: '5px',
-    backgroundColor: tokens.colorNeutralBackground3,
-  },
-  benchmarkBar: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    left: 0,
-    borderRadius: '5px',
-  },
-  modelRow: {
-    backgroundColor: tokens.colorBrandBackground2,
-    borderRadius: tokens.borderRadiusMedium,
-    padding: '6px 8px',
-    borderBottomWidth: '0',
-  },
-  assumptionList: {
-    margin: '8px 0 0',
-    paddingLeft: '20px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '4px',
-    color: tokens.colorNeutralForeground2,
-  },
-  steps: {
-    margin: '6px 0 0',
-    paddingLeft: '20px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '6px',
-  },
-});
-
-function MethodBadge({ method }: { method: EvidenceItem['method'] }) {
-  const styles = useStyles();
-  const t = useT();
-  return (
-    <Tooltip relationship="description" content={t(EVIDENCE_METHOD_TOOLTIP[method])}>
-      {method === 'measured' ? (
-        <Badge size="small" className={styles.measured}>
-          {t(EVIDENCE_METHOD_LABEL[method])}
-        </Badge>
-      ) : (
-        <Badge size="small" appearance="outline" color={method === 'selfReported' ? 'warning' : 'informative'}>
-          {t(EVIDENCE_METHOD_LABEL[method])}
-        </Badge>
-      )}
-    </Tooltip>
-  );
-}
-
-function EvidenceEntry({ item }: { item: EvidenceItem }) {
-  const styles = useStyles();
-  const t = useT();
-  return (
-    <li className={styles.evidenceItem}>
-      <span className={styles.evidenceHead}>
-        <MethodBadge method={item.method} />
-        <Link href={item.url} target="_blank" rel="noopener noreferrer">
-          {t(item.sourceKey)}
-          {'\u00a0'}
-          <Open12Regular aria-hidden="true" />
-        </Link>
-      </span>
-      <Text size={200}>{t(item.findingKey)}</Text>
-    </li>
-  );
-}
+type Scenario = 'ready' | 'full';
 
 /**
- * One editable assumption.
- *
- * Holds its own draft text so a reader can type "0." on the way to "0.5" without the half-typed value
- * being rejected and snapped back under their cursor. Only a figure the model accepts is committed;
- * anything else is shown as a validation message and changes nothing.
- */
-function AssumptionInput({
-  field,
-  value,
-  defaultValue,
-  customised,
-  label,
-  unit,
-  scale = 1,
-  defaultLabel,
-  onCommit,
-  onReset,
-}: {
-  field: TimeSavedAssumptionKey;
-  value: number;
-  defaultValue: number;
-  customised: boolean;
-  label: string;
-  unit: ReactNode;
-  /** Display multiplier: the conservative ratio is edited as a percentage. */
-  scale?: number;
-  /**
-   * What an unchanged figure is. "Product default" for everything the product configures; the Cowork
-   * task rate says instead where it came from, because it is usually observed rather than configured.
-   */
-  defaultLabel?: string;
-  onCommit: (field: TimeSavedAssumptionKey, value: number) => void;
-  onReset: (field: TimeSavedAssumptionKey) => void;
-}) {
-  const styles = useStyles();
-  const t = useT();
-  const messageId = useId();
-  const shown = (v: number) => String(Math.round(v * scale * 1000) / 1000);
-  const [draft, setDraft] = useState(shown(value));
-  const [invalid, setInvalid] = useState(false);
-
-  // A reset, or the same figure changed elsewhere on the page, has to reach the box.
-  useEffect(() => {
-    setDraft(shown(value));
-    setInvalid(false);
-  }, [value, scale]);
-
-  const limits = TIME_SAVED_LIMITS[field];
-
-  return (
-    <span className={styles.inputCell}>
-      <Input
-        className={styles.input}
-        type="number"
-        inputMode="decimal"
-        size="small"
-        value={draft}
-        min={limits.min * scale}
-        max={limits.max * scale}
-        step="any"
-        aria-label={label}
-        aria-invalid={invalid || undefined}
-        aria-describedby={invalid ? messageId : undefined}
-        contentAfter={<Text size={200}>{unit}</Text>}
-        onChange={(_e, data) => {
-          setDraft(data.value);
-          const parsed = data.value.trim() === '' ? Number.NaN : Number(data.value) / scale;
-          if (isValidAssumption(field, parsed)) {
-            setInvalid(false);
-            onCommit(field, parsed);
-          } else {
-            setInvalid(true);
-          }
-        }}
-        onBlur={() => {
-          if (invalid) {
-            setDraft(shown(value));
-            setInvalid(false);
-          }
-        }}
-      />
-      {customised ? (
-        <>
-          <Badge size="small" appearance="tint" color="brand">
-            {t('copilotAdoptionCowork.timeSaved.input.yourFigure')}
-          </Badge>
-          <Button
-            size="small"
-            appearance="subtle"
-            icon={<ArrowCounterclockwise16Regular />}
-            onClick={() => onReset(field)}
-            data-print="hide"
-          >
-            {t('copilotAdoptionCowork.timeSaved.input.resetTo', { value: formatNumber(defaultValue * scale, { maximumFractionDigits: 2 }) })}
-          </Button>
-        </>
-      ) : (
-        <Text size={100} className={styles.sub}>
-          {defaultLabel ?? t('copilotAdoptionCowork.timeSaved.input.productDefault')}
-        </Text>
-      )}
-      {invalid && (
-        <Text id={messageId} size={100} role="alert" style={{ color: tokens.colorPaletteRedForeground1 }}>
-          {t('copilotAdoptionCowork.timeSaved.input.invalid', {
-            min: formatNumber(limits.min * scale),
-            max: formatNumber(limits.max * scale),
-          })}
-        </Text>
-      )}
-    </span>
-  );
-}
-
-type Scenario = 'full' | 'ready';
-
-function senseCheckKey(verdict: 'below' | 'within' | 'above'): TranslationKey {
-  switch (verdict) {
-    case 'above':
-      return 'copilotAdoptionCowork.timeSaved.senseCheck.verdict.above';
-    case 'below':
-      return 'copilotAdoptionCowork.timeSaved.senseCheck.verdict.below';
-    default:
-      return 'copilotAdoptionCowork.timeSaved.senseCheck.verdict.within';
-  }
-}
-
-function volumeUnitLabel(t: TFunction, activity: TimeSavedActivity): string {
-  return t(ACTIVITY_VOLUME_LABEL[activity]);
-}
-
-/**
- * The model behind the headline, laid open: what was observed, what is assumed, and why.
+ * The Cowork estimate laid open: what was observed, what is assumed, and what is and is not known.
  *
  * Written for the meeting where somebody pushes back on the number. Every assumption is an input the
- * reader can change on the spot, every default states how it was derived from Microsoft's own
- * published credits, every piece of evidence says whether it was measured or self-reported, and the
- * result is compared with what published studies actually found. A figure that survives that is one
- * worth quoting; one that does not should not be in a board pack at all.
+ * reader can change on the spot, and the page says plainly that no study has measured Cowork - so the
+ * figure is sized honestly for what it is: the value of enabling Cowork for people who already hold a
+ * Copilot licence, on top of what that licence gives back. There is no sense check, because there is
+ * nothing published to check Cowork against; the Copilot evidence and its sense check sit with the
+ * licence estimate, on the Licence opportunities tab.
  */
 export default function CoworkTimeSavedModel({
   summary,
@@ -507,37 +40,22 @@ export default function CoworkTimeSavedModel({
   timeSaved: TimeSavedAssumptionState;
   /**
    * Incremented by the headline's "Adjust the assumptions" button. Each new value scrolls the
-   * calculator into view, focuses its first figure and briefly rings it - so the button visibly does
-   * something even when this section was already open and the table already on screen.
+   * calculator into view, focuses its first figure and briefly rings it.
    */
   focusRequest?: number;
 }) {
-  const styles = useStyles();
+  const styles = useModelStyles();
   const t = useT();
   const tNode = useTNode();
-  const { assumptions, defaults, customised, isCustomised, setAssumption, resetAssumption, resetAll } = timeSaved;
+  const { assumptions, defaults, customised, setAssumption, resetAssumption } = timeSaved;
 
-  const full = projectTimeSaved(summary.coworkFullRolloutEstimate, assumptions, options);
-  const ready = projectTimeSaved(summary.coworkValueEstimate, assumptions, options);
-  const [scenario, setScenario] = useState<Scenario>(full ? 'full' : 'ready');
-  const calculatorRef = useRef<HTMLDivElement>(null);
-  const [highlighted, setHighlighted] = useState(false);
+  const ready = projectCoworkTimeSaved(summary.coworkValueEstimate, assumptions, options);
+  const full = projectCoworkTimeSaved(summary.coworkFullRolloutEstimate, assumptions, options);
+  // The people ready now first, as on the headline: that is the spending-policy decision.
+  const [scenario, setScenario] = useState<Scenario>(ready ? 'ready' : 'full');
+  const { ref: calculatorRef, highlighted } = useCalculatorFocus(focusRequest);
 
-  useEffect(() => {
-    if (!focusRequest) return undefined;
-    const calculator = calculatorRef.current;
-    if (!calculator) return undefined;
-
-    revealElement(calculator);
-    // preventScroll: focusing would otherwise jump straight to the field and cut the smooth scroll
-    // short. The meetings figure is the first number input in the table.
-    calculator.querySelector<HTMLInputElement>('input[type="number"]')?.focus({ preventScroll: true });
-    setHighlighted(true);
-    const timer = window.setTimeout(() => setHighlighted(false), 1600);
-    return () => window.clearTimeout(timer);
-  }, [focusRequest]);
-
-  const projection = (scenario === 'full' ? full : ready) ?? full ?? ready;
+  const projection = (scenario === 'ready' ? ready : full) ?? ready ?? full;
 
   if (!projection) {
     return (
@@ -553,379 +71,170 @@ export default function CoworkTimeSavedModel({
   }
 
   const conservativePercent = formatNumber(assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 });
-  const range = benchmarkRange();
-  // Published figures are averages across everybody licensed, so the average seat holder - the full
-  // adoption cohort - is the like-for-like comparison, not the heavier people ready now. And they
-  // measured Microsoft 365 Copilot, so they are compared with the Copilot layer alone: no study has
-  // measured Cowork, so there is nothing to check its layer against.
-  const averageFigure = full ?? projection;
-  const verdict = senseCheck(averageFigure.copilotMinutesPerPersonDayLow);
-  const benchmarkScale = Math.max(
-    range.max,
-    averageFigure.copilotMinutesPerPersonDayHigh,
-    ready?.copilotMinutesPerPersonDayHigh ?? 0,
-  ) * 1.1;
-  const cowork = projection.cowork;
-
+  const monthDays = Math.max(1, options.habitBucketNormalisationDays);
   const commit = (field: TimeSavedAssumptionKey, value: number) => setAssumption(field, value);
 
   return (
     <div className={styles.stack}>
       {/* ---------- The calculator ---------- */}
       <div ref={calculatorRef} className={mergeClasses(styles.calculator, highlighted && styles.calculatorHighlighted)}>
-      <Card>
-        <Text weight="semibold" size={400} className={styles.sectionTitle}>
-          {t('copilotAdoptionCowork.timeSaved.model.title')}
-        </Text>
-        <Text size={200} className={styles.note}>
-          {t('copilotAdoptionCowork.timeSaved.model.intro')}
-        </Text>
+        <Card>
+          <Text weight="semibold" size={400} className={styles.sectionTitle}>
+            {t('copilotAdoptionCowork.timeSaved.model.title')}
+          </Text>
+          <Text size={200} className={styles.note}>
+            {t('copilotAdoptionCowork.timeSaved.model.intro')}
+          </Text>
 
-        {full && ready && (
-          <div className={styles.scenario} data-print="hide">
-            <Text size={200} weight="semibold">
-              {t('copilotAdoptionCowork.timeSaved.model.scenarioLabel')}
-            </Text>
-            <RadioGroup
-              layout="horizontal"
+          {ready && full && (
+            <ScenarioPicker<Scenario>
               value={scenario}
-              onChange={(_e, data) => setScenario(data.value as Scenario)}
-              aria-label={t('copilotAdoptionCowork.timeSaved.model.scenarioLabel')}
-            >
-              <Radio
-                value="full"
-                label={t(
-                  plural(full.cohortUsers, 'copilotAdoptionCowork.timeSaved.model.scenario.full.one', 'copilotAdoptionCowork.timeSaved.model.scenario.full.other'),
-                  { users: formatCount(full.cohortUsers) },
-                )}
-              />
-              <Radio
-                value="ready"
-                label={t(
-                  plural(ready.cohortUsers, 'copilotAdoptionCowork.timeSaved.model.scenario.ready.one', 'copilotAdoptionCowork.timeSaved.model.scenario.ready.other'),
-                  { users: formatCount(ready.cohortUsers) },
-                )}
-              />
-            </RadioGroup>
-          </div>
-        )}
-
-        <div className={styles.tableWrap}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th className={styles.th}>{t('copilotAdoptionCowork.timeSaved.table.work')}</th>
-                <th className={mergeClasses(styles.th, styles.thNumeric)}>{t('copilotAdoptionCowork.timeSaved.table.observed')}</th>
-                <th className={styles.th}>{t('copilotAdoptionCowork.timeSaved.table.minutesEach')}</th>
-                <th className={mergeClasses(styles.th, styles.thNumeric)}>{t('copilotAdoptionCowork.timeSaved.table.hours')}</th>
-                <th className={styles.th}>{t('copilotAdoptionCowork.timeSaved.table.share')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td className={styles.groupCell} colSpan={5}>
-                  <span className={styles.groupHead}>
-                    <Text size={300} weight="semibold">
-                      {t('copilotAdoptionCowork.timeSaved.table.copilotGroup')}
-                    </Text>
-                    <Badge size="small" className={styles.measured}>
-                      {t('copilotAdoptionCowork.timeSaved.hero.copilotLayer.badge')}
-                    </Badge>
-                  </span>
-                </td>
-              </tr>
-              {projection.activities.map((a) => {
-                const field = ACTIVITY_ASSUMPTION[a.activity];
-                return (
-                  <tr key={a.activity}>
-                    <td className={styles.td}>
-                      <span className={styles.activityCell}>
-                        <span className={styles.swatch} style={{ backgroundColor: TIME_SAVED_ACTIVITY_COLOUR[a.activity] }} aria-hidden="true" />
-                        <span>
-                          <Text size={300} weight="semibold">
-                            {t(TIME_SAVED_ACTIVITY_LABEL[a.activity])}
-                          </Text>
-                          <Text size={100} className={styles.sub}>
-                            {volumeUnitLabel(t, a.activity)}
-                          </Text>
-                        </span>
-                      </span>
-                    </td>
-                    <td className={mergeClasses(styles.td, styles.tdNumeric)}>{formatCount(a.volume)}</td>
-                    <td className={styles.td}>
-                      <AssumptionInput
-                        field={field}
-                        value={assumptions[field]}
-                        defaultValue={defaults[field]}
-                        customised={customised.includes(field)}
-                        label={t(ACTIVITY_INPUT_LABEL[a.activity])}
-                        unit={t('copilotAdoptionCowork.timeSaved.unit.minutes')}
-                        onCommit={commit}
-                        onReset={resetAssumption}
-                      />
-                    </td>
-                    <td className={mergeClasses(styles.td, styles.tdNumeric)}>
-                      {t('copilotAdoptionCowork.timeSaved.table.hoursValue', { hours: formatCount(a.displayHours) })}
-                    </td>
-                    <td className={styles.td}>
-                      <div className={styles.shareBar} title={`${formatNumber(a.sharePct, { maximumFractionDigits: 0 })}%`}>
-                        <div
-                          style={{
-                            width: `${Math.max(0, Math.min(100, a.sharePct))}%`,
-                            height: '100%',
-                            backgroundColor: TIME_SAVED_ACTIVITY_COLOUR[a.activity],
-                          }}
-                        />
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-              <tr className={mergeClasses(styles.totalRow, styles.subtotalRow)}>
-                <td className={styles.td} colSpan={3}>
-                  {t('copilotAdoptionCowork.timeSaved.table.copilotSubtotal')}
-                </td>
-                <td className={mergeClasses(styles.td, styles.tdNumeric)}>
-                  {t('copilotAdoptionCowork.timeSaved.table.hoursValue', { hours: formatCount(projection.copilotHoursHigh) })}
-                </td>
-                <td className={styles.td} />
-              </tr>
-
-              <tr>
-                <td className={styles.groupCell} colSpan={5}>
-                  <span className={styles.groupHead}>
-                    <Text size={300} weight="semibold">
-                      {t('copilotAdoptionCowork.timeSaved.table.coworkGroup')}
-                    </Text>
-                    <Badge size="small" appearance="outline" color="warning">
-                      {t('copilotAdoptionCowork.timeSaved.hero.coworkLayer.badge')}
-                    </Badge>
-                  </span>
-                </td>
-              </tr>
-              <tr>
-                <td className={styles.td}>
-                  <span className={styles.activityCell}>
-                    <span className={styles.swatch} style={{ backgroundColor: TIME_SAVED_COWORK_COLOUR }} aria-hidden="true" />
-                    <span>
-                      <Text size={300} weight="semibold">
-                        {t('copilotAdoptionCowork.timeSaved.activity.coworkTasks')}
-                      </Text>
-                      <Text size={100} className={styles.sub}>
-                        {t(
-                          plural(
-                            cowork.projectedUsers,
-                            'copilotAdoptionCowork.timeSaved.volume.coworkTasks.one',
-                            'copilotAdoptionCowork.timeSaved.volume.coworkTasks.other',
-                          ),
-                          {
-                            observed: formatCount(cowork.observedTasks),
-                            users: formatCount(cowork.projectedUsers),
-                            rate: formatNumber(cowork.tasksPerPerson, { maximumFractionDigits: 2 }),
-                          },
-                        )}
-                      </Text>
-                    </span>
-                  </span>
-                </td>
-                <td className={mergeClasses(styles.td, styles.tdNumeric)}>{formatCount(cowork.tasks)}</td>
-                <td className={styles.td}>
-                  <AssumptionInput
-                    field="taskMinutes"
-                    value={assumptions.taskMinutes}
-                    defaultValue={defaults.taskMinutes}
-                    customised={customised.includes('taskMinutes')}
-                    label={t('copilotAdoptionCowork.timeSaved.input.taskMinutes')}
-                    unit={t('copilotAdoptionCowork.timeSaved.unit.minutes')}
-                    onCommit={commit}
-                    onReset={resetAssumption}
-                  />
-                </td>
-                <td className={mergeClasses(styles.td, styles.tdNumeric)}>
-                  {t('copilotAdoptionCowork.timeSaved.table.hoursValue', { hours: formatCount(cowork.hoursHigh) })}
-                </td>
-                <td className={styles.td}>
-                  <div className={styles.shareBar} title={`${formatNumber(cowork.sharePct, { maximumFractionDigits: 0 })}%`}>
-                    <div
-                      style={{
-                        width: `${Math.max(0, Math.min(100, cowork.sharePct))}%`,
-                        height: '100%',
-                        backgroundColor: TIME_SAVED_COWORK_COLOUR,
-                      }}
-                    />
-                  </div>
-                </td>
-              </tr>
-              <tr>
-                <td className={styles.td} colSpan={2}>
-                  <Text size={200}>
-                    {t(
-                      plural(
-                        cowork.projectedUsers,
-                        'copilotAdoptionCowork.timeSaved.table.tasksPerPerson.one',
-                        'copilotAdoptionCowork.timeSaved.table.tasksPerPerson.other',
-                      ),
-                      { users: formatCount(cowork.projectedUsers) },
-                    )}
-                  </Text>
-                </td>
-                <td className={styles.td} colSpan={3}>
-                  <AssumptionInput
-                    field="tasksPerPerson"
-                    value={assumptions.tasksPerPerson}
-                    defaultValue={defaults.tasksPerPerson}
-                    customised={customised.includes('tasksPerPerson')}
-                    label={t('copilotAdoptionCowork.timeSaved.input.tasksPerPerson')}
-                    unit={t('copilotAdoptionCowork.timeSaved.unit.tasks')}
-                    defaultLabel={t(
-                      cowork.rateBasis === 'observed'
-                        ? 'copilotAdoptionCowork.timeSaved.input.rateDefault.observed'
-                        : 'copilotAdoptionCowork.timeSaved.input.rateDefault.assumed',
-                    )}
-                    onCommit={commit}
-                    onReset={resetAssumption}
-                  />
-                </td>
-              </tr>
-
-              <tr className={styles.totalRow}>
-                <td className={styles.td} colSpan={3}>
-                  {t('copilotAdoptionCowork.timeSaved.table.fullAssumption')}
-                </td>
-                <td className={mergeClasses(styles.td, styles.tdNumeric)}>
-                  <span className={styles.bigHours}>
-                    {t('copilotAdoptionCowork.timeSaved.table.hoursValue', { hours: formatCount(projection.hoursHigh) })}
-                  </span>
-                </td>
-                <td className={styles.td} />
-              </tr>
-              <tr className={styles.totalRow}>
-                <td className={styles.td} colSpan={2}>
-                  {t('copilotAdoptionCowork.timeSaved.table.conservativeEnd')}
-                </td>
-                <td className={styles.td}>
-                  <AssumptionInput
-                    field="conservativeRatio"
-                    value={assumptions.conservativeRatio}
-                    defaultValue={defaults.conservativeRatio}
-                    customised={customised.includes('conservativeRatio')}
-                    label={t('copilotAdoptionCowork.timeSaved.input.conservativePercent')}
-                    unit="%"
-                    scale={100}
-                    onCommit={commit}
-                    onReset={resetAssumption}
-                  />
-                </td>
-                <td className={mergeClasses(styles.td, styles.tdNumeric)}>
-                  <span className={styles.bigHours}>
-                    {t('copilotAdoptionCowork.timeSaved.table.hoursValue', { hours: formatCount(projection.hoursLow) })}
-                  </span>
-                </td>
-                <td className={styles.td} />
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div className={styles.controlsRow}>
-          <span className={styles.inline}>
-            <Text size={200}>{t('copilotAdoptionCowork.timeSaved.input.hoursPerDayLabel')}</Text>
-            <AssumptionInput
-              field="hoursPerDay"
-              value={assumptions.hoursPerDay}
-              defaultValue={defaults.hoursPerDay}
-              customised={customised.includes('hoursPerDay')}
-              label={t('copilotAdoptionCowork.timeSaved.input.hoursPerDayLabel')}
-              unit={t('copilotAdoptionCowork.timeSaved.unit.hours')}
-              onCommit={commit}
-              onReset={resetAssumption}
+              onChange={setScenario}
+              options={[
+                {
+                  value: 'ready',
+                  label: t(
+                    plural(ready.cohortUsers, 'copilotAdoptionCowork.timeSaved.model.scenario.ready.one', 'copilotAdoptionCowork.timeSaved.model.scenario.ready.other'),
+                    { users: formatCount(ready.cohortUsers) },
+                  ),
+                },
+                {
+                  value: 'full',
+                  label: t(
+                    plural(full.cohortUsers, 'copilotAdoptionCowork.timeSaved.model.scenario.full.one', 'copilotAdoptionCowork.timeSaved.model.scenario.full.other'),
+                    { users: formatCount(full.cohortUsers) },
+                  ),
+                },
+              ]}
             />
-          </span>
-          {isCustomised && (
-            <Button size="small" icon={<ArrowCounterclockwise16Regular />} onClick={resetAll} data-print="hide">
-              {t('copilotAdoptionCowork.timeSaved.input.resetAll')}
-            </Button>
           )}
-        </div>
 
-        <MessageBar intent={isCustomised ? 'warning' : 'info'} style={{ marginTop: '12px' }}>
-          <MessageBarBody>
-            {isCustomised
-              ? t('copilotAdoptionCowork.timeSaved.storage.customised')
-              : t('copilotAdoptionCowork.timeSaved.storage.defaults')}
-          </MessageBarBody>
-        </MessageBar>
-      </Card>
+          <div className={styles.tableWrap}>
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th className={styles.th}>{t('copilotAdoptionTimeSaved.table.work')}</th>
+                  <th className={mergeClasses(styles.th, styles.thNumeric)}>{t('copilotAdoptionTimeSaved.table.observed')}</th>
+                  <th className={styles.th}>{t('copilotAdoptionTimeSaved.table.minutesEach')}</th>
+                  <th className={mergeClasses(styles.th, styles.thNumeric)}>{t('copilotAdoptionTimeSaved.table.hours')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td className={styles.td}>
+                    <span className={styles.activityCell}>
+                      <span className={styles.swatch} style={{ backgroundColor: TIME_SAVED_COWORK_COLOUR }} aria-hidden="true" />
+                      <span>
+                        <Text size={300} weight="semibold">
+                          {t('copilotAdoptionCowork.timeSaved.activity.coworkTasks')}
+                        </Text>
+                        <Text size={100} className={styles.sub}>
+                          {t(
+                            plural(
+                              projection.projectedUsers,
+                              'copilotAdoptionCowork.timeSaved.volume.coworkTasks.one',
+                              'copilotAdoptionCowork.timeSaved.volume.coworkTasks.other',
+                            ),
+                            {
+                              observed: formatCount(projection.observedTasks),
+                              users: formatCount(projection.projectedUsers),
+                              rate: formatAssumption(projection.tasksPerPerson),
+                            },
+                          )}
+                        </Text>
+                      </span>
+                    </span>
+                  </td>
+                  <td className={mergeClasses(styles.td, styles.tdNumeric)}>{formatCount(projection.tasks)}</td>
+                  <td className={styles.td}>
+                    <AssumptionInput
+                      field="taskMinutes"
+                      value={assumptions.taskMinutes}
+                      defaultValue={defaults.taskMinutes}
+                      customised={customised.includes('taskMinutes')}
+                      label={t('copilotAdoptionCowork.timeSaved.input.taskMinutes')}
+                      unit={t('copilotAdoptionTimeSaved.unit.minutes')}
+                      onCommit={commit}
+                      onReset={resetAssumption}
+                    />
+                  </td>
+                  <td className={mergeClasses(styles.td, styles.tdNumeric)}>
+                    {t('copilotAdoptionTimeSaved.table.hoursValue', { hours: formatCount(projection.hoursHigh) })}
+                  </td>
+                </tr>
+                <tr>
+                  <td className={styles.td} colSpan={2}>
+                    <Text size={200}>
+                      {t(
+                        plural(
+                          projection.projectedUsers,
+                          'copilotAdoptionCowork.timeSaved.table.tasksPerPerson.one',
+                          'copilotAdoptionCowork.timeSaved.table.tasksPerPerson.other',
+                        ),
+                        { users: formatCount(projection.projectedUsers) },
+                      )}
+                    </Text>
+                  </td>
+                  <td className={styles.td} colSpan={2}>
+                    <AssumptionInput
+                      field="tasksPerPerson"
+                      value={assumptions.tasksPerPerson}
+                      defaultValue={defaults.tasksPerPerson}
+                      customised={customised.includes('tasksPerPerson')}
+                      label={t('copilotAdoptionCowork.timeSaved.input.tasksPerPerson')}
+                      unit={t('copilotAdoptionCowork.timeSaved.unit.tasks')}
+                      defaultLabel={t(
+                        projection.rateBasis === 'observed'
+                          ? 'copilotAdoptionCowork.timeSaved.input.rateDefault.observed'
+                          : 'copilotAdoptionCowork.timeSaved.input.rateDefault.assumed',
+                      )}
+                      onCommit={commit}
+                      onReset={resetAssumption}
+                    />
+                  </td>
+                </tr>
+                <tr className={styles.totalRow}>
+                  <td className={styles.td} colSpan={3}>
+                    {t('copilotAdoptionTimeSaved.table.total')}
+                  </td>
+                  <td className={mergeClasses(styles.td, styles.tdNumeric)}>
+                    <span className={styles.bigHours}>
+                      {t('copilotAdoptionTimeSaved.table.hoursValue', { hours: formatCount(projection.hoursHigh) })}
+                    </span>
+                  </td>
+                </tr>
+                <tr className={styles.totalRow}>
+                  <td className={styles.td} colSpan={2}>
+                    {t('copilotAdoptionTimeSaved.table.conservativeEnd')}
+                  </td>
+                  <td className={styles.td}>
+                    <AssumptionInput
+                      field="conservativeRatio"
+                      value={assumptions.conservativeRatio}
+                      defaultValue={defaults.conservativeRatio}
+                      customised={customised.includes('conservativeRatio')}
+                      label={t('copilotAdoptionTimeSaved.input.conservativePercent')}
+                      unit="%"
+                      scale={100}
+                      onCommit={commit}
+                      onReset={resetAssumption}
+                    />
+                  </td>
+                  <td className={mergeClasses(styles.td, styles.tdNumeric)}>
+                    <span className={styles.bigHours}>
+                      {t('copilotAdoptionTimeSaved.table.hoursValue', { hours: formatCount(projection.hoursLow) })}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <CalculatorControls timeSaved={timeSaved} />
+        </Card>
       </div>
 
-      {/* ---------- Why each figure: Microsoft 365 Copilot ---------- */}
-      <div>
-        <Text weight="semibold" size={400} className={styles.sectionTitle}>
-          {t('copilotAdoptionCowork.timeSaved.rationale.title')}
-        </Text>
-        <Text size={200} className={styles.note}>
-          {t('copilotAdoptionCowork.timeSaved.rationale.intro')}
-        </Text>
-      </div>
-
-      <div className={styles.grid}>
-        {ACTIVITY_RATIONALE.map((r) => {
-          const field = ACTIVITY_ASSUMPTION[r.activity];
-          const defaultMinutes = formatNumber(defaults[field], { maximumFractionDigits: 2 });
-          return (
-            <Card key={r.activity} className={styles.card} style={{ borderTopColor: TIME_SAVED_ACTIVITY_COLOUR[r.activity] }}>
-              <div className={styles.cardHead}>
-                <Text weight="semibold" size={400}>
-                  {t(ACTIVITY_CARD_TITLE[r.activity], { minutes: defaultMinutes })}
-                </Text>
-                {customised.includes(field) && (
-                  <Badge size="small" appearance="tint" color="brand">
-                    {t('copilotAdoptionCowork.timeSaved.input.usingYours', {
-                      minutes: formatNumber(assumptions[field], { maximumFractionDigits: 2 }),
-                    })}
-                  </Badge>
-                )}
-              </div>
-              <div>
-                <Text size={100} weight="semibold" className={styles.label}>
-                  {t('copilotAdoptionCowork.timeSaved.rationale.whatSavesTime')}
-                </Text>
-                <ul className={styles.list}>
-                  {r.operationKeys.map((key) => (
-                    <li key={key}>
-                      <Text size={200}>{t(key)}</Text>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <div>
-                <Text size={100} weight="semibold" className={styles.label}>
-                  {t('copilotAdoptionCowork.timeSaved.rationale.whyThisFigure', { minutes: defaultMinutes })}
-                </Text>
-                <Text size={200}>{t(r.whyKey)}</Text>
-              </div>
-              <div>
-                <Text size={100} weight="semibold" className={styles.label}>
-                  {t('copilotAdoptionCowork.timeSaved.rationale.evidence')}
-                </Text>
-                <ul className={styles.evidenceList}>
-                  {r.evidence.map((item) => (
-                    <EvidenceEntry key={item.id} item={item} />
-                  ))}
-                </ul>
-              </div>
-              <div className={styles.test}>
-                <Text size={100} weight="semibold" className={styles.label}>
-                  {t('copilotAdoptionCowork.timeSaved.rationale.testIt')}
-                </Text>
-                <Text size={200}>{t(r.testKey)}</Text>
-              </div>
-            </Card>
-          );
-        })}
-      </div>
-
-      {/* ---------- Why each figure: Cowork, on top ---------- */}
+      {/* ---------- What is and is not known ---------- */}
       <div>
         <Text weight="semibold" size={400} className={styles.sectionTitle}>
           {t('copilotAdoptionCowork.timeSaved.cowork.title')}
@@ -945,16 +254,14 @@ export default function CoworkTimeSavedModel({
         <Card className={styles.card} style={{ borderTopColor: TIME_SAVED_COWORK_COLOUR }}>
           <div className={styles.cardHead}>
             <Text weight="semibold" size={400}>
-              {t('copilotAdoptionCowork.timeSaved.card.coworkTasks', {
-                minutes: formatNumber(defaults.taskMinutes, { maximumFractionDigits: 2 }),
-              })}
+              {t('copilotAdoptionCowork.timeSaved.card.coworkTasks', { minutes: formatAssumption(defaults.taskMinutes) })}
             </Text>
-            {customised.includes('taskMinutes') && (
+            {customised.includes('taskMinutes') ? (
               <Badge size="small" appearance="tint" color="brand">
-                {t('copilotAdoptionCowork.timeSaved.input.usingYours', {
-                  minutes: formatNumber(assumptions.taskMinutes, { maximumFractionDigits: 2 }),
-                })}
+                {t('copilotAdoptionTimeSaved.input.usingYours', { minutes: formatAssumption(assumptions.taskMinutes) })}
               </Badge>
+            ) : (
+              <AssumptionBadge size="small" />
             )}
           </div>
           <MessageBar intent="warning" className={styles.noStudy}>
@@ -974,9 +281,7 @@ export default function CoworkTimeSavedModel({
           </div>
           <div>
             <Text size={100} weight="semibold" className={styles.label}>
-              {t('copilotAdoptionCowork.timeSaved.rationale.whyThisFigure', {
-                minutes: formatNumber(defaults.taskMinutes, { maximumFractionDigits: 2 }),
-              })}
+              {t('copilotAdoptionTimeSaved.rationale.whyThisFigure', { minutes: formatAssumption(defaults.taskMinutes) })}
             </Text>
             <Text size={200}>{t(COWORK_TASK_RATIONALE.whyKey)}</Text>
           </div>
@@ -992,7 +297,7 @@ export default function CoworkTimeSavedModel({
           </div>
           <div className={styles.test}>
             <Text size={100} weight="semibold" className={styles.label}>
-              {t('copilotAdoptionCowork.timeSaved.rationale.testIt')}
+              {t('copilotAdoptionTimeSaved.rationale.testIt')}
             </Text>
             <Text size={200}>{t(COWORK_TASK_RATIONALE.testKey)}</Text>
           </div>
@@ -1001,167 +306,33 @@ export default function CoworkTimeSavedModel({
         <Card className={styles.card} style={{ borderTopColor: TIME_SAVED_COWORK_COLOUR }}>
           <div className={styles.cardHead}>
             <Text weight="semibold" size={400}>
-              {t('copilotAdoptionCowork.timeSaved.cowork.volumeTitle', {
-                rate: formatNumber(cowork.tasksPerPerson, { maximumFractionDigits: 2 }),
-              })}
+              {t('copilotAdoptionCowork.timeSaved.cowork.volumeTitle', { rate: formatAssumption(projection.tasksPerPerson) })}
             </Text>
           </div>
           <Text size={200}>
-            {cowork.rateBasis === 'observed'
+            {projection.rateBasis === 'observed'
               ? t(
                   plural(
-                    cowork.rateUsers,
+                    projection.rateUsers,
                     'copilotAdoptionCowork.timeSaved.cowork.volume.observed.one',
                     'copilotAdoptionCowork.timeSaved.cowork.volume.observed.other',
                   ),
-                  { users: formatCount(cowork.rateUsers) },
+                  { users: formatCount(projection.rateUsers) },
                 )
               : t(
-                  cowork.rateBasis === 'custom'
+                  projection.rateBasis === 'custom'
                     ? 'copilotAdoptionCowork.timeSaved.cowork.volume.custom'
                     : 'copilotAdoptionCowork.timeSaved.cowork.volume.assumed',
                 )}
           </Text>
           <Text size={200}>{t('copilotAdoptionCowork.timeSaved.cowork.volume.counted')}</Text>
-          <Text size={200}>{t('copilotAdoptionCowork.timeSaved.cowork.overlap')}</Text>
+          <Text size={200}>{t('copilotAdoptionCowork.timeSaved.cowork.increment')}</Text>
           <div className={styles.test}>
             <Text size={100} weight="semibold" className={styles.label}>
-              {t('copilotAdoptionCowork.timeSaved.rationale.testIt')}
+              {t('copilotAdoptionTimeSaved.rationale.testIt')}
             </Text>
             <Text size={200}>{t('copilotAdoptionCowork.timeSaved.cowork.volume.test')}</Text>
           </div>
-        </Card>
-      </div>
-
-      <div className={styles.grid}>
-        {/* ---------- The conservative end ---------- */}
-        <Card className={styles.card} style={{ borderTopColor: tokens.colorNeutralStroke1 }}>
-          <Text weight="semibold" size={400}>
-            {t('copilotAdoptionCowork.timeSaved.conservative.title', { percent: conservativePercent })}
-          </Text>
-          <Text size={200}>{t('copilotAdoptionCowork.timeSaved.conservative.why')}</Text>
-          <ul className={styles.evidenceList}>
-            {CONSERVATIVE_EVIDENCE.map((item) => (
-              <EvidenceEntry key={item.id} item={item} />
-            ))}
-          </ul>
-        </Card>
-
-        {/* ---------- The sense check ---------- */}
-        <Card className={styles.card} style={{ borderTopColor: tokens.colorBrandStroke1 }}>
-          <Text weight="semibold" size={400}>
-            {t('copilotAdoptionCowork.timeSaved.senseCheck.title')}
-          </Text>
-          <Text size={200}>
-            {t('copilotAdoptionCowork.timeSaved.senseCheck.intro', {
-              range: modelledRange(
-                t,
-                formatModelled(averageFigure.copilotMinutesPerPersonDayLow),
-                formatModelled(averageFigure.copilotMinutesPerPersonDayHigh),
-              ),
-            })}
-          </Text>
-
-          <div role="list" aria-label={t('copilotAdoptionCowork.timeSaved.senseCheck.title')}>
-            {[
-              {
-                id: 'model-full',
-                label: t('copilotAdoptionCowork.timeSaved.senseCheck.yourModelAverage'),
-                minutes: averageFigure.copilotMinutesPerPersonDayHigh,
-                low: averageFigure.copilotMinutesPerPersonDayLow,
-                model: true,
-              },
-              ...(full && ready
-                ? [
-                    {
-                      id: 'model-ready',
-                      label: t('copilotAdoptionCowork.timeSaved.senseCheck.yourModelReady'),
-                      minutes: ready.copilotMinutesPerPersonDayHigh,
-                      low: ready.copilotMinutesPerPersonDayLow,
-                      model: true,
-                    },
-                  ]
-                : []),
-            ].map((row) => (
-              <div key={row.id} role="listitem" className={mergeClasses(styles.benchmarkRow, styles.modelRow)}>
-                <Text size={200} weight="semibold">
-                  {row.label}
-                </Text>
-                <div className={styles.benchmarkBarTrack} aria-hidden="true">
-                  <div
-                    className={styles.benchmarkBar}
-                    style={{
-                      width: `${Math.min(100, (row.minutes / benchmarkScale) * 100)}%`,
-                      backgroundColor: tokens.colorBrandBackground,
-                      opacity: 0.35,
-                    }}
-                  />
-                  <div
-                    className={styles.benchmarkBar}
-                    style={{
-                      width: `${Math.min(100, (row.low / benchmarkScale) * 100)}%`,
-                      backgroundColor: tokens.colorBrandBackground,
-                    }}
-                  />
-                </div>
-                <Text size={200} weight="semibold" style={{ whiteSpace: 'nowrap' }}>
-                  {t('copilotAdoptionCowork.timeSaved.senseCheck.minutesRange', {
-                    range: modelledRange(t, formatModelled(row.low), formatModelled(row.minutes)),
-                  })}
-                </Text>
-              </div>
-            ))}
-            {TIME_SAVED_BENCHMARKS.map((b) => (
-              <div key={b.id} role="listitem" className={styles.benchmarkRow}>
-                <span className={styles.evidenceItem}>
-                  <span className={styles.evidenceHead}>
-                    <MethodBadge method={b.method} />
-                  </span>
-                  <Link href={b.url} target="_blank" rel="noopener noreferrer">
-                    <Text size={200}>{t(b.sourceKey)}</Text>
-                  </Link>
-                  <Text size={100} className={styles.sub}>
-                    {t(b.findingKey)}
-                  </Text>
-                </span>
-                <div className={styles.benchmarkBarTrack} aria-hidden="true">
-                  <div
-                    className={styles.benchmarkBar}
-                    style={{
-                      width: `${Math.min(100, (b.minutesPerDay / benchmarkScale) * 100)}%`,
-                      backgroundColor: b.method === 'measured' ? '#107c10' : tokens.colorNeutralForeground3,
-                    }}
-                  />
-                </div>
-                <Text size={200} style={{ whiteSpace: 'nowrap' }}>
-                  {t('copilotAdoptionCowork.timeSaved.senseCheck.minutes', { minutes: formatNumber(b.minutesPerDay) })}
-                </Text>
-              </div>
-            ))}
-          </div>
-
-          <MessageBar intent={verdict === 'above' ? 'warning' : 'success'}>
-            <MessageBarBody>
-              {t(senseCheckKey(verdict), {
-                min: formatNumber(range.min),
-                max: formatNumber(range.max),
-              })}
-            </MessageBarBody>
-          </MessageBar>
-          {full && ready && (
-            <Text size={100} className={styles.sub}>
-              {t('copilotAdoptionCowork.timeSaved.senseCheck.readyNote')}
-            </Text>
-          )}
-          <Text size={100} className={styles.sub}>
-            {t('copilotAdoptionCowork.timeSaved.senseCheck.coworkExcluded')}
-          </Text>
-          <Text size={100} className={styles.sub}>
-            {t(SELF_REPORT_CAVEAT.findingKey)}{' '}
-            <Link href={SELF_REPORT_CAVEAT.url} target="_blank" rel="noopener noreferrer">
-              {t(SELF_REPORT_CAVEAT.sourceKey)}
-            </Link>
-          </Text>
         </Card>
       </div>
 
@@ -1169,15 +340,13 @@ export default function CoworkTimeSavedModel({
       <div className={styles.grid}>
         <Card>
           <Text weight="semibold" size={400}>
-            {t('copilotAdoptionCowork.timeSaved.caveats.title')}
+            {t('copilotAdoptionTimeSaved.caveats.title')}
           </Text>
           <ul className={styles.assumptionList}>
-            <li key="estimate-assumption-saves">
+            <li key="estimate-assumption-taskMinutes">
               <Text size={200}>
-                {t('copilotAdoptionCowork.estimate.assumption.saves', {
-                  meetingMinutes: formatNumber(assumptions.meetingMinutes, { maximumFractionDigits: 15 }),
-                  emailMinutes: formatNumber(assumptions.emailMinutes, { maximumFractionDigits: 15 }),
-                  documentMinutes: formatNumber(assumptions.documentMinutes, { maximumFractionDigits: 15 }),
+                {t('copilotAdoptionCowork.estimate.assumption.taskMinutes', {
+                  minutes: formatNumber(assumptions.taskMinutes, { maximumFractionDigits: 15 }),
                 })}
               </Text>
             </li>
@@ -1191,49 +360,40 @@ export default function CoworkTimeSavedModel({
                   ),
                   {
                     users: formatNumber(projection.cohortUsers),
-                    workingDays: formatNumber(projection.workingDaysPerMonth, { maximumFractionDigits: 15 }),
+                    days: formatNumber(monthDays),
                   },
                 )}
               </Text>
             </li>
-            <li key="estimate-assumption-taskMinutes">
-              <Text size={200}>
-                {t('copilotAdoptionCowork.estimate.assumption.taskMinutes', {
-                  minutes: formatNumber(assumptions.taskMinutes, { maximumFractionDigits: 15 }),
-                })}
-              </Text>
-            </li>
             <li key="estimate-assumption-taskRate">
               <Text size={200}>
-                {cowork.rateBasis === 'observed'
+                {projection.rateBasis === 'observed'
                   ? t(
                       plural(
-                        cowork.rateUsers,
+                        projection.rateUsers,
                         'copilotAdoptionCowork.estimate.assumption.taskRateObserved.one',
                         'copilotAdoptionCowork.estimate.assumption.taskRateObserved.other',
                       ),
                       {
-                        rate: formatNumber(projection.cowork.tasksPerPerson, { maximumFractionDigits: 15 }),
-                        users: formatNumber(projection.cowork.rateUsers),
+                        rate: formatNumber(projection.tasksPerPerson, { maximumFractionDigits: 15 }),
+                        users: formatNumber(projection.rateUsers),
                       },
                     )
-                  : cowork.rateBasis === 'custom'
+                  : projection.rateBasis === 'custom'
                     ? t('copilotAdoptionCowork.estimate.assumption.taskRateCustom', {
-                        rate: formatNumber(projection.cowork.tasksPerPerson, { maximumFractionDigits: 15 }),
+                        rate: formatNumber(projection.tasksPerPerson, { maximumFractionDigits: 15 }),
                       })
                     : t('copilotAdoptionCowork.estimate.assumption.taskRateAssumed', {
-                        rate: formatNumber(projection.cowork.tasksPerPerson, { maximumFractionDigits: 15 }),
+                        rate: formatNumber(projection.tasksPerPerson, { maximumFractionDigits: 15 }),
                       })}
               </Text>
             </li>
-            <li key="estimate-assumption-overlap">
-              <Text size={200}>{t('copilotAdoptionCowork.estimate.assumption.overlap')}</Text>
+            <li key="estimate-assumption-increment">
+              <Text size={200}>{t('copilotAdoptionCowork.estimate.assumption.increment')}</Text>
             </li>
             <li key="estimate-assumption-lowerBound">
               <Text size={200}>
-                {t('copilotAdoptionCowork.estimate.assumption.lowerBound', {
-                  percent: conservativePercent,
-                })}
+                {t('copilotAdoptionCowork.estimate.assumption.lowerBound', { percent: conservativePercent })}
               </Text>
             </li>
             <li key="estimate-assumption-potential">
@@ -1250,20 +410,14 @@ export default function CoworkTimeSavedModel({
 
         <Card>
           <Text weight="semibold" size={400}>
-            {t('copilotAdoptionCowork.timeSaved.own.title')}
+            {t('copilotAdoptionTimeSaved.own.title')}
           </Text>
           <ol className={styles.steps}>
-            <li>
-              <Text size={200}>{t('copilotAdoptionCowork.timeSaved.own.pilot')}</Text>
-            </li>
             <li>
               <Text size={200}>{t('copilotAdoptionCowork.timeSaved.own.coworkIncrement')}</Text>
             </li>
             <li>
-              <Text size={200}>{t('copilotAdoptionCowork.timeSaved.own.askPerItem')}</Text>
-            </li>
-            <li>
-              <Text size={200}>{t('copilotAdoptionCowork.timeSaved.own.compareDashboard')}</Text>
+              <Text size={200}>{t('copilotAdoptionCowork.timeSaved.own.askPerTask')}</Text>
             </li>
             <li>
               <Text size={200}>{t('copilotAdoptionCowork.timeSaved.own.enter')}</Text>

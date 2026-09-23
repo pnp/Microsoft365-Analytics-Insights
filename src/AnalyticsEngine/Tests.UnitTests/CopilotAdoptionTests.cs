@@ -1778,8 +1778,9 @@ namespace Tests.UnitTests
         /// The page used to take per-SKU seat prices typed into its header and publish an "idle licence
         /// spend" figure from them. That was withdrawn deliberately: a price typed into a report header
         /// is not a source of truth about what a tenant pays, and a money figure derived from one gets
-        /// quoted in a renewal negotiation as though it were. The only value estimate the product makes
-        /// is the Cowork time saving, and that is reported in hours.
+        /// quoted in a renewal negotiation as though it were. The only value estimates the product makes
+        /// are the time-saved models - the licence estimate and the Cowork estimate - and both are
+        /// reported in hours.
         ///
         /// Asserted over the serialised payload rather than over a property list, because the way this
         /// comes back is somebody re-adding a currency field to a nested model.

@@ -1,46 +1,72 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import type { CopilotAdoptionOptions, CopilotAdoptionSummary, CoworkValueEstimate } from '../../types/copilotAdoption';
+import type {
+  CopilotAdoptionOptions,
+  CopilotAdoptionSummary,
+  CoworkValueEstimate,
+  LicenceValueEstimate,
+} from '../../types/copilotAdoption';
 import {
+  COWORK_ASSUMPTION_KEYS,
+  LICENCE_ASSUMPTION_KEYS,
   TIME_SAVED_STORAGE_KEY,
   apportion,
+  compactHoursRange,
+  customisesAny,
   defaultTimeSavedAssumptions,
   parseTimeSavedOverrides,
-  projectTimeSaved,
+  projectCoworkTimeSaved,
+  projectLicenceTimeSaved,
   resetTimeSavedStore,
   timeSavedExportParams,
   useTimeSavedAssumptions,
 } from './coworkTimeSaved';
 import { TIME_SAVED_BENCHMARKS, benchmarkRange, senseCheck } from './coworkTimeSavedEvidence';
+import { loadCatalog, setActiveLanguage, translateActive, type TFunction } from '../../i18n';
 
 /** The product defaults as the server ships them (CopilotAdoptionOptions.cs). */
 const OPTIONS = {
   workingDaysPerWeek: 5,
   habitBucketNormalisationDays: 28,
-  coworkMinutesSavedPerMeeting: 5,
-  coworkMinutesSavedPerMailThread: 0.5,
-  coworkMinutesSavedPerDocument: 1,
+  copilotMinutesSavedPerMeeting: 5,
+  copilotMinutesSavedPerMailThread: 0.5,
+  copilotMinutesSavedPerDocument: 1,
   coworkEstimateLowerBoundRatio: 0.5,
   coworkMinutesSavedPerTask: 6,
   coworkAssumedTasksPerPersonPerMonth: 20,
+  maxOpportunityCandidates: 50000,
 } as CopilotAdoptionOptions;
 
-/** The golden estimate shared with CopilotAdoptionCoworkTests.Estimate_MatchesThePortalsGoldenFigure. */
-function estimate(overrides: Partial<CoworkValueEstimate> = {}): CoworkValueEstimate {
+/** The licence golden estimate shared with CopilotAdoptionLicenceEstimateTests.Estimate_MatchesThePortalsGoldenFigure. */
+function licenceEstimate(overrides: Partial<LicenceValueEstimate> = {}): LicenceValueEstimate {
   return {
     isModelled: true,
     cohortUsers: 10,
     addressableMeetings: 1234,
     addressableMailThreads: 5678,
     addressableDocuments: 910,
+    hoursPerMonthLow: 83,
+    hoursPerMonthHigh: 165,
+    candidatesCapped: false,
+    assumptions: [],
+    ...overrides,
+  };
+}
+
+/** The Cowork golden estimate shared with CopilotAdoptionCoworkTests.Estimate_MatchesThePortalsGoldenFigure. */
+function coworkEstimate(overrides: Partial<CoworkValueEstimate> = {}): CoworkValueEstimate {
+  return {
+    isModelled: true,
+    cohortUsers: 10,
     coworkTaskUsers: 3,
     observedCoworkTasks: 45,
     projectedCoworkUsers: 7,
     coworkTasksPerPersonPerMonth: 12.5,
     coworkTaskRateBasis: 'observed',
     coworkTaskRateUsers: 3,
-    hoursPerMonthLow: 0,
-    hoursPerMonthHigh: 0,
+    coworkTasks: 133,
+    hoursPerMonthLow: 7,
+    hoursPerMonthHigh: 13,
     assumptions: [],
     ...overrides,
   };
@@ -48,129 +74,157 @@ function estimate(overrides: Partial<CoworkValueEstimate> = {}): CoworkValueEsti
 
 const SUMMARY = {
   options: OPTIONS,
-  coworkValueEstimate: estimate(),
-  coworkFullRolloutEstimate: estimate(),
+  coworkValueEstimate: coworkEstimate(),
+  coworkFullRolloutEstimate: coworkEstimate(),
 } as Pick<CopilotAdoptionSummary, 'options' | 'coworkValueEstimate' | 'coworkFullRolloutEstimate'>;
 
-const defaults = () => defaultTimeSavedAssumptions(OPTIONS, estimate());
+const defaults = () => defaultTimeSavedAssumptions(OPTIONS, coworkEstimate());
 
-describe('projectTimeSaved', () => {
+describe('projectLicenceTimeSaved', () => {
   /**
-   * The golden figure shared with CopilotAdoptionCoworkTests.Estimate_MatchesThePortalsGoldenFigure.
+   * The golden figure shared with CopilotAdoptionLicenceEstimateTests.Estimate_MatchesThePortalsGoldenFigure.
    * The portal recomputes the hours the server also publishes, so both implementations are pinned to
    * the same answer for the same input - change one and this, or its C# twin, fails.
    *
-   * Copilot: 1,234 x 5 + 5,678 x 0.5 + 910 x 1 = 9,919 minutes = 165.3 hours; x 50% = 82.7.
-   * Cowork: 45 observed + 7 projected x 12.5 (= 87.5, a deliberate midpoint: both languages must
-   * round it up to 88) = 133 tasks x 6 minutes = 798 minutes = 13.3 hours; x 50% = 6.65.
+   * 1,234 x 5 + 5,678 x 0.5 + 910 x 1 = 9,919 minutes = 165.3 hours; x 50% = 82.7.
    */
   it('matches the server to the hour for the same inputs and assumptions', () => {
-    const projection = projectTimeSaved(estimate(), defaults(), OPTIONS)!;
+    const projection = projectLicenceTimeSaved(licenceEstimate(), defaults(), OPTIONS)!;
 
-    expect(projection.copilotHoursHigh).toBe(165);
-    expect(projection.copilotHoursLow).toBe(83);
+    expect(projection.hoursHigh).toBe(165);
+    expect(projection.hoursLow).toBe(83);
     expect(projection.activities.map((a) => a.displayHours)).toEqual([103, 47, 15]);
-    expect(projection.cowork.projectedTasks).toBe(88);
-    expect(projection.cowork.tasks).toBe(133);
-    expect(projection.cowork.hoursHigh).toBe(13);
-    expect(projection.cowork.hoursLow).toBe(7);
-    expect(projection.hoursHigh).toBe(178);
-    expect(projection.hoursLow).toBe(90);
   });
 
-  it('restates the hours per person per day and as full-time people, with Copilot\u2019s share apart', () => {
-    const projection = projectTimeSaved(estimate(), defaults(), OPTIONS)!;
+  it('restates the hours per person per day and as full-time people', () => {
+    const projection = projectLicenceTimeSaved(licenceEstimate(), defaults(), OPTIONS)!;
 
     // 28 days x 5/7 = 20 working days; 20 x 8 hours = a 160-hour full-time month.
     expect(projection.workingDaysPerMonth).toBe(20);
     expect(projection.hoursPerFullTimeMonth).toBe(160);
-    expect(projection.minutesPerPersonDayHigh).toBeCloseTo((9919 + 798) / 200, 9);
-    expect(projection.copilotMinutesPerPersonDayHigh).toBeCloseTo(9919 / 200, 9);
-    expect(projection.copilotMinutesPerPersonDayLow).toBeCloseTo(9919 / 400, 9);
-    expect(projection.fteHigh).toBeCloseTo((9919 + 798) / 60 / 160, 9);
+    expect(projection.minutesPerPersonDayHigh).toBeCloseTo(9919 / 200, 9);
+    expect(projection.minutesPerPersonDayLow).toBeCloseTo(9919 / 400, 9);
+    expect(projection.fteHigh).toBeCloseTo(9919 / 60 / 160, 9);
     expect(projection.fteLow).toBeCloseTo(projection.fteHigh / 2, 9);
+  });
+
+  it('shares the bar between the three kinds of work, and never moves with Cowork\u2019s figures', () => {
+    const projection = projectLicenceTimeSaved(licenceEstimate(), defaults(), OPTIONS)!;
+    expect(projection.activities.reduce((sum, a) => sum + a.sharePct, 0)).toBeCloseTo(100, 9);
+
+    const heavierCowork = projectLicenceTimeSaved(licenceEstimate(), { ...defaults(), taskMinutes: 240, tasksPerPerson: 200 }, OPTIONS)!;
+    expect(heavierCowork.hoursHigh).toBe(projection.hoursHigh);
+  });
+
+  it('carries the candidate cap, so the headline can say it is a floor', () => {
+    expect(projectLicenceTimeSaved(licenceEstimate({ candidatesCapped: true }), defaults(), OPTIONS)!.candidatesCapped).toBe(true);
+    expect(projectLicenceTimeSaved(licenceEstimate(), defaults(), OPTIONS)!.candidatesCapped).toBe(false);
   });
 
   it('says nothing, rather than zero, when there is nobody to model', () => {
     // "0 hours" would read as a finding about the tenant, when it only means an empty cohort.
-    expect(projectTimeSaved(estimate({ cohortUsers: 0 }), defaults(), OPTIONS)).toBeNull();
-    expect(projectTimeSaved(undefined, defaults(), OPTIONS)).toBeNull();
+    expect(projectLicenceTimeSaved(licenceEstimate({ cohortUsers: 0 }), defaults(), OPTIONS)).toBeNull();
+    expect(projectLicenceTimeSaved(undefined, defaults(), OPTIONS)).toBeNull();
   });
 
   it('keeps the range the right way round whatever the conservative share says', () => {
-    const assumptions = { ...defaults(), conservativeRatio: 7 };
-    const projection = projectTimeSaved(estimate(), assumptions, OPTIONS)!;
-
+    const projection = projectLicenceTimeSaved(licenceEstimate(), { ...defaults(), conservativeRatio: 7 }, OPTIONS)!;
     expect(projection.hoursLow).toBeLessThanOrEqual(projection.hoursHigh);
   });
 });
 
-describe('the Copilot and Cowork layers', () => {
+describe('projectCoworkTimeSaved', () => {
   /**
-   * The defect this guards: the model used to be one blended layer, "Copilot and Cowork together",
-   * resting entirely on Microsoft 365 Copilot evidence - so the figure used to justify Copilot Credits
-   * was mostly Copilot's. Each layer is now separate, and the total is exactly their sum.
+   * The golden figure shared with CopilotAdoptionCoworkTests.Estimate_MatchesThePortalsGoldenFigure.
+   *
+   * 45 observed + 7 projected x 12.5 (= 87.5, a deliberate midpoint: both languages must round it up
+   * to 88) = 133 tasks x 6 minutes = 798 minutes = 13.3 hours; x 50% = 6.65.
    */
-  it('adds the two layers up to the total, and keeps Cowork\u2019s minutes out of Copilot\u2019s', () => {
-    const projection = projectTimeSaved(estimate(), defaults(), OPTIONS)!;
-    expect(projection.hoursHigh).toBe(projection.copilotHoursHigh + projection.cowork.hoursHigh);
-    expect(projection.hoursLow).toBe(projection.copilotHoursLow + projection.cowork.hoursLow);
+  it('matches the server to the hour for the same inputs and assumptions', () => {
+    const projection = projectCoworkTimeSaved(coworkEstimate(), defaults(), OPTIONS)!;
 
-    const noCowork = projectTimeSaved(estimate(), { ...defaults(), taskMinutes: 0 }, OPTIONS)!;
-    expect(noCowork.hoursHigh).toBe(projection.copilotHoursHigh);
-    expect(noCowork.copilotMinutesPerPersonDayHigh).toBe(projection.copilotMinutesPerPersonDayHigh);
+    expect(projection.projectedTasks).toBe(88);
+    expect(projection.tasks).toBe(133);
+    expect(projection.hoursHigh).toBe(13);
+    expect(projection.hoursLow).toBe(7);
   });
 
-  it('shares the whole bar between the three kinds of Copilot work and Cowork\u2019s tasks', () => {
-    const projection = projectTimeSaved(estimate(), defaults(), OPTIONS)!;
-    const total = projection.activities.reduce((sum, a) => sum + a.sharePct, 0) + projection.cowork.sharePct;
+  it('is Cowork\u2019s increment alone: the Copilot minutes never move it', () => {
+    // The defect this guards: the Cowork headline used to add a Copilot layer for people who already
+    // hold a licence - most of the figure used to justify Copilot Credits was time the licence gives.
+    const projection = projectCoworkTimeSaved(coworkEstimate(), defaults(), OPTIONS)!;
+    const heavierCopilot = projectCoworkTimeSaved(
+      coworkEstimate(),
+      { ...defaults(), meetingMinutes: 120, emailMinutes: 60, documentMinutes: 120 },
+      OPTIONS,
+    )!;
 
-    expect(total).toBeCloseTo(100, 9);
-    expect(projection.cowork.sharePct).toBeCloseTo((798 / (9919 + 798)) * 100, 9);
+    expect(heavierCopilot.hoursHigh).toBe(projection.hoursHigh);
+    expect(projection.minutesPerPersonDayHigh).toBeCloseTo(798 / 200, 9);
   });
 
   it('takes the task-rate default from the tenant\u2019s own Cowork users, not from configuration', () => {
-    expect(defaultTimeSavedAssumptions(OPTIONS, estimate()).tasksPerPerson).toBe(12.5);
-    // Nothing observed and nothing published: the server's labelled placeholder.
-    expect(defaultTimeSavedAssumptions(OPTIONS, estimate({ coworkTasksPerPersonPerMonth: undefined })).tasksPerPerson).toBe(20);
-    expect(projectTimeSaved(estimate(), defaults(), OPTIONS)!.cowork.rateBasis).toBe('observed');
+    expect(defaultTimeSavedAssumptions(OPTIONS, coworkEstimate()).tasksPerPerson).toBe(12.5);
+    // Nothing published: the server's labelled placeholder.
+    const unpublished = { ...coworkEstimate(), coworkTasksPerPersonPerMonth: undefined } as unknown as CoworkValueEstimate;
+    expect(defaultTimeSavedAssumptions(OPTIONS, unpublished).tasksPerPerson).toBe(20);
+    expect(projectCoworkTimeSaved(coworkEstimate(), defaults(), OPTIONS)!.rateBasis).toBe('observed');
   });
 
   it('labels a changed task rate as the reader\u2019s own and projects only the people not yet observed', () => {
-    const projection = projectTimeSaved(estimate(), { ...defaults(), tasksPerPerson: 30 }, OPTIONS)!;
+    const projection = projectCoworkTimeSaved(coworkEstimate(), { ...defaults(), tasksPerPerson: 30 }, OPTIONS)!;
 
-    expect(projection.cowork.rateBasis).toBe('custom');
-    expect(projection.cowork.rateUsers).toBe(0);
-    expect(projection.cowork.projectedTasks).toBe(7 * 30);
+    expect(projection.rateBasis).toBe('custom');
+    expect(projection.rateUsers).toBe(0);
+    expect(projection.projectedTasks).toBe(7 * 30);
     // The 45 observed tasks stay exactly as Microsoft reported them.
-    expect(projection.cowork.tasks).toBe(45 + 210);
+    expect(projection.tasks).toBe(45 + 210);
   });
 
-  it('models no Cowork it was not told about', () => {
-    // An estimate published before the layers were split carries no Cowork fields, and options with
-    // no minutes per task: the Cowork layer is then zero rather than an invented figure.
-    const legacy = estimate({
-      coworkTaskUsers: undefined,
-      observedCoworkTasks: undefined,
-      projectedCoworkUsers: undefined,
-      coworkTasksPerPersonPerMonth: undefined,
-      coworkTaskRateBasis: undefined,
-      coworkTaskRateUsers: undefined,
-    });
-    const legacyOptions = { ...OPTIONS, coworkMinutesSavedPerTask: undefined, coworkAssumedTasksPerPersonPerMonth: undefined } as unknown as CopilotAdoptionOptions;
-    const projection = projectTimeSaved(legacy, defaultTimeSavedAssumptions(legacyOptions, legacy), legacyOptions)!;
-
-    expect(projection.cowork.hoursHigh).toBe(0);
-    expect(projection.hoursHigh).toBe(165);
+  it('says nothing, rather than zero, when there is nobody to model', () => {
+    expect(projectCoworkTimeSaved(coworkEstimate({ cohortUsers: 0 }), defaults(), OPTIONS)).toBeNull();
+    expect(projectCoworkTimeSaved(undefined, defaults(), OPTIONS)).toBeNull();
   });
 });
 
 describe('apportion', () => {
   it('rounds parts so they add up to exactly the rounded total', () => {
-    const parts = [102.83, 47.32, 15.17];
-    expect(apportion(165, parts)).toEqual([103, 47, 15]);
+    expect(apportion(165, [102.83, 47.32, 15.17])).toEqual([103, 47, 15]);
     expect(apportion(10, [3.34, 3.33, 3.33])).toEqual([4, 3, 3]);
     expect(apportion(0, [0, 0, 0])).toEqual([0, 0, 0]);
+  });
+});
+
+/**
+ * The overview's tiles are a couple of hundred pixels wide, and at the 200,000-user design point a
+ * range reaches seven digits. Compact notation keeps it on one line - but only where it is shorter:
+ * Spanish writes thousands as "48 mil", longer than "48.000".
+ */
+describe('compactHoursRange', () => {
+  const t = translateActive as unknown as TFunction;
+
+  afterEach(() => setActiveLanguage('en'));
+
+  it('uses compact notation in English once the range reaches five digits, on both ends alike', () => {
+    setActiveLanguage('en');
+    expect(compactHoursRange(t, 1275, 2550)).toBe('1,275\u20132,550');
+    expect(compactHoursRange(t, 48000, 97000)).toBe('48k\u201397k');
+    expect(compactHoursRange(t, 9500, 19000)).toBe('9.5k\u201319k');
+    expect(compactHoursRange(t, 1234567, 2469134)).toBe('1.23m\u20132.47m');
+  });
+
+  it('keeps Spanish digits until compact notation is genuinely shorter', async () => {
+    await loadCatalog('es');
+    setActiveLanguage('es');
+    // "48.000" is shorter than "48 mil", so thousands keep their digits...
+    expect(compactHoursRange(t, 48000, 97000)).toBe('48.000\u201397.000');
+    // ...and millions switch, because "1,23 M" is far shorter than "1.234.567".
+    expect(compactHoursRange(t, 1234567, 2469134)).toBe('1,23\u00a0M\u20132,47\u00a0M');
+  });
+
+  it('shows one figure, not a range, when both ends round to the same value', () => {
+    setActiveLanguage('en');
+    expect(compactHoursRange(t, 12340, 12345)).toBe('12.3k');
   });
 });
 
@@ -210,13 +264,23 @@ describe('the reader\u2019s own figures', () => {
   });
 
   it('shares one set of figures between every part of the page', () => {
-    // The headline, the overview KPI and the Excel link each read the store; a change in one must
-    // be the figure in all of them.
+    // Both tabs, the overview tiles and the Excel link each read the store; a change in one must be
+    // the figure in all of them.
     const first = renderHook(() => useTimeSavedAssumptions(SUMMARY));
     const second = renderHook(() => useTimeSavedAssumptions(SUMMARY));
 
     act(() => first.result.current.setAssumption('documentMinutes', 2));
     expect(second.result.current.assumptions.documentMinutes).toBe(2);
+  });
+
+  it('knows which estimate a changed figure belongs to', () => {
+    // A reader who retuned the Copilot minutes has changed the licence estimate, not the Cowork one.
+    expect(customisesAny(['meetingMinutes'], LICENCE_ASSUMPTION_KEYS)).toBe(true);
+    expect(customisesAny(['meetingMinutes'], COWORK_ASSUMPTION_KEYS)).toBe(false);
+    expect(customisesAny(['tasksPerPerson'], COWORK_ASSUMPTION_KEYS)).toBe(true);
+    expect(customisesAny(['conservativeRatio'], LICENCE_ASSUMPTION_KEYS)).toBe(true);
+    expect(customisesAny(['conservativeRatio'], COWORK_ASSUMPTION_KEYS)).toBe(true);
+    expect(customisesAny(['hoursPerDay'], [...LICENCE_ASSUMPTION_KEYS, ...COWORK_ASSUMPTION_KEYS])).toBe(false);
   });
 
   it('sends only the changed, server-modelled figures with an export, under the option names', () => {
@@ -233,7 +297,7 @@ describe('the reader\u2019s own figures', () => {
     });
 
     expect(timeSavedExportParams(result.current)).toEqual({
-      coworkMinutesSavedPerMeeting: '8',
+      copilotMinutesSavedPerMeeting: '8',
       coworkEstimateLowerBoundRatio: '0.3',
       coworkMinutesSavedPerTask: '15',
       coworkTasksPerPersonPerMonth: '25',

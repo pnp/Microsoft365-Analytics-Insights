@@ -109,6 +109,7 @@
     <Compile Include="CopilotAdoption\CopilotAdoptionSql.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionSummaryModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionTelemetry.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionTimeSavedModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionUnlicensedModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionUserModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionWorkbook.cs" />

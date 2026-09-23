@@ -2,8 +2,8 @@ import type { TranslationKey } from '../../i18n';
 import type { TimeSavedActivity } from './coworkTimeSaved';
 
 /**
- * The published evidence behind the time-saved defaults, and the studies the model is sense-checked
- * against.
+ * The published evidence behind the time-saved defaults, and the studies the licence estimate is
+ * sense-checked against.
  *
  * Every figure quoted in the catalog text these keys point at was checked against the primary source
  * before it was written down, and each item carries how the figure was obtained - because the first
@@ -11,10 +11,12 @@ import type { TimeSavedActivity } from './coworkTimeSaved';
  * it. Self-reported figures are labelled as such and never presented as measurements; Microsoft's own
  * lab found self-estimates overstate the measured saving threefold.
  *
- * <b>Everything in the Copilot rationale is about Microsoft 365 Copilot, and says so.</b> No study has
- * yet measured Cowork's time savings - alone, or for people who already use Copilot - so Cowork has
- * its own rationale below, and its only anchor is Microsoft's time credit for agent work. It is
- * presented as the assumption it is, never alongside Copilot's evidence as though it shared it.
+ * <b>Everything in the Copilot rationale is about Microsoft 365 Copilot, and says so.</b> It backs the
+ * licence estimate on the Licence opportunities tab - the decision those studies measured, since the
+ * largest of them randomised who received a licence. No study has yet measured Cowork's time savings -
+ * alone, or for people who already use Copilot - so Cowork has its own rationale below, and its only
+ * anchor is Microsoft's time credit for agent work. It is presented on the Cowork tab as the assumption
+ * it is, never alongside Copilot's evidence as though it shared it.
  */
 
 /** How a figure was obtained. The single most important thing to know about any time-saved claim. */
@@ -31,15 +33,15 @@ export interface EvidenceItem {
 }
 
 export const EVIDENCE_METHOD_LABEL: Record<EvidenceMethod, TranslationKey> = {
-  measured: 'copilotAdoptionCowork.timeSaved.method.measured',
-  selfReported: 'copilotAdoptionCowork.timeSaved.method.selfReported',
-  vendorModel: 'copilotAdoptionCowork.timeSaved.method.vendorModel',
+  measured: 'copilotAdoptionTimeSaved.method.measured',
+  selfReported: 'copilotAdoptionTimeSaved.method.selfReported',
+  vendorModel: 'copilotAdoptionTimeSaved.method.vendorModel',
 };
 
 export const EVIDENCE_METHOD_TOOLTIP: Record<EvidenceMethod, TranslationKey> = {
-  measured: 'copilotAdoptionCowork.timeSaved.method.measuredTooltip',
-  selfReported: 'copilotAdoptionCowork.timeSaved.method.selfReportedTooltip',
-  vendorModel: 'copilotAdoptionCowork.timeSaved.method.vendorModelTooltip',
+  measured: 'copilotAdoptionTimeSaved.method.measuredTooltip',
+  selfReported: 'copilotAdoptionTimeSaved.method.selfReportedTooltip',
+  vendorModel: 'copilotAdoptionTimeSaved.method.vendorModelTooltip',
 };
 
 const COPILOT_DASHBOARD_URL =
@@ -73,16 +75,16 @@ export interface ActivityRationale {
 const DASHBOARD_MEETINGS: EvidenceItem = {
   id: 'dashboard-meetings',
   url: COPILOT_DASHBOARD_URL,
-  sourceKey: 'copilotAdoptionCowork.timeSaved.source.copilotDashboard',
-  findingKey: 'copilotAdoptionCowork.timeSaved.finding.dashboardMeetings',
+  sourceKey: 'copilotAdoptionTimeSaved.source.copilotDashboard',
+  findingKey: 'copilotAdoptionTimeSaved.finding.dashboardMeetings',
   method: 'vendorModel',
 };
 
 const DASHBOARD_ACTIONS: EvidenceItem = {
   id: 'dashboard-actions',
   url: COPILOT_DASHBOARD_URL,
-  sourceKey: 'copilotAdoptionCowork.timeSaved.source.copilotDashboard',
-  findingKey: 'copilotAdoptionCowork.timeSaved.finding.dashboardActions',
+  sourceKey: 'copilotAdoptionTimeSaved.source.copilotDashboard',
+  findingKey: 'copilotAdoptionTimeSaved.finding.dashboardActions',
   method: 'vendorModel',
 };
 
@@ -90,81 +92,81 @@ export const ACTIVITY_RATIONALE: ActivityRationale[] = [
   {
     activity: 'meetings',
     operationKeys: [
-      'copilotAdoptionCowork.timeSaved.meetings.operation.prepare',
-      'copilotAdoptionCowork.timeSaved.meetings.operation.recap',
-      'copilotAdoptionCowork.timeSaved.meetings.operation.followUp',
+      'copilotAdoptionTimeSaved.meetings.operation.prepare',
+      'copilotAdoptionTimeSaved.meetings.operation.recap',
+      'copilotAdoptionTimeSaved.meetings.operation.followUp',
     ],
-    whyKey: 'copilotAdoptionCowork.timeSaved.meetings.why',
+    whyKey: 'copilotAdoptionTimeSaved.meetings.why',
     evidence: [
       DASHBOARD_MEETINGS,
       {
         id: 'wti-missed-meeting',
         url: WORK_TREND_INDEX_2023_URL,
-        sourceKey: 'copilotAdoptionCowork.timeSaved.source.workTrendIndex2023',
-        findingKey: 'copilotAdoptionCowork.timeSaved.finding.missedMeeting',
+        sourceKey: 'copilotAdoptionTimeSaved.source.workTrendIndex2023',
+        findingKey: 'copilotAdoptionTimeSaved.finding.missedMeeting',
         method: 'measured',
       },
       {
         id: 'nber-meetings',
         url: NBER_FIELD_EXPERIMENT_URL,
-        sourceKey: 'copilotAdoptionCowork.timeSaved.source.nberFieldExperiment',
-        findingKey: 'copilotAdoptionCowork.timeSaved.finding.nberMeetings',
+        sourceKey: 'copilotAdoptionTimeSaved.source.nberFieldExperiment',
+        findingKey: 'copilotAdoptionTimeSaved.finding.nberMeetings',
         method: 'measured',
       },
     ],
-    testKey: 'copilotAdoptionCowork.timeSaved.meetings.test',
+    testKey: 'copilotAdoptionTimeSaved.meetings.test',
   },
   {
     activity: 'email',
     operationKeys: [
-      'copilotAdoptionCowork.timeSaved.email.operation.triage',
-      'copilotAdoptionCowork.timeSaved.email.operation.draft',
+      'copilotAdoptionTimeSaved.email.operation.triage',
+      'copilotAdoptionTimeSaved.email.operation.draft',
     ],
-    whyKey: 'copilotAdoptionCowork.timeSaved.email.why',
+    whyKey: 'copilotAdoptionTimeSaved.email.why',
     evidence: [
       DASHBOARD_ACTIONS,
       {
         id: 'nber-email',
         url: NBER_FIELD_EXPERIMENT_URL,
-        sourceKey: 'copilotAdoptionCowork.timeSaved.source.nberFieldExperiment',
-        findingKey: 'copilotAdoptionCowork.timeSaved.finding.nberEmail',
+        sourceKey: 'copilotAdoptionTimeSaved.source.nberFieldExperiment',
+        findingKey: 'copilotAdoptionTimeSaved.finding.nberEmail',
         method: 'measured',
       },
       {
         id: 'wti-email',
         url: WORK_TREND_INDEX_2023_URL,
-        sourceKey: 'copilotAdoptionCowork.timeSaved.source.workTrendIndex2023',
-        findingKey: 'copilotAdoptionCowork.timeSaved.finding.wtiEmail',
+        sourceKey: 'copilotAdoptionTimeSaved.source.workTrendIndex2023',
+        findingKey: 'copilotAdoptionTimeSaved.finding.wtiEmail',
         method: 'selfReported',
       },
     ],
-    testKey: 'copilotAdoptionCowork.timeSaved.email.test',
+    testKey: 'copilotAdoptionTimeSaved.email.test',
   },
   {
     activity: 'documents',
     operationKeys: [
-      'copilotAdoptionCowork.timeSaved.documents.operation.draft',
-      'copilotAdoptionCowork.timeSaved.documents.operation.summarise',
+      'copilotAdoptionTimeSaved.documents.operation.draft',
+      'copilotAdoptionTimeSaved.documents.operation.summarise',
     ],
-    whyKey: 'copilotAdoptionCowork.timeSaved.documents.why',
+    whyKey: 'copilotAdoptionTimeSaved.documents.why',
     evidence: [
       DASHBOARD_ACTIONS,
       {
         id: 'wti-first-draft',
         url: WORK_TREND_INDEX_2023_URL,
-        sourceKey: 'copilotAdoptionCowork.timeSaved.source.workTrendIndex2023',
-        findingKey: 'copilotAdoptionCowork.timeSaved.finding.firstDraft',
+        sourceKey: 'copilotAdoptionTimeSaved.source.workTrendIndex2023',
+        findingKey: 'copilotAdoptionTimeSaved.finding.firstDraft',
         method: 'measured',
       },
       {
         id: 'nber-documents',
         url: NBER_FIELD_EXPERIMENT_URL,
-        sourceKey: 'copilotAdoptionCowork.timeSaved.source.nberFieldExperiment',
-        findingKey: 'copilotAdoptionCowork.timeSaved.finding.nberDocuments',
+        sourceKey: 'copilotAdoptionTimeSaved.source.nberFieldExperiment',
+        findingKey: 'copilotAdoptionTimeSaved.finding.nberDocuments',
         method: 'measured',
       },
     ],
-    testKey: 'copilotAdoptionCowork.timeSaved.documents.test',
+    testKey: 'copilotAdoptionTimeSaved.documents.test',
   },
 ];
 
@@ -207,7 +209,7 @@ export const COWORK_TASK_RATIONALE: CoworkTaskRationale = {
     {
       id: 'wti-agent-basis',
       url: WORK_TREND_INDEX_2023_URL,
-      sourceKey: 'copilotAdoptionCowork.timeSaved.source.workTrendIndex2023',
+      sourceKey: 'copilotAdoptionTimeSaved.source.workTrendIndex2023',
       findingKey: 'copilotAdoptionCowork.timeSaved.finding.agentBasis',
       method: 'measured',
     },
@@ -220,15 +222,15 @@ export const CONSERVATIVE_EVIDENCE: EvidenceItem[] = [
   {
     id: 'forrester-recapture',
     url: FORRESTER_TEI_2025_URL,
-    sourceKey: 'copilotAdoptionCowork.timeSaved.source.forresterTei2025',
-    findingKey: 'copilotAdoptionCowork.timeSaved.finding.forresterRecapture',
+    sourceKey: 'copilotAdoptionTimeSaved.source.forresterTei2025',
+    findingKey: 'copilotAdoptionTimeSaved.finding.forresterRecapture',
     method: 'vendorModel',
   },
   {
     id: 'msr-lab-caveat',
     url: MSR_PRODUCTIVITY_REPORT_URL,
-    sourceKey: 'copilotAdoptionCowork.timeSaved.source.msrProductivityReport',
-    findingKey: 'copilotAdoptionCowork.timeSaved.finding.msrLabCaveat',
+    sourceKey: 'copilotAdoptionTimeSaved.source.msrProductivityReport',
+    findingKey: 'copilotAdoptionTimeSaved.finding.msrLabCaveat',
     method: 'measured',
   },
 ];
@@ -254,16 +256,16 @@ export const TIME_SAVED_BENCHMARKS: Benchmark[] = [
   {
     id: 'wti-daily',
     url: WORK_TREND_INDEX_2023_URL,
-    sourceKey: 'copilotAdoptionCowork.timeSaved.source.workTrendIndex2023',
-    findingKey: 'copilotAdoptionCowork.timeSaved.benchmark.wtiDaily',
+    sourceKey: 'copilotAdoptionTimeSaved.source.workTrendIndex2023',
+    findingKey: 'copilotAdoptionTimeSaved.benchmark.wtiDaily',
     method: 'selfReported',
     minutesPerDay: 14,
   },
   {
     id: 'nber-email-daily',
     url: NBER_FIELD_EXPERIMENT_URL,
-    sourceKey: 'copilotAdoptionCowork.timeSaved.source.nberFieldExperiment',
-    findingKey: 'copilotAdoptionCowork.timeSaved.benchmark.nberEmailDaily',
+    sourceKey: 'copilotAdoptionTimeSaved.source.nberFieldExperiment',
+    findingKey: 'copilotAdoptionTimeSaved.benchmark.nberEmailDaily',
     method: 'measured',
     minutesPerDay: 17,
     partial: true,
@@ -271,16 +273,16 @@ export const TIME_SAVED_BENCHMARKS: Benchmark[] = [
   {
     id: 'uk-government',
     url: UK_GOVERNMENT_EXPERIMENT_URL,
-    sourceKey: 'copilotAdoptionCowork.timeSaved.source.ukGovernment',
-    findingKey: 'copilotAdoptionCowork.timeSaved.benchmark.ukGovernment',
+    sourceKey: 'copilotAdoptionTimeSaved.source.ukGovernment',
+    findingKey: 'copilotAdoptionTimeSaved.benchmark.ukGovernment',
     method: 'selfReported',
     minutesPerDay: 26,
   },
   {
     id: 'forrester-monthly',
     url: FORRESTER_TEI_2025_URL,
-    sourceKey: 'copilotAdoptionCowork.timeSaved.source.forresterTei2025',
-    findingKey: 'copilotAdoptionCowork.timeSaved.benchmark.forresterMonthly',
+    sourceKey: 'copilotAdoptionTimeSaved.source.forresterTei2025',
+    findingKey: 'copilotAdoptionTimeSaved.benchmark.forresterMonthly',
     method: 'selfReported',
     minutesPerDay: 27,
   },
@@ -296,11 +298,11 @@ export function benchmarkRange(): { min: number; max: number } {
 export type SenseCheckVerdict = 'below' | 'within' | 'above';
 
 /**
- * Judges the CONSERVATIVE end of the Copilot layer against the published figures.
+ * Judges the CONSERVATIVE end of the licence estimate against the published figures.
  *
- * The published figures describe Microsoft 365 Copilot as people use it today - partly adopted, and
- * without Cowork - so they are the counterpart of the Copilot layer's conservative end, not of the
- * full one and not of the Cowork layer, which no study has measured. A conservative end inside that
+ * The published figures describe Microsoft 365 Copilot as licensed people use it today - partly
+ * adopted - so they are the counterpart of the licence estimate's conservative end, not of its full
+ * one, and not of the Cowork estimate, which no study has measured. A conservative end inside that
  * range is a model that agrees with the evidence; one above it is a model that has to be defended
  * line by line.
  */
@@ -315,7 +317,7 @@ export function senseCheck(minutesPerDayLow: number): SenseCheckVerdict {
 export const SELF_REPORT_CAVEAT: EvidenceItem = {
   id: 'msr-self-report',
   url: MSR_PRODUCTIVITY_REPORT_URL,
-  sourceKey: 'copilotAdoptionCowork.timeSaved.source.msrProductivityReport',
-  findingKey: 'copilotAdoptionCowork.timeSaved.finding.msrSelfReport',
+  sourceKey: 'copilotAdoptionTimeSaved.source.msrProductivityReport',
+  findingKey: 'copilotAdoptionTimeSaved.finding.msrSelfReport',
   method: 'measured',
 };
