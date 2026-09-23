@@ -11,6 +11,7 @@ import {
 } from '../api/copilotAdoptionApi';
 import { AdoptionBand, CopilotResourceTypeKind, type CopilotAdoptionOptions, type CopilotAdoptionSummary } from '../types/copilotAdoption';
 import { TIME_SAVED_STORAGE_KEY, resetTimeSavedStore } from '../components/copilotAdoption/coworkTimeSaved';
+import { loadCatalog } from '../i18n';
 
 vi.mock('../api/copilotAdoptionApi', async (importOriginal) => ({
   ...await importOriginal<typeof import('../api/copilotAdoptionApi')>(),
@@ -242,6 +243,9 @@ describe('CopilotAdoptionPage view split', () => {
       messages: ['SERVER: user metadata off', 'SERVER: sources off'],
     });
 
+    // Loaded first, as main.tsx does before the first render. Otherwise the assertion races the
+    // Spanish chunk's dynamic import, which under a loaded parallel run outlasts waitFor's 1s default.
+    await loadCatalog('es');
     renderWithProvider(<CopilotAdoptionPage />, { language: 'es' });
 
     await waitFor(() => expect(screen.getByText(/La importación de metadatos de usuario está deshabilitada/)).toBeVisible());

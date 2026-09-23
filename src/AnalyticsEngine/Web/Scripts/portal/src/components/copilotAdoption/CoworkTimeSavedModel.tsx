@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import {
   makeStyles,
   mergeClasses,
@@ -42,6 +42,7 @@ import {
   type EvidenceItem,
 } from './coworkTimeSavedEvidence';
 import { TIME_SAVED_ACTIVITY_COLOUR, TIME_SAVED_ACTIVITY_LABEL } from './CoworkTimeSavedHero';
+import { revealElement } from './adoptionShared';
 
 const ACTIVITY_ASSUMPTION: Record<TimeSavedActivity, TimeSavedAssumptionKey> = {
   meetings: 'meetingMinutes',
@@ -72,6 +73,18 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: '16px',
+  },
+  // The calculator, as the target of "Adjust the assumptions". The ring is what tells the reader the
+  // button worked when the table was already on screen and there was nothing to scroll.
+  calculator: {
+    scrollMarginTop: '12px',
+    borderRadius: tokens.borderRadiusMedium,
+    transitionProperty: 'box-shadow',
+    transitionDuration: tokens.durationSlow,
+    transitionTimingFunction: tokens.curveEasyEase,
+  },
+  calculatorHighlighted: {
+    boxShadow: `0 0 0 3px ${tokens.colorBrandStroke1}`,
   },
   sectionTitle: {
     display: 'block',
@@ -455,10 +468,17 @@ export default function CoworkTimeSavedModel({
   summary,
   options,
   timeSaved,
+  focusRequest = 0,
 }: {
   summary: CopilotAdoptionSummary;
   options: CopilotAdoptionOptions;
   timeSaved: TimeSavedAssumptionState;
+  /**
+   * Incremented by the headline's "Adjust the assumptions" button. Each new value scrolls the
+   * calculator into view, focuses its first figure and briefly rings it - so the button visibly does
+   * something even when this section was already open and the table already on screen.
+   */
+  focusRequest?: number;
 }) {
   const styles = useStyles();
   const t = useT();
@@ -468,6 +488,23 @@ export default function CoworkTimeSavedModel({
   const full = projectTimeSaved(summary.coworkFullRolloutEstimate, assumptions, options);
   const ready = projectTimeSaved(summary.coworkValueEstimate, assumptions, options);
   const [scenario, setScenario] = useState<Scenario>(full ? 'full' : 'ready');
+  const calculatorRef = useRef<HTMLDivElement>(null);
+  const [highlighted, setHighlighted] = useState(false);
+
+  useEffect(() => {
+    if (!focusRequest) return undefined;
+    const calculator = calculatorRef.current;
+    if (!calculator) return undefined;
+
+    revealElement(calculator);
+    // preventScroll: focusing would otherwise jump straight to the field and cut the smooth scroll
+    // short. The meetings figure is the first number input in the table.
+    calculator.querySelector<HTMLInputElement>('input[type="number"]')?.focus({ preventScroll: true });
+    setHighlighted(true);
+    const timer = window.setTimeout(() => setHighlighted(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [focusRequest]);
+
   const projection = (scenario === 'full' ? full : ready) ?? full ?? ready;
 
   if (!projection) {
@@ -500,6 +537,7 @@ export default function CoworkTimeSavedModel({
   return (
     <div className={styles.stack}>
       {/* ---------- The calculator ---------- */}
+      <div ref={calculatorRef} className={mergeClasses(styles.calculator, highlighted && styles.calculatorHighlighted)}>
       <Card>
         <Text weight="semibold" size={400} className={styles.sectionTitle}>
           {t('copilotAdoptionCowork.timeSaved.model.title')}
@@ -664,6 +702,7 @@ export default function CoworkTimeSavedModel({
           </MessageBarBody>
         </MessageBar>
       </Card>
+      </div>
 
       {/* ---------- Why each figure ---------- */}
       <div>

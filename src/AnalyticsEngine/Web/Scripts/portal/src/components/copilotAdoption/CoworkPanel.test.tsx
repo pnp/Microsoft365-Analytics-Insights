@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../../test/renderWithProvider';
@@ -530,6 +530,66 @@ describe('CoworkPanel time-saved assumptions', () => {
     expect(screen.getAllByText('Measured').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Self-reported').length).toBeGreaterThan(0);
     expect(screen.getByText(/no statistically significant change in how long documents took/)).toBeTruthy();
+  });
+});
+
+describe('CoworkPanel headline actions', () => {
+  const scrollIntoView = vi.fn();
+  const originalScrollIntoView = Element.prototype.scrollIntoView;
+
+  beforeEach(() => {
+    fetchCowork.mockReset();
+    fetchCowork.mockResolvedValue(page([row({})]));
+    resetTimeSavedStore();
+    scrollIntoView.mockReset();
+    // jsdom implements no scrolling, so the call is recorded rather than performed.
+    Element.prototype.scrollIntoView = scrollIntoView;
+  });
+
+  afterEach(() => {
+    Element.prototype.scrollIntoView = originalScrollIntoView;
+  });
+
+  /**
+   * The defect this guards. The tab opens on the Time saved section, so "Adjust the assumptions"
+   * re-selected the section already showing - and with the table below the headline, nothing on
+   * screen changed and the button read as broken.
+   */
+  it('takes the reader to the figures even when the Time saved section is already open', async () => {
+    const user = userEvent.setup();
+    render(summary({ coworkValueEstimate: ESTIMATE }));
+    expect(screen.getByRole('tab', { name: /Time saved/, selected: true })).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Adjust the assumptions' }));
+
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(screen.getByRole('spinbutton', { name: 'Minutes saved per meeting' })).toHaveFocus();
+  });
+
+  it('opens the Time saved section from any other section to do it', async () => {
+    const user = userEvent.setup();
+    render(summary({ coworkValueEstimate: ESTIMATE }));
+    await openSection(user, /People to enable/);
+    expect(screen.queryByRole('spinbutton', { name: 'Minutes saved per meeting' })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Adjust the assumptions' }));
+
+    expect(screen.getByRole('tab', { name: /Time saved/, selected: true })).toBeTruthy();
+    expect(screen.getByRole('spinbutton', { name: 'Minutes saved per meeting' })).toHaveFocus();
+  });
+
+  it('opens the policy list, scrolled into view, from the headline', async () => {
+    const user = userEvent.setup();
+    render(summary({ coworkValueEstimate: ESTIMATE }));
+    await waitFor(() => expect(fetchCowork).toHaveBeenCalled());
+    fetchCowork.mockClear();
+
+    await user.click(screen.getByRole('button', { name: 'See the 2 people to enable' }));
+
+    expect(screen.getByRole('tab', { name: /People to enable/, selected: true })).toBeTruthy();
+    expect(scrollIntoView).toHaveBeenCalled();
+    await waitFor(() => expect(fetchCowork).toHaveBeenCalled());
+    expect((fetchCowork.mock.calls.at(-1)![1] as { recommendedOnly: boolean }).recommendedOnly).toBe(true);
   });
 });
 

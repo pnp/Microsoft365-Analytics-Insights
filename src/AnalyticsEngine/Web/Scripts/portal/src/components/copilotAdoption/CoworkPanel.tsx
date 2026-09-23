@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, Fragment } from 'react';
+import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import {
   makeStyles,
   tokens,
@@ -44,6 +44,7 @@ import {
   DetailStats,
   ExpandableUserCell,
   ScoreBar,
+  revealElement,
   useAdoptionTableStyles,
   useRowExpansion,
 } from './adoptionShared';
@@ -150,6 +151,7 @@ const useStyles = makeStyles({
     borderBottomWidth: '1px',
     borderBottomStyle: 'solid',
     borderBottomColor: tokens.colorNeutralStroke2,
+    scrollMarginTop: '12px',
   },
   sectionHeader: {
     display: 'flex',
@@ -380,6 +382,15 @@ export default function CoworkPanel({
   const { isExpanded, toggle: toggleRow, collapseAll } = useRowExpansion();
   const [section, setSection] = useState<CoworkSection>('timeSaved');
   const timeSaved = useTimeSavedAssumptions(options);
+  // Requests, not flags: each click must act again, including a second click on a section that is
+  // already open - which is exactly when a plain setSection() changes nothing the reader can see.
+  const [assumptionFocusRequest, setAssumptionFocusRequest] = useState(0);
+  const [sectionRevealRequest, setSectionRevealRequest] = useState(0);
+  const sectionNavRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (sectionRevealRequest) revealElement(sectionNavRef.current);
+  }, [sectionRevealRequest]);
 
   const available = summary.coworkReadinessAvailable;
 
@@ -438,7 +449,9 @@ export default function CoworkPanel({
 
   /**
    * Opens the people section, optionally re-filtered - how a tier card or the headline hands the
-   * reader the exact list it just counted, now that the list is no longer directly underneath.
+   * reader the exact list it just counted, now that the list is no longer directly underneath. The
+   * section strip is scrolled into view with it, because the list opens below the headline and would
+   * otherwise start below the fold on a laptop screen.
    */
   const showPeople = (next?: Partial<CoworkFilters>) => {
     if (next) {
@@ -446,6 +459,13 @@ export default function CoworkPanel({
       setFilters((f) => ({ ...f, ...next }));
     }
     setSection('people');
+    setSectionRevealRequest((n) => n + 1);
+  };
+
+  /** Takes the reader to the editable figures - from any section, including the one already open. */
+  const adjustAssumptions = () => {
+    setSection('timeSaved');
+    setAssumptionFocusRequest((n) => n + 1);
   };
 
   const selectTier = (tier: CoworkTier) => showPeople({ tiers: [tier], recommendedOnly: false });
@@ -494,11 +514,11 @@ export default function CoworkPanel({
         summary={summary}
         options={options}
         timeSaved={timeSaved}
-        onAdjust={() => setSection('timeSaved')}
+        onAdjust={adjustAssumptions}
         onShowPeople={() => showPeople({ recommendedOnly: true, tiers: [] })}
       />
 
-      <div className={styles.sectionNav} data-print="hide">
+      <div className={styles.sectionNav} data-print="hide" ref={sectionNavRef}>
         <TabList
           selectedValue={section}
           onTabSelect={(_e, d) => setSection(d.value as CoworkSection)}
@@ -525,7 +545,12 @@ export default function CoworkPanel({
 
       {/* ---------- Time saved: the model behind the headline ---------- */}
       <div role="tabpanel" aria-label={t('copilotAdoptionCowork.sections.timeSaved')} hidden={section !== 'timeSaved'}>
-        <CoworkTimeSavedModel summary={summary} options={options} timeSaved={timeSaved} />
+        <CoworkTimeSavedModel
+          summary={summary}
+          options={options}
+          timeSaved={timeSaved}
+          focusRequest={assumptionFocusRequest}
+        />
       </div>
 
       {/* ---------- Readiness: who is ready, and why ---------- */}
