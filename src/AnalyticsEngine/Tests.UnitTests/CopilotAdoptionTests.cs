@@ -1814,7 +1814,7 @@ namespace Tests.UnitTests
                 Assert.IsFalse(
                     json.IndexOf(banned, StringComparison.OrdinalIgnoreCase) >= 0,
                     $"The Copilot Adoption summary must not carry '{banned}'. This report deliberately talks about "
-                    + "seats and people, and about time saved for Cowork - never about money.");
+                    + "seats and people, and about time saved in hours - never about money.");
             }
 
             // The seat COUNTS are still published: they are observed, not priced.
