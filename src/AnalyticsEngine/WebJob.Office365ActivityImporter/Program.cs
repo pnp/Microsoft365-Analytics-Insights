@@ -263,6 +263,7 @@ namespace WebJob.Office365ActivityImporter
             // Run app
             while (runAgain)
             {
+                var importCycleTelemetryScope = logger.BeginOperationScope(Guid.NewGuid().ToString("N"));
                 var importCycleTimer = new JobTimer(logger, Process.GetCurrentProcess().ProcessName);
                 importCycleTimer.Start();
                 var tasks = new ProgramTasks(logger, configuredSettings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList, reportCompletionStore);
@@ -391,6 +392,8 @@ namespace WebJob.Office365ActivityImporter
                         await stats.ProcessAndFailSilently();
                     }
                 }
+
+                importCycleTelemetryScope.Dispose();
 
                 if (runAgain)
                 {

@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Threading;
 
 namespace DataUtils
 {
@@ -15,7 +16,7 @@ namespace DataUtils
             return logLevel == LogLevel.Information || logLevel == LogLevel.Warning || logLevel == LogLevel.Error || logLevel == LogLevel.Critical;
         }
 
-        public IDisposable BeginScope<TState>(TState state)
+        public virtual IDisposable BeginScope<TState>(TState state)
         {
             return null;
         }
@@ -28,6 +29,9 @@ namespace DataUtils
     /// </summary>
     public class AnalyticsLogger : BaseAnalyticsLogger
     {
+        private const string ExceptionTelemetryTrackedKey = "DataUtils.AnalyticsLogger.ExceptionTelemetryTracked";
+        private static readonly AsyncLocal<string> CurrentOperationId = new AsyncLocal<string>();
+
         private TelemetryClient AppInsights { get; set; }
 
         #region Constructors
@@ -70,6 +74,21 @@ namespace DataUtils
 
         #endregion
 
+        public override IDisposable BeginScope<TState>(TState state)
+        {
+            var operationId = TryGetOperationId(state);
+            return string.IsNullOrEmpty(operationId)
+                ? null
+                : BeginOperationScope(operationId);
+        }
+
+        public IDisposable BeginOperationScope(string operationId)
+        {
+            var previous = CurrentOperationId.Value;
+            CurrentOperationId.Value = operationId;
+            return new OperationScope(() => CurrentOperationId.Value = previous);
+        }
+
         public void TrackException(Exception ex)
         {
             TrackException(ex, null, null);
@@ -80,16 +99,35 @@ namespace DataUtils
             IDictionary<string, string> properties,
             string operationId)
         {
-            if (AppInsights != null)
+            if (AppInsights != null && ex != null)
             {
-                var telemetry = new ExceptionTelemetry(ex);
-                if (!string.IsNullOrEmpty(operationId))
+                var safeDetails = ex as IExceptionTelemetryDetails;
+                if (safeDetails != null && !TryMarkExceptionAsTracked(ex))
                 {
-                    telemetry.Context.Operation.Id = operationId;
+                    return;
+                }
+
+                var telemetry = new ExceptionTelemetry(safeDetails?.ToTelemetryException() ?? ex);
+                if (safeDetails != null && !string.IsNullOrEmpty(safeDetails.TelemetryProblemId))
+                {
+                    telemetry.ProblemId = safeDetails.TelemetryProblemId;
+                }
+
+                var effectiveOperationId = operationId ?? CurrentOperationId.Value;
+                if (!string.IsNullOrEmpty(effectiveOperationId))
+                {
+                    telemetry.Context.Operation.Id = effectiveOperationId;
                 }
                 if (!string.IsNullOrEmpty(AppInsights.Context.Operation.Name))
                 {
                     telemetry.Context.Operation.Name = AppInsights.Context.Operation.Name;
+                }
+                if (safeDetails?.TelemetryProperties != null)
+                {
+                    foreach (var property in safeDetails.TelemetryProperties)
+                    {
+                        telemetry.Properties[property.Key] = property.Value;
+                    }
                 }
                 if (properties != null)
                 {
@@ -109,7 +147,16 @@ namespace DataUtils
 
             if (AppInsights != null)
             {
-                AppInsights.TrackTrace(sayWut, severityLevel);
+                var telemetry = new TraceTelemetry(sayWut, severityLevel);
+                if (!string.IsNullOrEmpty(CurrentOperationId.Value))
+                {
+                    telemetry.Context.Operation.Id = CurrentOperationId.Value;
+                }
+                if (!string.IsNullOrEmpty(AppInsights.Context.Operation.Name))
+                {
+                    telemetry.Context.Operation.Name = AppInsights.Context.Operation.Name;
+                }
+                AppInsights.TrackTrace(telemetry);
             }
         }
 
@@ -196,9 +243,10 @@ namespace DataUtils
                 {
                     telemetry.Timestamp = timestamp.Value;
                 }
-                if (!string.IsNullOrEmpty(operationId))
+                var effectiveOperationId = operationId ?? CurrentOperationId.Value;
+                if (!string.IsNullOrEmpty(effectiveOperationId))
                 {
-                    telemetry.Context.Operation.Id = operationId;
+                    telemetry.Context.Operation.Id = effectiveOperationId;
                 }
                 if (!string.IsNullOrEmpty(AppInsights.Context.Operation.Name))
                 {
@@ -380,6 +428,69 @@ namespace DataUtils
             CopilotAdoptionLifecycle,
             LicenceActivityLifecycle,
             UsageReportSaveStage
+        }
+
+        private static bool TryMarkExceptionAsTracked(Exception ex)
+        {
+            lock (ex)
+            {
+                if (ex.Data.Contains(ExceptionTelemetryTrackedKey))
+                {
+                    return false;
+                }
+
+                ex.Data[ExceptionTelemetryTrackedKey] = true;
+                return true;
+            }
+        }
+
+        private static string TryGetOperationId<TState>(TState state)
+        {
+            if (state is IEnumerable<KeyValuePair<string, object>> objectPairs)
+            {
+                foreach (var pair in objectPairs)
+                {
+                    if (IsOperationIdKey(pair.Key))
+                    {
+                        return pair.Value?.ToString();
+                    }
+                }
+            }
+
+            if (state is IEnumerable<KeyValuePair<string, string>> stringPairs)
+            {
+                foreach (var pair in stringPairs)
+                {
+                    if (IsOperationIdKey(pair.Key))
+                    {
+                        return pair.Value;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static bool IsOperationIdKey(string key)
+        {
+            return string.Equals(key, "OperationId", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(key, "operation_Id", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private sealed class OperationScope : IDisposable
+        {
+            private Action _dispose;
+
+            public OperationScope(Action dispose)
+            {
+                _dispose = dispose;
+            }
+
+            public void Dispose()
+            {
+                var dispose = Interlocked.Exchange(ref _dispose, null);
+                dispose?.Invoke();
+            }
         }
     }
 }
