@@ -581,6 +581,57 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void StorageCheckpointFirewall_PublicInstallWithDefaultDenyWarns()
+        {
+            var result = SolutionInstallVerifier.EvaluateStorageCheckpointFirewall(
+                privateEndpointInstall: false,
+                publicNetworkAccess: "Enabled",
+                defaultAction: "Deny");
+
+            Assert.IsTrue(result.Warns);
+            StringAssert.Contains(result.Message, "selected virtual networks and IP addresses");
+            StringAssert.Contains(result.Message, "same Azure region");
+            StringAssert.Contains(result.Message, "IP allow-list rules do not apply");
+        }
+
+        [TestMethod]
+        public void StorageCheckpointFirewall_PublicInstallWithPublicAccessDisabledWarns()
+        {
+            var result = SolutionInstallVerifier.EvaluateStorageCheckpointFirewall(
+                privateEndpointInstall: false,
+                publicNetworkAccess: "Disabled",
+                defaultAction: "Allow");
+
+            Assert.IsTrue(result.Warns);
+            StringAssert.Contains(result.Message, "public network access is Disabled");
+            StringAssert.Contains(result.Message, "Enabled from all networks");
+        }
+
+        [TestMethod]
+        public void StorageCheckpointFirewall_PublicInstallWithAllowAndEnabledPasses()
+        {
+            var result = SolutionInstallVerifier.EvaluateStorageCheckpointFirewall(
+                privateEndpointInstall: false,
+                publicNetworkAccess: "Enabled",
+                defaultAction: "Allow");
+
+            Assert.IsFalse(result.Warns);
+            StringAssert.Contains(result.Message, "check passed");
+        }
+
+        [TestMethod]
+        public void StorageCheckpointFirewall_PrivateEndpointInstallDoesNotWarnAboutDeny()
+        {
+            var result = SolutionInstallVerifier.EvaluateStorageCheckpointFirewall(
+                privateEndpointInstall: true,
+                publicNetworkAccess: "Disabled",
+                defaultAction: "Deny");
+
+            Assert.IsFalse(result.Warns);
+            StringAssert.Contains(result.Message, "private-endpoint");
+        }
+
+        [TestMethod]
         public void BuildRedisDnsTargetProducesManagedCandidateForEveryOfferedAzureRegion()
         {
             // The region picker is populated straight from AzurePublicCloudEnumerator, so every value it can

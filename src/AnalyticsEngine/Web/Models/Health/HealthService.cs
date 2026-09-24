@@ -517,6 +517,9 @@ namespace Web.AnalyticsWeb.Models.Health
                     Component = component,
                     Status = table.GetString(row, "Status"),
                     Detail = table.GetString(row, "Detail"),
+                    ReasonKey = table.GetString(row, "ReasonKey"),
+                    ErrorCode = table.GetString(row, "ErrorCode"),
+                    HttpStatus = table.GetInt(row, "HttpStatus"),
                     DaysToExpiry = table.GetInt(row, "DaysToExpiry"),
                     LastSeenUtc = table.GetDateTimeUtc(row, "LastSeen")
                 });
@@ -757,7 +760,7 @@ namespace Web.AnalyticsWeb.Models.Health
             "| where name == \"HealthCheck\" " +
             "| extend Component = tostring(customDimensions.Component) " +
             "| summarize arg_max(timestamp, *) by Component " +
-            "| project Component, Status = tostring(customDimensions.Status), Detail = tostring(customDimensions.Detail), DaysToExpiry = tostring(customDimensions.DaysToExpiry), LastSeen = timestamp " +
+            "| project Component, Status = tostring(customDimensions.Status), Detail = tostring(customDimensions.Detail), ReasonKey = tostring(customDimensions.ReasonKey), ErrorCode = tostring(customDimensions.ErrorCode), HttpStatus = toint(customDimensions.HttpStatus), DaysToExpiry = tostring(customDimensions.DaysToExpiry), LastSeen = timestamp " +
             "| order by Component asc";
 
         private const string QueryLastCyclePerJob =
