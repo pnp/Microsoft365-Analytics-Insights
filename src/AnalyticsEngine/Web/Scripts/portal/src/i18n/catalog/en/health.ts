@@ -39,6 +39,7 @@ export const health = {
   'health.reason.runtimeCertificateCheckFailed': "Couldn't check the runtime certificate: {error}",
   'health.reason.teamsCallsQueueDepthFailed': "Couldn't read the Teams calls queue depth: {error}",
   'health.reason.teamsCallsQueueDepthFailedNetworkBlock': "Couldn't read the Teams calls queue depth: {error} This looks like a network-level block rather than a permissions problem: in a private (VNet) deployment Service Bus must be on the Premium SKU with a private endpoint, otherwise the namespace is unreachable and Teams calls will not import. Either migrate the namespace to Premium, or re-enable public network access on it.",
+  'health.reason.blobCheckpointStorageFirewall': "The audit blob checkpoint is degraded because the storage account firewall rejected the Table request (HTTP {status} {errorCode}). On a public install, set the storage account to 'Enabled from all networks'; IP allow-list rules do not apply to requests from an App Service in the same Azure region as the storage account. Anything stricter needs App Service VNet integration plus a Microsoft.Storage service endpoint, or the private-endpoint deployment. Until this is fixed, the importer uses a non-durable in-memory checkpoint that is lost on restart/redeploy, and durable cross-cycle metadata recovery is unavailable.",
 
   // Health page
   'health.page.title': 'System Health{buildLabel}',

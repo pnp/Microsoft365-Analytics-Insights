@@ -1,12 +1,14 @@
 ﻿using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.InstallerTasks;
 using App.ControlPanel.Engine.Models;
+using Azure;
 using Azure.Identity;
 using Azure.ResourceManager;
 using Azure.ResourceManager.KeyVault;
 using Azure.ResourceManager.Redis;
 using Azure.ResourceManager.RedisEnterprise;
 using Azure.ResourceManager.AppService;
+using Azure.ResourceManager.Storage;
 using CloudInstallEngine.Azure;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Sql;
@@ -100,6 +102,11 @@ namespace App.ControlPanel.Engine
             // "The remote name could not be resolved" class of failure (broken/limited DNS on the
             // installer host) up-front instead of letting it abort an install part-way through.
             await VerifyResourceDnsResolution(testRg);
+
+            // The audit-import blob checkpoint is a runtime data-plane call from the App Service to Table
+            // storage. Read the storage account's firewall from ARM (control plane) rather than probing from
+            // the admin's machine, whose network path is not the App Service's network path.
+            await VerifyStorageCheckpointFirewall(testRg);
 
             // Key Vault data-plane reachability with the installer account (the exact call that failed
             // mid-install). Only runs when the vault already exists and installer credentials are present.
@@ -691,6 +698,71 @@ namespace App.ControlPanel.Engine
             }
 
             _logger.LogInformation("DNS resolution checks complete.");
+        }
+
+        async Task VerifyStorageCheckpointFirewall(ResourceGroupResource testRg)
+        {
+            if (testRg == null || string.IsNullOrWhiteSpace(Config?.StorageAccountName)) return;
+
+            try
+            {
+                var response = await testRg.GetStorageAccountAsync(Config.StorageAccountName.Trim());
+                var storage = response.Value;
+                var result = EvaluateStorageCheckpointFirewall(
+                    PrivateNetworkGuidance.IsPrivateNetworkOnly(Config),
+                    storage.Data.PublicNetworkAccess?.ToString(),
+                    storage.Data.NetworkRuleSet == null ? null : storage.Data.NetworkRuleSet.DefaultAction.ToString());
+
+                if (result.Warns)
+                {
+                    _logger.LogWarning(result.Message);
+                }
+                else
+                {
+                    _logger.LogInformation(result.Message);
+                }
+            }
+            catch (RequestFailedException ex) when (ex.Status == 404)
+            {
+                _logger.LogInformation($"Storage account '{Config.StorageAccountName}' does not exist yet; skipping checkpoint firewall check.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning($"Could not read storage account '{Config.StorageAccountName}' firewall settings from ARM: {ex.Message}");
+            }
+        }
+
+        public static StorageCheckpointFirewallEvaluation EvaluateStorageCheckpointFirewall(
+            bool privateEndpointInstall, string publicNetworkAccess, string defaultAction)
+        {
+            if (privateEndpointInstall)
+            {
+                return StorageCheckpointFirewallEvaluation.Pass(
+                    "Storage checkpoint firewall check skipped: private-endpoint/VNet deployments are expected to restrict public storage access.");
+            }
+
+            var publicAccessDisabled = string.Equals(publicNetworkAccess, "Disabled", StringComparison.OrdinalIgnoreCase);
+            var defaultDeny = string.Equals(defaultAction, "Deny", StringComparison.OrdinalIgnoreCase);
+
+            if (!publicAccessDisabled && !defaultDeny)
+            {
+                return StorageCheckpointFirewallEvaluation.Pass(
+                    "Storage checkpoint firewall check passed: public storage access is enabled and the storage firewall default action is not Deny.");
+            }
+
+            var reason = publicAccessDisabled
+                ? "public network access is Disabled"
+                : "the storage firewall default action is Deny ('Enabled from selected virtual networks and IP addresses')";
+            if (publicAccessDisabled && defaultDeny)
+            {
+                reason = "public network access is Disabled and the storage firewall default action is Deny";
+            }
+
+            return StorageCheckpointFirewallEvaluation.Warn(
+                $"Storage account network rules will block the audit blob checkpoint because {reason}. " +
+                "On a public install the importer App Service reaches the storage account's Table endpoint from the same Azure region, " +
+                "so storage IP allow-list rules do not apply to that traffic. Use 'Enabled from all networks' for a public install, " +
+                "or use VNet integration with a Microsoft.Storage service endpoint / the private-endpoint deployment for stricter networking.");
         }
 
         /// <summary>
@@ -1536,6 +1608,28 @@ namespace App.ControlPanel.Engine
             }
 
             _logger.LogInformation("Successfully verified user activity settings.");
+        }
+    }
+
+    public class StorageCheckpointFirewallEvaluation
+    {
+        private StorageCheckpointFirewallEvaluation(bool warns, string message)
+        {
+            Warns = warns;
+            Message = message;
+        }
+
+        public bool Warns { get; }
+        public string Message { get; }
+
+        public static StorageCheckpointFirewallEvaluation Pass(string message)
+        {
+            return new StorageCheckpointFirewallEvaluation(false, message);
+        }
+
+        public static StorageCheckpointFirewallEvaluation Warn(string message)
+        {
+            return new StorageCheckpointFirewallEvaluation(true, message);
         }
     }
 
