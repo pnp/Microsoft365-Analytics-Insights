@@ -11,6 +11,7 @@ using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot;
 
 namespace Tests.UnitTests
@@ -380,6 +381,77 @@ namespace Tests.UnitTests
                 Assert.AreEqual("D30", source.LastSuccessfulPeriod);
                 Assert.AreEqual(1, CopilotUsageUserDetailParser.Parse(rows).Count);
             }
+        }
+
+        [TestMethod]
+        public async Task CoworkLoader_TreatsUnknownReportFunctionBadRequestAsNotAvailable()
+        {
+            var source = new FakeCopilotReportSource(new GraphHttpException(
+                HttpStatusCode.BadRequest,
+                "https://graph.microsoft.com/beta/reports/getMicrosoft365CopilotCoworkUsageUserDetail(period='D30')",
+                "{ 'error': { 'code': 'BadRequest', 'message': \"Resource not found for the segment 'getMicrosoft365CopilotCoworkUsageUserDetail'.\" } }",
+                null));
+            var persistence = new FakeCoworkUsagePersistenceManager();
+
+            var rows = await new CoworkUsageUserDetailLoader(
+                    source,
+                    AnalyticsLogger.ConsoleOnlyTracer(),
+                    userGroupsCache: null,
+                    userGroupsFilter: null,
+                    persistence: persistence)
+                .LoadAndSaveAsync(new CopilotReportRequest(CopilotReportNames.CoworkUsageUserDetail, "D28"));
+
+            Assert.AreEqual(0, rows);
+            Assert.AreEqual(1, source.Requests.Count);
+            Assert.AreEqual(1, persistence.ImportLogs.Count);
+            Assert.AreEqual(CopilotReportNames.CoworkUsageUserDetail, persistence.ImportLogs[0].ReportName);
+            Assert.AreEqual(0, persistence.ImportLogs[0].RowsRead);
+            StringAssert.StartsWith(persistence.ImportLogs[0].Error, "Report not available:");
+            Assert.AreEqual(0, persistence.UpsertRequests.Count, "An unavailable report must not write data rows.");
+        }
+
+        [TestMethod]
+        public async Task CoworkLoader_StillTreats404AsNotAvailable()
+        {
+            var source = new FakeCopilotReportSource(new GraphResourceNotFoundException(
+                "https://graph.microsoft.com/beta/reports/getMicrosoft365CopilotCoworkUsageUserDetail(period='D30')",
+                "{ 'error': { 'code': 'itemNotFound', 'message': 'Report not found.' } }",
+                null));
+            var persistence = new FakeCoworkUsagePersistenceManager();
+
+            var rows = await new CoworkUsageUserDetailLoader(
+                    source,
+                    AnalyticsLogger.ConsoleOnlyTracer(),
+                    userGroupsCache: null,
+                    userGroupsFilter: null,
+                    persistence: persistence)
+                .LoadAndSaveAsync(new CopilotReportRequest(CopilotReportNames.CoworkUsageUserDetail, "D28"));
+
+            Assert.AreEqual(0, rows);
+            Assert.AreEqual(1, persistence.ImportLogs.Count);
+            StringAssert.StartsWith(persistence.ImportLogs[0].Error, "Report not available:");
+        }
+
+        [TestMethod]
+        public async Task CoworkLoader_RethrowsOtherBadRequests()
+        {
+            var source = new FakeCopilotReportSource(new GraphHttpException(
+                HttpStatusCode.BadRequest,
+                "https://graph.microsoft.com/beta/reports/getMicrosoft365CopilotCoworkUsageUserDetail(period='D30')",
+                "{ 'error': { 'code': 'BadRequest', 'message': 'Invalid period specified.' } }",
+                null));
+            var persistence = new FakeCoworkUsagePersistenceManager();
+
+            await Assert.ThrowsExceptionAsync<GraphHttpException>(() => new CoworkUsageUserDetailLoader(
+                    source,
+                    AnalyticsLogger.ConsoleOnlyTracer(),
+                    userGroupsCache: null,
+                    userGroupsFilter: null,
+                    persistence: persistence)
+                .LoadAndSaveAsync(new CopilotReportRequest(CopilotReportNames.CoworkUsageUserDetail, "D28")));
+
+            Assert.AreEqual(1, persistence.ImportLogs.Count);
+            Assert.IsFalse(persistence.ImportLogs[0].Error.StartsWith("Report not available:", StringComparison.Ordinal));
         }
 
         [TestMethod]
@@ -835,13 +907,49 @@ namespace Tests.UnitTests
         private class FakeCopilotReportSource : ICopilotReportSource
         {
             private readonly List<JObject> _report;
+            private readonly Exception _exception;
+            public List<CopilotReportRequest> Requests { get; } = new List<CopilotReportRequest>();
 
             public FakeCopilotReportSource(List<JObject> report)
             {
                 _report = report;
             }
 
-            public Task<List<JObject>> LoadReportAsync(CopilotReportRequest request) => Task.FromResult(_report);
+            public FakeCopilotReportSource(Exception exception)
+            {
+                _exception = exception;
+            }
+
+            public Task<List<JObject>> LoadReportAsync(CopilotReportRequest request)
+            {
+                Requests.Add(request);
+                if (_exception != null) throw _exception;
+                return Task.FromResult(_report);
+            }
+        }
+
+        private class FakeCoworkUsagePersistenceManager : ICoworkUsagePersistenceManager
+        {
+            public List<CopilotUsageReportImportLog> ImportLogs { get; } = new List<CopilotUsageReportImportLog>();
+            public List<IReadOnlyList<CoworkUsageUserDetailRow>> UpsertRequests { get; } = new List<IReadOnlyList<CoworkUsageUserDetailRow>>();
+
+            public Task<CopilotUsageUpsertResult> UpsertUserDetailAsync(IReadOnlyList<CoworkUsageUserDetailRow> rows)
+            {
+                UpsertRequests.Add(rows);
+                return Task.FromResult(new CopilotUsageUpsertResult { Inserted = rows?.Count ?? 0 });
+            }
+
+            public Task RecordReportLoadAsync(CopilotUsageReportImportLog importLog)
+            {
+                ImportLogs.Add(importLog);
+                return Task.CompletedTask;
+            }
+
+            public Task RecordReportLoadAfterFailureAsync(CopilotUsageReportImportLog importLog)
+            {
+                ImportLogs.Add(importLog);
+                return Task.CompletedTask;
+            }
         }
     }
 }
