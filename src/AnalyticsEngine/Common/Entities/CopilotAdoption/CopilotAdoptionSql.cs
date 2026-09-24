@@ -756,10 +756,11 @@ namespace Common.Entities.CopilotAdoption
         /// every figure is derived from them (<c>*Usage</c>). Only two SUMs are new - meetings organised,
         /// and the channel posts and replies that channel messages already contain - and the mail and file
         /// aggregates gain none. The split shape was faster here but REJECTED: it scans each table twice,
-        /// which on an edition without the columnstore index (Express and LocalDB get no fallback index at
-        /// all) means two full scans of the largest tables in the schema. Every shape returned
-        /// byte-identical rows. The step runs concurrently with the rest of the analysis, well under its
-        /// slowest step, and the analysis is cached for ten minutes.</para>
+        /// which is cheap against the columnstore index but not on a server where that index could not be
+        /// built - there the migration leaves a covering B-tree, or on Express no index at all, and a second
+        /// pass is a second range or clustered scan of the largest tables in the schema. Every shape
+        /// returned byte-identical rows. This query runs concurrently with the licensed-user query, and the
+        /// analysis is cached for ten minutes.</para>
         /// </summary>
         /// <param name="seatLicenceTypeIds">Licence-type ids classified as Copilot seats.</param>
         /// <param name="coworkAgentIds">Agent ids identified as Cowork; may be empty.</param>
