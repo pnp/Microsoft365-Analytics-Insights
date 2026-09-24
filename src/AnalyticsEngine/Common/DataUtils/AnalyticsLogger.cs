@@ -293,9 +293,18 @@ namespace DataUtils
         /// <param name="windowDays">Reporting window the analysis was run for.</param>
         /// <param name="totalMs">Wall-clock duration of the whole analysis.</param>
         /// <param name="stepDurationsMs">Per-step wall-clock durations, keyed by step name.</param>
-        /// <param name="warningCount">How many figures degraded. Non-zero means the report is incomplete.</param>
-        /// <param name="timedOut">Whether any step hit the query timeout - the signal that matters most.</param>
+        /// <param name="warningCount">
+        /// How many caveats the page shows. Informational only: most real tenants carry at least one caveat
+        /// that is not a failure (for example the Cowork eligibility note), so this no longer decides
+        /// <c>Outcome</c>.
+        /// </param>
+        /// <param name="timedOut">Whether any query was classified as a timeout - the signal that matters most.</param>
         /// <param name="slowestStep">Name of the slowest step, for triage without unpacking the measurements.</param>
+        /// <param name="figuresIncomplete">Whether any dataset failed to load, so some figures are too low or missing.</param>
+        /// <param name="incompleteReasonCount">How many datasets failed.</param>
+        /// <param name="failedQueryCount">How many queries failed, of any kind.</param>
+        /// <param name="timedOutQueryCount">How many of those were timeouts.</param>
+        /// <param name="failedSteps">Comma-separated names of the failed steps (compile-time constants).</param>
         public void TrackCopilotAdoptionAnalysis(
             int windowDays,
             long totalMs,
@@ -303,21 +312,43 @@ namespace DataUtils
             int warningCount,
             bool timedOut,
             string slowestStep,
-            string operationId = null)
+            string operationId = null,
+            bool figuresIncomplete = false,
+            int incompleteReasonCount = 0,
+            int failedQueryCount = 0,
+            int timedOutQueryCount = 0,
+            string failedSteps = null)
         {
+            // Degraded means something FAILED, not that the page carries a caveat. It used to be
+            // "WarningCount > 0", which was true on nearly every real tenant - one caveat is added on every run
+            // that sees any Cowork use - so an alert on it fired constantly and hid the runs that had actually
+            // lost data.
+            var degraded = figuresIncomplete || failedQueryCount > 0 || !string.IsNullOrEmpty(failedSteps);
+
             var context = new Dictionary<string, string>
             {
                 { "WindowDays", windowDays.ToString(CultureInfo.InvariantCulture) },
                 { "WarningCount", warningCount.ToString(CultureInfo.InvariantCulture) },
                 { "TimedOut", timedOut ? "true" : "false" },
-                { "Outcome", warningCount == 0 ? "Complete" : "Degraded" },
+                { "Outcome", degraded ? "Degraded" : "Complete" },
+                { "FiguresIncomplete", figuresIncomplete ? "true" : "false" },
             };
             if (!string.IsNullOrEmpty(slowestStep))
             {
                 context.Add("SlowestStep", slowestStep);
             }
+            if (!string.IsNullOrEmpty(failedSteps))
+            {
+                context.Add("FailedSteps", failedSteps);
+            }
 
-            var metrics = new Dictionary<string, double> { { "TotalMs", totalMs } };
+            var metrics = new Dictionary<string, double>
+            {
+                { "TotalMs", totalMs },
+                { "FailedQueryCount", failedQueryCount },
+                { "TimedOutQueryCount", timedOutQueryCount },
+                { "IncompleteReasonCount", incompleteReasonCount },
+            };
             if (stepDurationsMs != null)
             {
                 foreach (var step in stepDurationsMs)
