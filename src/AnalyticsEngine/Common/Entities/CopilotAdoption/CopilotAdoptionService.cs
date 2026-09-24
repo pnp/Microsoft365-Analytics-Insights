@@ -2140,19 +2140,28 @@ namespace Common.Entities.CopilotAdoption
             summary.CoworkByDepartment = BuildCoworkSegments(rows);
             summary.CoworkQuadrant = BuildCoworkQuadrant(summary.CoworkByDepartment);
 
-            // One Cowork task rate for the whole tenant - the average of everyone with tasks in Microsoft's
-            // Cowork report, or the labelled placeholder when nobody has any - shared by both cohorts so
-            // they project the same rate.
+            // The tenant's own Cowork users' average task rate - everyone with tasks in Microsoft's Cowork
+            // report - computed once and shared by both cohorts, so they quote the same sense check. It is
+            // not an input: everyone not yet running Cowork tasks is modelled from their own activity.
             var coworkReportPeriodDays = summary.DataSources?.CoworkUsageReportPeriodDays ?? 0;
-            var coworkTaskRate = CopilotAdoptionScoring.CoworkTaskRateFor(rows, coworkReportPeriodDays, _options);
+            var coworkTaskRate = CopilotAdoptionScoring.CoworkObservedTaskRate(rows, coworkReportPeriodDays, _options);
 
-            summary.CoworkValueEstimate = CopilotAdoptionScoring.EstimateCoworkValue(
-                rows.Where(r => r.RecommendForPolicy).ToList(), _options, coworkReportPeriodDays, coworkTaskRate);
+            // Modelled only when the Microsoft 365 usage reports supplied the activity it multiplies, for
+            // the same reason as the licence estimate: without them everyone has zero meetings, emails,
+            // messages and files, and "0 hours" would read as a finding that Cowork has nothing to take on
+            // rather than as a missing import. The tab says which it is.
+            var activityObserved = summary.DataSources?.M365UsageReportsAvailable ?? false;
+
+            summary.CoworkValueEstimate = activityObserved
+                ? CopilotAdoptionScoring.EstimateCoworkValue(
+                    rows.Where(r => r.RecommendForPolicy).ToList(), _options, coworkReportPeriodDays, coworkTaskRate)
+                : new CoworkValueEstimate();
 
             // The ceiling: every scored seat holder, not only the people ready today. Same rows, same
             // options, same arithmetic - so the cohort above can never model more time than this.
-            summary.CoworkFullRolloutEstimate = CopilotAdoptionScoring.EstimateCoworkValue(
-                rows, _options, coworkReportPeriodDays, coworkTaskRate);
+            summary.CoworkFullRolloutEstimate = activityObserved
+                ? CopilotAdoptionScoring.EstimateCoworkValue(rows, _options, coworkReportPeriodDays, coworkTaskRate)
+                : new CoworkValueEstimate();
         }
 
         /// <summary>

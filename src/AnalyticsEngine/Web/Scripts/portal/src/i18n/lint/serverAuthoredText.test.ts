@@ -565,14 +565,28 @@ const TIME_SAVED_ASSUMPTION_SPECS: TimeSavedAssumptionSpec[] = [
     serverCall: /\bestimate\.Assumptions\.Add\(/g,
     prefix: 'copilotAdoptionCowork.estimate.assumption.',
     requiredFacts: {
-      taskMinutes: ['assumptions.taskMinutes'],
-      volumes: ['projection.cohortUsers', 'monthDays'],
-      // The Cowork task rate IN FORCE - the reader's, or the published one - never options.*, and for
-      // an observed rate the number of people it averages.
-      taskRateObserved: ['projection.tasksPerPerson', 'projection.rateUsers'],
-      taskRateAssumed: ['projection.tasksPerPerson'],
-      taskRateCustom: ['projection.tasksPerPerson'],
+      // Every minutes and share figure IN FORCE - the reader's, or the defaults - never options.*.
+      minutes: [
+        'assumptions.organiseMeetingsMinutes',
+        'assumptions.prepareMeetingsMinutes',
+        'assumptions.sendEmailMinutes',
+        'assumptions.postInTeamsMinutes',
+        'assumptions.createDocumentsMinutes',
+        'assumptions.taskMinutes',
+      ],
+      shares: [
+        'assumptions.organiseMeetingsShare',
+        'assumptions.prepareMeetingsShare',
+        'assumptions.sendEmailShare',
+        'assumptions.postInTeamsShare',
+        'assumptions.createDocumentsShare',
+      ],
+      volumes: ['projection.cohortUsers', 'projection.workingDaysPerMonth', 'monthDays'],
+      // The tasks already running, and how many people run them - or the sentence saying nobody does.
+      observedTasks: ['projection.observedTasks', 'projection.observedUsers'],
+      observedNone: [],
       increment: [],
+      leftOut: [],
       lowerBound: ['conservativePercent'],
       potential: [],
       notMeasured: [],

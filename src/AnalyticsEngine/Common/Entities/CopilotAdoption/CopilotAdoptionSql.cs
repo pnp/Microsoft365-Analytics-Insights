@@ -733,6 +733,34 @@ namespace Common.Entities.CopilotAdoption
         /// at that width the window covers essentially the whole table, so a scan is the correct plan. It
         /// is reported here because the repo requires more than one selectivity - a shape that only ever
         /// gets tested at its best window is not proven.</para>
+        ///
+        /// <para><b>The Cowork estimate's volumes, and what they cost - measured.</b> The estimate needs
+        /// each seat holder's meetings organised and attended, Teams chat and channel messages, emails sent
+        /// and files, UNROUNDED per active day (<see cref="CoworkActivities"/>): rounded, someone who
+        /// organises two meetings a week averages 0.4 a day and is modelled as organising none. Every
+        /// column involved is already in the <c>ColumnstoreUsageReportMetrics</c> index, so logical reads
+        /// do not move. CPU does, because <c>COUNT(DISTINCT)</c> puts every SUM through a two-stage
+        /// aggregate over one row per user per day. On a synthetic benchmark database (200,000
+        /// users, 60,000 seats, 13.2M Teams rows with the columnstore index; the real query, medians of six
+        /// warm runs, <c>DBCC FREEPROCCACHE</c> per run):</para>
+        ///
+        /// <list type="table">
+        ///   <listheader><term>Shape</term><description>28-day window / 120-day window (CPU, elapsed)</description></listheader>
+        ///   <item><term>Before the estimate</term><description>2,078 / 2,066 ms; 4,312 / 3,231 ms</description></item>
+        ///   <item><term>Five more SUMs (first cut)</term><description>+28% / +31%; +51% / +46%</description></item>
+        ///   <item><term><b>Totals once, derived figures (shipped)</b></term><description><b>+21% / +26%; +38% / +34%</b>, reads unchanged</description></item>
+        ///   <item><term>Distinct days and sums split</term><description>+10% / +19%; +1% / +11%, Teams reads x2.2</description></item>
+        /// </list>
+        ///
+        /// <para>Shipped: each workload aggregates its totals and active days once (<c>*Totals</c>), and
+        /// every figure is derived from them (<c>*Usage</c>). Only two SUMs are new - meetings organised,
+        /// and the channel posts and replies that channel messages already contain - and the mail and file
+        /// aggregates gain none. The split shape was faster here but REJECTED: it scans each table twice,
+        /// which is cheap against the columnstore index but not on a server where that index could not be
+        /// built - there the migration leaves a covering B-tree, or on Express no index at all, and a second
+        /// pass is a second range or clustered scan of the largest tables in the schema. Every shape
+        /// returned byte-identical rows. This query runs concurrently with the licensed-user query, and the
+        /// analysis is cached for ten minutes.</para>
         /// </summary>
         /// <param name="seatLicenceTypeIds">Licence-type ids classified as Copilot seats.</param>
         /// <param name="coworkAgentIds">Agent ids identified as Cowork; may be empty.</param>
@@ -822,11 +850,25 @@ namespace Common.Entities.CopilotAdoption
                 // aggregate the entire directory's activity and then throw almost all of it away at the
                 // final join - on a 200,000-user tenant with a few thousand Copilot seats that is most of
                 // the query's cost spent on rows that cannot appear in the result.
+                //
+                // Each workload is two CTEs: *Totals aggregates - the window's sums and the user's active
+                // days, each computed once - and *Usage divides them. The coordination-load figures are
+                // the same per-active-day averages, rounded, that PerActiveDay produces elsewhere; the
+                // Cowork estimate's volumes (CoworkActivities) are the same division unrounded, derived
+                // from those sums wherever it can be. That matters because COUNT(DISTINCT) makes every
+                // SUM here ride a two-stage aggregate over one row per user per day, and measured at
+                // synthetic 200,000-user scale each extra SUM costs real CPU there - so the estimate adds
+                // two (meetings organised, and the channel posts and replies that channel messages
+                // already contain), not five, and no extra scan of any table. See CoworkReadinessSql's
+                // summary for the measurements.
                 ctes.Add(
-                    "TeamsUsage AS (\r\n" +
+                    "TeamsTotals AS (\r\n" +
                     "    SELECT t.user_id AS user_id,\r\n" +
-                    "           " + PerActiveDay("t.private_chat_count + t.team_chat_count + t.post_messages + t.reply_messages", "t.[date]") + " AS Messages,\r\n" +
-                    "           " + PerActiveDay("t.meetings_attended_count + t.meetings_organized_count", "t.[date]") + " AS Meetings,\r\n" +
+                    "           COUNT(DISTINCT CAST(t.[date] AS date)) AS ActiveDays,\r\n" +
+                    "           SUM(CAST(t.private_chat_count + t.team_chat_count + t.post_messages + t.reply_messages AS float)) AS MessagesTotal,\r\n" +
+                    "           SUM(CAST(t.meetings_attended_count + t.meetings_organized_count AS float)) AS MeetingsTotal,\r\n" +
+                    "           SUM(CAST(t.meetings_organized_count AS float)) AS MeetingsOrganisedTotal,\r\n" +
+                    "           SUM(CAST(t.post_messages + t.reply_messages AS float)) AS PostsAndRepliesTotal,\r\n" +
                     "           MAX(t.last_activity_date) AS LastActivity\r\n" +
                     "    FROM dbo.teams_user_activity_log AS t\r\n" +
                     "    WHERE t.[date] >= @m365From AND t.[date] <= @m365ReportDate\r\n" +
@@ -835,12 +877,26 @@ namespace Common.Entities.CopilotAdoption
                     ")");
 
                 ctes.Add(
-                    // Named EmailsSent/EmailsRead, not Sent/Read: READ is a reserved word in T-SQL and an
-                    // unbracketed alias produces a syntax error the moment it is referenced.
-                    "MailUsage AS (\r\n" +
+                    // Channel messages (team_chat_count) already include the posts and replies Microsoft
+                    // also reports on their own, so chat plus channel is the total less those. The sums
+                    // are of whole numbers, so the subtractions are exact.
+                    "TeamsUsage AS (\r\n" +
+                    "    SELECT tt.user_id AS user_id,\r\n" +
+                    "           " + RoundedPerDay("tt.MessagesTotal", "tt.ActiveDays") + " AS Messages,\r\n" +
+                    "           " + RoundedPerDay("tt.MeetingsTotal", "tt.ActiveDays") + " AS Meetings,\r\n" +
+                    "           tt.MeetingsOrganisedTotal / NULLIF(tt.ActiveDays, 0) AS MeetingsOrganised,\r\n" +
+                    "           (tt.MeetingsTotal - tt.MeetingsOrganisedTotal) / NULLIF(tt.ActiveDays, 0) AS MeetingsAttended,\r\n" +
+                    "           (tt.MessagesTotal - tt.PostsAndRepliesTotal) / NULLIF(tt.ActiveDays, 0) AS ChatAndChannelMessages,\r\n" +
+                    "           tt.LastActivity AS LastActivity\r\n" +
+                    "    FROM TeamsTotals AS tt\r\n" +
+                    ")");
+
+                ctes.Add(
+                    "MailTotals AS (\r\n" +
                     "    SELECT o.user_id AS user_id,\r\n" +
-                    "           " + PerActiveDay("o.email_send_count", "o.[date]") + " AS EmailsSent,\r\n" +
-                    "           " + PerActiveDay("o.email_read_count", "o.[date]") + " AS EmailsRead,\r\n" +
+                    "           COUNT(DISTINCT CAST(o.[date] AS date)) AS ActiveDays,\r\n" +
+                    "           SUM(CAST(o.email_send_count AS float)) AS SentTotal,\r\n" +
+                    "           SUM(CAST(o.email_read_count AS float)) AS ReadTotal,\r\n" +
                     "           MAX(o.last_activity_date) AS LastActivity\r\n" +
                     "    FROM dbo.outlook_user_activity_log AS o\r\n" +
                     "    WHERE o.[date] >= @m365From AND o.[date] <= @m365ReportDate\r\n" +
@@ -849,11 +905,24 @@ namespace Common.Entities.CopilotAdoption
                     ")");
 
                 ctes.Add(
+                    // Named EmailsSent/EmailsRead, not Sent/Read: READ is a reserved word in T-SQL and an
+                    // unbracketed alias produces a syntax error the moment it is referenced.
+                    "MailUsage AS (\r\n" +
+                    "    SELECT mt.user_id AS user_id,\r\n" +
+                    "           " + RoundedPerDay("mt.SentTotal", "mt.ActiveDays") + " AS EmailsSent,\r\n" +
+                    "           " + RoundedPerDay("mt.ReadTotal", "mt.ActiveDays") + " AS EmailsRead,\r\n" +
+                    "           mt.SentTotal / NULLIF(mt.ActiveDays, 0) AS EmailsSentExact,\r\n" +
+                    "           mt.LastActivity AS LastActivity\r\n" +
+                    "    FROM MailTotals AS mt\r\n" +
+                    ")");
+
+                ctes.Add(
                     "-- SharePoint and OneDrive are one signal (\"works with documents\"), so they are summed\r\n" +
                     "-- rather than shown as two weak ones. A day the user touched both counts once.\r\n" +
-                    "FileUsage AS (\r\n" +
+                    "FileTotals AS (\r\n" +
                     "    SELECT f.user_id AS user_id,\r\n" +
-                    "           " + PerActiveDay("f.viewed_or_edited", "f.[date]") + " AS ViewedOrEdited,\r\n" +
+                    "           COUNT(DISTINCT CAST(f.[date] AS date)) AS ActiveDays,\r\n" +
+                    "           SUM(CAST(f.viewed_or_edited AS float)) AS ViewedOrEditedTotal,\r\n" +
                     "           MAX(f.last_activity_date) AS LastActivity\r\n" +
                     "    FROM (\r\n" +
                     "        SELECT sp.user_id, sp.[date], sp.viewed_or_edited, sp.last_activity_date\r\n" +
@@ -867,6 +936,15 @@ namespace Common.Entities.CopilotAdoption
                     "          AND EXISTS (SELECT 1 FROM SeatUsers AS s WHERE s.user_id = od.user_id)\r\n" +
                     "    ) AS f\r\n" +
                     "    GROUP BY f.user_id\r\n" +
+                    ")");
+
+                ctes.Add(
+                    "FileUsage AS (\r\n" +
+                    "    SELECT ft.user_id AS user_id,\r\n" +
+                    "           " + RoundedPerDay("ft.ViewedOrEditedTotal", "ft.ActiveDays") + " AS ViewedOrEdited,\r\n" +
+                    "           ft.ViewedOrEditedTotal / NULLIF(ft.ActiveDays, 0) AS ViewedOrEditedExact,\r\n" +
+                    "           ft.LastActivity AS LastActivity\r\n" +
+                    "    FROM FileTotals AS ft\r\n" +
                     ")");
             }
 
@@ -898,12 +976,22 @@ namespace Common.Entities.CopilotAdoption
                   "       CAST(ISNULL(mail.EmailsSent, 0) AS bigint) AS EmailsSent,\r\n" +
                   "       CAST(ISNULL(mail.EmailsRead, 0) AS bigint) AS EmailsRead,\r\n" +
                   "       CAST(ISNULL(files.ViewedOrEdited, 0) AS bigint) AS FilesViewedOrEdited,\r\n" +
+                  "       CAST(ISNULL(teams.MeetingsOrganised, 0) AS float) AS MeetingsOrganisedPerActiveDay,\r\n" +
+                  "       CAST(ISNULL(teams.MeetingsAttended, 0) AS float) AS MeetingsAttendedPerActiveDay,\r\n" +
+                  "       CAST(ISNULL(teams.ChatAndChannelMessages, 0) AS float) AS ChatAndChannelMessagesPerActiveDay,\r\n" +
+                  "       CAST(ISNULL(mail.EmailsSentExact, 0) AS float) AS EmailsSentPerActiveDay,\r\n" +
+                  "       CAST(ISNULL(files.ViewedOrEditedExact, 0) AS float) AS FilesPerActiveDay,\r\n" +
                   "       (SELECT MAX(activity.dt) FROM (VALUES (teams.LastActivity), (mail.LastActivity), (files.LastActivity)) AS activity(dt)) AS LastM365ActivityUtc,\r\n"
                 : "       CAST(0 AS bigint) AS TeamsMessages,\r\n" +
                   "       CAST(0 AS bigint) AS TeamsMeetings,\r\n" +
                   "       CAST(0 AS bigint) AS EmailsSent,\r\n" +
                   "       CAST(0 AS bigint) AS EmailsRead,\r\n" +
                   "       CAST(0 AS bigint) AS FilesViewedOrEdited,\r\n" +
+                  "       CAST(0 AS float) AS MeetingsOrganisedPerActiveDay,\r\n" +
+                  "       CAST(0 AS float) AS MeetingsAttendedPerActiveDay,\r\n" +
+                  "       CAST(0 AS float) AS ChatAndChannelMessagesPerActiveDay,\r\n" +
+                  "       CAST(0 AS float) AS EmailsSentPerActiveDay,\r\n" +
+                  "       CAST(0 AS float) AS FilesPerActiveDay,\r\n" +
                   "       CAST(NULL AS datetime) AS LastM365ActivityUtc,\r\n";
 
             // Existing Cowork users must survive the row cap. The ranking expression is coordination load
@@ -1295,6 +1383,18 @@ namespace Common.Entities.CopilotAdoption
         {
             return $"CAST(ROUND(SUM(CAST({metric} AS float)) "
                  + $"/ NULLIF(COUNT(DISTINCT CAST({dateColumn} AS date)), 0), 0) AS bigint)";
+        }
+
+        /// <summary>
+        /// A per-active-day average from a window total and the active days it was counted over, rounded
+        /// to a whole number exactly as <see cref="PerActiveDay"/> rounds it: the same float sum divided by
+        /// the same distinct-day count, then the same ROUND and CAST. Used where a query computes its totals
+        /// once and derives several figures from them (<see cref="CoworkReadinessSql"/>), so splitting the
+        /// aggregate from the division changes no figure.
+        /// </summary>
+        private static string RoundedPerDay(string total, string activeDays)
+        {
+            return $"CAST(ROUND({total} / NULLIF({activeDays}, 0), 0) AS bigint)";
         }
 
         /// <summary>

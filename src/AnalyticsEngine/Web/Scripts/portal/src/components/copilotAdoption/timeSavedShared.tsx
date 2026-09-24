@@ -16,6 +16,7 @@ import {
 import { ArrowCounterclockwise16Regular, Open12Regular } from '@fluentui/react-icons';
 import InfoTip from '../shared/InfoTip';
 import type { InfoTipContent } from '../shared/InfoTip';
+import type { CoworkActivity } from '../../types/copilotAdoption';
 import { formatNumber, useT, type TranslationKey } from '../../i18n';
 import {
   TIME_SAVED_LIMITS,
@@ -46,6 +47,55 @@ export const TIME_SAVED_ACTIVITY_COLOUR: Record<TimeSavedActivity, string> = {
  * resting on an assumption rather than on published evidence is never mistaken for the other one.
  */
 export const TIME_SAVED_COWORK_COLOUR = '#c239b3';
+
+/**
+ * One hue per kind of work Cowork could take on, used by the Cowork headline's bar and its calculator
+ * so the two read as one: a warm family around Cowork's magenta, kept apart from the licence
+ * estimate's. The Cowork tasks already running are a neutral grey, because they are counted, not
+ * modelled from anyone's work.
+ */
+export const COWORK_ACTIVITY_COLOUR: Record<CoworkActivity, string> = {
+  organiseMeetings: '#c239b3',
+  prepareMeetings: '#77004d',
+  sendEmail: '#da3b01',
+  postInTeams: '#e43ba6',
+  createDocuments: '#8e562e',
+};
+
+export const COWORK_OBSERVED_COLOUR = '#605e5c';
+
+export const COWORK_ACTIVITY_LABEL: Record<CoworkActivity, TranslationKey> = {
+  organiseMeetings: 'copilotAdoptionCowork.timeSaved.activity.organiseMeetings',
+  prepareMeetings: 'copilotAdoptionCowork.timeSaved.activity.prepareMeetings',
+  sendEmail: 'copilotAdoptionCowork.timeSaved.activity.sendEmail',
+  postInTeams: 'copilotAdoptionCowork.timeSaved.activity.postInTeams',
+  createDocuments: 'copilotAdoptionCowork.timeSaved.activity.createDocuments',
+};
+
+/** What the observed volume of each kind of work counts, and where it comes from. */
+export const COWORK_ACTIVITY_VOLUME_LABEL: Record<CoworkActivity, TranslationKey> = {
+  organiseMeetings: 'copilotAdoptionCowork.timeSaved.activityVolume.organiseMeetings',
+  prepareMeetings: 'copilotAdoptionCowork.timeSaved.activityVolume.prepareMeetings',
+  sendEmail: 'copilotAdoptionCowork.timeSaved.activityVolume.sendEmail',
+  postInTeams: 'copilotAdoptionCowork.timeSaved.activityVolume.postInTeams',
+  createDocuments: 'copilotAdoptionCowork.timeSaved.activityVolume.createDocuments',
+};
+
+export const COWORK_ACTIVITY_SHARE_INPUT_LABEL: Record<CoworkActivity, TranslationKey> = {
+  organiseMeetings: 'copilotAdoptionCowork.timeSaved.input.share.organiseMeetings',
+  prepareMeetings: 'copilotAdoptionCowork.timeSaved.input.share.prepareMeetings',
+  sendEmail: 'copilotAdoptionCowork.timeSaved.input.share.sendEmail',
+  postInTeams: 'copilotAdoptionCowork.timeSaved.input.share.postInTeams',
+  createDocuments: 'copilotAdoptionCowork.timeSaved.input.share.createDocuments',
+};
+
+export const COWORK_ACTIVITY_MINUTES_INPUT_LABEL: Record<CoworkActivity, TranslationKey> = {
+  organiseMeetings: 'copilotAdoptionCowork.timeSaved.input.minutes.organiseMeetings',
+  prepareMeetings: 'copilotAdoptionCowork.timeSaved.input.minutes.prepareMeetings',
+  sendEmail: 'copilotAdoptionCowork.timeSaved.input.minutes.sendEmail',
+  postInTeams: 'copilotAdoptionCowork.timeSaved.input.minutes.postInTeams',
+  createDocuments: 'copilotAdoptionCowork.timeSaved.input.minutes.createDocuments',
+};
 
 /** The badge colour for measured evidence and observed use, as elsewhere on the page. */
 export const EVIDENCE_GREEN = '#107c10';
