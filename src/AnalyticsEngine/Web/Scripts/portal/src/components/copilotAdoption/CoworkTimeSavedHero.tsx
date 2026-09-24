@@ -2,7 +2,7 @@ import { makeStyles, tokens, Text, Button, Badge } from '@fluentui/react-compone
 import { ArrowRight16Regular, Options16Regular } from '@fluentui/react-icons';
 import type { CopilotAdoptionOptions, CopilotAdoptionSummary } from '../../types/copilotAdoption';
 import { formatCount } from '../shared/KpiGrid';
-import { formatNumber, plural, useT, type TranslationKey } from '../../i18n';
+import { formatNumber, plural, useT } from '../../i18n';
 import {
   COWORK_ASSUMPTION_KEYS,
   customisesAny,
@@ -14,11 +14,15 @@ import {
 } from './coworkTimeSaved';
 import {
   AssumptionBadge,
+  COWORK_ACTIVITY_COLOUR,
+  COWORK_ACTIVITY_LABEL,
+  COWORK_OBSERVED_COLOUR,
   EVIDENCE_GREEN,
   ModelledBadge,
   TIME_SAVED_COWORK_COLOUR,
   TimeSavedHeroFrame,
   formatAssumption,
+  wholeShares,
   type HeroStat,
 } from './timeSavedShared';
 
@@ -35,19 +39,58 @@ const useStyles = makeStyles({
     backgroundColor: EVIDENCE_GREEN,
     whiteSpace: 'nowrap',
   },
+  breakdown: {
+    marginTop: '18px',
+  },
+  bar: {
+    display: 'flex',
+    width: '100%',
+    height: '26px',
+    borderRadius: tokens.borderRadiusMedium,
+    overflow: 'hidden',
+    marginTop: '6px',
+    backgroundColor: tokens.colorNeutralBackground3,
+    // The slices are the information; browsers drop background colours when printing by default.
+    printColorAdjust: 'exact',
+    WebkitPrintColorAdjust: 'exact',
+  },
+  slice: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: '#ffffff',
+    fontSize: '12px',
+    fontWeight: tokens.fontWeightSemibold,
+    fontVariantNumeric: 'tabular-nums',
+    minWidth: '2px',
+    borderRightWidth: '1px',
+    borderRightStyle: 'solid',
+    borderRightColor: '#ffffff',
+    ':last-child': {
+      borderRightWidth: '0',
+    },
+  },
+  legend: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px 16px',
+    marginTop: '8px',
+  },
+  legendItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+  },
+  swatch: {
+    width: '12px',
+    height: '12px',
+    borderRadius: '3px',
+    display: 'inline-block',
+    flexShrink: 0,
+    printColorAdjust: 'exact',
+    WebkitPrintColorAdjust: 'exact',
+  },
 });
-
-/** The label for the Cowork task rate's origin, shown wherever the rate is. */
-export function taskRateBasisKey(basis: CoworkProjection['rateBasis']): TranslationKey {
-  switch (basis) {
-    case 'observed':
-      return 'copilotAdoptionCowork.timeSaved.rateBasis.observed';
-    case 'custom':
-      return 'copilotAdoptionCowork.timeSaved.rateBasis.custom';
-    default:
-      return 'copilotAdoptionCowork.timeSaved.rateBasis.assumed';
-  }
-}
 
 /**
  * The Cowork tab's headline: the time Cowork could give back on top of what Microsoft 365 Copilot
@@ -55,8 +98,13 @@ export function taskRateBasisKey(basis: CoworkProjection['rateBasis']): Translat
  *
  * Leads with the people ready for Cowork now, because that is the decision this tab exists for: who
  * to put in the spending policy. Every Copilot seat holder is beside it as the ceiling, and says it
- * is one - it projects the tenant's Cowork users' average onto people who are not ready yet, so it
+ * is one - it has people who are not ready yet hand Cowork the same share of their work, so it
  * overstates. When nobody is ready, the ceiling leads instead rather than the headline vanishing.
+ *
+ * Beneath the figure, where it would come from: the share of the hours each kind of work Cowork can
+ * take on accounts for - the meetings people organise and attend, the email they send, their Teams
+ * messages and documents - beside the Cowork tasks already running. That is the question the figure
+ * is asked for: not only how much time, but where.
  *
  * There is deliberately no Microsoft 365 Copilot figure here. These people already hold a licence,
  * so the time Copilot saves them is the licence's: enabling Cowork does not unlock it, and quoting
@@ -89,7 +137,6 @@ export default function CoworkTimeSavedHero({
 
   const figures = {
     taskMinutes: formatAssumption(assumptions.taskMinutes),
-    rate: formatAssumption(headline.tasksPerPerson),
     percent: formatNumber(assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 }),
   };
   const readyUsers = summary.coworkRecommendedForPolicy;
@@ -131,12 +178,78 @@ export default function CoworkTimeSavedHero({
     },
   );
 
-  const basis = `${t(
-    customisesAny(customised, COWORK_ASSUMPTION_KEYS)
-      ? 'copilotAdoptionCowork.timeSaved.hero.basisCustom'
-      : 'copilotAdoptionCowork.timeSaved.hero.basisDefaults',
-    figures,
-  )} ${t(taskRateBasisKey(headline.rateBasis))}`;
+  // Where the time would come from: every kind of work, then the tasks already running - the order
+  // the calculator's rows and the Excel report use, so the three agree part for part.
+  const segments = [
+    ...headline.activities.map((a) => ({
+      key: a.activity as string,
+      label: t(COWORK_ACTIVITY_LABEL[a.activity]),
+      colour: COWORK_ACTIVITY_COLOUR[a.activity],
+      hours: a.displayHours,
+      sharePct: a.sharePct,
+    })),
+    ...(headline.observedUsers > 0
+      ? [
+          {
+            key: 'observed',
+            label: t('copilotAdoptionCowork.timeSaved.activity.observedTasks'),
+            colour: COWORK_OBSERVED_COLOUR,
+            hours: headline.observedDisplayHours,
+            sharePct: headline.observedSharePct,
+          },
+        ]
+      : []),
+  ];
+  const shares = wholeShares(segments.map((s) => s.sharePct));
+
+  const breakdown =
+    headline.hoursHigh > 0 ? (
+      <div className={styles.breakdown}>
+        <Text size={200} weight="semibold">
+          {t('copilotAdoptionCowork.timeSaved.hero.breakdownTitle')}
+        </Text>
+        <div
+          className={styles.bar}
+          role="img"
+          aria-label={t('copilotAdoptionCowork.timeSaved.hero.breakdownAria', {
+            parts: segments
+              .map((s, i) => t('copilotAdoptionCowork.timeSaved.hero.breakdownPart', { activity: s.label, share: `${shares[i]}%` }))
+              .join(', '),
+          })}
+        >
+          {segments.map((s, i) =>
+            s.sharePct > 0 ? (
+              <div
+                key={s.key}
+                className={styles.slice}
+                style={{ width: `${s.sharePct}%`, backgroundColor: s.colour }}
+                title={t('copilotAdoptionCowork.timeSaved.hero.sliceTitle', {
+                  activity: s.label,
+                  hours: formatCount(s.hours),
+                  share: `${shares[i]}%`,
+                })}
+              >
+                {shares[i] >= 10 ? `${shares[i]}%` : ''}
+              </div>
+            ) : null,
+          )}
+        </div>
+        <div className={styles.legend}>
+          {segments.map((s, i) => (
+            <div key={s.key} className={styles.legendItem}>
+              <span className={styles.swatch} style={{ backgroundColor: s.colour }} aria-hidden="true" />
+              <Text size={200}>
+                {t('copilotAdoptionCowork.timeSaved.hero.legendEntry', {
+                  activity: s.label,
+                  hours: formatCount(s.hours),
+                  share: `${shares[i]}%`,
+                })}
+              </Text>
+            </div>
+          ))}
+        </div>
+      </div>
+    ) : undefined;
 
   return (
     <TimeSavedHeroFrame
@@ -186,10 +299,16 @@ export default function CoworkTimeSavedHero({
           'copilotAdoptionCowork.timeSaved.hero.caption.one',
           'copilotAdoptionCowork.timeSaved.hero.caption.other',
         ),
-        { tasks: formatCount(headline.tasks), minutes: figures.taskMinutes },
+        { tasks: formatCount(headline.tasks) },
       )}
       stats={stats}
-      basis={basis}
+      breakdown={breakdown}
+      basis={t(
+        customisesAny(customised, COWORK_ASSUMPTION_KEYS)
+          ? 'copilotAdoptionCowork.timeSaved.hero.basisCustom'
+          : 'copilotAdoptionCowork.timeSaved.hero.basisDefaults',
+        { percent: figures.percent },
+      )}
       actions={
         <>
           <Button appearance="primary" size="small" icon={<Options16Regular />} onClick={onAdjust}>

@@ -45,7 +45,8 @@ const OPTIONS = {
   copilotMinutesSavedPerDocument: 1,
   coworkEstimateLowerBoundRatio: 0.5,
   coworkMinutesSavedPerTask: 6,
-  coworkAssumedTasksPerPersonPerMonth: 20,
+  coworkSendEmailShare: 0.05,
+  coworkSendEmailMinutes: 6,
   maxOpportunityCandidates: 50000,
 } as CopilotAdoptionOptions;
 

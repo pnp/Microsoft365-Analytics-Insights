@@ -2,7 +2,7 @@ import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import type {
   CopilotAdoptionOptions,
   CopilotAdoptionSummary,
-  CoworkTaskRateBasis,
+  CoworkActivity,
   CoworkValueEstimate,
   LicenceValueEstimate,
 } from '../../types/copilotAdoption';
@@ -24,9 +24,11 @@ import { formatNumber, type TFunction } from '../../i18n';
  *   each. The minutes are evidenced by published Copilot studies, the largest of which randomised who
  *   received a licence - the decision this figure sizes. Shown on the Licence opportunities tab.
  * - The COWORK estimate (`projectCoworkTimeSaved`, server twin `CopilotAdoptionScoring.ModelCoworkValue`):
- *   Cowork tasks times the minutes each is assumed to save ON TOP of Copilot - the value of enabling
- *   Cowork for people who already hold a licence, paid for in Copilot Credits. No study has measured
- *   it, and every surface says so. Shown on the Cowork tab.
+ *   the Cowork tasks already in Microsoft's report, and - for everyone else - each kind of work they
+ *   already do by hand (`COWORK_ACTIVITIES`) times the share of it handed to Cowork times the minutes
+ *   Cowork saves on each piece, ON TOP of Copilot. The value of enabling Cowork for people who already
+ *   hold a licence, paid for in Copilot Credits. No study has measured it, and every surface says so.
+ *   Shown on the Cowork tab.
  *
  * There is deliberately no figure for the time Copilot gives back to people who already hold a
  * licence: no decision hangs on it, and it used to swell the Cowork headline with time Cowork does
@@ -42,6 +44,19 @@ export type TimeSavedActivity = 'meetings' | 'email' | 'documents';
 
 export const TIME_SAVED_ACTIVITIES: readonly TimeSavedActivity[] = ['meetings', 'email', 'documents'];
 
+/**
+ * The kinds of work Cowork could take on, in the order the server publishes and SUMS them
+ * (`CoworkActivities.All`). Summing in the same order is what keeps the two floating-point totals - and
+ * so the hours - identical.
+ */
+export const COWORK_ACTIVITIES: readonly CoworkActivity[] = [
+  'organiseMeetings',
+  'prepareMeetings',
+  'sendEmail',
+  'postInTeams',
+  'createDocuments',
+];
+
 export interface TimeSavedAssumptions {
   /** Minutes Copilot saves per Teams meeting attended. Licence estimate. */
   meetingMinutes: number;
@@ -49,10 +64,19 @@ export interface TimeSavedAssumptions {
   emailMinutes: number;
   /** Minutes Copilot saves per SharePoint or OneDrive document viewed or edited. Licence estimate. */
   documentMinutes: number;
-  /** Minutes Cowork saves per task, on top of Copilot. No study has measured it. Cowork estimate. */
+  /** Minutes Cowork saves per task already in Microsoft's report, on top of Copilot. Cowork estimate. */
   taskMinutes: number;
-  /** Cowork tasks a month for each person not yet observed running them. Cowork estimate. */
-  tasksPerPerson: number;
+  /** For each kind of work Cowork could take on: the share handed to it (0-1), and the minutes saved on each piece. */
+  organiseMeetingsShare: number;
+  organiseMeetingsMinutes: number;
+  prepareMeetingsShare: number;
+  prepareMeetingsMinutes: number;
+  sendEmailShare: number;
+  sendEmailMinutes: number;
+  postInTeamsShare: number;
+  postInTeamsMinutes: number;
+  createDocumentsShare: number;
+  createDocumentsMinutes: number;
   /** Share of the assumptions the conservative end of the range applies, from 0 to 1. Both. */
   conservativeRatio: number;
   /** Working hours in a day. Used only to restate the hours as full-time capacity. Both. */
@@ -61,12 +85,59 @@ export interface TimeSavedAssumptions {
 
 export type TimeSavedAssumptionKey = keyof TimeSavedAssumptions;
 
+/** The two assumptions each kind of work carries, and the server options they restate. */
+export const COWORK_ACTIVITY_ASSUMPTIONS: Record<
+  CoworkActivity,
+  {
+    share: TimeSavedAssumptionKey;
+    minutes: TimeSavedAssumptionKey;
+    shareOption: keyof CopilotAdoptionOptions;
+    minutesOption: keyof CopilotAdoptionOptions;
+  }
+> = {
+  organiseMeetings: {
+    share: 'organiseMeetingsShare',
+    minutes: 'organiseMeetingsMinutes',
+    shareOption: 'coworkOrganiseMeetingsShare',
+    minutesOption: 'coworkOrganiseMeetingsMinutes',
+  },
+  prepareMeetings: {
+    share: 'prepareMeetingsShare',
+    minutes: 'prepareMeetingsMinutes',
+    shareOption: 'coworkPrepareMeetingsShare',
+    minutesOption: 'coworkPrepareMeetingsMinutes',
+  },
+  sendEmail: {
+    share: 'sendEmailShare',
+    minutes: 'sendEmailMinutes',
+    shareOption: 'coworkSendEmailShare',
+    minutesOption: 'coworkSendEmailMinutes',
+  },
+  postInTeams: {
+    share: 'postInTeamsShare',
+    minutes: 'postInTeamsMinutes',
+    shareOption: 'coworkPostInTeamsShare',
+    minutesOption: 'coworkPostInTeamsMinutes',
+  },
+  createDocuments: {
+    share: 'createDocumentsShare',
+    minutes: 'createDocumentsMinutes',
+    shareOption: 'coworkCreateDocumentsShare',
+    minutesOption: 'coworkCreateDocumentsMinutes',
+  },
+};
+
+const COWORK_ACTIVITY_KEYS: readonly TimeSavedAssumptionKey[] = COWORK_ACTIVITIES.flatMap((activity) => [
+  COWORK_ACTIVITY_ASSUMPTIONS[activity].share,
+  COWORK_ACTIVITY_ASSUMPTIONS[activity].minutes,
+]);
+
 export const TIME_SAVED_ASSUMPTION_KEYS: readonly TimeSavedAssumptionKey[] = [
   'meetingMinutes',
   'emailMinutes',
   'documentMinutes',
   'taskMinutes',
-  'tasksPerPerson',
+  ...COWORK_ACTIVITY_KEYS,
   'conservativeRatio',
   'hoursPerDay',
 ];
@@ -80,7 +151,7 @@ export const LICENCE_ASSUMPTION_KEYS: readonly TimeSavedAssumptionKey[] = [
 ];
 
 /** The figures the Cowork estimate's hours depend on. */
-export const COWORK_ASSUMPTION_KEYS: readonly TimeSavedAssumptionKey[] = ['taskMinutes', 'tasksPerPerson', 'conservativeRatio'];
+export const COWORK_ASSUMPTION_KEYS: readonly TimeSavedAssumptionKey[] = ['taskMinutes', ...COWORK_ACTIVITY_KEYS, 'conservativeRatio'];
 
 /**
  * True when the reader changed a figure THIS estimate uses. A reader who retuned the Copilot minutes
@@ -95,16 +166,26 @@ export function customisesAny(customised: readonly TimeSavedAssumptionKey[], key
  * The range a figure may take.
  *
  * Wide enough for any honest position - a customer who has timed their own meetings may well argue
- * for 20 minutes, and one Cowork task can be a whole piece of multi-step work - but bounded, so a typo
- * cannot turn a sizing model into a headline of millions of hours. The server clamps an Excel export's
- * figures to the same bounds (TimeSavedOverrides).
+ * for 20 minutes, and one piece of work handed to Cowork can be a whole multi-step job - but bounded,
+ * so a typo cannot turn a sizing model into a headline of millions of hours. A share is at most all of
+ * the work: above that the model would hand Cowork more than people do. The server clamps an Excel
+ * export's figures to the same bounds (TimeSavedOverrides).
  */
 export const TIME_SAVED_LIMITS: Record<TimeSavedAssumptionKey, { min: number; max: number }> = {
   meetingMinutes: { min: 0, max: 120 },
   emailMinutes: { min: 0, max: 60 },
   documentMinutes: { min: 0, max: 120 },
   taskMinutes: { min: 0, max: 240 },
-  tasksPerPerson: { min: 0, max: 200 },
+  organiseMeetingsShare: { min: 0, max: 1 },
+  organiseMeetingsMinutes: { min: 0, max: 240 },
+  prepareMeetingsShare: { min: 0, max: 1 },
+  prepareMeetingsMinutes: { min: 0, max: 240 },
+  sendEmailShare: { min: 0, max: 1 },
+  sendEmailMinutes: { min: 0, max: 240 },
+  postInTeamsShare: { min: 0, max: 1 },
+  postInTeamsMinutes: { min: 0, max: 240 },
+  createDocumentsShare: { min: 0, max: 1 },
+  createDocumentsMinutes: { min: 0, max: 240 },
   conservativeRatio: { min: 0, max: 1 },
   hoursPerDay: { min: 1, max: 24 },
 };
@@ -138,36 +219,30 @@ export function isValidAssumption(key: TimeSavedAssumptionKey, value: number): b
 }
 
 /**
- * The Cowork task rate an estimate was published with: the average of the people with tasks in
- * Microsoft's Cowork report, or the server's labelled placeholder when nobody has any.
- *
- * The same figure for both cohorts - the server computes it once for the whole tenant.
+ * The product's own assumptions, as configured on the server. Every Cowork figure is configured now:
+ * the people not yet running Cowork are modelled from their own work, so there is no observed task
+ * rate to take a default from.
  */
-export function publishedTaskRate(
-  estimate: CoworkValueEstimate | null | undefined,
-  options: CopilotAdoptionOptions | null | undefined,
-): number {
-  const rate = estimate?.coworkTasksPerPersonPerMonth;
-  if (finite(rate)) return Math.max(0, rate);
-  const placeholder = (options as Partial<CopilotAdoptionOptions> | null | undefined)?.coworkAssumedTasksPerPersonPerMonth;
-  return finite(placeholder) ? Math.max(0, placeholder) : 0;
-}
-
-/**
- * The product's own assumptions, as configured on the server - plus the tenant's published Cowork
- * task rate, which is observed rather than configured wherever the tenant has Cowork use to observe.
- */
-export function defaultTimeSavedAssumptions(
-  options: CopilotAdoptionOptions | null | undefined,
-  estimate?: CoworkValueEstimate | null,
-): TimeSavedAssumptions {
+export function defaultTimeSavedAssumptions(options: CopilotAdoptionOptions | null | undefined): TimeSavedAssumptions {
   const o = (options ?? {}) as Partial<CopilotAdoptionOptions>;
+  const option = (key: keyof CopilotAdoptionOptions) => nonNegative(o[key]);
   return {
     meetingMinutes: nonNegative(o.copilotMinutesSavedPerMeeting),
     emailMinutes: nonNegative(o.copilotMinutesSavedPerMailThread),
     documentMinutes: nonNegative(o.copilotMinutesSavedPerDocument),
     taskMinutes: nonNegative(o.coworkMinutesSavedPerTask),
-    tasksPerPerson: publishedTaskRate(estimate, options),
+    // Shares clamped exactly as the server clamps them (CoworkActivity.Share): above 1 the model would
+    // hand Cowork more work than people do.
+    organiseMeetingsShare: Math.min(1, option('coworkOrganiseMeetingsShare')),
+    organiseMeetingsMinutes: option('coworkOrganiseMeetingsMinutes'),
+    prepareMeetingsShare: Math.min(1, option('coworkPrepareMeetingsShare')),
+    prepareMeetingsMinutes: option('coworkPrepareMeetingsMinutes'),
+    sendEmailShare: Math.min(1, option('coworkSendEmailShare')),
+    sendEmailMinutes: option('coworkSendEmailMinutes'),
+    postInTeamsShare: Math.min(1, option('coworkPostInTeamsShare')),
+    postInTeamsMinutes: option('coworkPostInTeamsMinutes'),
+    createDocumentsShare: Math.min(1, option('coworkCreateDocumentsShare')),
+    createDocumentsMinutes: option('coworkCreateDocumentsMinutes'),
     // Clamped exactly as the server clamps it: above 1 the "conservative" end would exceed the full
     // one and the range would print backwards.
     conservativeRatio: clamp(finite(o.coworkEstimateLowerBoundRatio) ? o.coworkEstimateLowerBoundRatio : 0, 0, 1),
@@ -309,6 +384,27 @@ export interface LicenceProjection extends TimeSavedRestatement {
   candidatesCapped: boolean;
 }
 
+/** One kind of work in the Cowork estimate: what is done by hand, what is handed over, and the result. */
+export interface CoworkActivityProjection {
+  activity: CoworkActivity;
+  /** Done by hand a month by the people not yet running Cowork tasks. Observed, not modelled. */
+  volume: number;
+  /** The share of it handed to Cowork, 0-1: the reader's, or the product default. */
+  share: number;
+  /** The minutes Cowork saves on each piece it takes on. */
+  minutesEach: number;
+  /** Pieces of work a month handed to Cowork, unrounded. */
+  pieces: number;
+  /** The same, rounded so the kinds of work add up to exactly `projectedTasks`. */
+  displayPieces: number;
+  /** Modelled hours a month at the full assumptions, unrounded. */
+  hours: number;
+  /** The same hours rounded so every part, the observed tasks included, adds up to exactly `hoursHigh`. */
+  displayHours: number;
+  /** Share of the estimate's total, 0-100. */
+  sharePct: number;
+}
+
 /** Everything the page says about the time Cowork could give back to one cohort, on top of Copilot. */
 export interface CoworkProjection extends TimeSavedRestatement {
   cohortUsers: number;
@@ -320,20 +416,26 @@ export interface CoworkProjection extends TimeSavedRestatement {
   observedUsers: number;
   /** Their tasks a month. Observed. */
   observedTasks: number;
-  /** Everyone else in the cohort, projected at `tasksPerPerson`. */
+  /** The minutes-saved assumption applied to each of those tasks. */
+  taskMinutes: number;
+  /** The hours from those tasks, unrounded, and rounded as one part of `hoursHigh`. */
+  observedHours: number;
+  observedDisplayHours: number;
+  /** The observed tasks' share of the estimate's total, 0-100. */
+  observedSharePct: number;
+  /** Everyone else in the cohort, modelled from the work they already do. */
   projectedUsers: number;
-  /** The rate in force: the reader's own, or the one the estimate was published with. */
-  tasksPerPerson: number;
-  /** Where `tasksPerPerson` came from. */
-  rateBasis: CoworkTaskRateBasis;
-  /** For an observed rate, how many people it is the average of. */
-  rateUsers: number;
-  /** Projected tasks a month, rounded exactly as the server rounds them. */
+  /** That work, kind by kind, in `COWORK_ACTIVITIES` order. */
+  activities: CoworkActivityProjection[];
+  /** Pieces of work a month handed to Cowork, rounded exactly as the server rounds them. */
   projectedTasks: number;
-  /** Observed plus projected tasks a month. */
+  /** Observed tasks plus the pieces handed over. */
   tasks: number;
-  /** The minutes-saved assumption applied to each task. */
-  minutesEach: number;
+  /** The tenant's own Cowork users' average tasks a month, for the sense check; zero from nobody. */
+  observedRate: number;
+  observedRateUsers: number;
+  /** The pieces of work a month this model hands each person it models; zero when it models nobody. */
+  piecesPerProjectedPerson: number;
 }
 
 /**
@@ -391,11 +493,13 @@ export function projectLicenceTimeSaved(
 }
 
 /**
- * Applies the Cowork assumptions to a cohort: tasks already in Microsoft's Cowork report, plus
- * everyone else projected at the rate in force, times the minutes each task saves on top of Copilot.
+ * Applies the Cowork assumptions to a cohort: the tasks already in Microsoft's Cowork report at the
+ * minutes each saves, plus - for everyone else - each kind of work they already do by hand, times the
+ * share of it handed to Cowork, times the minutes Cowork saves on each piece. All on top of Copilot.
  *
  * Returns null for an empty or missing cohort, for the same reason as `projectLicenceTimeSaved`, and
- * mirrors `CopilotAdoptionScoring.ModelCoworkValue` step for step.
+ * mirrors `CopilotAdoptionScoring.ModelCoworkValue` step for step: the same rounded volumes, summed in
+ * the same order, so the floating-point total - and the hours - are identical.
  */
 export function projectCoworkTimeSaved(
   estimate: CoworkValueEstimate | null | undefined,
@@ -404,36 +508,66 @@ export function projectCoworkTimeSaved(
 ): CoworkProjection | null {
   if (!estimate || !(estimate.cohortUsers > 0)) return null;
 
-  // (observed tasks + projected people x rate) x minutes per task
   const observedUsers = Math.min(estimate.cohortUsers, Math.max(0, Math.floor(estimate.coworkTaskUsers || 0)));
-  const observedTasks = observedUsers > 0 ? nonNegative(estimate.observedCoworkTasks) : 0;
+  const observedTasks = observedUsers > 0 ? Math.round(nonNegative(estimate.observedCoworkTasks)) : 0;
   const projectedUsers = estimate.cohortUsers - observedUsers;
-  const tasksPerPerson = nonNegative(assumptions.tasksPerPerson);
-  const projectedTasks = Math.round(projectedUsers * tasksPerPerson);
-  const tasks = observedTasks + projectedTasks;
   const taskMinutes = nonNegative(assumptions.taskMinutes);
   const ratio = clamp(nonNegative(assumptions.conservativeRatio), 0, 1);
 
-  const minutes = tasks * taskMinutes;
+  // observed tasks x minutes per task, plus, kind by kind: volume x share x minutes
+  let minutes = observedTasks * taskMinutes;
+  let handedOver = 0;
+  const raw = COWORK_ACTIVITIES.map((activity) => {
+    const published = (estimate.activities ?? []).find((a) => a?.activity === activity);
+    const volume = projectedUsers > 0 ? Math.round(nonNegative(published?.volumePerMonth)) : 0;
+    const keys = COWORK_ACTIVITY_ASSUMPTIONS[activity];
+    const share = Math.min(1, nonNegative(assumptions[keys.share]));
+    const minutesEach = nonNegative(assumptions[keys.minutes]);
+    const pieces = volume * share;
+    handedOver += pieces;
+    minutes += pieces * minutesEach;
+    return { activity, volume, share, minutesEach, pieces, activityMinutes: pieces * minutesEach };
+  });
 
-  // A rate that differs from the one published is the reader's; otherwise it keeps the server's label.
-  const published = publishedTaskRate(estimate, options);
-  const rateBasis: CoworkTaskRateBasis =
-    tasksPerPerson !== published ? 'custom' : (estimate.coworkTaskRateBasis ?? 'assumed');
+  const hoursHigh = Math.round(minutes / 60);
+  const projectedTasks = Math.round(handedOver);
+  const observedHours = (observedTasks * taskMinutes) / 60;
+
+  // Apportioned in the server's order - every kind of work, then the observed tasks - so each row, the
+  // bar and the Excel report all show the same split, adding up to the headline.
+  const displayHours = apportion(hoursHigh, [...raw.map((r) => r.activityMinutes / 60), observedHours]);
+  const displayPieces = apportion(projectedTasks, raw.map((r) => r.pieces));
+  const sharePct = (part: number) => (minutes > 0 ? (part / minutes) * 100 : 0);
+
+  const observedRateUsers = Math.max(0, Math.floor(nonNegative(estimate.observedTaskRateUsers)));
 
   return {
     cohortUsers: estimate.cohortUsers,
-    hoursHigh: Math.round(minutes / 60),
+    hoursHigh,
     hoursLow: Math.round((minutes * ratio) / 60),
     observedUsers,
     observedTasks,
+    taskMinutes,
+    observedHours,
+    observedDisplayHours: displayHours[raw.length],
+    observedSharePct: sharePct(observedTasks * taskMinutes),
     projectedUsers,
-    tasksPerPerson,
-    rateBasis,
-    rateUsers: rateBasis === 'observed' ? nonNegative(estimate.coworkTaskRateUsers) : 0,
+    activities: raw.map((r, i) => ({
+      activity: r.activity,
+      volume: r.volume,
+      share: r.share,
+      minutesEach: r.minutesEach,
+      pieces: r.pieces,
+      displayPieces: displayPieces[i],
+      hours: r.activityMinutes / 60,
+      displayHours: displayHours[i],
+      sharePct: sharePct(r.activityMinutes),
+    })),
     projectedTasks,
-    tasks,
-    minutesEach: taskMinutes,
+    tasks: observedTasks + projectedTasks,
+    observedRate: observedRateUsers > 0 ? nonNegative(estimate.observedTasksPerPersonPerMonth) : 0,
+    observedRateUsers,
+    piecesPerProjectedPerson: projectedUsers > 0 ? handedOver / projectedUsers : 0,
     ...restate(minutes, ratio, estimate.cohortUsers, assumptions, options),
   };
 }
@@ -562,17 +696,15 @@ export interface TimeSavedAssumptionState {
  * different assumptions. The conservative share and the hours in a day apply to both models, so
  * changing either on one tab changes it on the other.
  *
- * Takes the summary, not just its options, because one default is not configured: the Cowork task rate
- * is the average of the tenant's own Cowork users wherever there are any, so it comes from the
- * published estimate.
+ * Takes the summary for its options: every default, the Cowork shares and minutes included, is the
+ * product's configured figure.
  */
 export function useTimeSavedAssumptions(
-  summary: Pick<CopilotAdoptionSummary, 'options' | 'coworkValueEstimate' | 'coworkFullRolloutEstimate'> | null | undefined,
+  summary: Pick<CopilotAdoptionSummary, 'options'> | null | undefined,
 ): TimeSavedAssumptionState {
   const raw = useSyncExternalStore(subscribe, readRaw, () => '');
   const options = summary?.options;
-  const estimate = summary?.coworkFullRolloutEstimate ?? summary?.coworkValueEstimate;
-  const defaults = useMemo(() => defaultTimeSavedAssumptions(options, estimate), [options, estimate]);
+  const defaults = useMemo(() => defaultTimeSavedAssumptions(options), [options]);
   const overrides = useMemo(() => parseTimeSavedOverrides(raw), [raw]);
 
   const assumptions = useMemo<TimeSavedAssumptions>(() => ({ ...defaults, ...overrides }), [defaults, overrides]);
@@ -630,8 +762,8 @@ export function useTimeSavedAssumptions(
  *
  * Only the figures that differ from the default are sent, and only those the server models: the
  * hours-per-day restatement exists on screen alone. Named after the server options they override -
- * the Copilot minutes restate the licence estimate, the task figures the Cowork one, and the
- * conservative share both.
+ * the Copilot minutes restate the licence estimate, the Cowork task minutes and each kind of work's
+ * share and minutes the Cowork one, and the conservative share both.
  */
 export function timeSavedExportParams(state: Pick<TimeSavedAssumptionState, 'assumptions' | 'customised'>): Record<string, string> {
   const params: Record<string, string> = {};
@@ -641,6 +773,10 @@ export function timeSavedExportParams(state: Pick<TimeSavedAssumptionState, 'ass
   if (customised.includes('documentMinutes')) params.copilotMinutesSavedPerDocument = String(assumptions.documentMinutes);
   if (customised.includes('conservativeRatio')) params.coworkEstimateLowerBoundRatio = String(assumptions.conservativeRatio);
   if (customised.includes('taskMinutes')) params.coworkMinutesSavedPerTask = String(assumptions.taskMinutes);
-  if (customised.includes('tasksPerPerson')) params.coworkTasksPerPersonPerMonth = String(assumptions.tasksPerPerson);
+  for (const activity of COWORK_ACTIVITIES) {
+    const keys = COWORK_ACTIVITY_ASSUMPTIONS[activity];
+    if (customised.includes(keys.share)) params[keys.shareOption] = String(assumptions[keys.share]);
+    if (customised.includes(keys.minutes)) params[keys.minutesOption] = String(assumptions[keys.minutes]);
+  }
   return params;
 }

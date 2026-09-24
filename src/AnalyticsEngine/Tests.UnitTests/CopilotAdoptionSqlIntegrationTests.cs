@@ -576,6 +576,15 @@ namespace Tests.UnitTests
                 Assert.AreEqual("Operations", prime.Department);
                 Assert.AreEqual(0, prime.CoworkInteractions, "Ordinary Copilot use is not Cowork use.");
 
+                // The Cowork estimate's volumes, one per kind of work it could take on.
+                Assert.AreEqual(10d, prime.MeetingsOrganisedPerActiveDay);
+                Assert.AreEqual(20d, prime.MeetingsAttendedPerActiveDay);
+                Assert.AreEqual(60d, prime.ChatAndChannelMessagesPerActiveDay,
+                    "40 chat + 20 channel. Channel messages already include the 10 posts and 10 replies, so "
+                    + "adding those again would count them twice.");
+                Assert.AreEqual(60d, prime.EmailsSentPerActiveDay);
+                Assert.AreEqual(55d, prime.FilesPerActiveDay);
+
                 var established = rows.Single(r => r.UserPrincipalName == "established@contoso.com");
                 Assert.AreEqual(3, established.CoworkInteractions);
                 Assert.AreEqual(3, established.CoworkActiveDays,
@@ -596,6 +605,65 @@ namespace Tests.UnitTests
                     scored.Single(s => s.UserPrincipalName == "established@contoso.com").Tier);
                 Assert.AreEqual(CopilotAdoptionScoring.CoworkTiers.NotIndicated,
                     scored.Single(s => s.UserPrincipalName == "quiet@contoso.com").Tier);
+            }
+        }
+
+        [TestMethod]
+        public void CoworkReadinessQuery_KeepsTheEstimatesVolumesUnrounded()
+        {
+            // The coordination-load figures are rounded to whole numbers per active day, which a 0-100
+            // score shrugs off. A volume cannot: someone organising two meetings a week averages 0.4 a
+            // day, and rounding modelled them - and, across a cohort, most of the meetings organised - as
+            // none. The Cowork estimate's volumes must come back as they are.
+            using (var db = ScratchDatabase.Create("CopilotAdoptCoworkExact"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                CreateM365UsageTables(db);
+
+                var snapshot = DateTime.UtcNow.Date.AddDays(-3);
+                var earlier = snapshot.AddDays(-1);
+
+                db.Execute(
+                    $@"INSERT INTO dbo.license_types (id, name, sku_id)
+                           VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                       INSERT INTO dbo.users (id, user_name, account_enabled) VALUES (1, N'a@contoso.com', 1);
+                       INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1);
+
+                       INSERT INTO dbo.teams_user_activity_log
+                           (id, [date], user_id, last_activity_date, private_chat_count, team_chat_count,
+                            post_messages, reply_messages, meetings_attended_count, meetings_organized_count)
+                       VALUES (1, '{snapshot:yyyy-MM-dd}', 1, '{snapshot:yyyy-MM-dd}', 3, 0, 0, 0, 1, 1),
+                              (2, '{earlier:yyyy-MM-dd}',  1, '{earlier:yyyy-MM-dd}',  2, 0, 0, 0, 2, 0);
+
+                       INSERT INTO dbo.outlook_user_activity_log
+                           (id, [date], user_id, last_activity_date, email_send_count, email_receive_count, email_read_count)
+                       VALUES (1, '{snapshot:yyyy-MM-dd}', 1, '{snapshot:yyyy-MM-dd}', 3, 0, 0),
+                              (2, '{earlier:yyyy-MM-dd}',  1, '{earlier:yyyy-MM-dd}',  4, 0, 0);
+
+                       -- One day in SharePoint, another in OneDrive: two active days of document work.
+                       INSERT INTO dbo.sharepoint_user_activity_log (id, [date], user_id, last_activity_date, viewed_or_edited)
+                       VALUES (1, '{snapshot:yyyy-MM-dd}', 1, '{snapshot:yyyy-MM-dd}', 1);
+                       INSERT INTO dbo.onedrive_user_activity_log (id, [date], user_id, last_activity_date, viewed_or_edited)
+                       VALUES (1, '{earlier:yyyy-MM-dd}', 1, '{earlier:yyyy-MM-dd}', 2);");
+
+                var sql = CopilotAdoptionSql.CoworkReadinessSql(
+                    new[] { 1 }, new int[0], CopilotAdoptionOptions.Default,
+                    includeCopilotAudit: false, includeM365Usage: true);
+
+                var row = Query<CoworkReadinessSignalRow>(db, sql,
+                    new SqlParameter("@m365From", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@m365ReportDate", snapshot),
+                    new SqlParameter("@maxRows", 1000)).Single();
+
+                Assert.AreEqual(0.5d, row.MeetingsOrganisedPerActiveDay, "One meeting organised over two active days.");
+                Assert.AreEqual(1.5d, row.MeetingsAttendedPerActiveDay);
+                Assert.AreEqual(2.5d, row.ChatAndChannelMessagesPerActiveDay);
+                Assert.AreEqual(3.5d, row.EmailsSentPerActiveDay);
+                Assert.AreEqual(1.5d, row.FilesPerActiveDay, "Three files over the two days either product was used.");
+
+                // The rounded figures beside them are unchanged - the load score still reads those.
+                Assert.AreEqual(4, row.EmailsSent, "3.5 a day rounds half away from zero, as it always has.");
             }
         }
 

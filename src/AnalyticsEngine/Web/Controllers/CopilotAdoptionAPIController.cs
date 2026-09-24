@@ -723,12 +723,15 @@ namespace Web.AnalyticsWeb.Controllers
         /// <para>The optional time-saved parameters carry the assumptions the reader entered in the
         /// portal. <c>copilotMinutesSavedPerMeeting</c>, <c>copilotMinutesSavedPerMailThread</c> and
         /// <c>copilotMinutesSavedPerDocument</c> restate the licence estimate;
-        /// <c>coworkMinutesSavedPerTask</c> and <c>coworkTasksPerPersonPerMonth</c> restate the Cowork
-        /// estimate; <c>coworkEstimateLowerBoundRatio</c> applies to both. The first three were
-        /// <c>coworkMinutesSaved*</c> until the licence estimate was split out of the Cowork one. Those
-        /// figures live in the browser only, so the export has to be told them or a customised page would
-        /// download a workbook modelling different hours. They change the modelled estimates and the
-        /// matching Settings rows, never a measured figure, and never the cached analysis itself.</para>
+        /// <c>coworkMinutesSavedPerTask</c> and, for each kind of work Cowork could take on, its share and
+        /// minutes under the option's own name (<c>coworkOrganiseMeetingsShare</c>,
+        /// <c>coworkOrganiseMeetingsMinutes</c> and so on - see <see cref="CoworkActivities"/>) restate the
+        /// Cowork estimate; <c>coworkEstimateLowerBoundRatio</c> applies to both. The per-activity figures
+        /// are read from the query string by those names rather than bound one parameter each, so a kind
+        /// of work added to the catalogue needs no change here. Those figures live in the browser only, so
+        /// the export has to be told them or a customised page would download a workbook modelling
+        /// different hours. They change the modelled estimates and the matching Settings rows, never a
+        /// measured figure, and never the cached analysis itself.</para>
         /// </summary>
         // GET: api/CopilotAdoption/export/workbook?windowDays=28
         [HttpGet]
@@ -742,7 +745,6 @@ namespace Web.AnalyticsWeb.Controllers
             string copilotMinutesSavedPerDocument = null,
             string coworkEstimateLowerBoundRatio = null,
             string coworkMinutesSavedPerTask = null,
-            string coworkTasksPerPersonPerMonth = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
             // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
@@ -759,7 +761,7 @@ namespace Web.AnalyticsWeb.Controllers
                 copilotMinutesSavedPerDocument,
                 coworkEstimateLowerBoundRatio,
                 coworkMinutesSavedPerTask,
-                coworkTasksPerPersonPerMonth);
+                Request?.GetQueryNameValuePairs());
 
             byte[] bytes;
             try
@@ -824,26 +826,48 @@ namespace Web.AnalyticsWeb.Controllers
         /// and on a server running a European culture a culture-sensitive parse reads the full stop as a
         /// thousands separator - "0.5" minutes per email would become 5, and the workbook would model
         /// ten times the saving the reader entered. Anything unparseable is ignored and keeps the
-        /// product default; the bounds are applied by <see cref="TimeSavedOverrides.ApplyTo"/> and
-        /// <see cref="TimeSavedOverrides.TaskRateFor"/>.
+        /// product default; the bounds are applied by <see cref="TimeSavedOverrides.ApplyTo"/>.
         /// </remarks>
+        /// <param name="query">
+        /// The request's query string, from which each kind of work's share and minutes are read under
+        /// their option names (<see cref="CoworkActivity.ShareOption"/>, <see cref="CoworkActivity.MinutesOption"/>),
+        /// matched case-insensitively as Web API binds the named parameters.
+        /// </param>
         internal static TimeSavedOverrides ParseTimeSavedOverrides(
             string minutesPerMeeting,
             string minutesPerMailThread,
             string minutesPerDocument,
             string lowerBoundRatio,
             string minutesPerTask = null,
-            string tasksPerPersonPerMonth = null)
+            IEnumerable<KeyValuePair<string, string>> query = null)
         {
-            return new TimeSavedOverrides
+            var overrides = new TimeSavedOverrides
             {
                 MinutesSavedPerMeeting = ParseInvariantDouble(minutesPerMeeting),
                 MinutesSavedPerMailThread = ParseInvariantDouble(minutesPerMailThread),
                 MinutesSavedPerDocument = ParseInvariantDouble(minutesPerDocument),
                 LowerBoundRatio = ParseInvariantDouble(lowerBoundRatio),
                 MinutesSavedPerTask = ParseInvariantDouble(minutesPerTask),
-                TasksPerPersonPerMonth = ParseInvariantDouble(tasksPerPersonPerMonth),
             };
+
+            if (query == null) return overrides;
+
+            // First value wins for a repeated key, as it does for a bound parameter.
+            var figures = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var pair in query)
+            {
+                if (pair.Key != null && !figures.ContainsKey(pair.Key)) figures[pair.Key] = pair.Value;
+            }
+
+            foreach (var activity in CoworkActivities.All)
+            {
+                if (figures.TryGetValue(activity.ShareOption, out var share))
+                    overrides.CoworkShares[activity.Key] = ParseInvariantDouble(share);
+                if (figures.TryGetValue(activity.MinutesOption, out var minutes))
+                    overrides.CoworkMinutes[activity.Key] = ParseInvariantDouble(minutes);
+            }
+
+            return overrides;
         }
 
         private static double? ParseInvariantDouble(string value)

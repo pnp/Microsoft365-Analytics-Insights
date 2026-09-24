@@ -97,6 +97,7 @@
     <Compile Include="CopilotAdoption\CopilotAdoptionAgentModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionAnalysis.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionConcentrationModels.cs" />
+    <Compile Include="CopilotAdoption\CopilotAdoptionCoworkActivities.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionCoworkModels.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionDiagnostics.cs" />
     <Compile Include="CopilotAdoption\CopilotAdoptionEmailDomain.cs" />

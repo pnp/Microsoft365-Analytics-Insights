@@ -493,17 +493,24 @@ namespace Common.Entities.CopilotAdoption
         public double CoworkEstimateLowerBoundRatio { get; set; } = 0.5;
 
         /// <summary>
-        /// Minutes Cowork is assumed to save on each task it carries out, ON TOP of what Microsoft 365
-        /// Copilot already saves: Cowork's increment over Copilot alone.
+        /// Minutes Cowork is assumed to save on each task already in Microsoft's Cowork usage report, ON
+        /// TOP of what Microsoft 365 Copilot already saves: Cowork's increment over Copilot alone.
         /// </summary>
         /// <remarks>
         /// <b>No study has measured Cowork's time savings - alone, or for people who already use Microsoft
         /// 365 Copilot.</b> The Copilot per-item figures above rest on Copilot evidence, which is why
-        /// Cowork is modelled on its own, per task, in its own estimate
+        /// Cowork is modelled on its own in its own estimate
         /// (<see cref="CopilotAdoptionSummary.CoworkValueEstimate"/>): it is the value of enabling Cowork,
         /// which a tenant pays for separately in Copilot Credits, for people who already hold a Copilot
         /// licence. Folding Copilot's minutes into that figure would credit Cowork with time the licence
         /// already gives back.
+        /// <para>
+        /// Applies only to the people whose Cowork tasks the report already counts: Microsoft's report
+        /// says how many tasks they ran, not what kind of work each one was. Everyone else is modelled
+        /// from their own Microsoft 365 activity, one kind of work at a time - see
+        /// <see cref="CoworkActivities"/> and the <c>Cowork*Share</c> / <c>Cowork*Minutes</c> options
+        /// below.
+        /// </para>
         /// <para>
         /// The default is Microsoft's own time credit for agent work, the nearest published method. Agent
         /// Assisted Hours in Viva Insights (the Copilot Studio agents report) credits each knowledge
@@ -517,17 +524,95 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("coworkMinutesSavedPerTask")]
         public double CoworkMinutesSavedPerTask { get; set; } = 6;
 
+        // ---- The work Cowork could take on, for the people not yet running Cowork tasks ----
+        //
+        // Each kind of work Microsoft says Cowork does is matched to the count Microsoft's usage reports
+        // already keep of people doing it by hand (see CoworkActivities for the mapping), and carries two
+        // assumptions: the SHARE of that work a person would hand to Cowork, and the MINUTES Cowork saves
+        // on each piece it takes on, on top of Copilot. Hours = observed volume x share x minutes.
+        //
+        // None of these is measured - no study has measured Cowork - and every surface says so. The
+        // minutes all default to the same six-minute credit as a Cowork task above, because nothing
+        // published tells the kinds of work apart; the shares carry the judgement about how much of each
+        // is worth delegating, and are deliberately cautious. Replacing the old flat "20 tasks a person"
+        // placeholder, they make the estimate follow what each person actually does: someone who
+        // organises ten meetings a week is modelled with more to hand over than someone who organises
+        // none. Changing a default is a product decision - CopilotAdoptionCoworkTests pins them.
+
         /// <summary>
-        /// Cowork tasks a month assumed for each person, used ONLY when nobody in the tenant has Cowork
-        /// tasks in Microsoft's Cowork usage report - so there is no observed rate to project from.
+        /// Share of the meetings a person organises that Cowork is assumed to organise for them -
+        /// finding a time, sending the invitation, moving it, following it up. 0 to 1.
         /// </summary>
         /// <remarks>
-        /// About one delegated task a working day. A placeholder, and labelled as one wherever it is used:
-        /// as soon as the report shows tasks for anyone, the average of the people running them replaces
-        /// it, and the reader can replace either with their own expectation.
+        /// One in four. Arranging a meeting is the classic delegated task, but Teams counts every meeting
+        /// a person organised - each occurrence of a recurring series, and ad hoc calls started from a
+        /// chat that needed no arranging at all - so only a minority are work to hand over.
         /// </remarks>
-        [JsonProperty("coworkAssumedTasksPerPersonPerMonth")]
-        public double CoworkAssumedTasksPerPersonPerMonth { get; set; } = 20;
+        [JsonProperty("coworkOrganiseMeetingsShare")]
+        public double CoworkOrganiseMeetingsShare { get; set; } = 0.25;
+
+        /// <summary>Minutes Cowork is assumed to save on each meeting it organises, on top of Copilot.</summary>
+        [JsonProperty("coworkOrganiseMeetingsMinutes")]
+        public double CoworkOrganiseMeetingsMinutes { get; set; } = 6;
+
+        /// <summary>
+        /// Share of the meetings a person attends that Cowork is assumed to prepare them for with a
+        /// briefing: who is coming, what has been said, what is outstanding. 0 to 1.
+        /// </summary>
+        /// <remarks>
+        /// One in ten. A briefing is worth having for the meetings that need preparing for, not for every
+        /// stand-up - and Microsoft 365 Copilot already prepares one when asked, which the licence
+        /// already pays for. Cowork's increment is doing it unasked, as part of a daily briefing.
+        /// </remarks>
+        [JsonProperty("coworkPrepareMeetingsShare")]
+        public double CoworkPrepareMeetingsShare { get; set; } = 0.1;
+
+        /// <summary>Minutes Cowork is assumed to save on each meeting it prepares a person for, on top of Copilot.</summary>
+        [JsonProperty("coworkPrepareMeetingsMinutes")]
+        public double CoworkPrepareMeetingsMinutes { get; set; } = 6;
+
+        /// <summary>
+        /// Share of the emails a person sends that Cowork is assumed to draft and send for them -
+        /// status updates, follow-ups, stakeholder messages. 0 to 1.
+        /// </summary>
+        /// <remarks>
+        /// One in twenty. Most emails are quick replies, faster to type than to describe to an agent.
+        /// </remarks>
+        [JsonProperty("coworkSendEmailShare")]
+        public double CoworkSendEmailShare { get; set; } = 0.05;
+
+        /// <summary>Minutes Cowork is assumed to save on each email it sends, on top of Copilot.</summary>
+        [JsonProperty("coworkSendEmailMinutes")]
+        public double CoworkSendEmailMinutes { get; set; } = 6;
+
+        /// <summary>
+        /// Share of a person's Teams chat and channel messages that Cowork is assumed to write and post
+        /// for them - updates and announcements rather than conversation. 0 to 1.
+        /// </summary>
+        /// <remarks>
+        /// One in a hundred. Almost every Teams message is part of a conversation.
+        /// </remarks>
+        [JsonProperty("coworkPostInTeamsShare")]
+        public double CoworkPostInTeamsShare { get; set; } = 0.01;
+
+        /// <summary>Minutes Cowork is assumed to save on each Teams message it posts, on top of Copilot.</summary>
+        [JsonProperty("coworkPostInTeamsMinutes")]
+        public double CoworkPostInTeamsMinutes { get; set; } = 6;
+
+        /// <summary>
+        /// Share of the SharePoint and OneDrive files a person views or edits that stand for a document
+        /// Cowork is assumed to build for them from scratch - a report, a deck, a spreadsheet. 0 to 1.
+        /// </summary>
+        /// <remarks>
+        /// One in fifty. Microsoft's reports count every file opened as well as every file edited, and do
+        /// not separate the two, so most of this volume is reading.
+        /// </remarks>
+        [JsonProperty("coworkCreateDocumentsShare")]
+        public double CoworkCreateDocumentsShare { get; set; } = 0.02;
+
+        /// <summary>Minutes Cowork is assumed to save on each document it creates, on top of Copilot.</summary>
+        [JsonProperty("coworkCreateDocumentsMinutes")]
+        public double CoworkCreateDocumentsMinutes { get; set; } = 6;
 
         // There is deliberately no loaded-hourly-cost or currency option here, and none anywhere else in
         // these options. The time-saved estimates are models built from assumed minutes per meeting,

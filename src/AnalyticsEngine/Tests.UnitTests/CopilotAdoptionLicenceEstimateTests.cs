@@ -187,7 +187,10 @@ namespace Tests.UnitTests
         {
             var options = Options().Clone();
             options.CoworkMinutesSavedPerTask = 240;
-            options.CoworkAssumedTasksPerPersonPerMonth = 200;
+            options.CoworkSendEmailShare = 1;
+            options.CoworkSendEmailMinutes = 240;
+            options.CoworkOrganiseMeetingsShare = 1;
+            options.CoworkCreateDocumentsMinutes = 240;
 
             var estimate = CopilotAdoptionScoring.ModelLicenceValue(10, 1234, 5678, 910, options);
 
