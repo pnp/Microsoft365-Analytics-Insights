@@ -26,6 +26,17 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void GetOnlineMeetingId_CombinesOrganizerIdAndMeetingThreadId()
+        {
+            const string userGuid = "00000000-0000-0000-0000-000000000000";
+            const string threadId = "19:meeting_NDQ4MGRhYjgtMzc5MS00ZWMxLWJiZjEtOTIxZmM5Mzg3ZGFi@thread.v2";
+            var contextUrl = "https://microsoft.teams.com/threads/" + threadId;
+
+            Assert.AreEqual(userGuid + "_" + threadId, StringUtils.GetOnlineMeetingId(contextUrl, userGuid));
+            Assert.AreEqual(threadId, StringUtils.GetMeetingIdFragmentFromMeetingThreadUrl(contextUrl));
+        }
+
+        [TestMethod]
         public void GetSiteUrl()
         {
             // My Site
