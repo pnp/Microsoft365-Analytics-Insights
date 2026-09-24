@@ -25,6 +25,19 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         public string Query { get; set; }
         public string Outcome { get; set; }
         public string ExceptionType { get; set; }
+
+        /// <summary>A <see cref="CopilotAdoptionFailureKinds"/> value: Timeout, Deadlock, Throttled, SchemaMismatch...</summary>
+        public string FailureKind { get; set; }
+
+        /// <summary>Exception type names, outermost to innermost. Type names only - never a message.</summary>
+        public string ExceptionChain { get; set; }
+
+        /// <summary>SQL Server error number, e.g. "-2" (timeout), "1205" (deadlock), "208" (invalid object).</summary>
+        public string SqlErrorNumber { get; set; }
+
+        /// <summary>Win32 native error code, e.g. "258" (wait operation timed out).</summary>
+        public string Win32ErrorCode { get; set; }
+
         public string ActiveOperations { get; set; }
         public string SynchronizationContext { get; set; }
         public string ShutdownReason { get; set; }
@@ -61,6 +74,10 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             AddIfPresent(result, "Query", Query);
             AddIfPresent(result, "Outcome", Outcome);
             AddIfPresent(result, "ExceptionType", ExceptionType);
+            AddIfPresent(result, "FailureKind", FailureKind);
+            AddIfPresent(result, "ExceptionChain", ExceptionChain);
+            AddIfPresent(result, "SqlErrorNumber", SqlErrorNumber);
+            AddIfPresent(result, "Win32ErrorCode", Win32ErrorCode);
             AddIfPresent(result, "ActiveOperations", ActiveOperations);
             AddIfPresent(result, "ShutdownReason", ShutdownReason);
             return result;
@@ -111,7 +128,11 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                    || stage == CopilotAdoptionTelemetryStages.ScoringCompleted
                    || stage == CopilotAdoptionTelemetryStages.ServiceReturned
                    || stage == CopilotAdoptionTelemetryStages.CachePublished
-                   || stage == CopilotAdoptionTelemetryStages.CompletionTelemetryReturned;
+                   || stage == CopilotAdoptionTelemetryStages.CompletionTelemetryReturned
+                   || stage == CopilotAdoptionTelemetryStages.GateAcquired
+                   || stage == CopilotAdoptionTelemetryStages.GateBypassed
+                   || stage == CopilotAdoptionTelemetryStages.GateTimedOut
+                   || stage == CopilotAdoptionTelemetryStages.Abandoned;
         }
     }
 
@@ -124,6 +145,20 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         public int WarningCount { get; set; }
         public bool TimedOut { get; set; }
         public string SlowestStep { get; set; }
+
+        /// <summary><c>Summary.FiguresIncomplete</c>: at least one dataset failed to load.</summary>
+        public bool FiguresIncomplete { get; set; }
+
+        public int IncompleteReasonCount { get; set; }
+
+        /// <summary>How many queries failed in this run (any kind).</summary>
+        public int FailedQueryCount { get; set; }
+
+        /// <summary>How many of those failures were classified as timeouts.</summary>
+        public int TimedOutQueryCount { get; set; }
+
+        /// <summary>Comma-separated names of the steps that failed - compile-time constants only.</summary>
+        public string FailedSteps { get; set; }
     }
 
     internal sealed class CopilotAdoptionFailureEvent
@@ -233,7 +268,12 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 completion.WarningCount,
                 completion.TimedOut,
                 completion.SlowestStep,
-                completion.RunId);
+                completion.RunId,
+                completion.FiguresIncomplete,
+                completion.IncompleteReasonCount,
+                completion.FailedQueryCount,
+                completion.TimedOutQueryCount,
+                completion.FailedSteps);
         }
 
         public void WriteFailure(CopilotAdoptionFailureEvent failure)
@@ -263,20 +303,31 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
     {
         private const int Capacity = 1024;
 
+        /// <summary>
+        /// The least time between the flushes heartbeats may force. On the SDK's default in-memory channel a
+        /// flush is a synchronous send on this single worker thread, so one per heartbeat - every 30 seconds for
+        /// every active or queued run - would let a slow ingestion endpoint back the queue up, and the events
+        /// waiting behind it are the terminal ones that matter most.
+        /// </summary>
+        internal static readonly TimeSpan DefaultHeartbeatFlushInterval = TimeSpan.FromSeconds(25);
+
         private readonly BlockingCollection<SinkItem> _queue =
             new BlockingCollection<SinkItem>(new ConcurrentQueue<SinkItem>(), Capacity);
         private readonly Func<ICopilotAdoptionTelemetryWriter> _writerFactory;
         private readonly Action<Exception, string> _reportDroppedFailure;
+        private readonly FlushPolicy _flush;
         private readonly Thread _worker;
         private int _droppedEvents;
         private int _stopping;
 
         public QueuedCopilotAdoptionEventSink(
             Func<ICopilotAdoptionTelemetryWriter> writerFactory,
-            Action<Exception, string> reportDroppedFailure = null)
+            Action<Exception, string> reportDroppedFailure = null,
+            TimeSpan? heartbeatFlushInterval = null)
         {
             _writerFactory = writerFactory ?? throw new ArgumentNullException(nameof(writerFactory));
             _reportDroppedFailure = reportDroppedFailure ?? WebExceptionTelemetry.Report;
+            _flush = new FlushPolicy(heartbeatFlushInterval ?? DefaultHeartbeatFlushInterval);
             _worker = new Thread(Drain)
             {
                 IsBackground = true,
@@ -362,7 +413,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 
                     try
                     {
-                        item.Write(writer);
+                        item.Write(writer, _flush);
                     }
                     catch (Exception ex)
                     {
@@ -388,6 +439,52 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 catch (Exception)
                 {
                     // The process is already stopping; telemetry must never obstruct shutdown.
+                }
+            }
+        }
+
+        /// <summary>
+        /// When the worker flushes the channel. Only the worker thread touches it, so it needs no locking.
+        /// </summary>
+        private sealed class FlushPolicy
+        {
+            private readonly TimeSpan _heartbeatInterval;
+            private readonly Stopwatch _sinceLastFlush = new Stopwatch();
+
+            public FlushPolicy(TimeSpan heartbeatInterval)
+            {
+                _heartbeatInterval = heartbeatInterval;
+            }
+
+            public void Now(ICopilotAdoptionTelemetryWriter writer)
+            {
+                writer.Flush();
+                _sinceLastFlush.Restart();
+            }
+
+            /// <summary>
+            /// Flushes after a lifecycle event that must not wait in the buffer: the end of a run that produced
+            /// no completion event, a host stopping, or a heartbeat - unless another flush went out recently,
+            /// which already sent every heartbeat buffered before it.
+            /// </summary>
+            /// <remarks>
+            /// <c>QueueFull</c> is deliberately not flushed. The other early endings are bounded by the queue,
+            /// but a rejection happens once per poll per request as fast as callers ask, so a send for each would
+            /// bring back the worker stall that <see cref="DefaultHeartbeatFlushInterval"/> prevents.
+            /// </remarks>
+            public void After(string stage, ICopilotAdoptionTelemetryWriter writer)
+            {
+                if (stage == CopilotAdoptionTelemetryStages.Heartbeat)
+                {
+                    if (!_sinceLastFlush.IsRunning || _sinceLastFlush.Elapsed >= _heartbeatInterval) Now(writer);
+                    return;
+                }
+
+                if (stage == CopilotAdoptionTelemetryStages.HostStopping
+                    || stage == CopilotAdoptionTelemetryStages.Abandoned
+                    || stage == CopilotAdoptionTelemetryStages.GateTimedOut)
+                {
+                    Now(writer);
                 }
             }
         }
@@ -425,9 +522,18 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 CopilotAdoptionLifecycleEvent failureEvent) =>
                 new SinkItem(failureEvent, null, failure, null);
 
-            public void Write(ICopilotAdoptionTelemetryWriter writer)
+            public void Write(ICopilotAdoptionTelemetryWriter writer, FlushPolicy flush)
             {
-                if (_lifecycle != null) writer.Write(_lifecycle);
+                if (_lifecycle != null)
+                {
+                    writer.Write(_lifecycle);
+
+                    // A heartbeat is the evidence left behind when a process dies mid-run, and the channel
+                    // otherwise buffers for up to 30 seconds - so an abrupt recycle used to take the last
+                    // heartbeat or two with it, exactly when they matter. Sent on this dedicated thread, never
+                    // on the analysis, and throttled across every run (see DefaultHeartbeatFlushInterval).
+                    flush.After(_lifecycle.Stage, writer);
+                }
                 if (_completion != null)
                 {
                     var watch = Stopwatch.StartNew();
@@ -436,7 +542,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                     _submitted.OccurredUtc = DateTimeOffset.UtcNow;
                     _submitted.DurationMs = watch.ElapsedMilliseconds;
                     writer.Write(_submitted);
-                    writer.Flush();
+                    flush.Now(writer);
                 }
                 if (_failure != null)
                 {
@@ -446,7 +552,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                         try
                         {
                             writer.WriteFailure(_failure);
-                            writer.Flush();
+                            flush.Now(writer);
                             WebExceptionTelemetry.MarkReported(_failure.Exception);
                             Interlocked.Exchange(ref _failureClaimed, 0);
                         }
@@ -458,7 +564,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                     }
                     else
                     {
-                        writer.Flush();
+                        flush.Now(writer);
                     }
                 }
             }
@@ -496,51 +602,186 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         IDisposable Start(Action heartbeat, TimeSpan interval);
     }
 
+    /// <summary>
+    /// Runs every Copilot Adoption heartbeat on one shared, dedicated background thread.
+    /// </summary>
+    /// <remarks>
+    /// <para>A dedicated thread rather than the thread pool or a timer, because a heartbeat has to arrive while
+    /// the pool is starved - that is one of the states it exists to reveal.</para>
+    /// <para>One thread for every run rather than one each. A thread per run meant that every run - including
+    /// one queued behind the admission gate, or turned away by it - created an OS thread just to be observed, so
+    /// the number of analyses being asked for turned directly into thread creation. Heartbeat callbacks only queue
+    /// an event, so sharing the thread does not hold one run's heartbeat up behind another's. The thread exists
+    /// only while at least one run is registered.</para>
+    /// </remarks>
     internal sealed class DedicatedThreadHeartbeatFactory : ICopilotAdoptionHeartbeatFactory
     {
         public static readonly DedicatedThreadHeartbeatFactory Instance =
             new DedicatedThreadHeartbeatFactory();
 
-        public IDisposable Start(Action heartbeat, TimeSpan interval) =>
-            new DedicatedThreadHeartbeat(heartbeat, interval);
+        private static readonly TimeSpan MinimumInterval = TimeSpan.FromMilliseconds(1);
+        private static readonly TimeSpan MaximumWait = TimeSpan.FromMilliseconds(int.MaxValue);
 
-        private sealed class DedicatedThreadHeartbeat : IDisposable
+        private readonly object _sync = new object();
+        private readonly List<Registration> _registrations = new List<Registration>();
+        private readonly Stopwatch _clock = Stopwatch.StartNew();
+        private readonly AutoResetEvent _wake = new AutoResetEvent(false);
+        private readonly Func<ThreadStart, Thread> _createThread;
+        private Thread _thread;
+
+        public DedicatedThreadHeartbeatFactory()
+            : this(null)
         {
-            private readonly Action _heartbeat;
-            private readonly TimeSpan _interval;
-            private readonly ManualResetEventSlim _stop = new ManualResetEventSlim(false);
-            private readonly Thread _thread;
+        }
+
+        /// <param name="createThread">How the shared thread is created (a test seam); it is started here.</param>
+        internal DedicatedThreadHeartbeatFactory(Func<ThreadStart, Thread> createThread)
+        {
+            _createThread = createThread ?? (run => new Thread(run)
+            {
+                IsBackground = true,
+                Name = "CopilotAdoptionHeartbeat",
+            });
+        }
+
+        public IDisposable Start(Action heartbeat, TimeSpan interval)
+        {
+            if (heartbeat == null) throw new ArgumentNullException(nameof(heartbeat));
+            if (interval < MinimumInterval) interval = MinimumInterval;
+
+            Registration registration;
+            lock (_sync)
+            {
+                // Under the same lock the thread uses to decide it has nothing left to do, so a run can never be
+                // registered with no thread to serve it. Started before it is recorded and before the run is
+                // registered: a thread that cannot be started - Start throws when the process cannot create one -
+                // must leave behind neither a dead thread recorded as running, which would silence every later
+                // run's heartbeat, nor a registration nobody will ever dispose.
+                if (_thread == null)
+                {
+                    var thread = _createThread(Run);
+                    thread.Start();
+                    _thread = thread;
+                }
+
+                registration = new Registration(this, heartbeat, interval, _clock.Elapsed + interval);
+                _registrations.Add(registration);
+            }
+
+            _wake.Set();
+            return registration;
+        }
+
+        private void Remove(Registration registration)
+        {
+            lock (_sync)
+            {
+                _registrations.Remove(registration);
+            }
+
+            // So the thread notices at once when it has nothing left to serve and exits, rather than holding on until
+            // the removed run's next due time - which, for a long interval, could be a very long time.
+            _wake.Set();
+        }
+
+        private void Run()
+        {
+            try
+            {
+                var due = new List<Registration>();
+                while (true)
+                {
+                    try
+                    {
+                        var wait = Timeout.InfiniteTimeSpan;
+                        lock (_sync)
+                        {
+                            if (_registrations.Count == 0)
+                            {
+                                _thread = null;
+                                return;
+                            }
+
+                            var now = _clock.Elapsed;
+                            foreach (var registration in _registrations)
+                            {
+                                if (registration.NextDue <= now)
+                                {
+                                    due.Add(registration);
+                                    registration.NextDue = now + registration.Interval;
+                                }
+
+                                var untilDue = registration.NextDue - now;
+                                if (wait == Timeout.InfiniteTimeSpan || untilDue < wait) wait = untilDue;
+                            }
+                        }
+
+                        // Outside the lock, so a slow callback cannot block a run starting or finishing. A run
+                        // disposed since its registration was read may be called once more; its heartbeat checks.
+                        foreach (var registration in due)
+                        {
+                            try
+                            {
+                                registration.Heartbeat();
+                            }
+                            catch (Exception)
+                            {
+                                // One run's heartbeat must never stop every other run's.
+                            }
+                        }
+
+                        due.Clear();
+
+                        // WaitOne takes at most Int32.MaxValue milliseconds; a longer interval just re-scans early.
+                        _wake.WaitOne(wait > MaximumWait ? MaximumWait : wait);
+                    }
+                    catch (Exception ex) when (!(ex is ThreadAbortException))
+                    {
+                        // Nothing above is expected to throw; if it ever does, keep serving the other runs.
+                        due.Clear();
+                        Thread.Sleep(TimeSpan.FromSeconds(1));
+                    }
+                }
+            }
+            finally
+            {
+                // However the loop ends - normally, or aborted as the AppDomain unloads - it must not stay recorded
+                // as the thread serving new registrations, or no later run would get a heartbeat.
+                lock (_sync)
+                {
+                    if (ReferenceEquals(_thread, Thread.CurrentThread)) _thread = null;
+                }
+            }
+        }
+
+        private sealed class Registration : IDisposable
+        {
+            private readonly DedicatedThreadHeartbeatFactory _owner;
             private int _disposed;
 
-            public DedicatedThreadHeartbeat(Action heartbeat, TimeSpan interval)
+            public Registration(
+                DedicatedThreadHeartbeatFactory owner,
+                Action heartbeat,
+                TimeSpan interval,
+                TimeSpan nextDue)
             {
-                _heartbeat = heartbeat ?? throw new ArgumentNullException(nameof(heartbeat));
-                _interval = interval;
-                _thread = new Thread(Run)
-                {
-                    IsBackground = true,
-                    Name = "CopilotAdoptionHeartbeat",
-                };
-                _thread.Start();
+                _owner = owner;
+                Heartbeat = heartbeat;
+                Interval = interval;
+                NextDue = nextDue;
             }
+
+            public Action Heartbeat { get; }
+
+            public TimeSpan Interval { get; }
+
+            /// <summary>Read and written only under the owner's lock.</summary>
+            public TimeSpan NextDue { get; set; }
 
             public void Dispose()
             {
                 if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-                _stop.Set();
-                if (Thread.CurrentThread != _thread
-                    && _thread.Join(TimeSpan.FromSeconds(1)))
-                {
-                    _stop.Dispose();
-                }
-            }
-
-            private void Run()
-            {
-                while (!_stop.Wait(_interval))
-                {
-                    _heartbeat();
-                }
+                _owner.Remove(this);
             }
         }
     }
@@ -573,7 +814,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             string step,
             long durationMs,
             bool failed,
-            string exceptionType = null)
+            CopilotAdoptionFailure failure = null)
         {
         }
 
@@ -585,7 +826,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             string query,
             long durationMs,
             bool failed,
-            string exceptionType = null)
+            CopilotAdoptionFailure failure = null)
         {
         }
 
@@ -618,6 +859,14 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         private readonly ConcurrentDictionary<long, ActiveOperation> _active =
             new ConcurrentDictionary<long, ActiveOperation>();
         private readonly object _emitGate = new object();
+
+        /// <summary>
+        /// Serialises <see cref="Dispose"/> and the run's terminal events with the two emitters called from outside
+        /// the run, which can still be called after it has ended: the shared heartbeat thread, and host shutdown
+        /// working from its snapshot of active runs. No heartbeat may be emitted once Dispose has returned, and no
+        /// HostStopping once the run has ended.
+        /// </summary>
+        private readonly object _disposalGate = new object();
         private readonly Action<CopilotAdoptionRunTelemetry> _onDispose;
         private readonly int _appDomainId;
         private readonly long _heartbeatIntervalMs;
@@ -625,6 +874,9 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         private long _sequence;
         private long _operationId;
         private long _lastHeartbeatMs;
+        private int _failedQueries;
+        private int _timedOutQueries;
+        private int _ended;
         private int _disposed;
 
         public CopilotAdoptionRunTelemetry(
@@ -671,14 +923,14 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             string step,
             long durationMs,
             bool failed,
-            string exceptionType = null)
+            CopilotAdoptionFailure failure = null)
         {
             _active.TryRemove(operationId, out _);
             Emit(
                 failed ? CopilotAdoptionTelemetryStages.StepFailed : CopilotAdoptionTelemetryStages.StepCompleted,
                 step,
                 outcome: failed ? "Failed" : "Succeeded",
-                exceptionType: exceptionType,
+                failure: failure,
                 operationId: operationId,
                 durationMs: durationMs);
         }
@@ -701,15 +953,25 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             string query,
             long durationMs,
             bool failed,
-            string exceptionType = null)
+            CopilotAdoptionFailure failure = null)
         {
             _active.TryRemove(operationId, out _);
+
+            if (failed)
+            {
+                Interlocked.Increment(ref _failedQueries);
+                if (failure?.FailureKind == CopilotAdoptionFailureKinds.Timeout)
+                {
+                    Interlocked.Increment(ref _timedOutQueries);
+                }
+            }
+
             Emit(
                 failed ? CopilotAdoptionTelemetryStages.QueryFailed : CopilotAdoptionTelemetryStages.QueryCompleted,
                 step,
                 query,
                 failed ? "Failed" : "Succeeded",
-                exceptionType,
+                failure,
                 operationId,
                 durationMs,
                 includeRuntime: true);
@@ -717,7 +979,19 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 
         public void Checkpoint(string stage, long durationMs = 0)
         {
-            Emit(stage, durationMs: durationMs, includeRuntime: IsTerminal(stage));
+            if (!IsTerminal(stage))
+            {
+                Emit(stage, durationMs: durationMs);
+                return;
+            }
+
+            // Under the disposal gate, and recorded, so host shutdown either lands before the run's end or not at all:
+            // an "Interrupted" event after the result was published would make a completed run read as cut off.
+            lock (_disposalGate)
+            {
+                Interlocked.Exchange(ref _ended, 1);
+                Emit(stage, durationMs: durationMs, includeRuntime: true);
+            }
         }
 
         public void QueueCompletion(CopilotAdoptionAnalysis analysis)
@@ -729,7 +1003,6 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 step => step.Step,
                 step => step.DurationMs,
                 StringComparer.Ordinal);
-            var timeoutMs = CopilotAdoptionService.QueryTimeoutSecs * 1000L;
 
             var completion = new CopilotAdoptionCompletionEvent
             {
@@ -738,8 +1011,17 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 TotalMs = diagnostics.TotalMs,
                 Steps = steps,
                 WarningCount = analysis.Summary.Warnings.Count,
-                TimedOut = diagnostics.Steps.Any(step => step.DurationMs >= timeoutMs),
+
+                // From classified query failures. It used to be "any step took 90 s or more", which fired for
+                // the six sequential probes or the CPU-only scoring step taking that long in total without a
+                // single timeout, and said nothing about which failures were timeouts at all.
+                TimedOut = Volatile.Read(ref _timedOutQueries) > 0,
                 SlowestStep = diagnostics.SlowestStep?.Step,
+                FiguresIncomplete = analysis.Summary.FiguresIncomplete,
+                IncompleteReasonCount = analysis.Summary.IncompleteReasons?.Count ?? 0,
+                FailedQueryCount = Volatile.Read(ref _failedQueries),
+                TimedOutQueryCount = Volatile.Read(ref _timedOutQueries),
+                FailedSteps = string.Join(",", diagnostics.Steps.Where(step => step.Failed).Select(step => step.Step)),
             };
 
             var submitted = CreateEvent(
@@ -752,30 +1034,43 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         public bool QueueFailure(Exception exception)
         {
             CopilotAdoptionExceptionCorrelation.SetRunId(exception, RunId);
-            var failureEvent = CreateEvent(
-                CopilotAdoptionTelemetryStages.Failed,
-                outcome: "Failed",
-                exceptionType: exception?.GetBaseException().GetType().Name,
-                activeOperations: ActiveOperations(),
-                includeRuntime: true);
-            return TryTrackFailure(
-                new CopilotAdoptionFailureEvent
-                {
-                    RunId = RunId,
-                    WindowDays = WindowDays,
-                    Exception = exception,
-                },
-                failureEvent);
+
+            // A failure ends the run just as a checkpoint does; see Checkpoint.
+            lock (_disposalGate)
+            {
+                Interlocked.Exchange(ref _ended, 1);
+                var failureEvent = CreateEvent(
+                    CopilotAdoptionTelemetryStages.Failed,
+                    outcome: "Failed",
+                    failure: CopilotAdoptionFailure.From(exception),
+                    activeOperations: ActiveOperations(),
+                    includeRuntime: true);
+                return TryTrackFailure(
+                    new CopilotAdoptionFailureEvent
+                    {
+                        RunId = RunId,
+                        WindowDays = WindowDays,
+                        Exception = exception,
+                    },
+                    failureEvent);
+            }
         }
 
         public void HostStopping(string reason)
         {
-            Emit(
-                CopilotAdoptionTelemetryStages.HostStopping,
-                outcome: "Interrupted",
-                activeOperations: ActiveOperations(),
-                shutdownReason: reason,
-                includeRuntime: true);
+            // Under the disposal gate: shutdown works from a snapshot of active runs, so it can reach a run that has
+            // just finished, and an "Interrupted" event after CachePublished would make a completed run read as cut off.
+            lock (_disposalGate)
+            {
+                if (Volatile.Read(ref _disposed) != 0 || Volatile.Read(ref _ended) != 0) return;
+
+                Emit(
+                    CopilotAdoptionTelemetryStages.HostStopping,
+                    outcome: "Interrupted",
+                    activeOperations: ActiveOperations(),
+                    shutdownReason: reason,
+                    includeRuntime: true);
+            }
         }
 
         public void EmitHeartbeat()
@@ -785,26 +1080,36 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            // Under the disposal gate, so a heartbeat or host-shutdown event already being emitted finishes before
+            // this returns and none starts afterwards - the guarantee a per-run heartbeat thread used to give by being
+            // joined. The shared heartbeat thread can still call Heartbeat once more; it will see the flag and do nothing.
+            lock (_disposalGate)
+            {
+                if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            }
+
             _heartbeat.Dispose();
             _onDispose?.Invoke(this);
         }
 
         private void Heartbeat()
         {
-            if (Volatile.Read(ref _disposed) != 0) return;
+            lock (_disposalGate)
+            {
+                if (Volatile.Read(ref _disposed) != 0) return;
 
-            var elapsed = _watch.ElapsedMilliseconds;
-            var previous = Interlocked.Exchange(ref _lastHeartbeatMs, elapsed);
-            var drift = previous == 0
-                ? Math.Max(0, elapsed - _heartbeatIntervalMs)
-                : Math.Max(0, elapsed - previous - _heartbeatIntervalMs);
+                var elapsed = _watch.ElapsedMilliseconds;
+                var previous = Interlocked.Exchange(ref _lastHeartbeatMs, elapsed);
+                var drift = previous == 0
+                    ? Math.Max(0, elapsed - _heartbeatIntervalMs)
+                    : Math.Max(0, elapsed - previous - _heartbeatIntervalMs);
 
-            Emit(
-                CopilotAdoptionTelemetryStages.Heartbeat,
-                activeOperations: ActiveOperations(),
-                heartbeatDriftMs: drift,
-                includeRuntime: true);
+                Emit(
+                    CopilotAdoptionTelemetryStages.Heartbeat,
+                    activeOperations: ActiveOperations(),
+                    heartbeatDriftMs: drift,
+                    includeRuntime: true);
+            }
         }
 
         private long NextOperationId() => Interlocked.Increment(ref _operationId);
@@ -823,7 +1128,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             string step = null,
             string query = null,
             string outcome = null,
-            string exceptionType = null,
+            CopilotAdoptionFailure failure = null,
             long operationId = 0,
             long durationMs = 0,
             string activeOperations = null,
@@ -836,7 +1141,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 step,
                 query,
                 outcome,
-                exceptionType,
+                failure,
                 operationId,
                 durationMs,
                 activeOperations,
@@ -891,7 +1196,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             string step = null,
             string query = null,
             string outcome = null,
-            string exceptionType = null,
+            CopilotAdoptionFailure failure = null,
             long operationId = 0,
             long durationMs = 0,
             string activeOperations = null,
@@ -912,7 +1217,11 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                     Step = step,
                     Query = query,
                     Outcome = outcome,
-                    ExceptionType = exceptionType,
+                    ExceptionType = failure?.ExceptionType,
+                    FailureKind = failure?.FailureKind,
+                    ExceptionChain = failure?.ExceptionChain,
+                    SqlErrorNumber = failure?.SqlErrorNumber?.ToString(CultureInfo.InvariantCulture),
+                    Win32ErrorCode = failure?.Win32ErrorCode?.ToString(CultureInfo.InvariantCulture),
                     ActiveOperations = activeOperations,
                     SynchronizationContext =
                         SynchronizationContext.Current?.GetType().Name ?? "None",
@@ -941,7 +1250,10 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         {
             return stage == CopilotAdoptionTelemetryStages.ServiceReturned
                    || stage == CopilotAdoptionTelemetryStages.CachePublished
-                   || stage == CopilotAdoptionTelemetryStages.Failed;
+                   || stage == CopilotAdoptionTelemetryStages.Failed
+                   || stage == CopilotAdoptionTelemetryStages.GateTimedOut
+                   || stage == CopilotAdoptionTelemetryStages.QueueFull
+                   || stage == CopilotAdoptionTelemetryStages.Abandoned;
         }
 
         private static void PopulateRuntime(CopilotAdoptionLifecycleEvent telemetryEvent)

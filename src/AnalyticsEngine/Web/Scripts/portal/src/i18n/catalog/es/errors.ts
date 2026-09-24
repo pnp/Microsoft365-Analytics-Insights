@@ -23,6 +23,7 @@ const errors: Record<keyof typeof en, string> = {
 
   // Copilot adoption API
   'errors.copilotAdoption.analysisStillRunning': 'El análisis de adopción de Copilot está tardando más de lo esperado y aún no ha finalizado. Sigue ejecutándose en el servidor; vuelva a cargar la página dentro de unos minutos.',
+  'errors.copilotAdoption.analysisStillRunningWithReference': 'El análisis de adopción de Copilot está tardando más de lo esperado y aún no ha finalizado. Sigue ejecutándose en el servidor; vuelva a cargar la página dentro de unos minutos. Si sigue ocurriendo, incluya la referencia {runId} al notificarlo.',
   'errors.copilotAdoption.availabilityFailed': 'No se ha podido cargar la disponibilidad de adopción de Copilot ({status}).',
   'errors.copilotAdoption.summaryFailed': 'No se ha podido cargar el resumen de adopción de Copilot ({status}).',
   'errors.copilotAdoption.filtersFailed': 'No se han podido cargar los filtros de adopción de Copilot ({status}).',
