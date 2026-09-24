@@ -1,6 +1,7 @@
 using ActivityImporter.Engine.ActivityAPI.Copilot;
 using Microsoft.Graph.Models;
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace Tests.UnitTests.FakeLoaderClasses
@@ -14,13 +15,14 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public int GetOnlineMeetingCalls { get; private set; }
         public int GetUserDriveCalls { get; private set; }
         public int GetSiteDriveCalls { get; private set; }
+        public int GetSiteDocumentLibraryDrivesCalls { get; private set; }
         public int GetSiteCalls { get; private set; }
         public int GetListItemByIdCalls { get; private set; }
         public int GetDriveItemByUrlCalls { get; private set; }
         public int GetUserCalls { get; private set; }
 
         public int TotalCalls => GetOnlineMeetingCalls + GetUserDriveCalls + GetSiteDriveCalls + GetSiteCalls
-            + GetListItemByIdCalls + GetDriveItemByUrlCalls + GetUserCalls;
+            + GetSiteDocumentLibraryDrivesCalls + GetListItemByIdCalls + GetDriveItemByUrlCalls + GetUserCalls;
 
         private static Drive DriveWithIds => new Drive { SharePointIds = new SharepointIds { SiteId = "site-guid", ListId = "list-guid" } };
 
@@ -28,6 +30,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
             new OnlineMeeting { Id = meetingId, Subject = "unit test meeting", CreationDateTime = DateTimeOffset.UtcNow };
         public Func<string, Drive> OnGetUserDrive = upn => DriveWithIds;
         public Func<string, Drive> OnGetSiteDrive = siteIdentifier => DriveWithIds;
+        public Func<string, int, IReadOnlyList<Drive>> OnGetSiteDocumentLibraryDrives = (siteIdentifier, maxDrives) => new[] { DriveWithIds };
         public Func<string, Site> OnGetSite = siteIdentifier => new Site { Id = siteIdentifier, WebUrl = "https://contoso.sharepoint.com/sites/x" };
         public Func<string, string, string, ListItem> OnGetListItemById = (siteId, listId, itemId) =>
             new ListItem { WebUrl = "https://contoso.sharepoint.com/sites/x/Shared Documents/file.docx" };
@@ -50,6 +53,12 @@ namespace Tests.UnitTests.FakeLoaderClasses
         {
             GetSiteDriveCalls++;
             return Task.FromResult(OnGetSiteDrive(siteIdentifier));
+        }
+
+        public Task<IReadOnlyList<Drive>> GetSiteDocumentLibraryDrivesAsync(string siteIdentifier, int maxDrives)
+        {
+            GetSiteDocumentLibraryDrivesCalls++;
+            return Task.FromResult(OnGetSiteDocumentLibraryDrives(siteIdentifier, maxDrives));
         }
 
         public Task<Site> GetSiteAsync(string siteIdentifier)

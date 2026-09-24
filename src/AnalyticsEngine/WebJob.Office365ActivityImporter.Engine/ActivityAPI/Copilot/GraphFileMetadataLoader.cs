@@ -5,6 +5,7 @@ using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.ODataErrors;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -33,6 +34,11 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         private readonly ConcurrentDictionary<string, SpoDocumentFileInfo> _fileInfoByContext =
             new ConcurrentDictionary<string, SpoDocumentFileInfo>(StringComparer.OrdinalIgnoreCase);
 
+        // Site-scoped cache of document-library drives used only after cheaper default-library and /shares
+        // resolution fail for a Doc.aspx?sourcedoc= link. Run-scoped and bounded by MaxDocumentLibrariesToSearch.
+        private readonly ConcurrentDictionary<string, IReadOnlyList<Drive>> _documentLibraryDrivesBySite =
+            new ConcurrentDictionary<string, IReadOnlyList<Drive>>(StringComparer.OrdinalIgnoreCase);
+
         // Users for whom Graph has told us there's no Teams application access policy for this app. The grant is
         // per-user (or global), so this is cached per user rather than tenant-wide, and only for this run.
         private readonly ConcurrentDictionary<string, byte> _usersWithoutMeetingAccessPolicy =
@@ -49,6 +55,8 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         // 1 once we've logged the generic 403 / 404 meeting lookup explanations for this run.
         private int _meetingForbiddenWarningLogged;
         private int _meetingNotFoundWarningLogged;
+
+        private const int MaxDocumentLibrariesToSearch = 50;
 
         public GraphFileMetadataLoader(GraphServiceClient graphServiceClient, ILogger logger)
             : this(new GraphSpoClient(graphServiceClient), logger)
@@ -195,10 +203,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 return null;
             }
 
-            // Cache key: a personal OneDrive ("-my") file is resolved through the *event user's* own drive, so
-            // the result is user-specific - key those per (context, upn). A shared-site file is resolved
-            // independently of the user, so key those by context alone (dedupes across all users who touched it).
-            var cacheKey = FileCacheKey(copilotDocContextId, eventUpn);
+            // File resolution is based only on the context URL: OneDrive URLs are resolved through the owner's
+            // personal site named in the URL, not through the Copilot user's drive.
+            var cacheKey = FileCacheKey(copilotDocContextId);
 
             // Already resolved this context earlier in the run? Return the cached result (no Graph call).
             if (_fileInfoByContext.TryGetValue(cacheKey, out var cached))
@@ -213,93 +220,75 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 return null;
             }
 
-            var result = await ResolveSpoFileInfoAsync(copilotDocContextId, eventUpn);
-            if (result == null)
+            var result = await ResolveSpoFileInfoAsync(copilotDocContextId);
+            if (result.FileInfo == null)
             {
-                _unresolvableContextIds.TryAdd(cacheKey, 0);
+                if (result.CacheAsUnresolvable)
+                {
+                    _unresolvableContextIds.TryAdd(cacheKey, 0);
+                }
             }
             else
             {
-                _fileInfoByContext.TryAdd(cacheKey, result);
+                _fileInfoByContext.TryAdd(cacheKey, result.FileInfo);
             }
-            return result;
+            return result.FileInfo;
         }
 
-        // Personal OneDrive ("-my") files depend on the event user's drive, so include the upn in the key;
-        // shared-site files don't, so key by context alone.
-        private static string FileCacheKey(string copilotDocContextId, string eventUpn)
-            => StringUtils.IsMySiteUrl(copilotDocContextId) ? copilotDocContextId + "\n" + (eventUpn ?? string.Empty) : copilotDocContextId;
+        private static string FileCacheKey(string copilotDocContextId) => copilotDocContextId;
 
-        // Example: https://m365cp123890-my.sharepoint.com/personal/sambetts_m365cp123890_onmicrosoft_com/_layouts/15/Doc.aspx?sourcedoc=%7B0D86F64F-8435-430C-8979-FF46C00F7ACB%7D&file=Presentation.pptx&action=edit&mobileredirect=true
-        private async Task<SpoDocumentFileInfo> ResolveSpoFileInfoAsync(string copilotDocContextId, string eventUpn)
+        // Example: https://contoso-my.sharepoint.com/personal/alex_contoso_com/_layouts/15/Doc.aspx?sourcedoc=%7B00000000-0000-0000-0000-000000000000%7D&file=Presentation.pptx&action=edit&mobileredirect=true
+        private async Task<FileResolutionResult> ResolveSpoFileInfoAsync(string copilotDocContextId)
         {
             var siteUrl = StringUtils.GetSiteUrl(copilotDocContextId);
-            if (siteUrl == null) return null;
+            if (siteUrl == null) return FileResolutionResult.Unresolvable;
 
-            Drive drive = null;
-            if (StringUtils.IsMySiteUrl(siteUrl))
+            var siteResult = await GetSiteFromSiteUrl(siteUrl);
+            if (siteResult.ShouldStop)
             {
-                drive = await GetSpoInfoFromMySiteUrl(eventUpn);
-            }
-            else
-            {
-                drive = await GetSpoInfoFromSiteUrl(siteUrl);
-            }
-            if (drive == null)
-            {
-                return null;
+                return FileResolutionResult.FromFailure(siteResult.CacheAsUnresolvable);
             }
 
-            // Get site ID from url
-            // https://learn.microsoft.com/en-us/graph/api/drive-get?view=graph-rest-beta&tabs=http
-            var spSiteId = drive.SharePointIds?.SiteId;
-            if (string.IsNullOrEmpty(spSiteId))
-            {
-                throw new ArgumentOutOfRangeException("SharePointIds.SiteId");
-            }
-            var spListId = drive.SharePointIds?.ListId;
-            if (string.IsNullOrEmpty(spListId))
-            {
-                throw new ArgumentOutOfRangeException("SharePointIds.ListId");
-            }
+            var site = siteResult.Site;
             var driveItemId = StringUtils.GetDriveItemId(copilotDocContextId);
-
-            var site = await _siteGraphCache.GetResourceOrNullIfNotExists(spSiteId);
-            if (driveItemId != null)
+            if (driveItemId == null)
             {
-                try
-                {
-                    var item = await _spoGraphClient.GetListItemByIdAsync(spSiteId, spListId, driveItemId);
-                    return new SpoDocumentFileInfo(item, site);
-                }
-                catch (ODataError ex)
-                {
-                    _logger.LogWarning(ex, "Error getting file info for copilotDocContextId {copilotDocContextId}", copilotDocContextId);
-                    return null;
-                }
+                return await ResolveDriveItemByUrlAsync(copilotDocContextId, site);
             }
-            else
+
+            var spSiteId = site.Id;
+            var defaultDriveResult = await GetSpoInfoFromSiteUrl(siteUrl);
+            var sawTransientFailure = defaultDriveResult.ShouldStop && !defaultDriveResult.CacheAsUnresolvable;
+
+            if (defaultDriveResult.Drive != null)
             {
-                // We might have a direct URL as the copilot context ID. Resolve it straight to a driveItem via
-                // the Graph /shares endpoint (one call) instead of paging the whole document library to URL-match.
-                // Example: https://contoso-my.sharepoint.com/personal/alex_contoso_onmicrosoft_com/Documents/MyDoc.docx
-                try
+                var defaultListId = defaultDriveResult.Drive.SharePointIds?.ListId;
+                if (!string.IsNullOrEmpty(defaultListId))
                 {
-                    var driveItem = await _spoGraphClient.GetDriveItemByUrlAsync(copilotDocContextId);
-                    if (driveItem != null)
+                    var defaultListResult = await TryGetListItemByIdAsync(spSiteId, defaultListId, driveItemId, site, copilotDocContextId);
+                    if (defaultListResult.FileInfo != null)
                     {
-                        return new SpoDocumentFileInfo(driveItem, site);
+                        return defaultListResult;
                     }
+                    sawTransientFailure |= !defaultListResult.CacheAsUnresolvable;
                 }
-                catch (ODataError ex)
-                {
-                    _logger.LogWarning(ex, "Error resolving driveItem for copilotDocContextId {copilotDocContextId}", copilotDocContextId);
-                    return null;
-                }
-
-                _logger.LogWarning("No driveItemId found in copilotDocContextId {copilotDocContextId}", copilotDocContextId);
-                return null;
             }
+
+            var sharesResult = await ResolveDriveItemByUrlAsync(copilotDocContextId, site);
+            if (sharesResult.FileInfo != null)
+            {
+                return sharesResult;
+            }
+            sawTransientFailure |= !sharesResult.CacheAsUnresolvable;
+
+            var librarySearchResult = await ResolveDriveItemFromSiteLibrariesAsync(spSiteId, defaultDriveResult.Drive?.SharePointIds?.ListId, driveItemId, site, copilotDocContextId);
+            if (librarySearchResult.FileInfo != null)
+            {
+                return librarySearchResult;
+            }
+            sawTransientFailure |= !librarySearchResult.CacheAsUnresolvable;
+
+            return FileResolutionResult.FromFailure(!sawTransientFailure);
         }
 
         public async Task<string> GetUserIdFromUpn(string userPrincipalName)
@@ -308,36 +297,173 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             return user.Id ?? throw new Exception($"No user ID found on user in Graph by upn {userPrincipalName}");
         }
 
-        private async Task<Drive> GetSpoInfoFromMySiteUrl(string eventUpn)
+        private async Task<FileResolutionResult> ResolveDriveItemByUrlAsync(string copilotDocContextId, Site site)
         {
-            // Needs Files.Read.All
+            // Resolve the URL directly via /shares without first loading a drive. This is one Graph call and
+            // works for plain SharePoint/OneDrive file URLs, including files in another user's OneDrive.
             try
             {
-                return await _spoGraphClient.GetUserDriveAsync(eventUpn)
-                    ?? throw new ArgumentOutOfRangeException(eventUpn);
+                var driveItem = await _spoGraphClient.GetDriveItemByUrlAsync(copilotDocContextId);
+                if (driveItem != null)
+                {
+                    return FileResolutionResult.Resolved(new SpoDocumentFileInfo(driveItem, site));
+                }
+            }
+            catch (ODataError ex) when (IsExpectedFileResolutionFailure(ex))
+            {
+                _logger.LogDebug("Graph could not resolve Copilot context '{ctx}' through /shares (status {status}, code {code}); trying any remaining bounded fallbacks",
+                    copilotDocContextId, ex.ResponseStatusCode, ex.Error?.Code);
+                return FileResolutionResult.Unresolvable;
+            }
+            catch (ODataError ex) when (IsTransientFileResolutionFailure(ex))
+            {
+                _logger.LogWarning("Transient Graph error resolving Copilot context '{ctx}' through /shares (status {status}, code {code}); it will not be cached as unresolvable",
+                    copilotDocContextId, ex.ResponseStatusCode, ex.Error?.Code);
+                return FileResolutionResult.TransientFailure;
             }
             catch (ODataError ex)
             {
-                _logger.LogWarning(ex, $"Error {ex.ResponseStatusCode} getting drive info for user {eventUpn}", eventUpn);
-                return null;
+                _logger.LogWarning(ex, "Unexpected error resolving driveItem for copilotDocContextId {copilotDocContextId}", copilotDocContextId);
+                return FileResolutionResult.TransientFailure;
+            }
+
+            _logger.LogDebug("Graph /shares returned no driveItem for Copilot context '{ctx}'", copilotDocContextId);
+            return FileResolutionResult.Unresolvable;
+        }
+
+        private async Task<FileResolutionResult> TryGetListItemByIdAsync(string spSiteId, string spListId, string driveItemId, Site site, string copilotDocContextId)
+        {
+            try
+            {
+                var item = await _spoGraphClient.GetListItemByIdAsync(spSiteId, spListId, driveItemId);
+                return FileResolutionResult.Resolved(new SpoDocumentFileInfo(item, site));
+            }
+            catch (ODataError ex) when (IsExpectedFileResolutionFailure(ex))
+            {
+                _logger.LogDebug("Graph could not resolve Copilot context '{ctx}' as list item {itemId} in list {listId} (status {status}, code {code})",
+                    copilotDocContextId, driveItemId, spListId, ex.ResponseStatusCode, ex.Error?.Code);
+                return FileResolutionResult.Unresolvable;
+            }
+            catch (ODataError ex) when (IsTransientFileResolutionFailure(ex))
+            {
+                _logger.LogWarning("Transient Graph error resolving Copilot context '{ctx}' as list item {itemId} in list {listId} (status {status}, code {code}); it will not be cached as unresolvable",
+                    copilotDocContextId, driveItemId, spListId, ex.ResponseStatusCode, ex.Error?.Code);
+                return FileResolutionResult.TransientFailure;
+            }
+            catch (ODataError ex)
+            {
+                _logger.LogWarning(ex, "Unexpected error getting file info for copilotDocContextId {copilotDocContextId}", copilotDocContextId);
+                return FileResolutionResult.TransientFailure;
             }
         }
 
-        private async Task<Drive> GetSpoInfoFromSiteUrl(string siteUrl)
+        private async Task<FileResolutionResult> ResolveDriveItemFromSiteLibrariesAsync(string spSiteId, string defaultListId, string driveItemId, Site site, string copilotDocContextId)
+        {
+            var drivesResult = await GetDocumentLibraryDrivesAsync(spSiteId);
+            if (drivesResult.ShouldStop)
+            {
+                return FileResolutionResult.FromFailure(drivesResult.CacheAsUnresolvable);
+            }
+
+            var sawTransientFailure = false;
+            foreach (var drive in drivesResult.Drives)
+            {
+                var listId = drive.SharePointIds?.ListId;
+                if (string.IsNullOrEmpty(listId) || string.Equals(listId, defaultListId, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var result = await TryGetListItemByIdAsync(spSiteId, listId, driveItemId, site, copilotDocContextId);
+                if (result.FileInfo != null)
+                {
+                    return result;
+                }
+                sawTransientFailure |= !result.CacheAsUnresolvable;
+            }
+
+            return FileResolutionResult.FromFailure(!sawTransientFailure);
+        }
+
+        private async Task<DocumentLibraryDrivesResult> GetDocumentLibraryDrivesAsync(string spSiteId)
+        {
+            if (_documentLibraryDrivesBySite.TryGetValue(spSiteId, out var cached))
+            {
+                return DocumentLibraryDrivesResult.Found(cached);
+            }
+
+            try
+            {
+                var drives = await _spoGraphClient.GetSiteDocumentLibraryDrivesAsync(spSiteId, MaxDocumentLibrariesToSearch);
+                _documentLibraryDrivesBySite.TryAdd(spSiteId, drives);
+                return DocumentLibraryDrivesResult.Found(drives);
+            }
+            catch (ODataError ex) when (IsExpectedFileResolutionFailure(ex))
+            {
+                _logger.LogDebug("Graph could not enumerate document libraries for site {siteId} (status {status}, code {code})",
+                    spSiteId, ex.ResponseStatusCode, ex.Error?.Code);
+                _documentLibraryDrivesBySite.TryAdd(spSiteId, Array.Empty<Drive>());
+                return DocumentLibraryDrivesResult.Found(Array.Empty<Drive>());
+            }
+            catch (ODataError ex) when (IsTransientFileResolutionFailure(ex))
+            {
+                _logger.LogWarning("Transient Graph error enumerating document libraries for site {siteId} (status {status}, code {code}); contexts depending on this fallback will not be cached as unresolvable",
+                    spSiteId, ex.ResponseStatusCode, ex.Error?.Code);
+                return DocumentLibraryDrivesResult.TransientFailure;
+            }
+            catch (ODataError ex)
+            {
+                _logger.LogWarning(ex, "Unexpected error enumerating document libraries for site {siteId}", spSiteId);
+                return DocumentLibraryDrivesResult.TransientFailure;
+            }
+        }
+
+        private async Task<SiteResolutionResult> GetSiteFromSiteUrl(string siteUrl)
         {
             var siteAddress = StringUtils.GetHostAndSiteRelativeUrl(siteUrl);
             if (siteAddress == null)
             {
                 // Possibly a Teams reference
-                return null;
+                return SiteResolutionResult.Unresolvable;
+            }
+
+            try
+            {
+                var site = await _siteGraphCache.GetResource(siteAddress);
+                return SiteResolutionResult.Found(site);
+            }
+            catch (ODataError ex) when (IsExpectedFileResolutionFailure(ex))
+            {
+                _logger.LogDebug("Graph could not resolve SharePoint site {siteUrl} (status {status}, code {code})",
+                    siteUrl, ex.ResponseStatusCode, ex.Error?.Code);
+                return SiteResolutionResult.Unresolvable;
+            }
+            catch (ODataError ex) when (IsTransientFileResolutionFailure(ex))
+            {
+                _logger.LogWarning("Transient Graph error resolving SharePoint site {siteUrl} (status {status}, code {code}); context will not be cached as unresolvable",
+                    siteUrl, ex.ResponseStatusCode, ex.Error?.Code);
+                return SiteResolutionResult.TransientFailure;
+            }
+            catch (ODataError ex)
+            {
+                _logger.LogWarning(ex, "Unexpected error getting site info for site {siteUrl}", siteUrl);
+                return SiteResolutionResult.TransientFailure;
+            }
+        }
+
+        private async Task<DriveResolutionResult> GetSpoInfoFromSiteUrl(string siteUrl)
+        {
+            var siteAddress = StringUtils.GetHostAndSiteRelativeUrl(siteUrl);
+            if (siteAddress == null)
+            {
+                return DriveResolutionResult.Unresolvable;
             }
 
             // Get drive ID from site ID
             Drive siteDrive = null;
             try
             {
-                siteDrive = await _spoGraphClient.GetSiteDriveAsync(siteAddress)
-                    ?? throw new ArgumentOutOfRangeException(siteAddress);
+                siteDrive = await _spoGraphClient.GetSiteDriveAsync(siteAddress);
             }
             catch (ODataError)
             {
@@ -352,46 +478,126 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 {
                     site = await _spoGraphClient.GetSiteAsync(siteAddress) ?? throw new ArgumentOutOfRangeException(siteAddress);
                 }
+                catch (ODataError ex) when (IsExpectedFileResolutionFailure(ex))
+                {
+                    _logger.LogDebug("Graph could not resolve SharePoint site {siteUrl} while loading its default drive (status {status}, code {code})",
+                        siteUrl, ex.ResponseStatusCode, ex.Error?.Code);
+                    return DriveResolutionResult.Unresolvable;
+                }
+                catch (ODataError ex) when (IsTransientFileResolutionFailure(ex))
+                {
+                    _logger.LogWarning("Transient Graph error resolving SharePoint site {siteUrl} while loading its default drive (status {status}, code {code}); context will not be cached as unresolvable",
+                        siteUrl, ex.ResponseStatusCode, ex.Error?.Code);
+                    return DriveResolutionResult.TransientFailure;
+                }
                 catch (ODataError ex)
                 {
-                    _logger.LogWarning(ex, "Error getting site info for site {siteUrl}", siteUrl);
-                    return null;
+                    _logger.LogWarning(ex, "Unexpected error getting site info for site {siteUrl}", siteUrl);
+                    return DriveResolutionResult.TransientFailure;
                 }
                 if (site != null)
                 {
                     try
                     {
                         // Try one more time using site ID
-                        siteDrive = await _spoGraphClient.GetSiteDriveAsync(site.Id)
-                            ?? throw new ArgumentOutOfRangeException(siteAddress);
+                        siteDrive = await _spoGraphClient.GetSiteDriveAsync(site.Id);
                     }
-                    catch (ODataError)
+                    catch (ODataError ex) when (IsExpectedFileResolutionFailure(ex))
                     {
-                        // Ignore. Handle logging below
+                        _logger.LogDebug("Graph could not resolve default drive for site {siteId} (status {status}, code {code})",
+                            site.Id, ex.ResponseStatusCode, ex.Error?.Code);
+                    }
+                    catch (ODataError ex) when (IsTransientFileResolutionFailure(ex))
+                    {
+                        _logger.LogWarning("Transient Graph error resolving default drive for site {siteId} (status {status}, code {code}); context will not be cached as unresolvable",
+                            site.Id, ex.ResponseStatusCode, ex.Error?.Code);
+                        return DriveResolutionResult.TransientFailure;
+                    }
+                    catch (ODataError ex)
+                    {
+                        _logger.LogWarning(ex, "Unexpected error resolving default drive for site {siteId}", site.Id);
+                        return DriveResolutionResult.TransientFailure;
                     }
 
                     if (siteDrive == null)
                     {
                         // Site exists but no drive for some reason
-                        _logger.LogWarning($"No drive found for site ID {site.Id}");
-                        return null;
+                        _logger.LogDebug("No default drive found for site ID {siteId}", site.Id);
+                        return DriveResolutionResult.Unresolvable;
                     }
                     else
                     {
-                        return siteDrive;
+                        return DriveResolutionResult.Found(siteDrive);
                     }
                 }
                 else
                 {
                     // We can't find the site. Bug in the URL parsing?
-                    _logger.LogError("No site found for site {siteUrl}", siteUrl);
-                    return null;
+                    _logger.LogDebug("No site found for site {siteUrl}", siteUrl);
+                    return DriveResolutionResult.Unresolvable;
                 }
             }
             else
             {
-                return siteDrive;
+                return DriveResolutionResult.Found(siteDrive);
             }
+        }
+
+        private static bool IsExpectedFileResolutionFailure(ODataError ex)
+        {
+            if (ex == null) return false;
+            return ex.ResponseStatusCode == (int)HttpStatusCode.NotFound
+                || ex.ResponseStatusCode == (int)HttpStatusCode.Forbidden;
+        }
+
+        private static bool IsTransientFileResolutionFailure(ODataError ex)
+        {
+            if (ex == null) return false;
+            return ex.ResponseStatusCode == 429
+                || ex.ResponseStatusCode >= 500;
+        }
+
+        private sealed class FileResolutionResult
+        {
+            public SpoDocumentFileInfo FileInfo { get; private set; }
+            public bool CacheAsUnresolvable { get; private set; }
+
+            public static FileResolutionResult Unresolvable { get; } = new FileResolutionResult { CacheAsUnresolvable = true };
+            public static FileResolutionResult TransientFailure { get; } = new FileResolutionResult { CacheAsUnresolvable = false };
+            public static FileResolutionResult Resolved(SpoDocumentFileInfo fileInfo) => new FileResolutionResult { FileInfo = fileInfo, CacheAsUnresolvable = false };
+            public static FileResolutionResult FromFailure(bool cacheAsUnresolvable) => cacheAsUnresolvable ? Unresolvable : TransientFailure;
+        }
+
+        private sealed class SiteResolutionResult
+        {
+            public Site Site { get; private set; }
+            public bool CacheAsUnresolvable { get; private set; }
+            public bool ShouldStop => Site == null;
+
+            public static SiteResolutionResult Unresolvable { get; } = new SiteResolutionResult { CacheAsUnresolvable = true };
+            public static SiteResolutionResult TransientFailure { get; } = new SiteResolutionResult { CacheAsUnresolvable = false };
+            public static SiteResolutionResult Found(Site site) => new SiteResolutionResult { Site = site };
+        }
+
+        private sealed class DriveResolutionResult
+        {
+            public Drive Drive { get; private set; }
+            public bool CacheAsUnresolvable { get; private set; }
+            public bool ShouldStop => Drive == null;
+
+            public static DriveResolutionResult Unresolvable { get; } = new DriveResolutionResult { CacheAsUnresolvable = true };
+            public static DriveResolutionResult TransientFailure { get; } = new DriveResolutionResult { CacheAsUnresolvable = false };
+            public static DriveResolutionResult Found(Drive drive) => new DriveResolutionResult { Drive = drive };
+        }
+
+        private sealed class DocumentLibraryDrivesResult
+        {
+            public IReadOnlyList<Drive> Drives { get; private set; }
+            public bool CacheAsUnresolvable { get; private set; }
+            public bool ShouldStop => Drives == null;
+
+            public static DocumentLibraryDrivesResult TransientFailure { get; } = new DocumentLibraryDrivesResult { CacheAsUnresolvable = false };
+            public static DocumentLibraryDrivesResult Found(IReadOnlyList<Drive> drives) => new DocumentLibraryDrivesResult { Drives = drives ?? Array.Empty<Drive>() };
         }
     }
 }

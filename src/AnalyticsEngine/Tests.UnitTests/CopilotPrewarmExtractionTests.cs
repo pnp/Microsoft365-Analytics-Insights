@@ -97,9 +97,8 @@ namespace Tests.UnitTests
         /// depends on.
         ///
         /// The URL is the Unicode-bearing field here and the map's value is deliberately ASCII: it is
-        /// the Copilot event's UserId, which this path consumes as an Entra UPN (it is handed to
-        /// GraphFileMetadataLoader.GetSpoFileInfo as eventUpn and on to GetUserDriveAsync), and Entra
-        /// UPNs are ASCII - see #402/#414.
+        /// the Copilot event's UserId, which this path consumes as an Entra UPN. Entra UPNs are ASCII -
+        /// see #402/#414.
         /// </summary>
         [TestMethod]
         public void ManagerWrapper_KeepsNonLatinFileUrlsIntact()
