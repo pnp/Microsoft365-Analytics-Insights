@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Data.SqlClient;
 using System.Linq;
+using System.Net;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Graph.User;
 
@@ -107,6 +108,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                 _logger.LogWarning($"Cowork usage report {request} is not available on this tenant: {ex.Message}.");
                 return 0;
             }
+            catch (GraphHttpException ex) when (IsUnknownReportFunctionBadRequest(ex))
+            {
+                importLog.RowsRead = 0;
+                importLog.Error = Truncate($"Report not available: {GraphHttpException.DescribeForStorage(ex)}", 1000);
+                await persistence.RecordReportLoadAsync(importLog);
+                _logger.LogWarning($"Cowork usage report {request} is not available on this tenant: {ex.Message}.");
+                return 0;
+            }
             catch (Exception ex)
             {
                 importLog.Error = Truncate(GraphHttpException.DescribeForStorage(ex), 1000);
@@ -159,6 +168,42 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             await persistence.RecordReportLoadAsync(importLog);
             _logger.LogInformation($"Cowork usage report {request}: parsed {parsed.Count} row(s), wrote {written} to SQL.");
             return written;
+        }
+
+        internal static bool IsUnknownReportFunctionBadRequest(GraphHttpException ex)
+        {
+            if (ex == null || ex.StatusCode != HttpStatusCode.BadRequest) return false;
+            if (string.IsNullOrWhiteSpace(ex.GraphErrorCode)) return false;
+            if (ex.GraphErrorCode.IndexOf("badrequest", StringComparison.OrdinalIgnoreCase) < 0) return false;
+
+            var message = ExtractGraphErrorMessage(ex.ResponseBody);
+            if (string.IsNullOrWhiteSpace(message)) return false;
+
+            return Contains(message, "resource not found")
+                || Contains(message, "resource could not be found")
+                || Contains(message, "function not found")
+                || Contains(message, "not find a property")
+                || Contains(message, "not found for the segment")
+                || Contains(message, "unknown segment");
+        }
+
+        private static bool Contains(string value, string expected)
+        {
+            return value?.IndexOf(expected, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static string ExtractGraphErrorMessage(string responseBody)
+        {
+            if (string.IsNullOrWhiteSpace(responseBody)) return null;
+
+            try
+            {
+                return JObject.Parse(responseBody)["error"]?["message"]?.ToString();
+            }
+            catch (Exception)
+            {
+                return null;
+            }
         }
 
         private async Task<List<CoworkUsageUserDetailRow>> FilterToUsersInScope(List<CoworkUsageUserDetailRow> rows)

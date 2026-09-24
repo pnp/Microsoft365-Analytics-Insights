@@ -43,6 +43,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         public const string GraphUsersMetadataLastImportedKey = "GraphUsersMetadataLastImported";
         public const string GraphTeamsLastImportedKey = "GraphTeamsLastImported";
         public const string GraphCopilotUsageReportsLastImportedKey = "GraphCopilotUsageReportsLastImported";
+        public const string GraphCopilotUsageReportUserCountTrendLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UserCountTrend";
+        public const string GraphCopilotUsageReportUserCountSummaryLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UserCountSummary";
+        public const string GraphCopilotUsageReportUsageUserDetailLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UsageUserDetail";
+        public const string GraphCopilotUsageReportCoworkUsageUserDetailLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":CoworkUsageUserDetail";
         public const string CopilotInteractionHistoryLastImportedKey = "CopilotInteractionHistoryLastImported";
 
         private readonly AnalyticsLogger _logger;
@@ -52,6 +56,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         private readonly ISentEmailMailboxSkipList _sentEmailMailboxSkipList;
         private readonly IAnalyticsDbContextFactory _dbContextFactory;
         private readonly IClock _clock;
+        private readonly IImportLastRunStore _lastRunStore;
         private readonly ActivityReportsImport _activityReportsImport;
 
         public ProductionGraphImportSectionFactory(
@@ -62,7 +67,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
             ISentEmailMailboxSkipList sentEmailMailboxSkipList,
             ActivityReportsImport activityReportsImport,
             IAnalyticsDbContextFactory dbContextFactory,
-            IClock clock)
+            IClock clock,
+            IImportLastRunStore lastRunStore = null)
         {
             // Deliberately no null guards on logger/settings: GraphImporter's own constructor never had them,
             // and adding them here would move the failure from an NRE inside the import to an
@@ -77,6 +83,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
             _activityReportsImport = activityReportsImport ?? throw new ArgumentNullException(nameof(activityReportsImport));
             _dbContextFactory = dbContextFactory ?? DefaultAnalyticsDbContextFactory.Instance;
             _clock = clock ?? SystemClock.Instance;
+            _lastRunStore = lastRunStore ?? new InMemoryImportLastRunStore();
         }
 
         /// <summary>
@@ -222,8 +229,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         }
 
         /// <summary>
-        /// Imports the three Graph Microsoft 365 Copilot usage reports. Returns true only if all three
-        /// succeeded, so the cadence gate retries next cycle otherwise.
+        /// Imports the four Graph Microsoft 365 Copilot usage reports. Each report has its own cadence
+        /// stamp behind the section-level gate: if one optional report fails, the failed report retries on
+        /// the next cycle while reports that already succeeded are skipped until their interval elapses.
         ///
         /// Order is deliberate: the two tenant-aggregate reports go first because they are cheap (a few
         /// thousand rows whatever the tenant size), need no per-user joins, and are unaffected by the tenant's
@@ -240,38 +248,59 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
             // Same client, throttling and paging as every other Graph usage report in this solution.
             var reportSource = new GraphCopilotReportSource(httpClient, _logger);
 
-            // First run gets the widest window Graph offers. This is history we cannot get any other way:
-            // the audit pipeline has a hard 7-day retrieval ceiling, so without this backfill a new
-            // install starts with an empty Copilot adoption trend.
-            //
-            // The decision is based on whether a D180 TREND import has ever completed - not on whether any
-            // Copilot row exists. Keying it off "any row" meant a successful summary import alongside a
-            // failed D180 trend permanently downgraded every later run to D28, silently losing the
-            // backfill for good.
-            var backfillDone = await HasCompletedTrendBackfill();
-            var trendPeriod = backfillDone ? CopilotReportRequest.DefaultRefreshPeriod : CopilotReportRequest.MaxHistoryPeriod;
-            if (!backfillDone)
+            var reportGate = new CopilotUsageReportCadenceRunner(
+                _logger,
+                _lastRunStore,
+                _clock,
+                _settings.GraphCopilotUsageReportsIntervalHours,
+                _settings.ForceGraphMetadataImport);
+
+            return await reportGate.RunAsync(new[]
             {
-                _logger.LogInformation($"No completed Copilot trend backfill on record - requesting the maximum window ({trendPeriod}).");
-            }
+                new CopilotUsageReportCadenceRunner.Report(
+                    "Copilot user-count trend",
+                    GraphCopilotUsageReportUserCountTrendLastImportedKey,
+                    async () =>
+                    {
+                        // First run gets the widest window Graph offers. This is history we cannot get any other way:
+                        // the audit pipeline has a hard 7-day retrieval ceiling, so without this backfill a new
+                        // install starts with an empty Copilot adoption trend.
+                        //
+                        // The decision is based on whether a D180 TREND import has ever completed - not on whether any
+                        // Copilot row exists. Keying it off "any row" meant a successful summary import alongside a
+                        // failed D180 trend permanently downgraded every later run to D28, silently losing the
+                        // backfill for good.
+                        var dueBackfillDone = await HasCompletedTrendBackfill();
+                        var dueTrendPeriod = dueBackfillDone ? CopilotReportRequest.DefaultRefreshPeriod : CopilotReportRequest.MaxHistoryPeriod;
+                        if (!dueBackfillDone)
+                        {
+                            _logger.LogInformation($"No completed Copilot trend backfill on record - requesting the maximum window ({dueTrendPeriod}).");
+                        }
 
-            var allSucceeded = true;
+                        return await RunCopilotReport("Copilot user-count trend", db =>
+                            new CopilotUserCountReportLoader(reportSource, _logger).LoadAndSaveTrendAsync(db, dueTrendPeriod));
+                    }),
 
-            allSucceeded &= await RunCopilotReport("Copilot user-count trend", db =>
-                new CopilotUserCountReportLoader(reportSource, _logger).LoadAndSaveTrendAsync(db, trendPeriod));
+                new CopilotUsageReportCadenceRunner.Report(
+                    "Copilot user-count summary",
+                    GraphCopilotUsageReportUserCountSummaryLastImportedKey,
+                    () => RunCopilotReport("Copilot user-count summary", db =>
+                        new CopilotUserCountReportLoader(reportSource, _logger).LoadAndSaveSummaryAsync(db, CopilotReportRequest.DefaultRefreshPeriod))),
 
-            allSucceeded &= await RunCopilotReport("Copilot user-count summary", db =>
-                new CopilotUserCountReportLoader(reportSource, _logger).LoadAndSaveSummaryAsync(db, CopilotReportRequest.DefaultRefreshPeriod));
+                new CopilotUsageReportCadenceRunner.Report(
+                    "Copilot per-user usage detail",
+                    GraphCopilotUsageReportUsageUserDetailLastImportedKey,
+                    () => RunCopilotReport("Copilot per-user usage detail", db =>
+                        new CopilotUsageUserDetailLoader(reportSource, _logger, userGroupsCache, userGroupsFilterModel)
+                            .LoadAndSaveAsync(db, CopilotReportRequest.DefaultRefreshPeriod))),
 
-            allSucceeded &= await RunCopilotReport("Copilot per-user usage detail", db =>
-                new CopilotUsageUserDetailLoader(reportSource, _logger, userGroupsCache, userGroupsFilterModel)
-                    .LoadAndSaveAsync(db, CopilotReportRequest.DefaultRefreshPeriod));
-
-            allSucceeded &= await RunCopilotReport("Cowork per-user usage detail", db =>
-                new CoworkUsageUserDetailLoader(reportSource, _logger, userGroupsCache, userGroupsFilterModel)
-                    .LoadAndSaveAsync(db, CopilotReportRequest.DefaultRefreshPeriod));
-
-            return allSucceeded;
+                new CopilotUsageReportCadenceRunner.Report(
+                    "Cowork per-user usage detail",
+                    GraphCopilotUsageReportCoworkUsageUserDetailLastImportedKey,
+                    () => RunCopilotReport("Cowork per-user usage detail", db =>
+                        new CoworkUsageUserDetailLoader(reportSource, _logger, userGroupsCache, userGroupsFilterModel)
+                            .LoadAndSaveAsync(db, CopilotReportRequest.DefaultRefreshPeriod))),
+            });
         }
 
         /// <summary>
@@ -330,6 +359,72 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     "Check the app registration has the Reports.Read.All application permission granted, and that this is a global-cloud tenant (these reports don't exist in the US Government or 21Vianet clouds). " +
                     "The other Copilot reports and the remaining Graph imports are unaffected; this one will be retried on the next cycle.");
                 return false;
+            }
+        }
+
+        internal class CopilotUsageReportCadenceRunner
+        {
+            private readonly ILogger _logger;
+            private readonly IImportLastRunStore _lastRunStore;
+            private readonly IClock _clock;
+            private readonly int _intervalHours;
+            private readonly bool _force;
+
+            public CopilotUsageReportCadenceRunner(ILogger logger, IImportLastRunStore lastRunStore, IClock clock, int intervalHours, bool force)
+            {
+                _logger = logger;
+                _lastRunStore = lastRunStore ?? new InMemoryImportLastRunStore();
+                _clock = clock ?? SystemClock.Instance;
+                _intervalHours = intervalHours;
+                _force = force;
+            }
+
+            public async Task<bool> RunAsync(IEnumerable<Report> reports)
+            {
+                var allDueReportsSucceeded = true;
+
+                foreach (var report in reports)
+                {
+                    var lastRun = await _lastRunStore.GetLastRunUtc(report.CadenceKey);
+                    if (!ImportCadenceGate.ShouldRun(lastRun, _intervalHours, _force, _clock.UtcNow))
+                    {
+                        _logger.LogInformation($"Skipping {report.Description}: ran recently ({lastRun:u} UTC). " +
+                            $"Next run after {lastRun?.AddHours(_intervalHours):u} UTC (interval {_intervalHours}h). " +
+                            $"Set ForceGraphMetadataImport=true or clear the '{report.CadenceKey}' cache key to override.");
+                        continue;
+                    }
+
+                    if (_force)
+                    {
+                        _logger.LogInformation($"ForceGraphMetadataImport=true; bypassing the cadence gate for {report.Description}.");
+                    }
+
+                    var succeeded = await report.Import();
+                    allDueReportsSucceeded &= succeeded;
+
+                    if (_intervalHours > 0 && succeeded)
+                    {
+                        await _lastRunStore.SetLastRunUtc(report.CadenceKey, _clock.UtcNow);
+                    }
+                }
+
+                return allDueReportsSucceeded;
+            }
+
+            public class Report
+            {
+                public Report(string description, string cadenceKey, Func<Task<bool>> import)
+                {
+                    if (string.IsNullOrWhiteSpace(description)) throw new ArgumentException($"'{nameof(description)}' is required.", nameof(description));
+                    if (string.IsNullOrWhiteSpace(cadenceKey)) throw new ArgumentException($"'{nameof(cadenceKey)}' is required.", nameof(cadenceKey));
+                    Description = description;
+                    CadenceKey = cadenceKey;
+                    Import = import ?? throw new ArgumentNullException(nameof(import));
+                }
+
+                public string Description { get; }
+                public string CadenceKey { get; }
+                public Func<Task<bool>> Import { get; }
             }
         }
     }
