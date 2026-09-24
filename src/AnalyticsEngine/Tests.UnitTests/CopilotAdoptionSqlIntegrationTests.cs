@@ -1195,6 +1195,110 @@ namespace Tests.UnitTests
 
         #endregion
 
+        #region Failure classification against the real driver
+
+        [TestMethod]
+        public async System.Threading.Tasks.Task FailureClassification_ARealCommandTimeoutIsATimeoutWithSqlErrorMinus2()
+        {
+            // Through the service's exact path - EF6 Database.SqlQuery + ToListAsync on Microsoft.Data.SqlClient.
+            // This is the case the telemetry used to record as a bare "Win32Exception": the innermost exception
+            // of a SqlClient command timeout is Win32Exception 258, indistinguishable by type from a network
+            // failure. The unit tests cannot construct a SqlException, so the real shape is only provable here.
+            using (var db = ScratchDatabase.Create("CopilotAdoptTimeout"))
+            using (var context = new RawSqlContext(db.ConnectionString))
+            {
+                context.Database.CommandTimeout = 1;
+
+                Exception thrown = null;
+                try
+                {
+                    await context.Database.SqlQuery<int>("WAITFOR DELAY '00:00:04'; SELECT 1;").ToListAsync();
+                }
+                catch (Exception ex)
+                {
+                    thrown = ex;
+                }
+
+                Assert.IsNotNull(thrown, "a 1-second command timeout must fire on a 4-second WAITFOR");
+                var failure = CopilotAdoptionFailure.From(thrown);
+
+                Assert.AreEqual(CopilotAdoptionFailureKinds.Timeout, failure.FailureKind, failure.ExceptionChain);
+
+                // EF6 / SqlClient surface an async command timeout as either shape, unpredictably (see
+                // CopilotAdoptionService.SafeAsync). Only the SqlException one carries the numbers.
+                if (failure.ExceptionChain.Contains("SqlException"))
+                {
+                    Assert.AreEqual(-2, failure.SqlErrorNumber, "-2 is SqlClient's 'Execution Timeout Expired'");
+                    Assert.AreEqual(258, failure.Win32ErrorCode, "WAIT_TIMEOUT");
+                    Assert.AreEqual("Win32Exception", failure.ExceptionType,
+                        "ExceptionType keeps its old meaning - which is exactly why it could not identify a timeout");
+                    StringAssert.Contains(failure.ExceptionChain, "SqlException>Win32Exception");
+                }
+                else
+                {
+                    StringAssert.Contains(failure.ExceptionChain, "CanceledException",
+                        "the only other shape is a cancellation nobody asked for");
+                }
+            }
+        }
+
+        [TestMethod]
+        public async System.Threading.Tasks.Task FailureClassification_ARequestedCancellationIsCancelledNotAConnectionFailure()
+        {
+            // SqlClient reports a token-triggered abort as SqlException "Operation cancelled by user", numbered 0 -
+            // which on its own maps to a transport failure. It must read as a cancellation when one was asked for.
+            using (var db = ScratchDatabase.Create("CopilotAdoptCancel"))
+            using (var context = new RawSqlContext(db.ConnectionString))
+            using (var cancel = new System.Threading.CancellationTokenSource())
+            {
+                context.Database.CommandTimeout = 30;
+                cancel.CancelAfter(TimeSpan.FromMilliseconds(500));
+
+                Exception thrown = null;
+                try
+                {
+                    await context.Database.SqlQuery<int>("WAITFOR DELAY '00:00:04'; SELECT 1;").ToListAsync(cancel.Token);
+                }
+                catch (Exception ex)
+                {
+                    thrown = ex;
+                }
+
+                Assert.IsNotNull(thrown, "cancelling after 500ms must abort a 4-second WAITFOR");
+                var failure = CopilotAdoptionFailure.From(thrown, cancellationRequested: true);
+
+                Assert.AreEqual(CopilotAdoptionFailureKinds.Cancelled, failure.FailureKind,
+                    $"shape was {failure.ExceptionChain} (SQL error {failure.SqlErrorNumber?.ToString() ?? "none"})");
+            }
+        }
+
+        [TestMethod]
+        public void FailureClassification_AMissingTableIsASchemaMismatchNotATimeout()
+        {
+            // What a database the upgrade never reached looks like: the query names a table that is not there.
+            using (var db = ScratchDatabase.Create("CopilotAdoptSchema"))
+            {
+                Exception thrown = null;
+                try
+                {
+                    Query<int>(db, "SELECT COUNT(*) FROM dbo.cowork_usage_user_activity_log;");
+                }
+                catch (Exception ex)
+                {
+                    thrown = ex;
+                }
+
+                Assert.IsNotNull(thrown);
+                var failure = CopilotAdoptionFailure.From(thrown);
+
+                Assert.AreEqual(CopilotAdoptionFailureKinds.SchemaMismatch, failure.FailureKind);
+                Assert.AreEqual(208, failure.SqlErrorNumber, "208 is 'Invalid object name'");
+                Assert.IsNull(failure.Win32ErrorCode);
+            }
+        }
+
+        #endregion
+
         #region Fixture
 
         private static List<T> Query<T>(ScratchDatabase db, string sql, params SqlParameter[] parameters)
