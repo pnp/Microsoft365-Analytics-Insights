@@ -4,6 +4,7 @@ using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -14,10 +15,13 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
     ///
     /// <para>Built for reporting on agent workloads billed directly to an Azure subscription, but it is a
     /// <b>general</b> cost import: which meters it brings back is configured, not compiled in. That is not
-    /// laziness. Microsoft Cowork - the workload this was written for - is billed through Copilot Credits
-    /// managed in the Microsoft 365 admin centre, and Microsoft documents no Azure meter for it at all, so
-    /// there is no correct constant to ship. With no filter configured the import brings back every meter at
-    /// the scope, which is exactly what an operator needs to discover what their own agent spend is called.</para>
+    /// laziness. Microsoft documents that pay-as-you-go Copilot Credits - Copilot Cowork, the workload this was
+    /// written for, as well as Copilot Studio and Work IQ API - appear under the one
+    /// <c>Microsoft Copilot Studio</c> service rather than a service per experience, so no compiled-in
+    /// constant could pick Cowork out; separating it takes its own subscription or resource group, or a service
+    /// tag where the billing data carries one (a <c>TagKey:</c> grouping). With no filter configured the import
+    /// brings back every meter at the scope, which is exactly what an operator needs to discover what their own
+    /// agent spend is called.</para>
     ///
     /// <para><b>No user attribution is possible.</b> Azure billing is resource-scoped; no Cost Management
     /// surface carries a user identity.</para>
@@ -193,7 +197,8 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 var usageDate = row.UsageDate.Date;
 
                 var hash = AgentCostRowHasher.Hash(
-                    usageDate.ToString("yyyy-MM-dd"),
+                    // Invariant: part of the row's identity, so it must not change with the host's calendar.
+                    usageDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                     scope,
                     row.SubscriptionId,
                     row.ResourceId,

@@ -56,8 +56,8 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         public async Task<CopilotStudioCreditPage> GetConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
         {
             var url = $"{BaseUrl}/licensing/entitlements/{EntitlementId}/resources"
-                + $"?fromDate={fromDate:yyyy-MM-dd}"
-                + $"&toDate={toDate:yyyy-MM-dd}"
+                + $"?fromDate={QueryDate(fromDate)}"
+                + $"&toDate={QueryDate(toDate)}"
                 + $"&includeFields={Uri.EscapeDataString(IncludeFields)}"
                 + $"&pageSize={PageSize.ToString(CultureInfo.InvariantCulture)}"
                 + $"&api-version={ApiVersion}";
@@ -78,6 +78,12 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         }
 
         /// <summary>
+        /// A date as the licensing API expects it, in the invariant culture. An interpolated
+        /// <c>{date:yyyy-MM-dd}</c> uses the CURRENT culture's calendar, so a th-TH host would ask for 2569.
+        /// </summary>
+        internal static string QueryDate(DateTime date) => date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+        /// <summary>
         /// One page of per-user consumption for the given day.
         /// </summary>
         /// <remarks>
@@ -94,8 +100,8 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         public async Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
         {
             var url = $"{BaseUrl}/licensing/entitlements/{EntitlementId}/users"
-                + $"?fromDate={fromDate:yyyy-MM-dd}"
-                + $"&toDate={toDate:yyyy-MM-dd}"
+                + $"?fromDate={QueryDate(fromDate)}"
+                + $"&toDate={QueryDate(toDate)}"
                 + $"&pageSize={PageSize.ToString(CultureInfo.InvariantCulture)}"
                 + $"&api-version={ApiVersion}";
 
@@ -151,7 +157,8 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         /// </remarks>
         private async Task<LicensingApiResponse> ReadAsync(string url, string what, bool treatNotFoundAsUnavailable)
         {
-            using (var response = await _httpClient.ExecuteHttpCallWithThrottleRetries(() => _httpClient.GetAsync(url), url))
+            using (var response = await _httpClient.ExecuteHttpCallWithThrottleRetries(
+                () => _httpClient.GetAsync(url), url, isReplayableIdempotentGet: true))
             {
                 if (treatNotFoundAsUnavailable && response.StatusCode == HttpStatusCode.NotFound)
                 {
