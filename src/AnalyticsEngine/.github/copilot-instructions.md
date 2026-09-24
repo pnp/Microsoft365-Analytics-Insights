@@ -51,6 +51,7 @@ Concrete anti-patterns that get expensive at 200k users:
 4. **Per-row EF queries inside a loop** (e.g. `foreach (var url in urls) { db.urls.Where(u => u.Url == url).SingleOrDefaultAsync(); }`). Batch with `Where(u => batch.Contains(u.Url)).ToListAsync()` in IN-clause-friendly chunks (~1000 elements is safe for SQL Server's 2100 parameter limit).
 5. **Rebuilding a 200k-entry dictionary inside a per-SKU / per-batch loop**. Hoist the dictionary build to the outer scope and pass it in.
 6. **Unbounded per-user Graph pulls**. A single noisy mailbox / dataset can dominate import time; add a per-entity cap with a "will resume next cycle" log.
+7. **EF6 `Add()` in a loop while change tracking is automatic**. With `AutoDetectChangesEnabled` on (the EF6 default, and nothing in `Common/Entities` turns it off), every `Add` runs `DetectChanges` over everything the context is tracking, including a window of stored rows loaded for an upsert. So N adds cost O(N²). Measured on the Azure cost store: 5,000 rows took 23 s and 20,000 rows took 167 s. Set `db.Configuration.AutoDetectChangesEnabled = false`, collect the new rows and `AddRange` them, then call `db.ChangeTracker.DetectChanges()` **once** before `SaveChanges`. That brought the same batches down to 6.7 s and 28 s. The explicit `DetectChanges` is not optional. With auto-detection off, in-place updates to already-tracked rows are silently not saved. Every upsert path needs a test that re-reads a *changed* value (see `AgentCostSqlIntegrationTests`). A test that only checks row counts cannot catch this.
 
 When writing or reviewing such code, call this out in the PR description / review comment with a concrete cost estimate at 200k-user scale.
 
@@ -70,7 +71,10 @@ already expose the useful boundaries without it.
 Collect these artifacts against the **same UTC window**:
 
 1. The approximate UTC start/end time, selected reporting period, visible outcome, and a HAR captured
-   without manually reloading the page.
+   without manually reloading the page. The HAR identifies the exact run: the 202 body carries
+   `runId` (with an `X-CopilotAdoption-RunId` response header), and so does the completed summary's
+   `diagnostics.runId`. It is the same value as the lifecycle events' `RunId` and `operation_Id`; the
+   per-run `CopilotAdoptionAnalysis` event carries it **only** as `operation_Id`.
 2. The lifecycle export below from the deployment's Application Insights resource.
 3. Azure SQL CPU, Data IO, Log IO and DTU percentages for that window. Use Query Store or
    `sys.dm_exec_requests` to establish server execution separately, but never paste query text,
@@ -90,6 +94,9 @@ customEvents
          Query=tostring(customDimensions.Query),
          Outcome=tostring(customDimensions.Outcome),
          ExceptionType=tostring(customDimensions.ExceptionType),
+         FailureKind=tostring(customDimensions.FailureKind),
+         SqlErrorNumber=tostring(customDimensions.SqlErrorNumber),
+         ExceptionChain=tostring(customDimensions.ExceptionChain),
          SyncContext=tostring(customDimensions.SynchronizationContext),
          ActiveOperations=tostring(customDimensions.ActiveOperations),
          ElapsedMs=tolong(customMeasurements.ElapsedMs),
@@ -101,7 +108,8 @@ customEvents
          HeartbeatDriftMs=tolong(customMeasurements.HeartbeatDriftMs),
          DroppedEvents=toint(customMeasurements.DroppedEvents)
 | project timestamp, RunId, InstanceId, Sequence, Stage, Step, Query,
-          Outcome, ExceptionType, SyncContext, ActiveOperations,
+          Outcome, ExceptionType, FailureKind, SqlErrorNumber, ExceptionChain,
+          SyncContext, ActiveOperations,
           ElapsedMs, DurationMs, WorkingSetMB, ManagedHeapMB,
           Gen2Collections, AvailableWorkers, HeartbeatDriftMs, DroppedEvents
 | order by RunId asc, Sequence asc
@@ -112,19 +120,34 @@ Interpret boundaries literally:
 | Last evidence | What it proves |
 |---|---|
 | No `Started` event and an immediate page | Usually a 10-minute web-process result-cache hit; confirm Application Insights was otherwise receiving events |
+| `Queued`, then a long gap before `GateAcquired` | This web app instance was already running its limit of analyses (`CopilotAdoptionAnalysisCoordinator.DefaultMaxConcurrentAnalyses`, 2, plus one on the overflow slot after the queue wait). The limit is per instance and per AppDomain: a scaled-out plan has one per instance, and an overlapped recycle briefly runs two. `GateAcquired.DurationMs` is the wait. Several windows requested at once cause this. Heartbeats continue while a run is queued, with an empty `ActiveOperations` |
+| `GateBypassed` | This run did not obtain a slot within the maximum queue wait (3 minutes), so it went ahead on the single overflow slot. That does not by itself mean a run is hung: either the slots are held by slow or hung runs (repeating heartbeats and no terminal event), or earlier queued runs took each slot as it freed (other `Queued` events ahead of this one) |
+| `GateTimedOut` | Terminal. As `GateBypassed`, but the overflow slot was taken too, so the run was dropped without touching the database rather than adding load. The page's next poll queues a fresh run with a new `RunId` |
+| `QueueFull` | Terminal. Both slots were busy and 8 runs (`DefaultMaxQueuedAnalyses`) were already queued, so the run was turned away at once, without queueing or touching the database. The page's next poll tries again. Sustained, it means more distinct periods and seat overrides are being asked for at once than one instance will queue. Unlike the other early endings it is not flushed immediately, so it normally arrives within the channel's 30-second send interval — normally, not guaranteed: nothing still buffered survives a crash, and a failing ingestion endpoint can delay or lose it |
+| `Abandoned` | Terminal. The run queued, and nobody had asked for its result for 60 seconds with no request waiting on it, so it never touched the database. A queued run re-checks every 15 seconds, so it can be abandoned while still queued (`Queued` then `Abandoned`), on reaching a slot (`GateAcquired` then `Abandoned`) or on taking the overflow slot (`GateBypassed` then `Abandoned`). A request that stops waiting counts as interest until that moment. Normal when someone clicks through periods |
 | `QueryStarted` without `QueryCompleted` | EF's full `ToListAsync` boundary did not return: connection acquisition, SQL execution, TDS transfer and materialisation are still combined here; Query Store decides whether SQL itself finished |
+| `QueryFailed` | Read `FailureKind` and `SqlErrorNumber`, not `ExceptionType`. A command timeout is `FailureKind=Timeout`, usually with `SqlErrorNumber=-2` and `DurationMs` about 90,000 (EF can also surface it as a bare cancellation, with no SQL number). Its `ExceptionType` is `Win32Exception`, because that is the innermost exception SqlClient wraps a timeout in, so `ExceptionType` alone cannot tell a timeout from a network failure. `SchemaMismatch` (207/208) means the database was not upgraded; `Throttled`/`Unavailable` are Azure SQL limits or failovers; `Deadlock` is 1205; `Cancelled` only when the caller asked for it |
 | `QueryCompleted` without `StepCompleted` | SQL/EF returned; the C# projection for that step did not finish |
 | All analysis steps complete without `ScoringCompleted` | Final in-memory summary scoring stalled or failed |
-| `ServiceReturned` without `CachePublished` | The service returned, but cache publication did not complete |
-| `CachePublished` without `CompletionTelemetryReturned` | The result was available to callers, but legacy completion telemetry did not return |
-| Repeating `Heartbeat` | Read `ActiveOperations`, memory/GC, available threads, drift and `DroppedEvents`; heartbeat starts after 30 seconds, so a healthy fast run has none |
-| `HostStopping` during a run | A graceful AppDomain shutdown interrupted it |
+| `ServiceReturned` without `CachePublished` | The result was published: the cache is written before either checkpoint is sent. Only the `CachePublished` event is missing — typically because the host was stopping and the telemetry queue no longer accepted it |
+| `CachePublished` without `CompletionTelemetryReturned` | The result was available to callers. The completion event is unconfirmed rather than lost: `CompletionTelemetryReturned` is written after the `CopilotAdoptionAnalysis` event, so look for that event by `operation_Id` before concluding it was not sent |
+| Repeating `Heartbeat` | Read `ActiveOperations`, memory/GC, available threads, drift and `DroppedEvents`; heartbeat starts after 30 seconds, so a healthy fast run has none. A heartbeat is flushed when it is sent unless another flush went out in the last 25 seconds (the throttle keeps several runs' heartbeats from stalling the one telemetry worker), so the last heartbeat before an abrupt process loss has normally been sent within about one heartbeat interval of it. That is an expectation, not a guarantee: a flush does not wait for delivery, and a failing ingestion endpoint can lose buffered events |
+| `HostStopping` during a run | A graceful AppDomain shutdown interrupted it. From the next release it is never emitted after the run has ended; on 1838 it can follow `CachePublished` when shutdown lands just as a run finishes, and a run with `CachePublished` completed whatever comes after it |
 | A run stops without a terminal event and the next run has a new `InstanceId` | Treat as an abrupt AppDomain/process loss |
 
-`ElapsedMs` is time since the run began. `DurationMs` is the named query/step/cache/telemetry
-operation only. A completed analysis is cached in the web process for 10 minutes per normalised
+`ElapsedMs` is time since the run began, including any time queued for a slot. `DurationMs` is the
+named query/step/gate/cache/telemetry operation only; `ServiceReturned.DurationMs` excludes the queue.
+A completed analysis is cached in the web process for 10 minutes per normalised
 period and licence-override shape; the in-flight task is also shared. Azure SQL's buffer/plan caches
 are separate and can make a fresh analysis much faster even after the web application is redeployed.
+
+On the per-run `CopilotAdoptionAnalysis` event, `Outcome` is `Degraded` only when the figures are known to
+be incomplete or something failed: `FiguresIncomplete=true` (a failed query, or data still being
+backfilled), `FailedQueryCount>0` or a non-empty `FailedSteps`. It used to be
+`WarningCount>0`, which almost every real tenant met, because the Cowork eligibility caveat is added on
+every run that sees any Cowork use. `TimedOut` now means at least one query was classified as a timeout
+(`TimedOutQueryCount`). It used to mean "any step took 90 s or more", which a slow probe sequence or
+the CPU-only scoring step could trigger without a single timeout.
 
 ## NuGet Package Management
 - When NuGet packages are added or updated, always update binding redirects in both App.Template.config and App.config for all affected projects (including test projects). App.config is generated dynamically from App.Template.config at build time, so App.Template.config is the source of truth.

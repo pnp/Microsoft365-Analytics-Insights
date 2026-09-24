@@ -392,7 +392,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     catch (GraphHttpException ex)
                     {
                         failedReports.Add($"{reportName} (HTTP {(int)ex.StatusCode} {ex.StatusCode})");
-                        _logger.LogError(ex, $"{reportName} failed with HTTP {(int)ex.StatusCode} ({ex.StatusCode}): {ex.Message} " +
+                        _logger.LogError($"{reportName} failed with HTTP {(int)ex.StatusCode} ({ex.StatusCode}): {ex.Message} " +
                             "The other activity reports are unaffected and keep whatever they downloaded; this report saved nothing at all. " +
                             "This phase will NOT be recorded as complete, so it retries on the next cycle. " +
                             "A 401/403 here almost always means the Reports.Read.All application permission is missing or not admin-consented.");
