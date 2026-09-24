@@ -38,8 +38,17 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         private readonly ConcurrentDictionary<string, byte> _usersWithoutMeetingAccessPolicy =
             new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
 
+        // Online-meeting ids that Graph has already told us cannot be resolved this run. The id already includes
+        // the user component used to construct it, so this suppresses repeats for the same (user, meeting) attempt.
+        private readonly ConcurrentDictionary<string, byte> _unresolvableMeetingIds =
+            new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+
         // 1 once we've logged the "no application access policy" explanation for this run.
         private int _meetingAccessPolicyWarningLogged;
+
+        // 1 once we've logged the generic 403 / 404 meeting lookup explanations for this run.
+        private int _meetingForbiddenWarningLogged;
+        private int _meetingNotFoundWarningLogged;
 
         public GraphFileMetadataLoader(GraphServiceClient graphServiceClient, ILogger logger)
             : this(new GraphSpoClient(graphServiceClient), logger)
@@ -63,6 +72,12 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             if (userGuid != null && _usersWithoutMeetingAccessPolicy.ContainsKey(userGuid))
             {
                 _logger.LogDebug("Skipping meeting lookup for meetingId {meetingId}: no Teams application access policy for this app on the user", meetingId);
+                return null;
+            }
+
+            if (meetingId != null && _unresolvableMeetingIds.ContainsKey(meetingId))
+            {
+                _logger.LogDebug("Skipping meeting lookup for meetingId {meetingId}: it already failed with an expected Graph response this run", meetingId);
                 return null;
             }
 
@@ -98,6 +113,49 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
                 return null;
             }
+            catch (ODataError ex) when (IsMeetingForbidden(ex))
+            {
+                if (meetingId != null)
+                {
+                    _unresolvableMeetingIds.TryAdd(meetingId, 0);
+                }
+
+                if (Interlocked.Exchange(ref _meetingForbiddenWarningLogged, 1) == 0)
+                {
+                    _logger.LogWarning("Copilot meeting enrichment could not read one online meeting because Microsoft Graph returned HTTP 403. "
+                        + "Meeting metadata will be skipped for affected events. Likely causes are: the Copilot audit event belongs to an attendee "
+                        + "but the online-meeting id requires the organiser id; OnlineMeetings.Read.All has not been consented for the runtime app; "
+                        + "or the Teams application access policy does not cover the user whose meeting is being read. Further 403 meeting lookup "
+                        + "failures this import run are logged at debug level only.");
+                }
+                else
+                {
+                    _logger.LogDebug("Skipping meeting info for meetingId {meetingId}: Graph returned HTTP 403 for this online-meeting lookup", meetingId);
+                }
+
+                return null;
+            }
+            catch (ODataError ex) when (IsMeetingNotFound(ex))
+            {
+                if (meetingId != null)
+                {
+                    _unresolvableMeetingIds.TryAdd(meetingId, 0);
+                }
+
+                if (Interlocked.Exchange(ref _meetingNotFoundWarningLogged, 1) == 0)
+                {
+                    _logger.LogWarning("Copilot meeting enrichment could not find one online meeting because Microsoft Graph returned HTTP 404. "
+                        + "Meeting metadata will be skipped for affected events. This can happen when an attendee uses Copilot in a meeting they "
+                        + "did not organise and the audit context does not include the organiser id needed to build the online-meeting id. "
+                        + "Further 404 meeting lookup failures this import run are logged at debug level only.");
+                }
+                else
+                {
+                    _logger.LogDebug("Skipping meeting info for meetingId {meetingId}: Graph returned HTTP 404 for this online-meeting lookup", meetingId);
+                }
+
+                return null;
+            }
             catch (ODataError ex)
             {
                 _logger.LogWarning(ex, "Error getting meeting info for meetingId {meetingId}", meetingId);
@@ -120,6 +178,12 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             var message = ex.Error?.Message ?? ex.Message ?? string.Empty;
             return message.IndexOf("application access policy", StringComparison.OrdinalIgnoreCase) >= 0;
         }
+
+        internal static bool IsMeetingForbidden(ODataError ex)
+            => ex?.ResponseStatusCode == (int)HttpStatusCode.Forbidden && !IsMissingApplicationAccessPolicy(ex);
+
+        internal static bool IsMeetingNotFound(ODataError ex)
+            => ex?.ResponseStatusCode == (int)HttpStatusCode.NotFound;
 
         public async Task<SpoDocumentFileInfo> GetSpoFileInfo(string copilotDocContextId, string eventUpn)
         {
