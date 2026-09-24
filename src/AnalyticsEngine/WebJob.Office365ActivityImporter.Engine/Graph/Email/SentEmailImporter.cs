@@ -251,6 +251,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             return ProcessUserChunkAsync(new List<Common.Entities.User> { user });
         }
 
+        internal Task ImportSentEmailsForUsersForTest(List<Common.Entities.User> users)
+        {
+            return ProcessUserChunkAsync(users);
+        }
+
         // For test-only access to the HTML stripper - kept on this class for backwards compatibility.
         internal static string StripHtml(string html) => AzureLanguageSentEmailSentimentScorer.StripHtml(html);
 
@@ -347,6 +352,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             // Filter each user's candidate list to the genuinely-new ones.
             int totalToInsert = 0;
             int totalOrphanRepairs = 0;
+            var orphanRepairsBySentEmailId = new HashSet<int>();
             foreach (var u in perUser)
             {
                 u.ToInsert = u.Candidates
@@ -361,6 +367,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                         SentEmailId = existingByKey[c.GraphMessageId].SentEmailId,
                         Candidate = c
                     })
+                    .Where(r => orphanRepairsBySentEmailId.Add(r.SentEmailId))
                     .ToList();
                 totalOrphanRepairs += u.OrphanRecipientRepairs.Count;
             }
@@ -528,6 +535,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 Interlocked.Increment(ref _mailboxesScanned);
             }
 
+            if (work.Count == 0 && perUser.All(u => u.OrphanRecipientRepairs.Count == 0))
+                return;
+
             using (var db = _dbContextFactory.Create())
             {
                 var conn = db.Database.Connection;
@@ -583,6 +593,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                         var repairRecipientCount = perUser.Sum(u => u.OrphanRecipientRepairs.Sum(r => r.Candidate.RecipientAddresses.Count));
                         var recipientPairs = new List<(int SentEmailId, int RecipientAddressId)>(
                             work.Sum(w => w.Candidate.RecipientAddresses.Count) + repairRecipientCount);
+                        var recipientPairSet = new HashSet<(int SentEmailId, int RecipientAddressId)>();
                         foreach (var w in work)
                         {
                             if (w.Row.ID == 0)
@@ -592,7 +603,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                             {
                                 if (!addressIds.TryGetValue(addr, out var addrId))
                                     continue;
-                                recipientPairs.Add((w.Row.ID, addrId));
+                                AddDistinctRecipientPair(recipientPairs, recipientPairSet, w.Row.ID, addrId);
                             }
                         }
                         foreach (var u in perUser)
@@ -603,7 +614,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                                 {
                                     if (!addressIds.TryGetValue(addr, out var addrId))
                                         continue;
-                                    recipientPairs.Add((repair.SentEmailId, addrId));
+                                    AddDistinctRecipientPair(recipientPairs, recipientPairSet, repair.SentEmailId, addrId);
                                 }
                             }
                         }
@@ -648,6 +659,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                     }
                 }
             }
+        }
+
+        internal static bool AddDistinctRecipientPair(
+            List<(int SentEmailId, int RecipientAddressId)> pairs,
+            HashSet<(int SentEmailId, int RecipientAddressId)> seen,
+            int sentEmailId,
+            int recipientAddressId)
+        {
+            if (!seen.Add((sentEmailId, recipientAddressId)))
+                return false;
+
+            pairs.Add((sentEmailId, recipientAddressId));
+            return true;
         }
 
         /// <summary>

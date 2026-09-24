@@ -598,6 +598,51 @@ namespace Tests.UnitTests
             Assert.AreEqual(source.NextDeltaToken, token);
         }
 
+        [TestMethod]
+        public async Task ImportSentEmailsForUsers_DuplicateOrphanRepairInChunk_IsDedupedAndCommitsTokens()
+        {
+            var alice = await CreateSavedUserAsync("repair-alice");
+            var bob = await CreateSavedUserAsync("repair-bob");
+            var charlie = await CreateSavedUserAsync("repair-charlie");
+            var orphanMessageId = "i618-repair-dupe-" + Guid.NewGuid().ToString("N");
+            var nextMessageId = "i618-repair-next-" + Guid.NewGuid().ToString("N");
+            var recipient = "recipient-repair-dupe-" + Guid.NewGuid().ToString("N") + "@contoso.com";
+            await SeedOrphanParentAsync(alice, orphanMessageId);
+
+            var source = new RecordingSentEmailSourceLoader(
+                (alice, Msg(orphanMessageId, alice.Mail, new[] { recipient }, "Καλημέρα κόσμε")),
+                (bob, Msg(orphanMessageId, bob.Mail, new[] { recipient }, "Καλημέρα κόσμε")),
+                (charlie, Msg(nextMessageId, charlie.Mail, new[] { "recipient-next@contoso.com" }, "Καλημέρα κόσμε")));
+            var committer = new RecordingDeltaTokenCommitter();
+            var importer = NewImporter(source, committer);
+
+            await importer.ImportSentEmailsForUsersForTest(new List<User> { alice, bob, charlie });
+
+            Assert.AreEqual(1, await CountSentEmailsAsync(orphanMessageId), "The existing orphan parent should be reused.");
+            Assert.AreEqual(1, await CountRecipientsAsync(orphanMessageId), "Cross-user orphan repair must insert the shared recipient pair once.");
+            Assert.AreEqual(1, await CountSentEmailsAsync(nextMessageId), "Later work in the chunk should still run.");
+            Assert.AreEqual(1, await CountRecipientsAsync(nextMessageId), "Later work in the chunk should still persist recipients.");
+            Assert.AreEqual(3, committer.WriteCount);
+            Assert.IsTrue(committer.TryGetToken(alice, out _));
+            Assert.IsTrue(committer.TryGetToken(bob, out _));
+            Assert.IsTrue(committer.TryGetToken(charlie, out _));
+        }
+
+        [TestMethod]
+        public void AddDistinctRecipientPair_SkipsDuplicatePairs()
+        {
+            var pairs = new List<(int SentEmailId, int RecipientAddressId)>();
+            var seen = new HashSet<(int SentEmailId, int RecipientAddressId)>();
+
+            Assert.IsTrue(SentEmailImporter.AddDistinctRecipientPair(pairs, seen, 10, 20));
+            Assert.IsFalse(SentEmailImporter.AddDistinctRecipientPair(pairs, seen, 10, 20));
+            Assert.IsTrue(SentEmailImporter.AddDistinctRecipientPair(pairs, seen, 10, 21));
+
+            CollectionAssert.AreEqual(
+                new[] { (SentEmailId: 10, RecipientAddressId: 20), (SentEmailId: 10, RecipientAddressId: 21) },
+                pairs);
+        }
+
         #endregion
 
         #region End-to-end pipeline (in-memory)
