@@ -85,20 +85,39 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task GetSpoFileInfo_MySiteUrl_ResolvesViaUserDrive()
+        public async Task GetSpoFileInfo_MySiteUrl_ResolvesThroughOwnerSiteNotCopilotUserDrive()
         {
-            var ctx = "https://contoso-my.sharepoint.com/personal/user_contoso_com/Documents/Plan.docx";
+            var ctx = "https://contoso-my.sharepoint.com/personal/alex_contoso_com/Documents/Καλημέρα κόσμε.docx";
             var fake = new FakeSpoGraphClient
             {
                 OnGetDriveItemByUrl = url => new DriveItem { WebUrl = url }
             };
             var loader = NewLoader(fake);
 
-            var result = await loader.GetSpoFileInfo(ctx, "user@contoso.com");
+            var result = await loader.GetSpoFileInfo(ctx, "viewer@contoso.com");
 
             Assert.IsNotNull(result);
-            Assert.AreEqual(1, fake.GetUserDriveCalls, "OneDrive (-my) contexts resolve via the user's drive");
-            Assert.AreEqual(0, fake.GetSiteDriveCalls, "OneDrive contexts must not use the site drive path");
+            Assert.AreEqual("Καλημέρα κόσμε.docx", result.Filename);
+            Assert.AreEqual(0, fake.GetUserDriveCalls, "OneDrive (-my) contexts must not resolve through the Copilot user's own drive");
+            Assert.AreEqual(0, fake.GetSiteDriveCalls, "Plain OneDrive URLs resolve through /shares without first loading a drive");
+        }
+
+        [TestMethod]
+        public async Task GetSpoFileInfo_MySiteUrl_DoesNotRequireCopilotUserOneDrive()
+        {
+            var ctx = "https://contoso-my.sharepoint.com/personal/alex_contoso_com/Documents/Καλημέρα κόσμε.docx";
+            var fake = new FakeSpoGraphClient
+            {
+                OnGetUserDrive = upn => throw NotFoundError(),
+                OnGetDriveItemByUrl = url => new DriveItem { WebUrl = url }
+            };
+            var loader = NewLoader(fake);
+
+            var result = await loader.GetSpoFileInfo(ctx, "viewer-without-drive@contoso.com");
+
+            Assert.IsNotNull(result);
+            Assert.AreEqual(0, fake.GetUserDriveCalls, "The Copilot user's missing OneDrive must not affect another owner's file lookup");
+            Assert.AreEqual(1, fake.GetDriveItemByUrlCalls);
         }
 
         [TestMethod]
@@ -137,16 +156,13 @@ namespace Tests.UnitTests
             Assert.AreEqual("Report.docx", second.Filename);
             // Same run-scoped loader: the second call is a pure cache hit (no repeat Graph resolution).
             Assert.AreEqual(1, fake.GetDriveItemByUrlCalls, "A resolved context must be cached and not re-resolved");
-            Assert.AreEqual(1, fake.GetSiteDriveCalls, "Site drive resolution should also happen only once");
+            Assert.AreEqual(1, fake.GetSiteCalls, "Site resolution should also happen only once");
         }
 
         [TestMethod]
-        public async Task GetSpoFileInfo_MySiteContext_CachedPerUserNotAliasedAcrossUsers()
+        public async Task GetSpoFileInfo_MySiteContext_CachedByContextAcrossUsers()
         {
-            // A personal OneDrive ("-my") file is resolved through the event user's own drive, so two different
-            // users referencing the same URL must resolve independently (not share a cached result), while the
-            // same user twice must be a cache hit.
-            var ctx = "https://contoso-my.sharepoint.com/personal/alice_contoso_com/Documents/Shared.docx";
+            var ctx = "https://contoso-my.sharepoint.com/personal/alex_contoso_com/Documents/Καλημέρα κόσμε.docx";
             var fake = new FakeSpoGraphClient
             {
                 OnGetDriveItemByUrl = url => new DriveItem { WebUrl = url }
@@ -155,9 +171,79 @@ namespace Tests.UnitTests
 
             await loader.GetSpoFileInfo(ctx, "alice@contoso.com");
             await loader.GetSpoFileInfo(ctx, "alice@contoso.com");   // same user -> cache hit
-            await loader.GetSpoFileInfo(ctx, "bob@contoso.com");     // different user -> resolves again
+            await loader.GetSpoFileInfo(ctx, "bob@contoso.com");     // different user -> same context cache hit
 
-            Assert.AreEqual(2, fake.GetUserDriveCalls, "My-site contexts must cache per user: 1 for alice (cached on repeat) + 1 for bob");
+            Assert.AreEqual(0, fake.GetUserDriveCalls);
+            Assert.AreEqual(1, fake.GetDriveItemByUrlCalls, "My-site contexts are owner-site based and must cache by context across Copilot users");
+        }
+
+        [TestMethod]
+        public async Task GetSpoFileInfo_TeamSiteSourcedocInNonDefaultLibrary_ResolvesFromBoundedLibraryFallback()
+        {
+            var ctx = "https://contoso.sharepoint.com/sites/project/_layouts/15/Doc.aspx?sourcedoc=%7B00000000-0000-0000-0000-000000000000%7D&file=%CE%9A%CE%B1%CE%BB%CE%B7%CE%BC%CE%AD%CF%81%CE%B1%20%CE%BA%CF%8C%CF%83%CE%BC%CE%B5.docx";
+            var fake = new FakeSpoGraphClient
+            {
+                OnGetSite = siteIdentifier => new Site { Id = "site-guid", WebUrl = "https://contoso.sharepoint.com/sites/project" },
+                OnGetSiteDrive = siteIdentifier => DriveWithIds("site-guid", "default-list"),
+                OnGetDriveItemByUrl = url => throw NotFoundError(),
+                OnGetSiteDocumentLibraryDrives = (siteIdentifier, maxDrives) => new[]
+                {
+                    DriveWithIds("site-guid", "default-list"),
+                    DriveWithIds("site-guid", "archive-list")
+                },
+                OnGetListItemById = (siteId, listId, itemId) =>
+                {
+                    if (listId == "archive-list")
+                    {
+                        return new ListItem { WebUrl = "https://contoso.sharepoint.com/sites/project/Archive/Καλημέρα κόσμε.docx" };
+                    }
+                    throw NotFoundError();
+                }
+            };
+            var loader = NewLoader(fake);
+
+            var result = await loader.GetSpoFileInfo(ctx, "viewer@contoso.com");
+
+            Assert.IsNotNull(result);
+            Assert.AreEqual("Καλημέρα κόσμε.docx", result.Filename);
+            Assert.AreEqual(2, fake.GetListItemByIdCalls, "Default library is tried first, then the bounded document-library fallback");
+            Assert.AreEqual(1, fake.GetSiteDocumentLibraryDrivesCalls);
+        }
+
+        [TestMethod]
+        public async Task GetSpoFileInfo_DeletedFile_IsCachedAndLoggedWithoutException()
+        {
+            var ctx = "https://contoso.sharepoint.com/sites/project/Shared Documents/Καλημέρα κόσμε.docx";
+            var fake = new FakeSpoGraphClient
+            {
+                OnGetDriveItemByUrl = url => throw NotFoundError()
+            };
+            var log = new CapturingLogger();
+            var loader = new GraphFileMetadataLoader(fake, log);
+
+            Assert.IsNull(await loader.GetSpoFileInfo(ctx, "alice@contoso.com"));
+            Assert.IsNull(await loader.GetSpoFileInfo(ctx, "bob@contoso.com"));
+
+            Assert.AreEqual(1, fake.GetDriveItemByUrlCalls, "Deleted files are negatively cached by context for this run");
+            Assert.IsTrue(log.Entries.Exists(e => e.Level == LogLevel.Debug));
+            Assert.IsFalse(log.Entries.Exists(e => e.Exception != null), "Expected not-found outcomes must be logged without exception telemetry");
+        }
+
+        [TestMethod]
+        public async Task GetSpoFileInfo_SharedFileUsedByManyUsers_ResolvesOncePerRun()
+        {
+            var ctx = "https://contoso.sharepoint.com/sites/project/Shared Documents/Καλημέρα κόσμε.docx";
+            var fake = new FakeSpoGraphClient
+            {
+                OnGetDriveItemByUrl = url => new DriveItem { WebUrl = url }
+            };
+            var loader = NewLoader(fake);
+
+            await loader.GetSpoFileInfo(ctx, "alice@contoso.com");
+            await loader.GetSpoFileInfo(ctx, "bob@contoso.com");
+            await loader.GetSpoFileInfo(ctx, "charlie@contoso.com");
+
+            Assert.AreEqual(1, fake.GetDriveItemByUrlCalls, "The same shared file context must resolve at most once, regardless of Copilot user count");
         }
 
         [TestMethod]
@@ -305,6 +391,17 @@ namespace Tests.UnitTests
                 Code = "Forbidden",
                 Message = "No application access policy found for this app 00000000-0000-0000-0000-000000000000 on the user."
             }
+        };
+
+        private static ODataError NotFoundError() => new ODataError
+        {
+            ResponseStatusCode = (int)HttpStatusCode.NotFound,
+            Error = new MainError { Code = "itemNotFound", Message = "Item not found" }
+        };
+
+        private static Drive DriveWithIds(string siteId, string listId) => new Drive
+        {
+            SharePointIds = new SharepointIds { SiteId = siteId, ListId = listId }
         };
 
         /// <summary>Minimal <see cref="ILogger"/> that records level, message and exception for assertions.</summary>

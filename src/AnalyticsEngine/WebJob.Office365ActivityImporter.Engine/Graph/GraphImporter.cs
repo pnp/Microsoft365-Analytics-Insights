@@ -77,7 +77,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 sentEmailMailboxSkipList ?? new InMemorySentEmailMailboxSkipList(),
                 GetAndSaveActivityReportsMultiThreaded,
                 DefaultAnalyticsDbContextFactory.Instance,
-                _clock);
+                _clock,
+                _lastRunStore);
         }
 
         /// <summary>

@@ -154,10 +154,25 @@ export function translateHealthComponentDetailText(detail: string | null | undef
     return t('health.reason.teamsCallsQueueDepthFailed', { error: diagnostic });
   }
 
+  const blobCheckpointFirewall = /^Azure Table checkpoint unavailable: Storage firewall\/network rules rejected the Table checkpoint request \(HTTP ([0-9]+) ([^)]+)\)\. On a public install, set the storage account to 'Enabled from all networks'; IP allow-list rules do not apply to requests from an App Service in the same Azure region as the storage account\. Anything stricter needs App Service VNet integration plus a Microsoft\.Storage service endpoint, or the private-endpoint deployment\. Using non-durable in-memory checkpoint \(lost on restart; durable cross-cycle metadata recovery unavailable\)\. See importer error log\.$/.exec(detail);
+  if (blobCheckpointFirewall) {
+    return t('health.reason.blobCheckpointStorageFirewall', {
+      status: blobCheckpointFirewall[1],
+      errorCode: blobCheckpointFirewall[2],
+    });
+  }
+
   return detail;
 }
 
 export function translateHealthComponentDetail(component: ComponentHealthRow, t: TFunction): string {
+  if (component.reasonKey === 'blobCheckpoint.storageFirewall') {
+    return t('health.reason.blobCheckpointStorageFirewall', {
+      status: component.httpStatus ? formatNumber(component.httpStatus) : '-',
+      errorCode: component.errorCode ?? '-',
+    });
+  }
+
   return translateHealthComponentDetailText(component.detail, t);
 }
 
