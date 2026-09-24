@@ -35,12 +35,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         {
             Messages = Array.Empty<GraphSentMessage>(),
             DeltaTokenReads = 0,
-            DeltaTokenWrites = 0
+            DeltaTokenWrites = 0,
+            NextDeltaToken = null
         };
 
         public IReadOnlyList<GraphSentMessage> Messages { get; set; }
         public int DeltaTokenReads { get; set; }
         public int DeltaTokenWrites { get; set; }
+        public string NextDeltaToken { get; set; }
+    }
+
+    /// <summary>
+    /// Commits per-user sent-email delta tokens once the caller's durable save has succeeded.
+    /// </summary>
+    public interface ISentEmailDeltaTokenCommitter
+    {
+        Task CommitDeltaTokenAsync(Common.Entities.User user, string deltaToken);
     }
 
     #region Graph DTO classes

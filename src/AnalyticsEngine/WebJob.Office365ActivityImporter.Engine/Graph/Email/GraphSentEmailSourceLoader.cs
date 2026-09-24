@@ -12,7 +12,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
     /// Loads sent emails from a user's mailbox via the Microsoft Graph
     /// /messages/delta endpoint, persisting per-user delta tokens.
     /// </summary>
-    public class GraphSentEmailSourceLoader : ISentEmailSourceLoader
+    public class GraphSentEmailSourceLoader : ISentEmailSourceLoader, ISentEmailDeltaTokenCommitter
     {
         // Graph defaults to 10 messages per page on /messages/delta - explicitly request more.
         public const int GraphPageSize = 200;
@@ -70,17 +70,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             var deltaKey = BuildDeltaKey(user);
             var deltaToken = await _deltaTokenStore.GetDeltaToken(deltaKey);
             var reads = 1;
-            var writes = 0;
+            string nextDeltaToken = null;
 
             var url = BuildDeltaUrl(user, deltaToken, includeBody);
 
             var messages = await _httpClient.LoadAllPagesPlusDeltaWithThrottleRetries<GraphSentMessage>(
                 url, _logger,
-                async (deltaLink) =>
+                (deltaLink) =>
                 {
-                    var thisPageDelta = StringUtils.ExtractCodeFromGraphUrl(deltaLink);
-                    await _deltaTokenStore.SetDeltaToken(deltaKey, thisPageDelta);
-                    writes++;
+                    nextDeltaToken = StringUtils.ExtractCodeFromGraphUrl(deltaLink);
+                    return Task.CompletedTask;
                 },
                 // A mailbox-less user 404s here. Surface it instead of silently returning an empty list,
                 // so the importer can tell "no mailbox" apart from "mailbox with no sent mail" and stop
@@ -91,8 +90,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             {
                 Messages = messages ?? new List<GraphSentMessage>(),
                 DeltaTokenReads = reads,
-                DeltaTokenWrites = writes
+                DeltaTokenWrites = 0,
+                NextDeltaToken = nextDeltaToken
             };
+        }
+
+        public Task CommitDeltaTokenAsync(Common.Entities.User user, string deltaToken)
+        {
+            return _deltaTokenStore.SetDeltaToken(BuildDeltaKey(user), deltaToken);
         }
 
         internal static string BuildDeltaKey(Common.Entities.User user)
