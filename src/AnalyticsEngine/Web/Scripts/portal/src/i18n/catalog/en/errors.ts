@@ -29,6 +29,7 @@ export const errors = {
 
   // Copilot adoption API
   'errors.copilotAdoption.analysisStillRunning': "The Copilot adoption analysis is taking longer than expected and hasn't finished yet. It is still running on the server - reload the page in a few minutes.",
+  'errors.copilotAdoption.analysisStillRunningWithReference': "The Copilot adoption analysis is taking longer than expected and hasn't finished yet. It is still running on the server - reload the page in a few minutes. If this keeps happening, include reference {runId} when you report it.",
   'errors.copilotAdoption.availabilityFailed': "Couldn't load the Copilot adoption availability ({status}).",
   'errors.copilotAdoption.summaryFailed': "Couldn't load the Copilot adoption summary ({status}).",
   'errors.copilotAdoption.filtersFailed': "Couldn't load the Copilot adoption filters ({status}).",
