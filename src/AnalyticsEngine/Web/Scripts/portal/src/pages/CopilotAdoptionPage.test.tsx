@@ -74,7 +74,16 @@ const options: CopilotAdoptionOptions = {
   copilotMinutesSavedPerDocument: 8,
   coworkEstimateLowerBoundRatio: 0.5,
   coworkMinutesSavedPerTask: 6,
-  coworkAssumedTasksPerPersonPerMonth: 20,
+  coworkOrganiseMeetingsShare: 0.25,
+  coworkOrganiseMeetingsMinutes: 6,
+  coworkPrepareMeetingsShare: 0.1,
+  coworkPrepareMeetingsMinutes: 6,
+  coworkSendEmailShare: 0.05,
+  coworkSendEmailMinutes: 6,
+  coworkPostInTeamsShare: 0.01,
+  coworkPostInTeamsMinutes: 6,
+  coworkCreateDocumentsShare: 0.02,
+  coworkCreateDocumentsMinutes: 6,
   usageReportLagDays: 3,
   topSegments: 10,
   minSeatsPerSegment: 5,
@@ -145,7 +154,7 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
     coworkQuadrant: [],
     coworkByDepartment: [],
     coworkCreditPosition: { available: false, snapshotUtc: null, entitled: null, consumed: null, available_credits: null, payAsYouGoConsumed: null, status: null, perUserCreditsAvailable: false },
-    coworkValueEstimate: { isModelled: false, cohortUsers: 0, coworkTaskUsers: 0, observedCoworkTasks: 0, projectedCoworkUsers: 0, coworkTasksPerPersonPerMonth: 20, coworkTaskRateBasis: 'assumed', coworkTaskRateUsers: 0, coworkTasks: 0, hoursPerMonthLow: 0, hoursPerMonthHigh: 0, assumptions: [] },
+    coworkValueEstimate: { isModelled: false, cohortUsers: 0, coworkTaskUsers: 0, observedCoworkTasks: 0, projectedCoworkUsers: 0, activities: [], projectedCoworkTasks: 0, coworkTasks: 0, observedTasksPerPersonPerMonth: 0, observedTaskRateUsers: 0, hoursPerMonthLow: 0, hoursPerMonthHigh: 0, assumptions: [] },
     unlicensedActiveUsers: 14,
     recommendedForLicence: 9,
     funnel: [
@@ -760,28 +769,39 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     assumptions: [],
   };
 
-  // Cowork, for the 20 people ready now: 150 tasks observed from 10 people, plus 10 people projected
-  // at their average of 15 = 300 tasks x 6 minutes = 1,800 minutes = 30 hours, 15 conservative.
+  // Cowork, for the 20 people ready now: 150 tasks observed from 10 people, and the other 10 modelled
+  // from their own work - 3,000 emails sent x 5% = 150 handed to Cowork, and nothing else. (150 + 150)
+  // x 6 minutes = 1,800 minutes = 30 hours, 15 conservative.
+  const noWork = [
+    { activity: 'organiseMeetings' as const, volumePerMonth: 0 },
+    { activity: 'prepareMeetings' as const, volumePerMonth: 0 },
+    { activity: 'postInTeams' as const, volumePerMonth: 0 },
+    { activity: 'createDocuments' as const, volumePerMonth: 0 },
+  ];
   const coworkReady = {
     isModelled: true,
     cohortUsers: 20,
     coworkTaskUsers: 10,
     observedCoworkTasks: 150,
     projectedCoworkUsers: 10,
-    coworkTasksPerPersonPerMonth: 15,
-    coworkTaskRateBasis: 'observed' as const,
-    coworkTaskRateUsers: 10,
+    activities: [{ activity: 'sendEmail' as const, volumePerMonth: 3000 }, ...noWork],
+    projectedCoworkTasks: 150,
     coworkTasks: 300,
+    observedTasksPerPersonPerMonth: 15,
+    observedTaskRateUsers: 10,
     hoursPerMonthLow: 15,
     hoursPerMonthHigh: 30,
     assumptions: [],
   };
 
-  // The ceiling, all 100 seat holders: 150 + 90 x 15 = 1,500 tasks = 150 hours, 75 conservative.
+  // The ceiling, all 100 seat holders: 150 observed + 27,000 emails x 5% = 1,350 = 1,500 x 6 minutes =
+  // 150 hours, 75 conservative.
   const coworkCeiling = {
     ...coworkReady,
     cohortUsers: 100,
     projectedCoworkUsers: 90,
+    activities: [{ activity: 'sendEmail' as const, volumePerMonth: 27000 }, ...noWork],
+    projectedCoworkTasks: 1350,
     coworkTasks: 1500,
     hoursPerMonthLow: 75,
     hoursPerMonthHigh: 150,
@@ -947,18 +967,21 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     expect(url.searchParams.has('coworkMinutesSavedPerMeeting')).toBe(false);
   });
 
-  it('quotes the reader\u2019s own Cowork task rate on the Cowork tile only, and sends it with the Excel report', async () => {
-    sessionStorage.setItem(TIME_SAVED_STORAGE_KEY, JSON.stringify({ tasksPerPerson: 25 }));
+  it('quotes the reader\u2019s own Cowork share on the Cowork tile only, and sends it with the Excel report', async () => {
+    sessionStorage.setItem(TIME_SAVED_STORAGE_KEY, JSON.stringify({ sendEmailShare: 0.1 }));
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
 
     await renderPage();
 
-    // 150 observed + 10 x 25 = 400 tasks x 6 = 2,400 minutes = 40 hours, 20 conservative.
-    expect(within(await tile('Time back from Cowork')).getByText('20\u201340 h')).toBeVisible();
+    // 150 observed + 3,000 emails x 10% = 300 handed over = 450 x 6 = 2,700 minutes = 45 hours, 22.5
+    // conservative.
+    expect(within(await tile('Time back from Cowork')).getByText('23\u201345 h')).toBeVisible();
     expect(within(await tile('Time back from licensing')).getByText('1,200\u20132,400 h')).toBeVisible();
     const url = new URL((screen.getByText('Excel report').closest('a') as HTMLAnchorElement).href);
-    expect(url.searchParams.get('coworkTasksPerPersonPerMonth')).toBe('25');
+    expect(url.searchParams.get('coworkSendEmailShare')).toBe('0.1');
     expect(url.searchParams.has('coworkMinutesSavedPerTask')).toBe(false);
+    // The flat task rate is gone: the server no longer reads it.
+    expect(url.searchParams.has('coworkTasksPerPersonPerMonth')).toBe(false);
   });
 
   it('explains the two estimates separately, and says they are never added', async () => {
@@ -973,7 +996,8 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     expect(await screen.findByText('The licensing estimate is a model, not a measurement.')).toBeVisible();
     expect(screen.getByText(/\(10 minutes per meeting, 5 per email, 8 per document by default/)).toBeVisible();
     expect(screen.getByText('The Cowork estimate is a model, not a measurement.')).toBeVisible();
-    expect(screen.getByText(/multiplied by 6 minutes a task by default/)).toBeVisible();
+    expect(screen.getByText(/at 6 minutes a task by default/)).toBeVisible();
+    expect(screen.getByText(/Everyone else is modelled from the work they already do by hand, one kind at a time/)).toBeVisible();
     expect(screen.getByText(/it is never added to the licensing estimate/)).toBeVisible();
   });
 

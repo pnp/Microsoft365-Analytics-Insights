@@ -1,4 +1,5 @@
 import type { TranslationKey } from '../../i18n';
+import type { CoworkActivity } from '../../types/copilotAdoption';
 import type { TimeSavedActivity } from './coworkTimeSaved';
 
 /**
@@ -182,7 +183,7 @@ export const ACTIVITY_RATIONALE: ActivityRationale[] = [
 export interface CoworkTaskRationale {
   /** What Cowork actually does, from Microsoft's own description of it. */
   operationKeys: TranslationKey[];
-  /** How the six-minute default is derived. */
+  /** How the six-minute default for each piece of work is derived. */
   whyKey: TranslationKey;
   /** The nearest published method. Not a study of Cowork. */
   evidence: EvidenceItem[];
@@ -215,6 +216,20 @@ export const COWORK_TASK_RATIONALE: CoworkTaskRationale = {
     },
   ],
   testKey: 'copilotAdoptionCowork.timeSaved.cowork.test',
+};
+
+/**
+ * Why each kind of work's default share is what it is: "one in N", and what makes the rest of that work
+ * not worth handing over. Judgement, not evidence - no study has measured how much work people hand to
+ * Cowork, and the card that lists these says so first. Each sentence names the default it explains, so
+ * changing a default in CopilotAdoptionOptions means rewording its sentence here, in every language.
+ */
+export const COWORK_ACTIVITY_SHARE_WHY: Record<CoworkActivity, TranslationKey> = {
+  organiseMeetings: 'copilotAdoptionCowork.timeSaved.shares.why.organiseMeetings',
+  prepareMeetings: 'copilotAdoptionCowork.timeSaved.shares.why.prepareMeetings',
+  sendEmail: 'copilotAdoptionCowork.timeSaved.shares.why.sendEmail',
+  postInTeams: 'copilotAdoptionCowork.timeSaved.shares.why.postInTeams',
+  createDocuments: 'copilotAdoptionCowork.timeSaved.shares.why.createDocuments',
 };
 
 /** Why the conservative end applies only part of the assumptions. */

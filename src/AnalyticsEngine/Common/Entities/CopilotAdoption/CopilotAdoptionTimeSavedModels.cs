@@ -1,6 +1,7 @@
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Common.Entities.CopilotAdoption
 {
@@ -90,13 +91,14 @@ namespace Common.Entities.CopilotAdoption
     /// </summary>
     /// <remarks>
     /// <para>Covers both estimates. The Copilot minutes per meeting, email and document restate the
-    /// licence estimate; the minutes per Cowork task and the Cowork task rate restate the Cowork
-    /// estimate; the conservative share applies to both.</para>
+    /// licence estimate; the minutes per Cowork task and the share and minutes for each kind of work
+    /// Cowork could take on (<see cref="CoworkActivities"/>) restate the Cowork estimate; the
+    /// conservative share applies to both.</para>
     ///
-    /// <para>The portal lets a reader replace any of the minutes-saved assumptions with their own
-    /// figure. Those figures live in that browser tab only - they are never persisted - so an export has
-    /// to carry them, or the Excel report downloaded from a customised page would quietly model
-    /// different hours from the screen it came from.</para>
+    /// <para>The portal lets a reader replace any of the assumptions with their own figure. Those
+    /// figures live in that browser tab only - they are never persisted - so an export has to carry
+    /// them, or the Excel report downloaded from a customised page would quietly model different hours
+    /// from the screen it came from.</para>
     ///
     /// <para><see cref="ApplyTo"/> returns a COPY. The options it starts from belong to the cached
     /// analysis every other caller is reading, and writing one reader's figures into them would change
@@ -114,13 +116,10 @@ namespace Common.Entities.CopilotAdoption
         public const double MaxMinutesPerEmail = 60;
 
         /// <summary>
-        /// Upper bound for the per-Cowork-task assumption, in minutes. Higher than a meeting's: one task
-        /// can be a whole piece of multi-step work.
+        /// Upper bound for the minutes Cowork saves on one task, or on one piece of work it takes on, in
+        /// minutes. Higher than a meeting's: one task can be a whole piece of multi-step work.
         /// </summary>
         public const double MaxMinutesPerTask = 240;
-
-        /// <summary>Upper bound for the Cowork tasks a month each projected person runs: ten a working day.</summary>
-        public const double MaxTasksPerPersonPerMonth = 200;
 
         /// <summary>Minutes Copilot saves per meeting. Restates the licence estimate.</summary>
         public double? MinutesSavedPerMeeting { get; set; }
@@ -134,14 +133,23 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>The conservative share of every assumption. Restates both estimates.</summary>
         public double? LowerBoundRatio { get; set; }
 
-        /// <summary>Minutes Cowork saves per task, on top of Copilot. Restates the Cowork estimate.</summary>
+        /// <summary>
+        /// Minutes Cowork saves per task already in Microsoft's report, on top of Copilot. Restates the
+        /// Cowork estimate.
+        /// </summary>
         public double? MinutesSavedPerTask { get; set; }
 
         /// <summary>
-        /// The Cowork tasks a month the reader expects each not-yet-observed person to run. Not an option:
-        /// it replaces the published rate - observed or placeholder - via <see cref="TaskRateFor"/>.
+        /// The share of each kind of work handed to Cowork, 0 to 1, keyed by <see cref="CoworkActivities"/>
+        /// key. Restates the Cowork estimate. A key this build does not know is ignored.
         /// </summary>
-        public double? TasksPerPersonPerMonth { get; set; }
+        public IDictionary<string, double?> CoworkShares { get; } = new Dictionary<string, double?>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// The minutes Cowork saves on each piece of each kind of work, keyed by <see cref="CoworkActivities"/>
+        /// key. Restates the Cowork estimate. A key this build does not know is ignored.
+        /// </summary>
+        public IDictionary<string, double?> CoworkMinutes { get; } = new Dictionary<string, double?>(StringComparer.Ordinal);
 
         /// <summary>True when at least one usable figure was supplied.</summary>
         public bool Any =>
@@ -150,7 +158,15 @@ namespace Common.Entities.CopilotAdoption
             || Usable(MinutesSavedPerDocument)
             || Usable(LowerBoundRatio)
             || Usable(MinutesSavedPerTask)
-            || Usable(TasksPerPersonPerMonth);
+            || CoworkActivities.All.Any(a => Usable(Lookup(CoworkShares, a.Key)) || Usable(Lookup(CoworkMinutes, a.Key)));
+
+        /// <summary>
+        /// True when a figure the Cowork estimate uses was supplied - so a workbook can say "assumptions
+        /// entered in the portal" on the Cowork sheet only when its own figures changed.
+        /// </summary>
+        public bool AnyCowork =>
+            Usable(MinutesSavedPerTask)
+            || CoworkActivities.All.Any(a => Usable(Lookup(CoworkShares, a.Key)) || Usable(Lookup(CoworkMinutes, a.Key)));
 
         /// <summary>
         /// A copy of <paramref name="options"/> with the supplied figures in place of the defaults.
@@ -171,36 +187,21 @@ namespace Common.Entities.CopilotAdoption
             if (Usable(MinutesSavedPerTask))
                 copy.CoworkMinutesSavedPerTask = Clamp(MinutesSavedPerTask.Value, 0, MaxMinutesPerTask);
 
+            foreach (var activity in CoworkActivities.All)
+            {
+                var share = Lookup(CoworkShares, activity.Key);
+                if (Usable(share)) activity.SetShare(copy, Clamp(share.Value, 0, 1));
+
+                var minutes = Lookup(CoworkMinutes, activity.Key);
+                if (Usable(minutes)) activity.SetMinutes(copy, Clamp(minutes.Value, 0, MaxMinutesPerTask));
+            }
+
             return copy;
         }
 
-        /// <summary>
-        /// The Cowork task rate to restate <paramref name="published"/> with: the reader's own figure when
-        /// they supplied one, otherwise the rate the estimate was published with, and its basis.
-        /// </summary>
-        public CoworkTaskRate TaskRateFor(CoworkValueEstimate published)
+        private static double? Lookup(IDictionary<string, double?> figures, string key)
         {
-            if (Usable(TasksPerPersonPerMonth))
-            {
-                return new CoworkTaskRate
-                {
-                    TasksPerPersonPerMonth = Clamp(TasksPerPersonPerMonth.Value, 0, MaxTasksPerPersonPerMonth),
-                    Basis = CoworkTaskRateBases.Custom,
-                };
-            }
-
-            return PublishedTaskRate(published);
-        }
-
-        /// <summary>The rate, basis and averaged population an estimate was published with.</summary>
-        public static CoworkTaskRate PublishedTaskRate(CoworkValueEstimate published)
-        {
-            return new CoworkTaskRate
-            {
-                TasksPerPersonPerMonth = published?.CoworkTasksPerPersonPerMonth ?? 0,
-                Basis = published?.CoworkTaskRateBasis ?? CoworkTaskRateBases.Assumed,
-                Users = published?.CoworkTaskRateUsers ?? 0,
-            };
+            return figures != null && figures.TryGetValue(key, out var value) ? value : null;
         }
 
         private static bool Usable(double? value)

@@ -182,10 +182,26 @@ export interface CopilotAdoptionOptions {
   copilotMinutesSavedPerDocument: number;
   /** The conservative share of every minutes-saved assumption. Shared by both estimates. */
   coworkEstimateLowerBoundRatio: number;
-  /** Minutes Cowork is assumed to save per task, on top of Copilot. No study has measured it. */
+  /**
+   * Minutes Cowork is assumed to save per task already in Microsoft's Cowork report, on top of Copilot.
+   * No study has measured it.
+   */
   coworkMinutesSavedPerTask: number;
-  /** Cowork tasks a month per person, used only when no Cowork tasks are observed: a placeholder. */
-  coworkAssumedTasksPerPersonPerMonth: number;
+  /**
+   * For each kind of work Cowork could take on (`CoworkActivity`), the share of it handed to Cowork
+   * (0 to 1) and the minutes Cowork saves on each piece, on top of Copilot. Assumptions, all of them -
+   * see CoworkActivities.cs. Named so the Excel export can send a reader's figure back under the same key.
+   */
+  coworkOrganiseMeetingsShare: number;
+  coworkOrganiseMeetingsMinutes: number;
+  coworkPrepareMeetingsShare: number;
+  coworkPrepareMeetingsMinutes: number;
+  coworkSendEmailShare: number;
+  coworkSendEmailMinutes: number;
+  coworkPostInTeamsShare: number;
+  coworkPostInTeamsMinutes: number;
+  coworkCreateDocumentsShare: number;
+  coworkCreateDocumentsMinutes: number;
 
   usageReportLagDays: number;
   topSegments: number;
@@ -759,18 +775,28 @@ export interface CoworkCreditPosition {
 }
 
 /**
- * Where the Cowork task rate a projection uses came from: the average of the people with Cowork tasks
- * in Microsoft's report, a labelled placeholder because nobody has any, or the reader's own figure.
+ * The kinds of work the Cowork estimate models for people not yet running Cowork tasks: each thing
+ * Microsoft says Cowork does, against the count Microsoft's usage reports keep of people doing it by
+ * hand. In the order the server publishes and sums them - see `COWORK_ACTIVITIES`.
  */
-export type CoworkTaskRateBasis = 'observed' | 'assumed' | 'custom';
+export type CoworkActivity = 'organiseMeetings' | 'prepareMeetings' | 'sendEmail' | 'postInTeams' | 'createDocuments';
+
+/** What one cohort already does by hand of one kind of work, a month. Observed, not modelled. */
+export interface CoworkActivityVolume {
+  activity: CoworkActivity;
+  /** Done by hand a month by the people not yet running Cowork tasks. */
+  volumePerMonth: number;
+}
 
 /**
  * The modelled Cowork estimate for one cohort: the time Cowork could give back ON TOP of what Microsoft
  * 365 Copilot already saves - the value of enabling Cowork, paid for in Copilot Credits.
  *
- * Cowork tasks - observed where Microsoft's report has them, projected where it does not - times
- * minutes per task, which no study has measured. There is deliberately no Copilot layer: these people
- * already hold a licence, and the time it gives back is not Cowork's to claim.
+ * The Cowork tasks already in Microsoft's report, at minutes per task; and for everyone else, each kind
+ * of work they already do by hand x the share of it handed to Cowork x the minutes saved on each piece.
+ * The volumes are observed; the shares and minutes are assumptions no study has tested. There is
+ * deliberately no Copilot layer: these people already hold a licence, and the time it gives back is not
+ * Cowork's to claim.
  *
  * `assumptions` travels with the numbers so no component can render a figure without it. The portal
  * recomputes the hours from the published inputs whenever the reader enters their own assumptions -
@@ -783,15 +809,21 @@ export interface CoworkValueEstimate {
   coworkTaskUsers: number;
   /** Their tasks, restated as a month. Observed. */
   observedCoworkTasks: number;
-  /** Everyone else in the cohort, projected at the rate below. */
+  /** Everyone else in the cohort, modelled from the work they already do. */
   projectedCoworkUsers: number;
-  /** The Cowork tasks a month each projected person is assumed to run. */
-  coworkTasksPerPersonPerMonth: number;
-  coworkTaskRateBasis: CoworkTaskRateBasis;
-  /** For an observed rate, how many people it is the average of. */
-  coworkTaskRateUsers: number;
-  /** Observed plus projected Cowork tasks a month. */
+  /** That work, a month, one entry per kind - every kind present, in `COWORK_ACTIVITIES` order. Observed. */
+  activities: CoworkActivityVolume[];
+  /** Pieces of work a month handed to Cowork: each volume x its share, summed, then rounded. */
+  projectedCoworkTasks: number;
+  /** Observed tasks plus the pieces of work handed over. */
   coworkTasks: number;
+  /**
+   * The tenant's own Cowork users' average tasks a month - the sense check, not an input. Zero when
+   * nobody has Cowork tasks in the report.
+   */
+  observedTasksPerPersonPerMonth: number;
+  /** How many people that average is of. */
+  observedTaskRateUsers: number;
   hoursPerMonthLow: number;
   hoursPerMonthHigh: number;
   // No monetary fields, and none anywhere else in this report: the estimate is modelled, and a money

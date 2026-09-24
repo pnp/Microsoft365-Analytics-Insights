@@ -7,6 +7,7 @@ import type {
   LicenceValueEstimate,
 } from '../../types/copilotAdoption';
 import {
+  COWORK_ACTIVITIES,
   COWORK_ASSUMPTION_KEYS,
   LICENCE_ASSUMPTION_KEYS,
   TIME_SAVED_STORAGE_KEY,
@@ -33,7 +34,16 @@ const OPTIONS = {
   copilotMinutesSavedPerDocument: 1,
   coworkEstimateLowerBoundRatio: 0.5,
   coworkMinutesSavedPerTask: 6,
-  coworkAssumedTasksPerPersonPerMonth: 20,
+  coworkOrganiseMeetingsShare: 0.25,
+  coworkOrganiseMeetingsMinutes: 6,
+  coworkPrepareMeetingsShare: 0.1,
+  coworkPrepareMeetingsMinutes: 6,
+  coworkSendEmailShare: 0.05,
+  coworkSendEmailMinutes: 6,
+  coworkPostInTeamsShare: 0.01,
+  coworkPostInTeamsMinutes: 6,
+  coworkCreateDocumentsShare: 0.02,
+  coworkCreateDocumentsMinutes: 6,
   maxOpportunityCandidates: 50000,
 } as CopilotAdoptionOptions;
 
@@ -61,12 +71,19 @@ function coworkEstimate(overrides: Partial<CoworkValueEstimate> = {}): CoworkVal
     coworkTaskUsers: 3,
     observedCoworkTasks: 45,
     projectedCoworkUsers: 7,
-    coworkTasksPerPersonPerMonth: 12.5,
-    coworkTaskRateBasis: 'observed',
-    coworkTaskRateUsers: 3,
-    coworkTasks: 133,
-    hoursPerMonthLow: 7,
-    hoursPerMonthHigh: 13,
+    activities: [
+      { activity: 'organiseMeetings', volumePerMonth: 142 },
+      { activity: 'prepareMeetings', volumePerMonth: 560 },
+      { activity: 'sendEmail', volumePerMonth: 1300 },
+      { activity: 'postInTeams', volumePerMonth: 4200 },
+      { activity: 'createDocuments', volumePerMonth: 1100 },
+    ],
+    projectedCoworkTasks: 221,
+    coworkTasks: 266,
+    observedTasksPerPersonPerMonth: 15,
+    observedTaskRateUsers: 3,
+    hoursPerMonthLow: 13,
+    hoursPerMonthHigh: 27,
     assumptions: [],
     ...overrides,
   };
@@ -78,7 +95,7 @@ const SUMMARY = {
   coworkFullRolloutEstimate: coworkEstimate(),
 } as Pick<CopilotAdoptionSummary, 'options' | 'coworkValueEstimate' | 'coworkFullRolloutEstimate'>;
 
-const defaults = () => defaultTimeSavedAssumptions(OPTIONS, coworkEstimate());
+const defaults = () => defaultTimeSavedAssumptions(OPTIONS);
 
 describe('projectLicenceTimeSaved', () => {
   /**
@@ -112,7 +129,11 @@ describe('projectLicenceTimeSaved', () => {
     const projection = projectLicenceTimeSaved(licenceEstimate(), defaults(), OPTIONS)!;
     expect(projection.activities.reduce((sum, a) => sum + a.sharePct, 0)).toBeCloseTo(100, 9);
 
-    const heavierCowork = projectLicenceTimeSaved(licenceEstimate(), { ...defaults(), taskMinutes: 240, tasksPerPerson: 200 }, OPTIONS)!;
+    const heavierCowork = projectLicenceTimeSaved(
+      licenceEstimate(),
+      { ...defaults(), taskMinutes: 240, sendEmailShare: 1, sendEmailMinutes: 240, organiseMeetingsShare: 1 },
+      OPTIONS,
+    )!;
     expect(heavierCowork.hoursHigh).toBe(projection.hoursHigh);
   });
 
@@ -137,16 +158,47 @@ describe('projectCoworkTimeSaved', () => {
   /**
    * The golden figure shared with CopilotAdoptionCoworkTests.Estimate_MatchesThePortalsGoldenFigure.
    *
-   * 45 observed + 7 projected x 12.5 (= 87.5, a deliberate midpoint: both languages must round it up
-   * to 88) = 133 tasks x 6 minutes = 798 minutes = 13.3 hours; x 50% = 6.65.
+   * At the product defaults: 142 meetings organised x 25% = 35.5, 560 attended x 10% = 56, 1,300
+   * emails x 5% = 65, 4,200 Teams messages x 1% = 42 and 1,100 files x 2% = 22 - 220.5 pieces of work,
+   * published as 221 - plus 45 observed tasks. (45 + 220.5) x 6 minutes = 1,593 minutes = 26.55
+   * hours; x 50% = 13.3.
    */
   it('matches the server to the hour for the same inputs and assumptions', () => {
     const projection = projectCoworkTimeSaved(coworkEstimate(), defaults(), OPTIONS)!;
 
-    expect(projection.projectedTasks).toBe(88);
-    expect(projection.tasks).toBe(133);
-    expect(projection.hoursHigh).toBe(13);
-    expect(projection.hoursLow).toBe(7);
+    expect(projection.projectedTasks).toBe(221);
+    expect(projection.tasks).toBe(266);
+    expect(projection.hoursHigh).toBe(27);
+    expect(projection.hoursLow).toBe(13);
+    // Where the time comes from, split exactly as CoworkHoursByActivity splits it: the five kinds of
+    // work in order, then the observed tasks, adding up to the headline.
+    expect(projection.activities.map((a) => a.displayHours)).toEqual([4, 6, 7, 4, 2]);
+    expect(projection.observedDisplayHours).toBe(4);
+    expect(projection.activities.map((a) => a.displayPieces)).toEqual([36, 56, 65, 42, 22]);
+  });
+
+  it('shows each kind of work in the server\u2019s order, with its own volume, share and minutes', () => {
+    const projection = projectCoworkTimeSaved(coworkEstimate(), defaults(), OPTIONS)!;
+
+    expect(projection.activities.map((a) => a.activity)).toEqual([...COWORK_ACTIVITIES]);
+    expect(projection.activities.map((a) => a.volume)).toEqual([142, 560, 1300, 4200, 1100]);
+    expect(projection.activities.map((a) => a.share)).toEqual([0.25, 0.1, 0.05, 0.01, 0.02]);
+    const total = projection.activities.reduce((sum, a) => sum + a.sharePct, 0) + projection.observedSharePct;
+    expect(total).toBeCloseTo(100, 9);
+  });
+
+  it('moves only the kind of work whose figures the reader changed', () => {
+    const baseline = projectCoworkTimeSaved(coworkEstimate(), defaults(), OPTIONS)!;
+    const changed = projectCoworkTimeSaved(
+      coworkEstimate(),
+      { ...defaults(), organiseMeetingsShare: 0.5, organiseMeetingsMinutes: 12 },
+      OPTIONS,
+    )!;
+
+    // 142 x 50% = 71 pieces x 12 minutes = 852 minutes, up from 213: (1,593 + 639) / 60 = 37.2.
+    expect(changed.hoursHigh).toBe(37);
+    expect(changed.projectedTasks).toBe(256);
+    expect(changed.activities.slice(1).map((a) => a.pieces)).toEqual(baseline.activities.slice(1).map((a) => a.pieces));
   });
 
   it('is Cowork\u2019s increment alone: the Copilot minutes never move it', () => {
@@ -160,25 +212,42 @@ describe('projectCoworkTimeSaved', () => {
     )!;
 
     expect(heavierCopilot.hoursHigh).toBe(projection.hoursHigh);
-    expect(projection.minutesPerPersonDayHigh).toBeCloseTo(798 / 200, 9);
+    expect(projection.minutesPerPersonDayHigh).toBeCloseTo(1593 / 200, 6);
   });
 
-  it('takes the task-rate default from the tenant\u2019s own Cowork users, not from configuration', () => {
-    expect(defaultTimeSavedAssumptions(OPTIONS, coworkEstimate()).tasksPerPerson).toBe(12.5);
-    // Nothing published: the server's labelled placeholder.
-    const unpublished = { ...coworkEstimate(), coworkTasksPerPersonPerMonth: undefined } as unknown as CoworkValueEstimate;
-    expect(defaultTimeSavedAssumptions(OPTIONS, unpublished).tasksPerPerson).toBe(20);
-    expect(projectCoworkTimeSaved(coworkEstimate(), defaults(), OPTIONS)!.rateBasis).toBe('observed');
+  it('takes every Cowork default from configuration: nobody is projected at a flat rate any more', () => {
+    const d = defaultTimeSavedAssumptions(OPTIONS);
+    expect(d.organiseMeetingsShare).toBe(0.25);
+    expect(d.sendEmailMinutes).toBe(6);
+    expect(d).not.toHaveProperty('tasksPerPerson');
+    // A share above 100% is clamped as the server clamps it: Cowork is never handed more than people do.
+    expect(defaultTimeSavedAssumptions({ ...OPTIONS, coworkSendEmailShare: 3 }).sendEmailShare).toBe(1);
   });
 
-  it('labels a changed task rate as the reader\u2019s own and projects only the people not yet observed', () => {
-    const projection = projectCoworkTimeSaved(coworkEstimate(), { ...defaults(), tasksPerPerson: 30 }, OPTIONS)!;
+  it('compares the model with the tenant\u2019s own Cowork users, and says nothing when there are none', () => {
+    const projection = projectCoworkTimeSaved(coworkEstimate(), defaults(), OPTIONS)!;
+    expect(projection.observedRate).toBe(15);
+    expect(projection.observedRateUsers).toBe(3);
+    // 220.5 pieces over the 7 people modelled.
+    expect(projection.piecesPerProjectedPerson).toBeCloseTo(220.5 / 7, 9);
 
-    expect(projection.rateBasis).toBe('custom');
-    expect(projection.rateUsers).toBe(0);
-    expect(projection.projectedTasks).toBe(7 * 30);
-    // The 45 observed tasks stay exactly as Microsoft reported them.
-    expect(projection.tasks).toBe(45 + 210);
+    const nobody = projectCoworkTimeSaved(
+      coworkEstimate({ observedTasksPerPersonPerMonth: 0, observedTaskRateUsers: 0 }),
+      defaults(),
+      OPTIONS,
+    )!;
+    expect(nobody.observedRateUsers).toBe(0);
+  });
+
+  it('models only the people not yet running Cowork tasks', () => {
+    // Everyone is observed: there is nobody whose work to model, whatever the published volumes say.
+    const allObserved = projectCoworkTimeSaved(
+      coworkEstimate({ coworkTaskUsers: 10, projectedCoworkUsers: 0 }),
+      defaults(),
+      OPTIONS,
+    )!;
+    expect(allObserved.projectedTasks).toBe(0);
+    expect(allObserved.hoursHigh).toBe(Math.round((45 * 6) / 60));
   });
 
   it('says nothing, rather than zero, when there is nobody to model', () => {
@@ -258,9 +327,21 @@ describe('the reader\u2019s own figures', () => {
 
     act(() => result.current.setAssumption('meetingMinutes', 100000));
     expect(result.current.assumptions.meetingMinutes).toBe(5);
-    act(() => result.current.setAssumption('tasksPerPerson', 1000));
-    expect(result.current.assumptions.tasksPerPerson).toBe(12.5);
+    // A share is at most all of the work.
+    act(() => result.current.setAssumption('sendEmailShare', 1.5));
+    expect(result.current.assumptions.sendEmailShare).toBe(0.05);
+    act(() => result.current.setAssumption('postInTeamsMinutes', 1000));
+    expect(result.current.assumptions.postInTeamsMinutes).toBe(6);
     expect(result.current.isCustomised).toBe(false);
+  });
+
+  it('forgets a figure from the flat tasks-a-person model rather than misreading it', () => {
+    // A session that began before the activity model stored its task rate under this key.
+    sessionStorage.setItem(TIME_SAVED_STORAGE_KEY, JSON.stringify({ tasksPerPerson: 25, taskMinutes: 9 }));
+    const { result } = renderHook(() => useTimeSavedAssumptions(SUMMARY));
+
+    expect(result.current.customised).toEqual(['taskMinutes']);
+    expect(result.current.assumptions).not.toHaveProperty('tasksPerPerson');
   });
 
   it('shares one set of figures between every part of the page', () => {
@@ -277,7 +358,9 @@ describe('the reader\u2019s own figures', () => {
     // A reader who retuned the Copilot minutes has changed the licence estimate, not the Cowork one.
     expect(customisesAny(['meetingMinutes'], LICENCE_ASSUMPTION_KEYS)).toBe(true);
     expect(customisesAny(['meetingMinutes'], COWORK_ASSUMPTION_KEYS)).toBe(false);
-    expect(customisesAny(['tasksPerPerson'], COWORK_ASSUMPTION_KEYS)).toBe(true);
+    expect(customisesAny(['sendEmailShare'], COWORK_ASSUMPTION_KEYS)).toBe(true);
+    expect(customisesAny(['createDocumentsMinutes'], COWORK_ASSUMPTION_KEYS)).toBe(true);
+    expect(customisesAny(['sendEmailShare'], LICENCE_ASSUMPTION_KEYS)).toBe(false);
     expect(customisesAny(['conservativeRatio'], LICENCE_ASSUMPTION_KEYS)).toBe(true);
     expect(customisesAny(['conservativeRatio'], COWORK_ASSUMPTION_KEYS)).toBe(true);
     expect(customisesAny(['hoursPerDay'], [...LICENCE_ASSUMPTION_KEYS, ...COWORK_ASSUMPTION_KEYS])).toBe(false);
@@ -291,7 +374,8 @@ describe('the reader\u2019s own figures', () => {
       result.current.setAssumption('meetingMinutes', 8);
       result.current.setAssumption('conservativeRatio', 0.3);
       result.current.setAssumption('taskMinutes', 15);
-      result.current.setAssumption('tasksPerPerson', 25);
+      result.current.setAssumption('organiseMeetingsShare', 0.4);
+      result.current.setAssumption('createDocumentsMinutes', 20);
       // On-screen only: the workbook quotes hours, not full-time people.
       result.current.setAssumption('hoursPerDay', 7.5);
     });
@@ -300,7 +384,8 @@ describe('the reader\u2019s own figures', () => {
       copilotMinutesSavedPerMeeting: '8',
       coworkEstimateLowerBoundRatio: '0.3',
       coworkMinutesSavedPerTask: '15',
-      coworkTasksPerPersonPerMonth: '25',
+      coworkOrganiseMeetingsShare: '0.4',
+      coworkCreateDocumentsMinutes: '20',
     });
   });
 });

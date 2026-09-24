@@ -2261,7 +2261,6 @@ function buildTimeSavedKpis(
           how: t('copilotAdoption.page.kpi.coworkTimeSaved.how'),
           formula: t('copilotAdoption.page.kpi.coworkTimeSaved.formula', {
             taskMinutes: minutes(assumptions.taskMinutes),
-            rate: minutes(cowork.tasksPerPerson),
             percent,
           }),
           source: t('copilotAdoption.page.kpi.coworkTimeSaved.source'),

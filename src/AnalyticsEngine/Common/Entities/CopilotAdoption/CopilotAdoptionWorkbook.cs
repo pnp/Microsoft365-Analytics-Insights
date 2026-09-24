@@ -79,7 +79,7 @@ namespace Common.Entities.CopilotAdoption
                 WriteActionPlanSheet(workbook, summary);
                 WriteLicensedUsersSheet(workbook, analysis);
                 WriteCoworkSheet(workbook, analysis);
-                WriteCoworkEstimateSheet(workbook, summary, configured, modelOptions, timeSaved);
+                WriteCoworkEstimateSheet(workbook, summary, configured, modelOptions);
                 WriteOpportunitiesSheet(workbook, analysis);
                 WriteLicenceEstimateSheet(workbook, summary, configured, modelOptions);
                 WriteMethodSheet(workbook, summary);
@@ -1500,16 +1500,22 @@ namespace Common.Entities.CopilotAdoption
         /// The modelled Cowork estimate, on its own sheet and nowhere else.
         ///
         /// <para>Deliberately separated from every measured figure in this workbook. The observed Cowork
-        /// tasks are real; the projection and the conversion to hours are assumptions, and a reader who
-        /// finds an "hours saved" column sitting beside interaction counts will reasonably assume both
-        /// were counted. Keeping it on a sheet that states its assumptions at the top is what makes the
-        /// number usable without making it misleading.</para>
+        /// tasks and the work people already do by hand are real; the share of that work handed to Cowork
+        /// and the conversion to hours are assumptions, and a reader who finds an "hours saved" column
+        /// sitting beside interaction counts will reasonably assume both were counted. Keeping it on a
+        /// sheet that states its assumptions at the top is what makes the number usable without making it
+        /// misleading.</para>
         ///
         /// <para>Two cohorts side by side - the people ready for Cowork now, and every Copilot seat
         /// holder - because the portal's headline quotes both: where a rollout starts, and the ceiling.
         /// When the export carries the reader's own assumptions both are restated under them from the
         /// published inputs, exactly as the portal does, and the sheet says so on a row that is present in
         /// every export so the layout never shifts.</para>
+        ///
+        /// <para><b>Where the time comes from.</b> One block per kind of work Cowork could take on
+        /// (<see cref="CoworkActivities"/>): the volume already done by hand, the share handed to Cowork,
+        /// the minutes saved on each piece and the hours that makes - the same rows as the calculator on
+        /// the portal's Cowork tab, in the same order, split so the parts add up to the total.</para>
         ///
         /// <para><b>Cowork only.</b> This sheet justifies Copilot Credits, so it carries no Microsoft 365
         /// Copilot hours: these people already hold a licence, and the time it saves them is not Cowork's
@@ -1520,52 +1526,46 @@ namespace Common.Entities.CopilotAdoption
             XlsxWriter workbook,
             CopilotAdoptionSummary summary,
             CopilotAdoptionOptions configured,
-            CopilotAdoptionOptions model,
-            TimeSavedOverrides timeSaved)
+            CopilotAdoptionOptions model)
         {
             if (!summary.CoworkReadinessAvailable) return;
 
-            var ready = RestateCowork(summary.CoworkValueEstimate, model, timeSaved);
-            var full = RestateCowork(summary.CoworkFullRolloutEstimate, model, timeSaved);
+            var ready = RestateCowork(summary.CoworkValueEstimate, model);
+            var full = RestateCowork(summary.CoworkFullRolloutEstimate, model);
             if (ready.CohortUsers == 0 && full.CohortUsers == 0) return;
 
-            // The rate is tenant-wide, identical in both cohorts; read it from whichever is populated.
-            var withRate = full.CohortUsers > 0 ? full : ready;
-            var publishedEstimate = full.CohortUsers > 0 ? summary.CoworkFullRolloutEstimate : summary.CoworkValueEstimate;
-            var publishedRate = TimeSavedOverrides.PublishedTaskRate(publishedEstimate);
             var reportPeriodDays = summary.DataSources?.CoworkUsageReportPeriodDays ?? 0;
+            var workingDays = CopilotAdoptionScoring.WorkingDaysPerMonth(configured);
 
             // Customised only by the figures this sheet uses: a reader who changed the Copilot minutes has
             // changed the licence estimate, not this one.
             var customised = !ReferenceEquals(configured, model)
                 && (model.CoworkMinutesSavedPerTask != configured.CoworkMinutesSavedPerTask
                     || CopilotAdoptionScoring.TimeSavedLowerBoundRatio(model) != CopilotAdoptionScoring.TimeSavedLowerBoundRatio(configured)
-                    || withRate.CoworkTaskRateBasis == CoworkTaskRateBases.Custom);
+                    || CoworkActivities.All.Any(a => a.Share(model) != a.Share(configured) || a.Minutes(model) != a.Minutes(configured)));
 
             var sheet = workbook.AddSheet("Cowork estimate (modelled)");
-            sheet.SetColumnWidths(46, 16, 22, 62);
+            sheet.SetColumnWidths(52, 16, 22, 62);
 
             sheet.AddTitle("Potential time back from Cowork - MODELLED, NOT MEASURED");
             sheet.AddRow(XlsxCell.Wrapped(
                 "This product does not and cannot measure time saved. The Cowork tasks below are observed from "
-                + "Microsoft's Cowork usage report where people already run them and projected for everyone "
-                + "else; the hours are those tasks multiplied by the minutes-saved assumption listed with them. "
-                + "Treat this as a way to size a Cowork rollout, not as a result, and never quote the hours "
-                + "without the assumptions underneath them."));
+                + "Microsoft's Cowork usage report where people already run them. For everyone else, the work they "
+                + "already do by hand - meetings organised and attended, emails sent, Teams messages, files worked "
+                + "on - is observed from Microsoft's usage reports; the share of that work handed to Cowork and the "
+                + "minutes saved on each piece are assumptions, listed with them. Treat this as a way to size a "
+                + "Cowork rollout, not as a result, and never quote the hours without the assumptions underneath them."));
             sheet.AddRow(XlsxCell.Wrapped(
                 "Cowork only, on top of Microsoft 365 Copilot - the part paid for in Copilot Credits. These people "
                 + "already hold a Copilot licence, so the time Copilot saves them is the licence's, not Cowork's: "
-                + "the minutes per task are Cowork's increment over Copilot alone. No study has yet measured it, "
-                + "alone or for people who already use Copilot, so quote these hours as an assumption, not as "
-                + "evidence. The time Copilot could give back to the people recommended for a licence is on the "
+                + "the minutes here are Cowork's increment over Copilot alone. No study has yet measured it, alone "
+                + "or for people who already use Copilot, so quote these hours as an assumption, not as evidence. "
+                + "The time Copilot could give back to the people recommended for a licence is on the "
                 + "'Licence estimate (modelled)' sheet."));
             sheet.AddRow(XlsxCell.Wrapped(customised
                 ? "ASSUMPTIONS ENTERED IN THE PORTAL: figures on this sheet were entered by the person who "
-                  + "downloaded this file. The product defaults are "
-                  + $"{Num(configured.CoworkMinutesSavedPerTask)} minutes per Cowork task and a lower bound of "
-                  + $"{Num(CopilotAdoptionScoring.TimeSavedLowerBoundRatio(configured) * 100d)}%; this report was "
-                  + $"published projecting {Num(publishedRate.TasksPerPersonPerMonth)} Cowork tasks a month per "
-                  + "person. The Settings sheet records the minutes against their keys."
+                  + "downloaded this file. The product defaults are recorded against their keys on the Settings "
+                  + "sheet, each marked where the figure used here differs."
                 : "Assumptions: the product defaults. The portal's Cowork tab explains each one and lets a reader "
                   + "enter their own figures before exporting."));
             sheet.AddBlankRow();
@@ -1575,48 +1575,100 @@ namespace Common.Entities.CopilotAdoption
             AddEstimateRow(sheet, "People covered", ready.CohortUsers, full.CohortUsers,
                 "Ready now: the people recommended for the Cowork spending policy - prime candidates plus "
                 + "everyone already using Cowork - and where a rollout starts. Every Copilot seat holder: the "
-                + "ceiling if every scored seat holder used Cowork. It projects your Cowork users' average onto "
-                + "people who are not ready yet, who would likely run fewer tasks, so it overstates.");
+                + "ceiling if every scored seat holder used Cowork, including people who are not ready yet and "
+                + "would likely hand it less.");
 
-            // ---- Cowork tasks ----
+            var readyHours = CopilotAdoptionScoring.CoworkHoursByActivity(ready, model);
+            var fullHours = CopilotAdoptionScoring.CoworkHoursByActivity(full, model);
+            var readyPieces = CopilotAdoptionScoring.CoworkTasksByActivity(ready, model);
+            var fullPieces = CopilotAdoptionScoring.CoworkTasksByActivity(full, model);
+
+            // ---- The work Cowork could take on ----
             sheet.AddBlankRow();
-            AddSectionRow(sheet, "COWORK TASKS");
+            AddSectionRow(sheet, "WORK COWORK COULD TAKE ON - the people not yet running Cowork tasks");
+            AddEstimateRow(sheet, "People modelled from their own work", ready.ProjectedCoworkUsers, full.ProjectedCoworkUsers,
+                "Everyone in the cohort without Cowork tasks in Microsoft's report. Their work comes from Microsoft's "
+                + $"usage reports: per-active-day averages, restated over {Num(workingDays)} working days a month.");
+
+            for (var i = 0; i < CoworkActivities.All.Count; i++)
+            {
+                var activity = CoworkActivities.All[i];
+                AddEstimateRow(sheet, $"{activity.Label} - done by hand a month (observed)",
+                    CopilotAdoptionScoring.CoworkVolume(ready, activity.Key),
+                    CopilotAdoptionScoring.CoworkVolume(full, activity.Key),
+                    $"OBSERVED. {activity.VolumeLabel}, from Microsoft's usage reports.");
+                sheet.AddRow(
+                    $"{activity.Label} - share handed to Cowork (assumption)",
+                    XlsxCell.Percent(activity.Share(model)),
+                    XlsxCell.Percent(activity.Share(model)),
+                    XlsxCell.Wrapped($"ASSUMPTION - NO PUBLISHED STUDY. {activity.ShareRationale}"));
+                AddAssumptionRow(sheet, $"{activity.Label} - minutes saved on each (assumption)",
+                    activity.Minutes(model),
+                    "ASSUMPTION - NO PUBLISHED STUDY. Cowork's increment over Copilot alone on each piece it takes on. "
+                    + "The product ships with the same six minutes for every kind of work: the smallest credit "
+                    + "Microsoft's Agent Assisted Hours method gives a resolved agent session.");
+                AddEstimateRow(sheet, $"{activity.Label} - handed to Cowork a month", readyPieces[i], fullPieces[i],
+                    "MODELLED. The volume x the share.");
+                AddEstimateRow(sheet, $"{activity.Label} - hours a month (high)", readyHours[i], fullHours[i],
+                    "MODELLED. Handed to Cowork x minutes saved on each.");
+            }
+
+            AddEstimateRow(sheet, "Pieces of work handed to Cowork a month", ready.ProjectedCoworkTasks, full.ProjectedCoworkTasks,
+                "MODELLED. Every kind of work above, handed over at its share.");
+
+            // ---- Cowork tasks already running ----
+            sheet.AddBlankRow();
+            AddSectionRow(sheet, "COWORK TASKS ALREADY RUNNING");
             AddEstimateRow(sheet, "People with Cowork tasks (observed)", ready.CoworkTaskUsers, full.CoworkTaskUsers,
-                "OBSERVED. People with Cowork tasks in Microsoft's Cowork usage report.");
+                "OBSERVED. People with Cowork tasks in Microsoft's Cowork usage report. Counted at their actual "
+                + "tasks; their own work is not modelled as well, so nobody is counted twice.");
             AddEstimateRow(sheet, "Cowork tasks a month (observed)", ready.ObservedCoworkTasks, full.ObservedCoworkTasks,
                 reportPeriodDays > 0
                     ? $"OBSERVED. Their tasks over the report's {reportPeriodDays}-day period, restated as a "
                       + $"{Math.Max(1, configured.HabitBucketNormalisationDays)}-day month."
                     : "OBSERVED. None counted: there is no Cowork usage-report snapshot with a known period "
-                      + "to restate tasks from, so everyone is projected instead.");
-            AddEstimateRow(sheet, "People projected", ready.ProjectedCoworkUsers, full.ProjectedCoworkUsers,
-                "Everyone in the cohort without Cowork tasks in the report, projected at the rate below.");
-            AddAssumptionRow(sheet, "Cowork tasks a month for each person projected",
-                withRate.CoworkTasksPerPersonPerMonth,
-                TaskRateNotes(withRate, publishedRate));
-            AddEstimateRow(sheet, "Cowork tasks a month (observed + projected)", ready.CoworkTasks, full.CoworkTasks,
-                "Observed tasks, plus people projected x tasks each.");
-
-            // ---- Time saved ----
-            sheet.AddBlankRow();
-            AddSectionRow(sheet, "TIME SAVED - on top of Microsoft 365 Copilot, paid for in Copilot Credits");
+                      + "to restate tasks from, so everyone is modelled from their own work instead.");
             // Plain numbers rather than XlsxCell.Number: that style is the whole-number "#,##0", and a
             // fractional figure would be displayed rounded.
             AddAssumptionRow(sheet, "Minutes saved per Cowork task (assumption)",
                 Math.Max(0d, model.CoworkMinutesSavedPerTask),
-                "ASSUMPTION - NO PUBLISHED STUDY. Cowork's increment over Copilot alone. No study has measured "
-                + "Cowork's time savings, alone or for people who already use Copilot. The product ships with 6 "
-                + "minutes: the smallest credit Microsoft's Agent Assisted Hours method (Viva Insights, built for "
-                + "Copilot Studio agents) gives a resolved agent session.");
+                "ASSUMPTION - NO PUBLISHED STUDY. Cowork's increment over Copilot alone. Microsoft's report counts "
+                + "tasks, not what kind of work each was, so one figure applies to all of them. The product ships "
+                + "with 6 minutes: the smallest credit Microsoft's Agent Assisted Hours method (Viva Insights, "
+                + "built for Copilot Studio agents) gives a resolved agent session.");
+            AddEstimateRow(sheet, "Hours a month from these tasks (high)",
+                readyHours[readyHours.Length - 1], fullHours[fullHours.Length - 1],
+                "MODELLED. Cowork tasks a month x minutes saved per task.");
+
+            // ---- Sense check ----
+            sheet.AddBlankRow();
+            AddSectionRow(sheet, "SENSE CHECK - against your own Cowork users");
+            AddEstimateTenthsRow(sheet, "Cowork tasks a month per person already running them (observed)",
+                ready.ObservedTasksPerPersonPerMonth, full.ObservedTasksPerPersonPerMonth,
+                full.ObservedTaskRateUsers > 0
+                    ? $"OBSERVED. The average of the {full.ObservedTaskRateUsers:N0} "
+                      + (full.ObservedTaskRateUsers == 1 ? "person" : "people")
+                      + " in the tenant with Cowork tasks in Microsoft's report. Not an input to the hours."
+                    : "OBSERVED. Nobody has Cowork tasks in Microsoft's report yet, so there is nothing to compare with.");
+            AddEstimateTenthsRow(sheet, "Pieces of work handed to Cowork a month per person modelled",
+                PerPerson(ready.ProjectedCoworkTasks, ready.ProjectedCoworkUsers),
+                PerPerson(full.ProjectedCoworkTasks, full.ProjectedCoworkUsers),
+                "MODELLED. Compare with the row above. Early adopters tend to use a new tool more than the people "
+                + "who follow, and one Cowork task can cover several pieces of work, so the two need not match - "
+                + "but a model far above what your own Cowork users do is one to tune down.");
+
+            // ---- Time saved ----
+            sheet.AddBlankRow();
+            AddSectionRow(sheet, "TIME SAVED - on top of Microsoft 365 Copilot, paid for in Copilot Credits");
             sheet.AddRow(
-                "Lower bound (share of the assumption)",
+                "Lower bound (share of the assumptions)",
                 XlsxCell.Percent(CopilotAdoptionScoring.TimeSavedLowerBoundRatio(model)),
                 XlsxCell.Percent(CopilotAdoptionScoring.TimeSavedLowerBoundRatio(model)),
-                XlsxCell.Wrapped("ASSUMPTION. The conservative end applies this share of the minutes per task."));
+                XlsxCell.Wrapped("ASSUMPTION. The conservative end applies this share of the minutes saved."));
             AddEstimateRow(sheet, "Cowork hours a month (low)", ready.HoursPerMonthLow, full.HoursPerMonthLow,
                 "MODELLED. The conservative end.");
             AddEstimateRow(sheet, "Cowork hours a month (high)", ready.HoursPerMonthHigh, full.HoursPerMonthHigh,
-                "MODELLED. Cowork tasks a month x minutes saved per task. Quote the range, never a single figure.");
+                "MODELLED. Every row of hours above, added up. Quote the range, never a single figure.");
 
             sheet.AddBlankRow();
             sheet.AddTitle("Assumptions");
@@ -1626,25 +1678,19 @@ namespace Common.Entities.CopilotAdoption
             }
         }
 
-        /// <summary>What the Cowork task rate on the estimate sheet is, in words - it is not always an assumption.</summary>
-        private static string TaskRateNotes(CoworkValueEstimate estimate, CoworkTaskRate published)
+        /// <summary>A per-person figure to one decimal place; zero when there is nobody to divide by.</summary>
+        private static double PerPerson(double total, int people)
         {
-            switch (estimate.CoworkTaskRateBasis)
-            {
-                case CoworkTaskRateBases.Observed:
-                    return $"OBSERVED RATE, ASSUMED TO APPLY. The average of the {estimate.CoworkTaskRateUsers:N0} "
-                         + $"{(estimate.CoworkTaskRateUsers == 1 ? "person" : "people")} with Cowork tasks in "
-                         + "Microsoft's report. Early adopters tend to use a new tool more than the people who "
-                         + "follow them, so it may overstate.";
+            return people > 0 ? Math.Round(total / people, 1, MidpointRounding.AwayFromZero) : 0d;
+        }
 
-                case CoworkTaskRateBases.Custom:
-                    return "ENTERED IN THE PORTAL for this export, in place of the published "
-                         + $"{Num(published.TasksPerPersonPerMonth)} a month.";
-
-                default:
-                    return "ASSUMPTION. A placeholder: nobody's Cowork tasks were in Microsoft's report for this "
-                         + "period. Replace it with your own expectation in the portal.";
-            }
+        /// <summary>
+        /// A row of figures that can be fractional, written unformatted: the whole-number style of
+        /// <see cref="AddEstimateRow"/> would print 2.5 tasks a person as 3.
+        /// </summary>
+        private static void AddEstimateTenthsRow(XlsxSheet sheet, string measure, double first, double second, string notes)
+        {
+            sheet.AddRow(measure, first, second, XlsxCell.Wrapped(notes));
         }
 
         /// <summary>A bold label across the top of a block of rows.</summary>
@@ -1658,24 +1704,27 @@ namespace Common.Entities.CopilotAdoption
         /// the portal recomputes it. Under the configured defaults this reproduces the published figures to
         /// the hour, because the server derives them from the same rounded inputs.
         /// </summary>
-        private static CoworkValueEstimate RestateCowork(
-            CoworkValueEstimate estimate,
-            CopilotAdoptionOptions model,
-            TimeSavedOverrides timeSaved)
+        private static CoworkValueEstimate RestateCowork(CoworkValueEstimate estimate, CopilotAdoptionOptions model)
         {
             if (estimate == null || estimate.CohortUsers <= 0) return new CoworkValueEstimate();
 
-            return CopilotAdoptionScoring.ModelCoworkValue(
-                estimate.CohortUsers,
-                model,
-                new CoworkTaskInputs
+            var inputs = new CoworkTaskInputs
+            {
+                ObservedUsers = estimate.CoworkTaskUsers,
+                ObservedTasksPerMonth = estimate.ObservedCoworkTasks,
+                ObservedRate = new CoworkTaskRate
                 {
-                    ObservedUsers = estimate.CoworkTaskUsers,
-                    ObservedTasksPerMonth = estimate.ObservedCoworkTasks,
-                    Rate = timeSaved != null
-                        ? timeSaved.TaskRateFor(estimate)
-                        : TimeSavedOverrides.PublishedTaskRate(estimate),
-                });
+                    TasksPerPersonPerMonth = estimate.ObservedTasksPerPersonPerMonth,
+                    Users = estimate.ObservedTaskRateUsers,
+                },
+            };
+
+            foreach (var activity in CoworkActivities.All)
+            {
+                inputs.ActivityVolumes[activity.Key] = CopilotAdoptionScoring.CoworkVolume(estimate, activity.Key);
+            }
+
+            return CopilotAdoptionScoring.ModelCoworkValue(estimate.CohortUsers, model, inputs);
         }
 
         /// <summary>
