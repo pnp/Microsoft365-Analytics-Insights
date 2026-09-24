@@ -57,6 +57,7 @@
     <Compile Include="WorkloadToggleTests.cs" />
     <Compile Include="PageUpdateManagerPerfTests.cs" />
     <Compile Include="PerfRegressionTests.cs" />
+    <Compile Include="SentEmailImporterDuplicateMessageIdTests.cs" />
     <Compile Include="SentEmailImporterPipelineTests.cs" />
     <Compile Include="SentEmailImportTests.cs" />
     <Compile Include="GraphPagingFailureTests.cs" />
