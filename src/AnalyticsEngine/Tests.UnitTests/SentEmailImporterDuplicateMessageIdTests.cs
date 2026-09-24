@@ -74,7 +74,7 @@ namespace Tests.UnitTests
                     new AppConfig(),
                     source,
                     NullSentEmailSentimentScorer.Instance,
-                    userChunkSize: 2,
+                    userChunkSize: 10000,
                     mailboxSkipList: skipList,
                     noMailboxRetryHours: 1);
 
