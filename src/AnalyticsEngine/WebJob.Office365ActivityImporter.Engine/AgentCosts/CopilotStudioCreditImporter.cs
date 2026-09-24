@@ -4,6 +4,7 @@ using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -196,7 +197,8 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 var usageDate = ResolveUsageDate(row, windowFrom, windowTo);
 
                 var hash = AgentCostRowHasher.Hash(
-                    usageDate.ToString("yyyy-MM-dd"),
+                    // Invariant: part of the row's identity, so it must not change with the host's calendar.
+                    usageDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                     row.EnvironmentId,
                     row.ResourceId,
                     row.FeatureName);
@@ -392,6 +394,12 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                     var seenTokens = new HashSet<string>(StringComparer.Ordinal);
                     var pages = 0;
 
+                    // Every page of the day is read before any is mapped. MapUserRows adds together rows for the
+                    // same person and environment, but only within what it is given, and the store treats a second
+                    // row with the same identity as a restatement and overwrites the first - so mapped a page at a
+                    // time, a person whose rows straddled a page boundary kept only the last page's credits.
+                    var dayRows = new List<CopilotStudioUserCreditRow>();
+
                     do
                     {
                         if (++pages > MaxPages)
@@ -409,7 +417,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                         }
 
                         rowsRead += page.Rows.Count;
-                        mapped.AddRange(MapUserRows(page.Rows, day, environmentNames, _clock.UtcNow));
+                        dayRows.AddRange(page.Rows);
 
                         if (!page.HasMore) break;
 
@@ -423,6 +431,11 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                         continuationToken = page.ContinuationToken;
                     }
                     while (!string.IsNullOrEmpty(continuationToken));
+
+                    if (routeAvailable)
+                    {
+                        mapped.AddRange(MapUserRows(dayRows, day, environmentNames, _clock.UtcNow));
+                    }
                 }
 
                 if (!routeAvailable)
@@ -539,7 +552,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 if (row == null || string.IsNullOrWhiteSpace(row.UserId)) continue;
 
                 var hash = AgentCostRowHasher.Hash(
-                    usageDate.ToString("yyyy-MM-dd"), row.UserId, row.EnvironmentId);
+                    usageDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), row.UserId, row.EnvironmentId);
 
                 if (byHash.TryGetValue(hash, out var existing))
                 {

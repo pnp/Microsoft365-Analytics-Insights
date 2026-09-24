@@ -100,6 +100,19 @@ namespace DataUtils.Http
             return response;
         }
 
+        /// <summary>
+        /// How long the server asked us to wait, in seconds, or null when it gave no usable hint.
+        /// </summary>
+        /// <remarks>
+        /// Reads the standard <c>Retry-After</c> header and also the Azure resource-provider rate-limit headers
+        /// named <c>x-ms-ratelimit-*-retry-after</c>. Microsoft Cost Management throttles with those instead:
+        /// its spec says to wait for <c>x-ms-ratelimit-microsoft.consumption-retry-after</c>, and in practice it
+        /// sends <c>x-ms-ratelimit-microsoft.costmanagement-{qpu|entity|tenant|client}-retry-after</c>. Without
+        /// reading them, a throttled cost query fell back to a few seconds' back-off and retried straight into
+        /// the same limit until the retry budget ran out.
+        /// <para>When several hints are present the LONGEST wins, because each one names a separate limit and
+        /// all of them must have reset before a retry can succeed.</para>
+        /// </remarks>
         public static int? GetRetryAfterHeaderSeconds(this HttpResponseMessage response, DateTimeOffset? nowUtc = null)
         {
             if (response == null)
@@ -107,6 +120,49 @@ namespace DataUtils.Http
                 return null;
             }
 
+            var standard = GetStandardRetryAfterSeconds(response, nowUtc);
+            var rateLimit = GetRateLimitRetryAfterSeconds(response);
+
+            if (standard.HasValue && rateLimit.HasValue)
+            {
+                return Math.Max(standard.Value, rateLimit.Value);
+            }
+
+            return standard ?? rateLimit;
+        }
+
+        private static int? GetRateLimitRetryAfterSeconds(HttpResponseMessage response)
+        {
+            int? longest = null;
+
+            foreach (var header in response.Headers)
+            {
+                if (!header.Key.StartsWith("x-ms-ratelimit-", StringComparison.OrdinalIgnoreCase)
+                    || !header.Key.EndsWith("retry-after", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                foreach (var value in header.Value)
+                {
+                    if (!long.TryParse(value?.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var seconds))
+                    {
+                        continue;
+                    }
+
+                    var clamped = seconds > int.MaxValue ? int.MaxValue : (int)seconds;
+                    if (!longest.HasValue || clamped > longest.Value)
+                    {
+                        longest = clamped;
+                    }
+                }
+            }
+
+            return longest;
+        }
+
+        private static int? GetStandardRetryAfterSeconds(HttpResponseMessage response, DateTimeOffset? nowUtc)
+        {
             response.Headers.TryGetValues("Retry-After", out var retryAfterHeaderValues);
 
             if (retryAfterHeaderValues == null)
