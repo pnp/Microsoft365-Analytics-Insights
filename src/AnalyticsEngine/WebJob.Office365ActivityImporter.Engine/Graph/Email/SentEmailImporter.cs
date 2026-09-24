@@ -58,6 +58,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         private int _recipientsInserted;
         private int _deltaTokenReads;
         private int _deltaTokenWrites;
+        private readonly ConcurrentDictionary<string, int> _mailboxFailureBuckets =
+            new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         public SentEmailImporter(
             AnalyticsLogger logger,
@@ -375,15 +377,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                             $"User '{user.UserPrincipalName}' has no mailbox ({ex.GraphErrorCode ?? "unknown"}); " +
                             "skipping and adding to the no-mailbox list.");
                     }
+                    catch (GraphHttpException ex)
+                    {
+                        RecordMailboxFailure(ex);
+                        _logger.LogWarning(
+                            $"Could not access sent items for user '{user.UserPrincipalName}': {ex.Message}");
+                    }
                     catch (System.Net.Http.HttpRequestException ex)
                     {
-                        Interlocked.Increment(ref _mailboxesFailed);
+                        RecordMailboxFailure(ex);
                         _logger.LogWarning(
                             $"Could not access sent items for user '{user.UserPrincipalName}': {ex.Message}");
                     }
                     catch (Exception ex)
                     {
-                        Interlocked.Increment(ref _mailboxesFailed);
+                        RecordMailboxFailure(ex);
                         _logger.LogError(ex,
                             $"Error loading sent emails for user '{user.UserPrincipalName}': {ex.Message}");
                     }
@@ -397,6 +405,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             }
 
             return loaded.ToList();
+        }
+
+        private void RecordMailboxFailure(Exception ex)
+        {
+            Interlocked.Increment(ref _mailboxesFailed);
+            _mailboxFailureBuckets.AddOrUpdate(BuildMailboxFailureBucket(ex), 1, (_, count) => count + 1);
         }
 
         private async Task<Dictionary<string, double?>> ScoreSentimentAcrossChunkAsync(List<UserChunkResult> perUser)
@@ -685,13 +699,59 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
 
         private void LogRunSummary(TimeSpan elapsed)
         {
+            var failureSummary = FormatMailboxFailureSummary(_mailboxesFailed, _mailboxFailureBuckets);
+
             _logger.LogInformation(
                 $"Finished sent emails import in {elapsed:hh\\:mm\\:ss}. " +
-                $"Mailboxes scanned: {_mailboxesScanned} (failed: {_mailboxesFailed}, " +
+                $"Mailboxes scanned: {_mailboxesScanned} (failed: {failureSummary}, " +
                 $"no mailbox: {_mailboxesNotFound}, skipped as already known to have no mailbox: {_mailboxesSkipped}). " +
                 $"Messages seen: {_messagesSeen}. Messages inserted: {_messagesInserted} " +
                 $"(recipient rows: {_recipientsInserted}). " +
                 $"Delta tokens read: {_deltaTokenReads}, written: {_deltaTokenWrites}.");
+        }
+
+        internal static string FormatMailboxFailureSummary(
+            int totalFailures,
+            IEnumerable<KeyValuePair<string, int>> failureBuckets,
+            int maxBuckets = 5)
+        {
+            if (totalFailures <= 0)
+                return "0";
+
+            var buckets = (failureBuckets ?? Enumerable.Empty<KeyValuePair<string, int>>())
+                .Where(kv => kv.Value > 0)
+                .OrderByDescending(kv => kv.Value)
+                .ThenBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (buckets.Count == 0)
+                return totalFailures.ToString(CultureInfo.InvariantCulture);
+
+            var shown = buckets
+                .Take(maxBuckets)
+                .Select(kv => $"{kv.Key} x{kv.Value.ToString(CultureInfo.InvariantCulture)}")
+                .ToList();
+
+            var remainingBuckets = buckets.Count - shown.Count;
+            if (remainingBuckets > 0)
+            {
+                shown.Add($"{remainingBuckets.ToString(CultureInfo.InvariantCulture)} more");
+            }
+
+            return $"{totalFailures.ToString(CultureInfo.InvariantCulture)} ({string.Join(", ", shown)})";
+        }
+
+        private static string BuildMailboxFailureBucket(Exception ex)
+        {
+            if (ex is GraphHttpException graphEx)
+            {
+                var code = string.IsNullOrWhiteSpace(graphEx.GraphErrorCode)
+                    ? graphEx.StatusCode.ToString()
+                    : graphEx.GraphErrorCode;
+                return $"{(int)graphEx.StatusCode} {code}";
+            }
+
+            return ex?.GetType().Name ?? "UnknownException";
         }
 
         internal static List<Candidate> BuildCandidates(

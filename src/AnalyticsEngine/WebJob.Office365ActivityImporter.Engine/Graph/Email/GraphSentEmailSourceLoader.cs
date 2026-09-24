@@ -85,7 +85,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 // A mailbox-less user 404s here. Surface it instead of silently returning an empty list,
                 // so the importer can tell "no mailbox" apart from "mailbox with no sent mail" and stop
                 // re-checking the user every cycle.
-                throwOnNotFound: true);
+                throwOnNotFound: true,
+                throwOnHttpError: true);
 
             return new SentEmailLoadResult
             {
