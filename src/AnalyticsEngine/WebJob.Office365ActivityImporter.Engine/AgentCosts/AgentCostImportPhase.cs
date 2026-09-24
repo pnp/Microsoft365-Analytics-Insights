@@ -196,8 +196,9 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 await _lastRunStore.SetLastRunUtc(cadenceKey, _clock.UtcNow);
                 _logger.LogWarning($"{description} was refused, and retrying cannot fix that, so it will wait for the "
                     + "normal interval rather than re-asking every cycle. Fix the permission (see the error above); "
-                    + "the retry then happens on the next scheduled run. To force it sooner, clear the Redis key "
-                    + $"'{cadenceKey}' - restarting the web-job does not, because the stamp is stored in Redis.");
+                    + "the retry then happens on the next scheduled run. To force it sooner: where Redis is configured, "
+                    + $"delete the Redis key '{cadenceKey}' (restarting the web-job does not clear it); without Redis "
+                    + "the time is held in memory and a restart of the web-job clears it.");
                 return;
             }
 

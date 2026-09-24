@@ -63,10 +63,11 @@ namespace Common.Entities.Config
 
         /// <summary>
         /// Values to filter <see cref="MeterFilterDimension"/> to. <b>Empty means import every meter at the
-        /// scope</b>, which is the honest default: Microsoft Cowork is billed through Copilot Credits managed
-        /// in the Microsoft 365 admin centre and Microsoft publishes no Azure meter name for it, so there is
-        /// no correct value to ship. Importing everything lets an operator read their own data and then
-        /// narrow the filter.
+        /// scope</b>, which is the honest default. Microsoft documents that pay-as-you-go Copilot Credits -
+        /// Copilot Cowork, Copilot Studio and Work IQ API together - appear under the single
+        /// <c>Microsoft Copilot Studio</c> service, so that value selects all three at once and cannot isolate
+        /// Cowork, while other agent spend sits under other services. Importing everything lets an operator
+        /// read their own data and then narrow the filter.
         /// </summary>
         public IReadOnlyList<string> MeterFilterValues { get; set; } = new List<string>();
 

@@ -1,10 +1,14 @@
+using Common.Entities.Config;
+using DataUtils;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
@@ -29,6 +33,10 @@ namespace Tests.UnitTests
             "{\"error\":{\"code\":\"MailboxNotEnabledForRESTAPI\",\"message\":\"The mailbox is either inactive, soft-deleted, or is hosted on-premise.\"}}";
         private const string ResourceNotFound =
             "{\"error\":{\"code\":\"Request_ResourceNotFound\",\"message\":\"Resource 'guest_contoso.com' does not exist.\"}}";
+        private const string InternalServerError =
+            "{\"error\":{\"code\":\"ErrorInternalServerError\",\"message\":\"The server encountered an internal error.\"}}";
+        private const string AccessDenied =
+            "{\"error\":{\"code\":\"ErrorAccessDenied\",\"message\":\"Access is denied.\"}}";
 
         #region Fake HTTP handler
 
@@ -56,10 +64,180 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>Plays back scripted responses so a later page can fail after an earlier page succeeded.</summary>
+        private class SequenceHandler : HttpMessageHandler
+        {
+            private readonly Queue<Tuple<HttpStatusCode, string>> _responses;
+            public int CallCount { get; private set; }
+
+            public SequenceHandler(params Tuple<HttpStatusCode, string>[] responses)
+            {
+                _responses = new Queue<Tuple<HttpStatusCode, string>>(responses);
+            }
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                CallCount++;
+                var next = _responses.Count > 0
+                    ? _responses.Dequeue()
+                    : Tuple.Create(HttpStatusCode.OK, "{\"value\":[]}");
+
+                return Task.FromResult(new HttpResponseMessage(next.Item1)
+                {
+                    Content = new StringContent(next.Item2 ?? string.Empty),
+                    RequestMessage = request,
+                });
+            }
+        }
+
         private static ManualGraphCallClient ClientReturning(HttpStatusCode status, string body, out StubHandler handler)
         {
             handler = new StubHandler(status, body);
             return new ManualGraphCallClient(handler, NullLogger.Instance);
+        }
+
+        private static T GetPrivateField<T>(object instance, string fieldName)
+        {
+            return (T)instance.GetType()
+                .GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(instance);
+        }
+
+        private sealed class ThrowingSentEmailSourceLoader : ISentEmailSourceLoader
+        {
+            private readonly Exception _exception;
+
+            public ThrowingSentEmailSourceLoader(Exception exception)
+            {
+                _exception = exception;
+            }
+
+            public Task<bool> HasMailReadAccessAsync()
+            {
+                return Task.FromResult(true);
+            }
+
+            public Task<SentEmailLoadResult> LoadSentEmailsForUserAsync(Common.Entities.User user, bool includeBody)
+            {
+                var tcs = new TaskCompletionSource<SentEmailLoadResult>();
+                tcs.SetException(_exception);
+                return tcs.Task;
+            }
+        }
+
+        #endregion
+
+        #region Strict sent-email paging failures
+
+        [TestMethod]
+        public async Task SentEmailSource_PageTwo500_ThrowsAndDoesNotAdvanceDeltaToken()
+        {
+            var page1 =
+                "{\"@odata.nextLink\":\"https://graph.microsoft.com/v1.0/users/alice@contoso.com/mailFolders/sentitems/messages/delta?page=2\"," +
+                "\"value\":[{\"id\":\"msg-1\",\"from\":{\"emailAddress\":{\"address\":\"alice@contoso.com\"}}," +
+                "\"toRecipients\":[{\"emailAddress\":{\"address\":\"bob@contoso.com\"}}]}]}";
+
+            using (var handler = new SequenceHandler(
+                Tuple.Create(HttpStatusCode.OK, page1),
+                Tuple.Create(HttpStatusCode.InternalServerError, InternalServerError)))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance))
+            {
+                var tokenStore = new InMemoryDeltaTokenStore();
+                var loader = new GraphSentEmailSourceLoader(
+                    client,
+                    tokenStore,
+                    appIdentity: null,
+                    logger: AnalyticsLogger.ConsoleOnlyTracer());
+
+                var user = new Common.Entities.User { UserPrincipalName = "alice@contoso.com" };
+                var ex = await Assert.ThrowsExceptionAsync<GraphHttpException>(() =>
+                    loader.LoadSentEmailsForUserAsync(user, includeBody: false));
+
+                Assert.AreEqual(HttpStatusCode.InternalServerError, ex.StatusCode);
+                Assert.AreEqual("ErrorInternalServerError", ex.GraphErrorCode);
+                Assert.AreEqual(2, handler.CallCount, "Page 1 succeeded, then page 2 failed.");
+                Assert.IsNull(await tokenStore.GetDeltaToken(GraphSentEmailSourceLoader.BuildDeltaKey(user)),
+                    "A page failure must not advance the delta token because the mailbox load did not complete.");
+            }
+        }
+
+        [TestMethod]
+        public async Task SentEmailSource_PageOne404_StillThrowsTypedNotFoundForSkipList()
+        {
+            using (var client = ClientReturning(HttpStatusCode.NotFound, MailboxNotEnabled, out var handler))
+            {
+                var loader = new GraphSentEmailSourceLoader(
+                    client,
+                    new InMemoryDeltaTokenStore(),
+                    appIdentity: null,
+                    logger: AnalyticsLogger.ConsoleOnlyTracer());
+
+                var ex = await Assert.ThrowsExceptionAsync<GraphResourceNotFoundException>(() =>
+                    loader.LoadSentEmailsForUserAsync(
+                        new Common.Entities.User { UserPrincipalName = "nomailbox@contoso.com" },
+                        includeBody: false));
+
+                Assert.AreEqual("MailboxNotEnabledForRESTAPI", ex.GraphErrorCode);
+                Assert.AreEqual(1, handler.CallCount);
+            }
+        }
+
+        [TestMethod]
+        public async Task SentEmailImporter_PageOne404_AddsUserToNoMailboxSkipList()
+        {
+            var user = new Common.Entities.User { UserPrincipalName = "nomailbox@contoso.com" };
+            var importer = new SentEmailImporter(
+                AnalyticsLogger.ConsoleOnlyTracer(),
+                new AppConfig(),
+                new ThrowingSentEmailSourceLoader(
+                    new GraphResourceNotFoundException("https://graph.microsoft.com/v1.0/users/nomailbox@contoso.com/messages", MailboxNotEnabled, null)),
+                NullSentEmailSentimentScorer.Instance);
+
+            await importer.ImportSentEmailsForUser(user);
+
+            Assert.AreEqual(1, GetPrivateField<int>(importer, "_mailboxesNotFound"));
+            var noMailboxUpns = GetPrivateField<ConcurrentDictionary<string, byte>>(importer, "_noMailboxUpns");
+            Assert.IsTrue(noMailboxUpns.ContainsKey("nomailbox@contoso.com"));
+        }
+
+        [TestMethod]
+        public async Task SentEmailImporter_ForbiddenFailure_IsCountedByStatusAndGraphCodeWithoutUpnInSummary()
+        {
+            const string failedUrl = "https://graph.microsoft.com/v1.0/users/alice@contoso.com/mailFolders/sentitems/messages/delta";
+            var importer = new SentEmailImporter(
+                AnalyticsLogger.ConsoleOnlyTracer(),
+                new AppConfig(),
+                new ThrowingSentEmailSourceLoader(
+                    new GraphHttpException(HttpStatusCode.Forbidden, failedUrl, AccessDenied, null)),
+                NullSentEmailSentimentScorer.Instance);
+
+            await importer.ImportSentEmailsForUser(new Common.Entities.User { UserPrincipalName = "alice@contoso.com" });
+
+            var failures = GetPrivateField<int>(importer, "_mailboxesFailed");
+            var buckets = GetPrivateField<ConcurrentDictionary<string, int>>(importer, "_mailboxFailureBuckets");
+            var summary = SentEmailImporter.FormatMailboxFailureSummary(failures, buckets);
+
+            Assert.AreEqual("1 (403 ErrorAccessDenied x1)", summary);
+            Assert.IsFalse(summary.Contains("alice@contoso.com"), "The run summary must not contain a UPN.");
+            Assert.IsFalse(summary.Contains("/users/"), "The run summary must not contain the Graph URL.");
+        }
+
+        [TestMethod]
+        public void SentEmailImporter_FailureSummary_IsBoundedAndSorted()
+        {
+            var buckets = new Dictionary<string, int>
+            {
+                ["500 ErrorInternalServerError"] = 5,
+                ["403 ErrorAccessDenied"] = 2,
+                ["HttpRequestException"] = 1,
+                ["InvalidOperationException"] = 1,
+                ["TaskCanceledException"] = 1,
+                ["TimeoutException"] = 1,
+            };
+
+            var summary = SentEmailImporter.FormatMailboxFailureSummary(11, buckets, maxBuckets: 3);
+
+            Assert.AreEqual("11 (500 ErrorInternalServerError x5, 403 ErrorAccessDenied x2, HttpRequestException x1, 3 more)", summary);
         }
 
         #endregion
