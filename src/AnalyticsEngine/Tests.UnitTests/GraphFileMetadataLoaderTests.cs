@@ -205,8 +205,8 @@ namespace Tests.UnitTests
         {
             var otherError = new ODataError
             {
-                ResponseStatusCode = (int)HttpStatusCode.NotFound,
-                Error = new MainError { Code = "NotFound", Message = "Meeting not found" }
+                ResponseStatusCode = (int)HttpStatusCode.InternalServerError,
+                Error = new MainError { Code = "ServiceError", Message = "Graph service unavailable" }
             };
             var fake = new FakeSpoGraphClient { OnGetOnlineMeeting = (userId, meetingId) => throw otherError };
             var log = new CapturingLogger();
@@ -222,6 +222,62 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task GetMeetingInfo_ForbiddenMeetingApiError_LogsOnceWithoutExceptionAndSkipsSameMeeting()
+        {
+            var insufficientPermissions = new ODataError
+            {
+                ResponseStatusCode = (int)HttpStatusCode.Forbidden,
+                Error = new MainError { Code = "Forbidden", Message = "Insufficient permissions to complete the operation." }
+            };
+            var fake = new FakeSpoGraphClient { OnGetOnlineMeeting = (userId, meetingId) => throw insufficientPermissions };
+            var log = new CapturingLogger();
+            var loader = new GraphFileMetadataLoader(fake, log);
+            const string sameMeeting = "00000000-0000-0000-0000-000000000000_19:meeting_same@thread.v2";
+            const string otherMeeting = "00000000-0000-0000-0000-000000000000_19:meeting_other@thread.v2";
+
+            Assert.IsNull(await loader.GetMeetingInfo(sameMeeting, "00000000-0000-0000-0000-000000000000"));
+            Assert.IsNull(await loader.GetMeetingInfo(sameMeeting, "00000000-0000-0000-0000-000000000000"));
+            Assert.IsNull(await loader.GetMeetingInfo(otherMeeting, "00000000-0000-0000-0000-000000000000"));
+
+            Assert.AreEqual(2, fake.GetOnlineMeetingCalls, "The same failed (user, meeting) id must not be requested again");
+
+            var warnings = log.Entries.FindAll(e => e.Level == LogLevel.Warning);
+            Assert.AreEqual(1, warnings.Count, "Generic meeting API 403s should produce one warning per run");
+            StringAssert.Contains(warnings[0].Message, "OnlineMeetings.Read.All");
+            StringAssert.Contains(warnings[0].Message, "application access policy");
+            Assert.IsNull(warnings[0].Exception, "The warning must not carry the exception, so it isn't counted as exception telemetry");
+
+            var debug = log.Entries.FindAll(e => e.Level == LogLevel.Debug);
+            Assert.IsTrue(debug.Count >= 2, "Repeat failures and cached skips should be logged at debug level");
+        }
+
+        [TestMethod]
+        public async Task GetMeetingInfo_NotFoundMeetingApiError_LogsOnceWithoutExceptionAndSkipsSameMeeting()
+        {
+            var notFound = new ODataError
+            {
+                ResponseStatusCode = (int)HttpStatusCode.NotFound,
+                Error = new MainError { Code = "NotFound", Message = "Meeting not found" }
+            };
+            var fake = new FakeSpoGraphClient { OnGetOnlineMeeting = (userId, meetingId) => throw notFound };
+            var log = new CapturingLogger();
+            var loader = new GraphFileMetadataLoader(fake, log);
+            const string sameMeeting = "00000000-0000-0000-0000-000000000000_19:meeting_missing@thread.v2";
+            const string otherMeeting = "00000000-0000-0000-0000-000000000000_19:meeting_missing2@thread.v2";
+
+            Assert.IsNull(await loader.GetMeetingInfo(sameMeeting, "00000000-0000-0000-0000-000000000000"));
+            Assert.IsNull(await loader.GetMeetingInfo(sameMeeting, "00000000-0000-0000-0000-000000000000"));
+            Assert.IsNull(await loader.GetMeetingInfo(otherMeeting, "00000000-0000-0000-0000-000000000000"));
+
+            Assert.AreEqual(2, fake.GetOnlineMeetingCalls, "The same failed (user, meeting) id must not be requested again");
+
+            var warnings = log.Entries.FindAll(e => e.Level == LogLevel.Warning);
+            Assert.AreEqual(1, warnings.Count, "Meeting API 404s should produce one warning per run");
+            StringAssert.Contains(warnings[0].Message, "did not organise");
+            Assert.IsNull(warnings[0].Exception, "The warning must not carry the exception, so it isn't counted as exception telemetry");
+        }
+
+        [TestMethod]
         public void IsMissingApplicationAccessPolicy_OnlyMatchesTheAccessPolicyForbidden()
         {
             Assert.IsTrue(GraphFileMetadataLoader.IsMissingApplicationAccessPolicy(NoApplicationAccessPolicyError()));
@@ -230,7 +286,7 @@ namespace Tests.UnitTests
             {
                 ResponseStatusCode = (int)HttpStatusCode.Forbidden,
                 Error = new MainError { Code = "Forbidden", Message = "Insufficient privileges to complete the operation." }
-            }), "A generic 403 is still a real permissions problem and must keep its exception logging");
+            }), "A generic 403 is handled separately from the application-access-policy warning");
 
             Assert.IsFalse(GraphFileMetadataLoader.IsMissingApplicationAccessPolicy(new ODataError
             {

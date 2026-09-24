@@ -6,6 +6,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
+using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.AgentCosts;
@@ -48,9 +49,52 @@ namespace Tests.UnitTests
             using (var db = new AnalyticsEntitiesContext())
             {
                 db.CopilotStudioCreditDaily.RemoveRange(db.CopilotStudioCreditDaily.Where(r => r.EnvironmentId == TestMarker));
+                db.CopilotStudioCreditUserDaily.RemoveRange(db.CopilotStudioCreditUserDaily.Where(r => r.EnvironmentId == TestMarker));
                 db.AzureCostDaily.RemoveRange(db.AzureCostDaily.Where(r => r.Scope == TestMarker));
                 db.AgentCostImportLogs.RemoveRange(db.AgentCostImportLogs.Where(l => l.ImportName == TestMarker));
                 db.SaveChanges();
+            }
+        }
+
+        [TestMethod]
+        public async Task UserCredits_ReImportingARestatedDay_UpdatesInPlace()
+        {
+            // The store detects changes once per batch rather than on every Add. That makes a missing
+            // DetectChanges easy to introduce and silent in effect - restated figures would simply never be
+            // saved - so every upsert path needs a test that re-reads a changed value.
+            await _store.UpsertCopilotStudioUserCreditsAsync(new[] { UserCreditRow(Day1, credits: 3m) });
+            await _store.UpsertCopilotStudioUserCreditsAsync(new[] { UserCreditRow(Day1, credits: 4.5m) });
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var stored = await db.CopilotStudioCreditUserDaily.Where(r => r.EnvironmentId == TestMarker).ToListAsync();
+
+                Assert.AreEqual(1, stored.Count, "A re-read of the same person-day must UPDATE, not append.");
+                Assert.AreEqual(4.5m, stored[0].BilledCredits, "The restated figure must be saved.");
+            }
+        }
+
+        [TestMethod]
+        public async Task AzureCosts_Replace_ARestatedDayIsSavedAlongsideNewRows()
+        {
+            // The scoped replace path: one row restated, one row new, in the same batch. Both must land.
+            await _store.ReplaceAzureCostsAsync(new[] { CostRow(Day1, "Copilot Studio", "GBP", 2.00m, estimated: true) },
+                TestMarker, Day1, Day2);
+
+            await _store.ReplaceAzureCostsAsync(new[]
+            {
+                CostRow(Day1, "Copilot Studio", "GBP", 2.40m, estimated: false),
+                CostRow(Day2, "Copilot Studio", "GBP", 1.10m, estimated: true),
+            }, TestMarker, Day1, Day2);
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var stored = await db.AzureCostDaily.Where(r => r.Scope == TestMarker).OrderBy(r => r.UsageDate).ToListAsync();
+
+                Assert.AreEqual(2, stored.Count);
+                Assert.AreEqual(2.40m, stored[0].Cost, "The restated day must be updated in place.");
+                Assert.IsFalse(stored[0].IsEstimated);
+                Assert.AreEqual(1.10m, stored[1].Cost);
             }
         }
 
@@ -344,7 +388,7 @@ namespace Tests.UnitTests
 
         private static CopilotStudioCreditDaily CreditRow(DateTime day, string agentId, string feature, decimal credits, int? users = null)
         {
-            var hash = AgentCostRowHasher.Hash(day.ToString("yyyy-MM-dd"), TestMarker, agentId, feature);
+            var hash = AgentCostRowHasher.Hash(day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), TestMarker, agentId, feature);
 
             return new CopilotStudioCreditDaily
             {
@@ -361,9 +405,25 @@ namespace Tests.UnitTests
             };
         }
 
+        private static CopilotStudioCreditUserDaily UserCreditRow(DateTime day, decimal credits)
+        {
+            const string objectId = "00000000-0000-0000-0000-0000000000a1";
+
+            return new CopilotStudioCreditUserDaily
+            {
+                UsageDate = day,
+                EntraObjectId = objectId,
+                EnvironmentId = TestMarker,
+                BilledCredits = credits,
+                Unit = "Credits",
+                DimensionHash = AgentCostRowHasher.Hash(day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), objectId, TestMarker),
+                ImportedUtc = DateTime.UtcNow,
+            };
+        }
+
         private static AzureCostDaily CostRow(DateTime day, string meter, string currency, decimal cost, bool estimated)
         {
-            var hash = AgentCostRowHasher.Hash(day.ToString("yyyy-MM-dd"), TestMarker, meter, currency);
+            var hash = AgentCostRowHasher.Hash(day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), TestMarker, meter, currency);
 
             return new AzureCostDaily
             {

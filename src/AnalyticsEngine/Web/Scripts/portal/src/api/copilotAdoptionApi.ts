@@ -57,6 +57,11 @@ const delay = (ms: number, signal?: AbortSignal): Promise<void> =>
 async function getJson<T>(path: string, failureKey: TranslationKey, signal?: AbortSignal): Promise<T> {
   const giveUpAt = Date.now() + POLL_CEILING_MS;
 
+  // The server names the analysis run each 202 is waiting on. Quoted in the give-up message, it lets a
+  // screenshot identify that exact run in Application Insights instead of leaving the operator to guess
+  // from timestamps. Kept from the LATEST 202, because a later poll can be waiting on a newer run.
+  let runId: string | undefined;
+
   for (;;) {
     const response = await apiFetch(`${baseUrl()}${path}`, {
       method: 'GET',
@@ -67,11 +72,19 @@ async function getJson<T>(path: string, failureKey: TranslationKey, signal?: Abo
     if (response.status === STILL_BUILDING) {
       // Deliberately NOT treated as success: 202 is 2xx, so `response.ok` is true and parsing it as the
       // model would hand the page a "building" envelope where it expected data.
-      const body = (await response.json().catch(() => null)) as { retryAfterSeconds?: number } | null;
+      const body = (await response.json().catch(() => null)) as {
+        retryAfterSeconds?: number;
+        runId?: string;
+      } | null;
+      if (typeof body?.runId === 'string' && body.runId.length > 0) runId = body.runId;
       const waitMs = (body?.retryAfterSeconds ?? DEFAULT_RETRY_SECONDS) * 1000;
 
       if (Date.now() + waitMs >= giveUpAt) {
-        throw new Error(translateActive('errors.copilotAdoption.analysisStillRunning'));
+        throw new Error(
+          runId
+            ? translateActive('errors.copilotAdoption.analysisStillRunningWithReference', { runId })
+            : translateActive('errors.copilotAdoption.analysisStillRunning'),
+        );
       }
 
       // Abortable, so unmounting the page or changing the period actually STOPS the loop. A plain

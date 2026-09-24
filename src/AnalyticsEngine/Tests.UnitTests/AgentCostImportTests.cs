@@ -9,6 +9,9 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using DataUtils;
@@ -589,6 +592,35 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task AzureSource_TransientGatewayFailure_IsRetriedWithTheSameQuery()
+        {
+            // The query POST is a read. Before it was flagged replayable, one 503 from Cost Management failed the
+            // scope for the whole cycle, where a GET would have been retried.
+            const string scope = "/subscriptions/00000000-0000-0000-0000-000000000000";
+            var clock = new AutoThrottleHttpClientTests.FakeRetryClock(new DateTimeOffset(2026, 9, 16, 0, 0, 0, TimeSpan.Zero));
+            var handler = new RecordingPostHandler(
+                new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent(string.Empty) },
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(@"{ ""properties"": { ""columns"": [ { ""name"": ""UsageDate"" }, { ""name"": ""PreTaxCost"" } ],
+                        ""rows"": [ [ 20260916, 5 ] ] } }", Encoding.UTF8, "application/json"),
+                });
+
+            using (var client = new DataUtils.Http.AutoThrottleHttpClient(handler, Logger, clock) { MaxTotalRetryBudgetSeconds = 600 })
+            {
+                var source = new AzureCostManagementSource(client, new AzureCostImportSettings { Scopes = new[] { scope } }, Logger);
+
+                var rows = await source.GetDailyCostsAsync(scope, new DateTime(2026, 9, 16), new DateTime(2026, 9, 16));
+
+                Assert.AreEqual(1, rows.Count, "The retried page must be read.");
+                Assert.AreEqual(5m, rows[0].Cost);
+            }
+
+            Assert.AreEqual(2, handler.Bodies.Count, "The 503 must be retried exactly once.");
+            Assert.AreEqual(handler.Bodies[0], handler.Bodies[1], "The retry must re-post the identical query.");
+        }
+
+        [TestMethod]
         public void AzureQuery_NeverAsksForMoreThanTwoGroupings()
         {
             // Cost Management's QueryDataset schema declares grouping with maxItems: 2 in every API version.
@@ -612,6 +644,101 @@ namespace Tests.UnitTests
 
             var aggregation = (JObject)body["dataset"]["aggregation"];
             Assert.IsTrue(aggregation.Count <= 2, "The same maxItems: 2 limit applies to aggregation.");
+        }
+
+        [DataTestMethod]
+        [DataRow("fi-FI")] // ':' time separator is '.'
+        [DataRow("th-TH")] // Buddhist calendar: 2026 renders as 2569
+        [DataRow("fa-IR")] // Persian calendar
+        [DataRow("ar-SA")] // Hijri calendar
+        [DataRow("oc-FR")] // 'h' time separator
+        public void AzureQuery_TimePeriod_IsTheSameIsoTimestampOnEveryHostCulture(string cultureName)
+        {
+            // A custom date format takes its ':' separator and its calendar from the CURRENT culture, so on these
+            // hosts the request asked Cost Management for "2026-09-01T00.00.00Z", or for the year 2569.
+            var source = new AzureCostManagementSource(
+                new DataUtils.Http.AutoThrottleHttpClient(false, Logger),
+                new AzureCostImportSettings { Scopes = new[] { "/subscriptions/00000000-0000-0000-0000-000000000000" } },
+                Logger);
+
+            var previous = Thread.CurrentThread.CurrentCulture;
+            try
+            {
+                Thread.CurrentThread.CurrentCulture = new CultureInfo(cultureName);
+                var raw = source.BuildRequestBody(new DateTime(2026, 9, 1), new DateTime(2026, 9, 7));
+
+                // Parsed WITHOUT date handling: Json.NET would otherwise turn the ISO strings into DateTime tokens
+                // and re-render them, so the assertion would compare Json.NET's formatting rather than the text
+                // this product actually sends.
+                var body = Newtonsoft.Json.JsonConvert.DeserializeObject<JObject>(raw,
+                    new Newtonsoft.Json.JsonSerializerSettings { DateParseHandling = Newtonsoft.Json.DateParseHandling.None });
+
+                Assert.AreEqual("2026-09-01T00:00:00Z", (string)body["timePeriod"]["from"]);
+                Assert.AreEqual("2026-09-07T23:59:59Z", (string)body["timePeriod"]["to"]);
+            }
+            finally
+            {
+                Thread.CurrentThread.CurrentCulture = previous;
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("th-TH")]
+        [DataRow("fa-IR")]
+        public void LicensingQueryDate_IsGregorianOnEveryHostCulture(string cultureName)
+        {
+            var previous = Thread.CurrentThread.CurrentCulture;
+            try
+            {
+                Thread.CurrentThread.CurrentCulture = new CultureInfo(cultureName);
+
+                Assert.AreEqual("2026-09-01", PowerPlatformLicensingCreditSource.QueryDate(new DateTime(2026, 9, 1)),
+                    "An interpolated {date:yyyy-MM-dd} would ask the licensing API for a Buddhist or Persian year.");
+            }
+            finally
+            {
+                Thread.CurrentThread.CurrentCulture = previous;
+            }
+        }
+
+        [TestMethod]
+        public void RowIdentity_DoesNotChangeWithTheHostCulture_ForAllThreeImports()
+        {
+            // The usage date is part of every agent-cost upsert key. Formatted in the host culture, the same row
+            // would hash differently on a th-TH host than on an en-US one, so a culture change would re-insert
+            // rows instead of updating them. Both cultures are set explicitly: computing the baseline under the
+            // ambient culture would let the test pass on a th-TH build machine even with the fix reverted.
+            var importer = NewAzureImporter(new AzureCostImportSettings { Scopes = new[] { "/subscriptions/x" } });
+            var azureRow = NewTaggedRow("Cowork", 10m);
+            const string scope = "/subscriptions/00000000-0000-0000-0000-000000000000";
+            var day = new DateTime(2026, 9, 16);
+            var creditRow = new CopilotStudioCreditRow { ResourceId = "a", EnvironmentId = "env-1", FeatureName = "Generative answer", Consumed = 1m, AsOfDate = day };
+            var userRow = new CopilotStudioUserCreditRow { UserId = "00000000-0000-0000-0000-0000000000a1", EnvironmentId = "env-1", Consumed = 2m };
+
+            Func<string[]> hashes = () => new[]
+            {
+                importer.MapAndAggregate(new[] { azureRow }, scope, day, DateTime.UtcNow).Single().RowHash,
+                CopilotStudioCreditImporter.MapAndAggregate(new[] { creditRow }, day, day, null, DateTime.UtcNow).Single().DimensionHash,
+                CopilotStudioCreditImporter.MapUserRows(new[] { userRow }, day, null, DateTime.UtcNow).Single().DimensionHash,
+            };
+
+            var previous = Thread.CurrentThread.CurrentCulture;
+            try
+            {
+                Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
+                var invariant = hashes();
+
+                Thread.CurrentThread.CurrentCulture = new CultureInfo("th-TH");
+                var thai = hashes();
+
+                Assert.AreEqual(invariant[0], thai[0], "The Azure cost row identity must be calendar-independent.");
+                Assert.AreEqual(invariant[1], thai[1], "The per-agent credit row identity must be calendar-independent.");
+                Assert.AreEqual(invariant[2], thai[2], "The per-user credit row identity must be calendar-independent.");
+            }
+            finally
+            {
+                Thread.CurrentThread.CurrentCulture = previous;
+            }
         }
 
         [TestMethod]
@@ -983,6 +1110,31 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task CreditImporter_APersonWhoseRowsSpanTwoPages_KeepsTheCreditsFromBoth()
+        {
+            // MapUserRows adds together rows for the same person and environment, but only within what it is given,
+            // and the store treats a second row with the same identity as a restatement and overwrites the first.
+            // Mapped a page at a time, a person whose rows straddled a page boundary kept only the last page's credits.
+            var day = new DateTime(2026, 9, 9);
+            var source = new PagedUserCreditSource();
+            source.Pages[Tuple.Create(day, string.Empty)] = new CopilotStudioUserCreditPage(
+                new[] { new CopilotStudioUserCreditRow { UserId = "u1", EnvironmentId = "env-1", Consumed = 2m } }, "page-2");
+            source.Pages[Tuple.Create(day, "page-2")] = new CopilotStudioUserCreditPage(
+                new[] { new CopilotStudioUserCreditRow { UserId = "u1", EnvironmentId = "env-1", Consumed = 3m } }, null);
+
+            var store = new RecordingAgentCostStore();
+            var clock = new FixedClock(new DateTime(2026, 9, 9, 6, 0, 0, DateTimeKind.Utc));
+
+            var outcome = await new CopilotStudioCreditImporter(Logger, source, store, 1, clock).ImportUserCreditsAsync();
+
+            Assert.IsTrue(outcome.Succeeded);
+            Assert.AreEqual(2, outcome.Log.RowsRead, "both pages must be read");
+            Assert.AreEqual(1, store.UserCredits.Count,
+                "one person-day in one environment is one identity; handing the store two would make it keep only the last");
+            Assert.AreEqual(5m, store.UserCredits[0].BilledCredits, "the credits from both pages must be kept");
+        }
+
+        [TestMethod]
         public void ImportOutcome_SeparatesRefusedFromTransient()
         {
             var refused = new AgentCostImportOutcome(new AgentCostImportLog { Error = "403" }, isAuthorisationFailure: true);
@@ -1107,6 +1259,31 @@ namespace Tests.UnitTests
                 if (Failures.TryGetValue(scope, out var ex)) throw ex;
                 return Task.FromResult<IReadOnlyList<AzureCostRow>>(new List<AzureCostRow>());
             }
+        }
+
+        /// <summary>
+        /// A per-user source keyed by (day, continuation token), the first page's token being empty, so a test can
+        /// return a day in several pages. An unlisted page is empty and final.
+        /// </summary>
+        private class PagedUserCreditSource : ICopilotStudioCreditSource
+        {
+            public Dictionary<Tuple<DateTime, string>, CopilotStudioUserCreditPage> Pages { get; }
+                = new Dictionary<Tuple<DateTime, string>, CopilotStudioUserCreditPage>();
+
+            public Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
+            {
+                return Task.FromResult(Pages.TryGetValue(Tuple.Create(fromDate.Date, continuationToken ?? string.Empty), out var page)
+                    ? page
+                    : new CopilotStudioUserCreditPage(new List<CopilotStudioUserCreditRow>(), null));
+            }
+
+            public Task<CopilotStudioCreditPage> GetConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken)
+                => Task.FromResult(new CopilotStudioCreditPage(new List<CopilotStudioCreditRow>(), null));
+
+            public Task<CopilotStudioCapacitySnapshot> GetCapacityAsync() => Task.FromResult<CopilotStudioCapacitySnapshot>(null);
+
+            public Task<IReadOnlyDictionary<string, string>> GetEnvironmentNamesAsync()
+                => Task.FromResult<IReadOnlyDictionary<string, string>>(new Dictionary<string, string>());
         }
 
         [TestMethod]
@@ -1402,6 +1579,25 @@ namespace Tests.UnitTests
             {
                 Logs.Add(log);
                 return Task.CompletedTask;
+            }
+        }
+
+        /// <summary>Returns the given responses in order and records each request body as sent.</summary>
+        private sealed class RecordingPostHandler : HttpMessageHandler
+        {
+            private readonly Queue<HttpResponseMessage> _responses;
+
+            public RecordingPostHandler(params HttpResponseMessage[] responses)
+            {
+                _responses = new Queue<HttpResponseMessage>(responses);
+            }
+
+            public List<string> Bodies { get; } = new List<string>();
+
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                Bodies.Add(request.Content == null ? null : await request.Content.ReadAsStringAsync());
+                return _responses.Count > 0 ? _responses.Dequeue() : new HttpResponseMessage(HttpStatusCode.InternalServerError);
             }
         }
 

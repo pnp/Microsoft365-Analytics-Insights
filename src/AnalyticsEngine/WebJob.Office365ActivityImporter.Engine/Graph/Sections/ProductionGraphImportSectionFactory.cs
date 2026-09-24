@@ -348,7 +348,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     ? "Graph refused the call: grant the app registration the Reports.Read.All APPLICATION permission and admin-consent it. "
                     : "Graph returned an error rather than a report. ";
 
-                _logger.LogError(ex, $"{reportDescription} failed with HTTP {(int)ex.StatusCode} ({ex.StatusCode}): {ex.Message} {advice}" +
+                _logger.LogError($"{reportDescription} failed with HTTP {(int)ex.StatusCode} ({ex.StatusCode}): {ex.Message} {advice}" +
                     "The report was NOT imported and has not been recorded as up to date; it will be retried on the next cycle. " +
                     "The other Copilot reports and the remaining Graph imports are unaffected.");
                 return false;
