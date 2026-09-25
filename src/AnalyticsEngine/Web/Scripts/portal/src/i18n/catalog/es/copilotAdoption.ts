@@ -197,7 +197,7 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.accountability.empty.noCountry': '(sin país)',
   'copilotAdoption.page.accountability.empty.noOffice': '(sin oficina)',
   'copilotAdoption.page.accountability.empty.noCompany': '(sin empresa)',
-  'copilotAdoption.page.theDimensionDefaultsDirectManagerUsersManagerGroupedExplicitly': 'La dimensión tiene como valor predeterminado el gerente directo. Los usuarios sin un gerente se agrupan explícitamente como "(sin gerente)" en lugar de ser eliminados. La misma supresión {v0}-asiento utilizada para los segmentos de departamento se aplica aquí.',
+  'copilotAdoption.page.theDimensionDefaultsDirectManagerUsersManagerGroupedExplicitly': 'La dimensión tiene como valor predeterminado el responsable directo. Los usuarios sin responsable se agrupan explícitamente como "(sin responsable)" en lugar de descartarse. Aquí se aplica la misma supresión por debajo de {v0} puestos que en los segmentos de departamento.',
   'copilotAdoption.page.thisDeliberatelyAddNamedPerUserLeaderViewDrill': 'Esto deliberadamente no agrega una vista de líder por usuario con nombre; el desglose permanece limitado al comportamiento de tabla de usuario con licencia existente.',
   'copilotAdoption.page.adoptionDepartment': 'Adopción por departamento',
   'copilotAdoption.page.lowestAdoptionFirstRunningOrderEnablementPlanDepartmentsFewer': 'Primero la adopción más baja: el orden de ejecución de un plan de habilitación. Se omiten los departamentos con menos de {v0} licencias porque el porcentaje no sería significativo.',
