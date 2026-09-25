@@ -18,6 +18,7 @@ import { WEB_ACTIVITY_AVAILABILITY_REASON_KEYS } from '../../components/webActiv
 import { USER_DATA_WORKLOADS_BY_FLAG } from '../../components/userlookup/CategoryRow';
 import { ACCOUNTABILITY_DIMENSION_TEXT, ACCOUNTABILITY_EMPTY_SEGMENT_KEYS } from '../../pages/CopilotAdoptionPage';
 import { ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY } from '../../pages/InsightsOverviewPage';
+import { OFFICE_PLATFORM_LABEL_KEYS } from '../../pages/ReportsPage';
 
 function sortedUnique(values: string[]): string[] {
   return [...new Set(values)].sort((a, b) => a.localeCompare(b));
@@ -199,6 +200,12 @@ function reportChartKeys(): string[] {
   ].map((m) => m[1]);
 }
 
+function officePlatformLabels(): string[] {
+  const source = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'ReportsAPIController.OfficeApps.cs'), 'utf8');
+  const block = source.match(/OfficePlatformCatalogue\s*=\s*\{([\s\S]*?)\};/)?.[1] ?? '';
+  return sortedUnique([...block.matchAll(/new\s+KeyValuePair<string,\s*string>\("([^"]+)"/g)].map((m) => m[1]));
+}
+
 function expectedReportCatalogKeys(): string[] {
   return [...new Set(reportChartKeys())].flatMap((key) => [
     `reports.chart.${key}.title`,
@@ -241,6 +248,18 @@ describe('Reports chart metadata', () => {
       'These report chart catalog entries are not defined in ReportsAPIController - either the\n' +
         'chart was removed, or its key/field was renamed and the page is now falling back to English.',
     ).toEqual([]);
+  });
+});
+
+describe('Reports Office platform labels', () => {
+  it('keeps the translated platform-category map aligned with the server catalogue', () => {
+    const serverLabels = officePlatformLabels();
+    expect(serverLabels).toEqual(['Mac', 'Mobile', 'Web', 'Windows']);
+
+    const translatableProductCategories = ['Mobile', 'Web'];
+    expect(Object.keys(OFFICE_PLATFORM_LABEL_KEYS).sort()).toEqual(translatableProductCategories);
+    expect(translatableProductCategories.every((label) => serverLabels.includes(label))).toBe(true);
+    expect(Object.values(OFFICE_PLATFORM_LABEL_KEYS).filter((key) => !(key in EN_CATALOG))).toEqual([]);
   });
 });
 

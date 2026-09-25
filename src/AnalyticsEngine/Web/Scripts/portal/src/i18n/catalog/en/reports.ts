@@ -58,6 +58,8 @@ export const reports = {
   'reports.chart.noData': 'No data for this period.',
   'reports.category.appBreadth.one': '{count} app',
   'reports.category.appBreadth.other': '{count} apps',
+  'reports.platform.mobile': 'Mobile',
+  'reports.platform.web': 'Web',
 
 
   // Server-authored report chart metadata.

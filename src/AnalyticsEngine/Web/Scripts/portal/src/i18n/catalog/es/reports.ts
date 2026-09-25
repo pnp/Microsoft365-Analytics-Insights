@@ -60,6 +60,8 @@ const reports: Record<keyof typeof en, string> = {
   'reports.chart.noData': 'Sin datos para este periodo.',
   'reports.category.appBreadth.one': '{count} aplicación',
   'reports.category.appBreadth.other': '{count} aplicaciones',
+  'reports.platform.mobile': 'Móvil',
+  'reports.platform.web': 'Navegador',
 
 
   // Metadatos de gráficos de informes redactados por el servidor.

@@ -18,7 +18,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowClockwise16Regular } from '@fluentui/react-icons';
 import { fetchReportAreas, fetchReportArea } from '../api/reportsApi';
-import type { ReportAreaData, ReportAreaKey, ReportAreas, ReportChart } from '../types/reports';
+import type { ReportAreaData, ReportAreaKey, ReportAreas, ReportChart, ReportMatrix, ReportSeries } from '../types/reports';
 import Spinner from '../components/Spinner';
 import SqlPopover from '../components/SqlPopover';
 import TimeSeriesChart from '../components/charts/TimeSeriesChart';
@@ -49,6 +49,11 @@ const MONTH_OPTIONS = [
   { value: 3, labelKey: 'reports.period.last3Months' },
   { value: 6, labelKey: 'reports.period.last6Months' },
 ] satisfies { value: number; labelKey: TranslationKey }[];
+
+export const OFFICE_PLATFORM_LABEL_KEYS: Record<string, TranslationKey> = {
+  Mobile: 'reports.platform.mobile',
+  Web: 'reports.platform.web',
+};
 
 const useStyles = makeStyles({
   header: {
@@ -359,6 +364,13 @@ function chartWarningText(t: TFunction, chart: ReportChart): string | null {
 const APP_BREADTH_LABEL = /^(\d+) apps?$/;
 
 export function reportCategories(t: TFunction, chart: ReportChart) {
+  if (chart.key === 'office-apps-platform-mix' && chart.categories) {
+    return chart.categories.map((category) => ({
+      ...category,
+      label: reportPlatformLabel(t, category.label),
+    }));
+  }
+
   if (chart.key !== 'office-apps-breadth' || !chart.categories) return chart.categories;
 
   return chart.categories.map((category) => {
@@ -373,6 +385,41 @@ export function reportCategories(t: TFunction, chart: ReportChart) {
       }),
     };
   });
+}
+
+function reportPlatformLabel(t: TFunction, label: string): string {
+  const key = OFFICE_PLATFORM_LABEL_KEYS[label];
+  return key ? t(key) : label;
+}
+
+export function reportSeries(t: TFunction, chart: ReportChart): ReportSeries[] | null {
+  if (chart.key !== 'office-apps-platform-trend' || !chart.series) return chart.series;
+
+  return chart.series.map((series) => ({
+    ...series,
+    name: reportPlatformLabel(t, series.name),
+  }));
+}
+
+export function reportMatrix(t: TFunction, chart: ReportChart): ReportMatrix | null {
+  if (!chart.matrix) return null;
+
+  const matrix = {
+    ...chart.matrix,
+    rowLabel: chartText(t, chart.key, 'rowLabel', chart.matrix.rowLabel),
+    columnLabel: chartText(t, chart.key, 'columnLabel', chart.matrix.columnLabel),
+  };
+
+  if (chart.key !== 'office-apps-platform-matrix') return matrix;
+
+  return {
+    ...matrix,
+    columns: matrix.columns.map((column) => reportPlatformLabel(t, column)),
+    cells: matrix.cells.map((cell) => ({
+      ...cell,
+      column: reportPlatformLabel(t, cell.column),
+    })),
+  };
 }
 
 /** Fetches and renders the charts for a single report area over the chosen window. */
@@ -501,13 +548,8 @@ function ReportAreaView({
         const valueLabel = chartText(t, chart.key, 'valueLabel', chart.valueLabel);
         const warning = chartWarningText(t, chart);
         const categories = reportCategories(t, chart);
-        const matrix = chart.matrix
-          ? {
-              ...chart.matrix,
-              rowLabel: chartText(t, chart.key, 'rowLabel', chart.matrix.rowLabel),
-              columnLabel: chartText(t, chart.key, 'columnLabel', chart.matrix.columnLabel),
-            }
-          : null;
+        const series = reportSeries(t, chart);
+        const matrix = reportMatrix(t, chart);
 
         return (
         <Card key={chart.key} className={styles.chartCard}>
@@ -543,8 +585,8 @@ function ReportAreaView({
                 */}
                 {(!chart.warning || chartHasData(chart)) && (
                   <>
-                    {chart.type === 'timeseries' && chart.series ? (
-                      <TimeSeriesChart series={chart.series} valueLabel={valueLabel} />
+                    {chart.type === 'timeseries' && series ? (
+                      <TimeSeriesChart series={series} valueLabel={valueLabel} />
                     ) : chart.type === 'bar' && categories ? (
                       <CategoryBarChart
                         categories={categories}

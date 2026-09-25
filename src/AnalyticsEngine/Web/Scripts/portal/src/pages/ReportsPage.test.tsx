@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { screen, fireEvent, waitFor } from '@testing-library/react';
 import { renderWithProvider } from '../test/renderWithProvider';
-import ReportsPage from './ReportsPage';
+import ReportsPage, { reportCategories, reportMatrix, reportSeries } from './ReportsPage';
 import { fetchReportAreas, fetchReportArea } from '../api/reportsApi';
 import { fetchAvailability } from '../api/licenceActivityApi';
-import type { ReportAreaData, ReportAreas } from '../types/reports';
+import { loadCatalog, translateStatic } from '../i18n';
+import type { ReportAreaData, ReportAreas, ReportChart } from '../types/reports';
 
 vi.mock('../api/reportsApi', () => ({ fetchReportAreas: vi.fn(), fetchReportArea: vi.fn() }));
 vi.mock('../api/licenceActivityApi', () => ({ fetchAvailability: vi.fn() }));
@@ -30,6 +31,23 @@ const areaData: ReportAreaData = {
   charts: [],
   cognitiveConfigured: true,
 };
+
+const baseChart = (overrides: Partial<ReportChart>): ReportChart => ({
+  key: 'test',
+  title: 'Test',
+  description: 'Test chart',
+  type: 'bar',
+  valueLabel: 'People',
+  series: null,
+  categories: null,
+  matrix: null,
+  showShare: false,
+  valueSuffix: null,
+  sql: 'SELECT 1',
+  error: null,
+  warning: null,
+  ...overrides,
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -215,6 +233,51 @@ describe('ReportsPage', () => {
     expect(await screen.findByText('How much of the suite people use')).toBeInTheDocument();
     expect(screen.getByText('1 app')).toBeInTheDocument();
     expect(screen.getByText('2 apps')).toBeInTheDocument();
+  });
+
+  it('translates Office platform categories while leaving product platform names untouched', async () => {
+    await loadCatalog('es');
+    const es = (key: Parameters<typeof translateStatic>[1], values?: Parameters<typeof translateStatic>[2]) =>
+      translateStatic('es', key, values);
+
+    const categories = reportCategories(es, baseChart({
+      key: 'office-apps-platform-mix',
+      categories: [
+        { label: 'Windows', value: 10 },
+        { label: 'Mac', value: 9 },
+        { label: 'Mobile', value: 8 },
+        { label: 'Web', value: 7 },
+      ],
+    }));
+    expect(categories?.map((c) => c.label)).toEqual(['Windows', 'Mac', 'Móvil', 'Navegador']);
+
+    const series = reportSeries(es, baseChart({
+      key: 'office-apps-platform-trend',
+      type: 'timeseries',
+      series: [
+        { name: 'Mobile', points: [] },
+        { name: 'Web', points: [] },
+      ],
+    }));
+    expect(series?.map((s) => s.name)).toEqual(['Móvil', 'Navegador']);
+
+    const matrix = reportMatrix(es, baseChart({
+      key: 'office-apps-platform-matrix',
+      type: 'matrix',
+      matrix: {
+        rowLabel: 'App',
+        columnLabel: 'Platform',
+        rows: ['Word'],
+        columns: ['Mobile', 'Web'],
+        cells: [
+          { row: 'Word', column: 'Mobile', value: 3 },
+          { row: 'Word', column: 'Web', value: 4 },
+        ],
+        shadeByRow: true,
+      },
+    }));
+    expect(matrix?.columns).toEqual(['Móvil', 'Navegador']);
+    expect(matrix?.cells.map((cell) => cell.column)).toEqual(['Móvil', 'Navegador']);
   });
 
   /**
