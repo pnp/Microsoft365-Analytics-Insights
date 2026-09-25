@@ -598,6 +598,46 @@ namespace Tests.UnitTests
             Assert.AreEqual(source.NextDeltaToken, token);
         }
 
+        /// <summary>
+        /// One recipient address that SQL refuses must not strand the other new addresses resolved in the same
+        /// batch. Here it is a stored address repeated with a trailing blank: distinct in memory, but equal under
+        /// SQL's comparison, so the unique index rejects it - and SaveChanges is all-or-nothing, so the sender's
+        /// brand-new address was rolled back with it. The message then failed its chunk on the unresolved
+        /// sender, and because the delta token now waits for the chunk to save (#629), it failed again on every
+        /// cycle, taking every later chunk and Graph section with it.
+        /// </summary>
+        [TestMethod]
+        public async Task ImportSentEmailsForUser_OneRefusedRecipientAddress_DoesNotStrandTheRestOfItsBatch()
+        {
+            var user = await CreateSavedUserAsync("refused-address");
+            var messageId = "i618-refused-address-" + Guid.NewGuid().ToString("N");
+            var storedRecipient = ("stored-recipient-" + Guid.NewGuid().ToString("N") + "@contoso.com").ToLowerInvariant();
+            var newRecipient = ("new-recipient-" + Guid.NewGuid().ToString("N") + "@contoso.com").ToLowerInvariant();
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.EmailAddresses.Add(new EmailAddress { Address = storedRecipient });
+                await db.SaveChangesAsync();
+            }
+
+            var source = new RecordingSentEmailSourceLoader(user,
+                Msg(messageId, user.Mail, new[] { newRecipient, storedRecipient + " " }, "Καλημέρα κόσμε"));
+            var committer = new RecordingDeltaTokenCommitter();
+            var importer = NewImporter(source, committer);
+
+            await importer.ImportSentEmailsForUser(user);
+
+            Assert.AreEqual(1, await CountSentEmailsAsync(messageId), "The message must be saved despite the refused recipient address.");
+            Assert.AreEqual(2, await CountRecipientsAsync(messageId),
+                "Both recipients resolve: the new one inserted on its own, the trailing-blank twin onto the stored row.");
+            Assert.IsTrue(committer.TryGetToken(user, out var token), "The chunk saved, so its delta token must be committed.");
+            Assert.AreEqual(source.NextDeltaToken, token);
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                Assert.AreEqual(1, await db.EmailAddresses.CountAsync(e => e.Address == storedRecipient),
+                    "The refused twin must map onto the stored address, not add a second row.");
+            }
+        }
+
         [TestMethod]
         public async Task ImportSentEmailsForUsers_DuplicateOrphanRepairInChunk_IsDedupedAndCommitsTokens()
         {

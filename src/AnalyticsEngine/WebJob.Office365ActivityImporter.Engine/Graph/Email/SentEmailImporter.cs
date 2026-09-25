@@ -2,6 +2,7 @@ using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities.Email;
 using DataUtils;
+using DataUtils.Sql;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Concurrent;
@@ -542,7 +543,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             {
                 var conn = db.Database.Connection;
                 if (conn.State != System.Data.ConnectionState.Open)
-                    await conn.OpenAsync();
+                {
+                    // Not conn.OpenAsync(): opening EF's connection directly bypasses its Entra token
+                    // interceptor, so an Entra-only Azure SQL install could never save a chunk (#609).
+                    await AzureSqlTokenAuth.OpenAsync(conn);
+                }
 
                 using (var transaction = conn.BeginTransaction())
                 {
@@ -1123,6 +1128,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
 
                     foreach (var h in reread)
                         addressIds[h.Address] = h.ID;
+
+                    // SaveChanges is all-or-nothing, so one address SQL refused also rolled back every other
+                    // new address in the batch - and a message whose sender is left unresolved fails its whole
+                    // chunk. Because delta tokens now advance only once a chunk saves (#629), a refusal that
+                    // repeats (an address SQL's collation equates with a stored one, e.g. by trailing blanks,
+                    // or one longer than the column) would fail that chunk, and every chunk and Graph section
+                    // after it, on every cycle. So insert the remainder one at a time, and map an address SQL
+                    // considers equal to a stored one onto that row.
+                    await ResolveRemainingAddressesOneByOneAsync(db, batch, addressIds);
                     continue;
                 }
 
@@ -1131,6 +1145,45 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             }
 
             return addressIds;
+        }
+
+        /// <summary>
+        /// Slow path for <see cref="BulkResolveAddressIdsAsync"/> after a batch insert failed: resolves each
+        /// still-missing address on its own, so one address the database refuses cannot leave the others
+        /// unresolved. An address that can be neither inserted nor matched stays unresolved - recipient pairs
+        /// skip it, exactly as before - and a genuine connection failure still propagates, failing the chunk
+        /// so its delta tokens are not committed and it is retried.
+        /// </summary>
+        private static async Task ResolveRemainingAddressesOneByOneAsync(
+            AnalyticsEntitiesContext db, List<string> batch, Dictionary<string, int> addressIds)
+        {
+            foreach (var address in batch)
+            {
+                if (addressIds.ContainsKey(address))
+                    continue;
+
+                var entity = new EmailAddress { Address = address };
+                db.EmailAddresses.Add(entity);
+                try
+                {
+                    await db.SaveChangesAsync();
+                    addressIds[address] = entity.ID;
+                    continue;
+                }
+                catch (System.Data.Entity.Infrastructure.DbUpdateException)
+                {
+                    db.Entry(entity).State = EntityState.Detached;
+                }
+
+                // Compared in SQL, so its collation decides - the same comparison the unique index made when it
+                // refused the insert.
+                var storedId = await db.EmailAddresses
+                    .Where(e => e.Address == address)
+                    .Select(e => (int?)e.ID)
+                    .FirstOrDefaultAsync();
+                if (storedId.HasValue)
+                    addressIds[address] = storedId.Value;
+            }
         }
 
         internal static SentEmail BuildSentEmailRow(
