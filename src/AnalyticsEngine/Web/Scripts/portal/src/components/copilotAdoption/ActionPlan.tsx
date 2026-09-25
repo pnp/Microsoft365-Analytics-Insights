@@ -1,6 +1,9 @@
 import { makeStyles, tokens, Text, Badge } from '@fluentui/react-components';
 import type { AdoptionActionSummary } from '../../types/copilotAdoption';
+import type { CopilotAdoptionOptions } from '../../types/copilotAdoption';
+import { useT } from '../../i18n';
 import { formatCount, formatPct } from '../shared/KpiGrid';
+import { actionDescription, actionLabel } from './serverText';
 
 /**
  * Action colours run from "this licence is costing money" through to "this licence is paying for itself",
@@ -98,9 +101,10 @@ const useStyles = makeStyles({
 /** The action badge used in the user list, so the tag and the plan always use one palette. */
 export function ActionBadge({ code, label }: { code: string; label: string }) {
   const styles = useStyles();
+  const t = useT();
   return (
     <Badge className={styles.badge} style={{ backgroundColor: ACTION_COLOUR[code] ?? '#605e5c' }} size="small">
-      {label}
+      {actionLabel(t, code, label)}
     </Badge>
   );
 }
@@ -116,10 +120,12 @@ export function ActionBadge({ code, label }: { code: string; label: string }) {
  */
 export default function ActionPlan({
   actions,
+  options,
   showCounts = true,
   onSelect,
 }: {
   actions: AdoptionActionSummary[];
+  options?: CopilotAdoptionOptions;
   showCounts?: boolean;
   /**
    * Drill-through. Without it the plan states "76 people need coaching" and then leaves the reader
@@ -129,9 +135,10 @@ export default function ActionPlan({
   onSelect?: (code: string) => void;
 }) {
   const styles = useStyles();
+  const t = useT();
 
   if (actions.length === 0) {
-    return <div className={styles.empty}>No licensed users to plan for.</div>;
+    return <div className={styles.empty}>{t('copilotAdoption.actionPlan.empty')}</div>;
   }
 
   return (
@@ -147,7 +154,7 @@ export default function ActionPlan({
             className={rowClass}
             role={onSelect ? 'button' : undefined}
             tabIndex={onSelect ? 0 : undefined}
-            title={onSelect ? `Show the ${formatCount(a.users)} people who need this` : undefined}
+            title={onSelect ? t('copilotAdoption.actionPlan.rowTitle', { count: formatCount(a.users) }) : undefined}
             onClick={onSelect ? () => onSelect(a.code) : undefined}
             onKeyDown={
               onSelect
@@ -170,10 +177,10 @@ export default function ActionPlan({
               </Text>
             )}
             <Text size={200} className={styles.description}>
-              {a.description}
+              {options ? actionDescription(t, a.code, a.description, options) : a.description}
               {(a.guidanceLinks?.length ?? 0) > 0 && (
                 <span className={styles.guidance}>
-                  <Text size={200}>Microsoft&apos;s guidance for this kind of user:</Text>
+                  <Text size={200}>{t('copilotAdoption.actionPlan.microsoftGuidance')}</Text>
                   {a.guidanceLinks?.map((link) => (
                     <a
                       key={`${a.code}-${link.url}`}
@@ -192,8 +199,8 @@ export default function ActionPlan({
               {onSelect && (
                 <>
                   {' '}
-                  <Text size={200} className={styles.drill}>
-                    Show these people &rsaquo;
+                  <Text size={200} className={styles.drill} data-print="hide">
+                    {t('copilotAdoption.actionPlan.showPeople')}
                   </Text>
                 </>
               )}

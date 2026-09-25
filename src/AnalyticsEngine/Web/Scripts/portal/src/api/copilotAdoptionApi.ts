@@ -1,3 +1,5 @@
+import { translateActive } from '../i18n/runtime';
+import type { TranslationKey } from '../i18n/catalog';
 import { apiFetch } from './http';
 import type {
   AdoptionFilterOptions,
@@ -52,8 +54,13 @@ const delay = (ms: number, signal?: AbortSignal): Promise<void> =>
     signal?.addEventListener('abort', onAbort, { once: true });
   });
 
-async function getJson<T>(path: string, what: string, signal?: AbortSignal): Promise<T> {
+async function getJson<T>(path: string, failureKey: TranslationKey, signal?: AbortSignal): Promise<T> {
   const giveUpAt = Date.now() + POLL_CEILING_MS;
+
+  // The server names the analysis run each 202 is waiting on. Quoted in the give-up message, it lets a
+  // screenshot identify that exact run in Application Insights instead of leaving the operator to guess
+  // from timestamps. Kept from the LATEST 202, because a later poll can be waiting on a newer run.
+  let runId: string | undefined;
 
   for (;;) {
     const response = await apiFetch(`${baseUrl()}${path}`, {
@@ -65,13 +72,18 @@ async function getJson<T>(path: string, what: string, signal?: AbortSignal): Pro
     if (response.status === STILL_BUILDING) {
       // Deliberately NOT treated as success: 202 is 2xx, so `response.ok` is true and parsing it as the
       // model would hand the page a "building" envelope where it expected data.
-      const body = (await response.json().catch(() => null)) as { retryAfterSeconds?: number } | null;
+      const body = (await response.json().catch(() => null)) as {
+        retryAfterSeconds?: number;
+        runId?: string;
+      } | null;
+      if (typeof body?.runId === 'string' && body.runId.length > 0) runId = body.runId;
       const waitMs = (body?.retryAfterSeconds ?? DEFAULT_RETRY_SECONDS) * 1000;
 
       if (Date.now() + waitMs >= giveUpAt) {
         throw new Error(
-          `The Copilot adoption analysis is taking longer than expected and hasn't finished yet. ` +
-            `It is still running on the server - reload the page in a few minutes.`,
+          runId
+            ? translateActive('errors.copilotAdoption.analysisStillRunningWithReference', { runId })
+            : translateActive('errors.copilotAdoption.analysisStillRunning'),
         );
       }
 
@@ -82,7 +94,7 @@ async function getJson<T>(path: string, what: string, signal?: AbortSignal): Pro
     }
 
     if (!response.ok) {
-      throw new Error(`Couldn't load ${what} (${response.status}).`);
+      throw new Error(translateActive(failureKey, { status: response.status }));
     }
 
     return response.json() as Promise<T>;
@@ -142,7 +154,7 @@ function applyCoworkFilters(params: URLSearchParams, filters: CoworkFilters): UR
 }
 
 export function fetchAdoptionAvailability(): Promise<CopilotAdoptionAvailability> {
-  return getJson<CopilotAdoptionAvailability>('/availability', 'the Copilot adoption availability');
+  return getJson<CopilotAdoptionAvailability>('/availability', 'errors.copilotAdoption.availabilityFailed');
 }
 
 export function fetchAdoptionSummary(
@@ -155,7 +167,7 @@ export function fetchAdoptionSummary(
   if (emailDomain) params.set('emailDomain', emailDomain);
   return getJson<CopilotAdoptionSummary>(
     `/summary?${params}`,
-    'the Copilot adoption summary',
+    'errors.copilotAdoption.summaryFailed',
     signal,
   );
 }
@@ -174,7 +186,7 @@ export function fetchAdoptionFilters(
 ): Promise<AdoptionFilterOptions> {
   return getJson<AdoptionFilterOptions>(
     `/filters?${scopeParams(windowDays, seatLicenceTypeIds)}`,
-    'the Copilot adoption filters',
+    'errors.copilotAdoption.filtersFailed',
     signal,
   );
 }
@@ -191,7 +203,7 @@ export function fetchLicensedUsers(
   params.set('skip', String(skip));
   params.set('take', String(take));
 
-  return getJson<LicensedUserPage>(`/licensed-users?${params}`, 'the licensed Copilot users', signal);
+  return getJson<LicensedUserPage>(`/licensed-users?${params}`, 'errors.copilotAdoption.licensedUsersFailed', signal);
 }
 
 export function fetchOpportunities(
@@ -206,7 +218,7 @@ export function fetchOpportunities(
   params.set('skip', String(skip));
   params.set('take', String(take));
 
-  return getJson<LicenceOpportunityPage>(`/opportunities?${params}`, 'the Copilot licence opportunities', signal);
+  return getJson<LicenceOpportunityPage>(`/opportunities?${params}`, 'errors.copilotAdoption.opportunitiesFailed', signal);
 }
 
 export function fetchCowork(
@@ -221,7 +233,7 @@ export function fetchCowork(
   params.set('skip', String(skip));
   params.set('take', String(take));
 
-  return getJson<CoworkReadinessPage>(`/cowork?${params}`, 'the Cowork readiness list', signal);
+  return getJson<CoworkReadinessPage>(`/cowork?${params}`, 'errors.copilotAdoption.coworkFailed', signal);
 }
 
 export function fetchAdoptionSql(
@@ -231,7 +243,7 @@ export function fetchAdoptionSql(
 ): Promise<Record<string, string>> {
   return getJson<Record<string, string>>(
     `/sql?${scopeParams(windowDays, seatLicenceTypeIds)}`,
-    'the Copilot adoption queries',
+    'errors.copilotAdoption.queriesFailed',
     signal,
   );
 }
@@ -288,13 +300,19 @@ export function coworkExportUrl(
  * The file records the period, every threshold and the product build that produced it, and carries
  * a machine-readable "Snapshot facts" sheet so the two can be diffed with a formula rather than by
  * eye.
+ *
+ * `timeSaved` carries the reader's own Cowork time-saved assumptions (see
+ * `timeSavedExportParams`). They live in the browser only, so without them a customised page would
+ * download a workbook modelling different hours from the ones on screen.
  */
 export function workbookExportUrl(
   windowDays: number,
   seatLicenceTypeIds?: number[],
   emailDomain?: string | null,
+  timeSaved?: Record<string, string>,
 ): string {
   const params = scopeParams(windowDays, seatLicenceTypeIds);
   if (emailDomain) params.set('emailDomain', emailDomain);
+  for (const [name, value] of Object.entries(timeSaved ?? {})) params.set(name, value);
   return `${baseUrl()}/export/workbook?${params}`;
 }

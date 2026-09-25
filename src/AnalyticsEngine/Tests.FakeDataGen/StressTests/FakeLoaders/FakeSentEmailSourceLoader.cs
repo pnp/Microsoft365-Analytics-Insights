@@ -17,7 +17,7 @@ namespace Tests.FakeDataGen.StressTests.FakeLoaders
     /// messages address recipients on unrelated public domains, so the data has a realistic
     /// internal/external mix.
     /// </summary>
-    public class FakeSentEmailSourceLoader : ISentEmailSourceLoader
+    public class FakeSentEmailSourceLoader : ISentEmailSourceLoader, ISentEmailDeltaTokenCommitter
     {
         private static readonly string[] DomainPool =
         {
@@ -124,13 +124,20 @@ namespace Tests.FakeDataGen.StressTests.FakeLoaders
                 messages.Add(msg);
             }
 
-            // Simulate a single delta-token round-trip per user (read on entry, write on exit).
+            // Simulate a single delta-token read per user. The importer commits the returned
+            // token through CommitDeltaTokenAsync only after the SQL save succeeds.
             return Task.FromResult(new SentEmailLoadResult
             {
                 Messages = messages,
                 DeltaTokenReads = 1,
-                DeltaTokenWrites = 1
+                DeltaTokenWrites = 0,
+                NextDeltaToken = $"stress-delta-{userIndex:D6}"
             });
+        }
+
+        public Task CommitDeltaTokenAsync(Common.Entities.User user, string deltaToken)
+        {
+            return Task.CompletedTask;
         }
 
         private List<GraphEmailRecipient> BuildRecipients(Random random, bool isInternal, string senderDomain)

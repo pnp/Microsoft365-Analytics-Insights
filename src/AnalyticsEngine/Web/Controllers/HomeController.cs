@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+using Common.Entities;
+using System.Collections.Generic;
 using System.Net;
 using System.Runtime.Caching;
 using Microsoft.AspNetCore.Authorization;
@@ -64,7 +65,7 @@ namespace Web.AnalyticsWeb.Controllers
                 }
 
                 // Fetch the file contents.
-                fileContents = System.IO.File.ReadAllText(indexFile);
+                fileContents = InjectBuildLabel(System.IO.File.ReadAllText(indexFile), BuildConstants.BuildLabel);
 
 #if !DEBUG
                 var policy = new CacheItemPolicy();
@@ -79,6 +80,35 @@ namespace Web.AnalyticsWeb.Controllers
             Response.Headers.CacheControl = "no-cache, no-store";
 
             return Content(fileContents, "text/html");
+        }
+
+        /// <summary>
+        /// The token in the portal's index.html that stands in for the running build's label.
+        /// Matches the <c>__name__</c> convention the rest of the build uses for substitutions.
+        /// </summary>
+        internal const string BuildLabelPlaceholder = "__BuildLabel__";
+
+        /// <summary>
+        /// Stamps the running build's label into the portal's index.html.
+        /// </summary>
+        /// <remarks>
+        /// The SPA prints the build label in the footer of a printed report, so it has to be in
+        /// the page before <c>window.print()</c> runs - which rules out fetching it. It also
+        /// cannot come from api/SystemStatus, which COUNT(*)s whole tables and is far too
+        /// expensive to call on every page just to name a version. index.html is already served
+        /// through this action, so the label is substituted in here: free at runtime, and correct
+        /// for any deployment rather than only for builds the CI pipeline happened to patch.
+        ///
+        /// The value is JavaScript-encoded because it lands inside a quoted string literal in an
+        /// inline script. It is a build constant rather than user input today, but a substitution
+        /// into executable script is not somewhere to rely on that staying true.
+        /// </remarks>
+        internal static string InjectBuildLabel(string html, string buildLabel)
+        {
+            if (html == null) return null;
+            // System.Web.HttpUtility ships in the .NET shared framework (System.Web.HttpUtility.dll) with
+            // the same JavaScriptStringEncode as .NET Framework; it is the only System.Web type used here.
+            return html.Replace(BuildLabelPlaceholder, System.Web.HttpUtility.JavaScriptStringEncode(buildLabel ?? string.Empty));
         }
     }
 }

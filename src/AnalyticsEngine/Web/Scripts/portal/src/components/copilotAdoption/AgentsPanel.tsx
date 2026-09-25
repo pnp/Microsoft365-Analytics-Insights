@@ -21,7 +21,9 @@ import SqlPopover from '../SqlPopover';
 import InfoTip from '../shared/InfoTip';
 import { KpiGrid, formatCount, formatDate } from '../shared/KpiGrid';
 import type { KpiDefinition } from '../shared/KpiGrid';
-import { useAdoptionTableStyles } from './adoptionShared';
+import { PrintedFilters, printedSearch, useAdoptionTableStyles } from './adoptionShared';
+import { useT, type TFunction } from '../../i18n';
+import { agentHealthReason } from './serverText';
 
 /**
  * Health colours run from "delete this" to "this is working", matching the engagement-band palette
@@ -161,6 +163,7 @@ export default function AgentsPanel({
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
+  const t = useT();
 
   const [health, setHealth] = useState<'' | string>('');
   const [customOnly, setCustomOnly] = useState(false);
@@ -186,21 +189,25 @@ export default function AgentsPanel({
     return HEALTH_ORDER.filter((h) => present.has(h));
   }, [visible]);
 
+  const healthBreakdown = useMemo(
+    () => estate.healthBreakdown.map((h) => ({ ...h, label: healthBreakdownLabel(h.label, t) })),
+    [estate.healthBreakdown, t],
+  );
+
   if (estate.knownAgents === 0) {
     return (
       <Card>
         <Text weight="semibold" size={400}>
-          No Copilot agents found
+          {t('copilotAdoptionAgents.agents.empty.title')}
         </Text>
         <Text size={200} block className={styles.muted} style={{ marginTop: '6px' }}>
-          No Copilot interaction in the history window was attributed to an agent. Either no agents are in
-          use in this tenant, or the Copilot audit import has not run for long enough to have seen one.
+          {t('copilotAdoptionAgents.agents.empty.description')}
         </Text>
       </Card>
     );
   }
 
-  const kpis = buildAgentKpis(estate, options, windowDays);
+  const kpis = buildAgentKpis(estate, options, windowDays, t);
 
   return (
     <div className={styles.stack}>
@@ -211,28 +218,35 @@ export default function AgentsPanel({
           <div className={styles.cardHead}>
             <div>
               <Text weight="semibold" size={400}>
-                Inventory health
+                {t('copilotAdoptionAgents.agents.inventoryHealth.title')}
               </Text>
               <Text size={200} block className={styles.muted}>
-                Every known agent gets exactly one verdict. The Retire and Review counts are the size of the
-                clean-up.
+                {t('copilotAdoptionAgents.agents.inventoryHealth.description')}
               </Text>
             </div>
             <InfoTip
-              title="Inventory health"
+              title={t('copilotAdoptionAgents.agents.inventoryHealth.title')}
               content={{
-                what: 'What to do about each agent that has been seen in the history window: keep it, review it, retire it, or leave it alone because it is too new to judge.',
-                how: `Retire = not used for ${options.agentRetireInactiveDays} days or more. Review = last used between ${options.agentReviewInactiveDays} and ${options.agentRetireInactiveDays} days ago, or still current but used by fewer than ${options.agentMinUsers} people. New = first seen within the last ${options.agentNewDays} days, which exempts it from review entirely. Keep = used within ${options.agentReviewInactiveDays} days by at least ${options.agentMinUsers} people.`,
-                source: `The "New" exemption is deliberate: a brand-new agent with two users has not failed, it has not started. Agents are counted over ${estate.historyDays} days rather than the reporting period, because an agent nobody has touched for months is exactly what this is looking for. That window is deliberately shorter than the analysis history: it only needs to reach past the ${options.agentRetireInactiveDays}-day retirement line, and reading a full year of audit history to learn nothing extra is expensive on a large tenant.`,
+                what: t('copilotAdoptionAgents.agents.inventoryHealth.what'),
+                how: t('copilotAdoptionAgents.agents.inventoryHealth.how', {
+                  retireDays: options.agentRetireInactiveDays,
+                  reviewDays: options.agentReviewInactiveDays,
+                  minUsers: options.agentMinUsers,
+                  newDays: options.agentNewDays,
+                }),
+                source: t('copilotAdoptionAgents.agents.inventoryHealth.source', {
+                  historyDays: estate.historyDays,
+                  retireDays: options.agentRetireInactiveDays,
+                }),
               }}
             />
           </div>
           <div className={styles.cardBody}>
             <DonutChart
-              categories={estate.healthBreakdown}
+              categories={healthBreakdown}
               colours={HEALTH_ORDER.map((h) => AGENT_HEALTH_COLOUR[h])}
               centreValue={formatCount(estate.knownAgents)}
-              centreLabel="known agents"
+              centreLabel={t('copilotAdoptionAgents.agents.inventoryHealth.knownAgents')}
             />
           </div>
         </Card>
@@ -241,27 +255,27 @@ export default function AgentsPanel({
           <div className={styles.cardHead}>
             <div>
               <Text weight="semibold" size={400}>
-                Where agent effort goes
+                {t('copilotAdoptionAgents.agents.effort.title')}
               </Text>
               <Text size={200} block className={styles.muted}>
-                Interactions per agent. Usually a handful carry almost everything.
+                {t('copilotAdoptionAgents.agents.effort.description')}
               </Text>
             </div>
             <InfoTip
-              title="Where agent effort goes"
+              title={t('copilotAdoptionAgents.agents.effort.title')}
               content={{
-                what: 'Total interactions attributed to each agent across the history window, sized by area.',
-                how: `The top ${options.topSegments} agents by interaction count. Counted across everyone - an agent's worth to the organisation does not depend on whether the people using it hold a Copilot licence.`,
+                what: t('copilotAdoptionAgents.agents.effort.what'),
+                how: t('copilotAdoptionAgents.agents.effort.how', { top: options.topSegments }),
                 source:
-                  'Read against the inventory table below: a large tile with very few users is one person\u2019s tool, not an adopted agent.',
+                  t('copilotAdoptionAgents.agents.effort.source'),
               }}
             />
           </div>
           <div className={styles.cardBody}>
             {estate.usageByAgent.length > 0 ? (
-              <TreemapChart categories={estate.usageByAgent} valueLabel="interactions" />
+              <TreemapChart categories={estate.usageByAgent} valueLabel={t('copilotAdoptionAgents.agents.unit.interactions')} />
             ) : (
-              <div className={styles.empty}>No agent interactions recorded.</div>
+              <div className={styles.empty}>{t('copilotAdoptionAgents.agents.effort.empty')}</div>
             )}
           </div>
         </Card>
@@ -272,29 +286,32 @@ export default function AgentsPanel({
           <div className={styles.cardHead}>
             <div>
               <Text weight="semibold" size={400}>
-                Agent usage by department
+                {t('copilotAdoptionAgents.agents.department.title')}
               </Text>
               <Text size={200} block className={styles.muted}>
-                Agent interactions in the selected period, by the department of the person who ran them.
+                {t('copilotAdoptionAgents.agents.department.description')}
               </Text>
             </div>
             <div className={styles.cardTools}>
               <InfoTip
-                title="Agent usage by department"
+                title={t('copilotAdoptionAgents.agents.department.title')}
                 content={{
-                  what: 'Which parts of the organisation are actually using Copilot agents.',
-                  how: `Agent interactions in the last ${windowDays} days grouped by the user\u2019s department from the imported metadata, top ${options.topSegments}. Counts interactions, not people, so one heavy user can dominate a department.`,
+                  what: t('copilotAdoptionAgents.agents.department.what'),
+                  how: t('copilotAdoptionAgents.agents.department.how', {
+                    windowDays,
+                    top: options.topSegments,
+                  }),
                   source:
-                    'Unlike the inventory above, this uses the selected reporting period rather than the full history - it is a "what is happening now" view.',
+                    t('copilotAdoptionAgents.agents.department.source'),
                 }}
               />
               {sql?.agentsByDepartment && (
-                <SqlPopover sql={sql.agentsByDepartment} title="SQL behind this chart" />
+                <SqlPopover sql={sql.agentsByDepartment} title={t('copilotAdoptionAgents.agents.department.sqlTitle')} />
               )}
             </div>
           </div>
           <div className={styles.cardBody}>
-            <CategoryBarChart categories={estate.usageByDepartment} valueLabel="Interactions" />
+            <CategoryBarChart categories={estate.usageByDepartment} valueLabel={t('copilotAdoptionAgents.agents.unit.interactionsTitle')} />
           </div>
         </Card>
       )}
@@ -303,33 +320,34 @@ export default function AgentsPanel({
         <div className={styles.cardHead}>
           <div>
             <Text weight="semibold" size={400}>
-              Agent inventory
+              {t('copilotAdoptionAgents.agents.inventory.title')}
             </Text>
             <Text size={200} block className={styles.muted}>
-              Every agent seen in the last {estate.historyDays} days, busiest first.
+              {t('copilotAdoptionAgents.agents.inventory.description', { days: estate.historyDays })}
             </Text>
           </div>
           <div className={styles.cardTools}>
             <InfoTip
-              title="Agent inventory"
+              title={t('copilotAdoptionAgents.agents.inventory.title')}
               content={{
-                what: 'Every Copilot agent that has been used at least once in the history window, with how many people use it, how much, how broadly, and the verdict on it.',
-                how: `"Users" is distinct people across the whole tenant; "licensed" is how many of them hold a Copilot licence. "Surfaces" is the number of distinct Copilot hosts the agent was invoked from - an agent used in only one host is doing a narrower job than its interaction count suggests, which is what "most versatile" above measures.`,
+                what: t('copilotAdoptionAgents.agents.inventory.what'),
+                how: t('copilotAdoptionAgents.agents.inventory.how'),
                 source:
-                  'Agent identity comes from the Copilot audit log. Agents that have never been invoked do not appear at all - the audit log only records agents that were used.',
+                  t('copilotAdoptionAgents.agents.inventory.source'),
               }}
             />
-            {sql?.agents && <SqlPopover sql={sql.agents} title="SQL behind this table" />}
+            {sql?.agents && <SqlPopover sql={sql.agents} title={t('copilotAdoptionAgents.agents.inventory.sqlTitle')} />}
           </div>
         </div>
 
         <div className={styles.cardBody}>
-          <div className={styles.filters}>
+          {/* Chrome: nothing here can be used on paper. What it is set to is printed below instead. */}
+          <div className={styles.filters} data-print="hide">
             <Input
               className={styles.search}
               value={search}
-              placeholder="Search agent name or ID"
-              aria-label="Search agents by name or ID"
+              placeholder={t('copilotAdoptionAgents.agents.inventory.search.placeholder')}
+              aria-label={t('copilotAdoptionAgents.agents.inventory.search.ariaLabel')}
               contentBefore={<Search16Regular />}
               contentAfter={
                 search ? (
@@ -337,7 +355,7 @@ export default function AgentsPanel({
                     appearance="transparent"
                     size="small"
                     icon={<Dismiss16Regular />}
-                    aria-label="Clear agent search"
+                    aria-label={t('copilotAdoptionAgents.agents.inventory.search.clearAriaLabel')}
                     onClick={() => setSearch('')}
                   />
                 ) : undefined
@@ -346,48 +364,70 @@ export default function AgentsPanel({
             />
             <Select
               value={health}
-              aria-label="Filter agents by health"
+              aria-label={t('copilotAdoptionAgents.agents.inventory.filterHealth.ariaLabel')}
               onChange={(_e: any, d: any) => setHealth(d.value)}
             >
-              <option value="">All verdicts</option>
+              <option value="">{t('copilotAdoptionAgents.agents.inventory.filterHealth.all')}</option>
               {HEALTH_ORDER.map((h) => (
                 <option key={h} value={h}>
-                  {healthLabel(h)}
+                  {healthLabel(h, t)}
                 </option>
               ))}
             </Select>
             <Tooltip
-              content="Agents your organisation built, rather than the ones Microsoft ships."
+              content={t('copilotAdoptionAgents.agents.inventory.customOnly.tooltip')}
               relationship="description"
             >
               <Checkbox
-                label="Custom agents only"
+                label={t('copilotAdoptionAgents.agents.inventory.customOnly.label')}
                 checked={customOnly}
                 onChange={(_e: any, d: any) => setCustomOnly(!!d.checked)}
               />
             </Tooltip>
             <div className={styles.spacer} />
             <Text size={200} className={styles.muted}>
-              {formatCount(visible.length)} of {formatCount(agents.length)} agents
+              {t('copilotAdoptionAgents.agents.inventory.visibleCount', {
+                visible: formatCount(visible.length),
+                total: formatCount(agents.length),
+              })}
             </Text>
           </div>
 
+          <PrintedFilters
+            filters={[
+              printedSearch(t, search),
+              {
+                label: t('copilotAdoptionAgents.agents.table.verdict'),
+                value: health
+                  ? healthLabel(Number(health) as AgentHealth, t)
+                  : t('copilotAdoptionAgents.agents.inventory.filterHealth.all'),
+              },
+              customOnly && { value: t('copilotAdoptionAgents.agents.inventory.customOnly.label') },
+              {
+                value: t('copilotAdoptionAgents.agents.inventory.visibleCount', {
+                  visible: formatCount(visible.length),
+                  total: formatCount(agents.length),
+                }),
+              },
+            ]}
+          />
+
           {visible.length === 0 ? (
-            <div className={styles.empty}>No agents match these filters.</div>
+            <div className={styles.empty}>{t('copilotAdoptionAgents.agents.inventory.noMatches')}</div>
           ) : (
             <>
               <div className={styles.tableWrap}>
                 <table className={table.table}>
                   <thead>
                     <tr>
-                      <th className={table.th}>Agent</th>
-                      <th className={table.th}>Type</th>
-                      <th className={`${table.th} ${table.thNumeric}`}>Users</th>
-                      <th className={`${table.th} ${table.thNumeric}`}>Interactions</th>
-                      <th className={`${table.th} ${table.thNumeric}`}>Per user</th>
-                      <th className={`${table.th} ${table.thNumeric}`}>Surfaces</th>
-                      <th className={table.th}>Last used</th>
-                      <th className={table.th}>Verdict</th>
+                      <th className={table.th}>{t('copilotAdoptionAgents.agents.table.agent')}</th>
+                      <th className={table.th}>{t('copilotAdoptionAgents.agents.table.type')}</th>
+                      <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoptionAgents.agents.table.users')}</th>
+                      <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoptionAgents.agents.table.interactions')}</th>
+                      <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoptionAgents.agents.table.perUser')}</th>
+                      <th className={`${table.th} ${table.thNumeric}`}>{t('copilotAdoptionAgents.agents.table.surfaces')}</th>
+                      <th className={table.th}>{t('copilotAdoptionAgents.agents.table.lastUsed')}</th>
+                      <th className={table.th}>{t('copilotAdoptionAgents.agents.table.verdict')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -405,11 +445,11 @@ export default function AgentsPanel({
                             )}
                           </span>
                         </td>
-                        <td className={table.td}>{agent.isCustomAgent ? 'Custom' : 'Microsoft'}</td>
+                        <td className={table.td}>{agent.isCustomAgent ? t('copilotAdoptionAgents.agents.table.type.custom') : t('copilotAdoptionAgents.agents.table.type.microsoft')}</td>
                         <td className={`${table.td} ${table.tdNumeric}`}>
                           {formatCount(agent.users)}
                           <Text size={100} block className={table.tdSub}>
-                            {formatCount(agent.licensedUsers)} licensed
+                            {t('copilotAdoptionAgents.agents.table.licensedUsers', { count: formatCount(agent.licensedUsers) })}
                           </Text>
                         </td>
                         <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(agent.interactions)}</td>
@@ -419,14 +459,14 @@ export default function AgentsPanel({
                           {formatDate(agent.lastUsedUtc)}
                           {agent.daysSinceLastUse !== null && agent.daysSinceLastUse > 0 && (
                             <Text size={100} block className={table.tdSub}>
-                              {agent.daysSinceLastUse} days ago
+                              {t('common.time.daysAgo', { days: agent.daysSinceLastUse })}
                             </Text>
                           )}
                         </td>
                         <td className={table.td}>
-                          <Tooltip relationship="description" content={agent.healthReason}>
+                          <Tooltip relationship="description" content={agentHealthReason(t, agent, options)}>
                             <div>
-                              <AgentHealthBadge health={agent.health} name={agent.healthName} />
+                              <AgentHealthBadge health={agent.health} name={healthLabel(agent.health, t)} />
                             </div>
                           </Tooltip>
                         </td>
@@ -438,13 +478,13 @@ export default function AgentsPanel({
 
               <div className={styles.legend}>
                 <Text size={200} weight="semibold">
-                  What each verdict means
+                  {t('copilotAdoptionAgents.agents.legend.title')}
                 </Text>
                 {legendStates.map((h) => (
                   <div key={h} className={styles.legendRow}>
-                    <AgentHealthBadge health={h} name={healthLabel(h)} />
+                    <AgentHealthBadge health={h} name={healthLabel(h, t)} />
                     <Text size={200} className={styles.reason}>
-                      {healthMeaning(h, options)}
+                      {healthMeaning(h, options, t)}
                     </Text>
                   </div>
                 ))}
@@ -457,30 +497,52 @@ export default function AgentsPanel({
   );
 }
 
-function healthLabel(health: AgentHealth): string {
+function healthLabel(health: AgentHealth, t: TFunction): string {
   switch (health) {
     case AgentHealth.Keep:
-      return 'Keep';
+      return t('copilotAdoptionAgents.agents.health.keep');
     case AgentHealth.New:
-      return 'New';
+      return t('copilotAdoptionAgents.agents.health.new');
     case AgentHealth.Review:
-      return 'Review';
+      return t('copilotAdoptionAgents.agents.health.review');
     default:
-      return 'Retire';
+      return t('copilotAdoptionAgents.agents.health.retire');
+  }
+}
+
+function healthBreakdownLabel(label: string, t: TFunction): string {
+  switch (label) {
+    case 'Keep':
+      return t('copilotAdoptionAgents.agents.health.keep');
+    case 'New':
+      return t('copilotAdoptionAgents.agents.health.new');
+    case 'Review':
+      return t('copilotAdoptionAgents.agents.health.review');
+    case 'Retire':
+      return t('copilotAdoptionAgents.agents.health.retire');
+    default:
+      return label;
   }
 }
 
 /** The rule, stated once per verdict rather than repeated per row. */
-function healthMeaning(health: AgentHealth, o: CopilotAdoptionOptions): string {
+function healthMeaning(health: AgentHealth, o: CopilotAdoptionOptions, t: TFunction): string {
   switch (health) {
     case AgentHealth.Keep:
-      return `Used within the last ${o.agentReviewInactiveDays} days by at least ${o.agentMinUsers} people. Genuinely adopted - keep supporting it.`;
+      return t('copilotAdoptionAgents.agents.health.keep.meaning', {
+        reviewDays: o.agentReviewInactiveDays,
+        minUsers: o.agentMinUsers,
+      });
     case AgentHealth.New:
-      return `First seen within the last ${o.agentNewDays} days. Too new to judge, and deliberately exempt from review - a brand-new agent with two users has not failed, it has not started.`;
+      return t('copilotAdoptionAgents.agents.health.new.meaning', { newDays: o.agentNewDays });
     case AgentHealth.Review:
-      return `Either going quiet (last used ${o.agentReviewInactiveDays}-${o.agentRetireInactiveDays} days ago) or still current but used by fewer than ${o.agentMinUsers} people - often its author testing it, or an agent nobody was told about.`;
+      return t('copilotAdoptionAgents.agents.health.review.meaning', {
+        reviewDays: o.agentReviewInactiveDays,
+        retireDays: o.agentRetireInactiveDays,
+        minUsers: o.agentMinUsers,
+      });
     default:
-      return `Not used for ${o.agentRetireInactiveDays} days or more. Confirm with its owner, then remove it.`;
+      return t('copilotAdoptionAgents.agents.health.retire.meaning', { retireDays: o.agentRetireInactiveDays });
   }
 }
 
@@ -488,77 +550,87 @@ function buildAgentKpis(
   estate: AgentEstateSummary,
   o: CopilotAdoptionOptions,
   windowDays: number,
+  t: TFunction,
 ): KpiDefinition[] {
   const retire = estate.healthBreakdown.find((h) => h.label === 'Retire')?.value ?? 0;
 
   return [
     {
       key: 'active',
-      label: 'Active agents',
+      label: t('copilotAdoptionAgents.agents.kpi.active.label'),
       value: formatCount(estate.activeAgents),
-      hint: `${formatCount(estate.knownAgents)} known, ${formatCount(estate.customAgents)} custom-built`,
+      hint: t('copilotAdoptionAgents.agents.kpi.active.hint', {
+        known: formatCount(estate.knownAgents),
+        custom: formatCount(estate.customAgents),
+      }),
       info: {
-        what: `Agents used at least once in the last ${windowDays} days. "Known" counts every agent seen anywhere in the ${estate.historyDays}-day inventory window, used recently or not.`,
-        how: 'An agent only appears once it has been invoked - the Copilot audit log records agents that were used, not agents that exist. An agent built but never run is invisible here, and to everyone else too.',
-        source: 'Custom means an agent your organisation built, rather than one Microsoft ships.',
+        what: t('copilotAdoptionAgents.agents.kpi.active.what', {
+          windowDays,
+          historyDays: estate.historyDays,
+        }),
+        how: t('copilotAdoptionAgents.agents.kpi.active.how'),
+        source: t('copilotAdoptionAgents.agents.kpi.active.source'),
       },
     },
     {
       key: 'users',
-      label: 'Agent users',
+      label: t('copilotAdoptionAgents.agents.kpi.users.label'),
       value: formatCount(estate.agentUsers),
-      hint: `${formatCount(estate.licensedAgentUsers)} of them hold a Copilot licence`,
+      hint: t('copilotAdoptionAgents.agents.kpi.users.hint', { licensed: formatCount(estate.licensedAgentUsers) }),
       info: {
-        what: `Distinct people who used at least one agent in the last ${windowDays} days, licensed or not.`,
-        how: 'Counted from the per-user rows rather than by summing across agents, which would double-count anyone who uses more than one.',
+        what: t('copilotAdoptionAgents.agents.kpi.users.what', { windowDays }),
+        how: t('copilotAdoptionAgents.agents.kpi.users.how'),
         source:
-          'Agents are available to unlicensed Copilot Chat users too, which is why this can exceed the licensed figure.',
+          t('copilotAdoptionAgents.agents.kpi.users.source'),
       },
     },
     {
       key: 'intensity',
-      label: 'Interactions per agent user',
+      label: t('copilotAdoptionAgents.agents.kpi.intensity.label'),
       value: estate.interactionsPerAgentUser,
-      hint: `${formatCount(estate.agentInteractions)} agent interactions in total`,
+      hint: t('copilotAdoptionAgents.agents.kpi.intensity.hint', { interactions: formatCount(estate.agentInteractions) }),
       info: {
-        what: 'How much the people who use agents actually use them.',
-        how: 'Total agent interactions in the period divided by the number of distinct people who ran at least one. Only people who used an agent are in the denominator - including everyone else would just restate the adoption rate.',
-        source: 'A high figure across very few users is one or two enthusiasts, not an adopted capability.',
+        what: t('copilotAdoptionAgents.agents.kpi.intensity.what'),
+        how: t('copilotAdoptionAgents.agents.kpi.intensity.how'),
+        source: t('copilotAdoptionAgents.agents.kpi.intensity.source'),
       },
     },
     {
       key: 'popular',
-      label: 'Most used agent',
+      label: t('copilotAdoptionAgents.agents.kpi.popular.label'),
       value: <span style={{ fontSize: '20px' }}>{estate.mostPopularAgent ?? '\u2014'}</span>,
-      hint: 'The agent whose retirement would be felt most',
+      hint: t('copilotAdoptionAgents.agents.kpi.popular.hint'),
       info: {
-        what: 'The agent used by the most distinct people.',
-        how: 'Ranked by user count, not interaction count - an agent one person runs a thousand times is not the most widely useful one, and ranking by volume would say it was.',
-        source: 'Ties are broken by interaction count.',
+        what: t('copilotAdoptionAgents.agents.kpi.popular.what'),
+        how: t('copilotAdoptionAgents.agents.kpi.popular.how'),
+        source: t('copilotAdoptionAgents.agents.kpi.popular.source'),
       },
     },
     {
       key: 'versatile',
-      label: 'Most versatile agent',
+      label: t('copilotAdoptionAgents.agents.kpi.versatile.label'),
       value: <span style={{ fontSize: '20px' }}>{estate.mostVersatileAgent ?? '\u2014'}</span>,
-      hint: 'Used across the most Copilot surfaces',
+      hint: t('copilotAdoptionAgents.agents.kpi.versatile.hint'),
       info: {
-        what: 'The agent invoked from the greatest number of distinct Copilot surfaces (Teams, Word, Outlook, Copilot Chat and so on).',
-        how: 'Breadth of surface, not volume. An agent used everywhere by a few people is doing a broader job than one used constantly in a single host, and the two need different support.',
-        source: 'Ties are broken by user count.',
+        what: t('copilotAdoptionAgents.agents.kpi.versatile.what'),
+        how: t('copilotAdoptionAgents.agents.kpi.versatile.how'),
+        source: t('copilotAdoptionAgents.agents.kpi.versatile.source'),
       },
     },
     {
       key: 'retire',
-      label: 'Agents to retire',
+      label: t('copilotAdoptionAgents.agents.kpi.retire.label'),
       value: formatCount(retire),
       tone: retire > 0 ? 'critical' : 'good',
-      hint: `Unused for ${o.agentRetireInactiveDays}+ days`,
+      hint: t('copilotAdoptionAgents.agents.kpi.retire.hint', { retireDays: o.agentRetireInactiveDays }),
       info: {
-        what: 'Agents that have not been used for long enough that they are almost certainly abandoned.',
-        how: `No recorded interaction for ${o.agentRetireInactiveDays} days or more. Agents first seen within the last ${o.agentNewDays} days are exempt regardless, so this never catches something that simply has not launched yet.`,
+        what: t('copilotAdoptionAgents.agents.kpi.retire.what'),
+        how: t('copilotAdoptionAgents.agents.kpi.retire.how', {
+          retireDays: o.agentRetireInactiveDays,
+          newDays: o.agentNewDays,
+        }),
         source:
-          'Retiring an agent is not free - confirm with its owner first. The point of the figure is that an unreviewed agent estate grows indefinitely and nobody notices.',
+          t('copilotAdoptionAgents.agents.kpi.retire.source'),
       },
     },
   ];

@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   DASH,
-  UNKNOWN_TEXT,
   daysAgo,
   formatAge,
   formatCount,
@@ -10,6 +9,15 @@ import {
   formatPct,
   ratioPct,
 } from './format';
+import { EN_CATALOG, type TFunction } from '../../i18n';
+
+const t: TFunction = (key, values) => {
+  let text = EN_CATALOG[key];
+  for (const [name, value] of Object.entries(values ?? {})) text = text.replace(`{${name}}`, String(value));
+  return text;
+};
+
+const UNKNOWN_TEXT = EN_CATALOG['licenceActivity.common.unknown'];
 
 describe('format helpers', () => {
   it('formats whole counts with thousands separators', () => {
@@ -19,16 +27,16 @@ describe('format helpers', () => {
 
   describe('unknown is not zero', () => {
     it('renders null as the unknown marker, not 0', () => {
-      expect(formatMaybeCount(null)).toBe(UNKNOWN_TEXT);
-      expect(formatMaybeCount(undefined)).toBe(UNKNOWN_TEXT);
+      expect(formatMaybeCount(null, UNKNOWN_TEXT)).toBe(UNKNOWN_TEXT);
+      expect(formatMaybeCount(undefined, UNKNOWN_TEXT)).toBe(UNKNOWN_TEXT);
     });
 
     it('renders a measured zero as 0, not unknown', () => {
-      expect(formatMaybeCount(0)).toBe('0');
+      expect(formatMaybeCount(0, UNKNOWN_TEXT)).toBe('0');
     });
 
     it('renders a real count normally', () => {
-      expect(formatMaybeCount(42)).toBe('42');
+      expect(formatMaybeCount(42, UNKNOWN_TEXT)).toBe('42');
     });
 
     it('ratioPct returns null (not 0) when an operand is unknown or the denominator is 0', () => {
@@ -54,9 +62,9 @@ describe('format helpers', () => {
   it('computes whole days ago and a friendly age, treating unknown as unknown', () => {
     const now = new Date('2026-05-20T12:00:00Z');
     expect(daysAgo(null, now)).toBeNull();
-    expect(formatAge(null, now)).toBe(UNKNOWN_TEXT);
-    expect(formatAge('2026-05-20T00:00:00Z', now)).toBe('today');
-    expect(formatAge('2026-05-19T00:00:00Z', now)).toBe('yesterday');
-    expect(formatAge('2026-05-10T00:00:00Z', now)).toBe('10 days ago');
+    expect(formatAge(null, t, now)).toBe(UNKNOWN_TEXT);
+    expect(formatAge('2026-05-20T00:00:00Z', t, now)).toBe('today');
+    expect(formatAge('2026-05-19T00:00:00Z', t, now)).toBe('yesterday');
+    expect(formatAge('2026-05-10T00:00:00Z', t, now)).toBe('10 days ago');
   });
 });

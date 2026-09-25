@@ -11,32 +11,34 @@ import {
   Text,
 } from '@fluentui/react-components';
 import { fetchHealthComponents } from '../../api/healthApi';
-import { SectionFrame, howLongAgo, statusColor, useHealthSection } from './healthShared';
+import { useT } from '../../i18n';
+import { SectionFrame, healthStatusText, howLongAgo, statusColor, translateHealthComponentDetail, useHealthSection } from './healthShared';
 
 /** Component health: runtime credential + Service Bus checks, plus App Insights HealthCheck events. */
 export default function ComponentsPanel({ active }: { active: boolean }) {
+  const t = useT();
   const state = useHealthSection(fetchHealthComponents, active);
 
   return (
     <SectionFrame
-      title="Component health"
-      description="Latest health per component. The runtime credential (expiry) and Service Bus (Teams calls queue) checks run here today; SQL, Activity API, Graph, Key Vault, Redis and DNS fill in as the runtime HealthCheck emitter (a later phase) lands."
+      title={t('health.components.title')}
+      description={t('health.components.description')}
       state={state}
     >
       {(data) =>
         data.componentHealthError ? (
           <MessageBar intent="warning">
-            <MessageBarBody>Couldn't load component health: {data.componentHealthError}</MessageBarBody>
+            <MessageBarBody>{t('health.components.loadError', { error: data.componentHealthError })}</MessageBarBody>
           </MessageBar>
         ) : data.componentHealth.length > 0 ? (
-          <Table size="small" aria-label="Component health">
+          <Table size="small" aria-label={t('health.components.ariaLabel')}>
             <TableHeader>
               <TableRow>
-                <TableHeaderCell>Component</TableHeaderCell>
-                <TableHeaderCell>Status</TableHeaderCell>
-                <TableHeaderCell>Detail</TableHeaderCell>
-                <TableHeaderCell>Days to expiry</TableHeaderCell>
-                <TableHeaderCell>Last checked</TableHeaderCell>
+                <TableHeaderCell>{t('health.components.columnComponent')}</TableHeaderCell>
+                <TableHeaderCell>{t('health.components.columnStatus')}</TableHeaderCell>
+                <TableHeaderCell>{t('health.components.columnDetail')}</TableHeaderCell>
+                <TableHeaderCell>{t('health.components.columnDaysToExpiry')}</TableHeaderCell>
+                <TableHeaderCell>{t('health.components.columnLastChecked')}</TableHeaderCell>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -45,15 +47,15 @@ export default function ComponentsPanel({ active }: { active: boolean }) {
                   <TableCell>{c.component}</TableCell>
                   <TableCell>
                     <Badge appearance="filled" color={statusColor(c.status)}>
-                      {c.status}
+                      {healthStatusText(c.status, t)}
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    <Text size={200}>{c.detail}</Text>
+                    <Text size={200}>{translateHealthComponentDetail(c, t)}</Text>
                   </TableCell>
                   <TableCell>{c.daysToExpiry ?? ''}</TableCell>
                   <TableCell>
-                    <Text size={200}>{howLongAgo(c.lastSeenUtc)}</Text>
+                    <Text size={200}>{howLongAgo(c.lastSeenUtc, t)}</Text>
                   </TableCell>
                 </TableRow>
               ))}
@@ -61,7 +63,7 @@ export default function ComponentsPanel({ active }: { active: boolean }) {
           </Table>
         ) : (
           <MessageBar intent="info">
-            <MessageBarBody>No component health available yet.</MessageBarBody>
+            <MessageBarBody>{t('health.components.empty')}</MessageBarBody>
           </MessageBar>
         )
       }

@@ -37,6 +37,10 @@
          resolution is one package publish away from changing the auth stack underneath us. -->
     <PackageReference Include="Microsoft.Identity.Web" Version="4.0.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.11" />
+    <!-- Controllers serialise with Newtonsoft configured as Web API 2 was, not System.Text.Json:
+         the shared models' [JsonProperty]/[JsonIgnore] attributes ARE the portal's wire contract.
+         See WebApiCompatibleJson. -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.NewtonsoftJson" Version="10.0.11" />
     <PackageReference Include="System.ClientModel" Version="1.15.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.11" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.11" />

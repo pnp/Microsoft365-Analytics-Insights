@@ -1,5 +1,5 @@
 extern alias AnalyticsWeb;
-
+using AnalyticsWeb::Web.AnalyticsWeb;
 using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
 using AnalyticsWeb::Web.AnalyticsWeb.Models.LicenceActivity;
 using Common.Entities.LicenceActivity;
@@ -75,6 +75,9 @@ namespace Tests.UnitTests
                     {
                         services
                             .AddControllers()
+                            // The serializer production uses (Program.cs), so the bytes asserted here
+                            // are the bytes the portal receives.
+                            .AddWebApiCompatibleJson()
                             // Only this one controller. The Web assembly's other controllers would
                             // otherwise be discovered too, and they reach for configuration and a
                             // database that this test has deliberately not set up.

@@ -132,7 +132,10 @@ builder.Services.AddCors(options =>
 
 builder.Services.AddExceptionHandler<AnalyticsWebExceptionHandler>();
 
-builder.Services.AddControllersWithViews();
+// JSON exactly as the Web API 2 build on dev/main writes it - Newtonsoft, names as declared or as
+// [JsonProperty] gives them, [JsonIgnore] honoured. The default System.Text.Json formatter ignores
+// those attributes and renamed or leaked fields the shared portal reads; see WebApiCompatibleJson.
+builder.Services.AddControllersWithViews().AddWebApiCompatibleJson();
 
 var app = builder.Build();
 

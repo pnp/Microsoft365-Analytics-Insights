@@ -1,4 +1,4 @@
-﻿namespace App.ControlPanel
+namespace App.ControlPanel
 {
     partial class DatabaseUpgradeForm
     {
@@ -32,16 +32,28 @@
             this.label2 = new System.Windows.Forms.Label();
             this.label3 = new System.Windows.Forms.Label();
             this.grpConnectionString = new System.Windows.Forms.GroupBox();
+            this.lblAuthMode = new System.Windows.Forms.Label();
+            this.lnkAutodetect = new System.Windows.Forms.LinkLabel();
             this.label4 = new System.Windows.Forms.Label();
             this.txtConnectionString = new System.Windows.Forms.TextBox();
+            this.grpEntra = new System.Windows.Forms.GroupBox();
+            this.lblEntraInfo = new System.Windows.Forms.Label();
+            this.lblEntraTenantId = new System.Windows.Forms.Label();
+            this.txtEntraTenantId = new System.Windows.Forms.TextBox();
+            this.lblEntraClientId = new System.Windows.Forms.Label();
+            this.txtEntraClientId = new System.Windows.Forms.TextBox();
+            this.lblEntraSecret = new System.Windows.Forms.Label();
+            this.txtEntraSecret = new System.Windows.Forms.TextBox();
             this.chkConfirm = new System.Windows.Forms.CheckBox();
             this.btnUpgrade = new System.Windows.Forms.Button();
             this.btnCancel = new System.Windows.Forms.Button();
             this.progressBar = new System.Windows.Forms.ProgressBar();
             this.backgroundWorker = new System.ComponentModel.BackgroundWorker();
+            this.backgroundWorkerAutoDetectSql = new System.ComponentModel.BackgroundWorker();
             this.grpLog = new System.Windows.Forms.GroupBox();
             this.txtLog = new System.Windows.Forms.TextBox();
             this.grpConnectionString.SuspendLayout();
+            this.grpEntra.SuspendLayout();
             this.grpLog.SuspendLayout();
             this.SuspendLayout();
             // 
@@ -49,7 +61,7 @@
             // 
             this.label1.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
-            this.label1.Location = new System.Drawing.Point(39, 28);
+            this.label1.Location = new System.Drawing.Point(39, 18);
             this.label1.Name = "label1";
             this.label1.Size = new System.Drawing.Size(712, 43);
             this.label1.TabIndex = 0;
@@ -61,7 +73,7 @@
             this.label2.AutoSize = true;
             this.label2.Font = new System.Drawing.Font("Microsoft Sans Serif", 8F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.label2.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(192)))), ((int)(((byte)(0)))), ((int)(((byte)(0)))));
-            this.label2.Location = new System.Drawing.Point(39, 89);
+            this.label2.Location = new System.Drawing.Point(39, 64);
             this.label2.Name = "label2";
             this.label2.Size = new System.Drawing.Size(92, 20);
             this.label2.TabIndex = 1;
@@ -71,9 +83,9 @@
             // 
             this.label3.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
-            this.label3.Location = new System.Drawing.Point(39, 113);
+            this.label3.Location = new System.Drawing.Point(39, 94);
             this.label3.Name = "label3";
-            this.label3.Size = new System.Drawing.Size(712, 53);
+            this.label3.Size = new System.Drawing.Size(712, 26);
             this.label3.TabIndex = 2;
             this.label3.Text = "Upgrading the schema through this form is not recommended unless you're sure it's necesary.";
             // 
@@ -81,19 +93,43 @@
             // 
             this.grpConnectionString.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
+            this.grpConnectionString.Controls.Add(this.lblAuthMode);
+            this.grpConnectionString.Controls.Add(this.lnkAutodetect);
             this.grpConnectionString.Controls.Add(this.label4);
             this.grpConnectionString.Controls.Add(this.txtConnectionString);
-            this.grpConnectionString.Location = new System.Drawing.Point(43, 171);
+            this.grpConnectionString.Location = new System.Drawing.Point(43, 126);
             this.grpConnectionString.Name = "grpConnectionString";
-            this.grpConnectionString.Size = new System.Drawing.Size(708, 150);
+            this.grpConnectionString.Size = new System.Drawing.Size(708, 230);
             this.grpConnectionString.TabIndex = 4;
             this.grpConnectionString.TabStop = false;
             this.grpConnectionString.Text = "Connection String";
             // 
+            // lblAuthMode
+            // 
+            this.lblAuthMode.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
+            | System.Windows.Forms.AnchorStyles.Right)));
+            this.lblAuthMode.ForeColor = System.Drawing.SystemColors.GrayText;
+            this.lblAuthMode.Location = new System.Drawing.Point(30, 128);
+            this.lblAuthMode.Name = "lblAuthMode";
+            this.lblAuthMode.Size = new System.Drawing.Size(645, 90);
+            this.lblAuthMode.TabIndex = 3;
+            this.lblAuthMode.Text = "Authentication method";
+            // 
+            // lnkAutodetect
+            // 
+            this.lnkAutodetect.AutoSize = true;
+            this.lnkAutodetect.Location = new System.Drawing.Point(30, 98);
+            this.lnkAutodetect.Name = "lnkAutodetect";
+            this.lnkAutodetect.Size = new System.Drawing.Size(322, 20);
+            this.lnkAutodetect.TabIndex = 2;
+            this.lnkAutodetect.TabStop = true;
+            this.lnkAutodetect.Text = "Autodetect from installer configuration";
+            this.lnkAutodetect.LinkClicked += new System.Windows.Forms.LinkLabelLinkClickedEventHandler(this.lnkAutodetect_LinkClicked);
+            // 
             // label4
             // 
             this.label4.AutoSize = true;
-            this.label4.Location = new System.Drawing.Point(29, 50);
+            this.label4.Location = new System.Drawing.Point(29, 32);
             this.label4.Name = "label4";
             this.label4.Size = new System.Drawing.Size(256, 20);
             this.label4.TabIndex = 1;
@@ -103,22 +139,107 @@
             // 
             this.txtConnectionString.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
-            this.txtConnectionString.Location = new System.Drawing.Point(34, 84);
+            this.txtConnectionString.Location = new System.Drawing.Point(34, 62);
             this.txtConnectionString.Name = "txtConnectionString";
             this.txtConnectionString.Size = new System.Drawing.Size(641, 26);
             this.txtConnectionString.TabIndex = 0;
             this.txtConnectionString.Text = "data source=contoso.database.windows.net,1433;initial catalog=Office365Analytics;" +
     "persist security info=True;user id=sqladmin;password=xxxx;MultipleActiveResultSe" +
     "ts=True;";
+            this.txtConnectionString.TextChanged += new System.EventHandler(this.txtConnectionString_TextChanged);
+            // 
+            // grpEntra
+            // 
+            this.grpEntra.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
+            | System.Windows.Forms.AnchorStyles.Right)));
+            this.grpEntra.Controls.Add(this.lblEntraInfo);
+            this.grpEntra.Controls.Add(this.lblEntraTenantId);
+            this.grpEntra.Controls.Add(this.txtEntraTenantId);
+            this.grpEntra.Controls.Add(this.lblEntraClientId);
+            this.grpEntra.Controls.Add(this.txtEntraClientId);
+            this.grpEntra.Controls.Add(this.lblEntraSecret);
+            this.grpEntra.Controls.Add(this.txtEntraSecret);
+            this.grpEntra.Location = new System.Drawing.Point(43, 364);
+            this.grpEntra.Name = "grpEntra";
+            this.grpEntra.Size = new System.Drawing.Size(708, 190);
+            this.grpEntra.TabIndex = 5;
+            this.grpEntra.TabStop = false;
+            this.grpEntra.Text = "Microsoft Entra ID Authentication";
+            // 
+            // lblEntraInfo
+            // 
+            this.lblEntraInfo.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
+            | System.Windows.Forms.AnchorStyles.Right)));
+            this.lblEntraInfo.ForeColor = System.Drawing.SystemColors.GrayText;
+            this.lblEntraInfo.Location = new System.Drawing.Point(30, 28);
+            this.lblEntraInfo.Name = "lblEntraInfo";
+            this.lblEntraInfo.Size = new System.Drawing.Size(645, 40);
+            this.lblEntraInfo.TabIndex = 0;
+            this.lblEntraInfo.Text = "Service principal to sign in to Azure SQL with. Defaults to the installer account of the loaded configuration.";
+            // 
+            // lblEntraTenantId
+            // 
+            this.lblEntraTenantId.AutoSize = true;
+            this.lblEntraTenantId.Location = new System.Drawing.Point(30, 78);
+            this.lblEntraTenantId.Name = "lblEntraTenantId";
+            this.lblEntraTenantId.Size = new System.Drawing.Size(183, 20);
+            this.lblEntraTenantId.TabIndex = 1;
+            this.lblEntraTenantId.Text = "Directory (tenant) ID:";
+            // 
+            // txtEntraTenantId
+            // 
+            this.txtEntraTenantId.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
+            | System.Windows.Forms.AnchorStyles.Right)));
+            this.txtEntraTenantId.Location = new System.Drawing.Point(255, 75);
+            this.txtEntraTenantId.Name = "txtEntraTenantId";
+            this.txtEntraTenantId.Size = new System.Drawing.Size(420, 26);
+            this.txtEntraTenantId.TabIndex = 2;
+            // 
+            // lblEntraClientId
+            // 
+            this.lblEntraClientId.AutoSize = true;
+            this.lblEntraClientId.Location = new System.Drawing.Point(30, 113);
+            this.lblEntraClientId.Name = "lblEntraClientId";
+            this.lblEntraClientId.Size = new System.Drawing.Size(83, 20);
+            this.lblEntraClientId.TabIndex = 3;
+            this.lblEntraClientId.Text = "Client ID:";
+            // 
+            // txtEntraClientId
+            // 
+            this.txtEntraClientId.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
+            | System.Windows.Forms.AnchorStyles.Right)));
+            this.txtEntraClientId.Location = new System.Drawing.Point(255, 110);
+            this.txtEntraClientId.Name = "txtEntraClientId";
+            this.txtEntraClientId.Size = new System.Drawing.Size(420, 26);
+            this.txtEntraClientId.TabIndex = 4;
+            // 
+            // lblEntraSecret
+            // 
+            this.lblEntraSecret.AutoSize = true;
+            this.lblEntraSecret.Location = new System.Drawing.Point(30, 148);
+            this.lblEntraSecret.Name = "lblEntraSecret";
+            this.lblEntraSecret.Size = new System.Drawing.Size(108, 20);
+            this.lblEntraSecret.TabIndex = 5;
+            this.lblEntraSecret.Text = "Client secret:";
+            // 
+            // txtEntraSecret
+            // 
+            this.txtEntraSecret.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
+            | System.Windows.Forms.AnchorStyles.Right)));
+            this.txtEntraSecret.Location = new System.Drawing.Point(255, 145);
+            this.txtEntraSecret.Name = "txtEntraSecret";
+            this.txtEntraSecret.Size = new System.Drawing.Size(420, 26);
+            this.txtEntraSecret.TabIndex = 6;
+            this.txtEntraSecret.UseSystemPasswordChar = true;
             // 
             // chkConfirm
             // 
             this.chkConfirm.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
             this.chkConfirm.AutoSize = true;
-            this.chkConfirm.Location = new System.Drawing.Point(43, 605);
+            this.chkConfirm.Location = new System.Drawing.Point(43, 790);
             this.chkConfirm.Name = "chkConfirm";
             this.chkConfirm.Size = new System.Drawing.Size(545, 24);
-            this.chkConfirm.TabIndex = 4;
+            this.chkConfirm.TabIndex = 7;
             this.chkConfirm.Text = "I know what I\'m doing and I accept responsibility for anything that breaks.";
             this.chkConfirm.UseVisualStyleBackColor = true;
             this.chkConfirm.CheckedChanged += new System.EventHandler(this.chkConfirm_CheckedChanged);
@@ -126,10 +247,10 @@
             // btnUpgrade
             // 
             this.btnUpgrade.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
-            this.btnUpgrade.Location = new System.Drawing.Point(631, 675);
+            this.btnUpgrade.Location = new System.Drawing.Point(631, 830);
             this.btnUpgrade.Name = "btnUpgrade";
             this.btnUpgrade.Size = new System.Drawing.Size(120, 41);
-            this.btnUpgrade.TabIndex = 5;
+            this.btnUpgrade.TabIndex = 9;
             this.btnUpgrade.Text = "Upgrade";
             this.btnUpgrade.UseVisualStyleBackColor = true;
             this.btnUpgrade.Click += new System.EventHandler(this.btnUpgrade_Click);
@@ -138,10 +259,10 @@
             // 
             this.btnCancel.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
             this.btnCancel.DialogResult = System.Windows.Forms.DialogResult.Cancel;
-            this.btnCancel.Location = new System.Drawing.Point(493, 675);
+            this.btnCancel.Location = new System.Drawing.Point(493, 830);
             this.btnCancel.Name = "btnCancel";
             this.btnCancel.Size = new System.Drawing.Size(120, 41);
-            this.btnCancel.TabIndex = 6;
+            this.btnCancel.TabIndex = 10;
             this.btnCancel.Text = "Close";
             this.btnCancel.UseVisualStyleBackColor = true;
             this.btnCancel.Click += new System.EventHandler(this.btnCancel_Click);
@@ -149,16 +270,21 @@
             // progressBar
             // 
             this.progressBar.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
-            this.progressBar.Location = new System.Drawing.Point(43, 677);
+            this.progressBar.Location = new System.Drawing.Point(43, 835);
             this.progressBar.Name = "progressBar";
             this.progressBar.Size = new System.Drawing.Size(210, 30);
             this.progressBar.Style = System.Windows.Forms.ProgressBarStyle.Marquee;
-            this.progressBar.TabIndex = 7;
+            this.progressBar.TabIndex = 11;
             // 
             // backgroundWorker
             // 
             this.backgroundWorker.DoWork += new System.ComponentModel.DoWorkEventHandler(this.backgroundWorker_DoWork);
             this.backgroundWorker.RunWorkerCompleted += new System.ComponentModel.RunWorkerCompletedEventHandler(this.backgroundWorker_RunWorkerCompleted);
+            // 
+            // backgroundWorkerAutoDetectSql
+            // 
+            this.backgroundWorkerAutoDetectSql.DoWork += new System.ComponentModel.DoWorkEventHandler(this.backgroundWorkerAutoDetectSql_DoWork);
+            this.backgroundWorkerAutoDetectSql.RunWorkerCompleted += new System.ComponentModel.RunWorkerCompletedEventHandler(this.backgroundWorkerAutoDetectSql_RunWorkerCompleted);
             // 
             // grpLog
             // 
@@ -166,9 +292,9 @@
             | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
             this.grpLog.Controls.Add(this.txtLog);
-            this.grpLog.Location = new System.Drawing.Point(43, 342);
+            this.grpLog.Location = new System.Drawing.Point(43, 564);
             this.grpLog.Name = "grpLog";
-            this.grpLog.Size = new System.Drawing.Size(708, 242);
+            this.grpLog.Size = new System.Drawing.Size(708, 205);
             this.grpLog.TabIndex = 8;
             this.grpLog.TabStop = false;
             this.grpLog.Text = "Output";
@@ -179,12 +305,12 @@
             | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
             this.txtLog.Font = new System.Drawing.Font("Courier New", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.txtLog.Location = new System.Drawing.Point(36, 34);
+            this.txtLog.Location = new System.Drawing.Point(36, 30);
             this.txtLog.Multiline = true;
             this.txtLog.Name = "txtLog";
             this.txtLog.ReadOnly = true;
             this.txtLog.ScrollBars = System.Windows.Forms.ScrollBars.Vertical;
-            this.txtLog.Size = new System.Drawing.Size(640, 191);
+            this.txtLog.Size = new System.Drawing.Size(640, 158);
             this.txtLog.TabIndex = 0;
             this.txtLog.Text = "Log entry 1\r\nEntry 2\r\n";
             // 
@@ -193,12 +319,13 @@
             this.AutoScaleDimensions = new System.Drawing.SizeF(9F, 20F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.CancelButton = this.btnCancel;
-            this.ClientSize = new System.Drawing.Size(802, 739);
+            this.ClientSize = new System.Drawing.Size(802, 896);
             this.Controls.Add(this.grpLog);
             this.Controls.Add(this.progressBar);
             this.Controls.Add(this.btnCancel);
             this.Controls.Add(this.btnUpgrade);
             this.Controls.Add(this.chkConfirm);
+            this.Controls.Add(this.grpEntra);
             this.Controls.Add(this.grpConnectionString);
             this.Controls.Add(this.label3);
             this.Controls.Add(this.label2);
@@ -209,9 +336,13 @@
             this.ShowIcon = false;
             this.Text = "Upgrade Database Schema";
             this.Activated += new System.EventHandler(this.DatabaseUpgradeForm_Activated);
+            this.FormClosing += new System.Windows.Forms.FormClosingEventHandler(this.DatabaseUpgradeForm_FormClosing);
+            this.FormClosed += new System.Windows.Forms.FormClosedEventHandler(this.DatabaseUpgradeForm_FormClosed);
             this.Load += new System.EventHandler(this.DatabaseUpgradeForm_Load);
             this.grpConnectionString.ResumeLayout(false);
             this.grpConnectionString.PerformLayout();
+            this.grpEntra.ResumeLayout(false);
+            this.grpEntra.PerformLayout();
             this.grpLog.ResumeLayout(false);
             this.grpLog.PerformLayout();
             this.ResumeLayout(false);
@@ -226,12 +357,23 @@
         private System.Windows.Forms.Label label3;
         private System.Windows.Forms.GroupBox grpConnectionString;
         private System.Windows.Forms.TextBox txtConnectionString;
+        private System.Windows.Forms.LinkLabel lnkAutodetect;
+        private System.Windows.Forms.Label lblAuthMode;
+        private System.Windows.Forms.GroupBox grpEntra;
+        private System.Windows.Forms.Label lblEntraInfo;
+        private System.Windows.Forms.Label lblEntraTenantId;
+        private System.Windows.Forms.TextBox txtEntraTenantId;
+        private System.Windows.Forms.Label lblEntraClientId;
+        private System.Windows.Forms.TextBox txtEntraClientId;
+        private System.Windows.Forms.Label lblEntraSecret;
+        private System.Windows.Forms.TextBox txtEntraSecret;
         private System.Windows.Forms.CheckBox chkConfirm;
         private System.Windows.Forms.Label label4;
         private System.Windows.Forms.Button btnUpgrade;
         private System.Windows.Forms.Button btnCancel;
         private System.Windows.Forms.ProgressBar progressBar;
         private System.ComponentModel.BackgroundWorker backgroundWorker;
+        private System.ComponentModel.BackgroundWorker backgroundWorkerAutoDetectSql;
         private System.Windows.Forms.GroupBox grpLog;
         private System.Windows.Forms.TextBox txtLog;
     }

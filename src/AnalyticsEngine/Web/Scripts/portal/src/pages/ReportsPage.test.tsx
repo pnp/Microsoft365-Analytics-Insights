@@ -183,6 +183,40 @@ describe('ReportsPage', () => {
     expect(screen.getByTitle('Field Operations: 40% Adoption')).toBeInTheDocument();
   });
 
+  it('renders Office app-breadth labels through plural catalogue keys', async () => {
+    mockAreas.mockResolvedValue({ ...NO_AREAS, officeApps: true });
+    mockArea.mockResolvedValue({
+      ...areaData,
+      area: 'office-apps',
+      charts: [
+        {
+          key: 'office-apps-breadth',
+          title: 'How much of the suite people use',
+          description: 'How many different Office apps each person used in the period.',
+          type: 'bar',
+          valueLabel: 'People',
+          series: null,
+          categories: [
+            { label: '1 app', value: 5 },
+            { label: '2 apps', value: 8 },
+          ],
+          matrix: null,
+          showShare: true,
+          valueSuffix: null,
+          sql: 'SELECT 1',
+          error: null,
+          warning: null,
+        },
+      ],
+    });
+
+    renderWithProvider(<ReportsPage />);
+
+    expect(await screen.findByText('How much of the suite people use')).toBeInTheDocument();
+    expect(screen.getByText('1 app')).toBeInTheDocument();
+    expect(screen.getByText('2 apps')).toBeInTheDocument();
+  });
+
   /**
    * A chart that explains why it is empty must not also print the generic "No data for this period."
    * The two together read as a contradiction, and the generic line is the less true of the pair -

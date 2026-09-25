@@ -186,10 +186,13 @@ namespace Common.Entities
         /// <c>Cost Management Reader</c> role on each scope, and at least one scope in the
         /// <c>AzureCostScopes</c> App Service application setting - without that the import declines to run
         /// rather than guessing a subscription.</para>
-        /// <para>Which meters are imported is <b>configured, not compiled in</b>. Microsoft Cowork - the
-        /// workload this was built for - is billed through Copilot Credits managed in the Microsoft 365 admin
-        /// centre, and Microsoft publishes no Azure meter name for it, so there is no correct value to ship.
-        /// With no filter set, every meter at the scope is imported.</para>
+        /// <para>Which meters are imported is <b>configured, not compiled in</b>. Microsoft documents that
+        /// pay-as-you-go Copilot Credits - Copilot Cowork, Copilot Studio and Work IQ API alike - appear under the
+        /// one <c>Microsoft Copilot Studio</c> service, with no separate service per experience, so no shipped
+        /// filter could isolate Cowork. That takes its own subscription or resource group, or a service tag where
+        /// the billing data carries one (a <c>TagKey:</c> entry in <c>AzureCostGroupBy</c>). Prepaid capacity
+        /// packs do not appear in Cost Management at all. With no filter set, every meter at the scope is
+        /// imported.</para>
         /// <para>Azure billing is resource-scoped, so no per-user attribution is possible.</para>
         /// </remarks>
         [ImportProp]

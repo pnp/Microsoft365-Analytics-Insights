@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Data.Common;
 using System.Data.Entity;
 using System.Diagnostics;
 using System.Globalization;
@@ -16,6 +17,13 @@ using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
 {
+    internal enum SentEmailPersistenceFailurePhase
+    {
+        None,
+        PhaseA,
+        PhaseB
+    }
+
     /// <summary>
     /// Orchestrates the sent-emails import: pulls messages from an
     /// <see cref="ISentEmailSourceLoader"/>, optionally scores sentiment,
@@ -36,6 +44,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         private const int DefaultGraphLoadParallelism = 8;
 
         private readonly ISentEmailSourceLoader _sourceLoader;
+        private readonly ISentEmailDeltaTokenCommitter _deltaTokenCommitter;
         private readonly ISentEmailSentimentScorer _sentimentScorer;
         private readonly IAnalyticsDbContextFactory _dbContextFactory;
         private readonly int _userChunkSize;
@@ -56,8 +65,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         private int _messagesSeen;
         private int _messagesInserted;
         private int _recipientsInserted;
+        private int _duplicateMessageIdsSkippedInChunk;
+        private int _duplicateMessageIdsSkippedOnRetry;
         private int _deltaTokenReads;
         private int _deltaTokenWrites;
+        private readonly ConcurrentDictionary<string, int> _mailboxFailureBuckets =
+            new ConcurrentDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        internal Func<System.Data.Common.DbConnection, string, Task> BeforeSentEmailBatchInsertAsync { get; set; }
+
+        internal SentEmailPersistenceFailurePhase FailureInjectionPhase { get; set; }
 
         public SentEmailImporter(
             AnalyticsLogger logger,
@@ -68,10 +85,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             int userChunkSize = DefaultUserChunkSize,
             int graphLoadParallelism = DefaultGraphLoadParallelism,
             ISentEmailMailboxSkipList mailboxSkipList = null,
-            int noMailboxRetryHours = 0)
+            int noMailboxRetryHours = 0,
+            ISentEmailDeltaTokenCommitter deltaTokenCommitter = null)
             : base(logger, settings)
         {
             _sourceLoader = sourceLoader ?? throw new ArgumentNullException(nameof(sourceLoader));
+            _deltaTokenCommitter = deltaTokenCommitter ?? sourceLoader as ISentEmailDeltaTokenCommitter;
             _sentimentScorer = sentimentScorer ?? NullSentEmailSentimentScorer.Instance;
             _dbContextFactory = dbContextFactory ?? DefaultAnalyticsDbContextFactory.Instance;
             _userChunkSize = userChunkSize > 0 ? userChunkSize : DefaultUserChunkSize;
@@ -232,6 +251,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             return ProcessUserChunkAsync(new List<Common.Entities.User> { user });
         }
 
+        internal Task ImportSentEmailsForUsersForTest(List<Common.Entities.User> users)
+        {
+            return ProcessUserChunkAsync(users);
+        }
+
         // For test-only access to the HTML stripper - kept on this class for backwards compatibility.
         internal static string StripHtml(string html) => AzureLanguageSentEmailSentimentScorer.StripHtml(html);
 
@@ -257,6 +281,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 return;
 
             // Build candidates for the whole chunk and collect distinct addresses.
+            loaded = loaded.OrderBy(l => l.User.ID).ToList();
             var perUser = new List<UserChunkResult>(loaded.Count);
             var allDistinctAddresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var entry in loaded)
@@ -281,7 +306,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             }
 
             if (perUser.Count == 0)
+            {
+                await CommitDeltaTokensAsync(loaded);
                 return;
+            }
 
             int totalCandidates = perUser.Sum(u => u.Candidates.Count);
             _logger.LogInformation(
@@ -310,25 +338,38 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            HashSet<string> existingKeys;
+            Dictionary<string, ExistingEmailState> existingByKey;
             using (var db = _dbContextFactory.Create())
             {
                 db.Configuration.AutoDetectChangesEnabled = false;
-                existingKeys = await FindExistingKeysAsync(db, allKeys);
+                existingByKey = await FindExistingEmailStateAsync(db, allKeys);
             }
             swPhase.Stop();
             _logger.LogInformation(
-                $"  [chunk] existing-key check: {allKeys.Count} keys, {existingKeys.Count} already present, " +
+                $"  [chunk] existing-key check: {allKeys.Count} keys, {existingByKey.Count} already present, " +
                 $"in {swPhase.ElapsedMilliseconds}ms.");
 
             // Filter each user's candidate list to the genuinely-new ones.
             int totalToInsert = 0;
+            int totalOrphanRepairs = 0;
+            var orphanRepairsBySentEmailId = new HashSet<int>();
             foreach (var u in perUser)
             {
                 u.ToInsert = u.Candidates
-                    .Where(c => !existingKeys.Contains(c.GraphMessageId))
+                    .Where(c => !existingByKey.ContainsKey(c.GraphMessageId))
                     .ToList();
                 totalToInsert += u.ToInsert.Count;
+
+                u.OrphanRecipientRepairs = u.Candidates
+                    .Where(c => existingByKey.TryGetValue(c.GraphMessageId, out var existing) && !existing.HasRecipients)
+                    .Select(c => new ExistingRecipientRepair
+                    {
+                        SentEmailId = existingByKey[c.GraphMessageId].SentEmailId,
+                        Candidate = c
+                    })
+                    .Where(r => orphanRepairsBySentEmailId.Add(r.SentEmailId))
+                    .ToList();
+                totalOrphanRepairs += u.OrphanRecipientRepairs.Count;
             }
 
             // ---- 4. Sentiment scoring (parallel-safe; no DB writes) --------------------
@@ -337,12 +378,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             // ---- 5. Single-connection persistence of SentEmail + recipient rows -------
             swPhase.Restart();
             _logger.LogInformation(
-                $"  [chunk] persisting {totalToInsert} new messages across {perUser.Count} users " +
+                $"  [chunk] persisting {totalToInsert} new messages and repairing {totalOrphanRepairs} orphaned parents across {perUser.Count} users " +
                 "(serial multi-row INSERTs on one connection to avoid unique-index races)...");
             await PersistChunkAsync(perUser, addressIds, sentimentByMessageId);
             swPhase.Stop();
             _logger.LogInformation(
                 $"  [chunk] persistence done in {swPhase.ElapsedMilliseconds}ms.");
+
+            await CommitDeltaTokensAsync(loaded);
         }
 
         private async Task<List<LoadedUser>> LoadChunkInParallelAsync(List<Common.Entities.User> users)
@@ -360,7 +403,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                         var load = await _sourceLoader.LoadSentEmailsForUserAsync(user, includeBody);
                         Interlocked.Add(ref _deltaTokenReads, load.DeltaTokenReads);
                         Interlocked.Add(ref _deltaTokenWrites, load.DeltaTokenWrites);
-                        loaded.Add(new LoadedUser { User = user, Messages = load.Messages });
+                        loaded.Add(new LoadedUser
+                        {
+                            User = user,
+                            Messages = load.Messages,
+                            NextDeltaToken = load.NextDeltaToken
+                        });
                     }
                     catch (GraphResourceNotFoundException ex)
                     {
@@ -375,15 +423,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                             $"User '{user.UserPrincipalName}' has no mailbox ({ex.GraphErrorCode ?? "unknown"}); " +
                             "skipping and adding to the no-mailbox list.");
                     }
+                    catch (GraphHttpException ex)
+                    {
+                        RecordMailboxFailure(ex);
+                        _logger.LogWarning(
+                            $"Could not access sent items for user '{user.UserPrincipalName}': {ex.Message}");
+                    }
                     catch (System.Net.Http.HttpRequestException ex)
                     {
-                        Interlocked.Increment(ref _mailboxesFailed);
+                        RecordMailboxFailure(ex);
                         _logger.LogWarning(
                             $"Could not access sent items for user '{user.UserPrincipalName}': {ex.Message}");
                     }
                     catch (Exception ex)
                     {
-                        Interlocked.Increment(ref _mailboxesFailed);
+                        RecordMailboxFailure(ex);
                         _logger.LogError(ex,
                             $"Error loading sent emails for user '{user.UserPrincipalName}': {ex.Message}");
                     }
@@ -397,6 +451,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             }
 
             return loaded.ToList();
+        }
+
+        private void RecordMailboxFailure(Exception ex)
+        {
+            Interlocked.Increment(ref _mailboxesFailed);
+            _mailboxFailureBuckets.AddOrUpdate(BuildMailboxFailureBucket(ex), 1, (_, count) => count + 1);
         }
 
         private async Task<Dictionary<string, double?>> ScoreSentimentAcrossChunkAsync(List<UserChunkResult> perUser)
@@ -442,7 +502,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             const int recipientBatchSize = 1000;
 
             // Flatten work to a single ordered list so we can batch and report progress.
+            // Keep the first row seen for a Graph message ID: the order is the chunk's
+            // deterministic user/id order, and SQL Server's unique index is case-insensitive too.
             var work = new List<(Common.Entities.User User, Candidate Candidate, SentEmail Row)>();
+            var workByGraphMessageId = new Dictionary<string, (Common.Entities.User User, Candidate Candidate, SentEmail Row)>(
+                StringComparer.OrdinalIgnoreCase);
             foreach (var u in perUser)
             {
                 if (u.ToInsert.Count == 0)
@@ -454,12 +518,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 foreach (var c in u.ToInsert)
                 {
                     var row = BuildSentEmailRow(u.User, c, addressIds, sentimentByMessageId);
-                    work.Add((u.User, c, row));
+                    var item = (u.User, c, row);
+                    if (workByGraphMessageId.TryGetValue(c.GraphMessageId, out var existing))
+                    {
+                        Interlocked.Increment(ref _duplicateMessageIdsSkippedInChunk);
+                        _logger.LogWarning(
+                            $"Sent emails: duplicate graph_message_id found within one user chunk for user IDs " +
+                            $"{existing.User.ID} and {u.User.ID}; keeping the first row (user ID {existing.User.ID}) " +
+                            $"and skipping user ID {u.User.ID}.");
+                        continue;
+                    }
+
+                    workByGraphMessageId.Add(c.GraphMessageId, item);
+                    work.Add(item);
                 }
                 Interlocked.Increment(ref _mailboxesScanned);
             }
 
-            if (work.Count == 0)
+            if (work.Count == 0 && perUser.All(u => u.OrphanRecipientRepairs.Count == 0))
                 return;
 
             using (var db = _dbContextFactory.Create())
@@ -468,75 +544,134 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 if (conn.State != System.Data.ConnectionState.Open)
                     await conn.OpenAsync();
 
-                // ---- Phase A: SentEmail parents ----------------------------------------
-                var swA = Stopwatch.StartNew();
-                int parentsSaved = 0;
-                for (int i = 0; i < work.Count; i += parentBatchSize)
+                using (var transaction = conn.BeginTransaction())
                 {
-                    int take = Math.Min(parentBatchSize, work.Count - i);
                     try
                     {
-                        await BulkInsertSentEmailsAsync(conn, work, i, take);
+                        // ---- Phase A: SentEmail parents ----------------------------------------
+                        var swA = Stopwatch.StartNew();
+                        int parentsSaved = 0;
+                        for (int i = 0; i < work.Count; i += parentBatchSize)
+                        {
+                            int take = Math.Min(parentBatchSize, work.Count - i);
+                            try
+                            {
+                                if (FailureInjectionPhase == SentEmailPersistenceFailurePhase.PhaseA)
+                                    throw new InvalidOperationException("Injected sent-email phase A failure.");
+
+                                if (BeforeSentEmailBatchInsertAsync != null)
+                                    await BeforeSentEmailBatchInsertAsync(conn, work[i].Row.GraphMessageId);
+
+                                parentsSaved += await BulkInsertSentEmailsAsync(conn, work, i, take, transaction);
+                            }
+                            catch (Exception ex)
+                            {
+                                if (!IsUniqueConstraintViolation(ex))
+                                {
+                                    _logger.LogError(ex,
+                                        $"  [persist] phase A failed at batch starting {i} (size {take}): {ex.GetBaseException().Message}");
+                                    throw;
+                                }
+
+                                _logger.LogWarning(
+                                    $"  [persist] phase A hit a duplicate key at batch starting {i} (size {take}); " +
+                                    "retrying that batch row by row and skipping duplicates.");
+                                parentsSaved += await RetrySentEmailBatchRowByRowAsync(conn, work, i, take, transaction);
+                            }
+
+                            _logger.LogInformation(
+                                $"  [persist] phase A: saved {parentsSaved}/{work.Count} parent rows " +
+                                $"({swA.ElapsedMilliseconds}ms elapsed).");
+                        }
+                        swA.Stop();
+
+                        // ---- Phase B: SentEmailRecipient rows ----------------------------------
+                        var swB = Stopwatch.StartNew();
+                        int recipientsSaved = 0;
+
+                        // Flatten recipient pairs (sentEmailId, recipientAddressId).
+                        var repairRecipientCount = perUser.Sum(u => u.OrphanRecipientRepairs.Sum(r => r.Candidate.RecipientAddresses.Count));
+                        var recipientPairs = new List<(int SentEmailId, int RecipientAddressId)>(
+                            work.Sum(w => w.Candidate.RecipientAddresses.Count) + repairRecipientCount);
+                        var recipientPairSet = new HashSet<(int SentEmailId, int RecipientAddressId)>();
+                        foreach (var w in work)
+                        {
+                            if (w.Row.ID == 0)
+                                continue;
+
+                            foreach (var addr in w.Candidate.RecipientAddresses)
+                            {
+                                if (!addressIds.TryGetValue(addr, out var addrId))
+                                    continue;
+                                AddDistinctRecipientPair(recipientPairs, recipientPairSet, w.Row.ID, addrId);
+                            }
+                        }
+                        foreach (var u in perUser)
+                        {
+                            foreach (var repair in u.OrphanRecipientRepairs)
+                            {
+                                foreach (var addr in repair.Candidate.RecipientAddresses)
+                                {
+                                    if (!addressIds.TryGetValue(addr, out var addrId))
+                                        continue;
+                                    AddDistinctRecipientPair(recipientPairs, recipientPairSet, repair.SentEmailId, addrId);
+                                }
+                            }
+                        }
+
+                        int totalRecipients = recipientPairs.Count;
+                        for (int i = 0; i < recipientPairs.Count; i += recipientBatchSize)
+                        {
+                            int take = Math.Min(recipientBatchSize, recipientPairs.Count - i);
+                            try
+                            {
+                                if (FailureInjectionPhase == SentEmailPersistenceFailurePhase.PhaseB)
+                                    throw new InvalidOperationException("Injected sent-email phase B failure.");
+
+                                await BulkInsertSentEmailRecipientsAsync(conn, recipientPairs, i, take, transaction);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex,
+                                    $"  [persist] phase B failed at batch starting {i} (size {take}): {ex.GetBaseException().Message}");
+                                throw;
+                            }
+
+                            recipientsSaved += take;
+                            _logger.LogInformation(
+                                $"  [persist] phase B: saved {recipientsSaved}/{totalRecipients} recipient rows " +
+                                $"({swB.ElapsedMilliseconds}ms elapsed).");
+                        }
+                        swB.Stop();
+
+                        transaction.Commit();
+                        Interlocked.Add(ref _messagesInserted, parentsSaved);
+                        Interlocked.Add(ref _recipientsInserted, recipientsSaved);
+
+                        _logger.LogInformation(
+                            $"  [persist] phase A: {parentsSaved} parents in {swA.ElapsedMilliseconds}ms; " +
+                            $"phase B: {recipientsSaved} recipients in {swB.ElapsedMilliseconds}ms.");
                     }
-                    catch (Exception ex)
+                    catch
                     {
-                        _logger.LogError(ex,
-                            $"  [persist] phase A failed at batch starting {i} (size {take}): {ex.GetBaseException().Message}");
+                        transaction.Rollback();
                         throw;
                     }
-
-                    parentsSaved += take;
-                    Interlocked.Add(ref _messagesInserted, take);
-                    _logger.LogInformation(
-                        $"  [persist] phase A: saved {parentsSaved}/{work.Count} parent rows " +
-                        $"({swA.ElapsedMilliseconds}ms elapsed).");
                 }
-                swA.Stop();
-
-                // ---- Phase B: SentEmailRecipient rows ----------------------------------
-                var swB = Stopwatch.StartNew();
-                int recipientsSaved = 0;
-
-                // Flatten recipient pairs (sentEmailId, recipientAddressId).
-                var recipientPairs = new List<(int SentEmailId, int RecipientAddressId)>(
-                    work.Sum(w => w.Candidate.RecipientAddresses.Count));
-                foreach (var w in work)
-                {
-                    foreach (var addr in w.Candidate.RecipientAddresses)
-                    {
-                        if (!addressIds.TryGetValue(addr, out var addrId))
-                            continue;
-                        recipientPairs.Add((w.Row.ID, addrId));
-                    }
-                }
-
-                int totalRecipients = recipientPairs.Count;
-                for (int i = 0; i < recipientPairs.Count; i += recipientBatchSize)
-                {
-                    int take = Math.Min(recipientBatchSize, recipientPairs.Count - i);
-                    try
-                    {
-                        await BulkInsertSentEmailRecipientsAsync(conn, recipientPairs, i, take);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex,
-                            $"  [persist] phase B failed at batch starting {i} (size {take}): {ex.GetBaseException().Message}");
-                        throw;
-                    }
-
-                    recipientsSaved += take;
-                    Interlocked.Add(ref _recipientsInserted, take);
-                    _logger.LogInformation(
-                        $"  [persist] phase B: saved {recipientsSaved}/{totalRecipients} recipient rows " +
-                        $"({swB.ElapsedMilliseconds}ms elapsed).");
-                }
-                swB.Stop();
-
-                _logger.LogInformation(
-                    $"  [persist] phase A: {parentsSaved} parents in {swA.ElapsedMilliseconds}ms; " +
-                    $"phase B: {recipientsSaved} recipients in {swB.ElapsedMilliseconds}ms.");
             }
+        }
+
+        internal static bool AddDistinctRecipientPair(
+            List<(int SentEmailId, int RecipientAddressId)> pairs,
+            HashSet<(int SentEmailId, int RecipientAddressId)> seen,
+            int sentEmailId,
+            int recipientAddressId)
+        {
+            if (!seen.Add((sentEmailId, recipientAddressId)))
+                return false;
+
+            pairs.Add((sentEmailId, recipientAddressId));
+            return true;
         }
 
         /// <summary>
@@ -544,14 +679,48 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         /// <c>OUTPUT INSERTED.id, INSERTED.graph_message_id</c> to map the generated identity
         /// back onto each in-memory row in a single round-trip.
         /// </summary>
-        private static async Task BulkInsertSentEmailsAsync(
-            System.Data.Common.DbConnection conn,
+        private async Task<int> RetrySentEmailBatchRowByRowAsync(
+            DbConnection conn,
             List<(Common.Entities.User User, Candidate Candidate, SentEmail Row)> work,
             int offset,
-            int count)
+            int count,
+            DbTransaction transaction = null)
+        {
+            int inserted = 0;
+            for (int j = 0; j < count; j++)
+            {
+                var item = work[offset + j];
+                try
+                {
+                    inserted += await BulkInsertSentEmailsAsync(conn, work, offset + j, 1, transaction);
+                }
+                catch (Exception ex)
+                {
+                    if (!IsUniqueConstraintViolation(ex))
+                        throw;
+
+                    item.Row.ID = 0;
+                    Interlocked.Increment(ref _duplicateMessageIdsSkippedOnRetry);
+                    _logger.LogWarning(
+                        $"  [persist] phase A skipped a duplicate sent-email row for user ID {item.User.ID} " +
+                        "after row-by-row retry.");
+                }
+            }
+
+            return inserted;
+        }
+
+        private static async Task<int> BulkInsertSentEmailsAsync(
+            DbConnection conn,
+            List<(Common.Entities.User User, Candidate Candidate, SentEmail Row)> work,
+            int offset,
+            int count,
+            DbTransaction transaction = null)
         {
             using (var cmd = conn.CreateCommand())
             {
+                if (transaction != null)
+                    cmd.Transaction = transaction;
                 cmd.CommandTimeout = 0;
                 cmd.CommandText = BuildSentEmailsInsertSql(count);
 
@@ -586,9 +755,80 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                     if (idsByKey.TryGetValue(row.GraphMessageId, out var id))
                         row.ID = id;
                 }
+
+                return idsByKey.Count;
             }
         }
 
+        private static bool IsUniqueConstraintViolation(Exception ex)
+        {
+            for (var current = ex; current != null; current = current.InnerException)
+            {
+                if (HasSqlErrorNumber(current, 2601) || HasSqlErrorNumber(current, 2627))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool HasSqlErrorNumber(Exception ex, int expected)
+        {
+            if (ex == null)
+                return false;
+
+            var numberProperty = ex.GetType().GetProperty("Number");
+            if (numberProperty != null && numberProperty.PropertyType == typeof(int))
+            {
+                if ((int)numberProperty.GetValue(ex) == expected)
+                    return true;
+            }
+
+            var errorsProperty = ex.GetType().GetProperty("Errors");
+            var errors = errorsProperty?.GetValue(ex) as System.Collections.IEnumerable;
+            if (errors == null)
+                return false;
+
+            foreach (var error in errors)
+            {
+                var errorNumberProperty = error.GetType().GetProperty("Number");
+                if (errorNumberProperty != null
+                    && errorNumberProperty.PropertyType == typeof(int)
+                    && (int)errorNumberProperty.GetValue(error) == expected)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Multi-row insert of <see cref="SentEmailRecipient"/> rows with explicit FKs.
+        /// </summary>
+        private static async Task BulkInsertSentEmailRecipientsAsync(
+            DbConnection conn,
+            List<(int SentEmailId, int RecipientAddressId)> pairs,
+            int offset,
+            int count,
+            DbTransaction transaction = null)
+        {
+            using (var cmd = conn.CreateCommand())
+            {
+                if (transaction != null)
+                    cmd.Transaction = transaction;
+                cmd.CommandTimeout = 0;
+                cmd.CommandText = BuildSentEmailRecipientsInsertSql(count);
+
+                int p = 0;
+                for (int j = 0; j < count; j++)
+                {
+                    AddParam(cmd, "@p" + p++, pairs[offset + j].SentEmailId);
+                    AddParam(cmd, "@p" + p++, pairs[offset + j].RecipientAddressId);
+                }
+
+                await cmd.ExecuteNonQueryAsync();
+            }
+        }
         /// <summary>
         /// Build the parameterised multi-row INSERT SQL for <c>sent_emails</c>. Pure function so
         /// it is unit-testable in isolation.
@@ -614,31 +854,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 p += 6;
             }
             return sb.ToString();
-        }
-
-        /// <summary>
-        /// Multi-row insert of <see cref="SentEmailRecipient"/> rows with explicit FKs.
-        /// </summary>
-        private static async Task BulkInsertSentEmailRecipientsAsync(
-            System.Data.Common.DbConnection conn,
-            List<(int SentEmailId, int RecipientAddressId)> pairs,
-            int offset,
-            int count)
-        {
-            using (var cmd = conn.CreateCommand())
-            {
-                cmd.CommandTimeout = 0;
-                cmd.CommandText = BuildSentEmailRecipientsInsertSql(count);
-
-                int p = 0;
-                for (int j = 0; j < count; j++)
-                {
-                    AddParam(cmd, "@p" + p++, pairs[offset + j].SentEmailId);
-                    AddParam(cmd, "@p" + p++, pairs[offset + j].RecipientAddressId);
-                }
-
-                await cmd.ExecuteNonQueryAsync();
-            }
         }
 
         /// <summary>
@@ -679,19 +894,69 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         {
             using (var db = _dbContextFactory.Create())
             {
-                return await db.users.Where(u => u.Mail != null && u.Mail != "").ToListAsync();
+                return await db.users.Where(u => u.Mail != null && u.Mail != "")
+                    .OrderBy(u => u.ID)
+                    .ToListAsync();
             }
         }
 
         private void LogRunSummary(TimeSpan elapsed)
         {
+            var failureSummary = FormatMailboxFailureSummary(_mailboxesFailed, _mailboxFailureBuckets);
+
             _logger.LogInformation(
                 $"Finished sent emails import in {elapsed:hh\\:mm\\:ss}. " +
-                $"Mailboxes scanned: {_mailboxesScanned} (failed: {_mailboxesFailed}, " +
+                $"Mailboxes scanned: {_mailboxesScanned} (failed: {failureSummary}, " +
                 $"no mailbox: {_mailboxesNotFound}, skipped as already known to have no mailbox: {_mailboxesSkipped}). " +
                 $"Messages seen: {_messagesSeen}. Messages inserted: {_messagesInserted} " +
+                $"(duplicates skipped in chunk: {_duplicateMessageIdsSkippedInChunk}, " +
+                $"duplicates skipped on retry: {_duplicateMessageIdsSkippedOnRetry}) " +
                 $"(recipient rows: {_recipientsInserted}). " +
                 $"Delta tokens read: {_deltaTokenReads}, written: {_deltaTokenWrites}.");
+        }
+
+        internal static string FormatMailboxFailureSummary(
+            int totalFailures,
+            IEnumerable<KeyValuePair<string, int>> failureBuckets,
+            int maxBuckets = 5)
+        {
+            if (totalFailures <= 0)
+                return "0";
+
+            var buckets = (failureBuckets ?? Enumerable.Empty<KeyValuePair<string, int>>())
+                .Where(kv => kv.Value > 0)
+                .OrderByDescending(kv => kv.Value)
+                .ThenBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (buckets.Count == 0)
+                return totalFailures.ToString(CultureInfo.InvariantCulture);
+
+            var shown = buckets
+                .Take(maxBuckets)
+                .Select(kv => $"{kv.Key} x{kv.Value.ToString(CultureInfo.InvariantCulture)}")
+                .ToList();
+
+            var remainingBuckets = buckets.Count - shown.Count;
+            if (remainingBuckets > 0)
+            {
+                shown.Add($"{remainingBuckets.ToString(CultureInfo.InvariantCulture)} more");
+            }
+
+            return $"{totalFailures.ToString(CultureInfo.InvariantCulture)} ({string.Join(", ", shown)})";
+        }
+
+        private static string BuildMailboxFailureBucket(Exception ex)
+        {
+            if (ex is GraphHttpException graphEx)
+            {
+                var code = string.IsNullOrWhiteSpace(graphEx.GraphErrorCode)
+                    ? graphEx.StatusCode.ToString()
+                    : graphEx.GraphErrorCode;
+                return $"{(int)graphEx.StatusCode} {code}";
+            }
+
+            return ex?.GetType().Name ?? "UnknownException";
         }
 
         internal static List<Candidate> BuildCandidates(
@@ -755,25 +1020,51 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             return candidates;
         }
 
-        private static async Task<HashSet<string>> FindExistingKeysAsync(
+        private async Task CommitDeltaTokensAsync(IEnumerable<LoadedUser> loadedUsers)
+        {
+            if (_deltaTokenCommitter == null)
+                return;
+
+            foreach (var loaded in loadedUsers)
+            {
+                if (string.IsNullOrEmpty(loaded.NextDeltaToken))
+                    continue;
+
+                await _deltaTokenCommitter.CommitDeltaTokenAsync(loaded.User, loaded.NextDeltaToken);
+                Interlocked.Increment(ref _deltaTokenWrites);
+            }
+        }
+
+        private static async Task<Dictionary<string, ExistingEmailState>> FindExistingEmailStateAsync(
             AnalyticsEntitiesContext db, List<string> allKeys)
         {
-            var existingKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var existingByKey = new Dictionary<string, ExistingEmailState>(StringComparer.OrdinalIgnoreCase);
             if (allKeys.Count == 0)
-                return existingKeys;
+                return existingByKey;
 
             foreach (var batch in Chunk(allKeys, 1000))
             {
                 var hits = await db.SentEmails
                     .Where(s => batch.Contains(s.GraphMessageId))
-                    .Select(s => s.GraphMessageId)
+                    .Select(s => new
+                    {
+                        s.ID,
+                        s.GraphMessageId,
+                        HasRecipients = s.Recipients.Any()
+                    })
                     .ToListAsync();
 
                 foreach (var h in hits)
-                    existingKeys.Add(h);
+                {
+                    existingByKey[h.GraphMessageId] = new ExistingEmailState
+                    {
+                        SentEmailId = h.ID,
+                        HasRecipients = h.HasRecipients
+                    };
+                }
             }
 
-            return existingKeys;
+            return existingByKey;
         }
 
         /// <summary>
@@ -882,6 +1173,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         {
             public Common.Entities.User User;
             public IReadOnlyList<GraphSentMessage> Messages;
+            public string NextDeltaToken;
         }
 
         private sealed class UserChunkResult
@@ -889,6 +1181,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
             public Common.Entities.User User;
             public List<Candidate> Candidates;
             public List<Candidate> ToInsert = new List<Candidate>();
+            public List<ExistingRecipientRepair> OrphanRecipientRepairs = new List<ExistingRecipientRepair>();
+        }
+
+        private sealed class ExistingEmailState
+        {
+            public int SentEmailId;
+            public bool HasRecipients;
+        }
+
+        private sealed class ExistingRecipientRepair
+        {
+            public int SentEmailId;
+            public Candidate Candidate;
         }
 
         internal sealed class Candidate

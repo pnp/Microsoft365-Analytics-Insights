@@ -1,5 +1,7 @@
+using DataUtils;
 using Newtonsoft.Json.Linq;
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 
@@ -20,11 +22,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// Derives from <see cref="HttpRequestException"/> so pre-existing <c>catch (HttpRequestException)</c>
     /// handlers keep working unchanged.
     /// </remarks>
-    public class GraphHttpException : HttpRequestException
+    public class GraphHttpException : HttpRequestException, IExceptionTelemetryDetails
     {
         public GraphHttpException(HttpStatusCode statusCode, string url, string responseBody, Exception innerException)
+            : this(statusCode, url, responseBody, innerException, "GET", null)
+        {
+        }
+
+        public GraphHttpException(HttpStatusCode statusCode, string url, string responseBody, Exception innerException, string httpMethod, string graphRequestId)
             : this(BuildMessage(statusCode, url, responseBody), statusCode, url, responseBody, innerException)
         {
+            HttpMethod = string.IsNullOrWhiteSpace(httpMethod) ? "GET" : httpMethod.Trim().ToUpperInvariant();
+            GraphRequestId = string.IsNullOrWhiteSpace(graphRequestId)
+                ? ExtractGraphRequestId(responseBody)
+                : graphRequestId;
+            EndpointTemplate = GraphEndpointTemplate.FromUrl(HttpMethod, url);
         }
 
         protected GraphHttpException(string message, HttpStatusCode statusCode, string url, string responseBody, Exception innerException)
@@ -34,6 +46,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             Url = url;
             ResponseBody = responseBody;
             GraphErrorCode = ExtractGraphErrorCode(responseBody);
+            HttpMethod = "GET";
+            GraphRequestId = ExtractGraphRequestId(responseBody);
+            EndpointTemplate = GraphEndpointTemplate.FromUrl(HttpMethod, url);
         }
 
         /// <summary>The HTTP status Graph returned.</summary>
@@ -64,6 +79,48 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// body isn't a parseable Graph error.
         /// </summary>
         public string GraphErrorCode { get; }
+
+        /// <summary>The HTTP method used for the failed Graph request.</summary>
+        public string HttpMethod { get; }
+
+        /// <summary>The request-id Graph returned, when present in headers or the error payload.</summary>
+        public string GraphRequestId { get; }
+
+        /// <summary>The method plus URL path with identifiers and query string removed.</summary>
+        public string EndpointTemplate { get; }
+
+        public string TelemetryProblemId => $"GraphHttp {(int)StatusCode} {EndpointTemplate}";
+
+        public IDictionary<string, string> TelemetryProperties
+        {
+            get
+            {
+                var properties = new Dictionary<string, string>
+                {
+                    { "HttpMethod", HttpMethod },
+                    { "GraphEndpoint", EndpointTemplate },
+                    { "HttpStatusCode", ((int)StatusCode).ToString(System.Globalization.CultureInfo.InvariantCulture) },
+                    { "GraphErrorCode", string.IsNullOrEmpty(GraphErrorCode) ? "unknown" : GraphErrorCode },
+                };
+
+                if (!string.IsNullOrEmpty(GraphRequestId))
+                {
+                    properties["GraphRequestId"] = GraphRequestId;
+                }
+
+                return properties;
+            }
+        }
+
+        public Exception ToTelemetryException()
+        {
+            var status = $"{(int)StatusCode} ({StatusCode})";
+            var message = string.IsNullOrEmpty(GraphErrorCode)
+                ? $"Graph returned {status} for {EndpointTemplate}."
+                : $"Graph returned {status} for {EndpointTemplate} with error code '{GraphErrorCode}'.";
+
+            return new GraphHttpTelemetryException(message);
+        }
 
         /// <summary>
         /// The status and Graph error code with the URL deliberately omitted, for anywhere the text is
@@ -124,6 +181,30 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             catch (Exception)
             {
                 return null;
+            }
+        }
+
+        internal static string ExtractGraphRequestId(string responseBody)
+        {
+            if (string.IsNullOrWhiteSpace(responseBody))
+                return null;
+
+            try
+            {
+                var error = JObject.Parse(responseBody)["error"];
+                return error?["innerError"]?["request-id"]?.ToString()
+                    ?? error?["innerError"]?["requestId"]?.ToString();
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        private sealed class GraphHttpTelemetryException : Exception
+        {
+            public GraphHttpTelemetryException(string message) : base(message)
+            {
             }
         }
     }

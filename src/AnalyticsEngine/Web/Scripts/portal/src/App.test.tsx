@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { useEffect } from 'react';
 import { screen, within, fireEvent, waitFor, configure, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -216,5 +216,122 @@ describe('History entries', () => {
 
     await waitFor(() => expect(log[log.length - 1]).toBe('/admin/health'));
     expect(await screen.findByLabelText('Administration navigation')).toBeVisible();
+  });
+});
+
+/**
+ * The app shell is chrome, and chrome does not print.
+ *
+ * A printed page used to carry the brand bar, the area switcher and the nav rail, with the report
+ * squeezed into the third of the sheet they left over. What makes that not happen is the
+ * `data-print` contract with the `@media print` block in index.css (proved by printStyles.test.ts)
+ * - so these assert the shell's half of it, on the real shell rather than a stand-in.
+ */
+describe('Printing the app shell', () => {
+  it('marks the brand bar, the area switcher and the nav rail as print-hidden', async () => {
+    renderAt('/insights/reports');
+    await screen.findByLabelText('Insights navigation');
+
+    expect(screen.getByRole('banner')).toHaveAttribute('data-print', 'hide');
+    expect(screen.getByRole('tab', { name: 'Insights' }).closest('[data-print="hide"]')).not.toBeNull();
+    expect(screen.getByLabelText('Insights navigation')).toHaveAttribute('data-print', 'hide');
+  });
+
+  it('flattens the layout wrappers around the page so the report gets the whole sheet', async () => {
+    renderAt('/insights/reports');
+    await screen.findByLabelText('Insights navigation');
+
+    // <main> is the page's own container; it and the wrappers above it are what impose the 24px
+    // gutter, the 1120px column and the viewport-height floor that make a printout a narrow strip.
+    const main = screen.getByRole('main');
+    expect(main).toHaveAttribute('data-print', 'content');
+    expect(main.parentElement).toHaveAttribute('data-print', 'content');
+    expect(main.firstElementChild).toHaveAttribute('data-print', 'content');
+  });
+
+  it('never hides the page itself along with the chrome', async () => {
+    // The whole shell is marked up in one place, so the way to break this is to put a `hide` on a
+    // wrapper that also contains the page.
+    renderAt('/insights/reports');
+
+    expect(await screen.findByText(/No built-in report charts are available yet/)).toBeVisible();
+    expect(
+      screen.getByText(/No built-in report charts are available yet/).closest('[data-print="hide"]'),
+    ).toBeNull();
+  });
+});
+
+/**
+ * The printed footer.
+ *
+ * A printed report leaves the screen: it gets forwarded, filed, and re-read months later in a
+ * licence discussion by people who were not there when it was produced. Without the product name,
+ * the repository and the build, there is no way to tell what generated the numbers or whether a
+ * figure that now looks wrong came from a version since fixed.
+ */
+describe('Printed footer', () => {
+  const footer = () => document.querySelector('[data-print="footer"]');
+
+  afterEach(() => {
+    delete (window as Partial<Window>).o365AnalyticsBuildLabel;
+  });
+
+  it('names the product, the build and the repository', async () => {
+    window.o365AnalyticsBuildLabel = 'Build 1841';
+    renderAt('/insights/reports');
+    await screen.findByLabelText('Insights navigation');
+
+    expect(footer()?.textContent).toContain('Microsoft 365 Advanced Analytics (build 1841) · ');
+    // Spelled out in full, not hidden behind link text: on paper an href is not recoverable. It is
+    // still a real link, so it stays clickable in a PDF.
+    const repo = footer()?.querySelector('a');
+    expect(repo?.textContent).toBe('https://github.com/pnp/Microsoft365-Analytics-Insights');
+    expect(repo).toHaveAttribute('href', 'https://github.com/pnp/Microsoft365-Analytics-Insights');
+  });
+
+  it('says "development build" rather than nothing when this is not a released build', async () => {
+    // Two separate points. It must not print "DEV_BUILD", which reads as a real label and sends the
+    // reader looking for a release that does not exist. But it must not print *nothing* either:
+    // the segment used to vanish entirely, so a report run off a developer's machine or an
+    // unreleased test deployment was indistinguishable on paper from one off a release.
+    window.o365AnalyticsBuildLabel = 'DEV_BUILD';
+    renderAt('/insights/reports');
+    await screen.findByLabelText('Insights navigation');
+
+    expect(footer()?.textContent).toContain('Microsoft 365 Advanced Analytics (development build)');
+    expect(footer()?.textContent).not.toContain('DEV_BUILD');
+  });
+
+  it('is not inside anything the printout hides', async () => {
+    // It is hidden on screen by index.css, outside the print block - asserted there, because
+    // Vitest runs with `css: false` and cannot see it from here.
+    renderAt('/insights/reports');
+    await screen.findByLabelText('Insights navigation');
+
+    expect(footer()?.closest('[data-print="hide"]')).toBeNull();
+  });
+
+  it('is a table footer section, which is what makes it repeat with room reserved for it', async () => {
+    // Not a detail of taste. A footer positioned with `position: fixed` repeats but reserves no
+    // space, so it overprints the last line of every full page - and Chromium mis-resolves the
+    // negative offset meant to lift it into the page margin, printing it across the *top* of each
+    // sheet instead. Only a real <tfoot> in a real table both repeats and reserves the space, so
+    // the element type and its place in the shell are the fix, not decoration.
+    renderAt('/insights/reports');
+    await screen.findByLabelText('Insights navigation');
+
+    const foot = footer();
+    expect(foot?.tagName).toBe('TFOOT');
+
+    const shell = foot?.parentElement;
+    expect(shell?.tagName).toBe('TABLE');
+    expect(shell).toHaveAttribute('data-print', 'shell');
+    // A layout table has nothing to say to a screen reader; the footer's text and link remain in
+    // the accessibility tree regardless.
+    expect(shell).toHaveAttribute('role', 'presentation');
+
+    // The report has to be *inside* the same table, or there is nothing for the footer to reserve
+    // space on each page of.
+    expect(screen.getByRole('main').closest('[data-print="shell"]')).toBe(shell);
   });
 });

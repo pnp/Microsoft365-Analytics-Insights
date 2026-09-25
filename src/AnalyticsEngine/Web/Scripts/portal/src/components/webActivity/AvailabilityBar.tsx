@@ -17,6 +17,7 @@ import {
   Question16Regular,
 } from '@fluentui/react-icons';
 import type { WebActivityAvailability } from '../../types/webActivity';
+import { formatNumber, useT, type TFunction, type TranslationKey } from '../../i18n';
 import { formatDate } from './webActivityShared';
 
 const useStyles = makeStyles({
@@ -47,6 +48,75 @@ const useStyles = makeStyles({
   },
 });
 
+export const WEB_ACTIVITY_STALE_COLLECTION_DAYS = 3;
+
+export const WEB_ACTIVITY_AVAILABILITY_REASON_KEYS: Record<string, TranslationKey> = {
+  configurationUnreadable: 'webActivity.availability.reason.configurationUnreadable',
+  webTrafficOffWithExistingHits: 'webActivity.availability.reason.webTrafficOffWithExistingHits',
+  webTrafficOffNoHits: 'webActivity.availability.reason.webTrafficOffNoHits',
+  appInsightsMissing: 'webActivity.availability.reason.appInsightsMissing',
+  noPageViewsKnown: 'webActivity.availability.reason.noPageViewsKnown',
+  pageViewCheckFailed: 'webActivity.availability.reason.pageViewCheckFailed',
+  staleCollection: 'webActivity.availability.reason.staleCollection',
+  userMetadataOff: 'webActivity.availability.reason.userMetadataOff',
+  noSearches: 'webActivity.availability.reason.noSearches',
+  noClicks: 'webActivity.availability.reason.noClicks',
+};
+
+const unreadableConfigurationPrefix = ['Application', 'configuration', 'could', 'not', 'be', 'read'].join(' ');
+
+export function availabilityReasonTexts(
+  availability: WebActivityAvailability,
+  t: TFunction,
+  nowUtc: Date = new Date(),
+): string[] {
+  if (availability.reasons.some((reason) => reason.startsWith(unreadableConfigurationPrefix))) {
+    return [t(WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.configurationUnreadable)];
+  }
+
+  const reasons: string[] = [];
+
+  if (!availability.webTrafficAvailable) {
+    reasons.push(t(
+      availability.lastHitUtc
+        ? WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.webTrafficOffWithExistingHits
+        : WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.webTrafficOffNoHits,
+    ));
+  } else if (!availability.appInsightsConfigured) {
+    reasons.push(t(WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.appInsightsMissing));
+  } else if (!availability.lastHitUtc) {
+    reasons.push(t(
+      availability.collectionStatusKnown
+        ? WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.noPageViewsKnown
+        : WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.pageViewCheckFailed,
+    ));
+  } else {
+    const lastHit = new Date(availability.lastHitUtc);
+    const staleDays = (nowUtc.getTime() - lastHit.getTime()) / 86_400_000;
+
+    if (staleDays >= WEB_ACTIVITY_STALE_COLLECTION_DAYS) {
+      reasons.push(t(WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.staleCollection, {
+        days: formatNumber(Math.round(staleDays)),
+        date: formatDate(availability.lastHitUtc),
+      }));
+    }
+  }
+
+  if (!availability.userMetadataAvailable) {
+    reasons.push(t(WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.userMetadataOff));
+  }
+
+  if (!availability.searchAvailable) {
+    reasons.push(t(WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.noSearches));
+  }
+
+  if (!availability.clickTrackingAvailable) {
+    reasons.push(t(WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.noClicks));
+  }
+
+  return reasons;
+}
+
 /**
  * The per-source status strip.
  *
@@ -64,30 +134,32 @@ const useStyles = makeStyles({
  */
 export default function AvailabilityBar({ availability }: { availability: WebActivityAvailability }) {
   const styles = useStyles();
+  const t = useT();
   const [expanded, setExpanded] = useState(false);
+  const reasons = availabilityReasonTexts(availability, t);
 
   const sources: { label: string; on: boolean; unknown?: boolean; detail?: string }[] = [
-    { label: 'Web traffic import', on: availability.webTrafficAvailable },
+    { label: t('webActivity.availability.source.webTrafficImport'), on: availability.webTrafficAvailable },
     { label: 'Application Insights', on: availability.appInsightsConfigured },
     {
-      label: 'Page views collected',
+      label: t('webActivity.availability.source.pageViewsCollected'),
       on: availability.hasAnyHits,
       // "Nothing collected" and "the check failed" need opposite advice, so the badge has to be
       // able to say it does not know - otherwise it reads "off" beside a message saying the
       // opposite, which is how an admin ends up redeploying a working tracker.
       unknown: !availability.collectionStatusKnown,
-      detail: availability.lastHitUtc ? `last ${formatDate(availability.lastHitUtc)}` : undefined,
+      detail: availability.lastHitUtc ? t('webActivity.availability.lastHit', { date: formatDate(availability.lastHitUtc) }) : undefined,
     },
-    { label: 'Search terms', on: availability.searchAvailable },
-    { label: 'Element clicks', on: availability.clickTrackingAvailable },
-    { label: 'User directory', on: availability.userMetadataAvailable },
+    { label: t('webActivity.availability.source.searchTerms'), on: availability.searchAvailable },
+    { label: t('webActivity.availability.source.elementClicks'), on: availability.clickTrackingAvailable },
+    { label: t('webActivity.availability.source.userDirectory'), on: availability.userMetadataAvailable },
   ];
 
   return (
     <div className={styles.root}>
       <div className={styles.badges}>
         <Text size={200} className={styles.muted}>
-          Data sources:
+          {t('webActivity.availability.dataSources')}
         </Text>
         {sources.map((source) => (
           <Badge
@@ -105,13 +177,13 @@ export default function AvailabilityBar({ availability }: { availability: WebAct
             }
             title={source.detail}
           >
-            {source.label}: {source.unknown ? 'unknown' : source.on ? 'on' : 'off'}
+            {t('webActivity.availability.badge', { label: source.label, status: source.unknown ? t('webActivity.availability.status.unknown') : source.on ? t('webActivity.availability.status.on') : t('webActivity.availability.status.off') })}
             {source.detail ? ` \u2013 ${source.detail}` : ''}
           </Badge>
         ))}
       </div>
 
-      {availability.reasons.length > 0 && (
+      {reasons.length > 0 && (
         <>
           <Button
             className={styles.toggle}
@@ -121,15 +193,15 @@ export default function AvailabilityBar({ availability }: { availability: WebAct
             onClick={() => setExpanded((open) => !open)}
             aria-expanded={expanded}
           >
-            {expanded ? 'Hide' : 'Show'} what is missing ({availability.reasons.length})
+            {t(expanded ? 'webActivity.availability.hideMissing' : 'webActivity.availability.showMissing', { count: reasons.length })}
           </Button>
 
           {expanded && (
             <MessageBar intent={availability.available ? 'info' : 'warning'}>
               <MessageBarBody>
-                <MessageBarTitle>Some web traffic data is not being collected</MessageBarTitle>
+                <MessageBarTitle>{t('webActivity.availability.missingTitle')}</MessageBarTitle>
                 <ul className={styles.reasons}>
-                  {availability.reasons.map((reason) => (
+                  {reasons.map((reason) => (
                     <li key={reason}>
                       <Text size={200}>{reason}</Text>
                     </li>

@@ -1,10 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, screen, waitFor } from '@testing-library/react';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import LicensedUsersPanel from './LicensedUsersPanel';
 import { AdoptionBand } from '../../types/copilotAdoption';
 import type { CopilotAdoptionOptions, LicensedUserAdoptionRow, LicensedUserPage } from '../../types/copilotAdoption';
 import { fetchLicensedUsers } from '../../api/copilotAdoptionApi';
+import { PRINT_ROW_LIMIT, requestPrint, resetPrintPreparation } from '../shared/printPreparation';
 
 vi.mock('../../api/copilotAdoptionApi', () => ({
   fetchLicensedUsers: vi.fn(),
@@ -58,9 +59,9 @@ const OPTIONS: CopilotAdoptionOptions = {
   coworkFluencyMinScore: 50,
   coworkRegularMinActiveDays: 3,
   coworkAgentFamiliarityUplift: 10,
-  coworkMinutesSavedPerMeeting: 10,
-  coworkMinutesSavedPerMailThread: 3,
-  coworkMinutesSavedPerDocument: 2,
+  copilotMinutesSavedPerMeeting: 10,
+  copilotMinutesSavedPerMailThread: 3,
+  copilotMinutesSavedPerDocument: 2,
   coworkEstimateLowerBoundRatio: 0.5,
   usageReportLagDays: 3,
   topSegments: 10,
@@ -211,5 +212,94 @@ describe('LicensedUsersPanel source reconciliation', () => {
 
     // The audit-only row has nothing to reconcile, so it must not claim it has.
     expect(screen.queryByText(/Audit D28: 12 interactions, 4 days\./)).toBeNull();
+  });
+});
+
+// Rendering a hundred-odd rows through Fluent in jsdom takes seconds, and a CI runner is slower.
+describe('LicensedUsersPanel printing', { timeout: 30000 }, () => {
+  const upn = (id: number) => `demo.user${String(id).padStart(7, '0')}@contoso.example`;
+
+  /** A server holding `total` seat holders, paging and clamping exactly as the API does. */
+  function serve(total: number) {
+    vi.mocked(fetchLicensedUsers).mockImplementation(async (_windowDays, _filters, skip, take) => {
+      const count = Math.max(0, Math.min(take, 500, total - skip));
+      return {
+        total,
+        skip,
+        take,
+        warnings: [],
+        rows: Array.from({ length: count }, (_, i) => row({ userId: skip + i + 1, userPrincipalName: upn(skip + i + 1) })),
+      };
+    });
+  }
+
+  const listed = () => screen.queryAllByText(/^demo\.user\d+@contoso\.example$/).length;
+
+  function renderPanel(initialBands?: AdoptionBand[]) {
+    return renderWithProvider(
+      <LicensedUsersPanel
+        windowDays={28}
+        filterOptions={{ bands: [{ value: AdoptionBand.Dormant, name: 'Dormant' }], departments: ['Finance'] } as never}
+        actionPlan={[]}
+        options={OPTIONS}
+        initialBands={initialBands}
+      />,
+    );
+  }
+
+  beforeEach(() => {
+    vi.mocked(fetchLicensedUsers).mockReset();
+    resetPrintPreparation();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetPrintPreparation();
+  });
+
+  it('prints every seat holder rather than the page on screen, then returns to that page', async () => {
+    serve(75);
+    renderPanel();
+    await waitFor(() => expect(listed()).toBe(50));
+
+    let printed = -1;
+    vi.spyOn(window, 'print').mockImplementation(() => {
+      printed = listed();
+    });
+    await act(async () => {
+      await expect(requestPrint()).resolves.toEqual({ kind: 'printed' });
+    });
+
+    expect(printed).toBe(75);
+    expect(listed()).toBe(50);
+  });
+
+  it('refuses, rather than printing one page, when the list is longer than can be printed', async () => {
+    serve(PRINT_ROW_LIMIT + 10);
+    renderPanel();
+    await waitFor(() => expect(listed()).toBe(50));
+    vi.spyOn(window, 'print').mockImplementation(() => {});
+
+    await expect(requestPrint()).resolves.toMatchObject({ kind: 'tooManyRows', rows: PRINT_ROW_LIMIT + 10 });
+    expect(window.print).not.toHaveBeenCalled();
+  });
+
+  it('keeps the filter bar and the pager off paper, and prints what the bar was set to', async () => {
+    serve(75);
+    renderPanel([AdoptionBand.Dormant]);
+    await waitFor(() => expect(listed()).toBe(50));
+
+    for (const control of [
+      screen.getByRole('combobox', { name: 'Filter by engagement band' }),
+      screen.getByRole('checkbox', { name: 'Disabled accounts only' }),
+      screen.getByRole('button', { name: 'Next' }),
+    ]) {
+      expect(control.closest('[data-print="hide"]')).not.toBeNull();
+    }
+
+    expect(document.querySelector('[data-print="only"]')?.textContent).toBe(
+      'Filters: Band: Dormant \u00b7 Action: All recommended actions \u00b7 Reclaim tier: All reclaim tiers'
+        + ' \u00b7 Department: All departments',
+    );
   });
 });

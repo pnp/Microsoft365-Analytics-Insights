@@ -10,6 +10,8 @@ import {
   fetchLicensedUsers,
 } from '../api/copilotAdoptionApi';
 import { AdoptionBand, CopilotResourceTypeKind, type CopilotAdoptionOptions, type CopilotAdoptionSummary } from '../types/copilotAdoption';
+import { TIME_SAVED_STORAGE_KEY, resetTimeSavedStore } from '../components/copilotAdoption/coworkTimeSaved';
+import { loadCatalog } from '../i18n';
 
 vi.mock('../api/copilotAdoptionApi', async (importOriginal) => ({
   ...await importOriginal<typeof import('../api/copilotAdoptionApi')>(),
@@ -67,10 +69,21 @@ const options: CopilotAdoptionOptions = {
   coworkFluencyMinScore: 50,
   coworkRegularMinActiveDays: 4,
   coworkAgentFamiliarityUplift: 10,
-  coworkMinutesSavedPerMeeting: 10,
-  coworkMinutesSavedPerMailThread: 5,
-  coworkMinutesSavedPerDocument: 8,
+  copilotMinutesSavedPerMeeting: 10,
+  copilotMinutesSavedPerMailThread: 5,
+  copilotMinutesSavedPerDocument: 8,
   coworkEstimateLowerBoundRatio: 0.5,
+  coworkMinutesSavedPerTask: 6,
+  coworkOrganiseMeetingsShare: 0.25,
+  coworkOrganiseMeetingsMinutes: 6,
+  coworkPrepareMeetingsShare: 0.1,
+  coworkPrepareMeetingsMinutes: 6,
+  coworkSendEmailShare: 0.05,
+  coworkSendEmailMinutes: 6,
+  coworkPostInTeamsShare: 0.01,
+  coworkPostInTeamsMinutes: 6,
+  coworkCreateDocumentsShare: 0.02,
+  coworkCreateDocumentsMinutes: 6,
   usageReportLagDays: 3,
   topSegments: 10,
   minSeatsPerSegment: 5,
@@ -141,7 +154,7 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
     coworkQuadrant: [],
     coworkByDepartment: [],
     coworkCreditPosition: { available: false, snapshotUtc: null, entitled: null, consumed: null, available_credits: null, payAsYouGoConsumed: null, status: null, perUserCreditsAvailable: false },
-    coworkValueEstimate: { isModelled: false, cohortUsers: 0, addressableMeetings: 0, addressableMailThreads: 0, addressableDocuments: 0, hoursPerMonthLow: 0, hoursPerMonthHigh: 0, assumptions: [] },
+    coworkValueEstimate: { isModelled: false, cohortUsers: 0, coworkTaskUsers: 0, observedCoworkTasks: 0, projectedCoworkUsers: 0, activities: [], projectedCoworkTasks: 0, coworkTasks: 0, observedTasksPerPersonPerMonth: 0, observedTaskRateUsers: 0, hoursPerMonthLow: 0, hoursPerMonthHigh: 0, assumptions: [] },
     unlicensedActiveUsers: 14,
     recommendedForLicence: 9,
     funnel: [
@@ -231,6 +244,27 @@ async function renderPage() {
 }
 
 describe('CopilotAdoptionPage view split', () => {
+  it('translates unavailable availability reasons instead of rendering server English', async () => {
+    vi.mocked(fetchAdoptionAvailability).mockResolvedValue({
+      available: false,
+      copilotAuditImportEnabled: false,
+      copilotUsageReportImportEnabled: false,
+      userMetadataImportEnabled: false,
+      m365UsageReportImportEnabled: true,
+      messages: ['SERVER: user metadata off', 'SERVER: sources off'],
+    });
+
+    // Loaded first, as main.tsx does before the first render. Otherwise the assertion races the
+    // Spanish chunk's dynamic import, which under a loaded parallel run outlasts waitFor's 1s default.
+    await loadCatalog('es');
+    renderWithProvider(<CopilotAdoptionPage />, { language: 'es' });
+
+    await waitFor(() => expect(screen.getByText(/La importación de metadatos de usuario está deshabilitada/)).toBeVisible());
+    expect(screen.getByText(/No está habilitada ni la importación de auditoría de Copilot ni la importación del informe de uso de Copilot/)).toBeVisible();
+    expect(screen.queryByText('SERVER: user metadata off')).toBeNull();
+    expect(screen.queryByText('SERVER: sources off')).toBeNull();
+  });
+
   it('opens on an executive view with the three acts and no SQL popovers', async () => {
     await renderPage();
 
@@ -476,5 +510,514 @@ describe('CopilotAdoptionPage domain-scope regressions', () => {
     expect(screen.queryByLabelText('Comparison period')).toBeNull();
     expect(screen.queryByText('Compare')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Start intervention' })).toBeNull();
+  });
+});
+
+/**
+ * Printing.
+ *
+ * The printed report used to be whatever the screen happened to be: a menu down the left, a brand
+ * bar across the top and the report itself squeezed into the remaining third of the sheet. The fix
+ * is a `data-print` contract between the components and the `@media print` block in index.css
+ * (the stylesheet half is proved by printStyles.test.ts). What these tests assert is the half the
+ * components own: the chrome is marked as chrome, the report is not, and nothing the printout
+ * needs in order to be identifiable disappears along with the controls.
+ */
+describe('CopilotAdoptionPage printing', () => {
+  it('prints the report when the Print button is used', async () => {
+    const print = vi.spyOn(window, 'print').mockImplementation(() => {});
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }));
+
+    expect(print).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks the app-level chrome, the filter controls and the tab strip as print-hidden', async () => {
+    await renderPage();
+    // Waits for the loaded state on purpose. Without it this asserted against the loading state by
+    // accident, and then read the Excel button's role from it: Fluent renders that button as
+    // `<a role="button" aria-disabled>` while there is no summary to export, and as a plain
+    // `<a href>` - role `link`, not `button` - once there is. It passed locally and failed in CI
+    // purely on which side of that swap the machine happened to be.
+    await screen.findAllByText('Where we stand');
+
+    // The Print button itself has to go too: a printed page carrying a button to print it is the
+    // giveaway that the printout is a screenshot of an app rather than a report.
+    expect(screen.getByRole('button', { name: 'Print' }).closest('[data-print="hide"]')).not.toBeNull();
+    expect(screen.getByLabelText('Reporting period').closest('[data-print="hide"]')).not.toBeNull();
+    // By text, not by role, so this stays true either side of that swap.
+    expect(screen.getByText('Excel report').closest('[data-print="hide"]')).not.toBeNull();
+    expect(screen.getByRole('tab', { name: 'Executive view' }).closest('[data-print="hide"]')).not.toBeNull();
+  });
+
+  it('keeps the report itself out of the print-hidden chrome', async () => {
+    // The obvious way to get this wrong is to hide a container that also holds the report. The
+    // title and the figures have to survive - they are the printout.
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+
+    expect(screen.getByText('Copilot Adoption').closest('[data-print="hide"]')).toBeNull();
+    expect(screen.getAllByText('Where we stand')[0].closest('[data-print="hide"]')).toBeNull();
+  });
+
+  it('replaces the hidden controls with a caption naming the view, period and scope', async () => {
+    // With the tab strip and the filter controls gone, a printed sheet would otherwise say only
+    // "Copilot Adoption" - and which of eight views, over which of four periods, for which domain
+    // is not something a reader can reconstruct from the figures.
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+
+    const caption = document.querySelector('[data-print="only"]');
+    expect(caption).not.toBeNull();
+    expect(caption?.textContent).toContain('Executive view');
+    expect(caption?.textContent).toContain('Last 28 days');
+    expect(caption?.textContent).toContain('All email domains');
+    // Dated, because a printout outlives the period it describes.
+    expect(caption?.textContent).toContain('Generated');
+  });
+
+  it('follows the tab and the domain the reader actually chose', async () => {
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Analyst view' }));
+    expect(await screen.findByRole('tab', { name: 'Analyst view', selected: true })).toBeVisible();
+    fireEvent.change(await screen.findByLabelText('Email domain'), { target: { value: 'fabrikam.com' } });
+
+    await waitFor(() => {
+      const caption = document.querySelector('[data-print="only"]');
+      expect(caption?.textContent).toContain('Analyst view');
+      expect(caption?.textContent).toContain('fabrikam.com');
+    });
+  });
+
+  it('names every tab the same way in the strip and in the caption', async () => {
+    // The caption is the only thing naming the view on paper, so a tab renamed in one place but
+    // not the other would silently mislabel every printout of it.
+    await renderPage();
+
+    // Fluent renders an unselected tab's label twice: a visible span, plus a second, CSS-hidden
+    // one reserving the width of the bold selected state. So textContent reads "AgentsAgents",
+    // while the first span holds the label - and is what getByRole's accessible-name matching
+    // sees, the hidden twin being excluded from the accessible name.
+    const tabLabel = (tab: HTMLElement) => (tab.querySelector('span')?.textContent ?? '').trim();
+
+    const labels = screen.getAllByRole('tab').map(tabLabel);
+    expect(labels.length).toBe(8);
+
+    for (const label of labels) {
+      fireEvent.click(screen.getByRole('tab', { name: label }));
+      await waitFor(() =>
+        expect(document.querySelector('[data-print="only"]')?.textContent).toContain(label),
+      );
+    }
+  });
+});
+
+/**
+ * Dismissible data warnings.
+ *
+ * The bar carries caveats about the data behind the report - an import that has not run, a Graph
+ * permission that was never granted. They are true, they are worth saying once, and on a tenant
+ * that is not going to fix them today they are also the same orange block above the report on
+ * every visit, which is how readers learn to skim past everything at the top of the page.
+ *
+ * So the bar can be put away - but never lost, and never silently inherited by a different
+ * warning. Dismissing applies to the printout too: the control would otherwise lie to someone who
+ * put the warnings away and then printed.
+ */
+describe('CopilotAdoptionPage data warnings', () => {
+  const WARNINGS = [
+    'Purchased and unassigned Copilot seats are unknown because Graph subscribedSkus has not been imported.',
+    'The first-party Cowork usage report is not available.',
+  ];
+
+  it('shows the warnings, and lets the reader put them away', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({ warnings: WARNINGS }));
+    await renderPage();
+
+    expect(await screen.findByText(WARNINGS[0])).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide these warnings' }));
+
+    // Gone from the screen, but the count is still on offer: a reader must never be unaware that
+    // there are caveats, only free to stop looking at them.
+    await waitFor(() => expect(screen.getByRole('button', { name: /Show 2 data warnings/ })).toBeVisible());
+    expect(screen.queryByText(WARNINGS[0])).not.toBeInTheDocument();
+  });
+
+  it('brings them straight back', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({ warnings: WARNINGS }));
+    await renderPage();
+    await screen.findByText(WARNINGS[0]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide these warnings' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Show 2 data warnings/ }));
+
+    expect(await screen.findByText(WARNINGS[0])).toBeVisible();
+    expect(screen.queryByRole('button', { name: /Show 2 data warnings/ })).not.toBeInTheDocument();
+  });
+
+  it('shows itself again when the warnings are not the ones that were dismissed', async () => {
+    // The dismissal is keyed on the warnings, not on the bar. Otherwise putting away "Cowork is
+    // not imported" would also swallow a brand-new problem that appears after changing the scope -
+    // which is exactly the moment a new warning is most likely and most worth reading.
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({ warnings: WARNINGS }));
+    await renderPage();
+    await screen.findByText(WARNINGS[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Hide these warnings' }));
+    await screen.findByRole('button', { name: /Show 2 data warnings/ });
+
+    const different = 'Copilot audit events stop three days before the end of the period.';
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(
+      summary({ scopedEmailDomain: 'fabrikam.com', warnings: [different] }),
+    );
+    fireEvent.change(await screen.findByLabelText('Email domain'), { target: { value: 'fabrikam.com' } });
+
+    expect(await screen.findByText(different)).toBeVisible();
+    expect(screen.queryByRole('button', { name: /Show 1 data warning/ })).not.toBeInTheDocument();
+  });
+
+  it('leaves them off the printout too, because the reader said to put them away', async () => {
+    // This deliberately reversed: the bar used to survive on paper on the reasoning that a printed
+    // report is read by people who cannot check what it left out. But that makes the control lie -
+    // someone who hides the warnings and prints has said what they want on the page. Leaving the
+    // bar up is how you print it.
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({ warnings: WARNINGS }));
+    await renderPage();
+    await screen.findByText(WARNINGS[0]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide these warnings' }));
+    await screen.findByRole('button', { name: /Show 2 data warnings/ });
+
+    // Nothing left anywhere in the document - not on screen, and not in a print-only copy.
+    expect(document.body.textContent).not.toContain(WARNINGS[0]);
+    // ...and the button that replaced them is itself chrome, so the printout carries neither.
+    expect(screen.getByRole('button', { name: /Show 2 data warnings/ })).toHaveAttribute('data-print', 'hide');
+  });
+});
+
+/**
+ * Page breaks.
+ *
+ * A printed act used to be split from the thing it introduces: the heading landed at the foot of
+ * one page and every card it announces started on the next, so the sheet ended with a title and
+ * nothing under it. Each act now starts its own sheet.
+ */
+describe('CopilotAdoptionPage page breaks', () => {
+  /** The numbered act headings, in document order, with the break each one carries. */
+  const acts = () =>
+    [...document.querySelectorAll('[data-print="page-break"], [data-print="keep-with-next"]')].map((n) => ({
+      print: n.getAttribute('data-print'),
+      text: (n.querySelector('span')?.textContent ?? '') + (n.textContent ?? ''),
+    }));
+
+  it('starts every act after the first on a new sheet', async () => {
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+
+    // The executive view is three acts. The first keeps with what follows but does not break: it
+    // belongs with the KPI tiles on the report's front page, which would otherwise print alone.
+    expect(acts().map((a) => a.print)).toEqual(['keep-with-next', 'page-break', 'page-break']);
+    expect(acts()[0].text).toContain('Where we stand');
+    expect(acts()[2].text).toContain('What we are doing about it');
+  });
+
+  it('does the same for the four acts of the analyst view', async () => {
+    await renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: 'Analyst view' }));
+    await screen.findByRole('tab', { name: 'Analyst view', selected: true });
+
+    await waitFor(() =>
+      expect(acts().map((a) => a.print)).toEqual([
+        'keep-with-next',
+        'page-break',
+        'page-break',
+        'page-break',
+      ]),
+    );
+  });
+
+  it('puts those headings in block flow, without which the break does nothing', async () => {
+    // Fragmentation inside a flex container is unreliable across browsers, and the acts are flex
+    // items of a column stack - so `break-before` on them is ignored unless the stack itself is
+    // returned to block flow for printing. The two halves only work together, hence one assertion.
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+
+    for (const heading of document.querySelectorAll('[data-print="page-break"]')) {
+      expect(heading.parentElement).toHaveAttribute('data-print', 'flow');
+    }
+  });
+});
+
+describe('CopilotAdoptionPage modelled time saved', () => {
+  // Under this file's options, not the product defaults: 10 minutes a meeting, 5 an email, 8 a
+  // document and 6 a Cowork task, with the conservative end at 50%.
+  //
+  // Licensing, for the 9 recommended candidates: 2,000 meetings x 10 + 20,000 emails x 5 + 3,000
+  // documents x 8 = 144,000 minutes = 2,400 hours, 1,200 at the conservative end.
+  const licenceEstimate = {
+    isModelled: true,
+    cohortUsers: 9,
+    addressableMeetings: 2000,
+    addressableMailThreads: 20000,
+    addressableDocuments: 3000,
+    hoursPerMonthLow: 1200,
+    hoursPerMonthHigh: 2400,
+    candidatesCapped: false,
+    assumptions: [],
+  };
+
+  // Cowork, for the 20 people ready now: 150 tasks observed from 10 people, and the other 10 modelled
+  // from their own work - 3,000 emails sent x 5% = 150 handed to Cowork, and nothing else. (150 + 150)
+  // x 6 minutes = 1,800 minutes = 30 hours, 15 conservative.
+  const noWork = [
+    { activity: 'organiseMeetings' as const, volumePerMonth: 0 },
+    { activity: 'prepareMeetings' as const, volumePerMonth: 0 },
+    { activity: 'postInTeams' as const, volumePerMonth: 0 },
+    { activity: 'createDocuments' as const, volumePerMonth: 0 },
+  ];
+  const coworkReady = {
+    isModelled: true,
+    cohortUsers: 20,
+    coworkTaskUsers: 10,
+    observedCoworkTasks: 150,
+    projectedCoworkUsers: 10,
+    activities: [{ activity: 'sendEmail' as const, volumePerMonth: 3000 }, ...noWork],
+    projectedCoworkTasks: 150,
+    coworkTasks: 300,
+    observedTasksPerPersonPerMonth: 15,
+    observedTaskRateUsers: 10,
+    hoursPerMonthLow: 15,
+    hoursPerMonthHigh: 30,
+    assumptions: [],
+  };
+
+  // The ceiling, all 100 seat holders: 150 observed + 27,000 emails x 5% = 1,350 = 1,500 x 6 minutes =
+  // 150 hours, 75 conservative.
+  const coworkCeiling = {
+    ...coworkReady,
+    cohortUsers: 100,
+    projectedCoworkUsers: 90,
+    activities: [{ activity: 'sendEmail' as const, volumePerMonth: 27000 }, ...noWork],
+    projectedCoworkTasks: 1350,
+    coworkTasks: 1500,
+    hoursPerMonthLow: 75,
+    hoursPerMonthHigh: 150,
+  };
+
+  // A 200,000-user tenant's 5,000 candidates: 100,000 meetings x 10 + 800,000 emails x 5 + 102,500
+  // documents x 8 = 5,820,000 minutes = 97,000 hours, 48,500 conservative.
+  const largeTenant: Partial<CopilotAdoptionSummary> = {
+    recommendedForLicence: 5000,
+    licenceOpportunityEstimate: {
+      ...licenceEstimate,
+      cohortUsers: 5000,
+      addressableMeetings: 100000,
+      addressableMailThreads: 800000,
+      addressableDocuments: 102500,
+      hoursPerMonthLow: 48500,
+      hoursPerMonthHigh: 97000,
+    },
+  };
+
+  const withEstimate = (overrides: Partial<CopilotAdoptionSummary> = {}) =>
+    summary({
+      coworkReadinessAvailable: true,
+      coworkScoredUsers: 100,
+      coworkRecommendedForPolicy: 20,
+      coworkValueEstimate: coworkReady,
+      coworkFullRolloutEstimate: coworkCeiling,
+      licenceOpportunityEstimate: licenceEstimate,
+      licenceChatUsersEstimate: {
+        ...licenceEstimate,
+        cohortUsers: 3,
+        addressableMeetings: 600,
+        addressableMailThreads: 6000,
+        addressableDocuments: 900,
+        hoursPerMonthLow: 360,
+        hoursPerMonthHigh: 720,
+      },
+      ...overrides,
+    });
+
+  /** The headline tile carrying a label. */
+  const tile = async (label: string, timeout?: number) =>
+    (await screen.findByText(label, undefined, timeout ? { timeout } : undefined)).closest('.fui-Card') as HTMLElement;
+
+  beforeEach(() => resetTimeSavedStore());
+
+  it('puts each modelled figure on a tile of its own, marked as modelled', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
+
+    await renderPage();
+
+    const licence = await tile('Time back from licensing');
+    expect(within(licence).getByText('Modelled')).toBeVisible();
+    expect(within(licence).getByText('1,200\u20132,400 h')).toBeVisible();
+    expect(within(licence).getByText('a month if the 9 recommended people were licensed')).toBeVisible();
+
+    const cowork = await tile('Time back from Cowork');
+    expect(within(cowork).getByText('Modelled')).toBeVisible();
+    expect(within(cowork).getByText('15\u201330 h')).toBeVisible();
+    expect(within(cowork).getByText('a month if the 20 people ready used Cowork')).toBeVisible();
+  });
+
+  /**
+   * The defect this guards. One "Potential time back" tile used to add Microsoft 365 Copilot's minutes
+   * to Cowork's, for people who already hold a licence - so the figure quoted for Copilot Credits was
+   * mostly the licence's, and rested on evidence that never measured Cowork. The two figures justify
+   * different decisions on different evidence, and a total of them would recreate that blend.
+   */
+  it('never adds the two figures together, and has no figure for people already licensed', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
+
+    await renderPage();
+    await tile('Time back from licensing');
+
+    expect(screen.queryByText('Potential time back')).not.toBeInTheDocument();
+    // 1,200 + 15 and 2,400 + 30.
+    expect(document.body.textContent).not.toMatch(/1,215|2,430/);
+    expect(document.body.textContent).not.toMatch(/used Copilot and Cowork fully/);
+  });
+
+  it('falls back to the ceiling on the Cowork tile, and says so, when nobody is ready yet', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(
+      withEstimate({
+        coworkRecommendedForPolicy: 0,
+        coworkValueEstimate: {
+          ...coworkReady,
+          cohortUsers: 0,
+          coworkTaskUsers: 0,
+          observedCoworkTasks: 0,
+          projectedCoworkUsers: 0,
+          coworkTasks: 0,
+          hoursPerMonthLow: 0,
+          hoursPerMonthHigh: 0,
+        },
+      }),
+    );
+
+    await renderPage();
+
+    const cowork = await tile('Time back from Cowork');
+    expect(within(cowork).getByText('75\u2013150 h')).toBeVisible();
+    expect(within(cowork).getByText('a month if all 100 Copilot seat holders used Cowork')).toBeVisible();
+  });
+
+  it('links each tile to the tab that explains it', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
+
+    await renderPage();
+
+    fireEvent.click(within(await tile('Time back from licensing')).getByRole('button', { name: 'See licence opportunities' }));
+    expect(await screen.findByRole('tab', { name: 'Licence opportunities', selected: true })).toBeVisible();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Executive view' }));
+    fireEvent.click(within(await tile('Time back from Cowork')).getByRole('button', { name: 'See the Cowork tab' }));
+    expect(await screen.findByRole('tab', { name: 'Cowork', selected: true })).toBeVisible();
+  });
+
+  it('claims nothing when there is nobody to model', async () => {
+    // This file's default summary: no licence estimate from the server, and Cowork readiness not assessed.
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+
+    expect(screen.queryByText('Time back from licensing')).not.toBeInTheDocument();
+    expect(screen.queryByText('Time back from Cowork')).not.toBeInTheDocument();
+  });
+
+  it('shows the licensing figure on its own when Cowork readiness could not be assessed', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate({ coworkReadinessAvailable: false }));
+
+    await renderPage();
+
+    expect(within(await tile('Time back from licensing')).getByText('1,200\u20132,400 h')).toBeVisible();
+    expect(screen.queryByText('Time back from Cowork')).not.toBeInTheDocument();
+  });
+
+  it('keeps a large range short, with its unit on the same line', async () => {
+    // At the 200,000-user design point the range runs to five and six digits, which wrapped the old
+    // tile onto three lines with the "h" alone on the last.
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate(largeTenant));
+
+    await renderPage();
+
+    const value = within(await tile('Time back from licensing')).getByText('48.5k\u201397k h');
+    // A no-break space, so the unit can never wrap onto a line of its own.
+    expect(value.textContent).toBe('48.5k\u201397k\u00a0h');
+    // And its length, which the tile sizes it by so the range stays on one line however narrow.
+    expect(value.style.getPropertyValue('--kpi-value-chars')).toBe('11');
+  });
+
+  it('quotes the reader\u2019s own Copilot figures on the licensing tile only, and sends them with the Excel report', async () => {
+    sessionStorage.setItem(TIME_SAVED_STORAGE_KEY, JSON.stringify({ meetingMinutes: 16 }));
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
+
+    await renderPage();
+
+    // 2,000 x 16 + 100,000 + 24,000 = 156,000 minutes = 2,600 hours, 1,300 conservative.
+    expect(within(await tile('Time back from licensing')).getByText('1,300\u20132,600 h')).toBeVisible();
+    expect(within(await tile('Time back from Cowork')).getByText('15\u201330 h')).toBeVisible();
+    const url = new URL((screen.getByText('Excel report').closest('a') as HTMLAnchorElement).href);
+    expect(url.searchParams.get('copilotMinutesSavedPerMeeting')).toBe('16');
+    expect(url.searchParams.has('copilotMinutesSavedPerMailThread')).toBe(false);
+    // The name before the split is gone: the server no longer reads it.
+    expect(url.searchParams.has('coworkMinutesSavedPerMeeting')).toBe(false);
+  });
+
+  it('quotes the reader\u2019s own Cowork share on the Cowork tile only, and sends it with the Excel report', async () => {
+    sessionStorage.setItem(TIME_SAVED_STORAGE_KEY, JSON.stringify({ sendEmailShare: 0.1 }));
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
+
+    await renderPage();
+
+    // 150 observed + 3,000 emails x 10% = 300 handed over = 450 x 6 = 2,700 minutes = 45 hours, 22.5
+    // conservative.
+    expect(within(await tile('Time back from Cowork')).getByText('23\u201345 h')).toBeVisible();
+    expect(within(await tile('Time back from licensing')).getByText('1,200\u20132,400 h')).toBeVisible();
+    const url = new URL((screen.getByText('Excel report').closest('a') as HTMLAnchorElement).href);
+    expect(url.searchParams.get('coworkSendEmailShare')).toBe('0.1');
+    expect(url.searchParams.has('coworkMinutesSavedPerTask')).toBe(false);
+    // The flat task rate is gone: the server no longer reads it.
+    expect(url.searchParams.has('coworkTasksPerPersonPerMonth')).toBe(false);
+  });
+
+  it('explains the two estimates separately, and says they are never added', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate());
+
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'How this is calculated' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'How licence candidates are ranked' }));
+    fireEvent.click(screen.getByRole('button', { name: 'How Cowork readiness is assessed' }));
+
+    expect(await screen.findByText('The licensing estimate is a model, not a measurement.')).toBeVisible();
+    expect(screen.getByText(/\(10 minutes per meeting, 5 per email, 8 per document by default/)).toBeVisible();
+    expect(screen.getByText('The Cowork estimate is a model, not a measurement.')).toBeVisible();
+    expect(screen.getByText(/at 6 minutes a task by default/)).toBeVisible();
+    expect(screen.getByText(/Everyone else is modelled from the work they already do by hand, one kind at a time/)).toBeVisible();
+    expect(screen.getByText(/it is never added to the licensing estimate/)).toBeVisible();
+  });
+
+  it('keeps Spanish digits where compact notation would be longer, and translates both tiles', async () => {
+    // Spanish writes 48,500 compactly as "48,5 mil" - longer than "48.500" - so a compact figure
+    // would make the tile wider, not narrower.
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(withEstimate(largeTenant));
+    await loadCatalog('es');
+
+    renderWithProvider(<CopilotAdoptionPage />, { language: 'es' });
+
+    const licence = await tile('Tiempo recuperado con licencias', 5000);
+    const value = within(licence).getByText('48.500\u201397.000 h');
+    expect(value.textContent).toBe('48.500\u201397.000\u00a0h');
+    expect(value.style.getPropertyValue('--kpi-value-chars')).toBe('15');
+    expect(within(licence).getByText('Modelado')).toBeVisible();
+    expect(within(licence).getByText('al mes si las 5000 personas recomendadas tuvieran licencia')).toBeVisible();
+
+    const cowork = await tile('Tiempo recuperado con Cowork');
+    expect(within(cowork).getByText('15\u201330 h')).toBeVisible();
+    expect(within(cowork).getByText('al mes si las 20 personas preparadas usaran Cowork')).toBeVisible();
   });
 });

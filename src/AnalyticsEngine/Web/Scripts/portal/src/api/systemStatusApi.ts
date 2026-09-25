@@ -1,3 +1,4 @@
+import { translateActive } from '../i18n/runtime';
 import { apiFetch } from './http';
 import type { SystemStatus } from '../types/systemStatus';
 
@@ -12,7 +13,7 @@ export async function fetchSystemStatus(): Promise<SystemStatus> {
   });
 
   if (!response.ok) {
-    throw new Error(`Couldn't load system status (${response.status}).`);
+    throw new Error(translateActive('errors.systemStatus.loadFailed', { status: response.status }));
   }
 
   return response.json() as Promise<SystemStatus>;

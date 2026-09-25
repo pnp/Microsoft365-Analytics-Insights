@@ -231,6 +231,12 @@ namespace Web.AnalyticsWeb.Models.Health
         public string Status { get; set; }
         [JsonProperty("detail")]
         public string Detail { get; set; }
+        [JsonProperty("reasonKey")]
+        public string ReasonKey { get; set; }
+        [JsonProperty("errorCode")]
+        public string ErrorCode { get; set; }
+        [JsonProperty("httpStatus")]
+        public int? HttpStatus { get; set; }
         [JsonProperty("daysToExpiry")]
         public int? DaysToExpiry { get; set; }
         [JsonProperty("lastSeenUtc")]

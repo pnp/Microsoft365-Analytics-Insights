@@ -1,4 +1,5 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
+import { formatNumber, translateActive, useT, type TFunction, type TranslationKey } from '../../i18n';
 
 /**
  * Sentiment, drawn as a traffic light.
@@ -30,13 +31,24 @@ const LAMP_COLOUR: Record<Lamp, string> = {
 };
 
 /** The word for a sentiment score, using bands either side of neutral. */
-export function sentimentLabel(value: number): string {
+type SentimentBand = 'negative' | 'leaning negative' | 'neutral' | 'leaning positive' | 'positive';
+
+/** The word for a sentiment score, using bands either side of neutral. */
+export function sentimentLabel(value: number): SentimentBand {
   if (value < 0.35) return 'negative';
   if (value < 0.45) return 'leaning negative';
   if (value <= 0.55) return 'neutral';
   if (value <= 0.65) return 'leaning positive';
   return 'positive';
 }
+
+const SENTIMENT_LABEL_KEYS: Record<SentimentBand, TranslationKey> = {
+  negative: 'common.sentiment.band.negative',
+  'leaning negative': 'common.sentiment.band.leaningNegative',
+  neutral: 'common.sentiment.band.neutral',
+  'leaning positive': 'common.sentiment.band.leaningPositive',
+  positive: 'common.sentiment.band.positive',
+};
 
 /**
  * Which lamp is lit.
@@ -55,15 +67,15 @@ export function sentimentLamp(value: number): Lamp {
  *
  * Kept as text rather than a percentage on purpose: see the note on the scale above.
  */
-export function formatSentiment(value: number | null | undefined): string {
+export function formatSentiment(value: number | null | undefined, t?: TFunction): string {
   if (value === null || value === undefined) return '\u2014';
-  return `${value.toFixed(2)} (${sentimentLabel(value)})`;
+  return `${formatNumber(value, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${(t ?? translateActive)(SENTIMENT_LABEL_KEYS[sentimentLabel(value)])})`;
 }
 
 /** Explains the sentiment scale wherever it is shown. */
-export const SENTIMENT_SCALE_NOTE =
-  'Sentiment runs 0 (negative) to 1 (positive), weighted by message count, and 0.5 is neutral. '
-  + 'It is not a percentage of positive messages.';
+export function sentimentScaleNote(t: TFunction = translateActive): string {
+  return t('common.sentiment.scaleNote');
+}
 
 const useStyles = makeStyles({
   root: {
@@ -127,6 +139,8 @@ export default function SentimentLight({
   showLabel?: boolean;
 }) {
   const styles = useStyles();
+  const t = useT();
+  const scaleNote = t('common.sentiment.scaleNote');
 
   // Zero is the most NEGATIVE possible score, so an unscored period must never be drawn as a lit red
   // lamp - that would invert the meaning of "we have no data".
@@ -135,7 +149,7 @@ export default function SentimentLight({
       <Text
         size={200}
         className={styles.unscored}
-        title={`Not scored for this period. ${SENTIMENT_SCALE_NOTE}`}
+        title={t('common.sentiment.notScored', { note: scaleNote })}
       >
         {'\u2014'}
       </Text>
@@ -144,7 +158,12 @@ export default function SentimentLight({
 
   const lit = sentimentLamp(value);
   const label = sentimentLabel(value);
-  const detail = `Sentiment ${value.toFixed(2)} (${label}). ${SENTIMENT_SCALE_NOTE}`;
+  const translatedLabel = t(SENTIMENT_LABEL_KEYS[label]);
+  const detail = t('common.sentiment.detail', {
+    score: formatNumber(value, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+    band: translatedLabel,
+    note: scaleNote,
+  });
 
   return (
     <span className={styles.root} title={detail}>
@@ -161,7 +180,7 @@ export default function SentimentLight({
       </span>
       {showLabel && (
         <Text size={200} className={styles.label}>
-          {label}
+          {translatedLabel}
         </Text>
       )}
     </span>

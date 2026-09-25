@@ -1,6 +1,7 @@
 ﻿using Common.Entities.Copilot;
 using Common.Entities.AgentCosts;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data.Entity;
 using Microsoft.Data.SqlClient;
@@ -84,6 +85,15 @@ namespace Common.Entities.CopilotAdoption
         private readonly int _maxConcurrentSteps;
         private readonly ICopilotAdoptionRunTelemetry _telemetry;
 
+        /// <summary>
+        /// The first swallowed failure of each step in the current analysis. The sequential steps' queries go
+        /// through the shared Safe* helpers rather than a <see cref="StepOutput"/>, so this is how their
+        /// StepFailed event can say why they degraded. Reset by <see cref="AnalyseAsync"/>; like the telemetry
+        /// it reports to, an instance serves one analysis at a time.
+        /// </summary>
+        private readonly ConcurrentDictionary<string, CopilotAdoptionFailure> _firstStepFailures =
+            new ConcurrentDictionary<string, CopilotAdoptionFailure>(StringComparer.Ordinal);
+
         public CopilotAdoptionService(
             CopilotAdoptionOptions options = null,
             IAnalyticsDbContextFactory contextFactory = null,
@@ -113,6 +123,7 @@ namespace Common.Entities.CopilotAdoption
             // has already given up there is no point starting - and no point continuing between the
             // sequential probes either (see RunStepsAsync).
             cancellationToken.ThrowIfCancellationRequested();
+            _firstStepFailures.Clear();
 
             var nowUtc = DateTime.UtcNow;            var windowStart = CopilotAdoptionScoring.WindowStartUtc(nowUtc, _options.WindowDays);
             var historyStart = CopilotAdoptionScoring.WindowStartUtc(
@@ -146,11 +157,13 @@ namespace Common.Entities.CopilotAdoption
             // share of the total and left the first two database round trips invisible to an operator.
             summary.Diagnostics.Record(
                 CopilotAdoptionSteps.LicenceTypes, licenceTypesWatch.ElapsedMilliseconds, licenceTypes == null);
+            _firstStepFailures.TryGetValue(CopilotAdoptionSteps.LicenceTypes, out var licenceTypesFailure);
             _telemetry.StepCompleted(
                 licenceTypesOperation,
                 CopilotAdoptionSteps.LicenceTypes,
                 licenceTypesWatch.ElapsedMilliseconds,
-                licenceTypes == null);
+                licenceTypes == null,
+                licenceTypesFailure);
 
             if (licenceTypes == null || licenceTypes.Count == 0)
             {
@@ -165,6 +178,10 @@ namespace Common.Entities.CopilotAdoption
                 summary.Warnings.Add(
                     "No licence information has been imported, so Copilot licences cannot be identified. "
                     + "Enable the user metadata import to use this tool.");
+
+                // Set here too, or a run that stops at its first query reports a total of zero - and the
+                // completion telemetry would say the database answered instantly.
+                summary.Diagnostics.TotalMs = (long)(DateTime.UtcNow - nowUtc).TotalMilliseconds;
                 return analysis;
             }
 
@@ -321,15 +338,20 @@ namespace Common.Entities.CopilotAdoption
 
             probeWatch.Stop();
 
-            // Six sequential round trips, each of which can gate a whole section of the report. Left
-            // sequential on purpose: they are cheap existence probes, and the licensed-user and
-            // opportunity queries below cannot be shaped until their answers are known.
-            summary.Diagnostics.Record(CopilotAdoptionSteps.DataSourceProbes, probeWatch.ElapsedMilliseconds);
+            // Six to eight sequential round trips (the two report-period probes run only when a snapshot
+            // exists), each of which can gate a whole section of the report. Left sequential on purpose: they
+            // are cheap existence probes, and the licensed-user and opportunity queries below cannot be
+            // shaped until their answers are known.
+            var probesFailed = _firstStepFailures.TryGetValue(
+                CopilotAdoptionSteps.DataSourceProbes, out var probesFailure);
+            summary.Diagnostics.Record(
+                CopilotAdoptionSteps.DataSourceProbes, probeWatch.ElapsedMilliseconds, probesFailed);
             _telemetry.StepCompleted(
                 probesOperation,
                 CopilotAdoptionSteps.DataSourceProbes,
                 probeWatch.ElapsedMilliseconds,
-                false);
+                probesFailed,
+                probesFailure);
 
             if (summary.DataSources.CopilotUsageReportObfuscated)
             {
@@ -405,7 +427,7 @@ namespace Common.Entities.CopilotAdoption
             _telemetry.Checkpoint(CopilotAdoptionTelemetryStages.ScoringStarted);
             var scoringWatch = System.Diagnostics.Stopwatch.StartNew();
             var scoringFailed = false;
-            string scoringExceptionType = null;
+            CopilotAdoptionFailure scoringFailure = null;
             try
             {
                 FinaliseSummary(analysis);
@@ -413,7 +435,7 @@ namespace Common.Entities.CopilotAdoption
             catch (Exception ex)
             {
                 scoringFailed = true;
-                scoringExceptionType = ex.GetBaseException().GetType().Name;
+                scoringFailure = CopilotAdoptionFailure.From(ex);
                 throw;
             }
             finally
@@ -426,7 +448,7 @@ namespace Common.Entities.CopilotAdoption
                     CopilotAdoptionSteps.Scoring,
                     scoringWatch.ElapsedMilliseconds,
                     scoringFailed,
-                    scoringExceptionType);
+                    scoringFailure);
                 _telemetry.Checkpoint(
                     CopilotAdoptionTelemetryStages.ScoringCompleted, scoringWatch.ElapsedMilliseconds);
             }
@@ -497,10 +519,17 @@ namespace Common.Entities.CopilotAdoption
             /// </remarks>
             public bool QueryFailed { get; private set; }
 
+            /// <summary>
+            /// The first failure recorded in this step, so the step's own <c>StepFailed</c> event can say WHY
+            /// (a timeout, a deadlock, a missing table) rather than only that one of its queries failed.
+            /// </summary>
+            public CopilotAdoptionFailure FirstFailure { get; private set; }
+
             /// <summary>Records that a query in this step failed. See <see cref="QueryFailed"/>.</summary>
-            public void MarkQueryFailed()
+            public void MarkQueryFailed(CopilotAdoptionFailure failure = null)
             {
                 QueryFailed = true;
+                if (FirstFailure == null && failure != null) FirstFailure = failure;
             }
 
             /// <summary>Buffered equivalent of <see cref="CopilotAdoptionSummary.MarkFiguresIncomplete"/>.</summary>
@@ -573,7 +602,7 @@ namespace Common.Entities.CopilotAdoption
 
             var operationId = _telemetry.StepStarted(step.Name);
             var watch = System.Diagnostics.Stopwatch.StartNew();
-            string exceptionType = null;
+            CopilotAdoptionFailure failure = null;
             try
             {
                 await step.Work(step.Output);
@@ -581,7 +610,7 @@ namespace Common.Entities.CopilotAdoption
             catch (Exception ex)
             {
                 step.Failed = true;
-                exceptionType = ex.GetBaseException().GetType().Name;
+                failure = CopilotAdoptionFailure.From(ex, cancellationToken.IsCancellationRequested);
                 throw;
             }
             finally
@@ -599,7 +628,7 @@ namespace Common.Entities.CopilotAdoption
                     step.Name,
                     step.DurationMs,
                     step.Failed,
-                    exceptionType);
+                    failure ?? step.Output.FirstFailure);
                 gate.Release();
             }
         }
@@ -1142,6 +1171,10 @@ namespace Common.Entities.CopilotAdoption
                     + "will not appear.");
             }
 
+            // TOP (@maxRows) returned a full page: candidates below the cut were never scored, so every
+            // figure built from this list - the licence estimate above all - is a floor rather than a total.
+            analysis.OpportunitiesCapped = rows.Count >= _options.MaxOpportunityCandidates;
+
             analysis.Opportunities = rows
                 .Select(r => CopilotAdoptionScoring.ScoreOpportunity(r, _options))
                 // Proven demand first. The SQL deliberately sorts proven-demand candidates into the
@@ -1594,14 +1627,33 @@ namespace Common.Entities.CopilotAdoption
             summary.CombinedByDepartment = BuildCombinedSegments(analysis);
 
             var opportunities = analysis.Opportunities ?? new List<LicenceOpportunityRow>();
-            summary.RecommendedForLicence = opportunities.Count(o => o.Recommended);
-            summary.OpportunityByDepartment = opportunities
-                .Where(o => o.Recommended)
+            var recommended = opportunities.Where(o => o.Recommended).ToList();
+            summary.RecommendedForLicence = recommended.Count;
+            summary.OpportunityByDepartment = recommended
                 .GroupBy(o => string.IsNullOrWhiteSpace(o.Department) ? "(no department)" : o.Department.Trim())
                 .Select(g => new AdoptionCategory { Label = g.Key, Value = g.Count() })
                 .OrderByDescending(c => c.Value)
                 .Take(_options.TopSegments)
                 .ToList();
+
+            // The licence estimate: what Microsoft 365 Copilot could give back to the people recommended
+            // for a seat - the figure a licence purchase is justified with, and the only place the Copilot
+            // minutes are applied. Modelled only when the Microsoft 365 usage reports supplied the volumes
+            // it multiplies: without them every candidate has zero meetings, emails and documents, and
+            // "0 hours" would read as a finding about the candidates rather than as a missing import.
+            var volumesObserved = summary.DataSources?.M365UsageReportsAvailable ?? false;
+            summary.LicenceOpportunityEstimate = volumesObserved
+                ? CopilotAdoptionScoring.EstimateLicenceValue(recommended, _options, analysis.OpportunitiesCapped)
+                : new LicenceValueEstimate();
+
+            // Beside it, the candidates already using Copilot Chat without a licence: the same definition
+            // as the list's "Already using Copilot" filter, so a reader can bring up exactly these people.
+            summary.LicenceChatUsersEstimate = volumesObserved
+                ? CopilotAdoptionScoring.EstimateLicenceValue(
+                    recommended.Where(o => o.UnlicensedCopilotInteractions > 0).ToList(),
+                    _options,
+                    analysis.OpportunitiesCapped)
+                : new LicenceValueEstimate();
 
             // Last, because it reads the licensed, unlicensed, opportunity and Cowork populations
             // together - the point of the domain view is that those four answer one question per
@@ -2117,8 +2169,28 @@ namespace Common.Entities.CopilotAdoption
             summary.CoworkByDepartment = BuildCoworkSegments(rows);
             summary.CoworkQuadrant = BuildCoworkQuadrant(summary.CoworkByDepartment);
 
-            summary.CoworkValueEstimate = CopilotAdoptionScoring.EstimateCoworkValue(
-                rows.Where(r => r.RecommendForPolicy).ToList(), _options);
+            // The tenant's own Cowork users' average task rate - everyone with tasks in Microsoft's Cowork
+            // report - computed once and shared by both cohorts, so they quote the same sense check. It is
+            // not an input: everyone not yet running Cowork tasks is modelled from their own activity.
+            var coworkReportPeriodDays = summary.DataSources?.CoworkUsageReportPeriodDays ?? 0;
+            var coworkTaskRate = CopilotAdoptionScoring.CoworkObservedTaskRate(rows, coworkReportPeriodDays, _options);
+
+            // Modelled only when the Microsoft 365 usage reports supplied the activity it multiplies, for
+            // the same reason as the licence estimate: without them everyone has zero meetings, emails,
+            // messages and files, and "0 hours" would read as a finding that Cowork has nothing to take on
+            // rather than as a missing import. The tab says which it is.
+            var activityObserved = summary.DataSources?.M365UsageReportsAvailable ?? false;
+
+            summary.CoworkValueEstimate = activityObserved
+                ? CopilotAdoptionScoring.EstimateCoworkValue(
+                    rows.Where(r => r.RecommendForPolicy).ToList(), _options, coworkReportPeriodDays, coworkTaskRate)
+                : new CoworkValueEstimate();
+
+            // The ceiling: every scored seat holder, not only the people ready today. Same rows, same
+            // options, same arithmetic - so the cohort above can never model more time than this.
+            summary.CoworkFullRolloutEstimate = activityObserved
+                ? CopilotAdoptionScoring.EstimateCoworkValue(rows, _options, coworkReportPeriodDays, coworkTaskRate)
+                : new CoworkValueEstimate();
         }
 
         /// <summary>
@@ -2619,12 +2691,13 @@ namespace Common.Entities.CopilotAdoption
             string queryName,
             List<string> warnings,
             string description,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            Action<CopilotAdoptionFailure> onFailure = null)
         {
             var operationId = _telemetry.QueryStarted(step, queryName);
             var watch = System.Diagnostics.Stopwatch.StartNew();
             var failed = false;
-            string exceptionType = null;
+            CopilotAdoptionFailure failure = null;
             try
             {
                 return await query();
@@ -2632,7 +2705,11 @@ namespace Common.Entities.CopilotAdoption
             catch (Exception ex)
             {
                 failed = true;
-                exceptionType = ex.GetBaseException().GetType().Name;
+
+                // Classified for telemetry with the SQL error number and the whole exception chain, not just
+                // the innermost type: a command timeout's innermost exception is a Win32Exception, which on
+                // its own is indistinguishable from a network failure.
+                failure = CopilotAdoptionFailure.From(ex, cancellationToken.IsCancellationRequested);
 
                 // Cancellation is decided by the TOKEN, not by the exception type. A token-triggered
                 // abort surfaces from EF6 / SqlClient as any of TaskCanceledException, SqlException
@@ -2658,6 +2735,8 @@ namespace Common.Entities.CopilotAdoption
                 // the same timeout produced a degraded page on one run and an error on the next - see
                 // issue #360.
                 warnings.Add($"Could not load {description}: {InnermostMessage(ex)}");
+                if (step != null && failure != null) _firstStepFailures.TryAdd(step, failure);
+                onFailure?.Invoke(failure);
                 return null;
             }
             finally
@@ -2669,7 +2748,7 @@ namespace Common.Entities.CopilotAdoption
                     queryName,
                     watch.ElapsedMilliseconds,
                     failed,
-                    exceptionType);
+                    failure);
             }
         }
 
@@ -2686,9 +2765,11 @@ namespace Common.Entities.CopilotAdoption
             CancellationToken cancellationToken)
         {
             // SafeAsync returns null exactly when it swallowed a failure, which is what makes this work
-            // without every call site having to remember to report it.
+            // without every call site having to remember to report it. The callback carries WHY, so the
+            // step's own StepFailed event can name the failure kind.
             var rows = await SafeAsync(
-                query, step, queryName, output.Warnings, description, cancellationToken);
+                query, step, queryName, output.Warnings, description, cancellationToken,
+                failure => output.MarkQueryFailed(failure));
             if (rows == null) output.MarkQueryFailed();
             return rows;
         }

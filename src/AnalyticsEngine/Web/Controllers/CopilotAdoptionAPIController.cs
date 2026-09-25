@@ -4,6 +4,7 @@ using Common.Entities.CopilotAdoption;
 using DataUtils;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -13,6 +14,7 @@ using System.Threading;
 using Newtonsoft.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Web.AnalyticsWeb.Models.CopilotAdoption;
 
@@ -166,7 +168,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// to die now returns something the operator can read and act on.
         /// </para>
         /// </remarks>
-        private static readonly TimeSpan ExportWaitBudget = TimeSpan.FromSeconds(150);
+        internal static readonly TimeSpan ExportWaitBudget = TimeSpan.FromSeconds(150);
 
         /// <summary>What the SPA is told to wait before polling again.</summary>
         private const int RetryAfterSeconds = 5;
@@ -252,24 +254,65 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>
         /// The 202 body. Deliberately the same shape for every endpoint so the SPA has one thing to detect.
         /// </summary>
-        private IActionResult StillBuilding() => StillBuildingResponse();
+        private IActionResult StillBuilding(int windowDays, string seatLicenceTypeIds)
+            => StillBuildingResponse(InFlightRunId(windowDays, seatLicenceTypeIds));
 
         /// <summary>
-        /// The same 202, for the export endpoints - they return <see cref="HttpResponseMessage"/> directly
-        /// because they stream a file rather than a model.
+        /// The telemetry id of the run a 202 is waiting on, so a browser trace can be matched to the run's
+        /// <c>CopilotAdoptionLifecycle</c> events in Application Insights.
         /// </summary>
-        private IActionResult StillBuildingResponse()
+        private string InFlightRunId(int windowDays, string seatLicenceTypeIds)
         {
-            Response.Headers.RetryAfter = RetryAfterSeconds.ToString();
+            return Coordinator.InFlightRunId(NormaliseWindowDays(windowDays), ParseIds(seatLicenceTypeIds));
+        }
 
-            return StatusCode((int)HttpStatusCode.Accepted,
-                new
+        /// <summary>The header carrying the analysis run id on 202s, "not ready" 503s and export downloads.</summary>
+        internal const string RunIdHeader = "X-CopilotAdoption-RunId";
+
+        /// <summary>
+        /// The 202 body as a model: the status the SPA detects, the poll delay, a readable message and, when
+        /// telemetry is running, the <c>runId</c> of the analysis being waited for.
+        /// </summary>
+        internal static IDictionary<string, object> StillBuildingBody(string runId)
+        {
+            var body = new Dictionary<string, object>
+            {
+                { "status", "building" },
+                { "retryAfterSeconds", RetryAfterSeconds },
                 {
-                    status = "building",
-                    retryAfterSeconds = RetryAfterSeconds,
-                    message = "The Copilot adoption analysis is still running. This can take a few minutes the "
-                              + "first time on a large tenant; the page will refresh automatically.",
-                });
+                    "message",
+                    "The Copilot adoption analysis is still running. This can take a few minutes the "
+                    + "first time on a large tenant; the page will refresh automatically."
+                },
+            };
+
+            if (!string.IsNullOrEmpty(runId)) body.Add("runId", runId);
+            return body;
+        }
+
+        /// <summary>
+        /// The 202 response itself, with its <c>Retry-After</c> and run id headers. One place builds it
+        /// so every endpoint that can still be waiting answers identically.
+        /// </summary>
+        private IActionResult StillBuildingResponse(string runId)
+        {
+            Response.Headers.RetryAfter = RetryAfterSeconds.ToString(CultureInfo.InvariantCulture);
+            AddRunIdHeader(Response, runId);
+
+            // A dictionary rather than a model, as on the Web API 2 build: its keys are written exactly
+            // as given whichever serializer the host runs, so the body the SPA detects cannot be
+            // re-cased by a naming policy.
+            return StatusCode((int)HttpStatusCode.Accepted, StillBuildingBody(runId));
+        }
+
+        /// <summary>
+        /// Adds the run id header to the response being built. Set on <see cref="HttpResponse.Headers"/>
+        /// before the result executes; the file and content results add their own headers on top and
+        /// leave this one in place.
+        /// </summary>
+        private static void AddRunIdHeader(HttpResponse response, string runId)
+        {
+            if (response != null && !string.IsNullOrEmpty(runId)) response.Headers[RunIdHeader] = runId;
         }
 
         /// <summary>
@@ -280,9 +323,10 @@ namespace Web.AnalyticsWeb.Controllers
         /// the person who clicked has to be able to read it. 503 + <c>Retry-After</c> is the honest
         /// status - the report is temporarily unavailable and retrying later will work.
         /// </remarks>
-        private IActionResult ExportNotReadyResponse()
+        private IActionResult ExportNotReadyResponse(int windowDays, string seatLicenceTypeIds)
         {
-            Response.Headers.RetryAfter = RetryAfterSeconds.ToString();
+            Response.Headers.RetryAfter = RetryAfterSeconds.ToString(CultureInfo.InvariantCulture);
+            AddRunIdHeader(Response, InFlightRunId(windowDays, seatLicenceTypeIds));
 
             return new ContentResult
             {
@@ -313,7 +357,7 @@ namespace Web.AnalyticsWeb.Controllers
         {
             var analysis = await TryGetScopedSummaryAsync(
                 windowDays, seatLicenceTypeIds, emailDomain, FirstResponseBudget, cancellationToken);
-            if (analysis == null) return StillBuilding();
+            if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
             return Ok(analysis.Summary);
         }
 
@@ -333,7 +377,7 @@ namespace Web.AnalyticsWeb.Controllers
             CancellationToken cancellationToken = default(CancellationToken))
         {
             var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
-            if (analysis == null) return StillBuilding();
+            if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
             return Ok(analysis.Summary.SeatLicenceTypes);
         }
 
@@ -347,7 +391,7 @@ namespace Web.AnalyticsWeb.Controllers
             CancellationToken cancellationToken = default(CancellationToken))
         {
             var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
-            if (analysis == null) return StillBuilding();
+            if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
             return Ok(analysis.Sql);
         }
 
@@ -369,7 +413,7 @@ namespace Web.AnalyticsWeb.Controllers
             CancellationToken cancellationToken = default(CancellationToken))
         {
             var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, cancellationToken);
-            if (analysis == null) return StillBuilding();
+            if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
 
             return Ok(new
             {
@@ -437,7 +481,7 @@ namespace Web.AnalyticsWeb.Controllers
             CancellationToken cancellationToken = default(CancellationToken))
         {
             var analysis = await TryGetScopedRowsAsync(windowDays, seatLicenceTypeIds, emailDomain, cancellationToken);
-            if (analysis == null) return StillBuilding();
+            if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
 
             var query = BuildLicensedUserQuery(
                 search, bands, department, country, reclaimEligibility, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
@@ -485,7 +529,7 @@ namespace Web.AnalyticsWeb.Controllers
             // download instead of an answer.
             var analysis = await TryGetScopedRowsAsync(
                 windowDays, seatLicenceTypeIds, emailDomain, ExportWaitBudget, cancellationToken);
-            if (analysis == null) return ExportNotReadyResponse();
+            if (analysis == null) return ExportNotReadyResponse(windowDays, seatLicenceTypeIds);
 
             var query = BuildLicensedUserQuery(
                 search, bands, department, country, reclaimEligibility, coworkOnly, disabledOnly, minScore, maxScore, sortBy, sortDesc, actions);
@@ -498,7 +542,8 @@ namespace Web.AnalyticsWeb.Controllers
                     CopilotAdoptionExports.LicensedUserColumns(
                         analysis.Summary.FiguresIncomplete,
                         WarningSummary(analysis.Summary))),
-                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-licensed-users", emailDomain), analysis.Summary.GeneratedUtc));
+                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-licensed-users", emailDomain), analysis.Summary.GeneratedUtc),
+                analysis.Summary.Diagnostics?.RunId);
         }
 
         /// <summary>
@@ -550,7 +595,7 @@ namespace Web.AnalyticsWeb.Controllers
             CancellationToken cancellationToken = default(CancellationToken))
         {
             var analysis = await TryGetScopedRowsAsync(windowDays, seatLicenceTypeIds, emailDomain, cancellationToken);
-            if (analysis == null) return StillBuilding();
+            if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
 
             var query = BuildOpportunityQuery(
                 search, department, country, recommendedOnly, existingCopilotUsersOnly, minScore, sortBy, sortDesc);
@@ -590,7 +635,7 @@ namespace Web.AnalyticsWeb.Controllers
             // download instead of an answer.
             var analysis = await TryGetScopedRowsAsync(
                 windowDays, seatLicenceTypeIds, emailDomain, ExportWaitBudget, cancellationToken);
-            if (analysis == null) return ExportNotReadyResponse();
+            if (analysis == null) return ExportNotReadyResponse(windowDays, seatLicenceTypeIds);
 
             var query = BuildOpportunityQuery(
                 search, department, country, recommendedOnly, existingCopilotUsersOnly, minScore, sortBy, sortDesc);
@@ -603,7 +648,8 @@ namespace Web.AnalyticsWeb.Controllers
                     CopilotAdoptionExports.LicenceOpportunityColumns(
                         analysis.Summary.FiguresIncomplete,
                         WarningSummary(analysis.Summary))),
-                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-licence-opportunities", emailDomain), analysis.Summary.GeneratedUtc));
+                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-licence-opportunities", emailDomain), analysis.Summary.GeneratedUtc),
+                analysis.Summary.Diagnostics?.RunId);
         }
 
         #endregion
@@ -636,7 +682,7 @@ namespace Web.AnalyticsWeb.Controllers
             CancellationToken cancellationToken = default(CancellationToken))
         {
             var analysis = await TryGetScopedRowsAsync(windowDays, seatLicenceTypeIds, emailDomain, cancellationToken);
-            if (analysis == null) return StillBuilding();
+            if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
 
             var query = BuildCoworkQuery(
                 search, tiers, department, country, recommendedOnly, coworkUsersOnly,
@@ -681,7 +727,7 @@ namespace Web.AnalyticsWeb.Controllers
             // Exports are <a href> downloads, not fetch() calls - see ExportOpportunities.
             var analysis = await TryGetScopedRowsAsync(
                 windowDays, seatLicenceTypeIds, emailDomain, ExportWaitBudget, cancellationToken);
-            if (analysis == null) return ExportNotReadyResponse();
+            if (analysis == null) return ExportNotReadyResponse(windowDays, seatLicenceTypeIds);
 
             var query = BuildCoworkQuery(
                 search, tiers, department, country, recommendedOnly, coworkUsersOnly,
@@ -691,7 +737,8 @@ namespace Web.AnalyticsWeb.Controllers
 
             return CsvResponse(
                 CsvSerialiser.ToBytes(rows, CopilotAdoptionExports.CoworkReadinessColumns()),
-                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-cowork-readiness", emailDomain), analysis.Summary.GeneratedUtc));
+                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-cowork-readiness", emailDomain), analysis.Summary.GeneratedUtc),
+                analysis.Summary.Diagnostics?.RunId);
         }
 
         #endregion
@@ -714,6 +761,19 @@ namespace Web.AnalyticsWeb.Controllers
         /// The per-user sheets carry the same columns as the CSV exports, from the same definitions.</para>
         ///
         /// Built from the same cached analysis that renders the page, so the two can never disagree.
+        ///
+        /// <para>The optional time-saved parameters carry the assumptions the reader entered in the
+        /// portal. <c>copilotMinutesSavedPerMeeting</c>, <c>copilotMinutesSavedPerMailThread</c> and
+        /// <c>copilotMinutesSavedPerDocument</c> restate the licence estimate;
+        /// <c>coworkMinutesSavedPerTask</c> and, for each kind of work Cowork could take on, its share and
+        /// minutes under the option's own name (<c>coworkOrganiseMeetingsShare</c>,
+        /// <c>coworkOrganiseMeetingsMinutes</c> and so on - see <see cref="CoworkActivities"/>) restate the
+        /// Cowork estimate; <c>coworkEstimateLowerBoundRatio</c> applies to both. The per-activity figures
+        /// are read from the query string by those names rather than bound one parameter each, so a kind
+        /// of work added to the catalogue needs no change here. Those figures live in the browser only, so
+        /// the export has to be told them or a customised page would download a workbook modelling
+        /// different hours. They change the modelled estimates and the matching Settings rows, never a
+        /// measured figure, and never the cached analysis itself.</para>
         /// </summary>
         // GET: api/CopilotAdoption/export/workbook?windowDays=28
         [HttpGet]
@@ -722,6 +782,11 @@ namespace Web.AnalyticsWeb.Controllers
             int windowDays = 28,
             string seatLicenceTypeIds = null,
             string emailDomain = null,
+            string copilotMinutesSavedPerMeeting = null,
+            string copilotMinutesSavedPerMailThread = null,
+            string copilotMinutesSavedPerDocument = null,
+            string coworkEstimateLowerBoundRatio = null,
+            string coworkMinutesSavedPerTask = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
             // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
@@ -730,12 +795,20 @@ namespace Web.AnalyticsWeb.Controllers
             // download instead of an answer.
             var analysis = await TryGetScopedSummaryAsync(
                 windowDays, seatLicenceTypeIds, emailDomain, ExportWaitBudget, cancellationToken);
-            if (analysis == null) return ExportNotReadyResponse();
+            if (analysis == null) return ExportNotReadyResponse(windowDays, seatLicenceTypeIds);
+
+            var timeSaved = ParseTimeSavedOverrides(
+                copilotMinutesSavedPerMeeting,
+                copilotMinutesSavedPerMailThread,
+                copilotMinutesSavedPerDocument,
+                coworkEstimateLowerBoundRatio,
+                coworkMinutesSavedPerTask,
+                QueryNameValuePairs(Request));
 
             byte[] bytes;
             try
             {
-                bytes = CopilotAdoptionWorkbook.Build(analysis);
+                bytes = CopilotAdoptionWorkbook.Build(analysis, timeSaved.Any ? timeSaved : null);
             }
             catch (Exception ex)
             {
@@ -769,6 +842,8 @@ namespace Web.AnalyticsWeb.Controllers
                 };
             }
 
+            AddRunIdHeader(Response, analysis.Summary.Diagnostics?.RunId);
+
             return new FileContentResult(bytes,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             {
@@ -779,6 +854,72 @@ namespace Web.AnalyticsWeb.Controllers
         #endregion
 
         #region Parameter handling
+
+        /// <summary>
+        /// The reader's time-saved figures from an export URL, parsed with the INVARIANT culture.
+        /// </summary>
+        /// <remarks>
+        /// Taken as strings and parsed here rather than bound as <c>double?</c>, so the rule is stated
+        /// rather than inherited from the model binder. The portal writes JavaScript numbers ("0.5"),
+        /// and on a server running a European culture a culture-sensitive parse reads the full stop as a
+        /// thousands separator - "0.5" minutes per email would become 5, and the workbook would model
+        /// ten times the saving the reader entered. Anything unparseable is ignored and keeps the
+        /// product default; the bounds are applied by <see cref="TimeSavedOverrides.ApplyTo"/>.
+        /// </remarks>
+        /// <param name="query">
+        /// The request's query string, from which each kind of work's share and minutes are read under
+        /// their option names (<see cref="CoworkActivity.ShareOption"/>, <see cref="CoworkActivity.MinutesOption"/>),
+        /// matched case-insensitively as Web API binds the named parameters.
+        /// </param>
+        internal static TimeSavedOverrides ParseTimeSavedOverrides(
+            string minutesPerMeeting,
+            string minutesPerMailThread,
+            string minutesPerDocument,
+            string lowerBoundRatio,
+            string minutesPerTask = null,
+            IEnumerable<KeyValuePair<string, string>> query = null)
+        {
+            var overrides = new TimeSavedOverrides
+            {
+                MinutesSavedPerMeeting = ParseInvariantDouble(minutesPerMeeting),
+                MinutesSavedPerMailThread = ParseInvariantDouble(minutesPerMailThread),
+                MinutesSavedPerDocument = ParseInvariantDouble(minutesPerDocument),
+                LowerBoundRatio = ParseInvariantDouble(lowerBoundRatio),
+                MinutesSavedPerTask = ParseInvariantDouble(minutesPerTask),
+            };
+
+            if (query == null) return overrides;
+
+            // First value wins for a repeated key, as it does for a bound parameter.
+            var figures = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var pair in query)
+            {
+                if (pair.Key != null && !figures.ContainsKey(pair.Key)) figures[pair.Key] = pair.Value;
+            }
+
+            foreach (var activity in CoworkActivities.All)
+            {
+                if (figures.TryGetValue(activity.ShareOption, out var share))
+                    overrides.CoworkShares[activity.Key] = ParseInvariantDouble(share);
+                if (figures.TryGetValue(activity.MinutesOption, out var minutes))
+                    overrides.CoworkMinutes[activity.Key] = ParseInvariantDouble(minutes);
+            }
+
+            return overrides;
+        }
+
+        private static double? ParseInvariantDouble(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return null;
+
+            return double.TryParse(
+                value.Trim(),
+                NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint | NumberStyles.AllowExponent,
+                CultureInfo.InvariantCulture,
+                out var parsed)
+                ? parsed
+                : (double?)null;
+        }
 
         /// <summary>
         /// Snaps a requested window to one of the supported values. A free-form window would let a
@@ -1000,10 +1141,33 @@ namespace Web.AnalyticsWeb.Controllers
         /// so Excel renders non-ASCII names correctly, and the charset is declared explicitly for
         /// everything that is not Excel.
         /// </summary>
-        private static IActionResult CsvResponse(byte[] csv, string fileName)
+        private IActionResult CsvResponse(byte[] csv, string fileName, string runId)
         {
-            // File() sets Content-Type and an attachment Content-Disposition with the given name.
+            AddRunIdHeader(Response, runId);
+
+            // FileContentResult sets Content-Type and an attachment Content-Disposition with the given name.
             return new FileContentResult(csv, "text/csv; charset=utf-8") { FileDownloadName = fileName };
+        }
+
+        /// <summary>
+        /// The request's query string as name/value pairs, for <see cref="ParseTimeSavedOverrides"/>.
+        /// </summary>
+        /// <remarks>
+        /// The ASP.NET Core counterpart of Web API 2's <c>Request.GetQueryNameValuePairs()</c>. That
+        /// yielded a repeated key once per value and the parser keeps the first; ASP.NET Core groups a
+        /// repeated key's values into one <see cref="Microsoft.Extensions.Primitives.StringValues"/>,
+        /// so the first of them is handed over - never the comma-joined <c>ToString()</c>, which would
+        /// turn <c>?coworkSendEmailShare=0.1&amp;coworkSendEmailShare=0.9</c> into an unparseable
+        /// "0.1,0.9" and silently drop the reader's figure.
+        /// </remarks>
+        internal static IEnumerable<KeyValuePair<string, string>> QueryNameValuePairs(HttpRequest request)
+        {
+            if (request?.Query == null) return null;
+
+            return request.Query
+                .Select(pair => new KeyValuePair<string, string>(
+                    pair.Key, pair.Value.Count > 0 ? pair.Value[0] : null))
+                .ToList();
         }
 
         #endregion
