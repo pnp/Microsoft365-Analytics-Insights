@@ -1471,14 +1471,19 @@ const NOT_DISPLAYED_PLACEHOLDERS: Record<string, string> = {
   '(Any app)': 'the Office apps matrix ranking sentinel, filtered out before the rows are returned',
 };
 
-function serverPlaceholders(): string[] {
+/** Every parenthesised label the scanned C# and SQL write in CODE - comments quote them too. */
+function serverParenthesisedLiterals(): string[] {
   return sortedUnique(
     SERVER_PLACEHOLDER_SOURCES.flatMap((file) => {
       // Doc and line comments quote these labels too; only code can put one on a page.
       const code = readFileSync(file, 'utf8').replace(/^\s*\/\/.*$/gm, '');
       return [...code.matchAll(SERVER_PLACEHOLDER_LITERAL)].map((m) => m[1]);
     }),
-  ).filter((label) => !(label in NOT_DISPLAYED_PLACEHOLDERS));
+  );
+}
+
+function serverPlaceholders(): string[] {
+  return serverParenthesisedLiterals().filter((label) => !(label in NOT_DISPLAYED_PLACEHOLDERS));
 }
 
 describe('Server placeholder labels', () => {
@@ -1495,10 +1500,10 @@ describe('Server placeholder labels', () => {
     expect(serverPlaceholders()).toContain('(no department)');
     expect(serverPlaceholders().length).toBeGreaterThanOrEqual(20);
 
-    // An exclusion that no longer matches anything is a stale reason, not a harmless one.
-    const everything = SERVER_PLACEHOLDER_SOURCES.flatMap((file) =>
-      [...readFileSync(file, 'utf8').matchAll(SERVER_PLACEHOLDER_LITERAL)].map((m) => m[1]));
-    expect(Object.keys(NOT_DISPLAYED_PLACEHOLDERS).filter((label) => !everything.includes(label))).toEqual([]);
+    // An exclusion the code no longer writes is a stale reason, not a harmless one - checked against
+    // the same comment-free extraction, so a label that survives only in a comment does not keep it.
+    const inCode = serverParenthesisedLiterals();
+    expect(Object.keys(NOT_DISPLAYED_PLACEHOLDERS).filter((label) => !inCode.includes(label))).toEqual([]);
   });
 
   it('recognises every placeholder the server writes, and none it no longer writes', () => {
