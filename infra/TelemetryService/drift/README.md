@@ -51,7 +51,8 @@ repository secrets and variables, reusing what `telemetry-service.yml` already n
   "vnetAddressPrefix": "10.0.0.0/16",
   "appIntegrationSubnetPrefix": "10.0.1.0/24",
   "privateEndpointSubnetPrefix": "10.0.2.0/24",
-  "azureAdClientId": "<app registration client id>"
+  "azureAdClientId": "<app registration client id>",
+  "loadFirstPartyAuth": true
 }
 ```
 

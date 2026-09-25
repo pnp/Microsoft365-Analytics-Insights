@@ -17,8 +17,8 @@ works today. This file is about *how we got things wrong*.
 ### `wwwroot` is a decoy when running from package
 
 The app service sets `WEBSITE_RUN_FROM_PACKAGE=1`, so `/home/site/wwwroot`
-contains only the `hostingstart.html` placeholder. Listing it and concluding
-"nothing is deployed" is wrong.
+(`D:\home\site\wwwroot` on Windows) contains only the `hostingstart.html`
+placeholder. Listing it and concluding "nothing is deployed" is wrong.
 
 The running code is a zip under `/home/data/SitePackages/`, and
 `packagename.txt` in that folder names the active one. To confirm what is
@@ -141,11 +141,15 @@ far enough to need a signature check.
 On Linux, App Service Authentication runs as a **separate container** — the
 docker log shows `StartingAuthContainer`. It is not part of the application
 process, so it does not appear in the application's Application Insights at all.
+(On Windows it runs inside the site's IIS pipeline, but still emits nothing to
+the application's own telemetry.)
 
 Practical consequence: you cannot confirm what EasyAuth does, which identity
 stack it uses, or what it sends to Entra, from application telemetry. Absence of
 evidence in App Insights says nothing about the sidecar. We spent time looking
-for its key-discovery calls in a place they could never appear.
+for its key-discovery calls in a place they could never appear. App Service's
+own **EasyAuth detector** is where to look instead — see
+[Read the platform's own diagnostics first](#read-the-platforms-own-diagnostics-first).
 
 ---
 
@@ -195,8 +199,64 @@ Read the overload you are replacing before replacing it.
 
 Enabling App Service Authentication as MISE remediation was designed and shipped
 without first establishing that platform-supplied authentication satisfies the
-compliance KPI. It does not appear to, and two review cycles were spent finding
-that out.
+compliance KPI. As configured, it could not: it validated tokens with MISE v1
+(see below), and two review cycles were spent finding out that it did not work
+— and several more before anyone found out why.
+
+### Read the platform's own diagnostics first
+
+App Service's EasyAuth detector (*Diagnose and solve problems* →
+*Authentication Configuration and Investigation Detector (EasyAuth)*, or
+`GET {site}/detectors/EasyAuth?api-version=2022-03-01&startTime=…&endTime=…`)
+reports the App Service Authentication version actually running and, for every
+failed token validation, which MISE generation handled it. On this service it
+had been saying `JWT validation failed: MISEv1 enabled` and
+`Component: AuthenticationTicketProvider:1.37.0.0` since the day MISE was
+switched on. Five weeks of hypotheses, emails and configuration changes went
+by before anyone opened it.
+
+It only records *failures*, so to get a reading on demand, send one
+well-formed but unsigned token (the README has a snippet) and read the detector
+a few minutes later. `/.auth/version` is no substitute: on Linux it answers
+`401` unless the request is already authenticated.
+
+### `WEBSITE_AAD_ENABLE_MISE` is only half the switch
+
+`WEBSITE_AAD_ENABLE_MISE=true` makes App Service Authentication validate with
+MISE — but on its own that is **MISE v1**, and the compliance KPI requires v2.
+MISE v2 is in App Service Authentication's first-party modules, which load only
+when `WEBSITE_LOAD_FIRST_PARTY_AUTH=true` is set too, and App Service accepts
+that setting only on a subscription it has enabled for first-party
+authentication. Even then it depends on the host: those modules reached Windows
+first and Linux region by region, and had not reached this service's region on
+Linux. That is why the service moved to Windows.
+
+The public Linux build cannot do it. The public
+`mcr.microsoft.com/appsvc/middleware` image for the exact App Service
+Authentication version this service ran lists only MISE `1.37.0` packages in
+its `Middleware.Host.deps.json`; MISE v2 ships in the separate first-party
+modules. The earlier conclusion that "EasyAuth bundles MISE v1, so there is no
+path" was half right: it described the configuration we had, not the
+platform's limits.
+
+### A deleted app registration gets replaced without anyone deciding to
+
+Non-compliant registrations are scheduled for deletion, and this one was
+deleted. Three days later a replacement with the same display name — and a new
+client ID — was in place and the site had been pointed at it. Nothing made
+anyone notice the ID had changed, and `deploy.ps1` would have done the same on
+its own: it looked the registration up by display name and created one when
+nothing matched. A new client ID restarts the compliance process against a
+registration nobody is tracking and drops every user's role assignment and
+consent, and the next reminder looks exactly like the last one apart from the
+App ID.
+
+`deploy.ps1` now resolves the registration from the client ID the existing site
+is configured for, and **stops** if it has gone, pointing at Entra's *Deleted
+applications* (restorable for 30 days). Creating a replacement needs
+`-AllowNewEntraApplication`. When a compliance notice arrives, compare its App
+ID with the site's `AzureAd__ClientId` before assuming it is the one you have
+already been working on.
 
 The check that should have come first: what signal does the KPI actually read,
 and does the proposed change produce that specific signal? "Tokens now validate
