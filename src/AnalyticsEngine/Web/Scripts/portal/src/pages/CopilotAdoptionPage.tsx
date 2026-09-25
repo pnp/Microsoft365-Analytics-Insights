@@ -1466,7 +1466,11 @@ function AnalystTab({
           </div>
           <div className={styles.cardBody}>
             <RadarChart
-              axes={['Frequency', 'Depth', 'Breadth']}
+              axes={[
+                t('copilotAdoption.page.radar.axis.frequency'),
+                t('copilotAdoption.page.radar.axis.depth'),
+                t('copilotAdoption.page.radar.axis.breadth'),
+              ]}
               series={summary.scoreProfiles.map((p, i) => ({
                 name: `${scoreProfileLabel(t, p.label)} (${formatCount(p.users)})`,
                 colour: i === 0 ? '#0f6cbd' : '#107c10',

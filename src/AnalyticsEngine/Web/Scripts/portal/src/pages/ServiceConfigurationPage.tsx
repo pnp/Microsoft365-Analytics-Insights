@@ -29,6 +29,7 @@ import { formatUtc } from '../components/health/healthShared';
 import { serverPlaceholderText } from '../components/shared/serverPlaceholder';
 import Spinner from '../components/Spinner';
 import { useT, useTNode } from '../i18n';
+import { buildLabelText } from '../product';
 import { enabledImportLabelText } from './InsightsOverviewPage';
 
 const useStyles = makeStyles({
@@ -172,12 +173,12 @@ function UpdateCheckCard({ styles }: { styles: ReturnType<typeof useStyles> }) {
             <TableBody>
               <TableRow>
                 <TableCell className={styles.label}>{t('admin.serviceConfiguration.updates.currentBuildLabel')}</TableCell>
-                <TableCell className={styles.value}>{result.currentBuildLabel ?? t('admin.common.unknown')}</TableCell>
+                <TableCell className={styles.value}>{buildLabelText(t, result.currentBuildLabel) ?? t('admin.common.unknown')}</TableCell>
               </TableRow>
               <TableRow>
                 <TableCell className={styles.label}>{t('admin.serviceConfiguration.updates.latestReleaseLabel')}</TableCell>
                 <TableCell className={styles.value}>
-                  {result.latestReleaseName ??
+                  {buildLabelText(t, result.latestReleaseName) ??
                     (result.latestBuild != null
                       ? t('admin.serviceConfiguration.updates.build', { build: result.latestBuild })
                       : t('admin.common.unknown'))}
@@ -332,7 +333,7 @@ export default function ServiceConfigurationPage() {
     <div>
       <Title3 block>
         {status.buildLabel
-          ? t('admin.serviceConfiguration.titleWithBuild', { buildLabel: status.buildLabel })
+          ? t('admin.serviceConfiguration.titleWithBuild', { buildLabel: buildLabelText(t, status.buildLabel) })
           : t('admin.serviceConfiguration.title')}
       </Title3>
 

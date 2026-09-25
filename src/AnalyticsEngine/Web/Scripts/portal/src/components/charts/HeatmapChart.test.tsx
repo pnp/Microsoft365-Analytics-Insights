@@ -1,9 +1,22 @@
 import { describe, it, expect } from 'vitest';
 import { screen } from '@testing-library/react';
+import { loadCatalog } from '../../i18n';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import HeatmapChart from './HeatmapChart';
 
 describe('HeatmapChart', () => {
+  it('names the days in the portal language', async () => {
+    await loadCatalog('es');
+    renderWithProvider(<HeatmapChart cells={[{ dayOfWeek: 0, hour: 9, value: 12 }]} valueLabel="llamadas" />, { language: 'es' });
+
+    // Monday first, as the server's dayOfWeek counts. The English list that used to be typed out
+    // here rendered "Mon ... Sun" on every Spanish heatmap.
+    expect(await screen.findByText('lun')).toBeInTheDocument();
+    expect(screen.getByText('dom')).toBeInTheDocument();
+    expect(screen.queryByText('Mon')).not.toBeInTheDocument();
+    expect(screen.getByTitle('lun 09:00 - 12 llamadas')).toBeInTheDocument();
+  });
+
   it('says so when there is nothing to draw', () => {
     renderWithProvider(<HeatmapChart cells={[]} valueLabel="calls" />);
     expect(screen.getByText('No data for this period.')).toBeInTheDocument();

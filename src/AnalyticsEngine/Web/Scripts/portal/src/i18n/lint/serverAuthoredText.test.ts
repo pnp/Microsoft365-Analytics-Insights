@@ -962,7 +962,11 @@ describe('Copilot Adoption server-authored text', () => {
       expect(dimensionClass, 'Could not find CopilotAdoptionAccountabilityDimensions').toBeTruthy();
       const dimensions = sortedUnique([...dimensionClass.matchAll(/public const string \w+ = "([^"]+)";/g)].map((m) => m[1]));
       const service = copilotAdoptionServiceSource();
-      const emptyKeys = sortedUnique([...service.matchAll(/"(no[A-Z]\w*)"/g)].map((m) => m[1]));
+      // Scoped to the method that assigns them, so an unrelated "noSomething" literal elsewhere in the
+      // service cannot fail this for the wrong reason.
+      const emptyKeyMethod = service.match(/static string EmptyAccountabilitySegmentKey\([\s\S]*?\n {8}\}/)?.[0] ?? '';
+      expect(emptyKeyMethod, 'Could not find EmptyAccountabilitySegmentKey').toBeTruthy();
+      const emptyKeys = sortedUnique([...emptyKeyMethod.matchAll(/"(no[A-Z]\w*)"/g)].map((m) => m[1]));
       expect(dimensions.length, 'accountability dimension extraction matched nothing').toBeGreaterThanOrEqual(5);
       expect(emptyKeys.length, 'empty-bucket key extraction matched nothing').toBeGreaterThanOrEqual(5);
 
@@ -1452,8 +1456,20 @@ const SERVER_PLACEHOLDER_SOURCES = [
   ['Web', 'Models', 'SystemStatus.cs'],
 ].map((parts) => join(process.cwd(), '..', '..', '..', ...parts));
 
-/** `"(no department)"`, `'(other sites)'`, `N'(untitled element)'` - C# and SQL string literals. */
-const SERVER_PLACEHOLDER_LITERAL = /(?:N?'|")(\((?:[Nn]o |[Uu]nknown|[Oo]ther|untitled|not |disabled|none)[^()'"]*\))(?:'|")/g;
+/**
+ * `"(no department)"`, `'(other sites)'`, `N'(untitled element)'` - any C# or SQL string literal whose
+ * whole value is a parenthesised label. Deliberately not a list of the prefixes that exist today
+ * ("no", "unknown", "other"...): round 5's first version was, and "(unnamed agent)" went straight
+ * past it. Letters, spaces and hyphens only, so SQL such as `(u.account_enabled IS NULL OR ...)`
+ * is not mistaken for a label.
+ */
+const SERVER_PLACEHOLDER_LITERAL = /(?:N?'|")(\([A-Za-z][A-Za-z \-]*\))(?:'|")/g;
+
+/** Parenthesised literals in those files that never reach a page, and why. */
+const NOT_DISPLAYED_PLACEHOLDERS: Record<string, string> = {
+  '(all)': 'a cache-key fragment in ReportsAPIController, never returned',
+  '(Any app)': 'the Office apps matrix ranking sentinel, filtered out before the rows are returned',
+};
 
 function serverPlaceholders(): string[] {
   return sortedUnique(
@@ -1462,7 +1478,7 @@ function serverPlaceholders(): string[] {
       const code = readFileSync(file, 'utf8').replace(/^\s*\/\/.*$/gm, '');
       return [...code.matchAll(SERVER_PLACEHOLDER_LITERAL)].map((m) => m[1]);
     }),
-  );
+  ).filter((label) => !(label in NOT_DISPLAYED_PLACEHOLDERS));
 }
 
 describe('Server placeholder labels', () => {
@@ -1478,6 +1494,11 @@ describe('Server placeholder labels', () => {
     }
     expect(serverPlaceholders()).toContain('(no department)');
     expect(serverPlaceholders().length).toBeGreaterThanOrEqual(20);
+
+    // An exclusion that no longer matches anything is a stale reason, not a harmless one.
+    const everything = SERVER_PLACEHOLDER_SOURCES.flatMap((file) =>
+      [...readFileSync(file, 'utf8').matchAll(SERVER_PLACEHOLDER_LITERAL)].map((m) => m[1]));
+    expect(Object.keys(NOT_DISPLAYED_PLACEHOLDERS).filter((label) => !everything.includes(label))).toEqual([]);
   });
 
   it('recognises every placeholder the server writes, and none it no longer writes', () => {

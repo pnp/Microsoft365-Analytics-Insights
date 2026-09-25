@@ -41,7 +41,7 @@ const health: Record<keyof typeof en, string> = {
   'health.reason.runtimeCertificateCheckFailed': 'No se pudo comprobar el certificado en tiempo de ejecución: {error}',
   'health.reason.teamsCallsQueueDepthFailed': 'No se pudo leer la profundidad de la cola de llamadas de Teams: {error}',
   'health.reason.teamsCallsQueueDepthFailedNetworkBlock': 'No se pudo leer la profundidad de la cola de llamadas de Teams: {error} Esto parece un bloqueo de nivel de red en lugar de un problema de permisos: en una implementación privada (VNet), Service Bus debe estar en la SKU Premium con un punto de conexión privado; de lo contrario, el espacio de nombres no es accesible y las llamadas de Teams no se importarán. Migre el espacio de nombres a Premium o vuelva a habilitar el acceso de red público en él.',
-  'health.reason.teamsCallsQueueDepth': "Cola de llamadas de Teams '{queue}': {active} activos y {deadLettered} en la cola de mensajes fallidos.",
+  'health.reason.teamsCallsQueueDepth': "Cola de llamadas de Teams '{queue}': mensajes activos: {active}; mensajes fallidos: {deadLettered}.",
   'health.reason.schemaBehind': 'El esquema de la base de datos va por detrás de esta compilación ({count} migración(es) pendiente(s)): ejecute el actualizador.',
   'health.reason.noCompletedImportCycle': 'No se ha registrado ningún ciclo de importación completado para {job}.',
   'health.reason.importCycleOverdue': '{job} no ha completado ningún ciclo en {hours} h (SLA {sla} h).',

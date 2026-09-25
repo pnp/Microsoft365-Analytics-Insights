@@ -101,6 +101,7 @@ const common: Record<keyof typeof en, string> = {
   'common.serverPlaceholder.unknownDevice': '(dispositivo desconocido)',
   'common.serverPlaceholder.otherDevices': '(otros dispositivos)',
   'common.serverPlaceholder.untitledElement': '(elemento sin título)',
+  'common.serverPlaceholder.unnamedAgent': '(agente sin nombre)',
   'common.serverPlaceholder.notSet': '(sin establecer)',
   'common.serverPlaceholder.notStated': '(sin indicar)',
   'common.serverPlaceholder.none': '(ninguno)',

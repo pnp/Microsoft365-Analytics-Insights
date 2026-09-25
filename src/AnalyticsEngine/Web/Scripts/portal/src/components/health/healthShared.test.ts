@@ -37,7 +37,11 @@ describe('translateHealthReasonText', () => {
     );
     expect(translateHealthReasonText(rollupReasons[2], es)).toBe('Office365ActivityImporter no ha completado ningún ciclo en 50 h (SLA 24 h).');
     expect(translateHealthReasonText(rollupReasons[7], es)).toBe(
-      "ServiceBus está degradado: Cola de llamadas de Teams 'callrecords': 12 activos y 3 en la cola de mensajes fallidos.",
+      "ServiceBus está degradado: Cola de llamadas de Teams 'callrecords': mensajes activos: 12; mensajes fallidos: 3.",
+    );
+    // Count-invariant on purpose: "{active} activos" read "1 activos" for a single message.
+    expect(translateHealthReasonText("ServiceBus is degraded: Teams calls queue 'callrecords': 1 active, 1 dead-lettered.", es)).toBe(
+      "ServiceBus está degradado: Cola de llamadas de Teams 'callrecords': mensajes activos: 1; mensajes fallidos: 1.",
     );
   });
 

@@ -33,6 +33,7 @@ export const SERVER_PLACEHOLDER_KEYS: readonly TranslationKey[] = [
   'common.serverPlaceholder.unknownDevice',
   'common.serverPlaceholder.otherDevices',
   'common.serverPlaceholder.untitledElement',
+  'common.serverPlaceholder.unnamedAgent',
   'common.serverPlaceholder.notSet',
   'common.serverPlaceholder.notStated',
   'common.serverPlaceholder.none',

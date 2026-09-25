@@ -109,6 +109,7 @@ export const common = {
   'common.serverPlaceholder.unknownDevice': '(unknown device)',
   'common.serverPlaceholder.otherDevices': '(other devices)',
   'common.serverPlaceholder.untitledElement': '(untitled element)',
+  'common.serverPlaceholder.unnamedAgent': '(unnamed agent)',
   'common.serverPlaceholder.notSet': '(not set)',
   'common.serverPlaceholder.notStated': '(not stated)',
   'common.serverPlaceholder.none': '(none)',
