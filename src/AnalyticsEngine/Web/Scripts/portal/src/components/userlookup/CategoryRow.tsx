@@ -159,7 +159,20 @@ function detailTitle(t: TFunction, categoryKey: string, title: string | null): s
   return title;
 }
 
-function detailText(t: TFunction, categoryKey: string, detail: string | null): string | null {
+function formatDetailDate(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return formatDateParts(date, { dateStyle: 'short', timeZone: 'UTC' });
+}
+
+export function detailText(t: TFunction, categoryKey: string, row: UserDataDetailRow): string | null {
+  const detail = row.detail;
+  if (row.detailKey === 'usage.lastActivity') {
+    const date = formatDetailDate(row.detailDateUtc);
+    return date ? t('admin.userLookup.detail.lastActivity', { date }) : detail;
+  }
+
   if (!detail) return detail;
   if ((categoryKey === 'calls-organised' || categoryKey === 'call-sessions') && detail.startsWith('Ended ')) {
     return t('admin.userLookup.detail.ended', { date: detail.slice('Ended '.length) });
@@ -331,8 +344,8 @@ export default function CategoryRow({ upn, category }: CategoryRowProps) {
                         </TableCell>
                         <TableCell>
                           {detailTitle(t, category.key, r.title) ? <strong>{detailTitle(t, category.key, r.title)}</strong> : null}
-                          {detailTitle(t, category.key, r.title) && detailText(t, category.key, r.detail) ? ' — ' : ''}
-                          {detailText(t, category.key, r.detail)}
+                          {detailTitle(t, category.key, r.title) && detailText(t, category.key, r) ? ' — ' : ''}
+                          {detailText(t, category.key, r)}
                         </TableCell>
                       </TableRow>
                     ))}

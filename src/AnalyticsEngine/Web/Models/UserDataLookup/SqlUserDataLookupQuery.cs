@@ -432,6 +432,8 @@ namespace Web.AnalyticsWeb.Models.UserDataLookup
                 Timestamp = r.Date,
                 Title = "Activity report day",
                 Detail = r.LastActivityDate.HasValue ? "Last activity " + r.LastActivityDate.Value.ToString("d") : null,
+                DetailKey = r.LastActivityDate.HasValue ? "usage.lastActivity" : null,
+                DetailDateUtc = r.LastActivityDate,
             }).ToList();
         }
 

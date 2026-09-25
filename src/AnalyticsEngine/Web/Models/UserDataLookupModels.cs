@@ -160,6 +160,12 @@ namespace Web.AnalyticsWeb.Models
 
         [JsonProperty("detail")]
         public string Detail { get; set; }
+
+        [JsonProperty("detailKey")]
+        public string DetailKey { get; set; }
+
+        [JsonProperty("detailDateUtc")]
+        public DateTime? DetailDateUtc { get; set; }
     }
 
     /// <summary>
