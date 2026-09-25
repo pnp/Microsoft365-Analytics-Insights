@@ -806,7 +806,16 @@ namespace Web.AnalyticsWeb.Models.Health
         private const string QuerySqlCapacityExceptions =
             "exceptions " +
             "| where timestamp > ago(24h) " +
-            "| where (outerMessage has \"read-only\") or (outerMessage has \"database is full\") or (outerMessage has \"insufficient disk space\") or (type contains \"SqlException\") " +
+            "| where " +
+            "outerMessage has_any (\"40544\", \"1105\", \"1101\", \"9002\", \"3906\") " +
+            "or innermostMessage has_any (\"40544\", \"1105\", \"1101\", \"9002\", \"3906\") " +
+            "or outerMessage has \"read-only\" or innermostMessage has \"read-only\" " +
+            "or outerMessage contains \"database is full\" or innermostMessage contains \"database is full\" " +
+            "or outerMessage contains \"insufficient disk space\" or innermostMessage contains \"insufficient disk space\" " +
+            "or outerMessage contains \"has reached its size quota\" or innermostMessage contains \"has reached its size quota\" " +
+            "or outerMessage contains \"Could not allocate space\" or innermostMessage contains \"Could not allocate space\" " +
+            "or (outerMessage has \"transaction\" and outerMessage has \"log\" and outerMessage has \"full\") " +
+            "or (innermostMessage has \"transaction\" and innermostMessage has \"log\" and innermostMessage has \"full\") " +
             "| summarize Count = count()";
 
         #endregion
