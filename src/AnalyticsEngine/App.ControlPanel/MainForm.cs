@@ -65,7 +65,12 @@ namespace App.ControlPanel
             {
                 this.SavedPreferences.ProxyConfig = new InstallerProxyConfig();
             }
-            InstallerNetworkProxy.ApplyProcessWide(this.SavedPreferences.ProxyConfig, null);
+            if (!InstallerNetworkProxy.TryApplyProcessWide(this.SavedPreferences.ProxyConfig, null, out var proxyError))
+            {
+                MessageBox.Show($"The saved installer proxy settings can't be used: {proxyError}\r\n\r\n" +
+                    "The installer will use the system proxy until you correct them in Window > Proxy Configuration.",
+                    "Proxy Configuration", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
             installSPOSitesControl.ProxyConfig = SavedPreferences.ProxyConfig;
 
             // Overwrite tests config if we're using default settings, or we don't have any saved for some reason

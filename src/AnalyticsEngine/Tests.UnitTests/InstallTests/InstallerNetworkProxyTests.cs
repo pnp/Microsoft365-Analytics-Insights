@@ -142,6 +142,42 @@ namespace Tests.UnitTests.InstallTests
             }
         }
 
+        /// <summary>
+        /// The installer UI applies the saved preference when it opens and before every run. A preference an
+        /// older build saved can fail the stricter #613 validation, and <see cref="InstallerNetworkProxy.ApplyProcessWide"/>
+        /// throws for it - raised from the main form's Load event that left the installer half-initialised.
+        /// The UI therefore uses the Try form, which must leave the process proxy untouched and say why.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow("proxy.contoso.com/proxy.pac", 8080, "without a path", DisplayName = "Path an older build accepted")]
+        [DataRow("http://proxy.contoso.com:3128", 8080, "3128", DisplayName = "Host port contradicts the Port box")]
+        public void TryApply_SavedPreferenceTheStricterValidationRefuses_LeavesTheProxyAloneAndSaysWhy(string host, int port, string expectedFragment)
+        {
+            var saved = new InstallerProxyConfig { UseProxy = true, IntegratedAuth = true, Host = host, Port = port };
+            var before = WebRequest.DefaultWebProxy;
+            var logger = new CapturingLogger();
+
+            Assert.ThrowsException<InvalidOperationException>(() => InstallerNetworkProxy.ApplyProcessWide(saved, logger),
+                "The throwing form is what the UI used to call - the reason the Try form exists.");
+            Assert.AreSame(before, WebRequest.DefaultWebProxy);
+
+            Assert.IsFalse(InstallerNetworkProxy.TryApplyProcessWide(saved, logger, out var error));
+            StringAssert.Contains(error, expectedFragment);
+            Assert.AreSame(before, WebRequest.DefaultWebProxy, "An unusable preference must not change the process proxy.");
+            StringAssert.Contains(string.Join("\n", logger.Messages), expectedFragment);
+        }
+
+        [TestMethod]
+        public void TryApply_UsablePreference_AppliesIt()
+        {
+            using (var proxy = new FakeProxy())
+            {
+                Assert.IsTrue(InstallerNetworkProxy.TryApplyProcessWide(BasicProxyConfig(proxy.Port), new CapturingLogger(), out var error));
+                Assert.IsNull(error);
+                Assert.AreEqual(new Uri($"http://127.0.0.1:{proxy.Port}/"), ((WebProxy)WebRequest.DefaultWebProxy).Address);
+            }
+        }
+
         private static InstallerProxyConfig BasicProxyConfig(int port)
         {
             return new InstallerProxyConfig
