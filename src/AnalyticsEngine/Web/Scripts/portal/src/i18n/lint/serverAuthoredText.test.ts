@@ -833,6 +833,48 @@ describe('DLP availability reasons', () => {
   });
 });
 
+const LICENCE_RULES = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'LicenceActivity', 'ILicenceActivityStore.cs');
+const LICENCE_CONTROLLER = join(process.cwd(), '..', '..', 'Controllers', 'LicenceActivityAPIController.cs');
+
+function csharpStringLiteralValue(value: string): string {
+  return value.replace(/\\"/g, '"').replace(/\\r/g, '\r').replace(/\\n/g, '\n');
+}
+
+function csharpConstString(source: string, name: string): string {
+  const body = new RegExp(`public const string ${name}\\s*=([\\s\\S]*?);\\s*(?:public|static|private|protected|internal)`).exec(source)?.[1] ?? '';
+  return [...body.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => csharpStringLiteralValue(m[1])).join('');
+}
+
+function licenceServerNotes(): string[] {
+  const rules = readFileSync(LICENCE_RULES, 'utf8');
+  const controller = readFileSync(LICENCE_CONTROLLER, 'utf8');
+  return [
+    /result\.Messages\.Add\("((?:[^"\\]|\\.)*)"\)/.exec(controller)?.[1] ?? '',
+    ...[...controller.matchAll(/result\.Messages\.Add\("((?:[^"\\]|\\.)*)"\)/g)].slice(1).map((m) => m[1]),
+    csharpConstString(rules, 'AssignmentCaveat'),
+    csharpConstString(rules, 'InterpretationCaveat'),
+    csharpConstString(rules, 'Method'),
+  ].map(csharpStringLiteralValue);
+}
+
+describe('Licence Activity server-authored notes', () => {
+  it('maps each server note the page recognises to the exact English catalog text', () => {
+    const expectedKeys = [
+      'licenceActivity.note.userMetadataRequired',
+      'licenceActivity.note.privacy',
+      'licenceActivity.note.assignmentCaveat',
+      'licenceActivity.note.interpretationCaveat',
+      'licenceActivity.note.activityMethod',
+    ];
+    const serverNotes = licenceServerNotes();
+    const catalogValuesForNotes = expectedKeys.map((key) => EN_CATALOG[key]);
+
+    expect(serverNotes).toEqual(catalogValuesForNotes);
+    expect(translationKeysIn(readFileSync(join(process.cwd(), 'src', 'pages', 'LicenceActivityPage.tsx'), 'utf8'), 'licenceActivity.note.'))
+      .toEqual(expectedKeys.sort());
+  });
+});
+
 /** Agent cost availability messages are server-authored in SqlAgentCostReportStore.AddMessages. */
 const AGENT_COST_STORE = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'AgentCosts', 'SqlAgentCostReportStore.cs');
 const AGENT_COST_PAGE = join(process.cwd(), 'src', 'pages', 'AgentCostsPage.tsx');

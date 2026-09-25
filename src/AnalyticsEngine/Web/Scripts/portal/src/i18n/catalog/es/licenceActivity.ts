@@ -6,7 +6,7 @@ import type { licenceActivity as en } from '../en/licenceActivity';
  * Typed against the English module, so a key added there without a translation here fails the
  * build rather than reaching a customer as English text inside a Spanish page.
  */
-const licenceActivity: Record<keyof typeof en, string> = {
+const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.users.workloadActivity': 'Actividad de {workload}',
   'licenceActivity.licenceFallbackName': 'Licencia {id}',
   // Shared vocabulary
@@ -32,6 +32,11 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.common.search': 'Buscar',
   'licenceActivity.common.previous': 'Anterior',
   'licenceActivity.common.next': 'Siguiente',
+  'licenceActivity.note.userMetadataRequired': 'Este informe necesita que la importación de detalles de usuario esté activada para poder emparejar las licencias con las personas que las tienen. Pida a quien instaló el producto que marque "User Entra ID extended metadata" en el instalador. Mientras tanto, la pestaña permanece visible.',
+  'licenceActivity.note.privacy': 'Las personas se identifican por su dirección de inicio de sesión. No se recopilan los nombres del personal, por lo que la búsqueda y las listas de usuarios muestran la dirección de inicio de sesión. El departamento y el país proceden del directorio.',
+  'licenceActivity.note.assignmentCaveat': 'La actividad anterior se muestra contra quien tiene cada licencia hoy, no contra quien la tenía en ese momento. Una persona puede tener varias licencias, por lo que sumar las cifras de asignación contará a algunas personas dos veces. Las licencias asignadas no son lo mismo que el número de licencias compradas.',
+  'licenceActivity.note.interpretationCaveat': 'La actividad de alguien que tiene una licencia no demuestra que esa licencia sea lo que la habilitó. Estas cifras no miden productividad, retorno de la inversión ni cumplimiento, y por sí solas no bastan para justificar quitar la licencia a nadie.',
+  'licenceActivity.note.activityMethod': 'Los niveles de actividad describen en cuántas semanas del periodo alguien estuvo activo: Sin actividad = ninguna, Baja = menos de una cuarta parte, Moderada = entre una cuarta parte y menos de tres cuartas partes, Alta = tres cuartas partes o más. Una semana solo se cuenta cuando se importaron todos sus días; cuando una semana no pudo medirse completa, el nivel es Desconocida, no cero.',
 
   // Activity bands and coverage statuses
   'licenceActivity.band.high': 'Alta',

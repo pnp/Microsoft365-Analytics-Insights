@@ -4,7 +4,7 @@
  * Every key here must have a Spanish counterpart in `../es/licenceActivity.ts`; the type of that module
  * makes a missing one a build failure.
  */
-export const licenceActivity = {
+export const licenceActivity = {
   'licenceActivity.users.workloadActivity': '{workload} activity',
   'licenceActivity.licenceFallbackName': 'Licence {id}',
   // Shared vocabulary
@@ -30,6 +30,11 @@ export const licenceActivity = {
   'licenceActivity.common.search': 'Search',
   'licenceActivity.common.previous': 'Previous',
   'licenceActivity.common.next': 'Next',
+  'licenceActivity.note.userMetadataRequired': 'This report needs the user details import turned on, so that licences can be matched to the people who hold them. Ask whoever installed the product to tick "User Entra ID extended metadata" in the installer. The tab stays visible in the meantime.',
+  'licenceActivity.note.privacy': 'People are identified by their sign-in address. Staff names are not collected, so search and the user lists show the sign-in address instead. Department and country come from your directory.',
+  'licenceActivity.note.assignmentCaveat': 'Past activity is shown against who holds each licence today, not who held it at the time. One person can hold several licences, so adding the assignment figures together will count some people twice. Assigned licences are not the same as the number of licences you have bought.',
+  'licenceActivity.note.interpretationCaveat': "Activity by someone who holds a licence does not prove that this licence is what enabled it. These figures do not measure productivity, return on investment or compliance, and are not enough on their own to justify removing anyone's licence.",
+  'licenceActivity.note.activityMethod': "Activity levels describe how many of the period's weeks someone was active in: No activity = none, Low = under a quarter, Moderate = a quarter to under three quarters, High = three quarters or more. A week is only counted when every one of its days was imported; where a week could not be measured in full the level is Unknown, not zero.",
 
   // Activity bands and coverage statuses
   'licenceActivity.band.high': 'High',

@@ -18,7 +18,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowDownload16Regular } from '@fluentui/react-icons';
 import { fetchAvailability, fetchOverview, downloadExport } from '../api/licenceActivityApi';
-import { useT } from '../i18n';
+import { EN_CATALOG, useT, type TranslationKey } from '../i18n';
 import type {
   DateRange,
   LicenceActivityAvailability,
@@ -133,6 +133,18 @@ const useStyles = makeStyles({
  * data-source summary stay above the tabs because they scope every one of them.
  */
 type LaTab = 'overview' | 'byService' | 'byDemographic' | 'people';
+
+export function serverMessageText(t: ReturnType<typeof useT>, message: string): string {
+  const matches: [TranslationKey, string][] = [
+    ['licenceActivity.note.userMetadataRequired', EN_CATALOG['licenceActivity.note.userMetadataRequired']],
+    ['licenceActivity.note.privacy', EN_CATALOG['licenceActivity.note.privacy']],
+    ['licenceActivity.note.assignmentCaveat', EN_CATALOG['licenceActivity.note.assignmentCaveat']],
+    ['licenceActivity.note.interpretationCaveat', EN_CATALOG['licenceActivity.note.interpretationCaveat']],
+    ['licenceActivity.note.activityMethod', EN_CATALOG['licenceActivity.note.activityMethod']],
+  ];
+  const match = matches.find(([, english]) => english === message);
+  return match ? t(match[0]) : message;
+}
 
 /**
  * Licence activity report (issues #436 / #437).
@@ -361,7 +373,7 @@ export default function LicenceActivityPage() {
             {availability.messages.length > 0 && (
               <ul style={{ margin: '6px 0 0 0', paddingInlineStart: '20px' }}>
                 {availability.messages.map((m) => (
-                  <li key={m}>{m}</li>
+                  <li key={m}>{serverMessageText(t, m)}</li>
                 ))}
               </ul>
             )}
@@ -376,7 +388,7 @@ export default function LicenceActivityPage() {
               <MessageBarBody>
                 <ul style={{ margin: 0, paddingInlineStart: '20px' }}>
                   {availability.messages.map((m) => (
-                    <li key={m}>{m}</li>
+                    <li key={m}>{serverMessageText(t, m)}</li>
                   ))}
                 </ul>
               </MessageBarBody>
@@ -509,7 +521,7 @@ export default function LicenceActivityPage() {
                   <MessageBarBody>
                     <ul style={{ margin: 0, paddingInlineStart: '20px' }}>
                       {overview.messages.map((m) => (
-                        <li key={m}>{m}</li>
+                        <li key={m}>{serverMessageText(t, m)}</li>
                       ))}
                     </ul>
                   </MessageBarBody>

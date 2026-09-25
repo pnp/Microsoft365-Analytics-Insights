@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { screen, fireEvent, waitFor, act, within, configure } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../test/renderWithProvider';
-import LicenceActivityPage from './LicenceActivityPage';
+import LicenceActivityPage, { serverMessageText } from './LicenceActivityPage';
+import { EN_CATALOG, loadCatalog, translateStatic } from '../i18n';
 import {
   fetchAvailability,
   fetchOverview,
@@ -160,6 +161,16 @@ beforeEach(() => {
 });
 
 describe('LicenceActivityPage - availability', () => {
+  it('translates known server-authored notes and leaves new notes as server fallback', async () => {
+    await loadCatalog('es');
+    const es = (key: Parameters<typeof translateStatic>[1], values?: Parameters<typeof translateStatic>[2]) =>
+      translateStatic('es', key, values);
+
+    const translated = serverMessageText(es, EN_CATALOG['licenceActivity.note.privacy']);
+    expect(translated).toContain('dirección de inicio de sesión');
+    expect(translated).not.toContain('sign-in address');
+    expect(serverMessageText(es, 'A new server-authored note.')).toBe('A new server-authored note.');
+  });
   it('shows an unavailable message and no export when the report cannot run', async () => {
     mockAvailability.mockResolvedValue(
       availability({ available: false, messages: ['This report needs the user details import turned on.'] }),
