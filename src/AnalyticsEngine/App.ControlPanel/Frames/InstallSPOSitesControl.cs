@@ -432,13 +432,22 @@ namespace App.ControlPanel.Frames
 
         void StartBackgroundProcess(InstallTask task)
         {
+            // Before anything changes state: every installer call below goes out through this proxy, and a
+            // failure after SetFormGUIState(Working) would leave the form stuck in its working state (#613).
+            if (!InstallerNetworkProxy.TryApplyProcessWide(ProxyConfig, _logger, out var proxyError))
+            {
+                MessageBox.Show(this, $"The installer proxy settings can't be used: {proxyError}\r\n\r\n" +
+                    "Correct them in Window > Proxy Configuration, then try again.",
+                    "Proxy Configuration", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
             SetFormGUIState(AppWaitState.Working);
 
             // Start new install 
             installSolutionControl1.ClearLog();
 
             var config = GetConfigFromGUI();
-
 
             var softwareConfig = new SoftwareReleaseConfig();
 

@@ -337,17 +337,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 // Built from the normalised address, never new WebProxy(Host, Port) - see
                 // InstallerProxyConfig.TryGetProxyAddress for the .NET Framework quirk that made a host typed
                 // as "http://proxy.contoso.com" resolve to a proxy called "http" (#613).
-                if (!proxyConfig.TryGetProxyAddress(out var proxyAddress, out var error))
-                {
-                    handler.Dispose();
-                    throw new InvalidOperationException($"The installer proxy configuration is not valid: {error}");
-                }
-
-                var proxy = new WebProxy(proxyAddress);
-                proxy.Credentials = proxyConfig.IntegratedAuth
-                    ? CredentialCache.DefaultCredentials
-                    : new NetworkCredential(proxyConfig.Username, proxyConfig.Password);
-                handler.Proxy = proxy;
+                handler.Proxy = InstallerNetworkProxy.CreateWebProxy(proxyConfig);
                 handler.UseProxy = true;
             }
             return handler;
