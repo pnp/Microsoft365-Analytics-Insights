@@ -5,9 +5,11 @@ import { join } from 'node:path';
 
 import { EN_CATALOG } from '../catalog';
 import { COWORK_TIER_LABEL_KEYS, TENURE_BASIS_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
+import { BLOB_CHECKPOINT_REASON_KEYS } from '../../components/health/healthShared';
 import { TEAMS_MEETING_BUCKET_LABEL_KEYS, TEAMS_SEGMENT_TEXT_KEYS } from '../../components/teamsExplorer/teamsShared';
 import { WEB_ACTIVITY_AVAILABILITY_REASON_KEYS } from '../../components/webActivity/AvailabilityBar';
 import { USER_DATA_WORKLOADS_BY_FLAG } from '../../components/userlookup/CategoryRow';
+import { ACCOUNTABILITY_DIMENSION_TEXT, ACCOUNTABILITY_EMPTY_SEGMENT_KEYS } from '../../pages/CopilotAdoptionPage';
 import { ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY } from '../../pages/InsightsOverviewPage';
 
 function sortedUnique(values: string[]): string[] {
@@ -936,6 +938,24 @@ describe('Copilot Adoption server-authored text', () => {
       ).toEqual({ missing: [], labelCodes: codes, descriptionCodes: codes });
     });
 
+    it('translates every accountability dimension and empty bucket the service can send', () => {
+      const service = copilotAdoptionServiceSource();
+      const dimensionConstants = [...service.matchAll(/CopilotAdoptionAccountabilityDimensions\.(Department|Country|Office|Company|DirectManager)/g)]
+        .map((m) => m[1])
+        .map((name) => name.slice(0, 1).toLowerCase() + name.slice(1));
+      const dimensions = sortedUnique(dimensionConstants);
+      const emptyKeys = sortedUnique([...service.matchAll(/"no(Manager|Department|Country|Office|Company)"/g)].map((m) => `no${m[1]}`));
+
+      expect(Object.keys(ACCOUNTABILITY_DIMENSION_TEXT).sort()).toEqual(dimensions.sort());
+      expect(Object.values(ACCOUNTABILITY_DIMENSION_TEXT).flatMap((entry) => [
+        entry.labelKey,
+        entry.aggregateViewKey,
+        entry.safeViewKey,
+      ]).filter((key) => !(key in EN_CATALOG))).toEqual([]);
+      expect(Object.keys(ACCOUNTABILITY_EMPTY_SEGMENT_KEYS).sort()).toEqual(emptyKeys.sort());
+      expect(Object.values(ACCOUNTABILITY_EMPTY_SEGMENT_KEYS).filter((key) => !(key in EN_CATALOG))).toEqual([]);
+    });
+
     it('translates every engagement band and habit bucket label the scorer can send', () => {
       const source = copilotAdoptionScoringSource();
       const bandLabels = sortedUnique([...source.matchAll(/case AdoptionBand\.\w+: return "([^"]+)";/g)].map((m) => m[1]));
@@ -1115,6 +1135,61 @@ describe('Web Activity availability reasons', () => {
   it('finds the server model that still authors the compatibility reasons', () => {
     expect(() => readFileSync(WEB_ACTIVITY_AVAILABILITY, 'utf8')).not.toThrow();
     expect([...readFileSync(WEB_ACTIVITY_AVAILABILITY, 'utf8').matchAll(WEB_ACTIVITY_REASON_CALL)].length).toBe(8);
+  });
+
+  const BLOB_CHECKPOINT_FACTORY = join(process.cwd(), '..', '..', '..', 'WebJob.Office365ActivityImporter.Engine', 'ActivityAPI', 'BlobCheckpoint', 'ProcessedBlobStoreFactory.cs');
+  const BLOB_CHECKPOINT_REASON_KEY = /new\s+BlobCheckpointFailureClassification\(\s*"([^"]+)"/g;
+  const BLOB_CHECKPOINT_HEALTH_REASON_KEY = /TrackHealthCheck\(\s*HealthComponent\.BlobCheckpoint[\s\S]*?reasonKey:\s*"([^"]+)"/g;
+
+  function blobCheckpointReasonKeys(): string[] {
+    const source = readFileSync(BLOB_CHECKPOINT_FACTORY, 'utf8');
+    return sortedUnique([
+      ...[...source.matchAll(BLOB_CHECKPOINT_REASON_KEY)].map((m) => m[1]),
+      ...[...source.matchAll(BLOB_CHECKPOINT_HEALTH_REASON_KEY)].map((m) => m[1]),
+    ]);
+  }
+
+  describe('Blob checkpoint component health reasons', () => {
+    it('finds the importer factory that emits them', () => {
+      expect(() => readFileSync(BLOB_CHECKPOINT_FACTORY, 'utf8')).not.toThrow();
+      expect(blobCheckpointReasonKeys()).toEqual([
+        'blobCheckpoint.authenticationFailed',
+        'blobCheckpoint.healthy',
+        'blobCheckpoint.keyAuthDisabled',
+        'blobCheckpoint.notConfigured',
+        'blobCheckpoint.permissionMismatch',
+        'blobCheckpoint.storageFirewall',
+        'blobCheckpoint.storageRejected',
+        'blobCheckpoint.transport',
+      ]);
+    });
+
+    it('maps every stable reason key the server emits to a catalog entry', () => {
+      const serverKeys = blobCheckpointReasonKeys();
+      const mappedKeys = sortedUnique(Object.keys(BLOB_CHECKPOINT_REASON_KEYS));
+      const mappedCatalogKeys = Object.values(BLOB_CHECKPOINT_REASON_KEYS).filter((key) => !(key in EN_CATALOG));
+
+      expect({
+        missing: serverKeys.filter((key) => !mappedKeys.includes(key)),
+        orphaned: mappedKeys.filter((key) => !serverKeys.includes(key)),
+        missingCatalog: mappedCatalogKeys,
+      }).toEqual({ missing: [], orphaned: [], missingCatalog: [] });
+    });
+
+    it('keeps the legacy storage-firewall detail recognisable until old telemetry ages out', () => {
+      const source = readFileSync(BLOB_CHECKPOINT_FACTORY, 'utf8');
+      const requiredFragments = [
+        'Azure Table checkpoint unavailable:',
+        'Storage firewall/network rules rejected the Table checkpoint request',
+        "set the storage account to 'Enabled from all networks'",
+        'Using non-durable in-memory checkpoint',
+        'See importer error log.',
+      ];
+
+      for (const fragment of requiredFragments) {
+        expect(source).toContain(fragment);
+      }
+    });
   });
 
   it('has catalogued SPA reasons for the server-authored availability branches', () => {

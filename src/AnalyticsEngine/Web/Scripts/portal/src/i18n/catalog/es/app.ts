@@ -20,6 +20,8 @@ const app: Record<keyof typeof en, string> = {
   'app.language.label': 'Idioma',
   'app.language.choose': 'Cambiar idioma',
   'app.language.current': 'Idioma: {language}',
+  'app.print.buildLabel': 'compilación {build}',
+  'app.print.developmentBuild': 'compilación de desarrollo',
 
   'app.area.insights': 'An\u00e1lisis',
   'app.area.admin': 'Administraci\u00f3n',

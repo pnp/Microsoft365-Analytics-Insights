@@ -12,6 +12,7 @@ import {
 import Spinner from '../Spinner';
 import { formatDateParts, formatNumber, translateActive, useT, type TFunction } from '../../i18n';
 import { health as enHealth } from '../../i18n/catalog/en/health';
+import type { TranslationKey } from '../../i18n';
 import type { ComponentHealthRow, DataOverviewSection, HealthSectionBase, HealthStatusName, HourCount } from '../../types/health';
 
 export type BadgeColor = 'success' | 'warning' | 'danger' | 'informative' | 'subtle';
@@ -19,6 +20,17 @@ export type BadgeColor = 'success' | 'warning' | 'danger' | 'informative' | 'sub
 // A full activity import cycle should complete at least this often (see HEALTH-MONITORING-DESIGN.md).
 export const CYCLE_SLA_HOURS = 24;
 export const AUTO_REFRESH_MS = 60_000;
+
+export const BLOB_CHECKPOINT_REASON_KEYS: Record<string, TranslationKey> = {
+  'blobCheckpoint.healthy': 'health.reason.blobCheckpointHealthy',
+  'blobCheckpoint.notConfigured': 'health.reason.blobCheckpointNotConfigured',
+  'blobCheckpoint.transport': 'health.reason.blobCheckpointTransport',
+  'blobCheckpoint.storageFirewall': 'health.reason.blobCheckpointStorageFirewall',
+  'blobCheckpoint.permissionMismatch': 'health.reason.blobCheckpointPermissionMismatch',
+  'blobCheckpoint.authenticationFailed': 'health.reason.blobCheckpointAuthenticationFailed',
+  'blobCheckpoint.keyAuthDisabled': 'health.reason.blobCheckpointKeyAuthDisabled',
+  'blobCheckpoint.storageRejected': 'health.reason.blobCheckpointStorageRejected',
+};
 
 // --- Time / format helpers ---
 
@@ -166,8 +178,9 @@ export function translateHealthComponentDetailText(detail: string | null | undef
 }
 
 export function translateHealthComponentDetail(component: ComponentHealthRow, t: TFunction): string {
-  if (component.reasonKey === 'blobCheckpoint.storageFirewall') {
-    return t('health.reason.blobCheckpointStorageFirewall', {
+  const blobCheckpointKey = component.reasonKey ? BLOB_CHECKPOINT_REASON_KEYS[component.reasonKey] : null;
+  if (blobCheckpointKey) {
+    return t(blobCheckpointKey, {
       status: component.httpStatus ? formatNumber(component.httpStatus) : '-',
       errorCode: component.errorCode ?? '-',
     });

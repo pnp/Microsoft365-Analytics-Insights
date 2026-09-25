@@ -2563,7 +2563,7 @@ namespace Common.Entities.CopilotAdoption
             return users
                 .GroupBy(u => AccountabilityKey(u, resolved))
                 .Where(g => g.Count() >= _options.MinSeatsPerSegment)
-                .Select(g => SummariseAccountability(g.Key, g.ToList()))
+                .Select(g => SummariseAccountability(g.Key, g.ToList(), EmptyAccountabilitySegmentKey(resolved, g.Key)))
                 .OrderByDescending(r => r.OpportunityUsers)
                 .ThenByDescending(r => r.ReclaimableSeats)
                 .ThenByDescending(r => r.NeverUsedUsers)
@@ -2574,13 +2574,15 @@ namespace Common.Entities.CopilotAdoption
 
         internal static AccountabilityRollupRow SummariseAccountability(
             string segment,
-            IEnumerable<LicensedUserAdoptionRow> users)
+            IEnumerable<LicensedUserAdoptionRow> users,
+            string emptySegmentKey = null)
         {
             var list = users as IList<LicensedUserAdoptionRow> ?? users?.ToList() ?? new List<LicensedUserAdoptionRow>();
             var baseRow = CopilotAdoptionScoring.Summarise(segment, list);
             var row = new AccountabilityRollupRow
             {
                 Segment = baseRow.Segment,
+                EmptySegmentKey = emptySegmentKey,
                 LicensedUsers = baseRow.LicensedUsers,
                 ActiveUsers = baseRow.ActiveUsers,
                 HabitualUsers = baseRow.HabitualUsers,
@@ -2654,6 +2656,23 @@ namespace Common.Entities.CopilotAdoption
                     return clean(user?.CompanyName, "(no company)");
                 default:
                     return clean(user?.ManagerUserPrincipalName, "(no manager)");
+            }
+        }
+
+        internal static string EmptyAccountabilitySegmentKey(string dimension, string segment)
+        {
+            switch (NormaliseAccountabilityDimension(dimension))
+            {
+                case CopilotAdoptionAccountabilityDimensions.Department:
+                    return string.Equals(segment, "(no department)", StringComparison.Ordinal) ? "noDepartment" : null;
+                case CopilotAdoptionAccountabilityDimensions.Country:
+                    return string.Equals(segment, "(no country)", StringComparison.Ordinal) ? "noCountry" : null;
+                case CopilotAdoptionAccountabilityDimensions.Office:
+                    return string.Equals(segment, "(no office)", StringComparison.Ordinal) ? "noOffice" : null;
+                case CopilotAdoptionAccountabilityDimensions.Company:
+                    return string.Equals(segment, "(no company)", StringComparison.Ordinal) ? "noCompany" : null;
+                default:
+                    return string.Equals(segment, "(no manager)", StringComparison.Ordinal) ? "noManager" : null;
             }
         }
 

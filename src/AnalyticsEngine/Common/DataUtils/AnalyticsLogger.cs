@@ -289,7 +289,8 @@ namespace DataUtils
         /// <param name="status">Result of the check.</param>
         /// <param name="detail">Optional free-text reason. MUST NOT contain secrets or customer data.</param>
         /// <param name="daysToExpiry">Optional; for <see cref="HealthComponent.Credential"/>, days until the credential expires.</param>
-        public void TrackHealthCheck(HealthComponent component, HealthStatus status, string detail = null, int? daysToExpiry = null)
+        /// <param name="reasonKey">Optional stable key the web portal can translate while keeping <paramref name="detail"/> as an English fallback.</param>
+        public void TrackHealthCheck(HealthComponent component, HealthStatus status, string detail = null, int? daysToExpiry = null, string reasonKey = null)
         {
             var context = new Dictionary<string, string>
             {
@@ -303,6 +304,10 @@ namespace DataUtils
             if (daysToExpiry.HasValue)
             {
                 context.Add("DaysToExpiry", daysToExpiry.Value.ToString(CultureInfo.InvariantCulture));
+            }
+            if (!string.IsNullOrEmpty(reasonKey))
+            {
+                context.Add("ReasonKey", reasonKey);
             }
             TrackEvent(AnalyticsEvent.HealthCheck, context);
         }

@@ -78,6 +78,14 @@ const BREAKDOWN_ERROR = 'agentCosts.error.breakdown';
 const DETAIL_ERROR = 'agentCosts.error.detail';
 const AZURE_ERROR = 'agentCosts.error.azure';
 
+export function agentCostDimensionLabel(
+  label: string | null | undefined,
+  key: string | null | undefined,
+  t: TFunction,
+): string {
+  return label || key || t('agentCosts.state.notReported');
+}
+
 type DetailSort = 'credits' | 'date' | 'agent' | 'feature' | 'users';
 
 const useStyles = makeStyles({
@@ -1013,7 +1021,7 @@ export default function AgentCostsPage() {
                   <tbody>
                     {azure.map((r) => (
                       <tr key={`${r.key ?? NOT_REPORTED}-${r.currency ?? ''}`}>
-                        <td className={`${styles.td} ${r.key ? '' : styles.tdMuted}`}>{r.label || r.key || NOT_REPORTED}</td>
+                        <td className={`${styles.td} ${r.key ? '' : styles.tdMuted}`}>{agentCostDimensionLabel(r.label, r.key, t)}</td>
                         <td className={`${styles.td} ${styles.tdNumeric}`}>{formatMoney(r.cost, r.currency)}</td>
                         <td className={`${styles.td} ${styles.tdNumeric}`}>{formatQuantity(r.quantity)}</td>
                         <td className={`${styles.td} ${styles.tdMuted}`}>

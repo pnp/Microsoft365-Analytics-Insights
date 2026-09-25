@@ -69,7 +69,6 @@ export const ALLOWED_LITERALS = new Set<string>([
   'Visio',
   'Windows',
   'Office',
-  'Microsoft 365 apps',
 
   // Technical identifiers and formats that are not translated in either language.
   'SQL',
@@ -91,7 +90,6 @@ export const ALLOWED_LITERALS = new Set<string>([
   'RBAC',
   'UTC',
   'SKU',
-  'AI',
   'ID',
   'IP',
   'DNS',
@@ -108,9 +106,7 @@ export const ALLOWED_LITERALS = new Set<string>([
   '\u2014',
   '\u2013',
   '\u2026',
-  'n/a',
   'N/A',
-  'OK',
   // The SI-style abbreviation for minutes. Spanish writes the same three letters (RAE: "min", no
   // full stop), so a translation that differed would be the wrong one.
   'min',
