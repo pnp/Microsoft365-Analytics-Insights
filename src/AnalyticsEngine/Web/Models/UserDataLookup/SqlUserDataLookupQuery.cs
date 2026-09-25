@@ -433,7 +433,10 @@ namespace Web.AnalyticsWeb.Models.UserDataLookup
                 Title = "Activity report day",
                 Detail = r.LastActivityDate.HasValue ? "Last activity " + r.LastActivityDate.Value.ToString("d") : null,
                 DetailKey = r.LastActivityDate.HasValue ? "usage.lastActivity" : null,
-                DetailDateUtc = r.LastActivityDate,
+                // A SQL date comes back from EF as DateTimeKind.Unspecified, which serialises with no zone,
+                // and the browser then reads it as LOCAL midnight. The portal formats it in UTC, so east of
+                // UTC that is the previous day. Mark it UTC, as the profile's dates already are.
+                DetailDateUtc = AsUtc(r.LastActivityDate),
             }).ToList();
         }
 
