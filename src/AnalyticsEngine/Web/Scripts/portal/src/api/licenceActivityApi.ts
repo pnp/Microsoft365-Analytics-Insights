@@ -122,10 +122,12 @@ async function readServerMessage(response: Response): Promise<string | null> {
   }
 }
 
-/** Turns a non-OK response into a typed error, preferring the server's message. */
+/** Turns a non-OK response into a typed error, preferring catalogued text for known states. */
 async function errorFor(response: Response, keys: LicenceActivityFailureKeys): Promise<LicenceActivityApiError> {
   const kind = kindForStatus(response.status);
-  const message = (await readServerMessage(response)) ?? fallbackMessage(kind, response.status, keys);
+  const message = kind === 'http'
+    ? (await readServerMessage(response)) ?? fallbackMessage(kind, response.status, keys)
+    : fallbackMessage(kind, response.status, keys);
   return new LicenceActivityApiError(kind, response.status, message);
 }
 
