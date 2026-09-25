@@ -1,5 +1,6 @@
 ﻿using App.ControlPanel.Engine.Entities;
 using System;
+using System.Globalization;
 using System.Windows.Forms;
 
 namespace App.ControlPanel
@@ -52,10 +53,21 @@ namespace App.ControlPanel
 
         private void btnOk_Click(object sender, EventArgs e)
         {
-            if (!ProxyConfig.IsValid)
+            var config = ProxyConfig;
+            var error = config.ValidationError;
+            if (error != null)
             {
-                MessageBox.Show("Invalid deployment proxy configuration", "Input Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(error, "Invalid deployment proxy configuration", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
+            }
+
+            // Save what will actually be used, so "http://proxy.contoso.com:3128" is stored as a bare host and
+            // port rather than re-normalised on every run (#613).
+            if (config.UseProxy &&
+                InstallerProxyConfig.TryNormalise(config.Host, config.Port, out var host, out var port, out _))
+            {
+                txtProxyHost.Text = host;
+                txtProxyPort.Text = port.ToString(CultureInfo.InvariantCulture);
             }
 
             this.DialogResult = DialogResult.OK;
