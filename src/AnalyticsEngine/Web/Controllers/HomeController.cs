@@ -18,7 +18,8 @@ namespace Web.AnalyticsWeb.Controllers
         }
         // Read and written through this single constant: the two used to differ, so the cached copy
         // was stored under a key nothing ever read and index.html was re-read from disk every request.
-        private const string PortalIndexCacheKey = "portalIndexHtml";
+        // Internal so the host tests can clear the process-wide cache before serving their own page.
+        internal const string PortalIndexCacheKey = "portalIndexHtml";
 
         // Root of the site. The whole admin experience (home/system status, Teams permissions,
         // user lookup) is now the SPA, so "/" serves it. It's served through this [Authorize]'d

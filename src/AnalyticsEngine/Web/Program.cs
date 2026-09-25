@@ -144,20 +144,17 @@ if (!app.Environment.IsDevelopment())
     app.UseExceptionHandler("/Home/Error");
 }
 
-app.UseStaticFiles();
+// Static assets from wwwroot - but never index.html itself, which PortalHosting hands on to
+// HomeController so the build label is stamped into it and [Authorize] applies.
+app.UsePortalStaticFiles();
 app.UseRouting();
 app.UseCors(OrgUrlCorsPolicy.PolicyName);
 app.UseAuthentication();
 app.UseAuthorization();
 
-// Routes carried across from RouteConfig: attribute routes on the API controllers, then the two
-// conventional MVC routes the sign-in pages rely on.
-app.MapControllers();
-app.MapControllerRoute(name: "Account", pattern: "Account/{action=Index}/{id?}", defaults: new { controller = "Account" });
-app.MapControllerRoute(name: "Home", pattern: "{action=Index}/{id?}", defaults: new { controller = "Home" });
-
-// The React portal is a static bundle; anything not matched above is handed to its index.html so
-// client-side routing works on a deep link or refresh.
-app.MapFallbackToFile("index.html");
+// Attribute-routed API controllers, the Account and Home conventional routes carried across from
+// RouteConfig, and a fallback that serves the portal page through HomeController (not from disk,
+// which would skip the build-label substitution). See PortalHosting.
+app.MapPortalRoutes();
 
 app.Run();
