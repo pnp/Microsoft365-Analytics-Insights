@@ -150,6 +150,23 @@ export function importFailureWarning(t: TFunction, kind: 'copilotStudio' | 'azur
     : 'agentCosts.warning.azureCostImportFailing');
 }
 
+/**
+ * A failing import's warning bar. The label is the portal's own wording, so it is translated. The detail is
+ * the importer's last error: diagnostic text, shown exactly as the importer wrote it, as `availabilityMessages`
+ * already does with `{error}`. It must stay, because once some figures exist this bar is the only place the page
+ * says WHY the import is failing - `availabilityMessages` quotes the error only while there is no data at all.
+ */
+export function ImportFailureBar({ kind, error }: { kind: 'copilotStudio' | 'azure'; error: string }) {
+  const t = useT();
+  return (
+    <MessageBar intent="warning">
+      <MessageBarBody>
+        <strong>{importFailureWarning(t, kind)}</strong> {error}
+      </MessageBarBody>
+    </MessageBar>
+  );
+}
+
 function availabilityMessages(availability: AgentCostAvailability, t: TFunction): string[] {
   const messages: string[] = [];
   if (!availability.copilotStudioCreditsEnabled && !availability.azureCostsEnabled) {
@@ -542,18 +559,10 @@ export default function AgentCostsPage() {
       {availability && (
         <div className={styles.messages}>
           {availability.copilotStudioCreditsEnabled && availability.copilotStudioCreditsLastError && (
-            <MessageBar intent="warning">
-              <MessageBarBody>
-                <strong>{importFailureWarning(t, 'copilotStudio')}</strong>
-              </MessageBarBody>
-            </MessageBar>
+            <ImportFailureBar kind="copilotStudio" error={availability.copilotStudioCreditsLastError} />
           )}
           {availability.azureCostsEnabled && availability.azureCostsLastError && (
-            <MessageBar intent="warning">
-              <MessageBarBody>
-                <strong>{importFailureWarning(t, 'azure')}</strong>
-              </MessageBarBody>
-            </MessageBar>
+            <ImportFailureBar kind="azure" error={availability.azureCostsLastError} />
           )}
           {availabilityMessages(availability, t).map((m) => (
             <MessageBar key={m} intent="info">
