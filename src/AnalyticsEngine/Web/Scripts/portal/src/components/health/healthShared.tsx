@@ -32,6 +32,12 @@ export const BLOB_CHECKPOINT_REASON_KEYS: Record<string, TranslationKey> = {
   'blobCheckpoint.storageRejected': 'health.reason.blobCheckpointStorageRejected',
 };
 
+export const HEALTH_COMPONENT_LABEL_KEYS: Record<string, TranslationKey> = {
+  Credential: 'health.component.Credential',
+  ServiceBus: 'health.component.ServiceBus',
+  BlobCheckpoint: 'health.component.BlobCheckpoint',
+};
+
 /**
  * The importer's telemetry detail for a blob checkpoint it could not open durably
  * (ProcessedBlobStoreFactory.TrackDegradedHealth), with the classifier's operator message inside.
@@ -80,6 +86,36 @@ function matchServerTemplate(template: string, text: string): Record<string, str
 /** A whole number the server printed invariantly ("1234"), re-printed in the portal language. */
 function serverNumber(value: string): string {
   return /^\d+$/.test(value) ? formatNumber(Number(value)) : value;
+}
+
+function durationPart(value: number, singularKey: TranslationKey, pluralKey: TranslationKey, t: TFunction): string {
+  return t(value === 1 ? singularKey : pluralKey, { count: formatNumber(value) });
+}
+
+export function formatHealthDuration(totalSeconds: number | null | undefined, fallback: string | null | undefined, t: TFunction): string {
+  if (totalSeconds === null || totalSeconds === undefined || !Number.isFinite(totalSeconds) || totalSeconds < 0) {
+    return fallback ?? '';
+  }
+
+  const wholeSeconds = Math.round(totalSeconds);
+  const days = Math.floor(wholeSeconds / 86400);
+  const hours = Math.floor((wholeSeconds % 86400) / 3600);
+  const minutes = Math.floor((wholeSeconds % 3600) / 60);
+  const seconds = wholeSeconds % 60;
+  const parts = [
+    ...(days > 0 ? [durationPart(days, 'health.duration.day', 'health.duration.days', t)] : []),
+    durationPart(hours, 'health.duration.hour', 'health.duration.hours', t),
+    durationPart(minutes, 'health.duration.minute', 'health.duration.minutes', t),
+    durationPart(seconds, 'health.duration.second', 'health.duration.seconds', t),
+  ];
+
+  return t('health.duration.parts', { parts: parts.join(', ') });
+}
+
+export function translateHealthComponentName(component: string | null | undefined, t: TFunction): string {
+  if (!component) return '';
+  const key = HEALTH_COMPONENT_LABEL_KEYS[component];
+  return key ? t(key) : component;
 }
 
 // --- Time / format helpers ---
@@ -319,7 +355,7 @@ export function translateHealthReasonText(reason: string, t: TFunction): string 
         ? 'health.reason.componentUnhealthy'
         : 'health.reason.componentDegraded',
       {
-        component: componentMatch[1],
+        component: translateHealthComponentName(componentMatch[1], t),
         detail: translateHealthComponentDetailText(componentMatch[3], t),
       },
     );

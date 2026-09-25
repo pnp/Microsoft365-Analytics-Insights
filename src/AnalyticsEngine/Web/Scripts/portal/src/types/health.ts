@@ -25,7 +25,9 @@ export interface ComponentHealthRow {
 
 export interface ImportCycleRow {
   jobName: string | null;
+  jobKey: string | null;
   lastCycleUtc: string | null;
+  durationSeconds: number | null;
   duration: string | null;
 }
 

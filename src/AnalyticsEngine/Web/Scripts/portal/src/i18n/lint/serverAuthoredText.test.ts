@@ -8,6 +8,7 @@ import { EN_CATALOG } from '../catalog';
 import { COWORK_TIER_LABEL_KEYS, TENURE_BASIS_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
 import {
   BLOB_CHECKPOINT_REASON_KEYS,
+  HEALTH_COMPONENT_LABEL_KEYS,
   translateHealthComponentDetailText,
   translateHealthReasonText,
 } from '../../components/health/healthShared';
@@ -413,6 +414,40 @@ describe('Health section labels', () => {
       'These have catalog entries but are not defined in the health summary - either the section\n' +
         'was removed, or its key was renamed and the page is now falling back to English.',
     ).toEqual([]);
+  });
+});
+
+const HEALTH_SERVICE_COMPONENT = /Component\s*=\s*"([^"]+)"/g;
+const HEALTH_TELEMETRY_COMPONENT = /TrackHealthCheck\(\s*HealthComponent\.([A-Za-z0-9_]+)/g;
+const HEALTH_COMPONENT_BLOB_CHECKPOINT_FACTORY = join(process.cwd(), '..', '..', '..', 'WebJob.Office365ActivityImporter.Engine', 'ActivityAPI', 'BlobCheckpoint', 'ProcessedBlobStoreFactory.cs');
+
+function healthComponentKeys(): string[] {
+  const source = readFileSync(join(process.cwd(), '..', '..', 'Models', 'Health', 'HealthService.cs'), 'utf8');
+  const blobCheckpointSource = readFileSync(HEALTH_COMPONENT_BLOB_CHECKPOINT_FACTORY, 'utf8');
+  return sortedUnique([
+    ...[...source.matchAll(HEALTH_SERVICE_COMPONENT)].map((m) => m[1]),
+    ...[...blobCheckpointSource.matchAll(HEALTH_TELEMETRY_COMPONENT)].map((m) => m[1]),
+  ]);
+}
+
+describe('Health component display names', () => {
+  it('translates every concrete component name the server can send today', () => {
+    const serverKeys = healthComponentKeys();
+    expect(serverKeys).toEqual(['BlobCheckpoint', 'Credential', 'ServiceBus']);
+
+    const missingMapEntries = serverKeys.filter((key) => !(key in HEALTH_COMPONENT_LABEL_KEYS));
+    const missingCatalogEntries = serverKeys
+      .map((key) => HEALTH_COMPONENT_LABEL_KEYS[key])
+      .filter((catalogKey) => !catalogKey || !(catalogKey in EN_CATALOG));
+
+    expect({ missingMapEntries, missingCatalogEntries }).toEqual({ missingMapEntries: [], missingCatalogEntries: [] });
+  });
+
+  it('does not carry stale component-name translations', () => {
+    const known = new Set(healthComponentKeys());
+    const orphans = Object.keys(HEALTH_COMPONENT_LABEL_KEYS).filter((key) => !known.has(key));
+
+    expect(orphans).toEqual([]);
   });
 });
 
@@ -1432,7 +1467,7 @@ describe('Health sentences the SPA recognises', () => {
       const expected = es(BLOB_CHECKPOINT_REASON_KEYS[reasonKey], { status: '403', errorCode: 'SampleErrorCode' });
       expect(translateHealthComponentDetailText(detail, es), reasonKey).toBe(expected);
       expect(translateHealthReasonText(`BlobCheckpoint is degraded: ${detail}`, es), `${reasonKey} in a roll-up`)
-        .toBe(es('health.reason.componentDegraded', { component: 'BlobCheckpoint', detail: expected }));
+        .toBe(es('health.reason.componentDegraded', { component: es('health.component.BlobCheckpoint'), detail: expected }));
     }
   });
 });

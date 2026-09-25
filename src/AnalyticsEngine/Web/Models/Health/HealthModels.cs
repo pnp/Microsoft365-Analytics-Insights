@@ -247,8 +247,12 @@ namespace Web.AnalyticsWeb.Models.Health
     {
         [JsonProperty("jobName")]
         public string JobName { get; set; }
+        [JsonProperty("jobKey")]
+        public string JobKey { get; set; }
         [JsonProperty("lastCycleUtc")]
         public DateTime? LastCycleUtc { get; set; }
+        [JsonProperty("durationSeconds")]
+        public double? DurationSeconds { get; set; }
         [JsonProperty("duration")]
         public string Duration { get; set; }
     }

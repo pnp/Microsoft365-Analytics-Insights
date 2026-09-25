@@ -12,7 +12,15 @@ import {
 } from '@fluentui/react-components';
 import { fetchHealthComponents } from '../../api/healthApi';
 import { useT } from '../../i18n';
-import { SectionFrame, healthStatusText, howLongAgo, statusColor, translateHealthComponentDetail, useHealthSection } from './healthShared';
+import {
+  SectionFrame,
+  healthStatusText,
+  howLongAgo,
+  statusColor,
+  translateHealthComponentDetail,
+  translateHealthComponentName,
+  useHealthSection,
+} from './healthShared';
 
 /** Component health: runtime credential + Service Bus checks, plus App Insights HealthCheck events. */
 export default function ComponentsPanel({ active }: { active: boolean }) {
@@ -44,7 +52,7 @@ export default function ComponentsPanel({ active }: { active: boolean }) {
             <TableBody>
               {data.componentHealth.map((c, i) => (
                 <TableRow key={(c.component ?? '') + i}>
-                  <TableCell>{c.component}</TableCell>
+                  <TableCell>{translateHealthComponentName(c.component, t)}</TableCell>
                   <TableCell>
                     <Badge appearance="filled" color={statusColor(c.status)}>
                       {healthStatusText(c.status, t)}

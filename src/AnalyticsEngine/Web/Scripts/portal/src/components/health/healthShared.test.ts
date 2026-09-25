@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   BLOB_CHECKPOINT_REASON_KEYS,
+  formatHealthDuration,
   translateHealthComponentDetail,
   translateHealthComponentDetailText,
+  translateHealthComponentName,
   translateHealthReasonText,
 } from './healthShared';
 import { loadCatalog, translateActive, translateStatic } from '../../i18n';
@@ -37,11 +39,11 @@ describe('translateHealthReasonText', () => {
     );
     expect(translateHealthReasonText(rollupReasons[2], es)).toBe('Office365ActivityImporter no ha completado ningún ciclo en 50 h (SLA 24 h).');
     expect(translateHealthReasonText(rollupReasons[7], es)).toBe(
-      "ServiceBus está degradado: Cola de llamadas de Teams 'callrecords': mensajes activos: 12; mensajes fallidos: 3.",
+      "El componente Service Bus está degradado: Cola de llamadas de Teams 'callrecords': mensajes activos: 12; mensajes fallidos: 3.",
     );
     // Count-invariant on purpose: "{active} activos" read "1 activos" for a single message.
     expect(translateHealthReasonText("ServiceBus is degraded: Teams calls queue 'callrecords': 1 active, 1 dead-lettered.", es)).toBe(
-      "ServiceBus está degradado: Cola de llamadas de Teams 'callrecords': mensajes activos: 1; mensajes fallidos: 1.",
+      "El componente Service Bus está degradado: Cola de llamadas de Teams 'callrecords': mensajes activos: 1; mensajes fallidos: 1.",
     );
   });
 
@@ -53,6 +55,28 @@ describe('translateHealthReasonText', () => {
     expect(translateHealthComponentDetailText(unknown, es)).toBe(unknown);
     expect(translateHealthComponentDetailText('Azure Table checkpoint unavailable: a new failure. Using non-durable in-memory checkpoint (lost on restart; durable cross-cycle metadata recovery unavailable). See importer error log.', es))
       .toContain('a new failure');
+  });
+
+  describe('health server facts rendered by the portal', () => {
+    it('translates component display names by key and leaves unknown components alone', async () => {
+      await loadCatalog('es');
+
+      expect(translateHealthComponentName('Credential', (key, values) => translateStatic('es', key, values))).toBe('Credencial');
+      expect(translateHealthComponentName('BlobCheckpoint', (key, values) => translateStatic('es', key, values))).toBe('Punto de control de blobs');
+      expect(translateHealthComponentName('ContosoConnector', (key, values) => translateStatic('es', key, values))).toBe('ContosoConnector');
+    });
+
+    it('formats numeric liveness durations in the active language instead of showing server English', async () => {
+      await loadCatalog('es');
+
+      const es = (key: Parameters<typeof translateActive>[0], values?: Parameters<typeof translateActive>[1]) => translateStatic('es', key, values);
+      expect(formatHealthDuration(90_061, 'Audit events import: 1 days, 1 hours, 1 mins, and 1 seconds.', es))
+        .toBe('1 día, 1 hora, 1 minuto, 1 segundo.');
+      expect(formatHealthDuration(3_662, 'Audit events import: 1 hours, 1 mins, and 2 seconds.', es))
+        .toBe('1 hora, 1 minuto, 2 segundos.');
+      expect(formatHealthDuration(null, 'Audit events import: 1 hours, 1 mins, and 2 seconds.', es))
+        .toBe('Audit events import: 1 hours, 1 mins, and 2 seconds.');
+    });
   });
 });
 
