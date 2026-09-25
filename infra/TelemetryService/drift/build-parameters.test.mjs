@@ -19,6 +19,7 @@ const SUPPLIED = JSON.stringify({
   appIntegrationSubnetPrefix: '10.0.1.0/24',
   privateEndpointSubnetPrefix: '10.0.2.0/24',
   azureAdClientId: '11111111-1111-1111-1111-111111111111',
+  loadFirstPartyAuth: true,
 });
 
 describe('buildParameters', () => {

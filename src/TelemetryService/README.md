@@ -65,12 +65,18 @@ installations (the AnalyticsEngine importer in
   API still performs the scope and role checks, while anonymous health,
   configuration and signed-upload requests continue to reach the application.
 
-  Note that enabling it did **not** satisfy the S360 MISE Compliance KPI. It
-  was switched on (with `WEBSITE_AAD_ENABLE_MISE`) on 18 Aug 2026 and fully
-  working from 19 Aug, validated real tokens on 19, 24 and 25 Aug, and the
-  registration was still reported non-compliant on 26 Aug and again on 2 Sep —
-  two full KPI cycles. Treat platform-supplied authentication as *unproven* for
-  that KPI rather than as remediation.
+  It is also what the S360 MISE Compliance KPI measures, and that KPI needs
+  **MISE v2**. `WEBSITE_AAD_ENABLE_MISE=true` on its own only gives MISE v1:
+  while this service ran on Linux, App Service's own EasyAuth diagnostics
+  reported every validation as `MISEv1 enabled`, MISE component version
+  `1.37.0.0`, which is why the registration stayed non-compliant from August
+  2026 onwards even though tokens validated correctly. MISE v2 comes from App
+  Service Authentication's *first-party* modules, which also need
+  `WEBSITE_LOAD_FIRST_PARTY_AUTH=true` and which App Service only allows on a
+  subscription it has enabled for first-party authentication. They were not
+  yet available for Linux in this service's region, so the service now runs
+  on **Windows** App Service. See
+  [MISE compliance](#mise-compliance--current-status).
 - **Key discovery is tagged with our own client ID.** `Program.cs` sets
   `JwtBearerOptions.MetadataAddress` to
   `…/{tenant}/v2.0/.well-known/openid-configuration?appid={clientId}` (see
@@ -116,13 +122,14 @@ wired up in `Program.cs` via `AddOpenTelemetry().UseAzureMonitor()`. It reads
 `APPLICATIONINSIGHTS_CONNECTION_STRING` and no-ops when that is unset, so local
 development sends nothing.
 
-Do **not** rely on the `ApplicationInsightsAgent_EXTENSION_VERSION` codeless
-attach setting. It applies only to **Windows** App Service, and this service
-runs on **Linux** (`DOTNETCORE|10.0`), so setting it there is silently
-ineffective for .NET while making the site look instrumented: the connection
-string is present and the ingestion endpoint is reachable, yet nothing is ever
-sent. If the Application Insights resource is empty, check that this package is
-actually referenced before investigating networking.
+Do **not** add the `ApplicationInsightsAgent_EXTENSION_VERSION` codeless
+attach setting. The service runs on **Windows** App Service, where that agent
+could attach alongside the in-process exporter and duplicate telemetry. (While
+the service ran on Linux it was worse: the setting applies only to Windows, so
+it did nothing for .NET while making the site look instrumented — the
+connection string was present and the ingestion endpoint reachable, yet nothing
+was ever sent.) If the Application Insights resource is empty, check that this
+package is actually referenced before investigating networking.
 
 ## Dashboard
 
@@ -197,7 +204,9 @@ fails to start is reported as a failed deployment rather than a successful one.
 
 Azure sign-in uses **OIDC federated credentials**, so no client secret is stored. Configure the
 app registration with a federated credential for this repository and the `telemetry-service`
-environment, and grant it Website Contributor (or Contributor) on the target App Service.
+environment, and grant it Website Contributor (or Contributor) on the target App Service. A role
+assignment scoped to the App Service is deleted with it; `deploy.ps1 -ReplaceLinuxWebApp` records
+and restores it.
 
 | Kind | Name | Purpose |
 | --- | --- | --- |
@@ -225,7 +234,8 @@ which runs a read-only `az deployment group what-if` and deploys nothing. See
 | `AzureAd:TenantId` | yes | Tenant containing the dashboard app registration. |
 | `AzureAd:ClientId` | yes | Client ID of the single-tenant SPA/API app registration. |
 | `AzureAd:Scopes` | yes | Delegated scope name exposed by the app registration. Must be `Telemetry.Read`. |
-| `WEBSITE_AAD_ENABLE_MISE` | Azure deployment | Enables the App Service MISE validation runtime. The Bicep deployment sets this to `true`. |
+| `WEBSITE_AAD_ENABLE_MISE` | Azure deployment | Makes App Service Authentication validate tokens with MISE. On its own this is MISE v1. The Bicep deployment sets this to `true`. |
+| `WEBSITE_LOAD_FIRST_PARTY_AUTH` | Azure deployment | Loads App Service Authentication's first-party modules, which use MISE v2 — the version the MISE compliance KPI requires. Only accepted on a subscription App Service has enabled for first-party authentication. The Bicep deployment sets this to `true` unless `loadFirstPartyAuth` is `false` (`deploy.ps1 -SkipFirstPartyAuth`). |
 | `CosmosDb:AccountEndpoint` | yes | Cosmos account URL, e.g. `https://myaccount.documents.azure.com:443/`. The account uses AAD (key auth disabled) — `DefaultAzureCredential` is used. |
 | `CosmosDb:DatabaseName` | yes | Cosmos database to use (created on startup if missing). |
 | `CosmosDb:ContainerNameCurrent` | yes | Container for the latest record per client. |
@@ -293,6 +303,10 @@ your approved secure backup system.
 - A globally unique App Service name.
 - The upload signing secret. It must match `StatsApiSecret` in every importer
   that sends telemetry to this service.
+- For the MISE compliance KPI (Microsoft-internal deployments only): a
+  subscription App Service has enabled for first-party authentication, so it
+  accepts `WEBSITE_LOAD_FIRST_PARTY_AUTH`. Anywhere else, pass
+  `-SkipFirstPartyAuth`.
 
 On a managed Microsoft device, configure npm to use the approved package feed:
 
@@ -341,8 +355,10 @@ Run an ARM what-if before provisioning:
   -WhatIf
 ```
 
-The preview does not create the Entra application; it uses a synthetic client
-ID only for ARM validation.
+The preview does not create or change the Entra application. It uses the
+client ID the existing site is configured for (or `-AzureAdClientId`), or a
+synthetic one for a new deployment, and warns if that registration no longer
+exists or if the existing site still runs on Linux.
 
 ### Deploy or redeploy
 
@@ -371,16 +387,20 @@ The script:
 
 1. checks the Azure context and App Service hostname;
 2. registers required Azure resource providers;
-3. creates or updates the single-tenant Entra SPA/API and assigns the current
-   user the `Telemetry.Dashboard.Read` role;
-4. deploys the ARM template, including non-enforcing App Service
-   Authentication and the MISE runtime setting, using a temporary parameters
-   file that is deleted afterward;
-5. stores the signing secret in private Key Vault;
-6. builds and ZIP-deploys the application using Entra authentication;
-7. verifies health, application authorization, EasyAuth configuration and
-   runtime version, Cosmos/Key Vault network isolation, private endpoints and
-   the Key Vault reference.
+3. updates the single-tenant Entra SPA/API registration the existing site is
+   configured for (or the one named by `-AzureAdClientId`) and assigns the
+   current user the `Telemetry.Dashboard.Read` role. Only a *new* deployment
+   creates a registration — see below if it has been deleted;
+4. with `-ReplaceLinuxWebApp`, deletes an existing Linux site and its plan so
+   they can be re-created on Windows — see below;
+5. deploys the ARM template, including non-enforcing App Service
+   Authentication and the MISE v2 settings, using a temporary parameters file
+   that is deleted afterward;
+6. stores the signing secret in private Key Vault;
+7. builds and ZIP-deploys the application using Entra authentication;
+8. verifies health, application authorization, EasyAuth configuration and
+   runtime version, the MISE settings and Windows hosting, Cosmos/Key Vault
+   network isolation, private endpoints and the Key Vault reference.
 
 Tenant admin consent might need to be granted manually after deployment. The
 assigned dashboard user can otherwise be prompted for delegated
@@ -389,6 +409,60 @@ assigned dashboard user can otherwise be prompted for delegated
 > Deploying `azuredeploy.json` directly provisions only Azure resources. Use
 > `deploy.ps1` for the complete Entra configuration, secure secret handling,
 > application publication and verification workflow.
+
+#### If the app registration has been deleted
+
+A deployment is tied to its app registration's client ID: the site's settings,
+user role assignments, consent and any compliance tracking all refer to it. If
+that registration no longer exists — for example because a compliance process
+deleted it — the script **stops** instead of creating a replacement, because a
+replacement has a new client ID and silently restarts everything tied to the
+old one. Either:
+
+- restore it (Microsoft Entra ID → App registrations → Deleted applications;
+  deleted registrations are kept for 30 days) and re-run;
+- re-run with `-AzureAdClientId <client-id>` to use another existing
+  registration; or
+- re-run with `-AllowNewEntraApplication` to create a replacement
+  deliberately, then assign the `Telemetry.Dashboard.Read` role to the
+  dashboard's users again.
+
+#### Moving an existing Linux deployment to Windows
+
+The template deploys a Windows App Service (see
+[MISE compliance](#mise-compliance--current-status)). An App Service cannot
+change operating system, so an existing Linux site has to be deleted and
+re-created with the **same name**, because deployed importers post to that
+hostname. The script refuses to do that unless asked: run the deploy command
+above with `-ReplaceLinuxWebApp` added. It then:
+
+1. checks, while nothing has been changed, that no management lock would stop
+   the deletion part-way, that the plan hosts no other app, and that App
+   Service accepts `WEBSITE_LOAD_FIRST_PARTY_AUTH` on the subscription;
+2. records role assignments scoped to the site itself — typically the CI
+   deployment identity's Website Contributor — so it can restore them;
+3. deletes the old site's managed-identity role assignments on Key Vault and
+   Cosmos DB (the replacement gets a new identity, and ARM will not repoint an
+   existing assignment at it), disconnects the site from its subnet (deleting
+   an app that is still integrated can leave the subnet unusable for the
+   replacement), then deletes the site and its plan;
+4. deploys the Windows plan and site, restores the recorded role assignments,
+   and publishes and verifies as usual.
+
+The service is unavailable from step 3 until the deployment completes.
+Importers treat a failed upload as non-fatal and do not record it, so their
+next cycle sends again. The old site's deployment history and logs do not
+survive the replacement.
+
+If App Service has not enabled the subscription for first-party
+authentication, step 1 stops the script with nothing changed. The Azure CLI
+reports this only as `Operation returned an invalid status 'Bad Request'`. The
+underlying App Service message, shown by `az webapp config appsettings set
+… --debug` or in the ARM deployment error, is:
+
+```text
+AppSetting with name 'WEBSITE_LOAD_FIRST_PARTY_AUTH' is not allowed for subscription '<subscription-id>' because subscription is not marked as first party.
+```
 
 ### MISE compliance — current status
 
@@ -400,16 +474,72 @@ on nuget.org), and `telemetry-service.yml` builds on `ubuntu-latest` restoring
 from nuget.org, so wiring an internal feed into a public repository's workflow
 is not an option.
 
-App Service Authentication was enabled as an attempted remediation. **It did not
-work** — see the auth-model section above for the timeline. The registration
-remained non-compliant across two KPI cycles while EasyAuth was validating real
-tokens, so do not record platform authentication as remediation for this KPI.
+MISE therefore comes from the platform: App Service Authentication validates
+every bearer token before the application sees it, and that validation is what
+the KPI measures. The KPI requires **MISE v2**, which needs all three of:
 
-What this repository *does* guarantee is that key discovery identifies the app
-registration, via the `appid` parameter described in the auth-model section.
-That is a diagnosability improvement only — it is explicitly **not** remediation
-for the compliance KPI, which also requires a supported MISE version and uses a
-different attribution mechanism. Do not record it as remediation.
+| Requirement | Where it comes from |
+| --- | --- |
+| `WEBSITE_AAD_ENABLE_MISE=true` | Bicep app settings. |
+| `WEBSITE_LOAD_FIRST_PARTY_AUTH=true` | Bicep app settings (`loadFirstPartyAuth`). App Service rejects it unless it has enabled the subscription for first-party authentication, which is a Microsoft-internal arrangement made with the App Service team, outside this repository. |
+| A host where the first-party (MISE v2) modules are available | Windows App Service, in every public region. Linux support was still rolling out region by region and had not reached this service's region, which is why the service moved to Windows. |
+
+**What went wrong before.** From August 2026 the service ran on Linux with only
+`WEBSITE_AAD_ENABLE_MISE`. Tokens validated correctly, but App Service's
+EasyAuth diagnostics recorded every validation as `MISEv1 enabled`, MISE
+component version `1.37.0.0` — below the KPI's minimum — so the registration
+stayed non-compliant through every KPI cycle until it was deleted. None of the
+configuration fixes made in that period could have changed that. See
+[`LESSONS-LEARNED.md`](LESSONS-LEARNED.md).
+
+#### Verifying MISE v2 after deploying
+
+A token validated by MISE v2 looks no different from one validated by MISE v1,
+and App Service Authentication is invisible to the application's own telemetry,
+so check the platform's diagnostics instead:
+
+1. Send one request with a well-formed but unsigned token, so App Service
+   Authentication records a validation failure (the application still answers
+   `401`):
+
+   ```pwsh
+   $b64 = { param($s) [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s)).TrimEnd('=').Replace('+', '-').Replace('/', '_') }
+   $exp = [DateTimeOffset]::UtcNow.AddHours(1).ToUnixTimeSeconds()
+   $jwt = (& $b64 '{"alg":"RS256","typ":"JWT","kid":"mise-probe"}') + '.' +
+          (& $b64 "{`"aud`":`"api://<client-id>`",`"iss`":`"https://login.microsoftonline.com/<tenant-id>/v2.0`",`"exp`":$exp}") + '.c2ln'
+   Invoke-WebRequest "https://<app>.azurewebsites.net/api/Telemetry/stats" -Headers @{ Authorization = "Bearer $jwt" } -SkipHttpErrorCheck | Select-Object StatusCode
+   ```
+
+2. A few minutes later, read the **EasyAuth** detector — in the portal,
+   *Diagnose and solve problems* → *Authentication Configuration and
+   Investigation Detector (EasyAuth)*, or from the command line:
+
+   ```pwsh
+   $site = az webapp show -g <resource-group> -n <app> --query id -o tsv
+   $end = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:00Z')
+   $start = (Get-Date).ToUniversalTime().AddHours(-6).ToString('yyyy-MM-ddTHH:mm:00Z')
+   # Query parameters go in --url-parameters: on Windows, az is a batch file and cmd.exe would split
+   # a URL at its '&'.
+   az rest --method get --url "https://management.azure.com$site/detectors/EasyAuth" `
+     --url-parameters api-version=2022-03-01 startTime=$start endTime=$end
+   ```
+
+   It reports the App Service Authentication version actually running and,
+   for each failed validation, which MISE generation handled it. If it still
+   says `MISEv1 enabled`, the first-party modules did not load: check the two
+   app settings, the host, and that the site was restarted after they changed.
+3. Sign in to the dashboard, so a real token is acquired and validated, then
+   allow 3–5 days for the compliance pipeline to reflect it.
+
+#### Key-discovery attribution (in-process validator)
+
+The application validates tokens a second time itself, with
+Microsoft.Identity.Web. What this repository guarantees there is that its key
+discovery identifies the app registration, via the `appid` parameter described
+in the auth-model section. That is a diagnosability improvement only — it is
+explicitly **not** remediation for the compliance KPI, which also requires a
+supported MISE version and uses a different attribution mechanism. Do not
+record it as remediation.
 
 To verify attribution after deploying:
 
@@ -453,7 +583,6 @@ To verify attribution after deploying:
    | where Target has "login.microsoftonline.com"
    | summarize total = count(), tagged = countif(Data contains "?") by bin(TimeGenerated, 1d)
    ```
-3. Allow 3–5 days for the compliance pipeline to reflect new telemetry.
 
 Note that key discovery only happens on a cold start or when a cached
 configuration expires, so a service with very little authenticated traffic emits

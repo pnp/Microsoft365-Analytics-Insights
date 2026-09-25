@@ -10,10 +10,10 @@ builder.Services.AddControllers();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
-// Application Insights. This MUST be wired up in-process: the service runs on Linux App
-// Service, where the ApplicationInsightsAgent_EXTENSION_VERSION codeless attach used on
-// Windows does nothing for .NET, so without this the connection string is configured but
-// no telemetry is ever emitted. Reads APPLICATIONINSIGHTS_CONNECTION_STRING and silently
+// Application Insights. This is wired up in-process rather than through the
+// ApplicationInsightsAgent_EXTENSION_VERSION codeless attach, which only exists on Windows App
+// Service: when this service ran on Linux that setting did nothing, and on Windows it would
+// instrument the app a second time. Reads APPLICATIONINSIGHTS_CONNECTION_STRING and silently
 // no-ops when it is unset (e.g. local development).
 if (!string.IsNullOrWhiteSpace(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
 {

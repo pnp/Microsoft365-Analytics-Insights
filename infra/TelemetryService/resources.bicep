@@ -9,6 +9,9 @@ param privateEndpointSubnetPrefix string
 param azureAdTenantId string
 param azureAdClientId string
 
+@description('Load App Service Authentication\'s first-party modules (WEBSITE_LOAD_FIRST_PARTY_AUTH), which validate tokens with MISE v2. App Service only accepts the setting on a subscription it has enabled for first-party authentication, so set this to false anywhere else.')
+param loadFirstPartyAuth bool = true
+
 @secure()
 param telemetrySecret string
 
@@ -371,10 +374,15 @@ resource keyVaultPrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/private
   }
 }
 
+// Windows, not Linux. App Service Authentication on Linux validated tokens with MISE v1, which does
+// not meet the compliance KPI's MISE v2 requirement, and its first-party MISE v2 modules were not yet
+// available for Linux in this service's region. An App Service cannot change operating system in
+// place: moving an existing Linux deployment means deleting and re-creating the plan and site
+// (deploy.ps1 -ReplaceLinuxWebApp does this).
 resource appServicePlan 'Microsoft.Web/serverfarms@2024-04-01' = {
   name: appServicePlanName
   location: location
-  kind: 'linux'
+  kind: 'app'
   tags: tags
   sku: {
     name: 'B1'
@@ -382,7 +390,7 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2024-04-01' = {
     capacity: 1
   }
   properties: {
-    reserved: true
+    reserved: false
     zoneRedundant: false
   }
 }
@@ -390,7 +398,7 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2024-04-01' = {
 resource webApp 'Microsoft.Web/sites@2024-04-01' = {
   name: webAppName
   location: location
-  kind: 'app,linux'
+  kind: 'app'
   tags: tags
   identity: {
     type: 'SystemAssigned'
@@ -403,7 +411,14 @@ resource webApp 'Microsoft.Web/sites@2024-04-01' = {
     virtualNetworkSubnetId: appIntegrationSubnet.id
     vnetRouteAllEnabled: true
     siteConfig: {
-      linuxFxVersion: 'DOTNETCORE|10.0'
+      netFrameworkVersion: 'v10.0'
+      metadata: [
+        {
+          name: 'CURRENT_STACK'
+          value: 'dotnet'
+        }
+      ]
+      use32BitWorkerProcess: false
       alwaysOn: true
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
@@ -416,7 +431,8 @@ resource webApp 'Microsoft.Web/sites@2024-04-01' = {
   }
 }
 
-// EasyAuth validates bearer tokens with the App Service MISE runtime, while the
+// EasyAuth validates bearer tokens with MISE (WEBSITE_AAD_ENABLE_MISE, plus
+// WEBSITE_LOAD_FIRST_PARTY_AUTH for MISE v2 - see webAppSettings), while the
 // application remains responsible for enforcing dashboard scopes and roles.
 resource easyAuthSettings 'Microsoft.Web/sites/config@2024-04-01' = {
   parent: webApp
@@ -508,13 +524,14 @@ resource cosmosDataRoleAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRole
 resource webAppSettings 'Microsoft.Web/sites/config@2024-04-01' = {
   parent: webApp
   name: 'appsettings'
-  properties: {
+  properties: union({
     ASPNETCORE_ENVIRONMENT: 'Production'
     WEBSITE_RUN_FROM_PACKAGE: '1'
     WEBSITE_VNET_ROUTE_ALL: '1'
     WEBSITE_HEALTHCHECK_MAXPINGFAILURES: '5'
     SCM_DO_BUILD_DURING_DEPLOYMENT: 'false'
-    ENABLE_ORYX_BUILD: 'false'
+    // On its own this gives MISE v1, which does not satisfy the MISE compliance KPI (it requires
+    // v2). v2 additionally needs WEBSITE_LOAD_FIRST_PARTY_AUTH, added below.
     WEBSITE_AAD_ENABLE_MISE: 'true'
     TelemetrySecret: '@Microsoft.KeyVault(VaultName=${keyVault.name};SecretName=${telemetrySecretName})'
     CosmosDb__AccountEndpoint: cosmosAccount.properties.documentEndpoint
@@ -530,10 +547,14 @@ resource webAppSettings 'Microsoft.Web/sites/config@2024-04-01' = {
     MaxDashboardItems: '5000'
     // Telemetry is emitted in-process by Azure.Monitor.OpenTelemetry.AspNetCore (see
     // Web.Server/Program.cs). Deliberately no ApplicationInsightsAgent_EXTENSION_VERSION:
-    // that codeless-attach setting only applies to Windows App Service, so on this Linux
-    // .NET site it silently does nothing while making the app look instrumented.
+    // on Windows that codeless agent would attach as well and instrument the app twice.
     APPLICATIONINSIGHTS_CONNECTION_STRING: appInsights.properties.ConnectionString
-  }
+  }, loadFirstPartyAuth ? {
+    // Makes App Service Authentication load its first-party modules, which validate tokens with
+    // MISE v2. App Service rejects this setting unless it has enabled the subscription for
+    // first-party authentication.
+    WEBSITE_LOAD_FIRST_PARTY_AUTH: 'true'
+  } : {})
   dependsOn: [
     cosmosDataRoleAssignment
     cosmosPrivateDnsZoneGroup
