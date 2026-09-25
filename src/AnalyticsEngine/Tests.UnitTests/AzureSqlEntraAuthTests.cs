@@ -6,6 +6,7 @@ using Common.Entities.Sql;
 using DataUtils.Sql;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Collections.Generic;
 using Microsoft.Data.SqlClient;
 using System.Threading;
 
@@ -183,6 +184,48 @@ namespace Tests.UnitTests
                 Assert.AreEqual("stub-token", tokenless.AccessToken);
                 Assert.IsTrue(string.IsNullOrEmpty(withLogin.AccessToken));
             }
+        }
+
+        #endregion
+
+        #region Connections opened outside EF (#609)
+
+        /// <summary>
+        /// Deliberately unresolvable, and bounded by a one-second connect timeout, so that code which wrongly
+        /// tries to connect without asking for a token fails fast instead of hanging the test run.
+        /// </summary>
+        const string EntraOnlyUnreachableServer = "data source=tcp:sql-contoso-synthetic-00000000.database.windows.net,1433;initial catalog=analytics;persist security info=False;Encrypt=True;Connect Timeout=1";
+
+        /// <summary>
+        /// The user import's bulk insert must reach SQL through the Entra token path. It used to build
+        /// <c>SqlBulkCopy</c> from the connection string, which opens a private connection that neither EF's
+        /// interceptor nor <see cref="AzureSqlTokenAuth"/> ever sees - so an Entra-only server rejected it with
+        /// "Login failed for user ''" and every Graph section after the user import was skipped, every cycle.
+        /// </summary>
+        /// <remarks>
+        /// The credential throws, so the fixed code stops before any network I/O; the assertion is that a SQL
+        /// token was requested for the connection the bulk copy uses. The old code never asked for one - it
+        /// tried to log in with no credentials and failed with a <c>SqlException</c> instead. Called on the
+        /// connection-string overload because building an <c>AnalyticsEntitiesContext</c> over an unreachable
+        /// server runs EF's database initializer, which would ask for a token before the import ever did.
+        /// </remarks>
+        [TestMethod]
+        public async System.Threading.Tasks.Task UserBulkInsert_OnAnEntraOnlyServer_AcquiresAnAccessToken()
+        {
+            var credential = new TokenRequestRecorder();
+            AzureSqlTokenAuth.SetCredential(credential);
+
+            var logger = DataUtils.AnalyticsLogger.ConsoleOnlyTracer();
+            var processor = new WebJob.Office365ActivityImporter.Engine.Graph.UserInsertProcessor(
+                logger, new WebJob.Office365ActivityImporter.Engine.Graph.UserBatchProcessor(logger));
+            var newUser = new WebJob.Office365ActivityImporter.Engine.Graph.GraphUser { UserPrincipalName = "new.user@contoso.com", AccountEnabled = true };
+
+            await Assert.ThrowsExceptionAsync<TokenRequestedException>(() => processor.BulkInsertUsers(
+                EntraOnlyUnreachableServer,
+                new List<WebJob.Office365ActivityImporter.Engine.Graph.GraphUser> { newUser },
+                batchSize: 10));
+
+            Assert.AreEqual(1, credential.Requests, "The bulk insert must ask for a SQL access token before it connects.");
         }
 
         #endregion
@@ -1168,6 +1211,29 @@ namespace Tests.UnitTests
             {
                 Assert.AreEqual(AzureSqlTokenAuth.SqlTokenScope, requestContext.Scopes[0]);
                 return new AccessToken(NextToken, DateTimeOffset.UtcNow.AddHours(1));
+            }
+
+            public override System.Threading.Tasks.ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken)
+            {
+                return new System.Threading.Tasks.ValueTask<AccessToken>(GetToken(requestContext, cancellationToken));
+            }
+        }
+
+        /// <summary>Thrown by <see cref="TokenRequestRecorder"/>, so a test can stop at the moment a token is requested.</summary>
+        private sealed class TokenRequestedException : Exception
+        {
+        }
+
+        /// <summary>Counts SQL token requests and refuses every one, so nothing after it can reach the network.</summary>
+        private sealed class TokenRequestRecorder : TokenCredential
+        {
+            public int Requests { get; private set; }
+
+            public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken)
+            {
+                Requests++;
+                Assert.AreEqual(AzureSqlTokenAuth.SqlTokenScope, requestContext.Scopes[0]);
+                throw new TokenRequestedException();
             }
 
             public override System.Threading.Tasks.ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken)
