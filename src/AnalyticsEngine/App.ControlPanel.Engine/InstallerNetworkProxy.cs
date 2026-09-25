@@ -62,6 +62,30 @@ namespace App.ControlPanel.Engine
             }
         }
 
+        /// <summary>
+        /// Applies the preference if it is usable; otherwise leaves the process proxy exactly as it was and
+        /// reports why, in words the admin can act on.
+        /// </summary>
+        /// <remarks>
+        /// For the installer UI, which applies the saved preference as soon as it opens and before every run.
+        /// A preference saved by an older build was only checked for "host present, port above zero", so it can
+        /// hold a value the stricter #613 validation now refuses (a path, a user name, a port that contradicts
+        /// the Port box). <see cref="ApplyProcessWide"/> throws for those; thrown from the main form's Load
+        /// event or a button handler, that left the installer half-initialised or stuck in its working state.
+        /// </remarks>
+        public static bool TryApplyProcessWide(InstallerProxyConfig config, ILogger logger, out string error)
+        {
+            error = (config ?? InstallerProxyConfig.Default).ValidationError;
+            if (error != null)
+            {
+                logger?.LogWarning($"The saved installer proxy settings can't be used, so the proxy was not changed: {error}");
+                return false;
+            }
+
+            ApplyProcessWide(config, logger);
+            return true;
+        }
+
         internal static WebProxy CreateWebProxy(InstallerProxyConfig config)
         {
             if (config == null) throw new ArgumentNullException(nameof(config));
