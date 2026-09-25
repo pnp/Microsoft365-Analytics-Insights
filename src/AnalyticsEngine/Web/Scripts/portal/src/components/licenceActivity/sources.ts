@@ -26,6 +26,34 @@ const GRANULARITY_LABELS: Record<string, TranslationKey> = {
   unknown: 'licenceActivity.granularity.unknown',
 };
 
+const MEASURE_LABELS: Record<string, TranslationKey> = {
+  'm365.teams': 'licenceActivity.measure.m365.teams',
+  'm365.outlook': 'licenceActivity.measure.m365.outlook',
+  'm365.files': 'licenceActivity.measure.m365.files',
+  'copilot.microsoftReportPrompts': 'licenceActivity.measure.copilot.microsoftReportPrompts',
+  'copilot.recordedActivity': 'licenceActivity.measure.copilot.recordedActivity',
+  'copilot.auditActiveWeeks': 'licenceActivity.measure.copilot.auditActiveWeeks',
+  'copilot.interactionActiveWeeks': 'licenceActivity.measure.copilot.interactionActiveWeeks',
+};
+
+const MESSAGE_LABELS: Record<string, TranslationKey> = {
+  'm365.disabled': 'licenceActivity.coverageMessage.m365.disabled',
+  'm365.available': 'licenceActivity.coverageMessage.m365.available',
+  'm365.partial': 'licenceActivity.coverageMessage.m365.partial',
+  'm365.notImported': 'licenceActivity.coverageMessage.m365.notImported',
+  'm365.missingCoverage': 'licenceActivity.coverageMessage.m365.missingCoverage',
+  'copilotReport.available': 'licenceActivity.coverageMessage.copilotReport.available',
+  'copilotReport.partial': 'licenceActivity.coverageMessage.copilotReport.partial',
+  'copilotReport.unmatchableIdentity': 'licenceActivity.coverageMessage.copilotReport.unmatchableIdentity',
+  'copilotReport.notImported': 'licenceActivity.coverageMessage.copilotReport.notImported',
+  'copilotReport.failed': 'licenceActivity.coverageMessage.copilotReport.failed',
+  'copilotReport.missingCoverage': 'licenceActivity.coverageMessage.copilotReport.missingCoverage',
+  'copilotAudit.unmatchableIdentity': 'licenceActivity.coverageMessage.copilotAudit.unmatchableIdentity',
+  'copilotAudit.partial': 'licenceActivity.coverageMessage.copilotAudit.partial',
+  'copilotInteractions.unmatchableIdentity': 'licenceActivity.coverageMessage.copilotInteractions.unmatchableIdentity',
+  'copilotInteractions.partial': 'licenceActivity.coverageMessage.copilotInteractions.partial',
+};
+
 /** Where a workload's figures came from, named the way Microsoft 365 admins would recognise it. */
 export function sourceLabel(source: string | null | undefined, t: TFunction): string | null {
   if (!source) return null;
@@ -36,4 +64,14 @@ export function sourceLabel(source: string | null | undefined, t: TFunction): st
 export function granularityLabel(granularity: string | null | undefined, t: TFunction): string | null {
   if (!granularity) return null;
   return GRANULARITY_LABELS[granularity] ? t(GRANULARITY_LABELS[granularity]) : granularity;
+}
+
+export function measureLabel(key: string | null | undefined, fallback: string | null | undefined, t: TFunction): string | null {
+  if (key && MEASURE_LABELS[key]) return t(MEASURE_LABELS[key]);
+  return fallback ?? null;
+}
+
+export function coverageMessage(key: string | null | undefined, fallback: string | null | undefined, t: TFunction): string | null {
+  if (key && MESSAGE_LABELS[key]) return t(MESSAGE_LABELS[key]);
+  return fallback ?? null;
 }

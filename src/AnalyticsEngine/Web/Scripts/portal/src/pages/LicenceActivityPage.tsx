@@ -32,6 +32,7 @@ import SkuAssignments from '../components/licenceActivity/SkuAssignments';
 import SelectedLicenceBar from '../components/licenceActivity/SelectedLicenceBar';
 import WorkloadDistributions from '../components/licenceActivity/WorkloadDistributions';
 import DemographicBreakdown from '../components/licenceActivity/DemographicBreakdown';
+import { demographicName } from '../components/licenceActivity/DemographicBreakdown';
 import UsersDrillDown from '../components/licenceActivity/UsersDrillDown';
 import ApiErrorBar, { describeError } from '../components/licenceActivity/ApiErrorBar';
 import { presetRange } from '../components/licenceActivity/dateRange';
@@ -422,7 +423,7 @@ export default function LicenceActivityPage() {
                   <option value="">{t('licenceActivity.page.allDepartments')}</option>
                   {departmentOptions.options.map((dept) => (
                     <option key={dept.id} value={dept.id}>
-                      {dept.name}
+                      {demographicName(t, dept)}
                     </option>
                   ))}
                 </Select>
@@ -446,7 +447,7 @@ export default function LicenceActivityPage() {
                   <option value="">{t('licenceActivity.page.allCountries')}</option>
                   {countryOptions.options.map((country) => (
                     <option key={country.id} value={country.id}>
-                      {country.name}
+                      {demographicName(t, country)}
                     </option>
                   ))}
                 </Select>

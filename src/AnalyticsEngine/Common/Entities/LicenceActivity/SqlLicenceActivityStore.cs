@@ -903,6 +903,7 @@ namespace Common.Entities.LicenceActivity
                     ObservedSamples = ReadInt32(reader, "ObservedSamples"),
                     UnmatchedUsers = ReadInt32(reader, "UnmatchedUsers")
                 };
+                coverage.ApplyDisplayKeys();
                 overview.Coverage.Add(coverage);
                 coverageByWorkload[coverage.Workload] = coverage;
             }

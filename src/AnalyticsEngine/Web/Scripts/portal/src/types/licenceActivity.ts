@@ -88,8 +88,10 @@ export interface LicenceActivityCoverage {
   status: string;
   source: string | null;
   measure: string | null;
+  measureKey: string | null;
   granularity: string | null;
   message: string | null;
+  messageKey: string | null;
   effectiveFromUtc: string | null;
   effectiveToUtc: string | null;
   latestImportUtc: string | null;
