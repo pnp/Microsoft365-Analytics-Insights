@@ -1150,10 +1150,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         /// <summary>
         /// Slow path for <see cref="BulkResolveAddressIdsAsync"/> after a batch insert failed: resolves each
         /// still-missing address on its own, so one address the database refuses cannot leave the others
-        /// unresolved. An address that can be neither inserted nor matched stays unresolved - recipient pairs
-        /// skip it, exactly as before - and a genuine connection failure still propagates, failing the chunk
-        /// so its delta tokens are not committed and it is retried.
+        /// unresolved.
         /// </summary>
+        /// <remarks>
+        /// Only the two refusals that are permanent are tolerated. A duplicate (SQL 2601/2627) is an address SQL
+        /// already holds under its own comparison, so it maps onto that row. A value too long for the column
+        /// (8152/2628) can never be stored, so it stays unresolved and recipient pairs skip it, as they always
+        /// have. Anything else - a timeout, a deadlock, a dropped connection - may well succeed next cycle, so it
+        /// propagates and fails the chunk: that keeps the chunk's delta tokens uncommitted (#629) instead of
+        /// saving the message without this recipient and never reading it again.
+        /// </remarks>
         private static async Task ResolveRemainingAddressesOneByOneAsync(
             AnalyticsEntitiesContext db, List<string> batch, Dictionary<string, int> addressIds)
         {
@@ -1170,9 +1176,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                     addressIds[address] = entity.ID;
                     continue;
                 }
-                catch (System.Data.Entity.Infrastructure.DbUpdateException)
+                catch (System.Data.Entity.Infrastructure.DbUpdateException ex)
                 {
                     db.Entry(entity).State = EntityState.Detached;
+
+                    if (IsValueTooLongForColumn(ex))
+                        continue;
+
+                    if (!IsUniqueConstraintViolation(ex))
+                        throw;
                 }
 
                 // Compared in SQL, so its collation decides - the same comparison the unique index made when it
@@ -1184,6 +1196,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
                 if (storedId.HasValue)
                     addressIds[address] = storedId.Value;
             }
+        }
+
+        /// <summary>SQL 8152 ("String or binary data would be truncated") or its SQL 2019+ form, 2628.</summary>
+        private static bool IsValueTooLongForColumn(Exception ex)
+        {
+            for (var current = ex; current != null; current = current.InnerException)
+            {
+                if (HasSqlErrorNumber(current, 8152) || HasSqlErrorNumber(current, 2628))
+                    return true;
+            }
+
+            return false;
         }
 
         internal static SentEmail BuildSentEmailRow(

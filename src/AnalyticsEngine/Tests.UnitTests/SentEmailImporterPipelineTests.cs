@@ -638,6 +638,100 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// The other side of the fallback above: only refusals that are permanent may leave an address
+        /// unresolved. Any other failure inserting a recipient's address must fail the chunk and keep its delta
+        /// token, not save the message without that recipient and commit the token, which would lose the
+        /// recipient for good because the message is never read again.
+        /// </summary>
+        /// <remarks>
+        /// Failures EF's execution strategy recognises as transient are retried inside SaveChanges and surface
+        /// as <c>RetryLimitExceededException</c> before the fallback is ever reached. What does reach it is a
+        /// <c>DbUpdateException</c> for anything the strategy does not classify, so that is what this injects:
+        /// an error on exactly that INSERT that is neither a duplicate nor a value too long for the column.
+        /// </remarks>
+        [TestMethod]
+        public async Task ImportSentEmailsForUser_TransientFailureInsertingARecipientAddress_KeepsTheTokenForARetry()
+        {
+            var user = await CreateSavedUserAsync("transient-address");
+            var messageId = "i618-transient-address-" + Guid.NewGuid().ToString("N");
+            var steadyRecipient = ("steady-recipient-" + Guid.NewGuid().ToString("N") + "@contoso.com").ToLowerInvariant();
+            var flakyRecipient = ("flaky-recipient-" + Guid.NewGuid().ToString("N") + "@contoso.com").ToLowerInvariant();
+
+            var source = new RecordingSentEmailSourceLoader(user,
+                Msg(messageId, user.Mail, new[] { steadyRecipient, flakyRecipient }, "Καλημέρα κόσμε"));
+            var committer = new RecordingDeltaTokenCommitter();
+            var importer = NewImporter(source, committer);
+
+            var failFlakyInsert = new FailAddressInsertInterceptor(flakyRecipient);
+            System.Data.Entity.Infrastructure.Interception.DbInterception.Add(failFlakyInsert);
+            try
+            {
+                await Assert.ThrowsExceptionAsync<System.Data.Entity.Infrastructure.DbUpdateException>(
+                    () => importer.ImportSentEmailsForUser(user));
+            }
+            finally
+            {
+                System.Data.Entity.Infrastructure.Interception.DbInterception.Remove(failFlakyInsert);
+            }
+
+            Assert.IsTrue(failFlakyInsert.Failures >= 2, "Both the batch insert and the one-by-one retry must have hit the failure.");
+            Assert.IsFalse(committer.TryGetToken(user, out _), "A transient failure must not advance the user's delta token.");
+            Assert.AreEqual(0, await CountSentEmailsAsync(messageId), "Nothing is saved for a chunk that failed.");
+
+            await importer.ImportSentEmailsForUser(user);
+
+            Assert.AreEqual(2, source.LoadCount, "The message must be read again on the next run.");
+            Assert.AreEqual(1, await CountSentEmailsAsync(messageId));
+            Assert.AreEqual(2, await CountRecipientsAsync(messageId), "The retry must save the message with both recipients.");
+            Assert.IsTrue(committer.TryGetToken(user, out var token));
+            Assert.AreEqual(source.NextDeltaToken, token);
+        }
+
+        /// <summary>
+        /// Fails EF's INSERT of one email address with an error that is neither a duplicate nor a truncation, and
+        /// that EF's execution strategy does not retry - as a failure it cannot classify would. Everything else,
+        /// including the lookup that follows a refusal, runs normally.
+        /// </summary>
+        private sealed class FailAddressInsertInterceptor : System.Data.Entity.Infrastructure.Interception.DbCommandInterceptor
+        {
+            private readonly string _address;
+
+            public FailAddressInsertInterceptor(string address)
+            {
+                _address = address;
+            }
+
+            public int Failures { get; private set; }
+
+            public override void ReaderExecuting(System.Data.Common.DbCommand command,
+                System.Data.Entity.Infrastructure.Interception.DbCommandInterceptionContext<System.Data.Common.DbDataReader> interceptionContext)
+            {
+                if (IsInsertOfTheAddress(command))
+                {
+                    Failures++;
+                    interceptionContext.Exception = new InvalidOperationException("Simulated unclassified SQL failure.");
+                }
+            }
+
+            public override void NonQueryExecuting(System.Data.Common.DbCommand command,
+                System.Data.Entity.Infrastructure.Interception.DbCommandInterceptionContext<int> interceptionContext)
+            {
+                if (IsInsertOfTheAddress(command))
+                {
+                    Failures++;
+                    interceptionContext.Exception = new InvalidOperationException("Simulated unclassified SQL failure.");
+                }
+            }
+
+            private bool IsInsertOfTheAddress(System.Data.Common.DbCommand command)
+            {
+                return command.CommandText.IndexOf("INSERT", StringComparison.OrdinalIgnoreCase) >= 0
+                    && command.CommandText.IndexOf("email_addresses", StringComparison.OrdinalIgnoreCase) >= 0
+                    && command.Parameters.Cast<System.Data.Common.DbParameter>().Any(p => string.Equals(p.Value as string, _address, StringComparison.Ordinal));
+            }
+        }
+
         [TestMethod]
         public async Task ImportSentEmailsForUsers_DuplicateOrphanRepairInChunk_IsDedupedAndCommitsTokens()
         {
