@@ -124,42 +124,42 @@
 		<value>..\..\..\..\Clean Data By User StoredProc.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
 	</data>
 	<data name="Audit_Log_Migration" type="System.Resources.ResXFileRef, System.Windows.Forms">
-		<value>..\migrations\sql\audit log migration.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+		<value>..\Migrations\SQL\Audit Log Migration.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
 	</data>
 	<data name="Create_DB" type="System.Resources.ResXFileRef, System.Windows.Forms">
 		<value>..\Resources\Create DB.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
 	</data>
 	<data name="Table_DimDate" type="System.Resources.ResXFileRef, System.Windows.Forms">
-		<value>..\resources\tables\dimdate.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+		<value>..\Resources\Tables\DimDate.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
 	</data>
 	<data name="Table_DimTime" type="System.Resources.ResXFileRef, System.Windows.Forms">
-		<value>..\resources\tables\dimtime.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+		<value>..\Resources\Tables\DimTime.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
 	</data>
 	<data name="TeamsExtraViews1" type="System.Resources.ResXFileRef, System.Windows.Forms">
-		<value>..\migrations\sql\teamsextraviews1.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
+		<value>..\Migrations\SQL\TeamsExtraViews1.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;utf-8</value>
 	</data>
 	<data name="TeamsViewsV1" type="System.Resources.ResXFileRef, System.Windows.Forms">
-		<value>..\migrations\sql\teamsviewsv1.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+		<value>..\Migrations\SQL\TeamsViewsV1.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
 	</data>
 	<data name="TeamsViewsV2" type="System.Resources.ResXFileRef, System.Windows.Forms">
-		<value>..\migrations\sql\teamsviewsv2.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+		<value>..\Migrations\SQL\TeamsViewsV2.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
 	</data>
 	<data name="View_Content" type="System.Resources.ResXFileRef, System.Windows.Forms">
-		<value>..\resources\views\content.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+		<value>..\Resources\Views\Content.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
 	</data>
 	<data name="View_Usage" type="System.Resources.ResXFileRef, System.Windows.Forms">
-		<value>..\resources\views\usage.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+		<value>..\Resources\Views\Usage.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
 	</data>
 	<data name="View_vwEvents" type="System.Resources.ResXFileRef, System.Windows.Forms">
-		<value>..\resources\views\vwevents.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+		<value>..\Resources\Views\vwEvents.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
 	</data>
 	<data name="View_VWHits" type="System.Resources.ResXFileRef, System.Windows.Forms">
-		<value>..\resources\views\vwhits.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+		<value>..\Resources\Views\VWHits.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
 	</data>
 	<data name="View_vwSearches" type="System.Resources.ResXFileRef, System.Windows.Forms">
-		<value>..\resources\views\vwsearches.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+		<value>..\Resources\Views\vwSearches.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
 	</data>
 	<data name="View_vwSessions" type="System.Resources.ResXFileRef, System.Windows.Forms">
-		<value>..\resources\views\vwsessions.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
+		<value>..\Resources\Views\vwSessions.sql;System.String, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089;Windows-1252</value>
 	</data>
 </root>

@@ -3,8 +3,10 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <!-- net10.0-windows, not plain net10.0: this references Tests.UnitTests and
-         App.ControlPanel.Engine, both of which are windows-flavoured. -->
-    <TargetFramework>net10.0-windows</TargetFramework>
+         App.ControlPanel.Engine, both of which are windows-flavoured. The exception is a build with
+         -p:AnalyticsTargetOS=linux (the Container Apps demo image), which retargets all of them to
+         net10.0; see Directory.Build.props. -->
+    <TargetFramework>$(AnalyticsWindowsTargetFramework)</TargetFramework>
     <RootNamespace>Tests.FakeDataGen</RootNamespace>
     <AssemblyName>Tests.FakeDataGen</AssemblyName>
     <LangVersion>latest</LangVersion>

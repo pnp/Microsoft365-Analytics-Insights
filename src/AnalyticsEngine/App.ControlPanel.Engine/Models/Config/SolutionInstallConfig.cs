@@ -8,7 +8,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+#if WINDOWS
 using System.Windows.Forms;
+#endif
 
 namespace App.ControlPanel.Engine
 {
@@ -132,9 +134,14 @@ namespace App.ControlPanel.Engine
                 }
                 catch (IOException ex)
                 {
+#if WINDOWS
                     var r = MessageBox.Show($"Error loading config file '{fileName}'.\n\n{ex.Message}",
                         "IO Error", MessageBoxButtons.RetryCancel, MessageBoxIcon.Error);
                     tryAgain = (r == DialogResult.Retry);
+#else
+                    // A Linux build (-p:AnalyticsTargetOS=linux) has no Windows Forms to prompt with.
+                    throw new IOException($"Error loading config file '{fileName}'. {ex.Message}", ex);
+#endif
                 }
 
             var result = SolutionInstallConfig.LoadFromJson(jSon, password);
@@ -197,9 +204,14 @@ namespace App.ControlPanel.Engine
                 }
                 catch (IOException ex)
                 {
+#if WINDOWS
                     var result = MessageBox.Show($"Error saving config file '{fileName}'.\n\n{ex.Message}",
                         "IO Error", MessageBoxButtons.RetryCancel, MessageBoxIcon.Error);
                     tryAgain = (result == DialogResult.Retry);
+#else
+                    // A Linux build (-p:AnalyticsTargetOS=linux) has no Windows Forms to prompt with.
+                    throw new IOException($"Error saving config file '{fileName}'. {ex.Message}", ex);
+#endif
                 }
         }
 

@@ -36,6 +36,29 @@
   </ItemGroup>
 
   <!--
+    Linux build switch, for the Azure Container Apps demo (deploy/container-apps-demo) only.
+
+    The projects that touch the installer engine target net10.0-windows because
+    App.ControlPanel.Engine uses Windows Forms, and that framework reference flows to everything that
+    references it - the web app included - so their runtimeconfig demands Microsoft.WindowsDesktop.App,
+    which does not exist on Linux. Building with -p:AnalyticsTargetOS=linux retargets those projects
+    to plain net10.0 without Windows Forms, so the web app and the demo data generator can run in a
+    Linux container. Any code that genuinely needs Windows Forms then fails to COMPILE rather than
+    failing at runtime in a container.
+
+    The default is unchanged: every normal build, CI build and installer build is net10.0-windows.
+    The caveat above still applies - a Linux build ignores UseNls - which is why this switch is used
+    for the demo web app and generator, and not for the importers.
+  -->
+  <PropertyGroup>
+    <AnalyticsTargetOS Condition="'$(AnalyticsTargetOS)' == ''">windows</AnalyticsTargetOS>
+    <AnalyticsWindowsTargetFramework Condition="'$(AnalyticsTargetOS)' == 'linux'">net10.0</AnalyticsWindowsTargetFramework>
+    <AnalyticsWindowsTargetFramework Condition="'$(AnalyticsTargetOS)' != 'linux'">net10.0-windows</AnalyticsWindowsTargetFramework>
+    <AnalyticsUseWindowsForms Condition="'$(AnalyticsTargetOS)' == 'linux'">false</AnalyticsUseWindowsForms>
+    <AnalyticsUseWindowsForms Condition="'$(AnalyticsTargetOS)' != 'linux'">true</AnalyticsUseWindowsForms>
+  </PropertyGroup>
+
+  <!--
     Developer-local overrides. This file used to be gitignored so that a developer could drop their
     own settings in; now that the repository ships one, that hook moves here and the ignore rule
     follows it. Optional, and absent from a clean checkout.

@@ -1,7 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- net10.0-windows unless built with -p:AnalyticsTargetOS=linux (the Container Apps demo image);
+         see Directory.Build.props. -->
+    <TargetFramework>$(AnalyticsWindowsTargetFramework)</TargetFramework>
     <RootNamespace>Web.AnalyticsWeb</RootNamespace>
     <AssemblyName>Web.AnalyticsWeb</AssemblyName>
     <LangVersion>latest</LangVersion>

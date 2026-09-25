@@ -1,8 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0-windows</TargetFramework>
-    <UseWindowsForms>true</UseWindowsForms>
+    <!-- net10.0-windows unless built with -p:AnalyticsTargetOS=linux; see Directory.Build.props. -->
+    <TargetFramework>$(AnalyticsWindowsTargetFramework)</TargetFramework>
+    <UseWindowsForms>$(AnalyticsUseWindowsForms)</UseWindowsForms>
     <RootNamespace>Tests.UnitTests</RootNamespace>
     <AssemblyName>Tests.UnitTests</AssemblyName>
     <LangVersion>latest</LangVersion>
