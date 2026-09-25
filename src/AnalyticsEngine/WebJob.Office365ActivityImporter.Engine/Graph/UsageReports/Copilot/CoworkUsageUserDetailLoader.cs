@@ -1,12 +1,13 @@
 ﻿using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities.UsageReports;
+using DataUtils.Sql;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Data;
-using System.Data.SqlClient;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
@@ -393,9 +394,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             var importable = rows.Where(r => resolution.IdsByUpn.ContainsKey(r.UserPrincipalName)).ToList();
             if (importable.Count == 0) return result;
 
+            // EF's connection is a Microsoft.Data.SqlClient connection (SPOInsightsDBConfiguration, #511), so
+            // this file must use that namespace too: casting it to System.Data.SqlClient.SqlConnection threw
+            // InvalidCastException on every call, and no Cowork usage row was ever saved.
             var con = (SqlConnection)_db.Database.Connection;
             var openedHere = con.State != ConnectionState.Open;
-            if (openedHere) await con.OpenAsync();
+            if (openedHere)
+            {
+                // Opening EF's connection directly bypasses AzureSqlAccessTokenInterceptor, so attach (or
+                // refresh) the Entra token here. Without it an Entra-only Azure SQL install would reopen with no
+                // token, or with the expired one left from EF's last open of this long-lived context (#609).
+                AzureSqlTokenAuth.ApplyAccessTokenIfNeeded(con);
+                await con.OpenAsync();
+            }
             try
             {
                 using (var create = con.CreateCommand())

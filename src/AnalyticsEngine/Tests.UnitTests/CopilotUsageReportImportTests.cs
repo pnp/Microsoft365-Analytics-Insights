@@ -568,6 +568,75 @@ namespace Tests.UnitTests
 
         // ---- Persistence ---------------------------------------------------------------------------
 
+        /// <summary>
+        /// Drives the real SQL persistence of the first-party Cowork report against the test database. It
+        /// bulk-copies through EF's own connection, which is a Microsoft.Data.SqlClient connection
+        /// (SPOInsightsDBConfiguration, #511). While that file still imported System.Data.SqlClient the cast
+        /// threw InvalidCastException on every call, so no Cowork row was ever saved - and every fake-backed
+        /// Cowork test above passed regardless.
+        /// </summary>
+        [TestMethod]
+        public async Task CoworkSqlPersistence_WritesRowsAndSkipsUnchangedOnes()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var upn = $"cowork.persistence.{Guid.NewGuid():N}@contoso.com";
+            // A date far enough out that it can't collide with anything else in the shared test database.
+            var reportDate = new DateTime(2031, 4, 1);
+
+            int userId;
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var user = new User { UserPrincipalName = upn };
+                db.users.Add(user);
+                await db.SaveChangesAsync();
+                userId = user.ID;
+            }
+
+            try
+            {
+                var row = new CoworkUsageUserDetailRow
+                {
+                    ReportRefreshDate = reportDate,
+                    UserPrincipalName = upn,
+                    ReportPeriodDays = 28,
+                    TotalTasks = 12,
+                    ScheduledTasks = 4,
+                    UserInitiatedTasks = 8,
+                    ActiveDays = 6,
+                    LastActivityDate = reportDate.AddDays(-1),
+                    RetainedUser = true,
+                };
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var persistence = new SqlCoworkUsagePersistenceManager(db, logger);
+
+                    Assert.AreEqual(1, (await persistence.UpsertUserDetailAsync(new[] { row })).Written, "The first import writes the row.");
+                    Assert.AreEqual(0, (await persistence.UpsertUserDetailAsync(new[] { row })).Written, "Re-importing unchanged data must write nothing.");
+
+                    row.TotalTasks = 15;
+                    Assert.AreEqual(1, (await persistence.UpsertUserDetailAsync(new[] { row })).Written, "A revised figure must be written.");
+                }
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var stored = await db.Database.SqlQuery<int?>(
+                        "SELECT total_tasks FROM dbo.cowork_usage_user_activity_log WHERE user_id = @p0 AND [date] = @p1 AND report_period_days = 28",
+                        userId, reportDate).ToListAsync();
+                    CollectionAssert.AreEqual(new int?[] { 15 }, stored, "Exactly one row, carrying the revised figure.");
+                }
+            }
+            finally
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    await db.Database.ExecuteSqlCommandAsync(
+                        "DELETE FROM dbo.cowork_usage_user_activity_log WHERE user_id = @p0; DELETE FROM dbo.users WHERE id = @p0;",
+                        userId);
+                }
+            }
+        }
+
         [TestMethod]
         public async Task AggregateLoader_ReImportingTheSameWindowDoesNotDuplicateRows()
         {
