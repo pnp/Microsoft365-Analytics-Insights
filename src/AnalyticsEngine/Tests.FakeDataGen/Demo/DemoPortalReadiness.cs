@@ -1,4 +1,5 @@
 using Common.Entities.LicenceActivity;
+using DataUtils;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -26,12 +27,14 @@ namespace Tests.FakeDataGen.Demo
         /// </summary>
         internal static string RequiredImportJobSettings => ImportSettings(DemoArea.All);
 
-        internal static void PrintPortalSetup(string database, Action<string> write, DemoArea areas = DemoArea.All)
+        internal static void PrintPortalSetup(string database, Action<string> write, DemoArea areas = DemoArea.All, string connectionString = null)
         {
             if (write == null) return;
             write(string.Empty);
             write("To view this data, point a web application at it with:");
-            write($"  connectionStrings   SPOInsightsEntities = Server=(localdb)\\MSSQLLocalDB;Database={database};Integrated Security=True");
+            write("  connectionStrings   SPOInsightsEntities = " + (connectionString != null
+                ? StringUtils.RedactSqlConnectionString(connectionString)
+                : $"Server=(localdb)\\MSSQLLocalDB;Database={database};Integrated Security=True"));
             write("  appSettings         ImportJobSettings = " + ImportSettings(areas));
             write(string.Empty);
             write("Those toggles are how the portal decides which sources exist; they are all opt-in and");

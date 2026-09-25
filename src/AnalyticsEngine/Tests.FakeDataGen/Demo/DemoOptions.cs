@@ -1,3 +1,4 @@
+using Microsoft.Data.SqlClient;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -41,6 +42,19 @@ namespace Tests.FakeDataGen.Demo
         public string Output { get; private set; }
         public bool Preview { get; private set; }
         public bool Help { get; private set; }
+
+        /// <summary>
+        /// Drop the target and build it again from scratch (<c>--recreate</c>). Only ever applied to a
+        /// database carrying this generator's marker, or to a completely empty one; see SqlDemoDatabase.
+        /// </summary>
+        public bool Recreate { get; private set; }
+
+        /// <summary>
+        /// An existing database on any SQL Server or Azure SQL (<c>--connection-string</c>), such as the
+        /// Container Apps demo's. Null for the default LocalDB target. Its catalog is also
+        /// <see cref="Database"/>, and is held to the same <c>ContosoDemo_</c> rule.
+        /// </summary>
+        public string TargetConnectionString { get; private set; }
         public bool CompileProfiles { get; private set; } = true;
         public DemoArea Areas { get; private set; } = DemoArea.All;
         public bool Includes(DemoArea area) => (Areas & area) != 0;
@@ -60,12 +74,14 @@ namespace Tests.FakeDataGen.Demo
                 if (key == "--help") { result.Help = true; continue; }
                 if (key == "--preview") { result.Preview = true; continue; }
                 if (key == "--no-profiles") { result.CompileProfiles = false; continue; }
+                if (key == "--recreate") { result.Recreate = true; continue; }
                 if (i + 1 >= args.Length || args[i + 1].StartsWith("--", StringComparison.Ordinal))
                     throw new ArgumentException("Missing value for " + key);
                 var value = args[++i];
                 switch (key)
                 {
                     case "--database": result.Database = value; break;
+                    case "--connection-string": result.TargetConnectionString = value; break;
                     case "--areas": result.Areas = DemoAreas.Parse(value); break;
                     case "--output": result.Output = value; break;
                     case "--users": result.Users = Integer(key, value, MinUsers, MaxUsers); break;
@@ -88,6 +104,20 @@ namespace Tests.FakeDataGen.Demo
                     default: throw new ArgumentException("Unknown demo option: " + key + ". Use demo --help.");
                 }
             }
+            if (result.Recreate && result.Preview)
+                throw new ArgumentException("--recreate resets a SQL target, so it cannot be combined with --preview.");
+            if (result.Recreate && existingTarget)
+                throw new ArgumentException("--recreate cannot be used with append, which never modifies existing rows.");
+            if (result.TargetConnectionString != null)
+            {
+                if (existingTarget)
+                    throw new ArgumentException("append takes its connection string as its first argument; do not also pass --connection-string.");
+                if (result.Database != null)
+                    throw new ArgumentException("--connection-string already names its database; do not also pass --database.");
+                if (!result.Recreate)
+                    throw new ArgumentException("A --connection-string target is always rebuilt from scratch: add --recreate.");
+                result.Database = ConnectionStringCatalog(result.TargetConnectionString);
+            }
             if (!result.Help && !result.Preview && !existingTarget && string.IsNullOrWhiteSpace(result.Database))
                 throw new ArgumentException("Use --database ContosoDemo_<name> for a NEW local demo database, or --preview for no SQL.");
             if (existingTarget && result.Database != null)
@@ -106,6 +136,28 @@ namespace Tests.FakeDataGen.Demo
         /// </summary>
         internal static bool IsValidDatabaseName(string name) =>
             name != null && Regex.IsMatch(name, DatabaseNamePattern);
+
+        /// <summary>
+        /// The database a <c>--connection-string</c> target names, held to the same rule as
+        /// <c>--database</c>. The connection string itself is never echoed: it may carry a password.
+        /// </summary>
+        internal static string ConnectionStringCatalog(string connectionString)
+        {
+            SqlConnectionStringBuilder builder;
+            try
+            {
+                builder = new SqlConnectionStringBuilder(connectionString);
+            }
+            catch (Exception ex) when (ex is ArgumentException || ex is FormatException || ex is KeyNotFoundException)
+            {
+                throw new ArgumentException("--connection-string is not a valid SQL Server connection string.");
+            }
+            if (!string.IsNullOrEmpty(builder.AttachDBFilename))
+                throw new ArgumentException("--connection-string must name an existing database; attaching database files is not supported.");
+            if (!IsValidDatabaseName(builder.InitialCatalog))
+                throw new ArgumentException("--connection-string must name its database (Database / Initial Catalog), and that name must start with ContosoDemo_ and contain only ASCII letters, digits and underscores.");
+            return builder.InitialCatalog;
+        }
 
         private static int Integer(string key, string value, int min, int max)
         {
@@ -131,12 +183,24 @@ namespace Tests.FakeDataGen.Demo
   Tests.FakeDataGen.exe demo --preview --users 300000 --skus 50 --days 31
   Tests.FakeDataGen.exe demo --database ContosoDemo_Repeatable --as-of 2026-09-01 --seed 42
   Tests.FakeDataGen.exe demo --database ContosoDemo_Teams --areas teams
+  Tests.FakeDataGen.exe demo --database ContosoDemo_Nightly --recreate
+  Tests.FakeDataGen.exe demo --connection-string ""<ContosoDemo_ database connection string>"" --recreate
   Tests.FakeDataGen.exe append ""<test-database-connection-string>"" --areas powerapps,powerbi --confirm-existing
 
 Or run Tests.FakeDataGen.exe with no arguments and pick the demo option from the menu: it
 asks for the same values, prints the equivalent command line, and runs this same generator.
 
-  --database NAME          NEW database on (localdb)\MSSQLLocalDB only. Required unless preview.
+  --database NAME          NEW database on (localdb)\MSSQLLocalDB only. Required unless preview
+                           or --connection-string.
+  --connection-string CS   An EXISTING database on any SQL Server or Azure SQL instead of LocalDB,
+                           e.g. the Container Apps demo. Its database must be named ContosoDemo_*,
+                           and it requires --recreate: it is rebuilt from scratch on every run.
+  --recreate               Drop the target and build it again from scratch. Only a database this
+                           generator created (it carries the demo marker) or a completely empty one
+                           is ever reset; anything else is refused unchanged. A LocalDB target is
+                           dropped and re-created. A --connection-string target is emptied in place
+                           (every table, view, procedure, function, type and schema), so an Azure SQL
+                           database keeps its SKU, firewall and Entra users.
   --preview                Stream the same rows to counters; no SQL, config or external services.
   --areas LIST             all (default), or comma-separated area keys:
                            directory,copilot,copilot-history,teams,outlook,sent-email,
@@ -169,7 +233,9 @@ complete-week Power BI activity/device profiles. Power BI report views are separ
 these profiles. No real message, prompt or response text. All text/sentiment is synthetic.
 No schema/config changes; existing schema is applied through DatabaseUpgrader on the NEW DB.
 Exact completed reruns are read-only no-ops. Unmarked, changed or incomplete targets fail;
-choose a new name after a failure. There is deliberately no reset or production-connection option.
+choose a new name after a failure, or rebuild a demo database with --recreate. There is no
+production-connection option: every target, --connection-string included, must be a ContosoDemo_
+database, and --recreate never touches one this generator did not create.
 The separate append command requires --confirm-existing and an existing, current-schema
 TEST database. It adds a fresh synthetic population without modifying existing users.
 It never creates/upgrades the target, compiles global profiles or invents tenant-wide

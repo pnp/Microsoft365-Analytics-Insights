@@ -26,9 +26,10 @@ namespace Tests.FakeDataGen.Demo
         {
             FileStream summaryFile = null;
             string portalConnectionString = null;
+            DemoOptions options = null;
             try
             {
-                var options = DemoOptions.Parse(args, DateTime.UtcNow, existingConnectionString != null);
+                options = DemoOptions.Parse(args, DateTime.UtcNow, existingConnectionString != null);
                 if (options.Help) { Console.WriteLine(DemoOptions.HelpText); return 0; }
                 if (options.Output != null)
                     summaryFile = new FileStream(options.Output, FileMode.CreateNew, FileAccess.Write, FileShare.None);
@@ -92,7 +93,7 @@ namespace Tests.FakeDataGen.Demo
                     // Deliberately the real clock, not the demo's as-of: this reports what a portal opened
                     // now would be able to measure, which is different when a historical --as-of was used.
                     DemoPortalReadiness.PrintMeasuredCoverage(portalConnectionString, DateTime.UtcNow, Console.WriteLine);
-                    DemoPortalReadiness.PrintPortalSetup(options.Database, Console.WriteLine, options.Areas);
+                    DemoPortalReadiness.PrintPortalSetup(options.Database, Console.WriteLine, options.Areas, options.TargetConnectionString);
                 }
                 if (summaryFile != null)
                 {
@@ -104,9 +105,13 @@ namespace Tests.FakeDataGen.Demo
             catch (Exception ex)
             {
                 Console.Error.WriteLine("Demo generation FAILED: " + ex.GetBaseException().Message);
-                Console.Error.WriteLine(existingConnectionString == null
-                    ? "Targets are never reset automatically. Incomplete or changed targets are refused; an already completed target remains a read-only no-op."
-                    : "Append failed. Previously committed synthetic batches may remain. Existing rows are not reset or cleaned up automatically.");
+                Console.Error.WriteLine(options == null
+                    ? "Nothing was changed. Use demo --help for the options."
+                    : existingConnectionString != null
+                        ? "Append failed. Previously committed synthetic batches may remain. Existing rows are not reset or cleaned up automatically."
+                        : options.Recreate
+                            ? "The target may be left partly rebuilt. It keeps its synthetic demo marker, so running the same --recreate command again rebuilds it from scratch."
+                            : "Targets are never reset automatically. Incomplete or changed targets are refused; an already completed target remains a read-only no-op. Use --recreate to rebuild a demo database this generator created.");
                 if (summaryFile != null) Console.Error.WriteLine("No successful JSON summary was produced; the reserved output file may be empty or incomplete.");
                 return ex is ArgumentException ? 2 : ex is OperationCanceledException ? 130 : 1;
             }

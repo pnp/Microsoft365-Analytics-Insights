@@ -28,6 +28,34 @@ Exact completed reruns are read-only no-ops; other existing targets are refused.
 reproducibility. `--help` lists all flags and the deliberately unsupported datasets.
 The operator guide lives in the wiki: [Synthetic demo data](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Synthetic-demo-data).
 
+### Rebuilding a demo database: `--recreate`
+
+```
+Tests.FakeDataGen.exe demo --database ContosoDemo_Nightly --recreate
+Tests.FakeDataGen.exe demo --connection-string "<ContosoDemo_ database connection string>" --recreate
+```
+
+`--recreate` drops the target and builds it again from scratch, instead of refusing an existing one.
+It exists for a demo that must stay current - the
+[Container Apps demo](../../../infra/ContainerAppsDemo/README.md) runs it every night - so the data's
+end date keeps moving forward with the calendar.
+
+- A **LocalDB** target (`--database`) is dropped and re-created.
+- A **`--connection-string`** target - any SQL Server or Azure SQL database - is emptied in place:
+  every table, view, procedure, function, type and schema, the EF migration history included, and
+  then rebuilt through the migrations exactly like a new database. The database itself, its users,
+  roles and settings stay, so an Azure SQL database keeps its SKU (the free serverless offer and its
+  auto-pause), its firewall and the Entra identities that sign in to it. It must already exist, and a
+  connection-string target always needs `--recreate`.
+
+The safety rules do not relax. The database must be named `ContosoDemo_*`, and it is only reset when
+it carries this generator's synthetic-demo marker - any version, so a run that failed half-way can be
+rebuilt - or holds no objects at all. A database with content and no marker is refused unchanged,
+whatever its name. A failed `--recreate` leaves a marked target that the same command rebuilds.
+
+An auto-paused Azure SQL serverless database is given up to five minutes to resume on the first
+connection.
+
 The same demo is the **first option on the interactive menu**, so it can be run
 without knowing any of the flags - see
 [Full synthetic demo](#full-synthetic-demo-contoso) below.
@@ -140,7 +168,8 @@ Equivalent command line: Tests.FakeDataGen.exe demo --database ContosoDemo_20260
 window on a later day. To generate another copy from it, give `--database` (and
 `--output`, if one was chosen) new names: a completed target is a read-only
 no-op and an existing summary file is never overwritten. The default target name
-is timestamped because demo targets are never reset.
+is timestamped because the menu never resets a target (only the command line's
+`--recreate` does).
 
 The menu option only chooses flag values: `DemoCommand` still parses and
 validates them, so the LocalDB-only rule, the `ContosoDemo_` name restriction,
