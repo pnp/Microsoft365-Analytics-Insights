@@ -1,0 +1,54 @@
+{
+  "$comment": "Copy to demo.environment.json (or any *.environment.json - all are gitignored) and fill in. Never commit real subscription, tenant or resource names. Every field except subscriptionId, tenantId, location, resourceGroupName and namePrefix is optional; the values below are the defaults.",
+
+  "subscriptionId": "00000000-0000-0000-0000-000000000000",
+  "tenantId": "00000000-0000-0000-0000-000000000000",
+  "location": "westeurope",
+  "resourceGroupName": "rg-m365analytics-demo",
+  "namePrefix": "m365aidemo",
+  "tags": {
+    "Environment": "Demo"
+  },
+
+  "containerAppsEnvironment": {
+    "$comment": "Leave empty for a new environment, <namePrefix>-env in resourceGroupName, with a Log Analytics workspace and - for private SQL access - its own virtual network. Or name an existing environment to deploy the two apps into; it is never modified. With private SQL access an existing environment must be integrated with a virtual network: the SQL private endpoint joins a subnet of it (see sql.privateEndpointSubnetId).",
+    "name": "",
+    "resourceGroupName": ""
+  },
+
+  "web": {
+    "$comment": "minReplicas 0 scales the portal to zero when idle (cheapest: the first visit waits for a cold start and signs in again). 1 keeps it always on. customDomain gives the portal an address in a domain you own, e.g. analyticsdemo.contoso.com, with a free managed certificate; the default address keeps working. When the domain's zone is in Azure DNS in this subscription the script creates the two records it needs (dnsZoneId picks the zone explicitly); otherwise it prints them for you to create.",
+    "appName": "m365aidemo-portal",
+    "minReplicas": 0,
+    "customDomain": "",
+    "dnsZoneId": ""
+  },
+
+  "entraApp": {
+    "$comment": "The portal's app registration, created or updated by the deployment and found by this name, so it must be unique to this demo instance. Default: Microsoft 365 Analytics Insights demo (<namePrefix>). tenantDomain defaults to the tenant's default domain.",
+    "displayName": "Microsoft 365 Analytics Insights demo (m365aidemo)",
+    "tenantDomain": ""
+  },
+
+  "sql": {
+    "$comment": "useFreeOffer: the Azure SQL Database free offer (serverless, auto-pauses, no compute charge within 100,000 vCore-seconds a month). false: Basic 5 DTU. freeLimitExhaustionBehavior BillOverUsage (default) keeps the demo running at the normal serverless rate if the allowance is ever spent, and allows the 15-minute autoPauseDelayMinutes that keeps a normal month inside it; AutoPause caps the SQL cost at zero but stops the database until next month once the allowance is gone, and Azure then fixes the delay at 60 minutes. serverName defaults to <namePrefix>-sql-<unique suffix>. location defaults to the top-level location; set it when the subscription cannot create SQL servers there, or the region has no free offer (the script checks). networkAccess private (default) reaches SQL only through a private endpoint in the environment's virtual network - needed where policy disables public network access on SQL servers; public uses the public endpoint and suits any environment. With private access and an existing environment, privateEndpointSubnetId picks the endpoint's subnet (default: the one subnet of the environment's network that can hold it), and privateDnsZoneId a privatelink.database.windows.net zone in another subscription (default: the zone already linked to that network, else a new one).",
+    "serverName": "",
+    "location": "",
+    "networkAccess": "private",
+    "privateEndpointSubnetId": "",
+    "privateDnsZoneId": "",
+    "databaseName": "ContosoDemo_Portal",
+    "useFreeOffer": true,
+    "freeLimitExhaustionBehavior": "BillOverUsage",
+    "autoPauseDelayMinutes": 15
+  },
+
+  "demoData": {
+    "$comment": "The nightly Tests.FakeDataGen run. schedule is a cron expression evaluated in UTC. users/days/seed/copilotPercent/areas map to the generator's --users/--days/--seed/--copilot-percent/--areas; omit one to take the generator's default. extraArguments are passed through verbatim.",
+    "jobName": "m365aidemo-datagen",
+    "schedule": "0 0 * * *",
+    "users": 500,
+    "days": 120,
+    "extraArguments": []
+  }
+}

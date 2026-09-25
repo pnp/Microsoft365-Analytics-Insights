@@ -21,6 +21,7 @@ on:
       - net10
     paths:
       - src/AnalyticsEngine/**
+      - infra/ContainerAppsDemo/**
       - .github/workflows/net10.yml
   pull_request:
     branches:
@@ -118,6 +119,59 @@ jobs:
           elif [ "$behind" -gt 0 ]; then
             echo "::warning::net10 is ${behind} commits behind main."
           fi
+
+  # ---------------------------------------------------------------------------------------------
+  # The Container Apps demo image (infra/ContainerAppsDemo): the web app and the demo generator
+  # built for LINUX with -p:AnalyticsTargetOS=linux (src/AnalyticsEngine/Directory.Build.props).
+  #
+  # Nothing else in this workflow compiles on Linux, so a Windows-only habit - a resx path whose case
+  # differs from the file on disk, a new Windows Forms dependency, a partial class that relies on the
+  # file order Windows happens to glob - would otherwise first surface as a failed demo deployment.
+  # The context is staged from `git ls-files` exactly as Deploy-ContainerAppsDemo.ps1 stages it.
+  # ---------------------------------------------------------------------------------------------
+  demo_image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
+
+      - name: Build the demo image
+        shell: bash
+        run: |
+          set -euo pipefail
+          context="$RUNNER_TEMP/demo-context"
+          mkdir -p "$context"
+          git ls-files -z --cached --others --exclude-standard -- .nvmrc build src/AnalyticsEngine ':(glob)src/*.sql' \
+            | xargs -0 cp --parents -t "$context"
+          cp infra/ContainerAppsDemo/Dockerfile "$context/Dockerfile"
+          docker build --build-arg "NODE_VERSION=$(grep -oE '[0-9]+' .nvmrc | head -n 1)" -t m365analytics-demo:ci "$context"
+
+      - name: Smoke-test the image
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The generator runs end to end on Linux; --preview streams every row without SQL.
+          docker run --rm m365analytics-demo:ci /app/datagen/Tests.FakeDataGen.dll demo --preview --users 50 --days 31
+
+          # The web app starts and serves the portal's static bundle. Placeholder settings only:
+          # nothing here signs in or reaches a database.
+          docker run -d --name portal -p 8080:8080 \
+            -e ClientID=00000000-0000-0000-0000-000000000000 -e ClientSecret=unused \
+            -e TenantGUID=00000000-0000-0000-0000-000000000000 -e WebAppURL=https://portal.contoso.example \
+            -e 'ConnectionStrings__SPOInsightsEntities=Server=tcp:contoso.database.windows.net;Database=ContosoDemo_Ci;Authentication=Active Directory Managed Identity' \
+            -e 'ConnectionStrings__Storage=UseDevelopmentStorage=true' \
+            m365analytics-demo:ci
+          asset=$(docker exec portal sh -c 'ls /app/web/wwwroot/assets/*.js | head -n 1 | xargs basename')
+          for attempt in $(seq 1 30); do
+            if curl -fsS -o /dev/null "http://localhost:8080/assets/$asset"; then
+              echo "Portal served /assets/$asset"
+              docker rm -f portal > /dev/null
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs portal
+          exit 1
 
   # ---------------------------------------------------------------------------------------------
   # Build every .NET 10 project and run the unit test suite.

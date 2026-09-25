@@ -50,6 +50,10 @@ src/TelemetryService/web.client/.vscode/*
 /infra/TelemetryService/.deploy/
 /artifacts/TelemetryService/
 
+# Container Apps demo: the real environment file (subscription, tenant, resource names) stays on the
+# machine that deploys. Only demo.environment.example.json, with placeholders, is committed.
+/infra/ContainerAppsDemo/*.environment.json
+
 # The portal SPA bundle is copied into wwwroot at build time by IncludeSpaBuildOutput.
 # It is build output, not source - the source lives in Web/Scripts/portal.
 src/AnalyticsEngine/Web/wwwroot/
