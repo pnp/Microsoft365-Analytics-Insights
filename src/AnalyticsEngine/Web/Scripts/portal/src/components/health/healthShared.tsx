@@ -12,6 +12,7 @@ import {
 import Spinner from '../Spinner';
 import { formatDateParts, formatNumber, translateActive, useT, type TFunction } from '../../i18n';
 import { health as enHealth } from '../../i18n/catalog/en/health';
+import type { TranslationKey } from '../../i18n';
 import type { ComponentHealthRow, DataOverviewSection, HealthSectionBase, HealthStatusName, HourCount } from '../../types/health';
 
 export type BadgeColor = 'success' | 'warning' | 'danger' | 'informative' | 'subtle';
@@ -19,6 +20,67 @@ export type BadgeColor = 'success' | 'warning' | 'danger' | 'informative' | 'sub
 // A full activity import cycle should complete at least this often (see HEALTH-MONITORING-DESIGN.md).
 export const CYCLE_SLA_HOURS = 24;
 export const AUTO_REFRESH_MS = 60_000;
+
+export const BLOB_CHECKPOINT_REASON_KEYS: Record<string, TranslationKey> = {
+  'blobCheckpoint.healthy': 'health.reason.blobCheckpointHealthy',
+  'blobCheckpoint.notConfigured': 'health.reason.blobCheckpointNotConfigured',
+  'blobCheckpoint.transport': 'health.reason.blobCheckpointTransport',
+  'blobCheckpoint.storageFirewall': 'health.reason.blobCheckpointStorageFirewall',
+  'blobCheckpoint.permissionMismatch': 'health.reason.blobCheckpointPermissionMismatch',
+  'blobCheckpoint.authenticationFailed': 'health.reason.blobCheckpointAuthenticationFailed',
+  'blobCheckpoint.keyAuthDisabled': 'health.reason.blobCheckpointKeyAuthDisabled',
+  'blobCheckpoint.storageRejected': 'health.reason.blobCheckpointStorageRejected',
+};
+
+/**
+ * The importer's telemetry detail for a blob checkpoint it could not open durably
+ * (ProcessedBlobStoreFactory.TrackDegradedHealth), with the classifier's operator message inside.
+ *
+ * The Components table translates these from the event's ReasonKey. The Overview and the section
+ * roll-ups never see that key: HealthRollup folds each component into "{component} is degraded:
+ * {detail}", so the detail text is all they have. Recognising the failure by the sentence that names
+ * it is what stops every state but the storage firewall reaching a Spanish reader in English - and
+ * it also covers events written before the importer sent a ReasonKey. serverAuthoredText.test.ts
+ * rebuilds each detail from the C# and checks it lands on the right key.
+ */
+const BLOB_CHECKPOINT_UNAVAILABLE = /^Azure Table checkpoint unavailable: ([\s\S]+) Using non-durable in-memory checkpoint \(lost on restart; durable cross-cycle metadata recovery unavailable\)\. See importer error log\.$/;
+
+export const BLOB_CHECKPOINT_FAILURE_SENTENCES: ReadonlyArray<{ reasonKey: string; sentence: RegExp }> = [
+  { reasonKey: 'blobCheckpoint.transport', sentence: /^The Table checkpoint request failed before Azure Storage returned a service error\./ },
+  { reasonKey: 'blobCheckpoint.storageFirewall', sentence: /^Storage firewall\/network rules rejected the Table checkpoint request \(HTTP (\d+) ([^)]+)\)\./ },
+  { reasonKey: 'blobCheckpoint.permissionMismatch', sentence: /^The runtime identity reached Table storage but does not have the required data-plane role \(HTTP (\d+) ([^)]+)\)\./ },
+  { reasonKey: 'blobCheckpoint.authenticationFailed', sentence: /^Azure Storage rejected the checkpoint credential \(HTTP (\d+) ([^)]+)\)\./ },
+  { reasonKey: 'blobCheckpoint.keyAuthDisabled', sentence: /^The storage account has shared-key authentication disabled \(HTTP (\d+) ([^)]+)\)\./ },
+  { reasonKey: 'blobCheckpoint.storageRejected', sentence: /^Azure Storage rejected the Table checkpoint request \(HTTP (\d+) ([^)]+)\)\./ },
+];
+
+/**
+ * Matches text the server wrote against the English catalog value that mirrors it, and returns each
+ * `{placeholder}`'s value - or null when the text is something else.
+ *
+ * For these keys the English catalog value IS the server's sentence, word for word
+ * (serverAuthoredText.test.ts pins the two together), so recognising the server's English and
+ * translating it are one contract rather than two copies of the same sentence that can drift apart.
+ */
+function matchServerTemplate(template: string, text: string): Record<string, string> | null {
+  const names: string[] = [];
+  const pattern = template
+    .split(/(\{\w+\})/)
+    .map((part) => {
+      const placeholder = /^\{(\w+)\}$/.exec(part);
+      if (!placeholder) return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      names.push(placeholder[1]);
+      return '(.+?)';
+    })
+    .join('');
+  const match = new RegExp(`^${pattern}$`).exec(text);
+  return match ? Object.fromEntries(names.map((name, i) => [name, match[i + 1]])) : null;
+}
+
+/** A whole number the server printed invariantly ("1234"), re-printed in the portal language. */
+function serverNumber(value: string): string {
+  return /^\d+$/.test(value) ? formatNumber(Number(value)) : value;
+}
 
 // --- Time / format helpers ---
 
@@ -162,12 +224,38 @@ export function translateHealthComponentDetailText(detail: string | null | undef
     });
   }
 
+  if (detail === enHealth['health.reason.blobCheckpointHealthy']) return t('health.reason.blobCheckpointHealthy');
+  if (detail === enHealth['health.reason.blobCheckpointNotConfigured']) return t('health.reason.blobCheckpointNotConfigured');
+
+  const blobCheckpointUnavailable = BLOB_CHECKPOINT_UNAVAILABLE.exec(detail);
+  if (blobCheckpointUnavailable) {
+    for (const { reasonKey, sentence } of BLOB_CHECKPOINT_FAILURE_SENTENCES) {
+      const failure = sentence.exec(blobCheckpointUnavailable[1]);
+      if (failure) {
+        return t(BLOB_CHECKPOINT_REASON_KEYS[reasonKey], {
+          status: failure[1] ?? '-',
+          errorCode: failure[2] ?? '-',
+        });
+      }
+    }
+  }
+
+  const queueDepth = matchServerTemplate(enHealth['health.reason.teamsCallsQueueDepth'], detail);
+  if (queueDepth) {
+    return t('health.reason.teamsCallsQueueDepth', {
+      queue: queueDepth.queue,
+      active: serverNumber(queueDepth.active),
+      deadLettered: serverNumber(queueDepth.deadLettered),
+    });
+  }
+
   return detail;
 }
 
 export function translateHealthComponentDetail(component: ComponentHealthRow, t: TFunction): string {
-  if (component.reasonKey === 'blobCheckpoint.storageFirewall') {
-    return t('health.reason.blobCheckpointStorageFirewall', {
+  const blobCheckpointKey = component.reasonKey ? BLOB_CHECKPOINT_REASON_KEYS[component.reasonKey] : null;
+  if (blobCheckpointKey) {
+    return t(blobCheckpointKey, {
       status: component.httpStatus ? formatNumber(component.httpStatus) : '-',
       errorCode: component.errorCode ?? '-',
     });
@@ -191,6 +279,38 @@ export function translateHealthReasonText(reason: string, t: TFunction): string 
   if (reason.startsWith(databaseErrorPrefix)) {
     return t('health.reason.databaseQueryFailed', { error: reason.slice(databaseErrorPrefix.length) });
   }
+
+  // HealthRollup's own sentences. Numbers arrive printed invariantly and are re-printed here; job
+  // names are the importers' own identifiers and are left as they are.
+  const schemaBehind = matchServerTemplate(enHealth['health.reason.schemaBehind'], reason);
+  if (schemaBehind) return t('health.reason.schemaBehind', { count: serverNumber(schemaBehind.count) });
+
+  const noCycle = matchServerTemplate(enHealth['health.reason.noCompletedImportCycle'], reason);
+  if (noCycle) return t('health.reason.noCompletedImportCycle', { job: noCycle.job });
+
+  const cycleOverdue = matchServerTemplate(enHealth['health.reason.importCycleOverdue'], reason);
+  if (cycleOverdue) {
+    return t('health.reason.importCycleOverdue', {
+      job: cycleOverdue.job,
+      hours: serverNumber(cycleOverdue.hours),
+      sla: serverNumber(cycleOverdue.sla),
+    });
+  }
+
+  const cycleLate = matchServerTemplate(enHealth['health.reason.importCycleLate'], reason);
+  if (cycleLate) {
+    return t('health.reason.importCycleLate', {
+      job: cycleLate.job,
+      hours: serverNumber(cycleLate.hours),
+      sla: serverNumber(cycleLate.sla),
+    });
+  }
+
+  const sqlCapacity = matchServerTemplate(enHealth['health.reason.sqlCapacityExceptions'], reason);
+  if (sqlCapacity) return t('health.reason.sqlCapacityExceptions', { count: serverNumber(sqlCapacity.count) });
+
+  if (reason === enHealth['health.reason.teamsCallsWebhookMissing']) return t('health.reason.teamsCallsWebhookMissing');
+  if (reason === enHealth['health.reason.teamsCallsWebhookError']) return t('health.reason.teamsCallsWebhookError');
 
   const componentMatch = /^(.+) is (unhealthy|degraded): (.+)$/.exec(reason);
   if (componentMatch) {

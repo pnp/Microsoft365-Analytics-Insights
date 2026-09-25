@@ -123,6 +123,7 @@
     <Compile Include="SPO\SharePointModelBuilder\ValueLookups\Models.cs" />
     <Compile Include="SPO\SharePointModelBuilder\ValueLookups\JsonObjectToStringLookup.cs" />
     <Compile Include="InstallSummary.cs" />
+    <Compile Include="InstallerNetworkProxy.cs" />
     <Compile Include="PreInstallAdvisor.cs" />
     <Compile Include="SolutionInstaller.cs" />
     <Compile Include="Models\AzureSubscription.cs" />

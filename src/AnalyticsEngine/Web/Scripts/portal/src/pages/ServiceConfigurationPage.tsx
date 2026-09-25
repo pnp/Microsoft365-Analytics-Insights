@@ -26,8 +26,10 @@ import type { SystemStatus } from '../types/systemStatus';
 import type { ConfigSection } from '../types/health';
 import type { UpdateCheck } from '../types/updateCheck';
 import { formatUtc } from '../components/health/healthShared';
+import { serverPlaceholderText } from '../components/shared/serverPlaceholder';
 import Spinner from '../components/Spinner';
 import { useT, useTNode } from '../i18n';
+import { buildLabelText } from '../product';
 import { enabledImportLabelText } from './InsightsOverviewPage';
 
 const useStyles = makeStyles({
@@ -78,7 +80,9 @@ function WebhookSubscriptionBadge({ status }: { status: SystemStatus }) {
           {status.callWebhookExpiry && (
             <Text size={200} style={{ marginLeft: 8 }}>
               {t('admin.serviceConfiguration.webhook.renewsAutomatically', {
-                expiry: new Date(status.callWebhookExpiry).toUTCString(),
+                // formatUtc, not Date.toUTCString(): toUTCString is English in every locale
+                // ("Thu, 25 Sep 2026 ..."), so a Spanish page printed English day and month names.
+                expiry: formatUtc(status.callWebhookExpiry),
               })}
             </Text>
           )}
@@ -169,12 +173,12 @@ function UpdateCheckCard({ styles }: { styles: ReturnType<typeof useStyles> }) {
             <TableBody>
               <TableRow>
                 <TableCell className={styles.label}>{t('admin.serviceConfiguration.updates.currentBuildLabel')}</TableCell>
-                <TableCell className={styles.value}>{result.currentBuildLabel ?? t('admin.common.unknown')}</TableCell>
+                <TableCell className={styles.value}>{buildLabelText(t, result.currentBuildLabel) ?? t('admin.common.unknown')}</TableCell>
               </TableRow>
               <TableRow>
                 <TableCell className={styles.label}>{t('admin.serviceConfiguration.updates.latestReleaseLabel')}</TableCell>
                 <TableCell className={styles.value}>
-                  {result.latestReleaseName ??
+                  {buildLabelText(t, result.latestReleaseName) ??
                     (result.latestBuild != null
                       ? t('admin.serviceConfiguration.updates.build', { build: result.latestBuild })
                       : t('admin.common.unknown'))}
@@ -329,7 +333,7 @@ export default function ServiceConfigurationPage() {
     <div>
       <Title3 block>
         {status.buildLabel
-          ? t('admin.serviceConfiguration.titleWithBuild', { buildLabel: status.buildLabel })
+          ? t('admin.serviceConfiguration.titleWithBuild', { buildLabel: buildLabelText(t, status.buildLabel) })
           : t('admin.serviceConfiguration.title')}
       </Title3>
 
@@ -347,7 +351,7 @@ export default function ServiceConfigurationPage() {
               </TableRow>
               <TableRow>
                 <TableCell className={styles.label}>{t('admin.serviceConfiguration.azureResources.redisSslEndpoint')}</TableCell>
-                <TableCell className={styles.value}>{status.webAppConfigRedis}</TableCell>
+                <TableCell className={styles.value}>{serverPlaceholderText(t, status.webAppConfigRedis)}</TableCell>
               </TableRow>
               <TableRow>
                 <TableCell className={styles.label}>{t('admin.serviceConfiguration.azureResources.cognitiveServicesEndpoint')}</TableCell>
@@ -365,7 +369,7 @@ export default function ServiceConfigurationPage() {
               </TableRow>
               <TableRow>
                 <TableCell className={styles.label}>Service Bus</TableCell>
-                <TableCell className={styles.value}>{status.webAppConfigServiceBus}</TableCell>
+                <TableCell className={styles.value}>{serverPlaceholderText(t, status.webAppConfigServiceBus)}</TableCell>
               </TableRow>
               {health?.webAppUrl && (
                 <TableRow>

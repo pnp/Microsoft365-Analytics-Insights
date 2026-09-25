@@ -13,6 +13,7 @@ import DonutChart from '../charts/DonutChart';
 import StackedAreaChart from '../charts/StackedAreaChart';
 import { KpiGrid, type KpiDefinition } from '../shared/KpiGrid';
 import { seriesColor } from '../charts/chartCommon';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import type { WebActivityPlatformRow, WebActivityTechnology } from '../../types/webActivity';
 import { useT } from '../../i18n';
 import {
@@ -235,10 +236,10 @@ export default function TechnologyPanel({
               <TableBody>
                 {data.detail.map((row, index) => (
                   <TableRow key={`${row.browser}|${row.device}|${row.operatingSystem}|${row.city}|${index}`}>
-                    <TableCell className={styles.td}>{row.browser}</TableCell>
-                    <TableCell className={styles.td}>{row.device}</TableCell>
-                    <TableCell className={styles.td}>{row.operatingSystem}</TableCell>
-                    <TableCell className={styles.td}>{row.city}</TableCell>
+                    <TableCell className={styles.td}>{serverPlaceholderText(t, row.browser)}</TableCell>
+                    <TableCell className={styles.td}>{serverPlaceholderText(t, row.device)}</TableCell>
+                    <TableCell className={styles.td}>{serverPlaceholderText(t, row.operatingSystem)}</TableCell>
+                    <TableCell className={styles.td}>{serverPlaceholderText(t, row.city)}</TableCell>
                     <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.visits)}</TableCell>
                     <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.visitors)}</TableCell>
                     <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.pageViews)}</TableCell>
@@ -281,8 +282,8 @@ function PlatformTable({ rows, heading }: { rows: WebActivityPlatformRow[]; head
           {rows.map((row) => (
             <TableRow key={row.name}>
               <TableCell className={styles.td}>
-                <div className={styles.ellipsis} title={row.name}>
-                  {row.name}
+                <div className={styles.ellipsis} title={serverPlaceholderText(t, row.name)}>
+                  {serverPlaceholderText(t, row.name)}
                 </div>
               </TableCell>
               <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.pageViews)}</TableCell>

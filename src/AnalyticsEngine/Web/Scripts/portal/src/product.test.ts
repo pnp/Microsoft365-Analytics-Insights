@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PRODUCT_NAME, REPOSITORY_URL, buildLabel, printedBuildText } from './product';
+import { PRODUCT_NAME, REPOSITORY_URL, buildLabel, buildLabelText, printedBuildText } from './product';
+import { loadCatalog, setActiveLanguage, translateStatic, type TranslationKey, type TranslationValues } from './i18n';
 
 const PORTAL_DIR = process.cwd();
 
@@ -15,6 +16,7 @@ const PORTAL_DIR = process.cwd();
 describe('build label', () => {
   afterEach(() => {
     delete (window as Partial<Window>).o365AnalyticsBuildLabel;
+    setActiveLanguage('en');
   });
 
   it('reports a released build', () => {
@@ -102,5 +104,44 @@ describe('printed build text', () => {
       window.o365AnalyticsBuildLabel = notARelease;
       expect(printedBuildText()).not.toContain(notARelease);
     }
+  });
+
+  it('translates the printed build marker in Spanish', async () => {
+    await loadCatalog('es');
+    setActiveLanguage('es');
+
+    window.o365AnalyticsBuildLabel = 'Build 1841';
+    expect(printedBuildText()).toBe('compilación 1841');
+
+    window.o365AnalyticsBuildLabel = 'DEV_BUILD';
+    expect(printedBuildText()).toBe('compilación de desarrollo');
+  });
+});
+
+/**
+ * The build label on screen - Health's title, the Overview badge, Service configuration - which
+ * used to print the pipeline's English "Build 1836" on Spanish pages.
+ */
+describe('build label on screen', () => {
+  const en = (key: TranslationKey, values?: TranslationValues) => translateStatic('en', key, values);
+  const es = (key: TranslationKey, values?: TranslationValues) => translateStatic('es', key, values);
+
+  it('shows the pipeline\'s labels exactly as before in English', () => {
+    expect(buildLabelText(en, 'Build 1841')).toBe('Build 1841');
+    expect(buildLabelText(en, 'Stable build 1835')).toBe('Stable build 1835');
+  });
+
+  it('re-words them around the number in Spanish', async () => {
+    await loadCatalog('es');
+    expect(buildLabelText(es, 'Build 1841')).toBe('Compilación 1841');
+    expect(buildLabelText(es, 'Stable build 1835')).toBe('Compilación estable 1835');
+  });
+
+  it('shows anything else exactly as it arrived', async () => {
+    await loadCatalog('es');
+    for (const label of ['DEV_BUILD', 'Release 2026.09', 'Build', 'Build 1841 hotfix']) {
+      expect(buildLabelText(es, label), label).toBe(label);
+    }
+    expect(buildLabelText(es, null)).toBeNull();
   });
 });

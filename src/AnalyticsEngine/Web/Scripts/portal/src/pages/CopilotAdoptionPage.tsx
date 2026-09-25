@@ -58,6 +58,7 @@ import { ConcentrationBar, CombinedSegmentTable } from '../components/copilotAdo
 import InfoTip from '../components/shared/InfoTip';
 import PrintButton from '../components/shared/PrintButton';
 import { PRINT_ROW_LIMIT } from '../components/shared/printPreparation';
+import { serverPlaceholderText } from '../components/shared/serverPlaceholder';
 import DismissibleWarnings from '../components/shared/DismissibleWarnings';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
@@ -81,6 +82,48 @@ const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
 ];
 
 type AdoptionTab = 'executive' | 'analyst' | 'licensed' | 'cowork' | 'unlicensed' | 'agents' | 'opportunities' | 'method';
+
+type AccountabilityDimensionText = {
+  labelKey: TranslationKey;
+  aggregateViewKey: TranslationKey;
+  safeViewKey: TranslationKey;
+};
+
+export const ACCOUNTABILITY_DIMENSION_TEXT: Record<string, AccountabilityDimensionText> = {
+  directManager: {
+    labelKey: 'copilotAdoption.page.accountability.dimension.directManager.label',
+    aggregateViewKey: 'copilotAdoption.page.accountability.aggregateView.directManager',
+    safeViewKey: 'copilotAdoption.page.accountability.safeView.directManager',
+  },
+  department: {
+    labelKey: 'copilotAdoption.page.accountability.dimension.department.label',
+    aggregateViewKey: 'copilotAdoption.page.accountability.aggregateView.department',
+    safeViewKey: 'copilotAdoption.page.accountability.safeView.department',
+  },
+  country: {
+    labelKey: 'copilotAdoption.page.accountability.dimension.country.label',
+    aggregateViewKey: 'copilotAdoption.page.accountability.aggregateView.country',
+    safeViewKey: 'copilotAdoption.page.accountability.safeView.country',
+  },
+  office: {
+    labelKey: 'copilotAdoption.page.accountability.dimension.office.label',
+    aggregateViewKey: 'copilotAdoption.page.accountability.aggregateView.office',
+    safeViewKey: 'copilotAdoption.page.accountability.safeView.office',
+  },
+  company: {
+    labelKey: 'copilotAdoption.page.accountability.dimension.company.label',
+    aggregateViewKey: 'copilotAdoption.page.accountability.aggregateView.company',
+    safeViewKey: 'copilotAdoption.page.accountability.safeView.company',
+  },
+};
+
+export const ACCOUNTABILITY_EMPTY_SEGMENT_KEYS: Record<string, TranslationKey> = {
+  noManager: 'copilotAdoption.page.accountability.empty.noManager',
+  noDepartment: 'copilotAdoption.page.accountability.empty.noDepartment',
+  noCountry: 'copilotAdoption.page.accountability.empty.noCountry',
+  noOffice: 'copilotAdoption.page.accountability.empty.noOffice',
+  noCompany: 'copilotAdoption.page.accountability.empty.noCompany',
+};
 
 /**
  * The tab strip, in order.
@@ -990,7 +1033,7 @@ function ExecutiveDepartmentTable({ summary }: { summary: CopilotAdoptionSummary
       <tbody>
         {rows.map((row) => (
           <tr key={row.segment}>
-            <td className={styles.skuCell}>{row.segment}</td>
+            <td className={styles.skuCell}>{serverPlaceholderText(t, row.segment)}</td>
             <td className={styles.skuCell}>{formatPct(row.habitRatePct)}</td>
             <td className={styles.skuCell}>{formatCount(row.licensedUsers)}</td>
             <td className={styles.skuCell}>{formatCount(row.idleSeats)}</td>
@@ -1007,6 +1050,36 @@ function ExecutiveDepartmentTable({ summary }: { summary: CopilotAdoptionSummary
       </tbody>
     </table>
   );
+}
+
+function accountabilityDimensionCopy(summary: CopilotAdoptionSummary, t: TFunction): {
+  label: string;
+  aggregateView: string;
+  safeView: string;
+} {
+  const dimension = summary.accountabilityDimension ?? 'directManager';
+  const text = ACCOUNTABILITY_DIMENSION_TEXT[dimension];
+  const fallbackLabel = summary.accountabilityDimensionLabel ?? t(ACCOUNTABILITY_DIMENSION_TEXT.directManager.labelKey);
+
+  if (!text) {
+    const fallbackDescription = fallbackLabel.toLowerCase();
+    return {
+      label: fallbackLabel,
+      aggregateView: t('copilotAdoption.page.aggregateOnlyViewSortedLargestAbsoluteOpportunityFirstGroups', {
+        v0: fallbackDescription,
+        v1: summary.options.minSeatsPerSegment,
+      }),
+      safeView: t('copilotAdoption.page.leaderSafeAggregateViewSeatsAdoptionHabitReclaimTiers', {
+        v0: fallbackDescription,
+      }),
+    };
+  }
+
+  return {
+    label: t(text.labelKey),
+    aggregateView: t(text.aggregateViewKey, { minSeats: summary.options.minSeatsPerSegment }),
+    safeView: t(text.safeViewKey),
+  };
 }
 
 /** The analyst view: every diagnostic chart and the SQL popovers admins use to verify them. */
@@ -1030,8 +1103,7 @@ function AnalystTab({
   const { assumptions: timeSavedAssumptions } = useTimeSavedAssumptions(summary);
   const kpis = buildKpis(summary, t, timeSavedAssumptions, onOpenTab);
   const o = summary.options;
-  const accountabilityDimensionLabel = summary.accountabilityDimensionLabel ?? 'Direct manager';
-  const accountabilityDimensionDescription = accountabilityDimensionLabel.toLowerCase();
+  const accountabilityCopy = accountabilityDimensionCopy(summary, t);
 
   // The band slices and the action plan are built from the users actually scored, which is capped by
   // MaxLicensedUsersScored. That cap is far above any real Copilot deployment and raises an explicit
@@ -1192,16 +1264,13 @@ function AnalystTab({
           <div>
             <Text weight="semibold" size={400}>{t('copilotAdoption.page.accountabilityRollUp')}</Text>
             <Text size={200} block className={styles.muted}>
-              {t('copilotAdoption.page.aggregateOnlyViewSortedLargestAbsoluteOpportunityFirstGroups', {
-                v0: accountabilityDimensionDescription,
-                v1: o.minSeatsPerSegment,
-              })}
+              {accountabilityCopy.aggregateView}
             </Text>
           </div>
           <InfoTip
             title={t('copilotAdoption.page.accountabilityRollUp2')}
             content={{
-              what: t('copilotAdoption.page.leaderSafeAggregateViewSeatsAdoptionHabitReclaimTiers', { v0: accountabilityDimensionDescription }),
+              what: accountabilityCopy.safeView,
               how: t('copilotAdoption.page.theDimensionDefaultsDirectManagerUsersManagerGroupedExplicitly', { v0: o.minSeatsPerSegment }),
               source:
                 t('copilotAdoption.page.thisDeliberatelyAddNamedPerUserLeaderViewDrill'),
@@ -1211,7 +1280,7 @@ function AnalystTab({
         <div className={styles.cardBody}>
           <AccountabilityRollupTable
             rows={summary.accountabilityRollup}
-            segmentLabel={accountabilityDimensionLabel}
+            segmentLabel={accountabilityCopy.label}
           />
         </div>
       </Card>
@@ -1397,7 +1466,11 @@ function AnalystTab({
           </div>
           <div className={styles.cardBody}>
             <RadarChart
-              axes={['Frequency', 'Depth', 'Breadth']}
+              axes={[
+                t('copilotAdoption.page.radar.axis.frequency'),
+                t('copilotAdoption.page.radar.axis.depth'),
+                t('copilotAdoption.page.radar.axis.breadth'),
+              ]}
               series={summary.scoreProfiles.map((p, i) => ({
                 name: `${scoreProfileLabel(t, p.label)} (${formatCount(p.users)})`,
                 colour: i === 0 ? '#0f6cbd' : '#107c10',
@@ -1636,43 +1709,49 @@ function AccountabilityRollupTable({
         </tr>
       </thead>
       <tbody>
-        {rows.map((row) => (
-          <tr key={row.segment}>
-            <td className={styles.skuCell}>{row.segment}</td>
-            <td className={styles.skuCell}>{formatCount(row.licensedUsers)}</td>
-            <td className={styles.skuCell}>
-              {t('copilotAdoption.page.active', {
-                v0: formatPct(row.adoptionRatePct),
-                v1: formatCount(row.activeUsers),
-              })}
-            </td>
-            <td className={styles.skuCell}>
-              {t('copilotAdoption.page.habitual', {
-                v0: formatPct(row.licensedUsers === 0 ? 0 : (row.habitualUsers / row.licensedUsers) * 100),
-                v1: formatCount(row.habitualUsers),
-              })}
-            </td>
-            <td className={styles.skuCell}>
-              {t('copilotAdoption.page.reclaimableCertainProbableReview', {
-                v0: formatCount(row.reclaimableSeats),
-                v1: formatCount(row.reclaimCertainSeats),
-                v2: formatCount(row.reclaimProbableSeats),
-                v3: formatCount(row.reclaimReviewSeats),
-              })}
-            </td>
-            <td className={styles.skuCell}>
-              {t('copilotAdoption.page.needActionReclaimWinBackCoachBroadenDeepenReview', {
-                v0: formatCount(row.opportunityUsers),
-                v1: formatCount(row.reclaimUsers),
-                v2: formatCount(row.reengageUsers),
-                v3: formatCount(row.coachUsers),
-                v4: formatCount(row.broadenUsers),
-                v5: formatCount(row.growUsers),
-                v6: formatCount(row.reviewUsers),
-              })}
-            </td>
-          </tr>
-        ))}
+        {rows.map((row) => {
+          const segment = row.emptySegmentKey && ACCOUNTABILITY_EMPTY_SEGMENT_KEYS[row.emptySegmentKey]
+            ? t(ACCOUNTABILITY_EMPTY_SEGMENT_KEYS[row.emptySegmentKey])
+            : row.segment;
+
+          return (
+            <tr key={row.segment}>
+              <td className={styles.skuCell}>{segment}</td>
+              <td className={styles.skuCell}>{formatCount(row.licensedUsers)}</td>
+              <td className={styles.skuCell}>
+                {t('copilotAdoption.page.active', {
+                  v0: formatPct(row.adoptionRatePct),
+                  v1: formatCount(row.activeUsers),
+                })}
+              </td>
+              <td className={styles.skuCell}>
+                {t('copilotAdoption.page.habitual', {
+                  v0: formatPct(row.licensedUsers === 0 ? 0 : (row.habitualUsers / row.licensedUsers) * 100),
+                  v1: formatCount(row.habitualUsers),
+                })}
+              </td>
+              <td className={styles.skuCell}>
+                {t('copilotAdoption.page.reclaimableCertainProbableReview', {
+                  v0: formatCount(row.reclaimableSeats),
+                  v1: formatCount(row.reclaimCertainSeats),
+                  v2: formatCount(row.reclaimProbableSeats),
+                  v3: formatCount(row.reclaimReviewSeats),
+                })}
+              </td>
+              <td className={styles.skuCell}>
+                {t('copilotAdoption.page.needActionReclaimWinBackCoachBroadenDeepenReview', {
+                  v0: formatCount(row.opportunityUsers),
+                  v1: formatCount(row.reclaimUsers),
+                  v2: formatCount(row.reengageUsers),
+                  v3: formatCount(row.coachUsers),
+                  v4: formatCount(row.broadenUsers),
+                  v5: formatCount(row.growUsers),
+                  v6: formatCount(row.reviewUsers),
+                })}
+              </td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );

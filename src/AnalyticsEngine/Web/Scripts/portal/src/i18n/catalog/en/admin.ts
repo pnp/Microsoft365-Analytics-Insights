@@ -119,6 +119,7 @@ export const admin = {
   'admin.userLookup.categoryRow.recentRowsAriaLabel': '{category} recent rows',
   'admin.userLookup.categoryRow.showingRecent': 'Showing {count} most recent of {total}.',
   'admin.userLookup.categoryRow.source': 'Source: {source}',
+  'admin.userLookup.categoryRow.sourceNotAvailable': 'n/a',
   'admin.userLookup.categoryRow.sqlCopied': 'SQL copied to clipboard',
   'admin.userLookup.categoryRow.sqlCopyFailed': 'Could not copy to clipboard',
   'admin.userLookup.categoryRow.sqlTitle': 'SQL to reproduce this count',

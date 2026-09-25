@@ -1,4 +1,5 @@
 using Common.Entities;
+using DataUtils.Sql;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
@@ -149,14 +150,73 @@ namespace Web.AnalyticsWeb.Models.Health
             return volume;
         }
 
-        public Task<IReadOnlyList<string>> GetPendingMigrationsAsync()
+        public async Task<IReadOnlyList<string>> GetPendingMigrationsAsync()
         {
             // Read-only: compares this build's migrations against __MigrationHistory. Does NOT apply
-            // anything. DbMigrator is synchronous, so there is nothing to await.
+            // anything. Token connections read the history table directly (awaited); the DbMigrator path
+            // below is synchronous.
             var migrationsConfig = new Common.Entities.Migrations.Configuration();
+            using (var db = _contextFactory.Create())
+            {
+                if (AzureSqlTokenAuth.NeedsAccessToken(db.Database.Connection.ConnectionString))
+                {
+                    return await GetPendingMigrationsFromHistoryAsync(db, migrationsConfig);
+                }
+            }
+
             var migrator = new DbMigrator(migrationsConfig);
             IReadOnlyList<string> pending = migrator.GetPendingMigrations().ToList();
-            return Task.FromResult(pending);
+            return pending;
+        }
+
+        /// <summary>
+        /// Computes pending migrations without <see cref="DbMigrator.GetPendingMigrations"/>' database
+        /// existence probe. On Entra-only Azure SQL, the runtime identity is a contained database user:
+        /// it can read this database through the EF interceptor's access token, but it cannot log in to
+        /// <c>master</c>. EF6's migrator probes <c>master</c> first and reports every migration as pending
+        /// against an already-upgraded database. See issue #609.
+        /// </summary>
+        public static async Task<IReadOnlyList<string>> GetPendingMigrationsFromHistoryAsync(
+            AnalyticsEntitiesContext db,
+            Common.Entities.Migrations.Configuration migrationsConfig)
+        {
+            if (db == null) throw new ArgumentNullException(nameof(db));
+            if (migrationsConfig == null) throw new ArgumentNullException(nameof(migrationsConfig));
+
+            var migrator = new DbMigrator(migrationsConfig);
+            var localMigrations = migrator.GetLocalMigrations().ToList();
+            var appliedMigrations = await ReadAppliedMigrationsAsync(db, migrationsConfig.ContextKey);
+            return CompareMigrations(localMigrations, appliedMigrations);
+        }
+
+        public static IReadOnlyList<string> CompareMigrations(
+            IEnumerable<string> localMigrations,
+            IEnumerable<string> appliedMigrations)
+        {
+            var applied = new HashSet<string>(appliedMigrations ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+            return (localMigrations ?? Enumerable.Empty<string>())
+                .Where(migration => !applied.Contains(migration))
+                .ToList();
+        }
+
+        private static async Task<IReadOnlyList<string>> ReadAppliedMigrationsAsync(AnalyticsEntitiesContext db, string contextKey)
+        {
+            const string sql =
+                "SELECT [MigrationId] " +
+                "FROM [dbo].[__MigrationHistory] " +
+                "WHERE [ContextKey] = @contextKey " +
+                "ORDER BY [MigrationId]";
+
+            try
+            {
+                return await db.Database.SqlQuery<string>(
+                    sql,
+                    new SqlParameter("@contextKey", contextKey)).ToListAsync();
+            }
+            catch (SqlException ex) when (ex.Number == 208)
+            {
+                return new List<string>();
+            }
         }
 
         public async Task<CallWebhookStatusResult> GetCallWebhookStatusAsync()

@@ -1,6 +1,7 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { CoworkQuadrantPoint, CopilotAdoptionOptions } from '../../types/copilotAdoption';
 import { useT, useTNode, type TFunction, type TranslationKey } from '../../i18n';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 
 const WIDTH = 720;
 const HEIGHT = 380;
@@ -106,7 +107,7 @@ const QUADRANT_KEY: Array<{ id: Quadrant; initial: string; labelKey: Translation
 
 function pointTitle(t: TFunction, point: CoworkQuadrantPoint): string {
   return t('copilotAdoptionCowork.quadrant.tooltip', {
-    segment: point.segment,
+    segment: serverPlaceholderText(t, point.segment),
     seats: point.licensedUsers,
     load: Math.round(point.coordinationLoadScore),
     fluency: Math.round(point.fluencyScore),

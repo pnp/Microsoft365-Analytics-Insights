@@ -54,6 +54,13 @@ const INTL_CONSTRUCTORS = new Set([
 ]);
 
 /**
+ * Date methods that print English day and month names whatever the language - "Thu, 25 Sep 2026" -
+ * and take no locale, so there is nothing to pass. One printed a webhook's expiry on the Spanish
+ * Service configuration page.
+ */
+const ENGLISH_ONLY_DATE_METHODS = new Set(['toUTCString', 'toGMTString', 'toDateString', 'toTimeString']);
+
+/**
  * Files allowed to use them directly.
  *
  * The module that owns locale selection; the lint checks themselves, whose own sorting is for a
@@ -108,6 +115,10 @@ export function findAmbientLocaleFormatting(sourceText: string, fileName: string
       if (!call || hasNoExplicitLocale(call.arguments[localeIndex])) {
         report(node, `${node.name.text}() with no explicit locale`);
       }
+    }
+
+    if (ts.isPropertyAccessExpression(node) && ENGLISH_ONLY_DATE_METHODS.has(node.name.text)) {
+      report(node, `${node.name.text}() prints English in every language`);
     }
 
     if (
@@ -169,6 +180,13 @@ describe('Locale-aware formatting', () => {
 
     it('catches localeCompare, which sorts a Spanish list into an English alphabet', () => {
       expect(scan('export const f = (a, b) => a.localeCompare(b);')).toHaveLength(1);
+    });
+
+    it('catches toUTCString, which prints English day and month names in every language', () => {
+      expect(scan('export const f = (d) => new Date(d).toUTCString();')).toHaveLength(1);
+      expect(scan('export const f = (d) => d.toDateString();')).toHaveLength(1);
+      // A helper that happens to share the name is a plain call, not a Date method.
+      expect(scan('export const f = (d) => toDateString(d);')).toEqual([]);
     });
 
     it('accepts a call given a real locale', () => {

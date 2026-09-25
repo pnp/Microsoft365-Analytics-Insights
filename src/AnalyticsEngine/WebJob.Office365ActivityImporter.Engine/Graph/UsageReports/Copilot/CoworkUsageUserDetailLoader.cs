@@ -1,12 +1,13 @@
 ﻿using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.Entities.UsageReports;
+using DataUtils.Sql;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Data;
-using System.Data.SqlClient;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
@@ -393,9 +394,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             var importable = rows.Where(r => resolution.IdsByUpn.ContainsKey(r.UserPrincipalName)).ToList();
             if (importable.Count == 0) return result;
 
+            // EF's connection is a Microsoft.Data.SqlClient connection (SPOInsightsDBConfiguration, #511), so
+            // this file must use that namespace too: casting it to System.Data.SqlClient.SqlConnection threw
+            // InvalidCastException on every call, and no Cowork usage row was ever saved.
             var con = (SqlConnection)_db.Database.Connection;
             var openedHere = con.State != ConnectionState.Open;
-            if (openedHere) await con.OpenAsync();
+            if (openedHere)
+            {
+                // Opening EF's connection directly bypasses AzureSqlAccessTokenInterceptor, so the helper attaches
+                // (or refreshes) the Entra token first. Without it an Entra-only Azure SQL install would reopen with
+                // no token, or with the expired one left from EF's last open of this long-lived context (#609).
+                await AzureSqlTokenAuth.OpenAsync(con);
+            }
             try
             {
                 using (var create = con.CreateCommand())
@@ -420,12 +430,29 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                 table.Columns.Add("last_activity_date", typeof(DateTime));
                 table.Columns.Add("retained_user", typeof(bool));
 
+                // One source row per (user, date, period) - the key of the UNIQUE index this MERGE writes to.
+                // MERGE fails the whole statement when its source repeats a key (a unique-index violation on
+                // insert, error 8672 on update), and the report can repeat one: user ids are resolved
+                // case-insensitively, so two spellings of a UPN are the same user. Without this, one repeated
+                // user would stop every Cowork row from saving, on every cycle. Last row wins, as it does in
+                // SqlCopilotUsagePersistenceManager, whose change-tracked upsert tolerates repeats by construction.
+                var rowsByKey = new Dictionary<(int UserId, DateTime Date, int PeriodDays), CoworkUsageUserDetailRow>();
                 foreach (var row in importable)
                 {
+                    rowsByKey[(resolution.IdsByUpn[row.UserPrincipalName], row.ReportRefreshDate.Date, row.ReportPeriodDays.Value)] = row;
+                }
+                if (rowsByKey.Count < importable.Count)
+                {
+                    _logger.LogWarning($"Cowork usage report: {importable.Count - rowsByKey.Count:N0} row(s) repeated a user already in the report for the same date and period; kept the last of each.");
+                }
+
+                foreach (var keyed in rowsByKey)
+                {
+                    var row = keyed.Value;
                     var dr = table.NewRow();
-                    dr["user_id"] = resolution.IdsByUpn[row.UserPrincipalName];
-                    dr["date"] = row.ReportRefreshDate.Date;
-                    dr["report_period_days"] = row.ReportPeriodDays.Value;
+                    dr["user_id"] = keyed.Key.UserId;
+                    dr["date"] = keyed.Key.Date;
+                    dr["report_period_days"] = keyed.Key.PeriodDays;
                     dr["total_tasks"] = (object)row.TotalTasks ?? DBNull.Value;
                     dr["scheduled_tasks"] = (object)row.ScheduledTasks ?? DBNull.Value;
                     dr["user_initiated_tasks"] = (object)row.UserInitiatedTasks ?? DBNull.Value;

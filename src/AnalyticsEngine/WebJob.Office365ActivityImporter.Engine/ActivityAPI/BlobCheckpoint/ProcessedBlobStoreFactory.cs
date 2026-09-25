@@ -35,7 +35,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
                     var store = storeFactory(storageConn, retention, logger, tenantId, config.ClientID, config.ClientSecret);
                     logger?.LogInformation("Blob checkpoint: durable Azure Table store initialised (processed blobs persist across restarts).");
                     (logger as AnalyticsLogger)?.TrackHealthCheck(HealthComponent.BlobCheckpoint, HealthStatus.Healthy,
-                        "Durable Azure Table checkpoint active.");
+                        "Durable Azure Table checkpoint active.",
+                        reasonKey: "blobCheckpoint.healthy");
                     return store;
                 }
                 catch (Exception ex)
@@ -62,7 +63,8 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.BlobCheckpoint
                 logger?.LogInformation("Blob checkpoint: no storage connection string configured; using an in-memory store (persists across cycles only while this process runs).");
                 (logger as AnalyticsLogger)?.TrackHealthCheck(HealthComponent.BlobCheckpoint, HealthStatus.Degraded,
                     "No Storage connection string configured; using non-durable in-memory checkpoint " +
-                    "(lost on restart; durable cross-cycle metadata recovery unavailable).");
+                    "(lost on restart; durable cross-cycle metadata recovery unavailable).",
+                    reasonKey: "blobCheckpoint.notConfigured");
             }
 
             return new InMemoryProcessedBlobStore(retention);

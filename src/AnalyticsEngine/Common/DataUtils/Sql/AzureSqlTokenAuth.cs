@@ -1,9 +1,11 @@
 using Azure.Core;
 using Azure.Identity;
 using System;
+using System.Data.Common;
 using Microsoft.Data.SqlClient;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace DataUtils.Sql
 {
@@ -214,6 +216,33 @@ namespace DataUtils.Sql
             if (!NeedsAccessToken(connection.ConnectionString)) return;
 
             connection.AccessToken = GetAccessToken();
+        }
+
+        /// <summary>
+        /// Opens a connection that something else created - in practice Entity Framework's own
+        /// <c>DbContext.Database.Connection</c> - attaching (or refreshing) the Entra access token first when
+        /// the connection string needs one. Use this, never <c>connection.OpenAsync()</c>, whenever code opens
+        /// EF's connection itself to run raw SQL or <see cref="SqlBulkCopy"/> over it.
+        /// </summary>
+        /// <remarks>
+        /// EF attaches tokens in <c>AzureSqlAccessTokenInterceptor</c>, and interceptors only see the opens EF
+        /// performs. A direct open bypasses it, so on an Entra-only Azure SQL server the connection either has
+        /// no token at all (a fresh context: "Login failed for user ''") or still carries the one EF attached
+        /// at its last open, which a long-lived importer context can outlive (#609). The Tests.UnitTests guard
+        /// <c>EfConnectionsOpenedOutsideEf_GoThroughTheTokenHelper</c> enforces this across the product.
+        /// A no-op beyond <c>OpenAsync</c> for SQL-authentication, integrated-security and LocalDB connections,
+        /// and for connections that are not Microsoft.Data.SqlClient connections.
+        /// </remarks>
+        public static Task OpenAsync(DbConnection connection)
+        {
+            if (connection == null) throw new ArgumentNullException(nameof(connection));
+
+            if (connection is SqlConnection sqlConnection)
+            {
+                ApplyAccessTokenIfNeeded(sqlConnection);
+            }
+
+            return connection.OpenAsync();
         }
 
         /// <summary>

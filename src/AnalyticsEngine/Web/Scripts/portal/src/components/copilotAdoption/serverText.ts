@@ -9,6 +9,7 @@ import type {
 } from '../../types/copilotAdoption';
 import { AdoptionBand, AgentHealth } from '../../types/copilotAdoption';
 import { formatCount } from '../shared/KpiGrid';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { activeLocale, formatNumber, type TFunction, type TranslationKey, type TranslationValues } from '../../i18n';
 
 function catalogText(t: TFunction, key: TranslationKey, fallback: string, values?: TranslationValues): string {
@@ -152,7 +153,7 @@ function tenureBasisLabel(t: TFunction, basis: string | null): string {
 
 export function reclaimEligibilityReason(t: TFunction, row: LicensedUserAdoptionRow, options: CopilotAdoptionOptions): string {
   if (row.reclaimEligibility === 'excluded' && row.reclaimExclusionReason) {
-    return t('copilotAdoptionUsers.server.reclaimReason.excluded', { reason: row.reclaimExclusionReason });
+    return t('copilotAdoptionUsers.server.reclaimReason.excluded', { reason: serverPlaceholderText(t, row.reclaimExclusionReason) });
   }
   if (row.accountEnabled === false) {
     return t('copilotAdoptionUsers.server.reclaimReason.disabled');
@@ -182,10 +183,10 @@ export function recommendedActionText(t: TFunction, row: LicensedUserAdoptionRow
   if (row.reclaimEligibility === 'excluded') {
     return row.reclaimExclusionReviewAfterUtc
       ? t('copilotAdoptionUsers.server.recommendedAction.excluded.reviewAfter', {
-          reason: row.reclaimExclusionReason ?? '',
+          reason: serverPlaceholderText(t, row.reclaimExclusionReason) ?? '',
           date: row.reclaimExclusionReviewAfterUtc.slice(0, 10),
         })
-      : t('copilotAdoptionUsers.server.recommendedAction.excluded.permanent', { reason: row.reclaimExclusionReason ?? '' });
+      : t('copilotAdoptionUsers.server.recommendedAction.excluded.permanent', { reason: serverPlaceholderText(t, row.reclaimExclusionReason) ?? '' });
   }
   if (row.accountEnabled === false) {
     return t('copilotAdoptionUsers.server.recommendedAction.disabled');
