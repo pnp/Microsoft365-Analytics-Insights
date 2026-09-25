@@ -1,6 +1,7 @@
 import { MessageBar, MessageBarBody, MessageBarActions, Button } from '@fluentui/react-components';
 import { ArrowClockwise16Regular } from '@fluentui/react-icons';
 import { LicenceActivityApiError, type LicenceActivityErrorKind } from '../../api/licenceActivityApi';
+import { useT } from '../../i18n';
 
 /** A displayable message plus the failure kind, from any thrown value. */
 export function describeError(err: unknown, fallback: string): { message: string; kind?: LicenceActivityErrorKind } {
@@ -30,8 +31,9 @@ interface ApiErrorBarProps {
  * the fix is to remint the snapshot, not to repeat the same doomed request.
  */
 export default function ApiErrorBar({ error, fallback, onRetry, retryLabel }: ApiErrorBarProps) {
+  const t = useT();
   const { message, kind } = describeError(error, fallback);
-  const label = retryLabel ?? (kind === 'expired' ? 'Refresh' : 'Try again');
+  const label = retryLabel ?? (kind === 'expired' ? t('licenceActivity.common.refresh') : t('licenceActivity.page.tryAgain'));
 
   return (
     <MessageBar intent={intentForKind(kind)}>
