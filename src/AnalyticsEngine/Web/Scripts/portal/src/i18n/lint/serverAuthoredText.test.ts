@@ -1680,3 +1680,12 @@ describe('Copilot Adoption Cowork row tier labels', () => {
     expect(Object.keys(COWORK_TIER_LABEL_KEYS).sort()).toEqual(coworkTierKeys().sort());
   });
 });
+
+describe('Service Configuration webhook status details', () => {
+  it('keeps the known SystemStatus webhook detail aligned with the SPA translation map', () => {
+    const source = readFileSync(join(process.cwd(), '..', '..', 'Models', 'SystemStatus.cs'), 'utf8');
+    const detail = /CallWebhookStatusDetail\s*=\s*"([^"]+)"/.exec(source)?.[1] ?? '';
+    expect(detail).toBe("WebAppURL is not configured, so the webhook subscription URL can't be determined.");
+    expect(EN_CATALOG['admin.serviceConfiguration.webhook.detail.webAppUrlMissing']).toBe(detail);
+  });
+});

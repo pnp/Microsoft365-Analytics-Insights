@@ -28,7 +28,7 @@ import type { UpdateCheck } from '../types/updateCheck';
 import { formatUtc } from '../components/health/healthShared';
 import { serverPlaceholderText } from '../components/shared/serverPlaceholder';
 import Spinner from '../components/Spinner';
-import { useT, useTNode } from '../i18n';
+import { EN_CATALOG, useT, useTNode, type TFunction } from '../i18n';
 import { buildLabelText } from '../product';
 import { enabledImportLabelText } from './InsightsOverviewPage';
 
@@ -66,6 +66,17 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
   },
 });
+
+export const WEBHOOK_STATUS_DETAIL_TEXT: Record<string, Parameters<TFunction>[0]> = Object.freeze({
+  [EN_CATALOG['admin.serviceConfiguration.webhook.detail.webAppUrlMissing']]:
+    'admin.serviceConfiguration.webhook.detail.webAppUrlMissing',
+});
+
+export function webhookStatusDetail(t: TFunction, detail: string | null): string | null {
+  if (!detail) return detail;
+  const key = WEBHOOK_STATUS_DETAIL_TEXT[detail];
+  return key ? t(key) : detail;
+}
 
 function WebhookSubscriptionBadge({ status }: { status: SystemStatus }) {
   const t = useT();
@@ -108,7 +119,7 @@ function WebhookSubscriptionBadge({ status }: { status: SystemStatus }) {
             {t('admin.serviceConfiguration.webhook.couldNotCheck')}
           </Badge>
           <Text size={200} block style={{ marginTop: 4 }}>
-            {status.callWebhookStatusDetail}
+            {webhookStatusDetail(t, status.callWebhookStatusDetail)}
           </Text>
         </div>
       );

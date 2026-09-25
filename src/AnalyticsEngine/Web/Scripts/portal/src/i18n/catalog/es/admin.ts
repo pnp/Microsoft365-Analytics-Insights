@@ -205,6 +205,7 @@ const admin: Record<keyof typeof en, string> = {
   'admin.serviceConfiguration.webhook.active': 'Activo',
   'admin.serviceConfiguration.webhook.callRecordsPermission': 'CallRecords.Read.All',
   'admin.serviceConfiguration.webhook.couldNotCheck': 'No se pudo comprobar',
+  'admin.serviceConfiguration.webhook.detail.webAppUrlMissing': 'WebAppURL no está configurado, por lo que no se puede determinar la dirección URL de suscripción del webhook.',
   'admin.serviceConfiguration.webhook.missingHelp':
     'El trabajo web de importación registra y renueva esta suscripción en cada ciclo de importación. Si sigue faltando, compruebe que el trabajo web de importación se está ejecutando y que su registro de aplicación tiene el permiso de aplicación {permission} de Microsoft Graph.',
   'admin.serviceConfiguration.webhook.noActiveSubscription': 'No se encontró ninguna suscripción activa',
