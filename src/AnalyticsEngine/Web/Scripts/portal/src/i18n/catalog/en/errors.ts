@@ -16,6 +16,7 @@ export const errors = {
   // Shared API/session errors
   'errors.http.sessionExpired': 'Your session has expired. Reload the page to sign in again.',
   'errors.userLookup.requestFailed': 'Request failed ({status})',
+  'errors.userLookup.notFound': 'No matching user was found.',
 
   // Agent costs API
   'errors.agentCosts.availabilityFailed': "Couldn't load the agent cost availability ({status}).",

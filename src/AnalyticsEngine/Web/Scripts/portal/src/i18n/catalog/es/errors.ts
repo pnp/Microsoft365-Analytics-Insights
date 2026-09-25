@@ -10,6 +10,7 @@ const errors: Record<keyof typeof en, string> = {
   // Shared API/session errors
   'errors.http.sessionExpired': 'La sesión ha caducado. Vuelva a cargar la página para iniciar sesión de nuevo.',
   'errors.userLookup.requestFailed': 'La solicitud ha fallado ({status})',
+  'errors.userLookup.notFound': 'No se encontró ningún usuario coincidente.',
 
   // Agent costs API
   'errors.agentCosts.availabilityFailed': 'No se ha podido cargar la disponibilidad de costes de agentes ({status}).',

@@ -12,10 +12,12 @@ async function getJson<T>(url: string): Promise<T> {
   });
 
   if (!response.ok) {
-    let message = translateActive('errors.userLookup.requestFailed', { status: response.status });
+    let message = response.status === 404
+      ? translateActive('errors.userLookup.notFound')
+      : translateActive('errors.userLookup.requestFailed', { status: response.status });
     try {
       const body = await response.json();
-      if (body && typeof body.message === 'string') {
+      if (response.status !== 404 && body && typeof body.message === 'string') {
         message = body.message;
       }
     } catch {
