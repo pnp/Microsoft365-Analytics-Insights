@@ -78,6 +78,31 @@ export function webhookStatusDetail(t: TFunction, detail: string | null): string
   return key ? t(key) : detail;
 }
 
+function matchTemplate(template: string, text: string): Record<string, string> | null {
+  const names: string[] = [];
+  const pattern = template
+    .split(/(\{\w+\})/)
+    .map((part) => {
+      const placeholder = /^\{(\w+)\}$/.exec(part);
+      if (!placeholder) return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      names.push(placeholder[1]);
+      return '(.+?)';
+    })
+    .join('');
+  const match = new RegExp(`^${pattern}$`).exec(text);
+  return match ? Object.fromEntries(names.map((name, index) => [name, match[index + 1]])) : null;
+}
+
+export function updateCheckErrorText(t: TFunction, error: string | null): string | null {
+  if (!error) return error;
+  const timeout = matchTemplate(EN_CATALOG['admin.serviceConfiguration.updates.error.timeout'], error);
+  if (timeout) return t('admin.serviceConfiguration.updates.error.timeout', timeout);
+  const unreachable = matchTemplate(EN_CATALOG['admin.serviceConfiguration.updates.error.unreachable'], error);
+  if (unreachable) return t('admin.serviceConfiguration.updates.error.unreachable', unreachable);
+  const failed = matchTemplate(EN_CATALOG['admin.serviceConfiguration.updates.error.failed'], error);
+  return failed ? t('admin.serviceConfiguration.updates.error.failed', failed) : error;
+}
+
 function WebhookSubscriptionBadge({ status }: { status: SystemStatus }) {
   const t = useT();
   const tNode = useTNode();
@@ -228,7 +253,7 @@ function UpdateCheckCard({ styles }: { styles: ReturnType<typeof useStyles> }) {
           ) : result.checkError ? (
             <MessageBar intent="info">
               <MessageBarBody>
-                {result.checkError}{' '}
+                {updateCheckErrorText(t, result.checkError)}{' '}
                 {result.latestReleaseUrl && (
                   <Link href={result.latestReleaseUrl} target="_blank" rel="noreferrer">
                     {t('admin.serviceConfiguration.updates.openLatestRelease')}

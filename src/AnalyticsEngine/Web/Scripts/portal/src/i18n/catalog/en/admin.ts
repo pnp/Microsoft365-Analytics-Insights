@@ -223,6 +223,9 @@ export const admin = {
   'admin.serviceConfiguration.updates.currentBuildLabel': 'This site is running',
   'admin.serviceConfiguration.updates.description':
     'Compares the build this site is running against the latest published release on GitHub. Nothing is sent to GitHub until you press the button.',
+  'admin.serviceConfiguration.updates.error.timeout': "Timed out after {seconds}s contacting github.com. If this web app has no outbound internet access (for example a private-endpoint deployment with restricted egress), update checks can't work from here - check the release page manually instead.",
+  'admin.serviceConfiguration.updates.error.unreachable': "Couldn't reach github.com to check for updates: {error}. This is expected if the web app has no outbound internet access; check the release page manually.",
+  'admin.serviceConfiguration.updates.error.failed': 'Update check failed: {error}',
   'admin.serviceConfiguration.updates.latestReleaseLabel': 'Latest published release',
   'admin.serviceConfiguration.updates.openLatestRelease': 'Open the latest release',
   'admin.serviceConfiguration.updates.openReleaseNotes': 'Open the release notes and downloads',

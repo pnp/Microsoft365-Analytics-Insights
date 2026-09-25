@@ -227,6 +227,9 @@ const admin: Record<keyof typeof en, string> = {
   'admin.serviceConfiguration.updates.currentBuildLabel': 'Este sitio ejecuta',
   'admin.serviceConfiguration.updates.description':
     'Compara la compilación que ejecuta este sitio con la versión publicada más reciente en GitHub. No se envía nada a GitHub hasta que pulse el botón.',
+  'admin.serviceConfiguration.updates.error.timeout': 'Se agotó el tiempo de espera tras {seconds} s al contactar con github.com. Si esta aplicación web no tiene acceso saliente a Internet (por ejemplo, una implementación con punto de conexión privado y salida restringida), la comprobación de actualizaciones no puede funcionar desde aquí: consulte manualmente la página de versiones.',
+  'admin.serviceConfiguration.updates.error.unreachable': 'No se pudo contactar con github.com para buscar actualizaciones: {error}. Esto es esperado si la aplicación web no tiene acceso saliente a Internet; consulte manualmente la página de versiones.',
+  'admin.serviceConfiguration.updates.error.failed': 'Error al comprobar actualizaciones: {error}',
   'admin.serviceConfiguration.updates.latestReleaseLabel': 'Versión publicada más reciente',
   'admin.serviceConfiguration.updates.openLatestRelease': 'Abrir la versión más reciente',
   'admin.serviceConfiguration.updates.openReleaseNotes': 'Abrir las notas de la versión y las descargas',

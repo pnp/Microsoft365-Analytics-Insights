@@ -1689,3 +1689,16 @@ describe('Service Configuration webhook status details', () => {
     expect(EN_CATALOG['admin.serviceConfiguration.webhook.detail.webAppUrlMissing']).toBe(detail);
   });
 });
+
+describe('Service Configuration update-check errors', () => {
+  it('keeps UpdateChecker server-authored errors aligned with the SPA catalog templates', () => {
+    const source = readFileSync(join(process.cwd(), '..', '..', 'Models', 'UpdateCheck', 'UpdateChecker.cs'), 'utf8');
+    expect(source).toContain('Timed out after {_timeout.TotalSeconds:0}s contacting github.com');
+    expect(source).toContain("update checks can't work from here - check the release page manually instead.");
+    expect(source).toContain("Couldn't reach github.com to check for updates: {InnerMostMessage(ex)}");
+    expect(source).toContain('Update check failed: {InnerMostMessage(ex)}');
+    expect(EN_CATALOG['admin.serviceConfiguration.updates.error.timeout']).toContain('{seconds}');
+    expect(EN_CATALOG['admin.serviceConfiguration.updates.error.unreachable']).toContain('{error}');
+    expect(EN_CATALOG['admin.serviceConfiguration.updates.error.failed']).toContain('{error}');
+  });
+});
