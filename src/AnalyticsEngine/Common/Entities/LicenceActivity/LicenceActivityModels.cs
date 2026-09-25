@@ -78,10 +78,12 @@ namespace Common.Entities.LicenceActivity
         public string Status { get; set; }
         public string Source { get; set; }
         public string Measure { get; set; }
-        public string MeasureKey { get; set; }
+        /// <summary>Stable key the portal translates <see cref="Measure"/> by; <c>null</c> for an unrecognised measure.</summary>
+        public string MeasureKey => LicenceActivityDisplayKeys.MeasureKeyFor(Measure);
         public string Granularity { get; set; }
         public string Message { get; set; }
-        public string MessageKey { get; set; }
+        /// <summary>Stable key the portal translates <see cref="Message"/> by; <c>null</c> for an unrecognised message.</summary>
+        public string MessageKey => LicenceActivityDisplayKeys.MessageKeyFor(Message);
         public DateTime? EffectiveFromUtc { get; set; }
         public DateTime? EffectiveToUtc { get; set; }
         public DateTime? LatestImportUtc { get; set; }
@@ -91,21 +93,32 @@ namespace Common.Entities.LicenceActivity
         public int ObservedSamples { get; set; }
         public int UnmatchedUsers { get; set; }
         public List<DateTime> SnapshotDates { get; set; } = new List<DateTime>();
+    }
 
-        public void ApplyDisplayKeys()
-        {
-            MeasureKey = Measure == null ? null : MeasureKeyFor(Measure);
-            MessageKey = Message == null ? null : MessageKeyFor(Message);
-        }
-
-        private static string MeasureKeyFor(string measure)
+    /// <summary>
+    /// Stable keys for the coverage measures and messages the licence activity SQL writes in English, so the
+    /// portal can show them in the reader's language (the server's English stays the fallback for a key the
+    /// portal does not know).
+    /// </summary>
+    /// <remarks>
+    /// The keys are computed from the English text rather than stamped on at load time, so every way a
+    /// coverage or evidence object is made - read from SQL, cloned by the read model, or built in C# -
+    /// carries them. <c>serverAuthoredText.test.ts</c> reads <c>LicenceActivitySql.cs</c>,
+    /// <c>SqlLicenceActivityStore.cs</c> and this switch, and fails when a sentence has no key, a key has no
+    /// sentence, or the portal and the server disagree about the keys.
+    /// </remarks>
+    public static class LicenceActivityDisplayKeys
+    {
+        public static string MeasureKeyFor(string measure)
         {
             switch (measure)
             {
                 case "Teams messages and meetings counted by Microsoft, averaged across the readings": return "m365.teams";
                 case "emails sent and read counted by Microsoft, averaged across the readings": return "m365.outlook";
                 case "files viewed or edited counted by Microsoft, averaged across the readings": return "m365.files";
+                case "counts published by Microsoft": return "m365.published";
                 case "Copilot prompts counted by Microsoft, averaged across the readings": return "copilot.microsoftReportPrompts";
+                case "Copilot prompts and days used, from one rolling report": return "copilot.singleRollingReport";
                 case "recorded Copilot activity only": return "copilot.recordedActivity";
                 case "Copilot use counted per active week": return "copilot.auditActiveWeeks";
                 case "Copilot activity counted per active week": return "copilot.interactionActiveWeeks";
@@ -113,7 +126,7 @@ namespace Common.Entities.LicenceActivity
             }
         }
 
-        private static string MessageKeyFor(string message)
+        public static string MessageKeyFor(string message)
         {
             switch (message)
             {
@@ -132,6 +145,10 @@ namespace Common.Entities.LicenceActivity
                 case "Copilot audit records prove who DID use Copilot, but nothing confirms that every Copilot event was captured, so anyone absent stays Unknown rather than inactive.": return "copilotAudit.partial";
                 case "Microsoft's Copilot report hid every person's identity, so Copilot chat history is used instead. It proves who DID use Copilot, but cannot prove that anybody else did not.": return "copilotInteractions.unmatchableIdentity";
                 case "Copilot chat history proves who DID use Copilot, but nothing confirms the history is complete for everybody, so anyone absent stays Unknown rather than inactive.": return "copilotInteractions.partial";
+                case "Copilot audit records exist, but none fall inside the dates you selected. That is not the same as nobody using Copilot.": return "copilotAudit.missingCoverage";
+                case "Copilot chat history exists, but none of it falls inside the dates you selected. That is not the same as nobody using Copilot.": return "copilotInteractions.missingCoverage";
+                case "The dates you selected match one of Microsoft's rolling Copilot reports exactly. People Microsoft did not list, and reports that do not record days used, stay Unknown. Microsoft only reports on people who hold a Copilot licence.": return "copilotReport.singleWindowAvailable";
+                case "Microsoft only published a longer rolling report inside the dates you selected. It is shown here with the dates it really covers, but activity levels stay Unknown for your custom range.": return "copilotReport.singleWindowLonger";
                 default: return null;
             }
         }
@@ -169,6 +186,8 @@ namespace Common.Entities.LicenceActivity
         public string Band { get; set; }
         public string Source { get; set; }
         public string Measure { get; set; }
+        /// <summary>Stable key the portal translates <see cref="Measure"/> by; <c>null</c> for an unrecognised measure.</summary>
+        public string MeasureKey => LicenceActivityDisplayKeys.MeasureKeyFor(Measure);
         public int ActiveSamples { get; set; }
         public int ObservedSamples { get; set; }
         public int ExpectedSamples { get; set; }

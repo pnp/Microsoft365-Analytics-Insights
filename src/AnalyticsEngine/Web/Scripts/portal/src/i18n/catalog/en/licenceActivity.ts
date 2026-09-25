@@ -82,7 +82,9 @@ export const licenceActivity = {
   'licenceActivity.measure.m365.teams': 'Teams messages and meetings counted by Microsoft, averaged across the readings',
   'licenceActivity.measure.m365.outlook': 'emails sent and read counted by Microsoft, averaged across the readings',
   'licenceActivity.measure.m365.files': 'files viewed or edited counted by Microsoft, averaged across the readings',
+  'licenceActivity.measure.m365.published': 'counts published by Microsoft',
   'licenceActivity.measure.copilot.microsoftReportPrompts': 'Copilot prompts counted by Microsoft, averaged across the readings',
+  'licenceActivity.measure.copilot.singleRollingReport': 'Copilot prompts and days used, from one rolling report',
   'licenceActivity.measure.copilot.recordedActivity': 'recorded Copilot activity only',
   'licenceActivity.measure.copilot.auditActiveWeeks': 'Copilot use counted per active week',
   'licenceActivity.measure.copilot.interactionActiveWeeks': 'Copilot activity counted per active week',
@@ -93,14 +95,18 @@ export const licenceActivity = {
   'licenceActivity.coverageMessage.m365.missingCoverage': 'No week in the dates you selected was imported in full.',
   'licenceActivity.coverageMessage.copilotReport.available': "Microsoft's most recent 7-day Copilot report was read once per week; where those reports overlap the counts are averaged, never added up. People Microsoft did not list, and older reports that predate the current counters, stay Unknown. Microsoft only reports on people who hold a Copilot licence.",
   'licenceActivity.coverageMessage.copilotReport.partial': 'At least one week in the period has no Copilot reading on its end date. Earlier readings are still shown as evidence, but activity levels stay Unknown and nobody is listed as least active for Copilot.',
+  'licenceActivity.coverageMessage.copilotReport.singleWindowAvailable': "The dates you selected match one of Microsoft's rolling Copilot reports exactly. People Microsoft did not list, and reports that do not record days used, stay Unknown. Microsoft only reports on people who hold a Copilot licence.",
+  'licenceActivity.coverageMessage.copilotReport.singleWindowLonger': 'Microsoft only published a longer rolling report inside the dates you selected. It is shown here with the dates it really covers, but activity levels stay Unknown for your custom range.',
   'licenceActivity.coverageMessage.copilotReport.unmatchableIdentity': "Microsoft's Copilot usage report hid every person's identity, so its activity cannot be tied back to the people holding the licence. To fix this, turn off 'Display concealed user, group and site names in all reports' in the Microsoft 365 admin centre (Settings > Org settings > Reports).",
   'licenceActivity.coverageMessage.copilotReport.notImported': "Microsoft's per-person Copilot usage report has never been collected on this deployment.",
   'licenceActivity.coverageMessage.copilotReport.failed': "The last attempt to collect Microsoft's per-person Copilot usage report failed, so Copilot activity is unknown rather than zero.",
   'licenceActivity.coverageMessage.copilotReport.missingCoverage': "None of Microsoft's Copilot usage reports fits entirely inside the dates you selected.",
   'licenceActivity.coverageMessage.copilotAudit.unmatchableIdentity': "Microsoft's Copilot report hid every person's identity, so Copilot audit records are used instead. They prove who DID use Copilot, but cannot prove that anybody else did not.",
   'licenceActivity.coverageMessage.copilotAudit.partial': 'Copilot audit records prove who DID use Copilot, but nothing confirms that every Copilot event was captured, so anyone absent stays Unknown rather than inactive.',
+  'licenceActivity.coverageMessage.copilotAudit.missingCoverage': 'Copilot audit records exist, but none fall inside the dates you selected. That is not the same as nobody using Copilot.',
   'licenceActivity.coverageMessage.copilotInteractions.unmatchableIdentity': "Microsoft's Copilot report hid every person's identity, so Copilot chat history is used instead. It proves who DID use Copilot, but cannot prove that anybody else did not.",
   'licenceActivity.coverageMessage.copilotInteractions.partial': 'Copilot chat history proves who DID use Copilot, but nothing confirms the history is complete for everybody, so anyone absent stays Unknown rather than inactive.',
+  'licenceActivity.coverageMessage.copilotInteractions.missingCoverage': 'Copilot chat history exists, but none of it falls inside the dates you selected. That is not the same as nobody using Copilot.',
 
   // ActivityCoverageHelp
   'licenceActivity.activityCoverage.summary':

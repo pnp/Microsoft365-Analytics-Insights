@@ -26,17 +26,24 @@ const GRANULARITY_LABELS: Record<string, TranslationKey> = {
   unknown: 'licenceActivity.granularity.unknown',
 };
 
-const MEASURE_LABELS: Record<string, TranslationKey> = {
+// The coverage `measure` and `message` are English sentences the licence activity SQL writes. The server
+// also sends a stable `measureKey` / `messageKey` beside each (LicenceActivityDisplayKeys in C#), and the
+// sentence is shown from the catalog by that key; the server's English is only the fallback for a key this
+// build does not know. serverAuthoredText.test.ts reads the C# and fails when these maps and the server's
+// keys disagree in either direction.
+export const MEASURE_LABELS: Record<string, TranslationKey> = {
   'm365.teams': 'licenceActivity.measure.m365.teams',
   'm365.outlook': 'licenceActivity.measure.m365.outlook',
   'm365.files': 'licenceActivity.measure.m365.files',
+  'm365.published': 'licenceActivity.measure.m365.published',
   'copilot.microsoftReportPrompts': 'licenceActivity.measure.copilot.microsoftReportPrompts',
+  'copilot.singleRollingReport': 'licenceActivity.measure.copilot.singleRollingReport',
   'copilot.recordedActivity': 'licenceActivity.measure.copilot.recordedActivity',
   'copilot.auditActiveWeeks': 'licenceActivity.measure.copilot.auditActiveWeeks',
   'copilot.interactionActiveWeeks': 'licenceActivity.measure.copilot.interactionActiveWeeks',
 };
 
-const MESSAGE_LABELS: Record<string, TranslationKey> = {
+export const MESSAGE_LABELS: Record<string, TranslationKey> = {
   'm365.disabled': 'licenceActivity.coverageMessage.m365.disabled',
   'm365.available': 'licenceActivity.coverageMessage.m365.available',
   'm365.partial': 'licenceActivity.coverageMessage.m365.partial',
@@ -44,14 +51,18 @@ const MESSAGE_LABELS: Record<string, TranslationKey> = {
   'm365.missingCoverage': 'licenceActivity.coverageMessage.m365.missingCoverage',
   'copilotReport.available': 'licenceActivity.coverageMessage.copilotReport.available',
   'copilotReport.partial': 'licenceActivity.coverageMessage.copilotReport.partial',
+  'copilotReport.singleWindowAvailable': 'licenceActivity.coverageMessage.copilotReport.singleWindowAvailable',
+  'copilotReport.singleWindowLonger': 'licenceActivity.coverageMessage.copilotReport.singleWindowLonger',
   'copilotReport.unmatchableIdentity': 'licenceActivity.coverageMessage.copilotReport.unmatchableIdentity',
   'copilotReport.notImported': 'licenceActivity.coverageMessage.copilotReport.notImported',
   'copilotReport.failed': 'licenceActivity.coverageMessage.copilotReport.failed',
   'copilotReport.missingCoverage': 'licenceActivity.coverageMessage.copilotReport.missingCoverage',
   'copilotAudit.unmatchableIdentity': 'licenceActivity.coverageMessage.copilotAudit.unmatchableIdentity',
   'copilotAudit.partial': 'licenceActivity.coverageMessage.copilotAudit.partial',
+  'copilotAudit.missingCoverage': 'licenceActivity.coverageMessage.copilotAudit.missingCoverage',
   'copilotInteractions.unmatchableIdentity': 'licenceActivity.coverageMessage.copilotInteractions.unmatchableIdentity',
   'copilotInteractions.partial': 'licenceActivity.coverageMessage.copilotInteractions.partial',
+  'copilotInteractions.missingCoverage': 'licenceActivity.coverageMessage.copilotInteractions.missingCoverage',
 };
 
 /** Where a workload's figures came from, named the way Microsoft 365 admins would recognise it. */

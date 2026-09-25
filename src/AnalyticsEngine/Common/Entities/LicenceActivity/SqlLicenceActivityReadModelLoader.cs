@@ -182,7 +182,6 @@ namespace Common.Entities.LicenceActivity
                     ObservedSamples = ReadInt32(reader, "ObservedSamples"),
                     UnmatchedUsers = ReadInt32(reader, "UnmatchedUsers")
                 };
-                coverage.ApplyDisplayKeys();
                 result.Coverage.Add(coverage);
             }
             await RequireResultAsync(reader, false, cancellationToken, "WorkloadName", "SnapshotDate").ConfigureAwait(false);

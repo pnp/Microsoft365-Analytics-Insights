@@ -1711,3 +1711,78 @@ describe('Teams authorisation server errors', () => {
     expect(source).toContain(expected.slice(expected.indexOf('Add a Redis')));
   });
 });
+
+// --- Licence Activity coverage measures and messages -------------------------------------------------
+//
+// The licence activity SQL writes each workload's coverage `measure` and `message` as English sentences.
+// LicenceActivityDisplayKeys (C#) turns each sentence into a stable key, and sources.ts maps that key to a
+// catalog entry. Three kinds of drift each put English back on the Spanish page without failing anything
+// else: a sentence the C# switch does not know, a switch case whose sentence no longer exists (reworded),
+// and a key that one side has and the other lacks.
+
+const LICENCE_ACTIVITY_DIR = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'LicenceActivity');
+
+function licenceDisplayKeySwitch(name: 'MeasureKeyFor' | 'MessageKeyFor'): Map<string, string> {
+  const source = readFileSync(join(LICENCE_ACTIVITY_DIR, 'LicenceActivityModels.cs'), 'utf8');
+  const start = source.indexOf(`static string ${name}(`);
+  expect(start, `LicenceActivityDisplayKeys.${name} not found`).toBeGreaterThanOrEqual(0);
+  const body = source.slice(start, source.indexOf('default:', start));
+  return new Map(
+    [...body.matchAll(/case "((?:[^"\\]|\\.)*)": return "([^"]+)";/g)].map((m) => [csharpStringLiteralValue(m[1]), m[2]]),
+  );
+}
+
+/** Every coverage measure and message sentence the server can write, from the three places it writes them. */
+function licenceCoverageSentences(): string[] {
+  const sql = readFileSync(join(LICENCE_ACTIVITY_DIR, 'LicenceActivitySql.cs'), 'utf8');
+  const store = readFileSync(join(LICENCE_ACTIVITY_DIR, 'SqlLicenceActivityStore.cs'), 'utf8');
+  // SQL literals, apart from diagnostics (PRINT) and dynamic SQL (sp_executesql). Three or more words is a
+  // sentence someone reads; codes ('available') and bucket names (N'Unknown') are single words.
+  const sqlSentences = [...sql.matchAll(/(PRINT\s+|sp_executesql\s+)?N'((?:[^']|'')*)'/g)]
+    .filter((m) => !m[1])
+    .map((m) => m[2].replace(/''/g, "'"))
+    .filter((literal) => literal.trim().split(/\s+/).length >= 3);
+  // The Microsoft 365 measures are passed from C# into the SQL template; the store also builds coverage in C#.
+  const m365Measures = [...sql.matchAll(/AppendM365Overview\([^;]*?"((?:[^"\\]|\\.)*)",\s*sources\.UsageReports\)/g)]
+    .map((m) => csharpStringLiteralValue(m[1]));
+  const storeText = [...store.matchAll(/\b(?:Measure|Message)\s*=\s*"((?:[^"\\]|\\.)*)"/g)].map((m) => csharpStringLiteralValue(m[1]));
+  return sortedUnique([...sqlSentences, ...m365Measures, ...storeText]);
+}
+
+describe('Licence Activity coverage measures and messages', () => {
+  it('finds the sentences it is guarding', () => {
+    // A parser that silently matched nothing would make every test below vacuous.
+    expect(licenceCoverageSentences().length).toBeGreaterThanOrEqual(25);
+    expect(licenceDisplayKeySwitch('MeasureKeyFor').size).toBeGreaterThanOrEqual(8);
+    expect(licenceDisplayKeySwitch('MessageKeyFor').size).toBeGreaterThanOrEqual(15);
+  });
+
+  it('gives every sentence the server writes a stable key', () => {
+    const known = new Set([...licenceDisplayKeySwitch('MeasureKeyFor').keys(), ...licenceDisplayKeySwitch('MessageKeyFor').keys()]);
+    const unkeyed = licenceCoverageSentences().filter((sentence) => !known.has(sentence));
+
+    expect(unkeyed, 'add each sentence to LicenceActivityDisplayKeys, then map its key in sources.ts').toEqual([]);
+  });
+
+  it('has no key for a sentence the server no longer writes', () => {
+    const written = new Set(licenceCoverageSentences());
+    const stale = [...licenceDisplayKeySwitch('MeasureKeyFor').keys(), ...licenceDisplayKeySwitch('MessageKeyFor').keys()]
+      .filter((sentence) => !written.has(sentence));
+
+    expect(stale, 'a reworded sentence: update the switch, the English catalog text, and re-read its Spanish').toEqual([]);
+  });
+
+  it('maps exactly the keys the server sends, to catalog text that reads as the server does', async () => {
+    const { MEASURE_LABELS, MESSAGE_LABELS } = await import('../../components/licenceActivity/sources');
+
+    for (const [name, spaMap] of [['MeasureKeyFor', MEASURE_LABELS], ['MessageKeyFor', MESSAGE_LABELS]] as const) {
+      const server = licenceDisplayKeySwitch(name);
+      expect(Object.keys(spaMap).sort(), `${name}: SPA keys vs server keys`).toEqual(sortedUnique([...server.values()]));
+
+      // The English page must read exactly as it did when the server's sentence was shown directly.
+      for (const [sentence, key] of server) {
+        expect(EN_CATALOG[spaMap[key]], `${name}: English catalog text for '${key}'`).toBe(sentence);
+      }
+    }
+  });
+});

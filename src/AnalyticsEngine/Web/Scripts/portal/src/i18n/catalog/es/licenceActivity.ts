@@ -84,7 +84,9 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.measure.m365.teams': 'mensajes y reuniones de Teams contados por Microsoft, promediados entre las lecturas',
   'licenceActivity.measure.m365.outlook': 'correos enviados y leídos contados por Microsoft, promediados entre las lecturas',
   'licenceActivity.measure.m365.files': 'archivos vistos o editados contados por Microsoft, promediados entre las lecturas',
+  'licenceActivity.measure.m365.published': 'recuentos publicados por Microsoft',
   'licenceActivity.measure.copilot.microsoftReportPrompts': 'solicitudes de Copilot contadas por Microsoft, promediadas entre las lecturas',
+  'licenceActivity.measure.copilot.singleRollingReport': 'solicitudes de Copilot y días de uso, de un único informe móvil',
   'licenceActivity.measure.copilot.recordedActivity': 'solo actividad de Copilot registrada',
   'licenceActivity.measure.copilot.auditActiveWeeks': 'uso de Copilot contado por semana activa',
   'licenceActivity.measure.copilot.interactionActiveWeeks': 'actividad de Copilot contada por semana activa',
@@ -95,14 +97,18 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.coverageMessage.m365.missingCoverage': 'Ninguna semana de las fechas seleccionadas se importó por completo.',
   'licenceActivity.coverageMessage.copilotReport.available': 'El informe de Copilot de 7 días más reciente de Microsoft se leyó una vez por semana; cuando esos informes se solapan, los recuentos se promedian, nunca se suman. Las personas que Microsoft no enumeró y los informes antiguos anteriores a los contadores actuales permanecen como Desconocida. Microsoft solo informa sobre personas que tienen una licencia de Copilot.',
   'licenceActivity.coverageMessage.copilotReport.partial': 'Al menos una semana del periodo no tiene lectura de Copilot en su fecha de finalización. Las lecturas anteriores se siguen mostrando como evidencia, pero los niveles de actividad permanecen como Desconocida y nadie se lista como menos activo para Copilot.',
+  'licenceActivity.coverageMessage.copilotReport.singleWindowAvailable': 'Las fechas seleccionadas coinciden exactamente con uno de los informes móviles de Copilot de Microsoft. Las personas que Microsoft no enumeró y los informes que no registran los días de uso permanecen como Desconocida. Microsoft solo informa sobre personas que tienen una licencia de Copilot.',
+  'licenceActivity.coverageMessage.copilotReport.singleWindowLonger': 'Microsoft solo publicó un informe móvil más largo dentro de las fechas seleccionadas. Se muestra aquí con las fechas que abarca realmente, pero los niveles de actividad permanecen como Desconocida para su intervalo personalizado.',
   'licenceActivity.coverageMessage.copilotReport.unmatchableIdentity': "El informe de uso de Copilot de Microsoft ocultó la identidad de todas las personas, por lo que su actividad no puede vincularse a quienes tienen la licencia. Para corregirlo, desactive 'Display concealed user, group and site names in all reports' en el centro de administración de Microsoft 365 (Settings > Org settings > Reports).",
   'licenceActivity.coverageMessage.copilotReport.notImported': 'El informe de uso de Copilot por persona de Microsoft nunca se ha recopilado en esta implementación.',
   'licenceActivity.coverageMessage.copilotReport.failed': 'El último intento de recopilar el informe de uso de Copilot por persona de Microsoft produjo un error, por lo que la actividad de Copilot es desconocida en lugar de cero.',
   'licenceActivity.coverageMessage.copilotReport.missingCoverage': 'Ninguno de los informes de uso de Copilot de Microsoft encaja completamente dentro de las fechas seleccionadas.',
   'licenceActivity.coverageMessage.copilotAudit.unmatchableIdentity': 'El informe de Copilot de Microsoft ocultó la identidad de todas las personas, así que se usan en su lugar los registros de auditoría de Copilot. Demuestran quién SÍ usó Copilot, pero no pueden demostrar que nadie más no lo usara.',
   'licenceActivity.coverageMessage.copilotAudit.partial': 'Los registros de auditoría de Copilot demuestran quién SÍ usó Copilot, pero nada confirma que se capturaran todos los eventos de Copilot, por lo que quien no aparece permanece como Desconocida en lugar de inactivo.',
+  'licenceActivity.coverageMessage.copilotAudit.missingCoverage': 'Hay registros de auditoría de Copilot, pero ninguno queda dentro de las fechas seleccionadas. Eso no significa que nadie use Copilot.',
   'licenceActivity.coverageMessage.copilotInteractions.unmatchableIdentity': 'El informe de Copilot de Microsoft ocultó la identidad de todas las personas, así que se usa en su lugar el historial de chats de Copilot. Demuestra quién SÍ usó Copilot, pero no puede demostrar que nadie más no lo usara.',
   'licenceActivity.coverageMessage.copilotInteractions.partial': 'El historial de chats de Copilot demuestra quién SÍ usó Copilot, pero nada confirma que el historial esté completo para todo el mundo, por lo que quien no aparece permanece como Desconocida en lugar de inactivo.',
+  'licenceActivity.coverageMessage.copilotInteractions.missingCoverage': 'Hay historial de chats de Copilot, pero ninguna conversación queda dentro de las fechas seleccionadas. Eso no significa que nadie use Copilot.',
 
   // ActivityCoverageHelp
   'licenceActivity.activityCoverage.summary':

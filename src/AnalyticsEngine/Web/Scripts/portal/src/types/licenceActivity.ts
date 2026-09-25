@@ -144,6 +144,8 @@ export interface LicenceActivityEvidence {
   band: string;
   source: string | null;
   measure: string | null;
+  /** Stable key for `measure` (see `sources.ts`); null when the server does not recognise the measure. */
+  measureKey?: string | null;
   activeSamples: number;
   observedSamples: number;
   expectedSamples: number;
