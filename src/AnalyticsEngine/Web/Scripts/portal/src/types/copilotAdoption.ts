@@ -348,6 +348,7 @@ export interface AdoptionCombinedSegmentRow {
 
 /** Adoption, reclaim and next-action counts for one accountable unit. */
 export interface AccountabilityRollupRow extends AdoptionSegmentRow {
+  emptySegmentKey?: string | null;
   reclaimableSeats: number;
   reclaimCertainSeats: number;
   reclaimProbableSeats: number;
@@ -932,4 +933,3 @@ export interface CoworkFilters {
   sortBy: string;
   sortDesc: boolean;
 }
-

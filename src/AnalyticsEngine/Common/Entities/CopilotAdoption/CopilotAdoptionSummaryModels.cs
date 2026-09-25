@@ -252,6 +252,13 @@ namespace Common.Entities.CopilotAdoption
     /// </summary>
     public class AccountabilityRollupRow : AdoptionSegmentRow
     {
+        /// <summary>
+        /// Stable key for product-authored empty bucket labels such as "(no manager)".
+        /// <c>null</c> means <see cref="AdoptionSegmentRow.Segment"/> is tenant data and must be rendered verbatim.
+        /// </summary>
+        [JsonProperty("emptySegmentKey")]
+        public string EmptySegmentKey { get; set; }
+
         [JsonProperty("reclaimableSeats")]
         public int ReclaimableSeats { get; set; }
 

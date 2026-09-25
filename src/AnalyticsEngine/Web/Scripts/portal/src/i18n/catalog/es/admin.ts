@@ -122,6 +122,7 @@ const admin: Record<keyof typeof en, string> = {
   'admin.userLookup.categoryRow.recentRowsAriaLabel': 'Filas recientes de {category}',
   'admin.userLookup.categoryRow.showingRecent': 'Mostrando {count} más recientes de {total}.',
   'admin.userLookup.categoryRow.source': 'Origen: {source}',
+  'admin.userLookup.categoryRow.sourceNotAvailable': 'N/D',
   'admin.userLookup.categoryRow.sqlCopied': 'SQL copiado al Portapapeles',
   'admin.userLookup.categoryRow.sqlCopyFailed': 'No se pudo copiar al Portapapeles',
   'admin.userLookup.categoryRow.sqlTitle': 'SQL para reproducir este recuento',
