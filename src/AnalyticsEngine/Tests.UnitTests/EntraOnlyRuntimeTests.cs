@@ -26,8 +26,12 @@ namespace Tests.UnitTests
         private const string EntraOnlyUnreachableServer =
             "data source=tcp:sql-contoso-synthetic-00000000.database.windows.net,1433;initial catalog=analytics;persist security info=False;Encrypt=True;Connect Timeout=1";
 
-        private const string SyntheticLocalDb =
-            @"Data Source=(localdb)\MSSQLLocalDB;Initial Catalog=UnitTestingSPOInsights_relfixB;Integrated Security=true;MultipleActiveResultSets=True;App=EntityFramework";
+        /// <summary>
+        /// The test database every other suite uses, so the migrator and the history read below look at the same
+        /// database on every machine and in CI.
+        /// </summary>
+        private static string TestDatabase =>
+            System.Configuration.ConfigurationManager.ConnectionStrings["SPOInsightsEntities"].ConnectionString;
 
         [TestCleanup]
         public void Cleanup()
@@ -55,16 +59,51 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// The installer applies migrations with <c>new AnalyticsEntitiesContext(cs, true, true)</c> and
+        /// <c>Database.Initialize(true)</c> (<c>DatabaseUpgrader</c>). That must still migrate an Entra-only
+        /// database: skipping it would let the upgrade report success having applied nothing.
+        /// </summary>
+        /// <remarks>
+        /// The credential throws, so the proof is that the migration initializer asked for a SQL token to connect.
+        /// A version of the runtime fix that also wrapped this initializer returned silently, with no token requested.
+        /// </remarks>
+        [TestMethod]
+        public void ExplicitUpgrade_EntraOnlyConnection_StillRunsTheMigrationInitializer()
+        {
+            var credential = new TokenRequestRecorder();
+            AzureSqlTokenAuth.SetCredential(credential);
+
+            using (var db = new AnalyticsEntitiesContext(EntraOnlyUnreachableServer, true, true))
+            {
+                Assert.AreEqual(0, credential.Requests, "Constructing the upgrade context must not connect by itself.");
+
+                try
+                {
+                    db.Database.Initialize(true);
+                    Assert.Fail("The migration initializer must try to connect - and so ask for a token - rather than return silently.");
+                }
+                catch (Exception ex) when (!(ex is AssertFailedException))
+                {
+                    // Expected: the throwing credential stops the migrator before any network I/O.
+                }
+            }
+
+            Assert.IsTrue(credential.Requests >= 1, "An explicit schema upgrade on Entra-only SQL must run its migrations.");
+        }
+
         [TestMethod]
         public void ContextConstructor_LocalDbConnection_StillRunsTheRegisteredInitializer()
         {
             var initializer = new RecordingInitializer();
             Database.SetInitializer(initializer);
 
-            using (var sqlConnection = new SqlConnection(SyntheticLocalDb))
+            using (var sqlConnection = new SqlConnection(TestDatabase))
             using (var db = new AnalyticsEntitiesContext(sqlConnection))
             {
-                db.Database.Initialize(false);
+                // force: true - EF initialises each connection string once per AppDomain, and other suites have
+                // usually initialised this one already.
+                db.Database.Initialize(true);
                 Assert.AreEqual(1, initializer.Calls, "Non-token SQL must keep EF's existing initializer behaviour.");
             }
         }
@@ -75,7 +114,7 @@ namespace Tests.UnitTests
             var config = new Configuration();
             new DbMigrator(config).Update();
 
-            using (var db = new AnalyticsEntitiesContext(SyntheticLocalDb, true, true))
+            using (var db = new AnalyticsEntitiesContext(TestDatabase, true, true))
             {
                 var pending = await SqlHealthDataSource.GetPendingMigrationsFromHistoryAsync(db, config);
 
