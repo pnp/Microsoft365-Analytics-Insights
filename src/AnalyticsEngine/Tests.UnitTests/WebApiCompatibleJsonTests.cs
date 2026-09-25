@@ -101,6 +101,29 @@ namespace Tests.UnitTests
             StringAssert.Contains(Serialise(new LicenceActivityOverview()), "\"distinctAssignedUsers\":0");
         }
 
+        [TestMethod]
+        public void AccountabilityRows_CarryTheEmptySegmentKeyThePortalTranslates()
+        {
+            // The portal translates a product-authored empty bucket such as "(no manager)" from this key and
+            // renders every other segment verbatim, as tenant data. Under any other name the key is simply
+            // absent and the English label shows on a Spanish page - with nothing failing.
+            var summary = new CopilotAdoptionSummary();
+            summary.AccountabilityRollup.Add(new AccountabilityRollupRow { Segment = "(no manager)", EmptySegmentKey = "noManager" });
+            summary.AccountabilityRollup.Add(new AccountabilityRollupRow { Segment = "Finance" });
+
+            var json = Newtonsoft.Json.Linq.JObject.Parse(Serialise(summary));
+            var rows = (Newtonsoft.Json.Linq.JArray)json["accountabilityRollup"];
+
+            Assert.IsNotNull(rows, "The summary must publish the roll-up as 'accountabilityRollup'.");
+            Assert.AreEqual("(no manager)", (string)rows[0]["segment"]);
+            Assert.AreEqual("noManager", (string)rows[0]["emptySegmentKey"],
+                "The key must go out as exactly 'emptySegmentKey'.");
+            Assert.AreEqual("Finance", (string)rows[1]["segment"]);
+            Assert.IsTrue(((Newtonsoft.Json.Linq.JObject)rows[1]).ContainsKey("emptySegmentKey"),
+                "As on Web API 2, a tenant segment still carries the property - as null.");
+            Assert.AreEqual(Newtonsoft.Json.Linq.JTokenType.Null, rows[1]["emptySegmentKey"].Type);
+        }
+
         public sealed class UnannotatedPayload
         {
             public int DeclaredName { get; set; }

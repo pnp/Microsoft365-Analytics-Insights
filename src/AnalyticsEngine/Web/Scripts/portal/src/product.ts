@@ -8,6 +8,8 @@
  * version that has since been fixed.
  */
 
+import { translateActive, type TFunction } from './i18n';
+
 export const PRODUCT_NAME = 'Microsoft 365 Advanced Analytics';
 
 export const REPOSITORY_URL = 'https://github.com/pnp/Microsoft365-Analytics-Insights';
@@ -52,10 +54,10 @@ export const DEVELOPMENT_BUILD_TEXT = 'development build';
  * as part of the line rather than as a second title. A label in any other shape still gets the word
  * "build" in front of it, so the parenthesis never leaves a bare number to be guessed at.
  */
-export function printedBuildText(): string {
+export function printedBuildText(t: TFunction = translateActive): string {
   const label = buildLabel();
-  if (!label) return DEVELOPMENT_BUILD_TEXT;
+  if (!label) return t('app.print.developmentBuild');
 
   const withoutPrefix = label.replace(/^build\b\s*/i, '').trim();
-  return withoutPrefix ? `build ${withoutPrefix}` : DEVELOPMENT_BUILD_TEXT;
+  return withoutPrefix ? t('app.print.buildLabel', { build: withoutPrefix }) : t('app.print.developmentBuild');
 }

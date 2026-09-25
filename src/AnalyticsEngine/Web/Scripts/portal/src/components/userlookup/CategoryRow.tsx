@@ -231,7 +231,9 @@ export default function CategoryRow({ upn, category }: CategoryRowProps) {
           </Text>
           <div className={styles.source}>
             <Text size={200}>
-              {t('admin.userLookup.categoryRow.source', { source: workloadNames.join(', ') || 'n/a' })}
+              {t('admin.userLookup.categoryRow.source', {
+                source: workloadNames.join(', ') || t('admin.userLookup.categoryRow.sourceNotAvailable'),
+              })}
             </Text>
             {!category.workloadsEnabled && (
               <Tooltip

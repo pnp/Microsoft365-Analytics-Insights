@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PRODUCT_NAME, REPOSITORY_URL, buildLabel, printedBuildText } from './product';
+import { loadCatalog, setActiveLanguage } from './i18n';
 
 const PORTAL_DIR = process.cwd();
 
@@ -15,6 +16,7 @@ const PORTAL_DIR = process.cwd();
 describe('build label', () => {
   afterEach(() => {
     delete (window as Partial<Window>).o365AnalyticsBuildLabel;
+    setActiveLanguage('en');
   });
 
   it('reports a released build', () => {
@@ -102,5 +104,16 @@ describe('printed build text', () => {
       window.o365AnalyticsBuildLabel = notARelease;
       expect(printedBuildText()).not.toContain(notARelease);
     }
+  });
+
+  it('translates the printed build marker in Spanish', async () => {
+    await loadCatalog('es');
+    setActiveLanguage('es');
+
+    window.o365AnalyticsBuildLabel = 'Build 1841';
+    expect(printedBuildText()).toBe('compilación 1841');
+
+    window.o365AnalyticsBuildLabel = 'DEV_BUILD';
+    expect(printedBuildText()).toBe('compilación de desarrollo');
   });
 });

@@ -2065,6 +2065,8 @@ namespace Tests.UnitTests
 
             Assert.AreEqual("(no manager)", analysis.Summary.AccountabilityRollup.Single().Segment,
                 "Users with no manager must be visible as their own accountability group, not silently dropped.");
+            Assert.AreEqual("noManager", analysis.Summary.AccountabilityRollup.Single().EmptySegmentKey,
+                "The API must flag product-authored empty labels so the SPA can translate them without touching tenant data.");
         }
 
         [TestMethod]
@@ -2102,6 +2104,22 @@ namespace Tests.UnitTests
             Assert.AreEqual(CopilotAdoptionAccountabilityDimensions.Department, analysis.Summary.AccountabilityDimension);
             Assert.AreEqual("Department", analysis.Summary.AccountabilityDimensionLabel);
             Assert.AreEqual("Finance", analysis.Summary.AccountabilityRollup.Single().Segment);
+            Assert.IsNull(analysis.Summary.AccountabilityRollup.Single().EmptySegmentKey,
+                "Real tenant department names must not be flagged for translation.");
+        }
+
+        [TestMethod]
+        public void AccountabilityRollup_SerialisesEmptySegmentKeyAsCamelCaseContract()
+        {
+            var row = CopilotAdoptionService.SummariseAccountability(
+                "(no department)",
+                Enumerable.Range(0, 5).Select(i => ScoredUser($"nodept{i}@contoso.com", 0, AdoptionBand.NeverUsed)),
+                "noDepartment");
+
+            var json = JsonConvert.SerializeObject(row);
+
+            StringAssert.Contains(json, "\"emptySegmentKey\":\"noDepartment\"",
+                "The Web project has no camel-case resolver; additive API fields must carry their JSON name explicitly.");
         }
 
         [TestMethod]
