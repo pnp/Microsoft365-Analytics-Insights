@@ -8,6 +8,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 using UnitTests.FakeLoaderClasses;
 
@@ -446,6 +447,23 @@ namespace Tests.UnitTests
             Assert.AreEqual(false, section.SchemaUpToDate);
             CollectionAssert.AreEqual(new[] { "202601010000001_SomethingNew" }, section.PendingMigrations);
             Assert.IsNull(section.SchemaError);
+        }
+
+        [TestMethod]
+        public void AppInsightsSqlCapacityQuery_OnlyCountsCapacityAndReadOnlySqlFailures()
+        {
+            var query = (string)typeof(HealthService)
+                .GetField("QuerySqlCapacityExceptions", BindingFlags.NonPublic | BindingFlags.Static)
+                .GetValue(null);
+
+            StringAssert.DoesNotMatch(query, new System.Text.RegularExpressions.Regex("type\\s+contains\\s+\"SqlException\""));
+            StringAssert.Contains(query, "outerMessage has_any (\"40544\", \"1105\", \"1101\", \"9002\", \"3906\")");
+            StringAssert.Contains(query, "innermostMessage has_any (\"40544\", \"1105\", \"1101\", \"9002\", \"3906\")");
+            StringAssert.Contains(query, "outerMessage contains \"has reached its size quota\"");
+            StringAssert.Contains(query, "innermostMessage contains \"Could not allocate space\"");
+            StringAssert.Contains(query, "outerMessage has \"read-only\"");
+            StringAssert.Contains(query, "innermostMessage contains \"insufficient disk space\"");
+            StringAssert.Contains(query, "outerMessage has \"transaction\" and outerMessage has \"log\" and outerMessage has \"full\"");
         }
 
         [TestMethod]
