@@ -1,10 +1,16 @@
+extern alias AnalyticsWeb;
+
+using AnalyticsWeb::Web.AnalyticsWeb.Models.Health;
 using Azure.Core;
 using Common.Entities;
+using Common.Entities.Migrations;
 using DataUtils.Sql;
 using Microsoft.Data.SqlClient;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Data.Entity;
+using System.Data.Entity.Migrations;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -61,6 +67,33 @@ namespace Tests.UnitTests
                 db.Database.Initialize(false);
                 Assert.AreEqual(1, initializer.Calls, "Non-token SQL must keep EF's existing initializer behaviour.");
             }
+        }
+
+        [TestMethod]
+        public async Task PendingMigrations_HistoryReadOnFullyMigratedLocalDb_ReturnsNone()
+        {
+            var config = new Configuration();
+            new DbMigrator(config).Update();
+
+            using (var db = new AnalyticsEntitiesContext(SyntheticLocalDb, true, true))
+            {
+                var pending = await SqlHealthDataSource.GetPendingMigrationsFromHistoryAsync(db, config);
+
+                Assert.AreEqual(0, pending.Count, "The direct __MigrationHistory read must agree with EF on an up-to-date database.");
+            }
+        }
+
+        [TestMethod]
+        public void PendingMigrations_ComparisonReportsMissingMigrationIds()
+        {
+            var config = new Configuration();
+            var local = new DbMigrator(config).GetLocalMigrations().ToList();
+            Assert.IsTrue(local.Count > 1, "The test needs the real migration list to be non-empty.");
+            var missing = local[local.Count - 1];
+
+            var pending = SqlHealthDataSource.CompareMigrations(local, local.Take(local.Count - 1));
+
+            CollectionAssert.AreEqual(new[] { missing }, pending.ToArray());
         }
 
         private sealed class RecordingInitializer : IDatabaseInitializer<AnalyticsEntitiesContext>
