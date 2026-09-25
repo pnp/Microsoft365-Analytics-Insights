@@ -7,9 +7,6 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net;
-using System.Net.Http;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace CloudInstallEngine.Azure.InstallTasks
@@ -40,9 +37,6 @@ namespace CloudInstallEngine.Azure.InstallTasks
         /// <summary>Optional: App Service VNet-integration subnet resource ID (added as a virtual-network rule).</summary>
         public const string CONFIG_KEY_VNET_SUBNET_ID = "vnetSubnetId";
 
-        const string IP_CHECK_URL = "http://icanhazip.com";
-        static readonly Regex IPv4Regex = new Regex(@"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", RegexOptions.Compiled);
-
         public KeyVaultFirewallConfigTask(TaskConfig config, ILogger logger, AzureLocation azureLocation)
             : base(config, logger, azureLocation, new Dictionary<string, string>())
         {
@@ -62,7 +56,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var allowIps = new List<string>();
 
             // 1. Installer machine public IP - needed for the runtime secret upload (data-plane).
-            var installerIp = TryGetInstallerPublicIp();
+            var installerIp = await PublicIpResolver.TryGetPublicIPv4Async(vault.Data.Name, _logger);
             if (!string.IsNullOrEmpty(installerIp))
             {
                 allowIps.Add(installerIp);
@@ -119,29 +113,6 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 return new List<string>();
             }
             return ParseOutboundIPv4Addresses(site.Data.PossibleOutboundIPAddresses);
-        }
-
-        // One shared client for the public-IP lookup. A new HttpClient per call would leak sockets the
-        // way WebClient (obsolete since .NET 6) effectively did; the timeout keeps a hung endpoint from
-        // stalling the install, which is why the old code's implicit 100s default is made explicit.
-        static readonly HttpClient _ipLookupClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-
-        string TryGetInstallerPublicIp()
-        {
-            try
-            {
-                var ip = _ipLookupClient.GetStringAsync(IP_CHECK_URL).GetAwaiter().GetResult()?.Trim();
-                if (!string.IsNullOrEmpty(ip) && IPv4Regex.IsMatch(ip))
-                {
-                    return ip;
-                }
-                _logger.LogWarning($"Public IP lookup from '{IP_CHECK_URL}' returned an unexpected value ('{ip}').");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning($"Could not determine the installer's public IP from '{IP_CHECK_URL}': {ex.Message}");
-            }
-            return null;
         }
 
         /// <summary>
@@ -225,7 +196,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             foreach (var part in commaSeparated.Split(','))
             {
                 var ip = part.Trim();
-                if (ip.Length > 0 && IPv4Regex.IsMatch(ip) && seen.Add(ip))
+                if (SqlFirewallRules.IsValidIPv4(ip) && seen.Add(ip))
                 {
                     result.Add(ip);
                 }

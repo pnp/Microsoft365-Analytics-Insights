@@ -18,6 +18,8 @@ namespace App.ControlPanel
         [STAThread]
         static void Main(string[] args)
         {
+            ApplySavedProxyPreferences();
+
             // Are we running a special operation instead of just opening the UI? 
             // We can init the SQL database with EF (upgrade the schema), or register an install state in the local DB.
             // This happens as part of the install process, where the downloaded installer app is launched with special args.
@@ -111,6 +113,29 @@ namespace App.ControlPanel
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainForm());
+        }
+
+        private static void ApplySavedProxyPreferences()
+        {
+            // .NET 10: installed first, before anything can send. Every HttpClient in the process - Azure.Core's
+            // shared transport included - then resolves its proxy through the installer's switch, so a later
+            // change in Proxy Configuration applies without a restart. A handler that sent before this would keep
+            // the proxy it captured (see InstallerNetworkProxy). Outside the try: it does not depend on loading
+            // the preferences, which may fail.
+            InstallerNetworkProxy.EnsureProcessWideSwitch();
+
+            try
+            {
+                var preferences = SecureLocalPreferences.Load<InstallerPreferences>();
+                if (!InstallerNetworkProxy.TryApplyProcessWide(preferences?.ProxyConfig, null, out var proxyError))
+                {
+                    InstallerLogs.AddToWindowsEventLog($"The saved installer proxy settings can't be used, so the system proxy is in use: {proxyError}", true);
+                }
+            }
+            catch (Exception ex)
+            {
+                InstallerLogs.AddToWindowsEventLog($"Could not apply the saved installer proxy preferences: {ex.Message}", true);
+            }
         }
 
         /// <summary>

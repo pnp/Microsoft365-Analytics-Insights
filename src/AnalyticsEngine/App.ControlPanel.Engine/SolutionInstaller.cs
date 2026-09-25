@@ -41,6 +41,8 @@ namespace App.ControlPanel.Engine
         /// </summary>
         public async Task InstallOrUpdate(CancellationToken ct = default(CancellationToken))
         {
+            InstallerNetworkProxy.ApplyProcessWide(_proxyConfig, _logger);
+
             // Wrap the inbound logger so every WARN/ERROR raised during the run is captured
             // into an end-of-run summary block. Use the underlying _logger when emitting the
             // summary itself so its lines aren't re-captured recursively.
