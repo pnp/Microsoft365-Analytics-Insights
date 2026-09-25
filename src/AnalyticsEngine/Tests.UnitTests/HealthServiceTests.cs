@@ -457,8 +457,10 @@ namespace Tests.UnitTests
                 .GetValue(null);
 
             StringAssert.DoesNotMatch(query, new System.Text.RegularExpressions.Regex("type\\s+contains\\s+\"SqlException\""));
-            StringAssert.Contains(query, "outerMessage has_any (\"40544\", \"1105\", \"1101\", \"9002\", \"3906\")");
-            StringAssert.Contains(query, "innermostMessage has_any (\"40544\", \"1105\", \"1101\", \"9002\", \"3906\")");
+            StringAssert.DoesNotMatch(query, new System.Text.RegularExpressions.Regex("has_any\\s*\\(\\s*\"\\d"),
+                "SqlException.Message never contains the error number, so matching bare numbers only adds false positives.");
+            StringAssert.Matches(query, new System.Text.RegularExpressions.Regex("\\| where outerMessage has \"read-only\""),
+                "The where clause must open with a predicate, not a dangling 'or'.");
             StringAssert.Contains(query, "outerMessage contains \"has reached its size quota\"");
             StringAssert.Contains(query, "innermostMessage contains \"Could not allocate space\"");
             StringAssert.Contains(query, "outerMessage has \"read-only\"");

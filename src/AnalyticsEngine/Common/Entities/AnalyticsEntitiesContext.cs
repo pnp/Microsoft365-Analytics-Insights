@@ -88,20 +88,35 @@ namespace Common.Entities
         #endregion
 
         /// <summary>
-        /// Registers the normal EF6 runtime initializer, but makes it a no-op for Entra-token Azure SQL.
-        /// Runtime App Service identities are contained database users and cannot log in to <c>master</c>;
-        /// EF6's existence/create path probes <c>master</c>, then can fall back to an un-tokenised open of
-        /// the real database and wrongly try to create it. The installer/DatabaseUpgrader owns database
-        /// creation and migrations, so token-authenticated runtime contexts must not run EF initialization
-        /// at all. See issue #609.
+        /// Registers the EF6 initializer this context was asked for. The implicit runtime check
+        /// (<c>CreateDatabaseIfNotExists</c>) is skipped for Entra-token Azure SQL; an explicit migration
+        /// (<paramref name="autoUpdate"/>) never is.
         /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Runtime App Service identities are contained database users and cannot log in to <c>master</c>.
+        /// EF6's existence/create path probes <c>master</c>, can then fall back to an un-tokenised open of the
+        /// real database, and wrongly tries to create it - so on an Entra-only install the web app and web-jobs
+        /// failed on every request. The installer owns database creation and migrations, so the runtime check
+        /// has nothing to do there (#609).
+        /// </para>
+        /// <para>
+        /// <c>autoUpdate</c> is left alone on purpose: it is how <c>DatabaseUpgrader</c> - the installer and
+        /// <c>--initdb</c> - applies migrations (<c>new AnalyticsEntitiesContext(cs, true, true)</c> then
+        /// <c>Database.Initialize(true)</c>), and the installer's identity can reach <c>master</c>. Wrapping it
+        /// as well made every Entra-only upgrade report "Database initialised successfully" having applied no
+        /// migration at all. The DEBUG-only parameterless constructor also takes this path, unchanged.
+        /// </para>
+        /// </remarks>
         private static void SetRuntimeInitializer(bool autoUpdate)
         {
-            IDatabaseInitializer<AnalyticsEntitiesContext> inner = autoUpdate
-                ? (IDatabaseInitializer<AnalyticsEntitiesContext>)new MigrateDatabaseToLatestVersion<AnalyticsEntitiesContext, Migrations.Configuration>(true)
-                : new CreateDatabaseIfNotExists<AnalyticsEntitiesContext>();
+            if (autoUpdate)
+            {
+                Database.SetInitializer(new MigrateDatabaseToLatestVersion<AnalyticsEntitiesContext, Migrations.Configuration>(true));
+                return;
+            }
 
-            Database.SetInitializer(new TokenAuthenticatedSqlInitializer(inner));
+            Database.SetInitializer(new TokenAuthenticatedSqlInitializer(new CreateDatabaseIfNotExists<AnalyticsEntitiesContext>()));
         }
 
         private sealed class TokenAuthenticatedSqlInitializer : IDatabaseInitializer<AnalyticsEntitiesContext>
