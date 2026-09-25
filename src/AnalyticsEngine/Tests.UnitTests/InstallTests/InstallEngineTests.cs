@@ -131,6 +131,76 @@ namespace Tests.UnitTests
             Assert.IsTrue(config.IsValid);
         }
 
+        /// <summary>
+        /// A proxy host typed with its scheme, a trailing slash or its own port must still reach the right
+        /// proxy. .NET Framework's <c>WebProxy(string, int)</c> prefixes "http://" itself, so
+        /// "http://proxy.contoso.com" became a proxy whose host name was "http", and the Kudu deployment failed
+        /// with "The remote name could not be resolved: 'http'" deep into an install (#613). Asserted on the
+        /// <see cref="System.Net.WebProxy"/> the installer actually builds, because the defect lived in that
+        /// Uri round-trip rather than in the saved config string.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow("proxy.contoso.com", 8080, "http://proxy.contoso.com:8080/", DisplayName = "Bare host")]
+        [DataRow("http://proxy.contoso.com", 8080, "http://proxy.contoso.com:8080/", DisplayName = "http scheme")]
+        [DataRow("https://proxy.contoso.com", 8080, "http://proxy.contoso.com:8080/", DisplayName = "https scheme")]
+        [DataRow("HTTP://Proxy.Contoso.com/", 8080, "http://proxy.contoso.com:8080/", DisplayName = "Upper-case scheme, trailing slash")]
+        [DataRow("  proxy.contoso.com  ", 8080, "http://proxy.contoso.com:8080/", DisplayName = "Surrounding whitespace")]
+        [DataRow("http://proxy.contoso.com:3128", 0, "http://proxy.contoso.com:3128/", DisplayName = "Port only in the host")]
+        [DataRow("https://proxy.contoso.com:3128/", 3128, "http://proxy.contoso.com:3128/", DisplayName = "Port in both, matching")]
+        [DataRow("10.0.0.5", 3128, "http://10.0.0.5:3128/", DisplayName = "IPv4 literal")]
+        [DataRow("[fd00::10]:3128", 0, "http://[fd00::10]:3128/", DisplayName = "IPv6 literal with port")]
+        [DataRow("proxy_01", 8080, "http://proxy_01:8080/", DisplayName = "NetBIOS-style name")]
+        public void DeploymentProxy_NormalisesTheHostBeforeBuildingTheProxy(string host, int port, string expectedAddress)
+        {
+            var config = new InstallerProxyConfig { UseProxy = true, IntegratedAuth = true, Host = host, Port = port };
+
+            Assert.IsTrue(config.IsValid, config.ValidationError);
+            using (var handler = InstallAppServiceContentsTask.CreateHttpClientHandler(config))
+            {
+                Assert.IsTrue(handler.UseProxy);
+                var proxy = (System.Net.WebProxy)handler.Proxy;
+                Assert.AreEqual(new Uri(expectedAddress), proxy.Address);
+            }
+        }
+
+        /// <summary>
+        /// What cannot be normalised must be refused in words the admin can act on - both in the proxy form
+        /// (<see cref="InstallerProxyConfig.ValidationError"/>) and, for a preference saved before the form
+        /// validated it, at the point the installer would otherwise have built a broken proxy.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow("http://proxy.contoso.com:3128", 8080, "3128", DisplayName = "Port in the host contradicts the Port box")]
+        [DataRow("proxy.contoso.com/proxy.pac", 8080, "without a path", DisplayName = "Path")]
+        [DataRow("installer@proxy.contoso.com", 8080, "user name", DisplayName = "User name in the host")]
+        [DataRow("proxy.contoso.com:http", 8080, "valid port", DisplayName = "Non-numeric port")]
+        [DataRow("proxy.contoso.com", 0, "port number", DisplayName = "No port anywhere")]
+        [DataRow("proxy.contoso.com", 70000, "port number", DisplayName = "Port out of range")]
+        [DataRow("http://", 8080, "server name", DisplayName = "Scheme only")]
+        [DataRow("", 8080, "server name", DisplayName = "Empty host")]
+        public void DeploymentProxy_RejectsHostsItCannotUse(string host, int port, string expectedMessageFragment)
+        {
+            var config = new InstallerProxyConfig { UseProxy = true, IntegratedAuth = true, Host = host, Port = port };
+
+            Assert.IsFalse(config.IsValid);
+            StringAssert.Contains(config.ValidationError, expectedMessageFragment);
+
+            var ex = Assert.ThrowsException<InvalidOperationException>(() => InstallAppServiceContentsTask.CreateHttpClientHandler(config));
+            StringAssert.Contains(ex.Message, expectedMessageFragment);
+        }
+
+        [TestMethod]
+        public void DeploymentProxy_NotUsed_BuildsNoProxyWhateverTheHostSays()
+        {
+            var config = new InstallerProxyConfig { UseProxy = false, Host = "http://proxy.contoso.com:3128", Port = 8080 };
+
+            Assert.IsTrue(config.IsValid);
+            Assert.IsNull(config.ValidationError);
+            using (var handler = InstallAppServiceContentsTask.CreateHttpClientHandler(config))
+            {
+                Assert.IsNull(handler.Proxy, "With the proxy switched off the handler must keep the system default.");
+            }
+        }
+
 
         [TestMethod]
         public void PublishDataXmlTests()

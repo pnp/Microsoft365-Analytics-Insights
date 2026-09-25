@@ -568,6 +568,137 @@ namespace Tests.UnitTests
 
         // ---- Persistence ---------------------------------------------------------------------------
 
+        /// <summary>
+        /// Drives the real SQL persistence of the first-party Cowork report against the test database. It
+        /// bulk-copies through EF's own connection, which is a Microsoft.Data.SqlClient connection
+        /// (SPOInsightsDBConfiguration, #511). While that file still imported System.Data.SqlClient the cast
+        /// threw InvalidCastException on every call, so no Cowork row was ever saved - and every fake-backed
+        /// Cowork test above passed regardless.
+        /// </summary>
+        [TestMethod]
+        public async Task CoworkSqlPersistence_WritesRowsAndSkipsUnchangedOnes()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var upn = $"cowork.persistence.{Guid.NewGuid():N}@contoso.com";
+            // A date far enough out that it can't collide with anything else in the shared test database.
+            var reportDate = new DateTime(2031, 4, 1);
+
+            int userId;
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var user = new User { UserPrincipalName = upn };
+                db.users.Add(user);
+                await db.SaveChangesAsync();
+                userId = user.ID;
+            }
+
+            try
+            {
+                var row = new CoworkUsageUserDetailRow
+                {
+                    ReportRefreshDate = reportDate,
+                    UserPrincipalName = upn,
+                    ReportPeriodDays = 28,
+                    TotalTasks = 12,
+                    ScheduledTasks = 4,
+                    UserInitiatedTasks = 8,
+                    ActiveDays = 6,
+                    LastActivityDate = reportDate.AddDays(-1),
+                    RetainedUser = true,
+                };
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var persistence = new SqlCoworkUsagePersistenceManager(db, logger);
+
+                    Assert.AreEqual(1, (await persistence.UpsertUserDetailAsync(new[] { row })).Written, "The first import writes the row.");
+                    Assert.AreEqual(0, (await persistence.UpsertUserDetailAsync(new[] { row })).Written, "Re-importing unchanged data must write nothing.");
+
+                    row.TotalTasks = 15;
+                    Assert.AreEqual(1, (await persistence.UpsertUserDetailAsync(new[] { row })).Written, "A revised figure must be written.");
+                }
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var stored = await db.Database.SqlQuery<int?>(
+                        "SELECT total_tasks FROM dbo.cowork_usage_user_activity_log WHERE user_id = @p0 AND [date] = @p1 AND report_period_days = 28",
+                        userId, reportDate).ToListAsync();
+                    CollectionAssert.AreEqual(new int?[] { 15 }, stored, "Exactly one row, carrying the revised figure.");
+                }
+            }
+            finally
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    await db.Database.ExecuteSqlCommandAsync(
+                        "DELETE FROM dbo.cowork_usage_user_activity_log WHERE user_id = @p0; DELETE FROM dbo.users WHERE id = @p0;",
+                        userId);
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task CoworkSqlPersistence_ARepeatedUserInOneReport_IsSavedOnceNotRejected()
+        {
+            // The MERGE's target has a UNIQUE index on (date, user_id, report_period_days), and MERGE rejects a
+            // source that repeats a key. User ids resolve case-insensitively, so two spellings of one UPN are the
+            // same user - which used to fail the whole statement, so not one Cowork row saved, every cycle.
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var upn = $"cowork.repeat.{Guid.NewGuid():N}@contoso.com";
+            var reportDate = new DateTime(2031, 4, 2);
+
+            int userId;
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var user = new User { UserPrincipalName = upn };
+                db.users.Add(user);
+                await db.SaveChangesAsync();
+                userId = user.ID;
+            }
+
+            try
+            {
+                CoworkUsageUserDetailRow Row(string reportedUpn, int totalTasks) => new CoworkUsageUserDetailRow
+                {
+                    ReportRefreshDate = reportDate,
+                    UserPrincipalName = reportedUpn,
+                    ReportPeriodDays = 28,
+                    TotalTasks = totalTasks,
+                    ActiveDays = 3,
+                };
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var persistence = new SqlCoworkUsagePersistenceManager(db, logger);
+
+                    var result = await persistence.UpsertUserDetailAsync(new[] { Row(upn, 3), Row(upn.ToUpperInvariant(), 7) });
+                    Assert.AreEqual(1, result.Written, "Two report rows for one user, date and period are one stored row.");
+
+                    // And again once the row exists, which is MERGE's other failure mode (error 8672, updating one
+                    // target row twice).
+                    result = await persistence.UpsertUserDetailAsync(new[] { Row(upn, 9), Row(upn.ToUpperInvariant(), 11) });
+                    Assert.AreEqual(1, result.Written);
+                }
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var stored = await db.Database.SqlQuery<int?>(
+                        "SELECT total_tasks FROM dbo.cowork_usage_user_activity_log WHERE user_id = @p0 AND [date] = @p1 AND report_period_days = 28",
+                        userId, reportDate).ToListAsync();
+                    CollectionAssert.AreEqual(new int?[] { 11 }, stored, "One row, carrying the last value the report gave for that user.");
+                }
+            }
+            finally
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    await db.Database.ExecuteSqlCommandAsync(
+                        "DELETE FROM dbo.cowork_usage_user_activity_log WHERE user_id = @p0; DELETE FROM dbo.users WHERE id = @p0;",
+                        userId);
+                }
+            }
+        }
+
         [TestMethod]
         public async Task AggregateLoader_ReImportingTheSameWindowDoesNotDuplicateRows()
         {
