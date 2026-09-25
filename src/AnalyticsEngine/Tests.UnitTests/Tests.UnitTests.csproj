@@ -150,6 +150,7 @@
     <Compile Include="AgentCostUserResolutionTests.cs" />
     <Compile Include="AgentCostSqlIntegrationTests.cs" />
     <Compile Include="AzureSqlEntraAuthTests.cs" />
+    <Compile Include="EntraOnlyRuntimeTests.cs" />
     <Compile Include="EmbeddedResourceNameTests.cs" />
     <Compile Include="EfProviderRegistrationTests.cs" />
     <Compile Include="StringCipherCompatibilityTests.cs" />
