@@ -378,6 +378,15 @@ function Get-OrCreateEntraApplication {
     $otherRequiredAccess = @($applicationObject.requiredResourceAccess) |
         Where-Object { $_.resourceAppId -ne $application.appId }
 
+    # Keep redirect URIs added outside this script, such as https://localhost:7167 for local
+    # development, rather than replacing the list with the deployed site's alone.
+    $existingRedirectUris = @()
+    if ($applicationObject.PSObject.Properties.Name -contains 'spa' -and $applicationObject.spa -and
+        $applicationObject.spa.PSObject.Properties.Name -contains 'redirectUris') {
+        $existingRedirectUris = @($applicationObject.spa.redirectUris)
+    }
+    $redirectUris = @(@($existingRedirectUris) + @($RedirectUri) | Where-Object { $_ } | Select-Object -Unique)
+
     $scopeDefinition = @{
         id = $scopeId
         value = $script:ScopeName
@@ -402,7 +411,7 @@ function Get-OrCreateEntraApplication {
         -Body @{
             identifierUris = @("api://$($application.appId)")
             spa = @{
-                redirectUris = @($RedirectUri)
+                redirectUris = $redirectUris
             }
             api = @{
                 requestedAccessTokenVersion = 2
@@ -622,6 +631,18 @@ function Remove-PrincipalRoleAssignments {
     }
 }
 
+function Assert-NoManagementLocks {
+    # A lock would stop the replacement part-way, after the old site has already been taken apart.
+    $locks = @(Invoke-AzCli -Arguments @('lock', 'list', '--subscription', $SubscriptionId, '--output', 'json') -AsJson) |
+        Where-Object {
+            $_.id -like "/subscriptions/$SubscriptionId/providers/Microsoft.Authorization/locks/*" -or
+            $_.id -like "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/*"
+        }
+    if (@($locks).Count -gt 0) {
+        throw "Management locks would block deleting the Linux site: $(@($locks | ForEach-Object { "$($_.name) ($($_.level))" }) -join ', '). Nothing has been changed."
+    }
+}
+
 function Assert-AppServicePlanReplaceable {
     param(
         [Parameter(Mandatory)]
@@ -653,6 +674,17 @@ function Remove-LinuxWebApp {
         Remove-PrincipalRoleAssignments -PrincipalId $ManagedIdentityPrincipalId
     }
 
+    # Disconnect first. Deleting an app that is still integrated with a subnet can leave the subnet's
+    # service association link behind, and the replacement integrates with that same subnet.
+    $subnetId = if ($WebApp.PSObject.Properties.Name -contains 'virtualNetworkSubnetId') { $WebApp.virtualNetworkSubnetId } else { $null }
+    if ($subnetId) {
+        Invoke-AzCli -Arguments @(
+            'webapp', 'vnet-integration', 'remove',
+            '--resource-group', $ResourceGroupName,
+            '--name', $WebAppName
+        ) | Out-Null
+    }
+
     Invoke-AzCli -Arguments @(
         'webapp', 'delete',
         '--resource-group', $ResourceGroupName,
@@ -661,9 +693,7 @@ function Remove-LinuxWebApp {
     ) | Out-Null
     Invoke-AzCli -Arguments @('appservice', 'plan', 'delete', '--ids', $planId, '--yes') | Out-Null
 
-    # The replacement plan integrates with the same subnet, which App Service only releases a little
-    # after the old plan is deleted.
-    $subnetId = if ($WebApp.PSObject.Properties.Name -contains 'virtualNetworkSubnetId') { $WebApp.virtualNetworkSubnetId } else { $null }
+    # App Service releases the subnet a little after the integration is removed.
     if ($subnetId) {
         for ($attempt = 1; $attempt -le 30; $attempt++) {
             $subnet = Invoke-AzRestJson -Method get -Uri "https://management.azure.com$($subnetId)?api-version=2024-05-01"
@@ -1077,6 +1107,7 @@ try {
         }
 
         # Read-only checks first, so a failure leaves the Linux site exactly as it was.
+        Assert-NoManagementLocks
         Assert-AppServicePlanReplaceable -WebApp $existingWebApp
         $preservedRoleAssignments = @(Get-WebAppRoleAssignments -WebApp $existingWebApp -ManagedIdentityPrincipalId $managedIdentityPrincipalId)
 

@@ -436,13 +436,16 @@ re-created with the **same name**, because deployed importers post to that
 hostname. The script refuses to do that unless asked: run the deploy command
 above with `-ReplaceLinuxWebApp` added. It then:
 
-1. checks, while nothing has been deleted, that App Service accepts
-   `WEBSITE_LOAD_FIRST_PARTY_AUTH` on the subscription;
+1. checks, while nothing has been changed, that no management lock would stop
+   the deletion part-way, that the plan hosts no other app, and that App
+   Service accepts `WEBSITE_LOAD_FIRST_PARTY_AUTH` on the subscription;
 2. records role assignments scoped to the site itself — typically the CI
    deployment identity's Website Contributor — so it can restore them;
 3. deletes the old site's managed-identity role assignments on Key Vault and
    Cosmos DB (the replacement gets a new identity, and ARM will not repoint an
-   existing assignment at it), then the site and its plan;
+   existing assignment at it), disconnects the site from its subnet (deleting
+   an app that is still integrated can leave the subnet unusable for the
+   replacement), then deletes the site and its plan;
 4. deploys the Windows plan and site, restores the recorded role assignments,
    and publishes and verifies as usual.
 
@@ -505,7 +508,10 @@ so check the platform's diagnostics instead:
    $site = az webapp show -g <resource-group> -n <app> --query id -o tsv
    $end = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:00Z')
    $start = (Get-Date).ToUniversalTime().AddHours(-6).ToString('yyyy-MM-ddTHH:mm:00Z')
-   az rest --method get --url "https://management.azure.com$site/detectors/EasyAuth?api-version=2022-03-01&startTime=$start&endTime=$end"
+   # Query parameters go in --url-parameters: on Windows, az is a batch file and cmd.exe would split
+   # a URL at its '&'.
+   az rest --method get --url "https://management.azure.com$site/detectors/EasyAuth" `
+     --url-parameters api-version=2022-03-01 startTime=$start endTime=$end
    ```
 
    It reports the App Service Authentication version actually running and,
