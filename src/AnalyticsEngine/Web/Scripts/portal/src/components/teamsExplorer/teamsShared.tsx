@@ -88,6 +88,39 @@ export function bucketsToCategories(buckets: TeamsBucket[]): ReportCategory[] {
   return buckets.map((bucket) => ({ label: bucket.label, value: bucket.count }));
 }
 
+export const TEAMS_CALL_CODE_LABEL_KEYS = {
+  modality: {
+    audio: 'teamsExplorer.code.modality.audio',
+    video: 'teamsExplorer.code.modality.video',
+    screenSharing: 'teamsExplorer.code.modality.screenSharing',
+    videoBasedScreenSharing: 'teamsExplorer.code.modality.screenSharing',
+  },
+  quality: {
+    excellent: 'teamsExplorer.code.quality.excellent',
+    good: 'teamsExplorer.code.quality.good',
+    fair: 'teamsExplorer.code.quality.fair',
+    poor: 'teamsExplorer.code.quality.poor',
+    '(none)': 'teamsExplorer.code.quality.none',
+  },
+} as const satisfies Record<string, Record<string, TranslationKey>>;
+
+type TeamsCallCodeGroup = keyof typeof TEAMS_CALL_CODE_LABEL_KEYS;
+
+export function translatedCodeLabel(t: TFunction, group: TeamsCallCodeGroup, code: string | null | undefined): string {
+  if (!code) return '';
+  const keys: Record<string, TranslationKey> = TEAMS_CALL_CODE_LABEL_KEYS[group];
+  const key = keys[code];
+  return key ? t(key) : code;
+}
+
+export function translatedCodeBucketsToCategories(
+  t: TFunction,
+  group: TeamsCallCodeGroup,
+  buckets: TeamsBucket[],
+): ReportCategory[] {
+  return buckets.map((bucket) => ({ label: translatedCodeLabel(t, group, bucket.key), value: bucket.count }));
+}
+
 export const TEAMS_SEGMENT_TEXT_KEYS: Record<string, { labelKey: TranslationKey; descriptionKey: TranslationKey }> = {
   Power: {
     labelKey: 'teamsExplorer.segment.Power.label',

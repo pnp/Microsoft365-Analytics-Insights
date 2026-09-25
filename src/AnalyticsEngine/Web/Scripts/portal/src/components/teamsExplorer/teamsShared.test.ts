@@ -13,7 +13,10 @@ import {
   reachTone,
   sentimentLabel,
   toCategories,
+  translatedCodeBucketsToCategories,
+  translatedCodeLabel,
 } from './teamsShared';
+import { loadCatalog, translateStatic } from '../../i18n';
 
 describe('adoption bands', () => {
   it('uses the same boundaries as the server and the gauge', () => {
@@ -95,6 +98,21 @@ describe('chart adapters', () => {
     ];
 
     expect(bucketsToCategories(buckets).map((c) => c.label)).toEqual(['1', '2', '3-5']);
+  });
+
+  it('translates Teams call modality and quality codes with raw-code fallback', async () => {
+    await loadCatalog('es');
+    const es = (key: Parameters<typeof translateStatic>[1], values?: Parameters<typeof translateStatic>[2]) =>
+      translateStatic('es', key, values);
+
+    expect(translatedCodeBucketsToCategories(es, 'modality', [
+      { key: 'screenSharing', label: 'screenSharing', count: 3, sharePct: 75 },
+      { key: 'unknownFutureValue', label: 'unknownFutureValue', count: 1, sharePct: 25 },
+    ])).toEqual([
+      { label: 'Uso compartido de pantalla', value: 3 },
+      { label: 'unknownFutureValue', value: 1 },
+    ]);
+    expect(translatedCodeLabel(es, 'quality', 'poor')).toBe('Deficiente');
   });
 });
 

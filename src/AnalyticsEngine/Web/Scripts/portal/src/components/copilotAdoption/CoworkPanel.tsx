@@ -61,7 +61,7 @@ import { formatNumber, useT, useTNode, type TFunction, type TranslationKey } fro
 // the same "we do not know" / "it is nothing" conflation the null path here is careful to
 // avoid, and the reason formatCredits exists (agentCostShared.test.ts pins
 // formatCredits(0.000125) !== '0'). Every credit figure on this tab uses it.
-import { formatCredits } from '../agentCosts/agentCostShared';
+import { capacityStatusLabel, formatCredits } from '../agentCosts/agentCostShared';
 import InfoTip from '../shared/InfoTip';
 import CoworkQuadrant from './CoworkQuadrant';
 import CoworkTimeSavedHero from './CoworkTimeSavedHero';
@@ -762,7 +762,7 @@ export default function CoworkPanel({
                 <Text size={200} className={styles.muted} block>
                   {t('copilotAdoptionCowork.creditsHeadroom.status')}
                 </Text>
-                <span className={styles.creditValue}>{credits.status}</span>
+                <span className={styles.creditValue}>{capacityStatusLabel(credits.status, t)}</span>
               </div>
             )}
           </div>

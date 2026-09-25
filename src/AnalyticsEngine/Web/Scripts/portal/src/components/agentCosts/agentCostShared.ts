@@ -70,6 +70,12 @@ const HARNESS_LABEL_KEYS: Record<string, TranslationKey> = {
   NotAssessed: 'agentCosts.harness.noFeatureReported',
 };
 
+export const CAPACITY_STATUS_LABEL_KEYS: Record<string, TranslationKey> = {
+  MonthToDate: 'agentCosts.capacity.status.monthToDate',
+  WithinCapacity: 'agentCosts.capacity.status.withinCapacity',
+  Overage: 'agentCosts.capacity.status.overage',
+};
+
 /**
  * A display label for a stored harness value.
  *
@@ -82,6 +88,12 @@ export function harnessLabel(value: string | null | undefined, t: TFunction = tr
   if (key) return (t ?? translateActive)(key);
   if (value === 'GitHubCopilot') return 'GitHub Copilot';
   return value || t('agentCosts.state.notReported');
+}
+
+export function capacityStatusLabel(value: string | null | undefined, t: TFunction = translateActive): string {
+  if (!value) return DASH;
+  const key = CAPACITY_STATUS_LABEL_KEYS[value];
+  return key ? t(key) : value;
 }
 
 /** A UTC ISO date as a short date. Rendered in UTC - the underlying grain is a UTC usage day. */

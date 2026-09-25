@@ -56,6 +56,7 @@ import {
   formatDay,
   formatMoney,
   formatQuantity,
+  capacityStatusLabel,
   harnessLabel,
   saveCsv,
   windowOfDays,
@@ -618,7 +619,7 @@ export default function AgentCostsPage() {
                   </span>
                 </div>
                 <div className={styles.kpi}>
-                  <span className={styles.kpiValue}>{summary.capacity.status ?? DASH}</span>
+                  <span className={styles.kpiValue}>{capacityStatusLabel(summary.capacity.status, t)}</span>
                   <span className={styles.kpiLabel}>{t('agentCosts.capacity.status')}</span>
                   <span className={styles.kpiHint}>
                     {t('agentCosts.capacity.asAt', { day: formatDay(summary.capacity.consumptionAsOf ?? summary.capacity.snapshotUtc) })}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  capacityStatusLabel,
   DASH,
   detailRowsToCsv,
   formatCount,
@@ -8,6 +9,7 @@ import {
   formatMoney,
   windowOfDays,
 } from './agentCostShared';
+import { loadCatalog, translateStatic } from '../../i18n';
 import type { AgentCostDetailRow } from '../../types/agentCosts';
 
 describe('formatCredits', () => {
@@ -45,6 +47,19 @@ describe('formatCount', () => {
   it('distinguishes a measured zero from an unknown', () => {
     expect(formatCount(0)).toBe('0');
     expect(formatCount(null)).toBe(DASH);
+  });
+});
+
+describe('capacityStatusLabel', () => {
+  it('translates known Copilot Credit capacity codes and falls back to unknown raw codes', async () => {
+    await loadCatalog('es');
+    const es = (key: Parameters<typeof translateStatic>[1], values?: Parameters<typeof translateStatic>[2]) =>
+      translateStatic('es', key, values);
+
+    expect(capacityStatusLabel('MonthToDate', es)).toBe('Mes hasta la fecha');
+    expect(capacityStatusLabel('WithinCapacity', es)).toBe('Dentro de la capacidad');
+    expect(capacityStatusLabel('Overage', es)).toBe('Exceso');
+    expect(capacityStatusLabel('NewStatus', es)).toBe('NewStatus');
   });
 });
 

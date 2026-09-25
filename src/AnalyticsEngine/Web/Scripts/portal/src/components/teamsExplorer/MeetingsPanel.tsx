@@ -24,7 +24,6 @@ import { useT, useTNode } from '../../i18n';
 import {
   SectionCard,
   WindowNote,
-  bucketsToCategories,
   formatCount,
   formatDecimal,
   formatHours,
@@ -32,6 +31,8 @@ import {
   queryFor,
   toCategories,
   translatedBucketsToCategories,
+  translatedCodeBucketsToCategories,
+  translatedCodeLabel,
   useTeamsStyles,
 } from './teamsShared';
 
@@ -285,7 +286,7 @@ export default function MeetingsPanel({
           }
         >
           <DonutChart
-            categories={bucketsToCategories(data.modalityMix)}
+            categories={translatedCodeBucketsToCategories(t, 'modality', data.modalityMix)}
             colours={data.modalityMix.map((_, i) => seriesColor(i))}
             centreValue={formatCount(data.modalityMix.reduce((sum, b) => sum + b.count, 0))}
             centreLabel={t('teamsExplorer.meetings.modalities.centreLabel')}
@@ -332,7 +333,7 @@ export default function MeetingsPanel({
                 })}
               </Text>
               <CategoryBarChart
-                categories={bucketsToCategories(quality.ratings)}
+                categories={translatedCodeBucketsToCategories(t, 'quality', quality.ratings)}
                 valueLabel={t('teamsExplorer.meetings.valueLabel.submissions')}
                 showShare
               />
@@ -357,7 +358,7 @@ export default function MeetingsPanel({
                 <TableBody>
                   {quality.failureReasons.map((row) => (
                     <TableRow key={row.key}>
-                      <TableCell>{serverPlaceholderText(t, row.label)}</TableCell>
+                      <TableCell>{serverPlaceholderText(t, translatedCodeLabel(t, 'quality', row.key))}</TableCell>
                       <TableCell className={styles.numeric}>{formatCount(row.count)}</TableCell>
                       <TableCell className={styles.numeric}>{formatPct(row.sharePct)}</TableCell>
                     </TableRow>
