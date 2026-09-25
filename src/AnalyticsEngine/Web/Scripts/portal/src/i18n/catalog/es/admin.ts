@@ -43,6 +43,7 @@ const admin: Record<keyof typeof en, string> = {
   'admin.teams.teamList.columnTeamName': 'Nombre del equipo',
   'admin.teams.teamList.saveSuccess':
     'Los Teams seleccionados se han habilitado correctamente para análisis detallados. Los metadatos adicionales pueden tardar varias horas en aparecer en los informes.',
+  'admin.teams.teamList.redisNotConfigured': 'No se pueden habilitar los análisis detallados de Teams porque Redis no está configurado en esta implementación. Añada una cadena de conexión de Redis para poder almacenar los tokens de autorización de Teams.',
   'admin.teams.teamList.unexpectedApiResponse':
     'Respuesta inesperada de la API. Compruebe el registro de JS para obtener más detalles.',
   'admin.teams.teamListItem.authorised': 'Autorizado',

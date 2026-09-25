@@ -1702,3 +1702,12 @@ describe('Service Configuration update-check errors', () => {
     expect(EN_CATALOG['admin.serviceConfiguration.updates.error.failed']).toContain('{error}');
   });
 });
+
+describe('Teams authorisation server errors', () => {
+  it('keeps the Redis prerequisite error aligned with the SPA catalog entry', () => {
+    const source = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'TeamsAuthAPIController.cs'), 'utf8');
+    const expected = EN_CATALOG['admin.teams.teamList.redisNotConfigured'];
+    expect(source).toContain(expected.slice(0, expected.indexOf(' Add a Redis')));
+    expect(source).toContain(expected.slice(expected.indexOf('Add a Redis')));
+  });
+});

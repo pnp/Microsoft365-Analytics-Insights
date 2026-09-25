@@ -41,6 +41,7 @@ export const admin = {
   'admin.teams.teamList.columnTeamName': 'Team Name',
   'admin.teams.teamList.saveSuccess':
     'Selected Teams enabled for deep analytics successfully. It may take several hours before the extra metadata appears in any reports.',
+  'admin.teams.teamList.redisNotConfigured': "Teams deep analytics can't be enabled because Redis is not configured for this deployment. Add a Redis connection string so Teams authorisation tokens can be stored.",
   'admin.teams.teamList.unexpectedApiResponse': 'Unexpected response from API. Check JS log for more details.',
   'admin.teams.teamListItem.authorised': 'Authorised',
   'admin.teams.teamListItem.notAuthorised': 'Not authorised',
