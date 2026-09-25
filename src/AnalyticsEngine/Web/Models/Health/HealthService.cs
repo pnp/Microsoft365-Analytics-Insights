@@ -803,10 +803,28 @@ namespace Web.AnalyticsWeb.Models.Health
             "| summarize Count = count() by type, problemId " +
             "| top 10 by Count desc";
 
+        /// <summary>
+        /// Capacity and read-only failures only, matched on the texts SQL Server and Azure SQL actually return:
+        /// 40544 "has reached its size quota", 1105 "Could not allocate space", 1101 "insufficient disk space",
+        /// 9002 "The transaction log for database ... is full", 3906 "the database is read-only". Both the outer
+        /// and innermost messages are searched because EF wraps the SqlException.
+        /// </summary>
+        /// <remarks>
+        /// It used to count every SqlException, so a login failure or a timeout told admins to check database
+        /// storage (#609). The error numbers themselves are deliberately not matched: SqlException.Message never
+        /// contains them, so a bare "1105" could only ever match some unrelated message.
+        /// </remarks>
         private const string QuerySqlCapacityExceptions =
             "exceptions " +
             "| where timestamp > ago(24h) " +
-            "| where (outerMessage has \"read-only\") or (outerMessage has \"database is full\") or (outerMessage has \"insufficient disk space\") or (type contains \"SqlException\") " +
+            "| where " +
+            "outerMessage has \"read-only\" or innermostMessage has \"read-only\" " +
+            "or outerMessage contains \"database is full\" or innermostMessage contains \"database is full\" " +
+            "or outerMessage contains \"insufficient disk space\" or innermostMessage contains \"insufficient disk space\" " +
+            "or outerMessage contains \"has reached its size quota\" or innermostMessage contains \"has reached its size quota\" " +
+            "or outerMessage contains \"Could not allocate space\" or innermostMessage contains \"Could not allocate space\" " +
+            "or (outerMessage has \"transaction\" and outerMessage has \"log\" and outerMessage has \"full\") " +
+            "or (innermostMessage has \"transaction\" and innermostMessage has \"log\" and innermostMessage has \"full\") " +
             "| summarize Count = count()";
 
         #endregion
