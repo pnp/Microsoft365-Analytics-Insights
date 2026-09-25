@@ -398,6 +398,7 @@ namespace App.ControlPanel.Engine
         protected BaseInstallProcessWithProxy(SolutionInstallConfig config, ILogger logger, InstallerProxyConfig proxyConfig) : base(config, logger)
         {
             _proxyConfig = proxyConfig;
+            InstallerNetworkProxy.ApplyProcessWide(proxyConfig, logger);
         }
         protected readonly InstallerProxyConfig _proxyConfig;
     }

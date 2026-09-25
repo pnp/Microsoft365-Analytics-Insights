@@ -65,6 +65,7 @@ namespace App.ControlPanel
             {
                 this.SavedPreferences.ProxyConfig = new InstallerProxyConfig();
             }
+            InstallerNetworkProxy.ApplyProcessWide(this.SavedPreferences.ProxyConfig, null);
             installSPOSitesControl.ProxyConfig = SavedPreferences.ProxyConfig;
 
             // Overwrite tests config if we're using default settings, or we don't have any saved for some reason
@@ -165,6 +166,7 @@ namespace App.ControlPanel
             {
                 installSPOSitesControl.ProxyConfig = f.ProxyConfig;
                 this.SavedPreferences.ProxyConfig = f.ProxyConfig;
+                InstallerNetworkProxy.ApplyProcessWide(this.SavedPreferences.ProxyConfig, null);
                 this.SavedPreferences.SaveToTempFile();
             }
         }

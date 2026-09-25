@@ -439,6 +439,7 @@ namespace App.ControlPanel.Frames
 
             var config = GetConfigFromGUI();
 
+            InstallerNetworkProxy.ApplyProcessWide(ProxyConfig, _logger);
 
             var softwareConfig = new SoftwareReleaseConfig();
 
