@@ -30,7 +30,7 @@ namespace Common.Entities.CopilotAdoption
             Link(CopilotAdoptionScoring.AdoptionActionCodes.Grow, "Copilot Success Kit", "https://aka.ms/Copilot/SuccessKit", "Copilot Success Kit – Microsoft Adoption", "departmentLead"),
             Link(CopilotAdoptionScoring.AdoptionActionCodes.Grow, "Microsoft Scenario Library", "https://aka.ms/ScenarioLibrary", "Microsoft Scenario Library – Microsoft Adoption", "departmentLead"),
 
-            Link(CopilotAdoptionScoring.AdoptionActionCodes.Advocate, "Microsoft 365 Copilot Adoption Playbook", "https://www.microsoft.com/en-us/microsoft-365-copilot/copilot-adoption-guide", "Microsoft 365 Copilot Adoption Playbook | Microsoft Copilot", "enablementOwner"),
+            Link(CopilotAdoptionScoring.AdoptionActionCodes.Advocate, "The essential guide to Microsoft 365 Copilot adoption", "https://adoption.microsoft.com/en-us/copilot/essential-guide/", "The essential guide to Microsoft 365 Copilot adoption – Microsoft Adoption", "enablementOwner"),
             Link(CopilotAdoptionScoring.AdoptionActionCodes.Advocate, "Creating an AI Council", "https://adoption.microsoft.com/en-us/copilot/ai-council/", "Creating an AI Council – Microsoft Adoption", "enablementOwner"),
 
             Link(CopilotAdoptionScoring.AdoptionActionCodes.Review, "License allocation guidance", "https://aka.ms/Copilot/LicenseAllocationGuide", "Microsoft 365 Copilot license allocation guidance for rapid value", "admin"),
