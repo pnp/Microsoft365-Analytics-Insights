@@ -9,6 +9,7 @@ using Common.Entities.Entities.Email;
 using Common.Entities.Entities.WebTraffic;
 using Common.Entities.Teams;
 using Microsoft.Extensions.Logging;
+using DataUtils.Sql;
 using System.Data.Common;
 using System.Data.Entity;
 using System.Linq;
@@ -42,19 +43,13 @@ namespace Common.Entities
         {
 
             this.Database.Log = (a) => System.Diagnostics.Debug.WriteLine(a);
-            if (autoUpdate)
-            {
-                // Set DB to automatically upgrade
-                Database.SetInitializer(new MigrateDatabaseToLatestVersion<AnalyticsEntitiesContext, Migrations.Configuration>(true));
-            }
-            else
-            {
-                Database.SetInitializer(new CreateDatabaseIfNotExists<AnalyticsEntitiesContext>());
-            }
+            SetRuntimeInitializer(autoUpdate);
 
 
-            // 10 min command timeout. Default is whatever provider is, but we're doing long operations so need more
-            ((System.Data.Entity.Infrastructure.IObjectContextAdapter)this).ObjectContext.CommandTimeout = 0;
+            // Infinite command timeout. Default is whatever provider is, but we're doing long operations so need more.
+            // Use Database.CommandTimeout rather than touching ObjectContext here: ObjectContext creation can trigger
+            // EF6's database initializer, which token-authenticated runtime contexts deliberately skip (issue #609).
+            this.Database.CommandTimeout = 0;
 
             if (isConnectionString)
             {
@@ -76,7 +71,14 @@ namespace Common.Entities
 
         public AnalyticsEntitiesContext(DbConnection sqlConn) : base(sqlConn, true)
         {
-            ((System.Data.Entity.Infrastructure.IObjectContextAdapter)this).ObjectContext.CommandTimeout = 0;
+            if (AzureSqlTokenAuth.NeedsAccessToken(sqlConn?.ConnectionString))
+            {
+                Database.SetInitializer(new TokenAuthenticatedSqlInitializer(
+                    new CreateDatabaseIfNotExists<AnalyticsEntitiesContext>(),
+                    sqlConn.ConnectionString));
+            }
+
+            this.Database.CommandTimeout = 0;
 
             // Keep SARGable comparisons on the save-path context too (this ctor is used by the importer's
             // CommitAll). See the note in the constructor above.
@@ -84,6 +86,46 @@ namespace Common.Entities
         }
 
         #endregion
+
+        /// <summary>
+        /// Registers the normal EF6 runtime initializer, but makes it a no-op for Entra-token Azure SQL.
+        /// Runtime App Service identities are contained database users and cannot log in to <c>master</c>;
+        /// EF6's existence/create path probes <c>master</c>, then can fall back to an un-tokenised open of
+        /// the real database and wrongly try to create it. The installer/DatabaseUpgrader owns database
+        /// creation and migrations, so token-authenticated runtime contexts must not run EF initialization
+        /// at all. See issue #609.
+        /// </summary>
+        private static void SetRuntimeInitializer(bool autoUpdate)
+        {
+            IDatabaseInitializer<AnalyticsEntitiesContext> inner = autoUpdate
+                ? (IDatabaseInitializer<AnalyticsEntitiesContext>)new MigrateDatabaseToLatestVersion<AnalyticsEntitiesContext, Migrations.Configuration>(true)
+                : new CreateDatabaseIfNotExists<AnalyticsEntitiesContext>();
+
+            Database.SetInitializer(new TokenAuthenticatedSqlInitializer(inner));
+        }
+
+        private sealed class TokenAuthenticatedSqlInitializer : IDatabaseInitializer<AnalyticsEntitiesContext>
+        {
+            private readonly IDatabaseInitializer<AnalyticsEntitiesContext> _inner;
+            private readonly string _connectionStringOverride;
+
+            public TokenAuthenticatedSqlInitializer(IDatabaseInitializer<AnalyticsEntitiesContext> inner, string connectionStringOverride = null)
+            {
+                _inner = inner;
+                _connectionStringOverride = connectionStringOverride;
+            }
+
+            public void InitializeDatabase(AnalyticsEntitiesContext context)
+            {
+                if (AzureSqlTokenAuth.NeedsAccessToken(_connectionStringOverride)
+                    || AzureSqlTokenAuth.NeedsAccessToken(context?.Database?.Connection?.ConnectionString))
+                {
+                    return;
+                }
+
+                _inner?.InitializeDatabase(context);
+            }
+        }
 
         /// <summary>
         /// Outputs the changes to be made & then calls SaveChangesAsync
