@@ -874,6 +874,16 @@ const COPILOT_ADOPTION_SERVICE_TEXT = join(
     'CopilotAdoptionService.cs',
   );
 const COPILOT_ADOPTION_CONTROLLER_TEXT = join(process.cwd(), '..', '..', 'Controllers', 'CopilotAdoptionAPIController.cs');
+const COPILOT_ADOPTION_OPTIONS_TEXT = join(
+    process.cwd(),
+    '..',
+    '..',
+    '..',
+    'Common',
+    'Entities',
+    'CopilotAdoption',
+    'CopilotAdoptionOptions.cs',
+  );
 
 function copilotAdoptionScoringSource(): string {
     return readFileSync(COPILOT_ADOPTION_SCORING_TEXT, 'utf8');
@@ -945,12 +955,16 @@ describe('Copilot Adoption server-authored text', () => {
     });
 
     it('translates every accountability dimension and empty bucket the service can send', () => {
+      // Read from the definitions, not from a list of the ones that exist today: a sixth dimension
+      // or empty bucket added to the C# must fail here until the SPA can translate it.
+      const optionsSource = readFileSync(COPILOT_ADOPTION_OPTIONS_TEXT, 'utf8');
+      const dimensionClass = optionsSource.match(/public static class CopilotAdoptionAccountabilityDimensions\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? '';
+      expect(dimensionClass, 'Could not find CopilotAdoptionAccountabilityDimensions').toBeTruthy();
+      const dimensions = sortedUnique([...dimensionClass.matchAll(/public const string \w+ = "([^"]+)";/g)].map((m) => m[1]));
       const service = copilotAdoptionServiceSource();
-      const dimensionConstants = [...service.matchAll(/CopilotAdoptionAccountabilityDimensions\.(Department|Country|Office|Company|DirectManager)/g)]
-        .map((m) => m[1])
-        .map((name) => name.slice(0, 1).toLowerCase() + name.slice(1));
-      const dimensions = sortedUnique(dimensionConstants);
-      const emptyKeys = sortedUnique([...service.matchAll(/"no(Manager|Department|Country|Office|Company)"/g)].map((m) => `no${m[1]}`));
+      const emptyKeys = sortedUnique([...service.matchAll(/"(no[A-Z]\w*)"/g)].map((m) => m[1]));
+      expect(dimensions.length, 'accountability dimension extraction matched nothing').toBeGreaterThanOrEqual(5);
+      expect(emptyKeys.length, 'empty-bucket key extraction matched nothing').toBeGreaterThanOrEqual(5);
 
       expect(Object.keys(ACCOUNTABILITY_DIMENSION_TEXT).sort()).toEqual(dimensions.sort());
       expect(Object.values(ACCOUNTABILITY_DIMENSION_TEXT).flatMap((entry) => [
