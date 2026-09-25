@@ -806,8 +806,10 @@ namespace Web.AnalyticsWeb.Models.Health
         /// <summary>
         /// Capacity and read-only failures only, matched on the texts SQL Server and Azure SQL actually return:
         /// 40544 "has reached its size quota", 1105 "Could not allocate space", 1101 "insufficient disk space",
-        /// 9002 "The transaction log for database ... is full", 3906 "the database is read-only". Both the outer
-        /// and innermost messages are searched because EF wraps the SqlException.
+        /// 9002 "The transaction log for database ... is full", 3906 "the database is read-only", plus the older
+        /// "database is full" wording. Both the outer and innermost messages are searched because EF wraps the
+        /// SqlException. The 9002 test is the three words "transaction", "log" and "full" in any order, because
+        /// the database name sits in the middle of that sentence.
         /// </summary>
         /// <remarks>
         /// It used to count every SqlException, so a login failure or a timeout told admins to check database

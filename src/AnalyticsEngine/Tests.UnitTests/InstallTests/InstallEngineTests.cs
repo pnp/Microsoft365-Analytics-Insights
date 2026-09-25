@@ -177,6 +177,8 @@ namespace Tests.UnitTests
         [DataRow("proxy.contoso.com", 70000, "port number", DisplayName = "Port out of range")]
         [DataRow("http://", 8080, "server name", DisplayName = "Scheme only")]
         [DataRow("", 8080, "server name", DisplayName = "Empty host")]
+        [DataRow("proxy.contoso.com;", 8080, "not a valid proxy server name", DisplayName = "Character a URI host cannot hold")]
+        [DataRow("[not-an-ipv6]", 8080, "not a valid proxy server name", DisplayName = "Malformed IPv6 literal")]
         public void DeploymentProxy_RejectsHostsItCannotUse(string host, int port, string expectedMessageFragment)
         {
             var config = new InstallerProxyConfig { UseProxy = true, IntegratedAuth = true, Host = host, Port = port };

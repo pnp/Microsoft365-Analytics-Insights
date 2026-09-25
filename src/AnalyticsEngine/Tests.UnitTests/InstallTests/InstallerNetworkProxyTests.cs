@@ -151,6 +151,8 @@ namespace Tests.UnitTests.InstallTests
         [DataTestMethod]
         [DataRow("proxy.contoso.com/proxy.pac", 8080, "without a path", DisplayName = "Path an older build accepted")]
         [DataRow("http://proxy.contoso.com:3128", 8080, "3128", DisplayName = "Host port contradicts the Port box")]
+        [DataRow("proxy.contoso.com;", 8080, "not a valid proxy server name", DisplayName = "Host that normalises but is not a URI host")]
+        [DataRow("[not-an-ipv6]", 8080, "not a valid proxy server name", DisplayName = "Malformed IPv6 literal")]
         public void TryApply_SavedPreferenceTheStricterValidationRefuses_LeavesTheProxyAloneAndSaysWhy(string host, int port, string expectedFragment)
         {
             var saved = new InstallerProxyConfig { UseProxy = true, IntegratedAuth = true, Host = host, Port = port };

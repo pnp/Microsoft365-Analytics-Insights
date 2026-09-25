@@ -73,9 +73,11 @@ namespace Common.Entities
         {
             if (AzureSqlTokenAuth.NeedsAccessToken(sqlConn?.ConnectionString))
             {
-                Database.SetInitializer(new TokenAuthenticatedSqlInitializer(
-                    new CreateDatabaseIfNotExists<AnalyticsEntitiesContext>(),
-                    sqlConn.ConnectionString));
+                // This constructor has no autoUpdate of its own, so a token-backed context must not inherit a
+                // create/migrate initializer some other context registered. Registered WITHOUT this connection's
+                // string: EF keeps one initializer per context TYPE for the whole process, so anything captured here
+                // would decide for every later context too. The wrapper classifies each context it initializes.
+                Database.SetInitializer(new TokenAuthenticatedSqlInitializer(new CreateDatabaseIfNotExists<AnalyticsEntitiesContext>()));
             }
 
             this.Database.CommandTimeout = 0;
@@ -105,7 +107,13 @@ namespace Common.Entities
         /// <c>--initdb</c> - applies migrations (<c>new AnalyticsEntitiesContext(cs, true, true)</c> then
         /// <c>Database.Initialize(true)</c>), and the installer's identity can reach <c>master</c>. Wrapping it
         /// as well made every Entra-only upgrade report "Database initialised successfully" having applied no
-        /// migration at all. The DEBUG-only parameterless constructor also takes this path, unchanged.
+        /// migration at all. In DEBUG builds the parameterless constructor passes <c>autoUpdate: true</c> and so
+        /// also takes this path, unchanged; in Release it passes <c>false</c> and gets the runtime check.
+        /// </para>
+        /// <para>
+        /// Initialization now happens at a context's first EF use, not at construction: the constructors set
+        /// <c>Database.CommandTimeout</c> rather than touching <c>ObjectContext</c>, which built the model and ran
+        /// the initializer immediately.
         /// </para>
         /// </remarks>
         private static void SetRuntimeInitializer(bool autoUpdate)
@@ -119,21 +127,26 @@ namespace Common.Entities
             Database.SetInitializer(new TokenAuthenticatedSqlInitializer(new CreateDatabaseIfNotExists<AnalyticsEntitiesContext>()));
         }
 
+        /// <summary>
+        /// Runs the wrapped initializer unless the context being initialized connects with an Entra access token.
+        /// </summary>
+        /// <remarks>
+        /// Decides from the context it is handed, never from state captured at registration: EF registers
+        /// initializers per context type, last writer wins, so a captured token connection string made every
+        /// later context in the process - SQL-authentication and LocalDB ones included - skip its initializer.
+        /// </remarks>
         private sealed class TokenAuthenticatedSqlInitializer : IDatabaseInitializer<AnalyticsEntitiesContext>
         {
             private readonly IDatabaseInitializer<AnalyticsEntitiesContext> _inner;
-            private readonly string _connectionStringOverride;
 
-            public TokenAuthenticatedSqlInitializer(IDatabaseInitializer<AnalyticsEntitiesContext> inner, string connectionStringOverride = null)
+            public TokenAuthenticatedSqlInitializer(IDatabaseInitializer<AnalyticsEntitiesContext> inner)
             {
                 _inner = inner;
-                _connectionStringOverride = connectionStringOverride;
             }
 
             public void InitializeDatabase(AnalyticsEntitiesContext context)
             {
-                if (AzureSqlTokenAuth.NeedsAccessToken(_connectionStringOverride)
-                    || AzureSqlTokenAuth.NeedsAccessToken(context?.Database?.Connection?.ConnectionString))
+                if (AzureSqlTokenAuth.NeedsAccessToken(context?.Database?.Connection?.ConnectionString))
                 {
                     return;
                 }
