@@ -87,11 +87,15 @@
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoOptions.cs" />
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoPopulation.cs" />
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoPortalReadiness.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoTables.cs" />
+    <!-- The three DemoTables parts are deliberately linked in the order Tests.FakeDataGen's own file
+         glob compiles them on Windows (alphabetical: DemoTables.cs LAST). The parts' static
+         initialisers run in compile order, and a hand-picked order here once hid a flush-order bug that
+         broke every demo with web activity; see the comment on DemoTables.All. -->
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoCollaborationTables.cs" />
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoCollaborationGenerator.cs" />
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoPowerPlatformTables.cs" />
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoPowerPlatformGenerator.cs" />
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoTables.cs" />
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoTimeline.cs" />
     <!-- Added by the stable build 1835 forward-port: SharePoint web activity demo data (#597).
          These sit outside this project directory, so the SDK glob cannot see them and they must be

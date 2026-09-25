@@ -435,6 +435,24 @@ namespace Tests.UnitTests
             Assert.IsFalse(all.Any(t => t.Name.StartsWith("teams_addons", StringComparison.Ordinal)), "Deprecated add-on installs are not synthetic successes.");
         }
 
+        /// <summary>
+        /// The flush order must not depend on the order DemoTables' partial files are compiled in. This
+        /// project links DemoTables.cs after the other two parts - the order Tests.FakeDataGen's own glob
+        /// compiles them on Windows - so the core tables register LAST, and only the block ordering puts
+        /// the parents back in front of their children.
+        /// </summary>
+        [TestMethod]
+        public void Tables_FlushInDeclaringFileOrderWhateverTheCompileOrder()
+        {
+            var all = DemoTables.All.ToList();
+            Assert.IsTrue(all.All(t => t.Block > 0), "Every table belongs to a declared block.");
+            CollectionAssert.AreEqual(all.OrderBy(t => t.Block).ToList(), all, "All is ordered by block.");
+            Assert.AreEqual(DemoTables.CoreBlock, DemoTables.Users.Block);
+            Assert.AreEqual(DemoTables.CoreBlock, DemoTables.Hits.Block);
+            Assert.AreEqual(DemoTables.CollaborationBlock, DemoTables.Clicks.Block);
+            Assert.AreEqual(DemoTables.PowerPlatformBlock, DemoTables.PowerApps.Block);
+        }
+
         [TestMethod]
         public void Collaboration_SinglePersonNeverCreatesAnUnknownCallAttendee()
         {

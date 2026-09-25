@@ -31,6 +31,9 @@ namespace Tests.FakeDataGen.Demo
         public string Name { get; }
         public bool SupplyIdentity { get; }
         public IReadOnlyList<DemoColumn> Columns { get; }
+
+        /// <summary>The DemoTables file that declared it, in dependency order; see <see cref="DemoTables.All"/>.</summary>
+        internal int Block { get; set; }
         private readonly int[] _textColumns;
         private readonly int[] _decimalColumns;
         public DemoTable(string name, bool identity, params DemoColumn[] columns)
@@ -73,10 +76,28 @@ namespace Tests.FakeDataGen.Demo
 
     internal static partial class DemoTables
     {
-        // Dependency order is also the SQL buffer-flush order.
+        // Dependency order is also the SQL buffer-flush order: a child table's rows must reach SQL after
+        // the parent rows their foreign keys point at.
+        //
+        // Declaration order is only dependency order WITHIN a file. DemoTables is split across three files
+        // (this one, DemoCollaborationTables.cs and DemoPowerPlatformTables.cs), and C# runs a partial
+        // class's static field initialisers part by part in compile order - which for this SDK-style
+        // project is whatever order the file glob returns: alphabetical on Windows, so the collaboration
+        // tables used to register before the hits they reference, and arbitrary on Linux. Every demo with
+        // web activity then failed on its first flush with "The INSERT statement conflicted with the
+        // FOREIGN KEY constraint FK_dbo.hits_clicked_elements_dbo.hits_hit_id", and only the test project,
+        // which links the files in a hand-picked order, never saw it. So each file opens with Block(n),
+        // and All orders by that block first: the cross-file order is stated, not inherited.
         private static List<DemoTable> _tables;
         private static List<DemoTable> Tables => _tables ?? (_tables = new List<DemoTable>());
-        public static IReadOnlyList<DemoTable> All => Tables;
+        // Deliberately no initialiser: it must read 0 until a file's Block(n) runs, whichever part runs first.
+        private static int _block;
+        internal const int CoreBlock = 1, CollaborationBlock = 2, PowerPlatformBlock = 3;
+
+        /// <summary>Every table, parents before children. A stable sort, so each file keeps its own order.</summary>
+        public static IReadOnlyList<DemoTable> All => Tables.OrderBy(t => t.Block).ToList();
+
+        private static int Block(int block) => _block = block;
         private static DemoColumn I(string name) => new DemoColumn(name, SqlDbType.Int);
         private static DemoColumn L(string name) => new DemoColumn(name, SqlDbType.BigInt);
         private static DemoColumn B(string name) => new DemoColumn(name, SqlDbType.Bit);
@@ -90,7 +111,9 @@ namespace Tests.FakeDataGen.Demo
         private static DemoColumn M(string name) => new DemoColumn(name, SqlDbType.Decimal, 0, 18, 6);
         private static DemoTable T(string name, bool identity, params DemoColumn[] columns)
         {
-            var table = new DemoTable(name, identity, columns);
+            if (_block == 0)
+                throw new InvalidOperationException("A DemoTables file must open with Block(n) before it declares a table: " + name);
+            var table = new DemoTable(name, identity, columns) { Block = _block };
             Tables.Add(table);
             return table;
         }
@@ -98,6 +121,7 @@ namespace Tests.FakeDataGen.Demo
         private static DemoTable Daily(string table, params DemoColumn[] columns) =>
             T(table, false, new[] { I("user_id"), D("date"), D("last_activity_date") }.Concat(columns).ToArray());
 
+        private static readonly int DeclaredCoreBlock = Block(CoreBlock);
         public static readonly DemoTable Departments = Named("user_departments");
         public static readonly DemoTable Jobs = Named("user_job_titles");
         public static readonly DemoTable Companies = Named("user_company_name");

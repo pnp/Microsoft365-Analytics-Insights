@@ -2,6 +2,9 @@ namespace Tests.FakeDataGen.Demo
 {
     internal static partial class DemoTables
     {
+        // Registers after the core tables whatever the compile order; see DemoTables.All.
+        private static readonly int DeclaredCollaborationBlock = Block(CollaborationBlock);
+
         // Mappings follow the production entities and their explicit migrations, not DbSet names.
         public static readonly DemoTable CallTypes = Named("call_types");
         public static readonly DemoTable CallModalities = Named("call_modalities");

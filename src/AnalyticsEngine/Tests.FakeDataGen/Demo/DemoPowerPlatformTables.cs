@@ -2,6 +2,9 @@ namespace Tests.FakeDataGen.Demo
 {
     internal static partial class DemoTables
     {
+        // Registers after the core and collaboration tables whatever the compile order; see DemoTables.All.
+        private static readonly int DeclaredPowerPlatformBlock = Block(PowerPlatformBlock);
+
         public static readonly DemoTable PowerEnvironments = T("power_app_environments", true,
             I("id"), N("environment_id", 200), N("name", 255));
         public static readonly DemoTable PowerClients = Named("power_platform_client_types");
