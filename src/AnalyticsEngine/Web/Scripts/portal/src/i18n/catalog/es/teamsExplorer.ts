@@ -234,7 +234,7 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.adoption.reachBy.description': 'Dónde ha llegado Teams y dónde no.',
   'teamsExplorer.adoption.reachBy.emptyNoGroups': 'No se pudo agrupar ningún usuario para este periodo.',
   'teamsExplorer.adoption.reachBy.emptyMetadataUnavailable': 'Los metadatos de usuario no se están importando, por lo que no hay nada por lo que agrupar. Active la importación de metadatos de usuario de Graph.',
-  'teamsExplorer.adoption.reachBy.metadataUnavailableNote': 'Los metadatos de usuario no se están importando, por lo que cada grupo mostrará "(not set)".',
+  'teamsExplorer.adoption.reachBy.metadataUnavailableNote': 'Los metadatos de usuario no se están importando, por lo que cada grupo mostrará "(sin establecer)".',
   'teamsExplorer.adoption.groupBy': 'Agrupar por',
   'teamsExplorer.adoption.groupByAria': 'Agrupar el desglose de adopción por',
   'teamsExplorer.adoption.valueLabel.reachPct': '% de alcance',

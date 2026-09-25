@@ -53,6 +53,7 @@ import {
   useRowExpansion,
 } from './adoptionShared';
 import { usePrintAllRows } from '../shared/printPreparation';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { formatCount, formatDate } from '../shared/KpiGrid';
 import { formatNumber, useT, useTNode, type TFunction, type TranslationKey } from '../../i18n';
 // Credits are fractional and a per-user total over a short window is routinely below 1.
@@ -682,7 +683,7 @@ export default function CoworkPanel({
               <tbody>
                 {summary.coworkByDepartment.map((row) => (
                   <tr key={row.segment}>
-                    <td className={table.td}>{row.segment}</td>
+                    <td className={table.td}>{serverPlaceholderText(t, row.segment)}</td>
                     <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.licensedUsers)}</td>
                     <td className={`${table.td} ${table.tdNumeric}`}>
                       {formatCount(row.primeCandidates)}

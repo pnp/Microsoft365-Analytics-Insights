@@ -1,6 +1,7 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { ReportMatrix } from '../../types/reports';
 import { useT } from '../../i18n';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { formatValue, formatCompact } from './chartCommon';
 
 type MatrixChartProps = {
@@ -147,8 +148,8 @@ export default function MatrixChart({ matrix, valueLabel }: MatrixChartProps) {
                 {rowLabel}
               </th>
               {columns.map((column) => (
-                <th key={column} className={styles.columnHead} scope="col" title={column}>
-                  {column}
+                <th key={column} className={styles.columnHead} scope="col" title={serverPlaceholderText(t, column)}>
+                  {serverPlaceholderText(t, column)}
                 </th>
               ))}
             </tr>
@@ -156,10 +157,11 @@ export default function MatrixChart({ matrix, valueLabel }: MatrixChartProps) {
           <tbody>
             {rows.map((row) => {
               const max = shadeByRow ? (rowMax.get(row) ?? 0) : gridMax;
+              const rowText = serverPlaceholderText(t, row);
               return (
                 <tr key={row}>
-                  <th className={styles.rowHead} scope="row" title={row}>
-                    {row}
+                  <th className={styles.rowHead} scope="row" title={rowText}>
+                    {rowText}
                   </th>
                   {columns.map((column) => {
                     const value = valueAt(row, column);
@@ -168,7 +170,7 @@ export default function MatrixChart({ matrix, valueLabel }: MatrixChartProps) {
                         key={column}
                         className={styles.cell}
                         style={{ backgroundColor: shade(value, max), color: textColour(value, max) }}
-                        title={t('charts.matrix.cellTitle', { row, column, value: formatValue(value), valueLabel })}
+                        title={t('charts.matrix.cellTitle', { row: rowText, column: serverPlaceholderText(t, column), value: formatValue(value), valueLabel })}
                       >
                         {value > 0 ? formatCompact(value) : ''}
                       </td>

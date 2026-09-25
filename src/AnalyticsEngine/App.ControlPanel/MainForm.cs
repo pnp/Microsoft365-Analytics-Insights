@@ -67,8 +67,11 @@ namespace App.ControlPanel
             }
             if (!InstallerNetworkProxy.TryApplyProcessWide(this.SavedPreferences.ProxyConfig, null, out var proxyError))
             {
+                // The Window menu is hidden until the admin chooses Install Solution (SetMenu), so say how to
+                // reach it: naming a menu that is not on screen sends them looking for something that isn't there.
                 MessageBox.Show($"The saved installer proxy settings can't be used: {proxyError}\r\n\r\n" +
-                    "The installer will use the system proxy until you correct them in Window > Proxy Configuration.",
+                    "The installer will use the system proxy until you correct them: choose Install Solution, " +
+                    "then Window > Proxy Configuration.",
                     "Proxy Configuration", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             installSPOSitesControl.ProxyConfig = SavedPreferences.ProxyConfig;

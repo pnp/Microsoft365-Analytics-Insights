@@ -58,6 +58,7 @@ import { ConcentrationBar, CombinedSegmentTable } from '../components/copilotAdo
 import InfoTip from '../components/shared/InfoTip';
 import PrintButton from '../components/shared/PrintButton';
 import { PRINT_ROW_LIMIT } from '../components/shared/printPreparation';
+import { serverPlaceholderText } from '../components/shared/serverPlaceholder';
 import DismissibleWarnings from '../components/shared/DismissibleWarnings';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
@@ -1032,7 +1033,7 @@ function ExecutiveDepartmentTable({ summary }: { summary: CopilotAdoptionSummary
       <tbody>
         {rows.map((row) => (
           <tr key={row.segment}>
-            <td className={styles.skuCell}>{row.segment}</td>
+            <td className={styles.skuCell}>{serverPlaceholderText(t, row.segment)}</td>
             <td className={styles.skuCell}>{formatPct(row.habitRatePct)}</td>
             <td className={styles.skuCell}>{formatCount(row.licensedUsers)}</td>
             <td className={styles.skuCell}>{formatCount(row.idleSeats)}</td>

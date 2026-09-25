@@ -1,11 +1,17 @@
 // @vitest-environment node
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { loadCatalog, translateStatic, type TFunction } from '..';
 import { EN_CATALOG } from '../catalog';
 import { COWORK_TIER_LABEL_KEYS, TENURE_BASIS_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
-import { BLOB_CHECKPOINT_REASON_KEYS } from '../../components/health/healthShared';
+import {
+  BLOB_CHECKPOINT_REASON_KEYS,
+  translateHealthComponentDetailText,
+  translateHealthReasonText,
+} from '../../components/health/healthShared';
+import { SERVER_PLACEHOLDER_KEYS, serverPlaceholderText } from '../../components/shared/serverPlaceholder';
 import { TEAMS_MEETING_BUCKET_LABEL_KEYS, TEAMS_SEGMENT_TEXT_KEYS } from '../../components/teamsExplorer/teamsShared';
 import { WEB_ACTIVITY_AVAILABILITY_REASON_KEYS } from '../../components/webActivity/AvailabilityBar';
 import { USER_DATA_WORKLOADS_BY_FLAG } from '../../components/userlookup/CategoryRow';
@@ -1206,6 +1212,289 @@ describe('Web Activity availability reasons', () => {
       'noSearches',
       'noClicks',
     ]);
+  });
+});
+
+/**
+ * Health's Overview and section roll-ups are sentences HealthRollup writes in C#, and the component
+ * details are sentences HealthService and the importer write. The API sends no key beside them, so
+ * the SPA translates by recognising the English - and a sentence it does not recognise reaches a
+ * Spanish reader in English with every other check green, because from the SPA's side there is no
+ * string and no missing key.
+ *
+ * So these tests rebuild each sentence from the C# itself, fill its placeholders with sample values
+ * and run it through the SPA's translator in Spanish. A new or reworded server sentence fails here
+ * rather than on a customer's Health page.
+ */
+const HEALTH_ROLLUP = join(process.cwd(), '..', '..', '..', 'Common', 'DataUtils', 'Health', 'HealthRollup.cs');
+const HEALTH_DATA_SECTION_RULES = join(process.cwd(), '..', '..', 'Models', 'Health', 'HealthDataSectionRules.cs');
+const HEALTH_BLOB_CHECKPOINT_FACTORY = join(process.cwd(), '..', '..', '..', 'WebJob.Office365ActivityImporter.Engine', 'ActivityAPI', 'BlobCheckpoint', 'ProcessedBlobStoreFactory.cs');
+
+/** `"..."`, `$"..."` or `"..." + x`: the shapes the Health C# builds its sentences from. */
+const CSHARP_SENTENCE = String.raw`(\$?)"((?:[^"\\]|\\.)*)"(\s*\+\s*[\w.]+)?`;
+
+interface CSharpSentence {
+  interpolated: boolean;
+  text: string;
+  concatenated: boolean;
+}
+
+function csharpSentences(source: string, around: (sentence: string) => string): CSharpSentence[] {
+  return [...source.matchAll(new RegExp(around(CSHARP_SENTENCE), 'g'))].map((m) => ({
+    interpolated: m[1] === '$',
+    text: m[2],
+    concatenated: !!m[3],
+  }));
+}
+
+/** The sentence the server would send, with each `{hole}` (and a trailing `+ x`) given a sample value. */
+function sampleOf(sentence: CSharpSentence, holeValue: (hole: string) => string = () => '7'): string {
+  const body = sentence.interpolated ? sentence.text.replace(/\{([^{}]+)\}/g, (_, hole: string) => holeValue(hole)) : sentence.text;
+  return sentence.concatenated ? `${body}sample server error` : body;
+}
+
+/** The sentence's own English, which must not survive translation into Spanish. */
+function englishOf(sentence: CSharpSentence): string[] {
+  const parts = sentence.interpolated ? sentence.text.split(/\{[^{}]+\}/) : [sentence.text];
+  return parts.map((part) => part.trim()).filter((part) => part.length >= 12);
+}
+
+function leaksEnglish(sentence: CSharpSentence, translated: string): boolean {
+  return englishOf(sentence).some((fragment) => translated.includes(fragment));
+}
+
+describe('Health sentences the SPA recognises', () => {
+  const es: TFunction = (key, values) => translateStatic('es', key, values);
+
+  beforeAll(async () => {
+    await loadCatalog('es');
+  });
+
+  function rollupSentences(): CSharpSentence[] {
+    return csharpSentences(
+      readFileSync(HEALTH_ROLLUP, 'utf8'),
+      (sentence) => String.raw`(?:Raise\(HealthStatus\.\w+,|reasons\.Add\()\s*${sentence}\s*\)`,
+    );
+  }
+
+  /** HealthRollup only raises the webhook reason for these states, so only they need recognising. */
+  function webhookStates(): string[] {
+    return sortedUnique([...readFileSync(HEALTH_ROLLUP, 'utf8').matchAll(/string\.Equals\(input\.WebhookState,\s*"(\w+)"/g)].map((m) => m[1]));
+  }
+
+  function sectionSentences(): CSharpSentence[] {
+    return [HEALTH_SERVICE, HEALTH_DATA_SECTION_RULES].flatMap((file) => {
+      const source = readFileSync(file, 'utf8');
+      return [
+        ...csharpSentences(source, (sentence) => String.raw`Reasons\s*=\s*new List<string>\s*\{\s*${sentence}\s*\}`),
+        ...csharpSentences(source, (sentence) => String.raw`RaiseAtLeastDegraded\(\s*section,\s*${sentence}\s*\)`),
+      ];
+    });
+  }
+
+  /** A C# method's body, found by its declaration. Adequate for HealthService, whose braces all balance. */
+  function csharpMethodBody(source: string, name: string): string {
+    const declaration = new RegExp(String.raw`\b(?:Task|void)\s+${name}\(`).exec(source);
+    expect(declaration, `Could not find the declaration of ${name}`).toBeTruthy();
+    const start = declaration?.index ?? 0;
+    const brace = source.indexOf('{', source.indexOf(')', start));
+    let depth = 0;
+    for (let i = brace; i < source.length; i++) {
+      if (source[i] === '{') depth++;
+      if (source[i] === '}') depth--;
+      if (depth === 0) return source.slice(brace + 1, i);
+    }
+    throw new Error(`Could not find the end of ${name}`);
+  }
+
+  const COMPONENT_CHECKS = ['LoadCredentialHealth', 'LoadServiceBusHealth'];
+
+  /** Every `Detail = ...` the runtime component checks give a row - string literals may hold `,` and `;`. */
+  function componentDetailSentences(): CSharpSentence[] {
+    const source = readFileSync(HEALTH_SERVICE, 'utf8');
+    const initialiser = /(?<![\w.])Detail\s*=\s*((?:\$?"(?:[^"\\]|\\.)*"|[^",;])+?),\s*\r?\n/g;
+    return COMPONENT_CHECKS
+      .map((name) => csharpMethodBody(source, name))
+      .flatMap((body) => [...body.matchAll(initialiser)].map((m) => m[1]))
+      .flatMap((expression) => csharpSentences(expression, (sentence) => sentence));
+  }
+
+  /** The hint LoadServiceBusHealth appends to a queue-depth failure that looks like a network block. */
+  function queueDepthNetworkHint(): string {
+    const body = csharpMethodBody(readFileSync(HEALTH_SERVICE, 'utf8'), 'LoadServiceBusHealth').replace(/"\s*\+\s*"/g, '');
+    return /detail \+= "((?:[^"\\]|\\.)*)";/.exec(body)?.[1] ?? '';
+  }
+
+  /** The importer's source with `"..." + "..."` joined back into single literals. */
+  function blobCheckpointSource(): string {
+    return readFileSync(HEALTH_BLOB_CHECKPOINT_FACTORY, 'utf8').replace(/"\s*\+\s*"/g, '');
+  }
+
+  function blobCheckpointFailures(): { reasonKey: string; message: string }[] {
+    return [...blobCheckpointSource().matchAll(/new\s+BlobCheckpointFailureClassification\(\s*"([^"]+)"[^"]*?\$?"((?:[^"\\]|\\.)*)"\s*\)/g)]
+      .map((m) => ({ reasonKey: m[1], message: m[2] }));
+  }
+
+  it('finds the C# that writes them', () => {
+    expect(rollupSentences().length).toBeGreaterThanOrEqual(11);
+    expect(webhookStates()).toEqual(['Error', 'Missing']);
+    expect(sectionSentences().length).toBeGreaterThanOrEqual(4);
+    expect(componentDetailSentences().length).toBeGreaterThanOrEqual(6);
+    expect(queueDepthNetworkHint()).toContain('network-level block');
+    expect(blobCheckpointFailures().map((f) => f.reasonKey).sort()).toEqual([
+      'blobCheckpoint.authenticationFailed',
+      'blobCheckpoint.keyAuthDisabled',
+      'blobCheckpoint.permissionMismatch',
+      'blobCheckpoint.storageFirewall',
+      'blobCheckpoint.storageRejected',
+      'blobCheckpoint.transport',
+    ]);
+  });
+
+  it('translates every roll-up and section reason into Spanish', () => {
+    const untranslated: string[] = [];
+    for (const sentence of [...rollupSentences(), ...sectionSentences()]) {
+      const states = sentence.text.includes('{input.WebhookState}') ? webhookStates() : ['-'];
+      for (const state of states) {
+        const sample = sampleOf(sentence, (hole) => {
+          if (hole === 'input.WebhookState') return state;
+          if (hole === 'c.Component') return 'BlobCheckpoint';
+          return '7';
+        });
+        const translated = translateHealthReasonText(sample, es);
+        if (leaksEnglish(sentence, translated)) untranslated.push(`${sample}  ->  ${translated}`);
+      }
+    }
+
+    expect(
+      untranslated,
+      'These Health reasons reach a Spanish reader in English. Add a health.reason.* entry whose English\n' +
+        'is the C# sentence, and recognise it in translateHealthReasonText:\n  ' +
+        untranslated.join('\n  '),
+    ).toEqual([]);
+  });
+
+  it('translates every component detail HealthService writes into Spanish', () => {
+    const hint: CSharpSentence = { interpolated: false, text: queueDepthNetworkHint(), concatenated: false };
+    const untranslated = componentDetailSentences()
+      .flatMap((sentence) => {
+        const sample = sampleOf(sentence);
+        const checks = [{ sentence, sample }];
+        // The failure detail also has a network-block variant: the same prefix with a hint appended.
+        if (sentence.concatenated && sentence.text.includes('queue depth')) checks.push({ sentence: hint, sample: `${sample}${hint.text}` });
+        return checks;
+      })
+      .map(({ sentence, sample }) => ({ sentence, sample, translated: translateHealthComponentDetailText(sample, es) }))
+      .filter(({ sentence, translated }) => leaksEnglish(sentence, translated))
+      .map(({ sample, translated }) => `${sample}  ->  ${translated}`);
+
+    expect(
+      untranslated,
+      'These component details reach a Spanish reader in English. Add a health.reason.* entry whose English\n' +
+        'is the C# sentence, and recognise it in translateHealthComponentDetailText:\n  ' +
+        untranslated.join('\n  '),
+    ).toEqual([]);
+  });
+
+  it('translates every blob checkpoint detail the importer writes, onto the key the Components table uses', () => {
+    const source = blobCheckpointSource();
+    const wrapper = /var healthDetail = \$"([^"]+)";/.exec(source)?.[1] ?? '';
+    expect(wrapper, 'Could not find TrackDegradedHealth\'s detail').toContain('{classification.OperatorMessage}');
+
+    const statusAndCode = 'HTTP 403 SampleErrorCode';
+    const failures = blobCheckpointFailures().map(({ reasonKey, message }) => ({
+      reasonKey,
+      detail: wrapper.replace('{classification.OperatorMessage}', message.replace('{statusAndCode}', statusAndCode)),
+    }));
+    const tracked = [...source.matchAll(/TrackHealthCheck\(\s*HealthComponent\.BlobCheckpoint,\s*HealthStatus\.\w+,\s*"((?:[^"\\]|\\.)*)",\s*reasonKey:\s*"([^"]+)"\s*\)/g)]
+      .map((m) => ({ reasonKey: m[2], detail: m[1] }));
+    expect(tracked.map((t) => t.reasonKey).sort()).toEqual(['blobCheckpoint.healthy', 'blobCheckpoint.notConfigured']);
+
+    for (const { reasonKey, detail } of [...failures, ...tracked]) {
+      const expected = es(BLOB_CHECKPOINT_REASON_KEYS[reasonKey], { status: '403', errorCode: 'SampleErrorCode' });
+      expect(translateHealthComponentDetailText(detail, es), reasonKey).toBe(expected);
+      expect(translateHealthReasonText(`BlobCheckpoint is degraded: ${detail}`, es), `${reasonKey} in a roll-up`)
+        .toBe(es('health.reason.componentDegraded', { component: 'BlobCheckpoint', detail: expected }));
+    }
+  });
+});
+
+/**
+ * Placeholder labels the server writes into DATA - the "(no department)" bucket, the "(other sites)"
+ * roll-up - arrive as the value itself, with no key beside them, so the SPA recognises them by their
+ * exact English (components/shared/serverPlaceholder.ts). This reads the C# and the SQL embedded in
+ * it for every parenthesised placeholder it can write, and requires the SPA's list to match it
+ * exactly: a new placeholder would otherwise show in English on every Spanish page it reaches.
+ */
+const SERVER_PLACEHOLDER_SOURCES = [
+  ['Common', 'Entities', 'CopilotAdoption', 'CopilotAdoptionService.cs'],
+  ['Common', 'Entities', 'CopilotAdoption', 'CopilotAdoptionEmailDomain.cs'],
+  ['Common', 'Entities', 'CopilotAdoption', 'CopilotAdoptionSql.cs'],
+  ['Common', 'Entities', 'Copilot', 'CopilotAccessedResourceTaxonomy.cs'],
+  ['Common', 'Entities', 'SpoWebActivity', 'WebActivitySql.cs'],
+  ['Common', 'Entities', 'TeamsExplorer', 'TeamsExplorerSql.cs'],
+  ['Web', 'Controllers', 'ReportsAPIController.cs'],
+  ['Web', 'Controllers', 'ReportsAPIController.OfficeApps.cs'],
+  ['Web', 'Models', 'SystemStatus.cs'],
+].map((parts) => join(process.cwd(), '..', '..', '..', ...parts));
+
+/** `"(no department)"`, `'(other sites)'`, `N'(untitled element)'` - C# and SQL string literals. */
+const SERVER_PLACEHOLDER_LITERAL = /(?:N?'|")(\((?:[Nn]o |[Uu]nknown|[Oo]ther|untitled|not |disabled|none)[^()'"]*\))(?:'|")/g;
+
+function serverPlaceholders(): string[] {
+  return sortedUnique(
+    SERVER_PLACEHOLDER_SOURCES.flatMap((file) => {
+      // Doc and line comments quote these labels too; only code can put one on a page.
+      const code = readFileSync(file, 'utf8').replace(/^\s*\/\/.*$/gm, '');
+      return [...code.matchAll(SERVER_PLACEHOLDER_LITERAL)].map((m) => m[1]);
+    }),
+  );
+}
+
+describe('Server placeholder labels', () => {
+  const es: TFunction = (key, values) => translateStatic('es', key, values);
+
+  beforeAll(async () => {
+    await loadCatalog('es');
+  });
+
+  it('finds the C# and SQL that write them', () => {
+    for (const file of SERVER_PLACEHOLDER_SOURCES) {
+      expect(() => readFileSync(file, 'utf8'), file).not.toThrow();
+    }
+    expect(serverPlaceholders()).toContain('(no department)');
+    expect(serverPlaceholders().length).toBeGreaterThanOrEqual(20);
+  });
+
+  it('recognises every placeholder the server writes, and none it no longer writes', () => {
+    const server = serverPlaceholders();
+    const spa = sortedUnique(SERVER_PLACEHOLDER_KEYS.map((key) => EN_CATALOG[key]));
+
+    expect(
+      { missing: server.filter((label) => !spa.includes(label)), orphaned: spa.filter((label) => !server.includes(label)) },
+      'The server placeholders and SERVER_PLACEHOLDER_KEYS must be an exact two-way match. Add a\n' +
+        'common.serverPlaceholder.* entry whose English is the server\'s exact text, and list it in\n' +
+        'components/shared/serverPlaceholder.ts.',
+    ).toEqual({ missing: [], orphaned: [] });
+  });
+
+  it('translates each one, and leaves every other value exactly as the server sent it', () => {
+    const untranslated = SERVER_PLACEHOLDER_KEYS.filter((key) => serverPlaceholderText(es, EN_CATALOG[key]) === EN_CATALOG[key]);
+    expect(untranslated).toEqual([]);
+
+    // Only a whole, exact value is a placeholder. A tenant's own names are never looked up.
+    expect(serverPlaceholderText(es, 'Finance')).toBe('Finance');
+    expect(serverPlaceholderText(es, 'Finance (no department)')).toBe('Finance (no department)');
+    expect(serverPlaceholderText(es, '(No Department)')).toBe('(No Department)');
+    expect(serverPlaceholderText(es, null)).toBeNull();
+  });
+
+  it('agrees with the accountability roll-up about the empty buckets they share', () => {
+    for (const [emptyKey, catalogKey] of Object.entries(ACCOUNTABILITY_EMPTY_SEGMENT_KEYS)) {
+      const placeholderKey = SERVER_PLACEHOLDER_KEYS.find((key) => EN_CATALOG[key] === EN_CATALOG[catalogKey]);
+      expect(placeholderKey, `${emptyKey} has no server placeholder with the same English`).toBeTruthy();
+      expect(es(placeholderKey!), emptyKey).toBe(es(catalogKey));
+    }
   });
 });
 

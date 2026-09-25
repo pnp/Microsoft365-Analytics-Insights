@@ -2,6 +2,7 @@ import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import { CopilotResourceTypeKind } from '../../types/copilotAdoption';
 import type { AdoptionResourceTypeRow } from '../../types/copilotAdoption';
 import { formatValue, seriesColor, seriesColorLight } from '../charts/chartCommon';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { useT, type TranslationKey } from '../../i18n';
 
 /**
@@ -148,18 +149,19 @@ export default function ResourceTypesPanel({ rows }: ResourceTypesPanelProps) {
             </div>
             {groupRows.map((r) => {
               const pct = Math.max(1, (r.value / max) * 100);
+              const label = serverPlaceholderText(t, r.label);
 
               return (
                 <div
                   className={styles.row}
                   key={r.label}
                   title={t('copilotAdoptionAgents.resourceTypes.referenceTitle', {
-                    label: r.label,
+                    label,
                     count: formatValue(r.value),
                   })}
                 >
                   <Text size={200} className={styles.label}>
-                    {r.label}
+                    {label}
                   </Text>
                   <div className={styles.track}>
                     <div
