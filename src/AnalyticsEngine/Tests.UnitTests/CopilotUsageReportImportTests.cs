@@ -638,6 +638,68 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task CoworkSqlPersistence_ARepeatedUserInOneReport_IsSavedOnceNotRejected()
+        {
+            // The MERGE's target has a UNIQUE index on (date, user_id, report_period_days), and MERGE rejects a
+            // source that repeats a key. User ids resolve case-insensitively, so two spellings of one UPN are the
+            // same user - which used to fail the whole statement, so not one Cowork row saved, every cycle.
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var upn = $"cowork.repeat.{Guid.NewGuid():N}@contoso.com";
+            var reportDate = new DateTime(2031, 4, 2);
+
+            int userId;
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var user = new User { UserPrincipalName = upn };
+                db.users.Add(user);
+                await db.SaveChangesAsync();
+                userId = user.ID;
+            }
+
+            try
+            {
+                CoworkUsageUserDetailRow Row(string reportedUpn, int totalTasks) => new CoworkUsageUserDetailRow
+                {
+                    ReportRefreshDate = reportDate,
+                    UserPrincipalName = reportedUpn,
+                    ReportPeriodDays = 28,
+                    TotalTasks = totalTasks,
+                    ActiveDays = 3,
+                };
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var persistence = new SqlCoworkUsagePersistenceManager(db, logger);
+
+                    var result = await persistence.UpsertUserDetailAsync(new[] { Row(upn, 3), Row(upn.ToUpperInvariant(), 7) });
+                    Assert.AreEqual(1, result.Written, "Two report rows for one user, date and period are one stored row.");
+
+                    // And again once the row exists, which is MERGE's other failure mode (error 8672, updating one
+                    // target row twice).
+                    result = await persistence.UpsertUserDetailAsync(new[] { Row(upn, 9), Row(upn.ToUpperInvariant(), 11) });
+                    Assert.AreEqual(1, result.Written);
+                }
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var stored = await db.Database.SqlQuery<int?>(
+                        "SELECT total_tasks FROM dbo.cowork_usage_user_activity_log WHERE user_id = @p0 AND [date] = @p1 AND report_period_days = 28",
+                        userId, reportDate).ToListAsync();
+                    CollectionAssert.AreEqual(new int?[] { 11 }, stored, "One row, carrying the last value the report gave for that user.");
+                }
+            }
+            finally
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    await db.Database.ExecuteSqlCommandAsync(
+                        "DELETE FROM dbo.cowork_usage_user_activity_log WHERE user_id = @p0; DELETE FROM dbo.users WHERE id = @p0;",
+                        userId);
+                }
+            }
+        }
+
+        [TestMethod]
         public async Task AggregateLoader_ReImportingTheSameWindowDoesNotDuplicateRows()
         {
             var logger = AnalyticsLogger.ConsoleOnlyTracer();

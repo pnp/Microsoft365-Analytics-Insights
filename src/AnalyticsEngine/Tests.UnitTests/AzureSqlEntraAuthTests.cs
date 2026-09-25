@@ -7,6 +7,7 @@ using DataUtils.Sql;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.Data.SqlClient;
 using System.Threading;
 
@@ -226,6 +227,180 @@ namespace Tests.UnitTests
                 batchSize: 10));
 
             Assert.AreEqual(1, credential.Requests, "The bulk insert must ask for a SQL access token before it connects.");
+        }
+
+        /// <summary>
+        /// Code that opens EF's own connection to run raw SQL (the sent-email persistence, the licence store and
+        /// the Cowork report) goes through <see cref="AzureSqlTokenAuth.OpenAsync"/>, which must ask for a token
+        /// before it connects to an Entra-only server. A bare <c>OpenAsync()</c> never does - EF's interceptor
+        /// only sees the opens EF makes - so it tried to log in with no credentials and failed.
+        /// </summary>
+        [TestMethod]
+        public async System.Threading.Tasks.Task OpenAsync_OnAnEntraOnlyServer_AcquiresAnAccessTokenBeforeConnecting()
+        {
+            var credential = new TokenRequestRecorder();
+            AzureSqlTokenAuth.SetCredential(credential);
+
+            using (var connection = new SqlConnection(EntraOnlyUnreachableServer))
+            {
+                await Assert.ThrowsExceptionAsync<TokenRequestedException>(() => AzureSqlTokenAuth.OpenAsync(connection));
+            }
+
+            Assert.AreEqual(1, credential.Requests, "Opening an Entra-only connection must ask for a SQL access token first.");
+        }
+
+        /// <summary>
+        /// EF attaches a token when it opens its connection, and the object keeps it after closing. A long-lived
+        /// importer context reopened later - the licence store reopens it after enumerating every SKU's holders
+        /// from Graph - must get a fresh token rather than reuse one that may have expired meanwhile.
+        /// </summary>
+        [TestMethod]
+        public async System.Threading.Tasks.Task OpenAsync_OnAConnectionStillCarryingAnOldToken_RequestsAFreshOne()
+        {
+            var credential = new TokenRequestRecorder();
+            AzureSqlTokenAuth.SetCredential(credential);
+
+            using (var connection = new SqlConnection(EntraOnlyUnreachableServer) { AccessToken = "token-left-by-an-earlier-open" })
+            {
+                await Assert.ThrowsExceptionAsync<TokenRequestedException>(() => AzureSqlTokenAuth.OpenAsync(connection));
+            }
+
+            Assert.AreEqual(1, credential.Requests, "A connection that already carries a token must still have it refreshed on reopen.");
+        }
+
+        /// <summary>
+        /// The other direction: the helper must stay out of the way of every connection that is not Entra-only.
+        /// Opens a real EF connection to the (integrated-security) test database with a credential that fails
+        /// any token request, so asking for one - or setting a token SqlClient would reject - fails the test.
+        /// </summary>
+        [TestMethod]
+        public async System.Threading.Tasks.Task OpenAsync_OnANonEntraConnection_OpensWithoutRequestingAToken()
+        {
+            using (var db = new Common.Entities.AnalyticsEntitiesContext())
+            {
+                var credential = new TokenRequestRecorder();
+                AzureSqlTokenAuth.SetCredential(credential);
+
+                var connection = db.Database.Connection;
+                if (connection.State == System.Data.ConnectionState.Open) connection.Close();
+
+                await AzureSqlTokenAuth.OpenAsync(connection);
+                try
+                {
+                    Assert.AreEqual(System.Data.ConnectionState.Open, connection.State);
+                    Assert.AreEqual(0, credential.Requests, "A connection with credentials of its own must never ask for an Entra token.");
+                    Assert.IsTrue(string.IsNullOrEmpty(((SqlConnection)connection).AccessToken));
+                }
+                finally
+                {
+                    connection.Close();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Guards the whole product against this class of bug, which has now shipped three times (#609): a
+        /// connection opened outside EF on an Entra-only server has no token. Fails, naming file and line, when
+        /// production code opens EF's <c>Database.Connection</c> itself without <see cref="AzureSqlTokenAuth.OpenAsync"/>,
+        /// builds a <c>SqlConnection</c> outside <see cref="AzureSqlTokenAuth.CreateConnection"/>, or hands
+        /// <c>SqlBulkCopy</c> a connection string (which opens a private connection no token path ever sees).
+        /// </summary>
+        [TestMethod]
+        public void EfConnectionsOpenedOutsideEf_GoThroughTheTokenHelper()
+        {
+            var root = ProductSourceRoot();
+            var excludedDirectories = new[] { "Tests.UnitTests", "Tests.FakeDataGen", "Benchmarks", "TestResults", "packages", "node_modules", "bin", "obj" };
+
+            // Files allowed to construct a SqlConnection directly: the helper itself, and the installer bootstrap
+            // that attaches the signed-in administrator's own token explicitly.
+            var mayConstructSqlConnection = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "AzureSqlTokenAuth.cs",
+                "SqlEntraAccessBootstrap.cs",
+            };
+
+            var efConnectionVariable = new System.Text.RegularExpressions.Regex(
+                @"\b(?:var|DbConnection|SqlConnection)\s+(\w+)\s*=\s*(?:\(\s*SqlConnection\s*\)\s*)?[\w\.]*\bDatabase\.Connection\s*;");
+            var violations = new List<string>();
+            var scannedFiles = 0;
+
+            foreach (var file in System.IO.Directory.EnumerateFiles(root, "*.cs", System.IO.SearchOption.AllDirectories))
+            {
+                var relative = file.Substring(root.Length).TrimStart(System.IO.Path.DirectorySeparatorChar);
+                var segments = relative.Split(System.IO.Path.DirectorySeparatorChar);
+                if (segments.Any(s => excludedDirectories.Contains(s, StringComparer.OrdinalIgnoreCase))) continue;
+
+                scannedFiles++;
+                var lines = System.IO.File.ReadAllLines(file).Select(StripLineComment).ToArray();
+                var code = string.Join("\n", lines);
+
+                var efConnectionNames = efConnectionVariable.Matches(code)
+                    .Cast<System.Text.RegularExpressions.Match>()
+                    .Select(m => m.Groups[1].Value)
+                    .Distinct()
+                    .ToList();
+
+                for (var i = 0; i < lines.Length; i++)
+                {
+                    var line = lines[i];
+                    var where = $"{relative}:{i + 1}: {line.Trim()}";
+
+                    if (System.Text.RegularExpressions.Regex.IsMatch(line, @"\bDatabase\.Connection\s*\.\s*Open(Async)?\s*\("))
+                    {
+                        violations.Add(where);
+                    }
+
+                    foreach (var name in efConnectionNames)
+                    {
+                        if (System.Text.RegularExpressions.Regex.IsMatch(line, $@"(?<![\w\.]){name}\s*\.\s*Open(Async)?\s*\("))
+                        {
+                            violations.Add(where);
+                        }
+                    }
+
+                    if (!mayConstructSqlConnection.Contains(System.IO.Path.GetFileName(file)) &&
+                        System.Text.RegularExpressions.Regex.IsMatch(line, @"\bnew\s+(Microsoft\.Data\.SqlClient\.|System\.Data\.SqlClient\.)?SqlConnection\s*\("))
+                    {
+                        violations.Add(where);
+                    }
+
+                    if (System.Text.RegularExpressions.Regex.IsMatch(line, @"\bnew\s+SqlBulkCopy\s*\(\s*([\w\.]*[Cc]onnection[Ss]tring\b|""|@"")"))
+                    {
+                        violations.Add(where);
+                    }
+                }
+            }
+
+            Assert.IsTrue(scannedFiles > 200, $"Expected to scan the product source, but found only {scannedFiles} file(s) under {root}.");
+            Assert.AreEqual(0, violations.Count,
+                "These open a SQL connection without the Entra token path, so they fail on an Entra-only Azure SQL server. " +
+                "Open EF's connection with AzureSqlTokenAuth.OpenAsync, build connections with AzureSqlTokenAuth.CreateConnection, " +
+                "and give SqlBulkCopy an open connection rather than a connection string:" + Environment.NewLine +
+                string.Join(Environment.NewLine, violations));
+        }
+
+        private static string StripLineComment(string line)
+        {
+            var comment = line.IndexOf("//", StringComparison.Ordinal);
+            return comment < 0 ? line : line.Substring(0, comment);
+        }
+
+        /// <summary>The src\AnalyticsEngine folder, found by walking up from the test assembly.</summary>
+        private static string ProductSourceRoot()
+        {
+            var dir = new System.IO.DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
+            while (dir != null)
+            {
+                if (System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, "Common", "DataUtils")) &&
+                    System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, "WebJob.Office365ActivityImporter.Engine")))
+                {
+                    return dir.FullName;
+                }
+                dir = dir.Parent;
+            }
+
+            Assert.Fail("Could not locate src\\AnalyticsEngine above the test assembly.");
+            return null;
         }
 
         #endregion
