@@ -144,6 +144,12 @@ const useStyles = makeStyles({
 });
 
 
+export function importFailureWarning(t: TFunction, kind: 'copilotStudio' | 'azure'): string {
+  return t(kind === 'copilotStudio'
+    ? 'agentCosts.warning.copilotStudioImportFailing'
+    : 'agentCosts.warning.azureCostImportFailing');
+}
+
 function availabilityMessages(availability: AgentCostAvailability, t: TFunction): string[] {
   const messages: string[] = [];
   if (!availability.copilotStudioCreditsEnabled && !availability.azureCostsEnabled) {
@@ -538,14 +544,14 @@ export default function AgentCostsPage() {
           {availability.copilotStudioCreditsEnabled && availability.copilotStudioCreditsLastError && (
             <MessageBar intent="warning">
               <MessageBarBody>
-                <strong>{t('agentCosts.warning.copilotStudioImportFailing')}</strong> {availability.copilotStudioCreditsLastError}
+                <strong>{importFailureWarning(t, 'copilotStudio')}</strong>
               </MessageBarBody>
             </MessageBar>
           )}
           {availability.azureCostsEnabled && availability.azureCostsLastError && (
             <MessageBar intent="warning">
               <MessageBarBody>
-                <strong>{t('agentCosts.warning.azureCostImportFailing')}</strong> {availability.azureCostsLastError}
+                <strong>{importFailureWarning(t, 'azure')}</strong>
               </MessageBarBody>
             </MessageBar>
           )}

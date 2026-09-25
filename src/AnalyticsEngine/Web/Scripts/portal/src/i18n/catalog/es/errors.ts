@@ -21,6 +21,7 @@ const errors: Record<keyof typeof en, string> = {
   'errors.agentCosts.azureBreakdownFailed': 'No se ha podido cargar el desglose de costes de Azure ({status}).',
   'errors.agentCosts.topUsersFailed': 'No se ha podido cargar el consumo de créditos por usuario ({status}).',
   'errors.agentCosts.filtersFailed': 'No se han podido cargar los filtros disponibles ({status}).',
+  'errors.agentCosts.serverFailed': 'No se han podido cargar las cifras de costes de agentes. Compruebe las importaciones de Costes de agentes e inténtelo de nuevo.',
 
   // Copilot adoption API
   'errors.copilotAdoption.analysisStillRunning': 'El análisis de adopción de Copilot está tardando más de lo esperado y aún no ha finalizado. Sigue ejecutándose en el servidor; vuelva a cargar la página dentro de unos minutos.',

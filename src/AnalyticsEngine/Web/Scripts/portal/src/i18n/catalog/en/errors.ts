@@ -27,6 +27,7 @@ export const errors = {
   'errors.agentCosts.azureBreakdownFailed': "Couldn't load the Azure cost breakdown ({status}).",
   'errors.agentCosts.topUsersFailed': "Couldn't load the per-user credit consumption ({status}).",
   'errors.agentCosts.filtersFailed': "Couldn't load the available filters ({status}).",
+  'errors.agentCosts.serverFailed': 'The agent cost figures could not be loaded. Check the Agent Costs imports and try again.',
 
   // Copilot adoption API
   'errors.copilotAdoption.analysisStillRunning': "The Copilot adoption analysis is taking longer than expected and hasn't finished yet. It is still running on the server - reload the page in a few minutes.",

@@ -1,5 +1,5 @@
 import { translateActive } from '../i18n/runtime';
-import type { TranslationKey } from '../i18n/catalog';
+import { EN_CATALOG, type TranslationKey } from '../i18n/catalog';
 import { apiFetch } from './http';
 import type {
   AgentCostAvailability,
@@ -48,7 +48,11 @@ async function getJson<T>(path: string, failureKey: TranslationKey, signal?: Abo
   });
 
   if (!response.ok) {
-    const message = (await readServerMessage(response)) ?? translateActive(failureKey, { status: response.status });
+    const serverMessage = await readServerMessage(response);
+    const knownServerFailurePrefix = EN_CATALOG['errors.agentCosts.serverFailed'].split(' Check ')[0];
+    const message = response.status === 500 && serverMessage?.startsWith(knownServerFailurePrefix)
+      ? translateActive('errors.agentCosts.serverFailed')
+      : serverMessage ?? translateActive(failureKey, { status: response.status });
     throw new AgentCostsApiError(response.status, message);
   }
 
