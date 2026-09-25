@@ -18,6 +18,8 @@ namespace App.ControlPanel
         [STAThread]
         static void Main(string[] args)
         {
+            ApplySavedProxyPreferences();
+
             // Are we running a special operation instead of just opening the UI? 
             // We can init the SQL database with EF (upgrade the schema), or register an install state in the local DB.
             // This happens as part of the install process, where the downloaded installer app is launched with special args.
@@ -111,6 +113,19 @@ namespace App.ControlPanel
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainForm());
+        }
+
+        private static void ApplySavedProxyPreferences()
+        {
+            try
+            {
+                var preferences = SecureLocalPreferences.Load<InstallerPreferences>();
+                InstallerNetworkProxy.ApplyProcessWide(preferences?.ProxyConfig, null);
+            }
+            catch (Exception ex)
+            {
+                InstallerLogs.AddToWindowsEventLog($"Could not apply the saved installer proxy preferences: {ex.Message}", true);
+            }
         }
 
         /// <summary>
