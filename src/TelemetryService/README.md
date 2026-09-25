@@ -454,6 +454,16 @@ Importers treat a failed upload as non-fatal and do not record it, so their
 next cycle sends again. The old site's deployment history and logs do not
 survive the replacement.
 
+If App Service has not enabled the subscription for first-party
+authentication, step 1 stops the script with nothing changed. The Azure CLI
+reports this only as `Operation returned an invalid status 'Bad Request'`. The
+underlying App Service message, shown by `az webapp config appsettings set
+… --debug` or in the ARM deployment error, is:
+
+```text
+AppSetting with name 'WEBSITE_LOAD_FIRST_PARTY_AUTH' is not allowed for subscription '<subscription-id>' because subscription is not marked as first party.
+```
+
 ### MISE compliance — current status
 
 The public repository intentionally keeps `Microsoft.Identity.Web` for its
