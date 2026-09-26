@@ -43,9 +43,10 @@ namespace Tests.UnitTests.InstallTests
         /// A SqlException has no public constructor. The grant reads only its message, which an uninitialized
         /// instance still supplies.
         /// </summary>
+        /// <remarks>net10: <c>RuntimeHelpers</c>, as the rest of this branch does; <c>FormatterServices</c> is obsolete on .NET 10 (SYSLIB0050).</remarks>
         static SqlException NewSqlException()
         {
-            return (SqlException)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(SqlException));
+            return (SqlException)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(SqlException));
         }
 
         #region Where the application ID comes from
