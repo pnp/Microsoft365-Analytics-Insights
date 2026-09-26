@@ -495,6 +495,7 @@ namespace Web.AnalyticsWeb.Controllers
                 Take = Math.Min(Math.Max(1, take), MaxTake),
                 Rows = CopilotAdoptionExports.Page(matched, skip, take, MaxTake),
                 Warnings = analysis.Summary.Warnings,
+                WarningDetails = analysis.Summary.WarningDetails,
             });
         }
 
@@ -609,6 +610,7 @@ namespace Web.AnalyticsWeb.Controllers
                 Take = Math.Min(Math.Max(1, take), MaxTake),
                 Rows = CopilotAdoptionExports.Page(matched, skip, take, MaxTake),
                 Warnings = analysis.Summary.Warnings,
+                WarningDetails = analysis.Summary.WarningDetails,
             });
         }
 
@@ -697,6 +699,7 @@ namespace Web.AnalyticsWeb.Controllers
                 Take = Math.Min(Math.Max(1, take), MaxTake),
                 Rows = CopilotAdoptionExports.Page(matched, skip, take, MaxTake),
                 Warnings = analysis.Summary.Warnings,
+                WarningDetails = analysis.Summary.WarningDetails,
             });
         }
 

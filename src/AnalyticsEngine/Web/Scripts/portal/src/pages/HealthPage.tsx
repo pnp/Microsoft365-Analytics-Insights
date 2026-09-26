@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Badge, Tab, TabList, Text, Title3, makeStyles, tokens, type SelectTabEventHandler } from '@fluentui/react-components';
 import { fetchHealthSummary } from '../api/healthApi';
 import { formatNumber, useT, type TranslationKey } from '../i18n';
+import { buildLabelText } from '../product';
 import { AUTO_REFRESH_MS, formatUtc, healthStatusText, overallColor, useHealthSection } from '../components/health/healthShared';
 import OverviewPanel from '../components/health/OverviewPanel';
 import LivenessPanel from '../components/health/LivenessPanel';
@@ -103,7 +104,7 @@ export default function HealthPage() {
   return (
     <div>
       <div className={styles.headerRow}>
-        <Title3>{t('health.page.title', { buildLabel: buildLabel ? ` - ${buildLabel}` : '' })}</Title3>
+        <Title3>{t('health.page.title', { buildLabel: buildLabel ? ` - ${buildLabelText(t, buildLabel)}` : '' })}</Title3>
         <Badge appearance="filled" size="large" color={overallColor(overallStatus)}>
           {overallStatus ? healthStatusText(overallStatus, t) : t('health.status.checking')}
         </Badge>

@@ -4,7 +4,7 @@
  * Every key here must have a Spanish counterpart in `../es/licenceActivity.ts`; the type of that module
  * makes a missing one a build failure.
  */
-export const licenceActivity = {
+export const licenceActivity = {
   'licenceActivity.users.workloadActivity': '{workload} activity',
   'licenceActivity.licenceFallbackName': 'Licence {id}',
   // Shared vocabulary
@@ -30,6 +30,21 @@ export const licenceActivity = {
   'licenceActivity.common.search': 'Search',
   'licenceActivity.common.previous': 'Previous',
   'licenceActivity.common.next': 'Next',
+  'licenceActivity.note.userMetadataRequired': 'This report needs the user details import turned on, so that licences can be matched to the people who hold them. Ask whoever installed the product to tick "User Entra ID extended metadata" in the installer. The tab stays visible in the meantime.',
+  'licenceActivity.note.privacy': 'People are identified by their sign-in address. Staff names are not collected, so search and the user lists show the sign-in address instead. Department and country come from your directory.',
+  'licenceActivity.note.assignmentCaveat': 'Past activity is shown against who holds each licence today, not who held it at the time. One person can hold several licences, so adding the assignment figures together will count some people twice. Assigned licences are not the same as the number of licences you have bought.',
+  'licenceActivity.note.interpretationCaveat': "Activity by someone who holds a licence does not prove that this licence is what enabled it. These figures do not measure productivity, return on investment or compliance, and are not enough on their own to justify removing anyone's licence.",
+  'licenceActivity.note.activityMethod': "Activity levels describe how many of the period's weeks someone was active in: No activity = none, Low = under a quarter, Moderate = a quarter to under three quarters, High = three quarters or more. A week is only counted when every one of its days was imported; where a week could not be measured in full the level is Unknown, not zero.",
+  // LicenceActivityRules.Notes (C#): the overview and users drill-down notes, verbatim. serverNotes.ts
+  // recognises each by exact match, so these must stay identical to the server's sentences.
+  'licenceActivity.note.noLicences': 'No licences have been imported yet.',
+  'licenceActivity.note.nobodyHoldsALicence': 'Licences have been imported, but nobody in this selection currently holds one.',
+  'licenceActivity.note.noDisplayNames': "Staff names aren't collected by this product, so people are listed by their sign-in address. Search also checks their stored email address.",
+  'licenceActivity.note.demographicsCapped': 'The department and country breakdowns show only the 50 largest of each.',
+  'licenceActivity.note.usageReportsGroupFiltered': 'This deployment only collects Microsoft 365 usage for people in particular Entra groups, but it lists everyone who holds a licence. Anyone outside those groups is shown as Unknown rather than as doing nothing, because they were never measured.',
+  'licenceActivity.note.rankingMethod': 'The most and least active lists rank people by how often they were active in the chosen service, then by their average activity, then by when they were last active. In the most active list, people with recorded activity across a fully measured period come first, then people with recorded activity whose period was only partly measured, then people measured across the whole period as doing nothing at all. Anyone whose activity could not be measured is left out of the least active list rather than being assumed inactive.',
+  'licenceActivity.note.nobodyRankable': 'Nobody could be ranked for this service and date range: there is no recorded activity, and no complete measurement proving there was none.',
+  'licenceActivity.note.forService': '{service}: {message}',
 
   // Activity bands and coverage statuses
   'licenceActivity.band.high': 'High',
@@ -74,6 +89,36 @@ export const licenceActivity = {
   'licenceActivity.granularity.weeklySampleOfRolling7DayReport': 'one 7-day report read per week',
   'licenceActivity.granularity.eventPositiveOnly': 'recorded activity only',
   'licenceActivity.granularity.unknown': 'not applicable',
+  'licenceActivity.measure.m365.teams': 'Teams messages and meetings counted by Microsoft, averaged across the readings',
+  'licenceActivity.measure.m365.outlook': 'emails sent and read counted by Microsoft, averaged across the readings',
+  'licenceActivity.measure.m365.files': 'files viewed or edited counted by Microsoft, averaged across the readings',
+  'licenceActivity.measure.m365.published': 'counts published by Microsoft',
+  'licenceActivity.measure.copilot.microsoftReportPrompts': 'Copilot prompts counted by Microsoft, averaged across the readings',
+  'licenceActivity.measure.copilot.singleRollingReport': 'Copilot prompts and days used, from one rolling report',
+  'licenceActivity.measure.copilot.recordedActivity': 'recorded Copilot activity only',
+  'licenceActivity.measure.copilot.auditActiveWeeks': 'Copilot use counted per active week',
+  'licenceActivity.measure.copilot.interactionActiveWeeks': 'Copilot activity counted per active week',
+  'licenceActivity.coverageMessage.m365.disabled': 'The Microsoft 365 usage-report import is switched off, so nothing can be measured for this service. That is not the same as nobody using it.',
+  'licenceActivity.coverageMessage.m365.available': "Every day of every week in the period was imported from Microsoft's published reports. Someone counts as active in a week if Microsoft recorded activity for them in that week. Because those reports list only the people who were active, a fully measured week with nothing recorded for someone means they did nothing - not that they could not be measured. The published counts are averaged across the weeks, never added up and never presented as a daily total.",
+  'licenceActivity.coverageMessage.m365.partial': "At least one week in the period is missing a day of Microsoft's reports. Those weeks cannot prove either activity or inactivity, so activity levels stay Unknown and nobody is listed as least active for this service.",
+  'licenceActivity.coverageMessage.m365.notImported': 'Collection is switched on for this service, but no report has arrived yet.',
+  'licenceActivity.coverageMessage.m365.missingCoverage': 'No week in the dates you selected was imported in full.',
+  'licenceActivity.coverageMessage.copilotReport.available': "Microsoft's most recent 7-day Copilot report was read once per week; where those reports overlap the counts are averaged, never added up. People Microsoft did not list, and older reports that predate the current counters, stay Unknown. Microsoft only reports on people who hold a Copilot licence.",
+  'licenceActivity.coverageMessage.copilotReport.partial': 'At least one week in the period has no Copilot reading on its end date. Earlier readings are still shown as evidence, but activity levels stay Unknown and nobody is listed as least active for Copilot.',
+  'licenceActivity.coverageMessage.copilotReport.singleWindowAvailable': "The dates you selected match one of Microsoft's rolling Copilot reports exactly. People Microsoft did not list, and reports that do not record days used, stay Unknown. Microsoft only reports on people who hold a Copilot licence.",
+  'licenceActivity.coverageMessage.copilotReport.singleWindowLonger': 'Microsoft only published a longer rolling report inside the dates you selected. It is shown here with the dates it really covers, but activity levels stay Unknown for your custom range.',
+  'licenceActivity.coverageMessage.copilotReport.unmatchableIdentity': "Microsoft's Copilot usage report hid every person's identity, so its activity cannot be tied back to the people holding the licence. To fix this, turn off 'Display concealed user, group and site names in all reports' in the Microsoft 365 admin centre (Settings > Org settings > Reports).",
+  'licenceActivity.coverageMessage.copilotReport.notImported': "Microsoft's per-person Copilot usage report has never been collected on this deployment.",
+  'licenceActivity.coverageMessage.copilotReport.failed': "The last attempt to collect Microsoft's per-person Copilot usage report failed, so Copilot activity is unknown rather than zero.",
+  'licenceActivity.coverageMessage.copilotReport.missingCoverage': "None of Microsoft's Copilot usage reports fits entirely inside the dates you selected.",
+  'licenceActivity.coverageMessage.copilotAudit.unmatchableIdentity': "Microsoft's Copilot report hid every person's identity, so Copilot audit records are used instead. They prove who DID use Copilot, but cannot prove that anybody else did not.",
+  'licenceActivity.coverageMessage.copilotAudit.partial': 'Copilot audit records prove who DID use Copilot, but nothing confirms that every Copilot event was captured, so anyone absent stays Unknown rather than inactive.',
+  'licenceActivity.coverageMessage.copilotAudit.missingCoverage': 'Copilot audit records exist, but none fall inside the dates you selected. That is not the same as nobody using Copilot.',
+  'licenceActivity.coverageMessage.copilotInteractions.unmatchableIdentity': "Microsoft's Copilot report hid every person's identity, so Copilot chat history is used instead. It proves who DID use Copilot, but cannot prove that anybody else did not.",
+  'licenceActivity.coverageMessage.copilotInteractions.partial': 'Copilot chat history proves who DID use Copilot, but nothing confirms the history is complete for everybody, so anyone absent stays Unknown rather than inactive.',
+  'licenceActivity.coverageMessage.copilotInteractions.missingCoverage': 'Copilot chat history exists, but none of it falls inside the dates you selected. That is not the same as nobody using Copilot.',
+  'licenceActivity.coverageMessage.copilot.notImported': 'Collection is switched on for Copilot, but no Copilot activity has arrived for these dates yet.',
+  'licenceActivity.coverageMessage.copilot.disabled': 'Copilot collection is switched off on this deployment, so nothing can be measured. That is not the same as nobody using Copilot.',
 
   // ActivityCoverageHelp
   'licenceActivity.activityCoverage.summary':
@@ -140,6 +185,7 @@ export const licenceActivity = {
     'People with any imported licence, not necessarily a licence for every service, by {segment}, largest first.',
   'licenceActivity.demographics.capped':
     'Showing only the {count} largest by number of people assigned \u2014 this is not the full list.',
+  'licenceActivity.demographics.unknownBucket': 'Unknown',
 
   // Workload distributions
   'licenceActivity.distribution.activeOfMeasured': '{active} of {measured} active ({rate})',

@@ -61,3 +61,23 @@ export function printedBuildText(t: TFunction = translateActive): string {
   const withoutPrefix = label.replace(/^build\b\s*/i, '').trim();
   return withoutPrefix ? t('app.print.buildLabel', { build: withoutPrefix }) : t('app.print.developmentBuild');
 }
+
+/**
+ * A build label for the screen, in the portal language.
+ *
+ * The pipeline stamps "Build 1836" (`BuildLabel` in ci.yml) and titles stable GitHub releases
+ * "Stable build 1835"; both reached the Spanish Health, Overview and Service configuration pages in
+ * English, beside a printed footer that already said "compilación". Those two shapes are re-worded
+ * around their number. Anything else - an unstamped build, a release titled some other way - is shown
+ * exactly as it arrived, because guessing at a label is worse than printing it.
+ */
+export function buildLabelText(t: TFunction, label: string): string;
+export function buildLabelText(t: TFunction, label: string | null | undefined): string | null | undefined;
+export function buildLabelText(t: TFunction, label: string | null | undefined): string | null | undefined {
+  if (!label) return label;
+  const stable = /^stable build\s+(\S+)$/i.exec(label.trim());
+  if (stable) return t('app.stableBuildLabel', { build: stable[1] });
+  const build = /^build\s+(\S+)$/i.exec(label.trim());
+  if (build) return t('app.buildLabel', { build: build[1] });
+  return label;
+}

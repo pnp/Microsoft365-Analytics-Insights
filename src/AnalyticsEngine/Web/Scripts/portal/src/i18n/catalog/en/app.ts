@@ -21,6 +21,9 @@ export const app = {
   'app.language.current': 'Language: {language}',
   'app.print.buildLabel': 'build {build}',
   'app.print.developmentBuild': 'development build',
+  // The pipeline's own label shapes, re-worded around the number on screen (see product.ts).
+  'app.buildLabel': 'Build {build}',
+  'app.stableBuildLabel': 'Stable build {build}',
 
   'app.area.insights': 'Insights',
   'app.area.admin': 'Administration',

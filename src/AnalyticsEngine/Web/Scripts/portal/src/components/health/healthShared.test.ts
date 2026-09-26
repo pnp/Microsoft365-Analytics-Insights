@@ -1,7 +1,92 @@
 import { describe, expect, it } from 'vitest';
 
-import { BLOB_CHECKPOINT_REASON_KEYS, translateHealthComponentDetail, translateHealthComponentDetailText } from './healthShared';
-import { loadCatalog, translateActive, translateStatic } from '../../i18n';
+import {
+  BLOB_CHECKPOINT_REASON_KEYS,
+  formatHealthDuration,
+  translateHealthComponentDetail,
+  translateHealthComponentDetailText,
+  translateHealthComponentName,
+  translateHealthReasonText,
+} from './healthShared';
+import { loadCatalog, setActiveLanguage, translateActive, translateStatic } from '../../i18n';
+
+describe('translateHealthReasonText', () => {
+  const en = (key: Parameters<typeof translateActive>[0], values?: Parameters<typeof translateActive>[1]) => translateStatic('en', key, values);
+  const es = (key: Parameters<typeof translateActive>[0], values?: Parameters<typeof translateActive>[1]) => translateStatic('es', key, values);
+
+  const rollupReasons = [
+    'Database schema is behind this build (2 migration(s) pending) - run the upgrader.',
+    'No completed import cycle seen for Office365ActivityImporter.',
+    "Office365ActivityImporter hasn't completed a cycle in 50h (SLA 24h).",
+    'Office365ActivityImporter last completed a cycle 30h ago (SLA 24h).',
+    '3 SQL capacity / read-only exception(s) in the last 24h - check database storage.',
+    "Teams calls webhook subscription is 'Missing'.",
+    "Teams calls webhook subscription is 'Error'.",
+    "ServiceBus is degraded: Teams calls queue 'callrecords': 12 active, 3 dead-lettered.",
+  ];
+
+  it('renders the server\'s own sentence, unchanged, in English', () => {
+    for (const reason of rollupReasons) {
+      expect(translateHealthReasonText(reason, en)).toBe(reason);
+    }
+  });
+
+  it('translates the roll-up sentences into Spanish, keeping the job name and the figures', async () => {
+    await loadCatalog('es');
+
+    expect(translateHealthReasonText(rollupReasons[0], es)).toBe(
+      'El esquema de la base de datos va por detrás de esta compilación (2 migración(es) pendiente(s)): ejecute el actualizador.',
+    );
+    expect(translateHealthReasonText(rollupReasons[2], es)).toBe('Office365ActivityImporter no ha completado ningún ciclo en 50 h (SLA 24 h).');
+    expect(translateHealthReasonText(rollupReasons[7], es)).toBe(
+      "El componente Service Bus está degradado: Cola de llamadas de Teams 'callrecords': mensajes activos: 12; mensajes fallidos: 3.",
+    );
+    // Count-invariant on purpose: "{active} activos" read "1 activos" for a single message.
+    expect(translateHealthReasonText("ServiceBus is degraded: Teams calls queue 'callrecords': 1 active, 1 dead-lettered.", es)).toBe(
+      "El componente Service Bus está degradado: Cola de llamadas de Teams 'callrecords': mensajes activos: 1; mensajes fallidos: 1.",
+    );
+  });
+
+  it('keeps a sentence it does not recognise exactly as the server wrote it', async () => {
+    await loadCatalog('es');
+    const unknown = 'A sentence a newer server wrote that this portal build does not know.';
+
+    expect(translateHealthReasonText(unknown, es)).toBe(unknown);
+    expect(translateHealthComponentDetailText(unknown, es)).toBe(unknown);
+    expect(translateHealthComponentDetailText('Azure Table checkpoint unavailable: a new failure. Using non-durable in-memory checkpoint (lost on restart; durable cross-cycle metadata recovery unavailable). See importer error log.', es))
+      .toContain('a new failure');
+  });
+
+  describe('health server facts rendered by the portal', () => {
+    it('translates component display names by key and leaves unknown components alone', async () => {
+      await loadCatalog('es');
+
+      expect(translateHealthComponentName('Credential', (key, values) => translateStatic('es', key, values))).toBe('Credencial');
+      expect(translateHealthComponentName('BlobCheckpoint', (key, values) => translateStatic('es', key, values))).toBe('Punto de control de blobs');
+      expect(translateHealthComponentName('ContosoConnector', (key, values) => translateStatic('es', key, values))).toBe('ContosoConnector');
+    });
+
+    it('formats numeric liveness durations in the active language instead of showing server English', async () => {
+      await loadCatalog('es');
+      setActiveLanguage('es');
+
+      const es = (key: Parameters<typeof translateActive>[0], values?: Parameters<typeof translateActive>[1]) => translateStatic('es', key, values);
+      expect(formatHealthDuration(90_061, 'Audit events import: 1 days, 1 hours, 1 mins, and 1 seconds.', es))
+        .toBe('1 día, 1 hora, 1 minuto y 1 segundo.');
+      expect(formatHealthDuration(3_662, 'Audit events import: 1 hours, 1 mins, and 2 seconds.', es))
+        .toBe('1 hora, 1 minuto y 2 segundos.');
+      expect(formatHealthDuration(63, null, es)).toBe('0 horas, 1 minuto y 3 segundos.');
+      expect(formatHealthDuration(null, 'Audit events import: 1 hours, 1 mins, and 2 seconds.', es))
+        .toBe('Audit events import: 1 hours, 1 mins, and 2 seconds.');
+      setActiveLanguage('en');
+    });
+
+    it('uses the English list separator for English duration strings', () => {
+      setActiveLanguage('en');
+      expect(formatHealthDuration(63, null, en)).toBe('0 hours, 1 min and 3 seconds.');
+    });
+  });
+});
 
 describe('translateHealthComponentDetailText', () => {
   it('translates the blob checkpoint storage-firewall detail', () => {

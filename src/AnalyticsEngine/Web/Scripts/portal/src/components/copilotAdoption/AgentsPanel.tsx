@@ -21,6 +21,7 @@ import SqlPopover from '../SqlPopover';
 import InfoTip from '../shared/InfoTip';
 import { KpiGrid, formatCount, formatDate } from '../shared/KpiGrid';
 import type { KpiDefinition } from '../shared/KpiGrid';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { PrintedFilters, printedSearch, useAdoptionTableStyles } from './adoptionShared';
 import { useT, type TFunction } from '../../i18n';
 import { agentHealthReason } from './serverText';
@@ -436,7 +437,7 @@ export default function AgentsPanel({
                         <td className={table.td}>
                           <span className={styles.agentName}>
                             <Text size={200} weight="semibold">
-                              {agent.name}
+                              {serverPlaceholderText(t, agent.name)}
                             </Text>
                             {agent.agentKey && (
                               <Text size={100} className={styles.agentKey} title={agent.agentKey}>

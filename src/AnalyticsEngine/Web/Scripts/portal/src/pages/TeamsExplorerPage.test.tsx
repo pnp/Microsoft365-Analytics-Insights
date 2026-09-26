@@ -186,6 +186,25 @@ describe('TeamsExplorerPage', () => {
     expect(await screen.findByText('Attendee hours')).toBeInTheDocument();
   });
 
+  it('renders call failure reasons as server-authored reasons, not quality rating codes', async () => {
+    mockMeetings.mockResolvedValue(meetings({
+      quality: {
+        feedbackCount: 1,
+        failureCount: 2,
+        ratings: [{ key: 'poor', label: 'Poor', count: 1, sharePct: 100 }],
+        failureReasons: [{ key: 'poor', label: 'Poor network path', count: 2, sharePct: 100 }],
+        failureStages: [],
+      },
+    }));
+
+    renderWithProvider(<TeamsExplorerPage />);
+    await screen.findByText('Teams reach');
+    fireEvent.click(screen.getByRole('tab', { name: 'Meetings & calls' }));
+
+    expect(await screen.findByText('Poor network path')).toBeInTheDocument();
+    expect(screen.getByText('Poor')).toBeInTheDocument();
+  });
+
   it('refetches the visible tab when the period changes', async () => {
     renderWithProvider(<TeamsExplorerPage />);
     await screen.findByText('Teams reach');

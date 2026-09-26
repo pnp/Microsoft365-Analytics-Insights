@@ -2,6 +2,7 @@ import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { AdoptionIntensityPoint, CopilotAdoptionOptions } from '../../types/copilotAdoption';
 import { useT, type TranslationKey } from '../../i18n';
 import { formatValue } from '../charts/chartCommon';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { scoreColour } from './adoptionShared';
 
 /**
@@ -309,10 +310,11 @@ export default function IntensityScatter({
           const cx = xOf(p.activeDaysPerUser);
           const cy = yOf(p.actionsPerActiveDay);
           const r = rOf(p.licensedUsers);
+          const segment = serverPlaceholderText(t, p.segment);
 
           // Roughly 6px per character at this font size - close enough to reserve a sensible box
           // without measuring text, which would need a DOM round trip on every render.
-          const labelW = p.segment.length * 6;
+          const labelW = segment.length * 6;
           const above = tryPlace(cx, cy - r - 5, labelW);
           const below = above ? false : tryPlace(cx, cy + r + 16, labelW);
 
@@ -327,7 +329,7 @@ export default function IntensityScatter({
                 stroke={scoreColour(p.activeUserAverageScore, bands)}
               >
                 <title>
-                  {t('copilotAdoption.intensityScatter.pointTitle', { segment: p.segment, licences: formatValue(p.licensedUsers), active: formatValue(p.activeUsers), activeDays: formatValue(p.activeDaysPerUser), interactions: formatValue(p.actionsPerActiveDay), engagement: formatValue(p.activeUserAverageScore) })}
+                  {t('copilotAdoption.intensityScatter.pointTitle', { segment, licences: formatValue(p.licensedUsers), active: formatValue(p.activeUsers), activeDays: formatValue(p.activeDaysPerUser), interactions: formatValue(p.actionsPerActiveDay), engagement: formatValue(p.activeUserAverageScore) })}
                 </title>
               </circle>
 
@@ -354,7 +356,7 @@ export default function IntensityScatter({
                   fill={tokens.colorNeutralForeground2}
                   style={{ pointerEvents: 'none' }}
                 >
-                  {p.segment}
+                  {segment}
                 </text>
               )}
             </g>

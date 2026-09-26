@@ -153,7 +153,8 @@ namespace Web.AnalyticsWeb.Models.Health
         public async Task<IReadOnlyList<string>> GetPendingMigrationsAsync()
         {
             // Read-only: compares this build's migrations against __MigrationHistory. Does NOT apply
-            // anything. DbMigrator is synchronous, so there is nothing to await.
+            // anything. Token connections read the history table directly (awaited); the DbMigrator path
+            // below is synchronous.
             var migrationsConfig = new Common.Entities.Migrations.Configuration();
             using (var db = _contextFactory.Create())
             {

@@ -115,6 +115,10 @@ export const ALLOWED_LITERALS = new Set<string>([
   'No',
   'Total',
   'Error',
+  // Microsoft Spanish UI/reporting terminology keeps these English words: Teams modality "Audio"
+  // and Microsoft 365 usage-report platform "Web".
+  'Audio',
+  'Web',
   // A bootstrap failure thrown before React mounts, so there is no UI it could ever be shown in -
   // it reaches a developer through the console and nowhere else. Every other thrown message in
   // this portal IS shown (the api layer's errors are rendered in an error bar), which is why this

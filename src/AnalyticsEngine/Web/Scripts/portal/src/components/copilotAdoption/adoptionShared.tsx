@@ -15,6 +15,7 @@ import { formatCount, formatPct } from '../shared/KpiGrid';
 import InfoTip from '../shared/InfoTip';
 import type { InfoTipContent } from '../shared/InfoTip';
 import { PRINT_ROW_LIMIT } from '../shared/printPreparation';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 
 /**
  * Band colours run cold-to-warm with maturity, and the two zero-usage bands are deliberately the
@@ -447,7 +448,7 @@ export function SegmentTable({
       <tbody>
         {rows.map((row) => (
           <tr key={row.segment}>
-            <td className={styles.td}>{row.segment}</td>
+            <td className={styles.td}>{serverPlaceholderText(t, row.segment)}</td>
             <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCount(row.licensedUsers)}</td>
             <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCount(row.activeUsers)}</td>
             <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCount(row.habitualUsers)}</td>

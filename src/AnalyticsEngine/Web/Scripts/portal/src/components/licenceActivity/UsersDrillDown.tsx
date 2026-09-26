@@ -26,6 +26,8 @@ import UsersTable from './UsersTable';
 import ApiErrorBar, { describeError } from './ApiErrorBar';
 import { useUsersQuery } from './useUsersQuery';
 import { statusMeta } from './statuses';
+import { coverageMessage } from './sources';
+import { serverMessageText } from './serverNotes';
 import { formatCount, licenceName } from './format';
 
 const PAGE_SIZE = 50;
@@ -375,7 +377,9 @@ export default function UsersDrillDown({
               {workloadLabel}: {statusMeta(workloadCoverage.status, t).label}.
             </strong>{' '}
             {statusMeta(workloadCoverage.status, t).explanation}
-            {workloadCoverage.message ? ` ${workloadCoverage.message}` : ''}{' '}
+            {coverageMessage(workloadCoverage.messageKey, workloadCoverage.message, t)
+              ? ` ${coverageMessage(workloadCoverage.messageKey, workloadCoverage.message, t)}`
+              : ''}{' '}
             {t('licenceActivity.users.incompleteWarning')}
           </MessageBarBody>
         </MessageBar>
@@ -386,7 +390,7 @@ export default function UsersDrillDown({
           <MessageBarBody>
             <ul style={{ margin: 0, paddingInlineStart: '20px' }}>
               {data.messages.map((m) => (
-                <li key={m}>{m}</li>
+                <li key={m}>{serverMessageText(t, m, workloadCoverage ? [workloadCoverage] : [])}</li>
               ))}
             </ul>
           </MessageBarBody>

@@ -58,12 +58,21 @@ import { ConcentrationBar, CombinedSegmentTable } from '../components/copilotAdo
 import InfoTip from '../components/shared/InfoTip';
 import PrintButton from '../components/shared/PrintButton';
 import { PRINT_ROW_LIMIT } from '../components/shared/printPreparation';
+import { serverPlaceholderText } from '../components/shared/serverPlaceholder';
 import DismissibleWarnings from '../components/shared/DismissibleWarnings';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
 import type { KpiDefinition } from '../components/shared/KpiGrid';
 import { activeLocale, formatNumber, plural, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
-import { adoptionBandLabel, availabilityMessages, scoreProfileLabel } from '../components/copilotAdoption/serverText';
+import {
+  adoptionBandLabel,
+  availabilityMessages,
+  copilotAdoptionWarningIdentity,
+  copilotAdoptionWarningText,
+  incompleteDatasetText,
+  reclaimCaveatText,
+  scoreProfileLabel,
+} from '../components/copilotAdoption/serverText';
 import {
   compactHoursRange,
   projectCoworkTimeSaved,
@@ -592,14 +601,21 @@ export default function CopilotAdoptionPage() {
                       warning: <strong>{t('copilotAdoption.page.incomplete.warning')}</strong>,
                       missing:
                         summary.incompleteReasons.length > 0
-                          ? `${t('copilotAdoption.page.incomplete.missingPrefix')} ${summary.incompleteReasons.join(', ')}. `
+                          ? `${t('copilotAdoption.page.incomplete.missingPrefix')} ${summary.incompleteReasons.map((reason) => incompleteDatasetText(t, reason)).join(', ')}. `
                           : '',
                     })}
                   </MessageBarBody>
                 </MessageBar>
               )}
 
-              {summary.warnings.length > 0 && <DismissibleWarnings messages={summary.warnings} />}
+              {summary.warnings.length > 0 && (
+                <DismissibleWarnings
+                  messages={summary.warnings.map((warning, index) =>
+                    copilotAdoptionWarningText(t, summary.warningDetails?.[index], warning))}
+                  identities={summary.warnings.map((warning, index) =>
+                    copilotAdoptionWarningIdentity(summary.warningDetails?.[index], warning))}
+                />
+              )}
 
               {/* Stated on screen, every time. A dashboard silently showing one subsidiary is the
                   fastest way to get a licence decision wrong, and the domain drop-down is easy to
@@ -1032,7 +1048,7 @@ function ExecutiveDepartmentTable({ summary }: { summary: CopilotAdoptionSummary
       <tbody>
         {rows.map((row) => (
           <tr key={row.segment}>
-            <td className={styles.skuCell}>{row.segment}</td>
+            <td className={styles.skuCell}>{serverPlaceholderText(t, row.segment)}</td>
             <td className={styles.skuCell}>{formatPct(row.habitRatePct)}</td>
             <td className={styles.skuCell}>{formatCount(row.licensedUsers)}</td>
             <td className={styles.skuCell}>{formatCount(row.idleSeats)}</td>
@@ -1465,7 +1481,11 @@ function AnalystTab({
           </div>
           <div className={styles.cardBody}>
             <RadarChart
-              axes={['Frequency', 'Depth', 'Breadth']}
+              axes={[
+                t('copilotAdoption.page.radar.axis.frequency'),
+                t('copilotAdoption.page.radar.axis.depth'),
+                t('copilotAdoption.page.radar.axis.breadth'),
+              ]}
               series={summary.scoreProfiles.map((p, i) => ({
                 name: `${scoreProfileLabel(t, p.label)} (${formatCount(p.users)})`,
                 colour: i === 0 ? '#0f6cbd' : '#107c10',
@@ -2441,7 +2461,10 @@ function buildKpis(
       tone: summary.reclaimableSeats > 0 ? 'critical' : 'good',
       info: {
         what: t('copilotAdoption.page.licencesSafeEnoughIncludeActionableReclaimTotalDisabledAccounts'),
-        how: t('copilotAdoption.page.newUserProtectedDaysUsingGraphUserCreateddatetimeAccount', { v0: o.reclaimGraceDays, v1: summary.reclaimCaveat ?? '' }),
+        how: t('copilotAdoption.page.newUserProtectedDaysUsingGraphUserCreateddatetimeAccount', {
+          v0: o.reclaimGraceDays,
+          v1: reclaimCaveatText(t, summary.reclaimCaveatKey, summary.reclaimCaveat),
+        }),
         // Two independent mechanisms hold seats back - confidence tiering and a Microsoft
         // report-period mismatch - so the formula has to state both, or a reader adding up the band
         // breakdown finds a gap nothing on the page accounts for.

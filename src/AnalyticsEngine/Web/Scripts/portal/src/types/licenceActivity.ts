@@ -88,8 +88,12 @@ export interface LicenceActivityCoverage {
   status: string;
   source: string | null;
   measure: string | null;
+  /** Stable key for `measure` (see `sources.ts`); null or absent when the server does not recognise the measure. */
+  measureKey?: string | null;
   granularity: string | null;
   message: string | null;
+  /** Stable key for `message` (see `sources.ts`); null or absent when the server does not recognise the message. */
+  messageKey?: string | null;
   effectiveFromUtc: string | null;
   effectiveToUtc: string | null;
   latestImportUtc: string | null;
@@ -142,6 +146,8 @@ export interface LicenceActivityEvidence {
   band: string;
   source: string | null;
   measure: string | null;
+  /** Stable key for `measure` (see `sources.ts`); null when the server does not recognise the measure. */
+  measureKey?: string | null;
   activeSamples: number;
   observedSamples: number;
   expectedSamples: number;

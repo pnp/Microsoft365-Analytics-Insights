@@ -3,6 +3,7 @@ import type { AdoptionDomainRow, CopilotAdoptionSummary } from '../../types/copi
 import { formatCount, formatPct } from '../shared/KpiGrid';
 import InfoTip from '../shared/InfoTip';
 import { rateColour, scoreColour, ScoreBar, useAdoptionTableStyles } from './adoptionShared';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { useT } from '../../i18n';
 
 const useStyles = makeStyles({
@@ -92,7 +93,7 @@ export default function EmailDomainPanel({
   if (rows.length === 1) {
     return (
       <div className={styles.empty}>
-        {t('copilotAdoptionUsers.emailDomain.singleDomain', { domain: rows[0].segment })}
+        {t('copilotAdoptionUsers.emailDomain.singleDomain', { domain: serverPlaceholderText(t, rows[0].segment) })}
       </div>
     );
   }
@@ -167,7 +168,7 @@ export default function EmailDomainPanel({
               <tr key={row.segment} className={isSelected ? styles.selected : undefined}>
                 <td className={table.td}>
                   <span className={styles.domainCell}>
-                    <span>{row.segment}</span>
+                    <span>{serverPlaceholderText(t, row.segment)}</span>
                     {row.external && (
                       <Badge appearance="outline" color="informative" size="small">
                         {t('copilotAdoptionUsers.emailDomain.external')}

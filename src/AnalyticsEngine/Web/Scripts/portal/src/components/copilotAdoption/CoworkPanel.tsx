@@ -53,6 +53,7 @@ import {
   useRowExpansion,
 } from './adoptionShared';
 import { usePrintAllRows } from '../shared/printPreparation';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { formatCount, formatDate } from '../shared/KpiGrid';
 import { formatNumber, useT, useTNode, type TFunction, type TranslationKey } from '../../i18n';
 // Credits are fractional and a per-user total over a short window is routinely below 1.
@@ -60,13 +61,13 @@ import { formatNumber, useT, useTNode, type TFunction, type TranslationKey } fro
 // the same "we do not know" / "it is nothing" conflation the null path here is careful to
 // avoid, and the reason formatCredits exists (agentCostShared.test.ts pins
 // formatCredits(0.000125) !== '0'). Every credit figure on this tab uses it.
-import { formatCredits } from '../agentCosts/agentCostShared';
+import { capacityStatusLabel, formatCredits } from '../agentCosts/agentCostShared';
 import InfoTip from '../shared/InfoTip';
 import CoworkQuadrant from './CoworkQuadrant';
 import CoworkTimeSavedHero from './CoworkTimeSavedHero';
 import CoworkTimeSavedModel from './CoworkTimeSavedModel';
 import { useTimeSavedAssumptions } from './coworkTimeSaved';
-import { coworkRationaleText, coworkTierLabel } from './serverText';
+import { copilotAdoptionWarningText, coworkRationaleText, coworkTierLabel, isCoworkWarning } from './serverText';
 
 const PAGE_SIZE = 50;
 
@@ -494,9 +495,9 @@ export default function CoworkPanel({
     // Read from the SUMMARY, not from `data`: the effect above deliberately does not fetch when the
     // analysis is unavailable, so `data` is always null on this branch. The summary is a prop and is
     // always present, which is what makes the diagnosis below reachable at all.
-    const coworkWarnings = (summary.warnings ?? []).filter((w) =>
-      w.toLowerCase().includes('cowork'),
-    );
+    const coworkWarnings = (summary.warnings ?? [])
+      .map((warning, index) => ({ warning, detail: summary.warningDetails?.[index] }))
+      .filter(({ detail }) => isCoworkWarning(detail));
 
     return (
       <Card>
@@ -506,9 +507,9 @@ export default function CoworkPanel({
           </Text>
           {coworkWarnings.length > 0 ? (
             <div className={styles.warnings}>
-              {coworkWarnings.map((warning) => (
-                <MessageBar key={warning} intent="warning">
-                  <MessageBarBody>{warning}</MessageBarBody>
+              {coworkWarnings.map(({ warning, detail }) => (
+                <MessageBar key={`${detail?.key ?? warning}:${warning}`} intent="warning">
+                  <MessageBarBody>{copilotAdoptionWarningText(t, detail, warning)}</MessageBarBody>
                 </MessageBar>
               ))}
             </div>
@@ -682,7 +683,7 @@ export default function CoworkPanel({
               <tbody>
                 {summary.coworkByDepartment.map((row) => (
                   <tr key={row.segment}>
-                    <td className={table.td}>{row.segment}</td>
+                    <td className={table.td}>{serverPlaceholderText(t, row.segment)}</td>
                     <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.licensedUsers)}</td>
                     <td className={`${table.td} ${table.tdNumeric}`}>
                       {formatCount(row.primeCandidates)}
@@ -761,7 +762,7 @@ export default function CoworkPanel({
                 <Text size={200} className={styles.muted} block>
                   {t('copilotAdoptionCowork.creditsHeadroom.status')}
                 </Text>
-                <span className={styles.creditValue}>{credits.status}</span>
+                <span className={styles.creditValue}>{capacityStatusLabel(credits.status, t)}</span>
               </div>
             )}
           </div>
@@ -928,13 +929,16 @@ export default function CoworkPanel({
           </MessageBar>
         )}
 
-        {!loading && (data?.warnings ?? []).filter((w) => w.toLowerCase().includes('cowork')).length > 0 && (
+        {!loading && (data?.warnings ?? [])
+          .map((warning, index) => ({ warning, detail: data?.warningDetails?.[index] }))
+          .filter(({ detail }) => isCoworkWarning(detail)).length > 0 && (
           <div className={styles.warnings}>
             {(data?.warnings ?? [])
-              .filter((w) => w.toLowerCase().includes('cowork'))
-              .map((warning) => (
-                <MessageBar key={warning} intent="warning">
-                  <MessageBarBody>{warning}</MessageBarBody>
+              .map((warning, index) => ({ warning, detail: data?.warningDetails?.[index] }))
+              .filter(({ detail }) => isCoworkWarning(detail))
+              .map(({ warning, detail }) => (
+                <MessageBar key={`${detail?.key ?? warning}:${warning}`} intent="warning">
+                  <MessageBarBody>{copilotAdoptionWarningText(t, detail, warning)}</MessageBarBody>
                 </MessageBar>
               ))}
           </div>

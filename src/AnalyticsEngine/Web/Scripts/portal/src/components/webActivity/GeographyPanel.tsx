@@ -4,6 +4,7 @@ import DonutChart from '../charts/DonutChart';
 import StackedAreaChart from '../charts/StackedAreaChart';
 import { KpiGrid, type KpiDefinition } from '../shared/KpiGrid';
 import { seriesColor } from '../charts/chartCommon';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import type { WebActivityGeography, WebActivityPlaceRow } from '../../types/webActivity';
 import { useT } from '../../i18n';
 import {
@@ -192,8 +193,8 @@ function PlaceTable({
         <TableBody>
           {rows.map((row) => (
             <TableRow key={`${row.country ?? ''}\u0000${row.name}`}>
-              <TableCell className={styles.td}>{row.name}</TableCell>
-              {showCountry && <TableCell className={styles.td}>{row.country ?? '\u2014'}</TableCell>}
+              <TableCell className={styles.td}>{serverPlaceholderText(t, row.name)}</TableCell>
+              {showCountry && <TableCell className={styles.td}>{serverPlaceholderText(t, row.country) ?? '\u2014'}</TableCell>}
               <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.pageViews)}</TableCell>
               <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.visits)}</TableCell>
               <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.visitors)}</TableCell>

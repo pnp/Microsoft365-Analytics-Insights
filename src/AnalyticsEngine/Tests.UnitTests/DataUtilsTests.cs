@@ -696,6 +696,7 @@ namespace Tests.UnitTests
             // e.g. New event 'FinishedImportCycle'; 'context=Import cycle: 0 hours, 0 mins, and 0 seconds.'.
             StringAssert.Contains(output, "New event 'FinishedImportCycle'");
             StringAssert.Contains(output, "context=Import cycle: ");
+            StringAssert.Contains(output, "OperationName=Import cycle");
             StringAssert.Contains(output, " hours, ");
             StringAssert.Contains(output, " mins, and ");
             StringAssert.Contains(output, " seconds.");

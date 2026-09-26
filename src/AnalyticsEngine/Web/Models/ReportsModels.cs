@@ -146,6 +146,22 @@ namespace Web.AnalyticsWeb.Models
         public List<ReportTimePoint> Points { get; set; } = new List<ReportTimePoint>();
     }
 
+    /// <summary>Structured reason for a workload series that could not be fully charted.</summary>
+    public class ReportSeriesWarning
+    {
+        [JsonProperty("series")]
+        public string Series { get; set; }
+
+        [JsonProperty("reason")]
+        public string Reason { get; set; }
+
+        [JsonProperty("week")]
+        public DateTime? Week { get; set; }
+
+        [JsonProperty("error")]
+        public string Error { get; set; }
+    }
+
     /// <summary>One bar of a categorical chart (e.g. an app host, or an operation type).</summary>
     public class ReportCategory
     {
@@ -224,9 +240,17 @@ namespace Web.AnalyticsWeb.Models
         [JsonProperty("error")]
         public string Error { get; set; }
 
+        /// <summary>Stable key for a chart-level error the SPA can translate.</summary>
+        [JsonProperty("errorKey")]
+        public string ErrorKey { get; set; }
+
         /// <summary>Set when part of a chart could not load but other series remain usable.</summary>
         [JsonProperty("warning")]
         public string Warning { get; set; }
+
+        /// <summary>Structured partial-data warnings behind <see cref="Warning"/>.</summary>
+        [JsonProperty("seriesWarnings")]
+        public List<ReportSeriesWarning> SeriesWarnings { get; set; }
     }
 
     /// <summary>The set of charts for one report area over the requested window.</summary>

@@ -16,6 +16,10 @@ export const errors = {
   // Shared API/session errors
   'errors.http.sessionExpired': 'Your session has expired. Reload the page to sign in again.',
   'errors.userLookup.requestFailed': 'Request failed ({status})',
+  'errors.userLookup.notFound': "No user found with UPN '{upn}'.",
+  'errors.userLookup.missingUpn': "A 'upn' query parameter is required.",
+  'errors.userLookup.unknownCategory': "Unknown category '{category}'.",
+  'errors.userLookup.categoryNoDrilldown': "Category '{category}' does not support drill-down.",
 
   // Agent costs API
   'errors.agentCosts.availabilityFailed': "Couldn't load the agent cost availability ({status}).",
@@ -26,6 +30,7 @@ export const errors = {
   'errors.agentCosts.azureBreakdownFailed': "Couldn't load the Azure cost breakdown ({status}).",
   'errors.agentCosts.topUsersFailed': "Couldn't load the per-user credit consumption ({status}).",
   'errors.agentCosts.filtersFailed': "Couldn't load the available filters ({status}).",
+  'errors.agentCosts.loadFailed': 'The agent cost figures could not be loaded. If this keeps happening, check the database is reachable and that the agent cost imports have run at least once.',
 
   // Copilot adoption API
   'errors.copilotAdoption.analysisStillRunning': "The Copilot adoption analysis is taking longer than expected and hasn't finished yet. It is still running on the server - reload the page in a few minutes.",
@@ -59,8 +64,25 @@ export const errors = {
 
   // Licence activity API
   'errors.licenceActivity.figuresExpired': 'These figures are no longer being held. Refresh the report to bring back an up-to-date set.',
+  'errors.licenceActivity.figuresExpiredForAction': 'These figures are no longer being held. Refresh the report to bring back an up-to-date set before continuing or exporting.',
+  'errors.licenceActivity.licenceNotOnScreen': 'That licence is not part of the figures currently on screen. Refresh the report and try again.',
+  'errors.licenceActivity.summaryUsersMismatch': 'The summary and the user list are no longer from the same set of figures. Refresh the report before exporting.',
   'errors.licenceActivity.userDetailsImportOff': 'Licence activity is not available: the user details import is switched off on this deployment.',
+  'errors.licenceActivity.userDetailsImportOffSpecific': 'This report needs the user details import turned on, so that licences can be matched to the people who hold them.',
   'errors.licenceActivity.badRequest': 'That request was rejected. Check the selected dates and filters.',
+  'errors.licenceActivity.invalidRequest': "That request wasn't valid. Check the selected dates and filters.",
+  'errors.licenceActivity.anotherReportPreparing': 'Another licence report is being prepared right now. Try again in a few seconds.',
+  'errors.licenceActivity.licenceReportingBusy': 'Licence reporting is busy. Try again in a few seconds.',
+  'errors.licenceActivity.loadFailed': 'Licence activity could not be loaded. Retry the request. Reference: {reference}',
+  'errors.licenceActivity.validation.supplyBothDates': 'Supply both from and to dates in YYYY-MM-DD format.',
+  'errors.licenceActivity.validation.dateRange': 'Choose 7 to 180 inclusive UTC dates, ending before today. Custom ranges are never rounded.',
+  'errors.licenceActivity.validation.earliestDate': 'The earliest supported date is 1753-01-01.',
+  'errors.licenceActivity.validation.invalidIds': 'Licence IDs must be positive; demographic IDs must be zero (unknown) or positive.',
+  'errors.licenceActivity.validation.invalidWorkload': 'Choose teams, outlook, onedrive, sharepoint or copilot.',
+  'errors.licenceActivity.validation.invalidSort': 'Choose a supported sort and asc or desc direction.',
+  'errors.licenceActivity.validation.invalidPaging': 'Top and pageSize must be 1 to 100; page must be 1 to 10000.',
+  'errors.licenceActivity.validation.invalidSearch': 'Search must contain at most 100 characters and no control characters.',
+  'errors.licenceActivity.validation.dateFormat': 'Dates must use YYYY-MM-DD format.',
   'errors.licenceActivity.availabilityBusy': 'The server is busy or could not prepare the licence activity availability. Try again in a moment.',
   'errors.licenceActivity.availabilityForbidden': 'You do not have permission to view the licence activity availability.',
   'errors.licenceActivity.availabilityFailed': "Couldn't load the licence activity availability ({status}).",

@@ -114,6 +114,165 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// Where #609 actually failed: not at construction but at a runtime context's first EF use, which runs
+        /// the registered initializer. For Entra-only runtime SQL that must be skipped - CreateDatabaseIfNotExists
+        /// probes master, which the contained App Service user cannot reach.
+        /// </summary>
+        /// <remarks>
+        /// The credential throws, so running the create initializer - or anything else that connects - fails the
+        /// test. <c>Initialize(true)</c> is what a first query does (EF runs the initializer once per connection
+        /// string per AppDomain; forcing it makes the test independent of what ran before).
+        /// </remarks>
+        [TestMethod]
+        public void FirstEfUse_EntraOnlyRuntimeContext_SkipsTheCreateInitializerAndRequestsNoToken()
+        {
+            WarmTheModelOnTheTestDatabase();
+            var credential = new TokenRequestRecorder();
+            AzureSqlTokenAuth.SetCredential(credential);
+
+            using (var db = new AnalyticsEntitiesContext(EntraOnlyUnreachableServer, true, false))
+            {
+                db.Database.Initialize(true);
+            }
+
+            Assert.AreEqual(0, credential.Requests, "The runtime initializer must not connect to an Entra-only server at first EF use.");
+        }
+
+        /// <summary>
+        /// The importer's save path builds its context over an already-open connection. That constructor has no
+        /// autoUpdate of its own, so on an Entra-only server it must not run whatever create/migrate initializer
+        /// another context registered for the type.
+        /// </summary>
+        [TestMethod]
+        public void FirstEfUse_EntraOnlyDbConnectionContext_SkipsAnInheritedInitializer()
+        {
+            WarmTheModelOnTheTestDatabase();
+            var credential = new TokenRequestRecorder();
+            AzureSqlTokenAuth.SetCredential(credential);
+            Database.SetInitializer(new CreateDatabaseIfNotExists<AnalyticsEntitiesContext>());
+
+            using (var sqlConnection = new SqlConnection(EntraOnlyUnreachableServer))
+            using (var db = new AnalyticsEntitiesContext(sqlConnection))
+            {
+                db.Database.Initialize(true);
+            }
+
+            Assert.AreEqual(0, credential.Requests, "An inherited create initializer must not run for an Entra-only DbConnection context.");
+        }
+
+        /// <summary>
+        /// EF keeps one initializer per context TYPE for the whole process. A token-backed context registers the
+        /// runtime wrapper; a SQL-authentication or LocalDB context built the same way then gets that wrapper, and
+        /// must still have its own initializer run. The wrapper used to capture the token connection string and
+        /// skip for every context while that registration stood.
+        /// </summary>
+        [TestMethod]
+        public void TokenContext_DoesNotSuppressALaterLocalDbContextsInitializer()
+        {
+            WarmTheModelOnTheTestDatabase();
+
+            using (var tokenConnection = new SqlConnection(EntraOnlyUnreachableServer))
+            using (new AnalyticsEntitiesContext(tokenConnection))
+            {
+            }
+
+            var counter = new TestDatabaseCommandCounter(TestDatabase);
+            System.Data.Entity.Infrastructure.Interception.DbInterception.Add(counter);
+            try
+            {
+                using (var localConnection = new SqlConnection(TestDatabase))
+                using (var db = new AnalyticsEntitiesContext(localConnection))
+                {
+                    db.Database.Initialize(true);
+                }
+            }
+            finally
+            {
+                System.Data.Entity.Infrastructure.Interception.DbInterception.Remove(counter);
+            }
+
+            Assert.IsTrue(counter.Commands > 0,
+                "CreateDatabaseIfNotExists must still check the LocalDB database after a token context registered the wrapper.");
+        }
+
+        /// <summary>
+        /// The other direction for the runtime wrapper itself: for a connection with credentials of its own it must
+        /// hand over to CreateDatabaseIfNotExists, which on an existing database checks its tables and model.
+        /// </summary>
+        [TestMethod]
+        public void FirstEfUse_LocalDbRuntimeContext_StillRunsCreateDatabaseIfNotExists()
+        {
+            WarmTheModelOnTheTestDatabase();
+
+            var counter = new TestDatabaseCommandCounter(TestDatabase);
+            System.Data.Entity.Infrastructure.Interception.DbInterception.Add(counter);
+            try
+            {
+                using (var db = new AnalyticsEntitiesContext(TestDatabase, true, false))
+                {
+                    db.Database.Initialize(true);
+                }
+            }
+            finally
+            {
+                System.Data.Entity.Infrastructure.Interception.DbInterception.Remove(counter);
+            }
+
+            Assert.IsTrue(counter.Commands > 0, "The runtime wrapper must run CreateDatabaseIfNotExists for a non-token connection.");
+        }
+
+        /// <summary>
+        /// Builds and caches EF's model for both constructors against the test database, so a context over the
+        /// unreachable Entra-only server never has to connect just to work out the provider manifest.
+        /// </summary>
+        private static void WarmTheModelOnTheTestDatabase()
+        {
+            using (var db = new AnalyticsEntitiesContext(TestDatabase, true, false))
+            {
+                var unused = ((System.Data.Entity.Infrastructure.IObjectContextAdapter)db).ObjectContext;
+            }
+
+            using (var sqlConnection = new SqlConnection(TestDatabase))
+            using (var db = new AnalyticsEntitiesContext(sqlConnection))
+            {
+                var unused = ((System.Data.Entity.Infrastructure.IObjectContextAdapter)db).ObjectContext;
+            }
+        }
+
+        /// <summary>Counts EF commands sent to the test database, whichever connection object carries them.</summary>
+        private sealed class TestDatabaseCommandCounter : System.Data.Entity.Infrastructure.Interception.DbCommandInterceptor
+        {
+            private readonly string _catalog;
+
+            public TestDatabaseCommandCounter(string connectionString)
+            {
+                _catalog = new SqlConnectionStringBuilder(connectionString).InitialCatalog;
+            }
+
+            public int Commands { get; private set; }
+
+            public override void ReaderExecuting(System.Data.Common.DbCommand command,
+                System.Data.Entity.Infrastructure.Interception.DbCommandInterceptionContext<System.Data.Common.DbDataReader> interceptionContext) => Count(command);
+
+            public override void NonQueryExecuting(System.Data.Common.DbCommand command,
+                System.Data.Entity.Infrastructure.Interception.DbCommandInterceptionContext<int> interceptionContext) => Count(command);
+
+            public override void ScalarExecuting(System.Data.Common.DbCommand command,
+                System.Data.Entity.Infrastructure.Interception.DbCommandInterceptionContext<object> interceptionContext) => Count(command);
+
+            private void Count(System.Data.Common.DbCommand command)
+            {
+                var connectionString = command?.Connection?.ConnectionString;
+                if (string.IsNullOrEmpty(connectionString)) return;
+
+                if (string.Equals(new SqlConnectionStringBuilder(connectionString).InitialCatalog, _catalog, StringComparison.OrdinalIgnoreCase))
+                {
+                    Commands++;
+                }
+            }
+        }
+
         [TestMethod]
         public async Task PendingMigrations_HistoryReadOnFullyMigratedLocalDb_ReturnsNone()
         {

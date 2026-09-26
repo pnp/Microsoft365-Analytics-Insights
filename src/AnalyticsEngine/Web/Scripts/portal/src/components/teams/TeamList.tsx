@@ -13,7 +13,7 @@ import ConfirmSelection from './ConfirmSelection';
 import type { Team } from '@microsoft/microsoft-graph-types';
 import toast from '../toast';
 import { apiFetch } from '../../api/http';
-import { useT, type TFunction } from '../../i18n';
+import { EN_CATALOG, useT, type TFunction } from '../../i18n';
 
 type TeamListProps = {
   teamsList: Array<Team>;
@@ -27,6 +27,17 @@ type TeamListState = {
   teamIdsToDeauth: Array<string>;
   isBusy: boolean;
 };
+
+export const TEAMS_AUTH_ERROR_TEXT: Record<string, Parameters<TFunction>[0]> = Object.freeze({
+  [EN_CATALOG['admin.teams.teamList.redisNotConfigured']]: 'admin.teams.teamList.redisNotConfigured',
+});
+
+export function teamAuthErrorText(t: TFunction, message: string | undefined): string {
+  if (!message?.trim()) return t('admin.teams.teamList.unexpectedApiResponse');
+  const key = TEAMS_AUTH_ERROR_TEXT[message];
+  return key ? t(key) : message;
+}
+
 class TeamListInner extends React.Component<TeamListInnerProps, TeamListState> {
   constructor(props: TeamListInnerProps) {
     super(props);
@@ -273,11 +284,7 @@ class TeamListInner extends React.Component<TeamListInnerProps, TeamListState> {
 
   showApiError(errOrResponse: unknown, message?: string) {
     console.log(errOrResponse);
-    const text =
-      message && message.trim().length > 0
-        ? message
-        : this.props.t('admin.teams.teamList.unexpectedApiResponse');
-    toast.error(text);
+    toast.error(teamAuthErrorText(this.props.t, message));
     this.setState({ isBusy: false });
   }
 }

@@ -1,6 +1,7 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { ReportSeries } from '../../types/reports';
 import { useT } from '../../i18n';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { formatCompact, formatValue, formatWeek, niceTicks, seriesColor } from './chartCommon';
 
 const W = 960;
@@ -138,7 +139,7 @@ export default function StackedAreaChart({
               stroke={seriesColor(i)}
               strokeWidth={1}
             >
-              <title>{band.series.name}</title>
+              <title>{serverPlaceholderText(t, band.series.name)}</title>
             </polygon>
           );
         })}
@@ -170,7 +171,7 @@ export default function StackedAreaChart({
           >
             <title>
               {t('charts.stackedArea.weekOf', { week: formatWeek(week) }) + '\n' +
-                withPoints.map((s) => `${s.name}: ${formatValue(valueAt(s, week))}`).join('\n') +
+                withPoints.map((s) => `${serverPlaceholderText(t, s.name)}: ${formatValue(valueAt(s, week))}`).join('\n') +
                 `\n${t('charts.stackedArea.total', { value: formatValue(totals[i]) })}`}
             </title>
           </rect>
@@ -184,7 +185,7 @@ export default function StackedAreaChart({
           <span key={band.series.name} className={styles.legendItem}>
             <span className={styles.swatch} style={{ backgroundColor: seriesColor(i) }} />
             <Text size={200} className={styles.label}>
-              {band.series.name}
+              {serverPlaceholderText(t, band.series.name)}
             </Text>
           </span>
         ))}

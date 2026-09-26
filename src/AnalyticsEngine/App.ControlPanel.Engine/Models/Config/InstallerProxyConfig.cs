@@ -32,13 +32,21 @@ namespace App.ControlPanel.Engine.Entities
         /// Why this configuration cannot be used, worded for the admin who typed it; <c>null</c> when it is
         /// valid (or no proxy is used).
         /// </summary>
+        /// <remarks>
+        /// Checks the address the installer will actually build (<see cref="TryGetProxyAddress"/>), not only the
+        /// normalised text. <see cref="TryNormalise"/> refuses paths, user names and bad ports, but a host such as
+        /// <c>proxy.contoso.com;</c> or <c>[not-an-ipv6]</c> gets through it and only fails when the URI is built.
+        /// This is the single gate the proxy form, <c>InstallerNetworkProxy.TryApplyProcessWide</c> and
+        /// <c>InstallerNetworkProxy.CreateWebProxy</c> share: when they disagreed, a value the form accepted made
+        /// the process-wide proxy throw from the installer's Load event and from every Install click (#613).
+        /// </remarks>
         [JsonIgnore]
         public string ValidationError
         {
             get
             {
                 if (!UseProxy) return null;
-                if (!TryNormalise(Host, Port, out _, out _, out var error)) return error;
+                if (!TryGetProxyAddress(out _, out var error)) return error;
                 if (!IntegratedAuth && (string.IsNullOrEmpty(Username) || string.IsNullOrEmpty(Password)))
                 {
                     return "Enter the proxy user name and password, or use integrated authentication.";
