@@ -1930,3 +1930,73 @@ describe('Reports partial-data warning facts', () => {
     ).toEqual([]);
   });
 });
+
+describe('API error-code drift checks', () => {
+  function quotedArguments(call: string): string[] {
+    return [...call.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => csharpStringLiteralValue(m[1]));
+  }
+
+  function licenceActivityServerErrors(): Map<string, string> {
+    const controller = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'LicenceActivityAPIController.cs'), 'utf8');
+    const pairs = new Map<string, string>();
+
+    for (const match of controller.matchAll(/Error\(\s*"((?:[^"\\]|\\.)*)"\s*,\s*((?:.|\n)*?)\)/g)) {
+      const code = csharpStringLiteralValue(match[1]);
+      const message = quotedArguments(match[2]).join('');
+      if (message) pairs.set(code, message);
+    }
+
+    const switchStart = controller.indexOf('static string ValidationErrorCode');
+    expect(switchStart, 'ValidationErrorCode switch not found').toBeGreaterThanOrEqual(0);
+    const switchBody = controller.slice(switchStart, controller.indexOf('default:', switchStart));
+    for (const match of switchBody.matchAll(/case\s+"((?:[^"\\]|\\.)*)"\s*:\s*return\s+"((?:[^"\\]|\\.)*)"/g)) {
+      pairs.set(csharpStringLiteralValue(match[2]), csharpStringLiteralValue(match[1]));
+    }
+
+    return pairs;
+  }
+
+  it('keeps Licence Activity server error codes aligned with SPA mappings and English text', async () => {
+    const { ERROR_CODE_KEYS } = await import('../../api/licenceActivityApi');
+    const server = licenceActivityServerErrors();
+    const serverCodes = [...server.keys()].sort();
+    const spaCodes = Object.keys(ERROR_CODE_KEYS).sort();
+
+    expect(spaCodes, 'SPA maps exactly the LicenceActivityAPIController codes it can send').toEqual(serverCodes);
+
+    for (const [code, message] of server) {
+      const catalogKey = ERROR_CODE_KEYS[code];
+      expect(catalogKey, `Missing SPA map entry for Licence Activity error code '${code}'`).toBeTruthy();
+      expect(EN_CATALOG[catalogKey], `English catalog for Licence Activity error code '${code}' must match the server`).toBe(message);
+    }
+  });
+
+  function agentCostServerErrors(): Map<string, string> {
+    const source = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'AgentCostsAPIController.cs'), 'utf8');
+    const objectStart = source.indexOf('code = "agentCostsLoadFailed"');
+    expect(objectStart, 'Agent Costs coded 500 response not found').toBeGreaterThanOrEqual(0);
+    const objectBody = source.slice(objectStart, source.indexOf('detail = ex.Message', objectStart));
+    const code = /code\s*=\s*"([^"]+)"/.exec(objectBody)?.[1];
+    const messageStart = objectBody.indexOf('message =');
+    const messageStatement = objectBody.slice(messageStart, objectBody.indexOf('detail =', messageStart));
+    const message = quotedArguments(messageStatement).join('');
+    expect(code, 'Agent Costs error code not found').toBeTruthy();
+    expect(message, 'Agent Costs error message not found').toBeTruthy();
+    return new Map([[code!, message]]);
+  }
+
+  it('keeps Agent Costs server error codes aligned with SPA mappings and English text', async () => {
+    const { AGENT_COST_ERROR_CODE_KEYS } = await import('../../api/agentCostsApi');
+    const server = agentCostServerErrors();
+    const serverCodes = [...server.keys()].sort();
+    const spaCodes = Object.keys(AGENT_COST_ERROR_CODE_KEYS).sort();
+
+    expect(spaCodes, 'SPA maps exactly the AgentCostsAPIController codes it can send').toEqual(serverCodes);
+
+    for (const [code, message] of server) {
+      const catalogKey = AGENT_COST_ERROR_CODE_KEYS[code];
+      expect(catalogKey, `Missing SPA map entry for Agent Costs error code '${code}'`).toBeTruthy();
+      expect(EN_CATALOG[catalogKey], `English catalog for Agent Costs error code '${code}' must match the server`).toBe(message);
+    }
+  });
+});

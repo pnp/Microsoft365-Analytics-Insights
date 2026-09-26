@@ -112,7 +112,7 @@ function fallbackMessage(kind: LicenceActivityErrorKind, status: number, keys: L
   }
 }
 
-const ERROR_CODE_KEYS: Record<string, TranslationKey> = {
+export const ERROR_CODE_KEYS: Record<string, TranslationKey> = {
   licenceNotOnScreen: 'errors.licenceActivity.licenceNotOnScreen',
   summaryUsersMismatch: 'errors.licenceActivity.summaryUsersMismatch',
   figuresExpiredForAction: 'errors.licenceActivity.figuresExpiredForAction',

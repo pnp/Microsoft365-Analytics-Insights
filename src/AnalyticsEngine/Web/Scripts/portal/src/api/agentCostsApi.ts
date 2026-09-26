@@ -44,6 +44,10 @@ async function readServerError(response: Response): Promise<{ code?: string; mes
   }
 }
 
+export const AGENT_COST_ERROR_CODE_KEYS: Record<string, TranslationKey> = {
+  agentCostsLoadFailed: 'errors.agentCosts.loadFailed',
+};
+
 async function getJson<T>(path: string, failureKey: TranslationKey, signal?: AbortSignal): Promise<T> {
   const response = await apiFetch(`${baseUrl()}${path}`, {
     method: 'GET',
@@ -53,8 +57,9 @@ async function getJson<T>(path: string, failureKey: TranslationKey, signal?: Abo
 
   if (!response.ok) {
     const serverError = await readServerError(response);
-    const message = response.status === 500 && serverError?.code === 'agentCostsLoadFailed'
-      ? translateActive('errors.agentCosts.loadFailed')
+    const codeKey = serverError?.code ? AGENT_COST_ERROR_CODE_KEYS[serverError.code] : undefined;
+    const message = response.status === 500 && codeKey
+      ? translateActive(codeKey)
       : serverError?.message ?? translateActive(failureKey, { status: response.status });
     throw new AgentCostsApiError(response.status, message);
   }
