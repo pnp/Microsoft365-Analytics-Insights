@@ -126,6 +126,26 @@ describe('licenceActivityApi error mapping', () => {
       message: 'These figures are no longer being held. Refresh the report to bring back an up-to-date set.',
     });
   });
+
+  it('keeps the failed run reference in either language when a snapshot could not be loaded', async () => {
+    // LicenceActivityFailedException's reply: the English message still carries the reference, and the
+    // code and reference travel beside it so a Spanish reader gets both the sentence and the reference.
+    const serverMessage = 'Licence activity could not be loaded. Retry the request. Reference: run-7f3a';
+    mockedFetch.mockImplementation(async () => jsonResponse({ code: 'loadFailed', message: serverMessage, reference: 'run-7f3a' }, 503));
+
+    setActiveLanguage('en');
+    await expect(fetchOverview({ from: '2026-05-01', to: '2026-05-19' })).rejects.toMatchObject({
+      kind: 'busy',
+      message: serverMessage,
+    });
+
+    await loadCatalog('es');
+    setActiveLanguage('es');
+    await expect(fetchOverview({ from: '2026-05-01', to: '2026-05-19' })).rejects.toMatchObject({
+      kind: 'busy',
+      message: 'No se pudo cargar la actividad de licencias. Vuelva a intentar la solicitud. Referencia: run-7f3a',
+    });
+  });
 });
 
 describe('downloadExport', () => {

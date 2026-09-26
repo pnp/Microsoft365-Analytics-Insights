@@ -18,7 +18,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowDownload16Regular } from '@fluentui/react-icons';
 import { fetchAvailability, fetchOverview, downloadExport } from '../api/licenceActivityApi';
-import { EN_CATALOG, useT, type TranslationKey } from '../i18n';
+import { useT } from '../i18n';
 import type {
   DateRange,
   LicenceActivityAvailability,
@@ -35,6 +35,7 @@ import DemographicBreakdown from '../components/licenceActivity/DemographicBreak
 import { demographicName } from '../components/licenceActivity/DemographicBreakdown';
 import UsersDrillDown from '../components/licenceActivity/UsersDrillDown';
 import ApiErrorBar, { describeError } from '../components/licenceActivity/ApiErrorBar';
+import { serverMessageText } from '../components/licenceActivity/serverNotes';
 import { presetRange } from '../components/licenceActivity/dateRange';
 import { formatCount } from '../components/licenceActivity/format';
 import {
@@ -134,18 +135,6 @@ const useStyles = makeStyles({
  * data-source summary stay above the tabs because they scope every one of them.
  */
 type LaTab = 'overview' | 'byService' | 'byDemographic' | 'people';
-
-export function serverMessageText(t: ReturnType<typeof useT>, message: string): string {
-  const matches: [TranslationKey, string][] = [
-    ['licenceActivity.note.userMetadataRequired', EN_CATALOG['licenceActivity.note.userMetadataRequired']],
-    ['licenceActivity.note.privacy', EN_CATALOG['licenceActivity.note.privacy']],
-    ['licenceActivity.note.assignmentCaveat', EN_CATALOG['licenceActivity.note.assignmentCaveat']],
-    ['licenceActivity.note.interpretationCaveat', EN_CATALOG['licenceActivity.note.interpretationCaveat']],
-    ['licenceActivity.note.activityMethod', EN_CATALOG['licenceActivity.note.activityMethod']],
-  ];
-  const match = matches.find(([, english]) => english === message);
-  return match ? t(match[0]) : message;
-}
 
 /**
  * Licence activity report (issues #436 / #437).
@@ -522,7 +511,7 @@ export default function LicenceActivityPage() {
                   <MessageBarBody>
                     <ul style={{ margin: 0, paddingInlineStart: '20px' }}>
                       {overview.messages.map((m) => (
-                        <li key={m}>{serverMessageText(t, m)}</li>
+                        <li key={m}>{serverMessageText(t, m, overview.coverage)}</li>
                       ))}
                     </ul>
                   </MessageBarBody>

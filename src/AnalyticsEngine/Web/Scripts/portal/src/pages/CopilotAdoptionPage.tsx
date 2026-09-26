@@ -69,6 +69,7 @@ import {
   availabilityMessages,
   copilotAdoptionWarningIdentity,
   copilotAdoptionWarningText,
+  incompleteDatasetText,
   reclaimCaveatText,
   scoreProfileLabel,
 } from '../components/copilotAdoption/serverText';
@@ -600,7 +601,7 @@ export default function CopilotAdoptionPage() {
                       warning: <strong>{t('copilotAdoption.page.incomplete.warning')}</strong>,
                       missing:
                         summary.incompleteReasons.length > 0
-                          ? `${t('copilotAdoption.page.incomplete.missingPrefix')} ${summary.incompleteReasons.join(', ')}. `
+                          ? `${t('copilotAdoption.page.incomplete.missingPrefix')} ${summary.incompleteReasons.map((reason) => incompleteDatasetText(t, reason)).join(', ')}. `
                           : '',
                     })}
                   </MessageBarBody>

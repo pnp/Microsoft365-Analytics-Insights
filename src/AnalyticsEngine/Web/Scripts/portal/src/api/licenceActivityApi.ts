@@ -130,16 +130,18 @@ export const ERROR_CODE_KEYS: Record<string, TranslationKey> = {
   invalidPaging: 'errors.licenceActivity.validation.invalidPaging',
   invalidSearch: 'errors.licenceActivity.validation.invalidSearch',
   dateFormat: 'errors.licenceActivity.validation.dateFormat',
+  loadFailed: 'errors.licenceActivity.loadFailed',
 };
 
 /** Reads the server's error body without consuming the original response. */
-async function readServerError(response: Response): Promise<{ code?: string; message?: string } | null> {
+async function readServerError(response: Response): Promise<{ code?: string; message?: string; reference?: string } | null> {
   try {
-    const body = (await response.clone().json()) as { code?: unknown; message?: unknown } | null;
+    const body = (await response.clone().json()) as { code?: unknown; message?: unknown; reference?: unknown } | null;
     if (!body) return null;
     return {
       code: typeof body.code === 'string' ? body.code : undefined,
       message: typeof body.message === 'string' ? body.message : undefined,
+      reference: typeof body.reference === 'string' ? body.reference : undefined,
     };
   } catch {
     return null;
@@ -152,7 +154,8 @@ async function errorFor(response: Response, keys: LicenceActivityFailureKeys): P
   const serverError = await readServerError(response);
   const codeKey = serverError?.code ? ERROR_CODE_KEYS[serverError.code] : undefined;
   const message = codeKey
-    ? translateActive(codeKey)
+    // `reference` is the failed run's id (loadFailed): a fact the admin quotes when reporting the failure.
+    ? translateActive(codeKey, { reference: serverError?.reference ?? '' })
     : kind === 'http'
       ? serverError?.message ?? fallbackMessage(kind, response.status, keys)
       : fallbackMessage(kind, response.status, keys);

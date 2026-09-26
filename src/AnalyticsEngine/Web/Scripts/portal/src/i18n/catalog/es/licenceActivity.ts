@@ -37,6 +37,14 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.note.assignmentCaveat': 'La actividad anterior se atribuye a quien tiene cada licencia hoy, no a quien la tenía en ese momento. Una persona puede tener varias licencias, por lo que sumar las cifras de asignación contará a algunas personas dos veces. Las licencias asignadas no son lo mismo que el número de licencias compradas.',
   'licenceActivity.note.interpretationCaveat': 'La actividad de alguien que tiene una licencia no demuestra que esa licencia sea lo que la habilitó. Estas cifras no miden productividad, retorno de la inversión ni cumplimiento, y por sí solas no bastan para justificar quitar la licencia a nadie.',
   'licenceActivity.note.activityMethod': 'Los niveles de actividad describen en cuántas semanas del periodo alguien estuvo activo: Sin actividad = ninguna, Baja = menos de una cuarta parte, Moderada = entre una cuarta parte y menos de tres cuartas partes, Alta = tres cuartas partes o más. Una semana solo se cuenta cuando se importaron todos sus días; cuando una semana no pudo medirse completa, el nivel es «Desconocida», no cero.',
+  'licenceActivity.note.noLicences': 'Todavía no se ha importado ninguna licencia.',
+  'licenceActivity.note.nobodyHoldsALicence': 'Se han importado licencias, pero actualmente nadie de esta selección tiene una.',
+  'licenceActivity.note.noDisplayNames': 'Este producto no recopila los nombres del personal, por lo que las personas aparecen por su dirección de inicio de sesión. La búsqueda también comprueba su dirección de correo electrónico almacenada.',
+  'licenceActivity.note.demographicsCapped': 'Los desgloses por departamento y por país solo muestran los 50 más grandes de cada uno.',
+  'licenceActivity.note.usageReportsGroupFiltered': 'Esta implementación solo recopila el uso de Microsoft 365 de las personas de determinados grupos de Entra, pero enumera a todas las personas que tienen una licencia. Quien esté fuera de esos grupos aparece como «Desconocida» en lugar de sin actividad, porque nunca se midió.',
+  'licenceActivity.note.rankingMethod': 'Las listas de más y menos activos ordenan a las personas por la frecuencia con la que estuvieron activas en el servicio elegido, después por su actividad media y después por cuándo estuvieron activas por última vez. En la lista de más activos aparecen primero las personas con actividad registrada en un periodo medido por completo, después las personas con actividad registrada cuyo periodo solo se midió en parte y, por último, las personas medidas durante todo el periodo sin ninguna actividad. Quien no haya podido medirse queda fuera de la lista de menos activos en lugar de darse por inactivo.',
+  'licenceActivity.note.nobodyRankable': 'No se pudo clasificar a nadie para este servicio e intervalo de fechas: no hay actividad registrada ni ninguna medición completa que demuestre que no la hubo.',
+  'licenceActivity.note.forService': '{service}: {message}',
 
   // Activity bands and coverage statuses
   'licenceActivity.band.high': 'Alta',
@@ -51,9 +59,9 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.band.description.unknown':
     'Al menos una semana no se pudo medir por completo, por lo que no hay suficientes datos de informe para determinar la actividad de este usuario y periodo. Es posible que falten informes o filas de usuario, que la cobertura sea incompleta o que los contadores de uso no estén disponibles. Esto no es evidencia de ausencia de actividad.',
   'licenceActivity.band.copilotCoverageNote':
-    'El informe oficial de uso de Copilot solo cubre a usuarios con licencia de Copilot. Estos gráficos también pueden incluir personas con otras licencias, por lo que una persona sin licencia de Copilot puede aparecer como «Desconocida» en lugar de inactiva. El estado «Desconocido» por sí solo no indica si una persona tiene licencia de Copilot.',
+    'El informe oficial de uso de Copilot solo cubre a usuarios con licencia de Copilot. Estos gráficos también pueden incluir personas con otras licencias, por lo que una persona sin licencia de Copilot puede aparecer como «Desconocida» en lugar de inactiva. El nivel «Desconocida» por sí solo no indica si una persona tiene licencia de Copilot.',
   'licenceActivity.band.method':
-    'Los niveles de actividad describen en cuántas semanas del periodo estuvo activa una persona: Alta = tres cuartas partes o más, Moderada = entre una cuarta parte y menos de tres cuartas partes, Baja = menos de una cuarta parte, Sin actividad = ninguna. Una semana solo cuenta cuando se importaron todos sus días; si una semana no se pudo medir por completo, el nivel es «Desconocido», no cero.',
+    'Los niveles de actividad describen en cuántas semanas del periodo estuvo activa una persona: Alta = tres cuartas partes o más, Moderada = entre una cuarta parte y menos de tres cuartas partes, Baja = menos de una cuarta parte, Sin actividad = ninguna. Una semana solo cuenta cuando se importaron todos sus días; si una semana no se pudo medir por completo, el nivel es «Desconocida», no cero.',
   'licenceActivity.status.available.label': 'Disponible',
   'licenceActivity.status.available.explanation': 'Medido durante todo el periodo.',
   'licenceActivity.status.partial.label': 'Parcial',
@@ -85,8 +93,8 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.measure.m365.outlook': 'correos enviados y leídos contados por Microsoft, promediados entre las lecturas',
   'licenceActivity.measure.m365.files': 'archivos vistos o editados contados por Microsoft, promediados entre las lecturas',
   'licenceActivity.measure.m365.published': 'recuentos publicados por Microsoft',
-  'licenceActivity.measure.copilot.microsoftReportPrompts': 'solicitudes de Copilot contadas por Microsoft, promediadas entre las lecturas',
-  'licenceActivity.measure.copilot.singleRollingReport': 'solicitudes de Copilot y días de uso, de un único informe móvil',
+  'licenceActivity.measure.copilot.microsoftReportPrompts': 'indicaciones de Copilot contadas por Microsoft, promediadas entre las lecturas',
+  'licenceActivity.measure.copilot.singleRollingReport': 'indicaciones de Copilot y días de uso, de un único informe móvil',
   'licenceActivity.measure.copilot.recordedActivity': 'solo actividad de Copilot registrada',
   'licenceActivity.measure.copilot.auditActiveWeeks': 'uso de Copilot contado por semana activa',
   'licenceActivity.measure.copilot.interactionActiveWeeks': 'actividad de Copilot contada por semana activa',
@@ -103,16 +111,16 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.coverageMessage.copilotReport.notImported': 'El informe de uso de Copilot por persona de Microsoft nunca se ha recopilado en esta implementación.',
   'licenceActivity.coverageMessage.copilotReport.failed': 'El último intento de recopilar el informe de uso de Copilot por persona de Microsoft produjo un error, por lo que la actividad de Copilot es desconocida en lugar de cero.',
   'licenceActivity.coverageMessage.copilotReport.missingCoverage': 'Ninguno de los informes de uso de Copilot de Microsoft encaja completamente dentro de las fechas seleccionadas.',
-  'licenceActivity.coverageMessage.copilotAudit.unmatchableIdentity': 'El informe de Copilot de Microsoft ocultó la identidad de todas las personas, así que se usan en su lugar los registros de auditoría de Copilot. Demuestran quién SÍ usó Copilot, pero no pueden demostrar que nadie más no lo usara.',
+  'licenceActivity.coverageMessage.copilotAudit.unmatchableIdentity': 'El informe de Copilot de Microsoft ocultó la identidad de todas las personas, así que se usan en su lugar los registros de auditoría de Copilot. Demuestran quién SÍ usó Copilot, pero no pueden demostrar que los demás no lo usaran.',
   'licenceActivity.coverageMessage.copilotAudit.partial': 'Los registros de auditoría de Copilot demuestran quién SÍ usó Copilot, pero nada confirma que se capturaran todos los eventos de Copilot, por lo que quien no aparece permanece como «Desconocida» en lugar de inactivo.',
   'licenceActivity.coverageMessage.copilotAudit.missingCoverage': 'Hay registros de auditoría de Copilot, pero ninguno queda dentro de las fechas seleccionadas. Eso no significa que nadie use Copilot.',
-  'licenceActivity.coverageMessage.copilotInteractions.unmatchableIdentity': 'El informe de Copilot de Microsoft ocultó la identidad de todas las personas, así que se usa en su lugar el historial de chats de Copilot. Demuestra quién SÍ usó Copilot, pero no puede demostrar que nadie más no lo usara.',
+  'licenceActivity.coverageMessage.copilotInteractions.unmatchableIdentity': 'El informe de Copilot de Microsoft ocultó la identidad de todas las personas, así que se usa en su lugar el historial de chats de Copilot. Demuestra quién SÍ usó Copilot, pero no puede demostrar que los demás no lo usaran.',
   'licenceActivity.coverageMessage.copilotInteractions.partial': 'El historial de chats de Copilot demuestra quién SÍ usó Copilot, pero nada confirma que el historial esté completo para todo el mundo, por lo que quien no aparece permanece como «Desconocida» en lugar de inactivo.',
   'licenceActivity.coverageMessage.copilotInteractions.missingCoverage': 'Hay historial de chats de Copilot, pero ninguna conversación queda dentro de las fechas seleccionadas. Eso no significa que nadie use Copilot.',
 
   // ActivityCoverageHelp
   'licenceActivity.activityCoverage.summary':
-    '«Desconocido» significa datos insuficientes, no ausencia de actividad. Sin actividad significa que los datos de informe completos no muestran uso.',
+    '«Desconocida» significa datos insuficientes, no ausencia de actividad. Sin actividad significa que los datos de informe completos no muestran uso.',
   'licenceActivity.activityCoverage.whyUnknown': '¿Por qué la actividad es «Desconocida»?',
   'licenceActivity.activityCoverage.recordedEventsOnly':
     'Cuando el origen contiene solo eventos registrados, no encontrar eventos no demuestra que la persona estuviera inactiva.',
@@ -175,7 +183,7 @@ const licenceActivity: Record<keyof typeof en, string> = {
     'Personas con alguna licencia importada, no necesariamente una licencia para todos los servicios, por {segment}, de mayor a menor.',
   'licenceActivity.demographics.capped':
     'Se muestran solo los {count} grupos más grandes por número de personas asignadas; esta no es la lista completa.',
-  'licenceActivity.demographics.unknownBucket': '(Sin departamento/país)',
+  'licenceActivity.demographics.unknownBucket': 'Desconocido',
 
   // Workload distributions
   'licenceActivity.distribution.activeOfMeasured': '{active} de {measured} activos ({rate})',

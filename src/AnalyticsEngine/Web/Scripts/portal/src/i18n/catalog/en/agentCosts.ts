@@ -85,6 +85,8 @@ export const agentCosts = {
   'agentCosts.capacity.status.monthToDate': 'Month to date',
   'agentCosts.capacity.status.withinCapacity': 'Within capacity',
   'agentCosts.capacity.status.overage': 'Overage',
+  'agentCosts.capacity.status.coveredOverage': 'Covered overage',
+  'agentCosts.capacity.consumptionType.monthToDate': 'Month to date',
   'agentCosts.capacity.asAt': 'As at {day}',
   'agentCosts.capacity.payAsYouGo': 'Pay-as-you-go credits',
   'agentCosts.capacity.payAsYouGo.hint': 'Billed on top of pre-purchased capacity',

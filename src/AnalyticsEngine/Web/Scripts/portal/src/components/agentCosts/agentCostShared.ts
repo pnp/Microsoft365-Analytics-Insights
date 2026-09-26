@@ -74,6 +74,15 @@ export const CAPACITY_STATUS_LABEL_KEYS: Record<string, TranslationKey> = {
   MonthToDate: 'agentCosts.capacity.status.monthToDate',
   WithinCapacity: 'agentCosts.capacity.status.withinCapacity',
   Overage: 'agentCosts.capacity.status.overage',
+  CoveredOverage: 'agentCosts.capacity.status.coveredOverage',
+};
+
+/**
+ * What the capacity `consumed` figure is measured over, as Power Platform reports it (e.g. "MonthToDate").
+ * A stable identifier on the wire, so it is labelled here rather than shown raw.
+ */
+export const CAPACITY_CONSUMPTION_TYPE_LABEL_KEYS: Record<string, TranslationKey> = {
+  MonthToDate: 'agentCosts.capacity.consumptionType.monthToDate',
 };
 
 /**
@@ -100,6 +109,13 @@ function harnessCsvLabel(value: string | null | undefined): string {
 export function capacityStatusLabel(value: string | null | undefined, t: TFunction = translateActive): string {
   if (!value) return DASH;
   const key = CAPACITY_STATUS_LABEL_KEYS[value];
+  return key ? t(key) : value;
+}
+
+/** The capacity consumption type as a label; an unrecognised type is shown as sent, never blank. */
+export function capacityConsumptionTypeLabel(value: string | null | undefined, t: TFunction = translateActive): string {
+  if (!value) return '';
+  const key = CAPACITY_CONSUMPTION_TYPE_LABEL_KEYS[value];
   return key ? t(key) : value;
 }
 

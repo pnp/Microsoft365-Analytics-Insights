@@ -114,6 +114,31 @@ describe('chart adapters', () => {
     ]);
     expect(translatedCodeLabel(es, 'quality', 'poor')).toBe('Deficiente');
   });
+
+  it('keeps every Graph call code distinct, so no two chart slices share a label or a React key', async () => {
+    await loadCatalog('es');
+    for (const language of ['en', 'es'] as const) {
+      const t = (key: Parameters<typeof translateStatic>[1], values?: Parameters<typeof translateStatic>[2]) =>
+        translateStatic(language, key, values);
+      const modality = translatedCodeBucketsToCategories(t, 'modality', [
+        { key: 'audio', label: 'audio', count: 5, sharePct: 25 },
+        { key: 'video', label: 'video', count: 5, sharePct: 25 },
+        { key: 'screenSharing', label: 'screenSharing', count: 4, sharePct: 20 },
+        { key: 'videoBasedScreenSharing', label: 'videoBasedScreenSharing', count: 3, sharePct: 15 },
+        { key: 'data', label: 'data', count: 3, sharePct: 15 },
+      ]).map((c) => c.label);
+      expect(new Set(modality).size, `${language}: ${modality.join(' | ')}`).toBe(modality.length);
+      expect(modality.some((label) => /^[a-z]+[A-Z]/.test(label)), `${language}: a raw camelCase code leaked`).toBe(false);
+
+      const quality = ['excellent', 'good', 'fair', 'poor', 'bad', 'notRated', '(none)'].map((code) => translatedCodeLabel(t, 'quality', code));
+      expect(new Set(quality).size, `${language}: ${quality.join(' | ')}`).toBe(quality.length);
+    }
+
+    const es = (key: Parameters<typeof translateStatic>[1]) => translateStatic('es', key);
+    expect(translatedCodeLabel(es, 'modality', 'videoBasedScreenSharing')).toBe('Uso compartido de pantalla basado en vídeo');
+    expect(translatedCodeLabel(es, 'quality', 'bad')).toBe('Mala');
+    expect(translatedCodeLabel(es, 'quality', 'notRated')).toBe('Sin valorar');
+  });
 });
 
 describe('query lookup', () => {

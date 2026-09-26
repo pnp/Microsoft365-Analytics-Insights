@@ -87,6 +87,8 @@ const agentCosts: Record<keyof typeof en, string> = {
   'agentCosts.capacity.status.monthToDate': 'Mes hasta la fecha',
   'agentCosts.capacity.status.withinCapacity': 'Dentro de la capacidad',
   'agentCosts.capacity.status.overage': 'Exceso',
+  'agentCosts.capacity.status.coveredOverage': 'Exceso cubierto',
+  'agentCosts.capacity.consumptionType.monthToDate': 'Mes hasta la fecha',
   'agentCosts.capacity.asAt': 'A fecha de {day}',
   'agentCosts.capacity.payAsYouGo': 'Créditos de pago por uso',
   'agentCosts.capacity.payAsYouGo.hint': 'Facturados además de la capacidad comprada previamente',

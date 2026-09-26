@@ -168,10 +168,14 @@ export const teamsExplorer = {
   'teamsExplorer.code.modality.audio': 'Audio',
   'teamsExplorer.code.modality.video': 'Video',
   'teamsExplorer.code.modality.screenSharing': 'Screen sharing',
+  'teamsExplorer.code.modality.videoBasedScreenSharing': 'Video-based screen sharing',
+  'teamsExplorer.code.modality.data': 'Data',
   'teamsExplorer.code.quality.excellent': 'Excellent',
   'teamsExplorer.code.quality.good': 'Good',
   'teamsExplorer.code.quality.fair': 'Fair',
   'teamsExplorer.code.quality.poor': 'Poor',
+  'teamsExplorer.code.quality.bad': 'Bad',
+  'teamsExplorer.code.quality.notRated': 'Not rated',
   'teamsExplorer.code.quality.none': 'No rating',
 
 

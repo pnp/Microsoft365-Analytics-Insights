@@ -395,7 +395,7 @@ export interface CopilotAdoptionSummary {
   expiredReclaimExclusions: number;
   tooNewToJudgeUsers: number;
   reclaimCaveat: string | null;
-  reclaimCaveatKey: string | null;
+  reclaimCaveatKey?: string | null;
   reclaimSeatsHeldBackForWindowMismatch: number;
   reclaimSeatsHeldBackForReview: number;
   reclaimSeatsFromActiveBands: number;

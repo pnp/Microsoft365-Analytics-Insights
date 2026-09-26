@@ -88,18 +88,23 @@ export function bucketsToCategories(buckets: TeamsBucket[]): ReportCategory[] {
   return buckets.map((bucket) => ({ label: bucket.label, value: bucket.count }));
 }
 
+// Graph callRecord modality and userFeedback rating values. Each code has its OWN label: two codes sharing
+// one would draw two slices with the same legend text, and the charts key their rows on the label.
 export const TEAMS_CALL_CODE_LABEL_KEYS = {
   modality: {
     audio: 'teamsExplorer.code.modality.audio',
     video: 'teamsExplorer.code.modality.video',
     screenSharing: 'teamsExplorer.code.modality.screenSharing',
-    videoBasedScreenSharing: 'teamsExplorer.code.modality.screenSharing',
+    videoBasedScreenSharing: 'teamsExplorer.code.modality.videoBasedScreenSharing',
+    data: 'teamsExplorer.code.modality.data',
   },
   quality: {
     excellent: 'teamsExplorer.code.quality.excellent',
     good: 'teamsExplorer.code.quality.good',
     fair: 'teamsExplorer.code.quality.fair',
     poor: 'teamsExplorer.code.quality.poor',
+    bad: 'teamsExplorer.code.quality.bad',
+    notRated: 'teamsExplorer.code.quality.notRated',
     '(none)': 'teamsExplorer.code.quality.none',
   },
 } as const satisfies Record<string, Record<string, TranslationKey>>;

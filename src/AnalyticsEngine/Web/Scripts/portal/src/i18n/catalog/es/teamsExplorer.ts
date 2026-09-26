@@ -170,10 +170,14 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.code.modality.audio': 'Audio',
   'teamsExplorer.code.modality.video': 'Vídeo',
   'teamsExplorer.code.modality.screenSharing': 'Uso compartido de pantalla',
+  'teamsExplorer.code.modality.videoBasedScreenSharing': 'Uso compartido de pantalla basado en vídeo',
+  'teamsExplorer.code.modality.data': 'Datos',
   'teamsExplorer.code.quality.excellent': 'Excelente',
   'teamsExplorer.code.quality.good': 'Buena',
   'teamsExplorer.code.quality.fair': 'Aceptable',
   'teamsExplorer.code.quality.poor': 'Deficiente',
+  'teamsExplorer.code.quality.bad': 'Mala',
+  'teamsExplorer.code.quality.notRated': 'Sin valorar',
   'teamsExplorer.code.quality.none': 'Sin valoración',
 
 

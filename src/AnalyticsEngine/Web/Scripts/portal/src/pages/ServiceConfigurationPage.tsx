@@ -93,14 +93,35 @@ function matchTemplate(template: string, text: string): Record<string, string> |
   return match ? Object.fromEntries(names.map((name, index) => [name, match[index + 1]])) : null;
 }
 
+/**
+ * UpdateChecker's fixed error sentences, most specific first. Each English catalog entry is the server's
+ * sentence verbatim with its variable parts as placeholders, so a match yields the facts and the sentence
+ * is shown from the catalog in the reader's language. `rateLimitedSoon` is the rate-limit sentence when
+ * GitHub sends no reset time and the server writes the English word "shortly" in its place.
+ *
+ * serverAuthoredText.test.ts reads UpdateChecker.cs and fails when these and the server's sentences
+ * disagree in either direction. Anything unrecognised is shown as the server sent it.
+ */
+export const UPDATE_CHECK_ERROR_KEYS = [
+  'admin.serviceConfiguration.updates.error.rateLimitedSoon',
+  'admin.serviceConfiguration.updates.error.rateLimited',
+  'admin.serviceConfiguration.updates.error.releasesNotFound',
+  'admin.serviceConfiguration.updates.error.httpStatus',
+  'admin.serviceConfiguration.updates.error.timeout',
+  'admin.serviceConfiguration.updates.error.unreachable',
+  'admin.serviceConfiguration.updates.error.failed',
+  'admin.serviceConfiguration.updates.error.devBuild',
+  'admin.serviceConfiguration.updates.error.currentBuildUnreadable',
+  'admin.serviceConfiguration.updates.error.latestBuildUnreadable',
+] as const satisfies readonly Parameters<TFunction>[0][];
+
 export function updateCheckErrorText(t: TFunction, error: string | null): string | null {
   if (!error) return error;
-  const timeout = matchTemplate(EN_CATALOG['admin.serviceConfiguration.updates.error.timeout'], error);
-  if (timeout) return t('admin.serviceConfiguration.updates.error.timeout', timeout);
-  const unreachable = matchTemplate(EN_CATALOG['admin.serviceConfiguration.updates.error.unreachable'], error);
-  if (unreachable) return t('admin.serviceConfiguration.updates.error.unreachable', unreachable);
-  const failed = matchTemplate(EN_CATALOG['admin.serviceConfiguration.updates.error.failed'], error);
-  return failed ? t('admin.serviceConfiguration.updates.error.failed', failed) : error;
+  for (const key of UPDATE_CHECK_ERROR_KEYS) {
+    const facts = matchTemplate(EN_CATALOG[key], error);
+    if (facts) return t(key, facts);
+  }
+  return error;
 }
 
 function WebhookSubscriptionBadge({ status }: { status: SystemStatus }) {

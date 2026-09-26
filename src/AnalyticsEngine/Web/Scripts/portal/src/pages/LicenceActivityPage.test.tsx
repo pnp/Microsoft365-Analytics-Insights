@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { screen, fireEvent, waitFor, act, within, configure } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../test/renderWithProvider';
-import LicenceActivityPage, { serverMessageText } from './LicenceActivityPage';
+import LicenceActivityPage from './LicenceActivityPage';
+import { serverMessageText } from '../components/licenceActivity/serverNotes';
 import { EN_CATALOG, loadCatalog, translateStatic } from '../i18n';
 import {
   fetchAvailability,
@@ -170,6 +171,68 @@ describe('LicenceActivityPage - availability', () => {
     expect(translated).toContain('dirección de inicio de sesión');
     expect(translated).not.toContain('sign-in address');
     expect(serverMessageText(es, 'A new server-authored note.')).toBe('A new server-authored note.');
+  });
+
+  // The server's sentences, verbatim (LicenceActivityRules.Notes and a LicenceActivitySql coverage
+  // message). Literal rather than read from EN_CATALOG so these prove the SPA recognises what the server
+  // actually sends; serverAuthoredText.test.ts separately pins the catalog to the C#.
+  const NO_DISPLAY_NAMES =
+    "Staff names aren't collected by this product, so people are listed by their sign-in address. Search also checks their stored email address.";
+  const RANKING_METHOD =
+    'The most and least active lists rank people by how often they were active in the chosen service, then by their average activity, then by when they were last active. In the most active list, people with recorded activity across a fully measured period come first, then people with recorded activity whose period was only partly measured, then people measured across the whole period as doing nothing at all. Anyone whose activity could not be measured is left out of the least active list rather than being assumed inactive.';
+  const NOT_IMPORTED = 'Collection is switched on for this service, but no report has arrived yet.';
+  const teamsNotImported = (): LicenceActivityOverview['coverage'][number] => ({
+    ...overview().coverage[0],
+    status: 'notImported',
+    message: NOT_IMPORTED,
+    messageKey: 'm365.notImported',
+  });
+
+  it('translates the overview and drill-down notes, and rebuilds per-service coverage notes from their key', async () => {
+    await loadCatalog('es');
+    const es = (key: Parameters<typeof translateStatic>[1], values?: Parameters<typeof translateStatic>[2]) =>
+      translateStatic('es', key, values);
+    const coverage = [teamsNotImported()];
+    const spanishNotImported = es('licenceActivity.coverageMessage.m365.notImported');
+
+    expect(serverMessageText(es, NO_DISPLAY_NAMES)).toBe(es('licenceActivity.note.noDisplayNames'));
+    expect(serverMessageText(es, NO_DISPLAY_NAMES)).not.toContain('sign-in');
+    expect(serverMessageText(es, RANKING_METHOD)).toBe(es('licenceActivity.note.rankingMethod'));
+    expect(serverMessageText(es, `Teams: ${NOT_IMPORTED}`, coverage)).toBe(`Teams: ${spanishNotImported}`);
+    expect(serverMessageText(es, NOT_IMPORTED, coverage)).toBe(spanishNotImported);
+    // Without the coverage entry there is nothing to rebuild from, so the server's English stands.
+    expect(serverMessageText(es, `Teams: ${NOT_IMPORTED}`)).toBe(`Teams: ${NOT_IMPORTED}`);
+    // An unrecognised coverage key keeps the server's sentence but still localises the note around it.
+    expect(serverMessageText(es, `Teams: ${NOT_IMPORTED}`, [{ ...coverage[0], messageKey: 'm365.newMessage' }]))
+      .toBe(`Teams: ${NOT_IMPORTED}`);
+  });
+
+  it('shows English readers exactly the sentences the server wrote', () => {
+    const coverage = [teamsNotImported()];
+    const en = (key: Parameters<typeof translateStatic>[1], values?: Parameters<typeof translateStatic>[2]) =>
+      translateStatic('en', key, values);
+    for (const note of [NO_DISPLAY_NAMES, RANKING_METHOD, `Teams: ${NOT_IMPORTED}`, NOT_IMPORTED]) {
+      expect(serverMessageText(en, note, coverage)).toBe(note);
+    }
+  });
+
+  it('renders the server-written overview and drill-down notes in Spanish on the page', async () => {
+    mockAvailability.mockResolvedValue(availability());
+    mockOverview.mockResolvedValue(overview({ coverage: [teamsNotImported()], messages: [NO_DISPLAY_NAMES, `Teams: ${NOT_IMPORTED}`] }));
+    mockUsers.mockResolvedValue({ ...usersResponse(), messages: [RANKING_METHOD] });
+    await loadCatalog('es');
+    const es = (key: Parameters<typeof translateStatic>[1]) => translateStatic('es', key);
+
+    renderWithProvider(<LicenceActivityPage />, { language: 'es' });
+
+    expect(await screen.findByText(es('licenceActivity.note.noDisplayNames'))).toBeInTheDocument();
+    expect(screen.getByText(`Teams: ${es('licenceActivity.coverageMessage.m365.notImported')}`)).toBeInTheDocument();
+    expect(await screen.findByText(es('licenceActivity.note.rankingMethod'))).toBeInTheDocument();
+    // Whole-page text, because the drill-down's incomplete-coverage bar embeds the coverage message in a
+    // longer sentence that an exact-text query would never match.
+    for (const english of [NO_DISPLAY_NAMES, NOT_IMPORTED, RANKING_METHOD]) {
+      expect(document.body.textContent).not.toContain(english);
+    }
   });
   it('shows an unavailable message and no export when the report cannot run', async () => {
     mockAvailability.mockResolvedValue(

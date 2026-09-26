@@ -24,7 +24,6 @@ const errors: Record<keyof typeof en, string> = {
   'errors.agentCosts.azureBreakdownFailed': 'No se ha podido cargar el desglose de costes de Azure ({status}).',
   'errors.agentCosts.topUsersFailed': 'No se ha podido cargar el consumo de créditos por usuario ({status}).',
   'errors.agentCosts.filtersFailed': 'No se han podido cargar los filtros disponibles ({status}).',
-  'errors.agentCosts.serverFailed': 'No se han podido cargar las cifras de costes de agentes. Compruebe las importaciones de Costes de agentes e inténtelo de nuevo.',
   'errors.agentCosts.loadFailed': 'No se han podido cargar las cifras de costes de agentes. Si sigue ocurriendo, compruebe que la base de datos sea accesible y que las importaciones de costes de agentes se hayan ejecutado al menos una vez.',
 
   // Copilot adoption API
@@ -68,6 +67,7 @@ const errors: Record<keyof typeof en, string> = {
   'errors.licenceActivity.invalidRequest': 'Esa solicitud no es válida. Compruebe las fechas y los filtros seleccionados.',
   'errors.licenceActivity.anotherReportPreparing': 'Se está preparando otro informe de licencias ahora mismo. Inténtelo de nuevo en unos segundos.',
   'errors.licenceActivity.licenceReportingBusy': 'Los informes de licencias están ocupados. Inténtelo de nuevo en unos segundos.',
+  'errors.licenceActivity.loadFailed': 'No se pudo cargar la actividad de licencias. Vuelva a intentar la solicitud. Referencia: {reference}',
   'errors.licenceActivity.validation.supplyBothDates': 'Indique las fechas desde y hasta en formato YYYY-MM-DD.',
   'errors.licenceActivity.validation.dateRange': 'Elija fechas UTC inclusivas de 7 a 180 días, que terminen antes de hoy. Los intervalos personalizados nunca se redondean.',
   'errors.licenceActivity.validation.earliestDate': 'La fecha más antigua admitida es 1753-01-01.',

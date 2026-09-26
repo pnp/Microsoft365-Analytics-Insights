@@ -142,7 +142,7 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch (LicenceActivityFailedException ex)
             {
-                return Reply(HttpStatusCode.ServiceUnavailable, new { message = ex.Message }, true);
+                return Reply(HttpStatusCode.ServiceUnavailable, new { code = "loadFailed", message = ex.Message, reference = ex.RunId }, true);
             }
         }
 

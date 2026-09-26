@@ -35,6 +35,16 @@ export const licenceActivity = {
   'licenceActivity.note.assignmentCaveat': 'Past activity is shown against who holds each licence today, not who held it at the time. One person can hold several licences, so adding the assignment figures together will count some people twice. Assigned licences are not the same as the number of licences you have bought.',
   'licenceActivity.note.interpretationCaveat': "Activity by someone who holds a licence does not prove that this licence is what enabled it. These figures do not measure productivity, return on investment or compliance, and are not enough on their own to justify removing anyone's licence.",
   'licenceActivity.note.activityMethod': "Activity levels describe how many of the period's weeks someone was active in: No activity = none, Low = under a quarter, Moderate = a quarter to under three quarters, High = three quarters or more. A week is only counted when every one of its days was imported; where a week could not be measured in full the level is Unknown, not zero.",
+  // LicenceActivityRules.Notes (C#): the overview and users drill-down notes, verbatim. serverNotes.ts
+  // recognises each by exact match, so these must stay identical to the server's sentences.
+  'licenceActivity.note.noLicences': 'No licences have been imported yet.',
+  'licenceActivity.note.nobodyHoldsALicence': 'Licences have been imported, but nobody in this selection currently holds one.',
+  'licenceActivity.note.noDisplayNames': "Staff names aren't collected by this product, so people are listed by their sign-in address. Search also checks their stored email address.",
+  'licenceActivity.note.demographicsCapped': 'The department and country breakdowns show only the 50 largest of each.',
+  'licenceActivity.note.usageReportsGroupFiltered': 'This deployment only collects Microsoft 365 usage for people in particular Entra groups, but it lists everyone who holds a licence. Anyone outside those groups is shown as Unknown rather than as doing nothing, because they were never measured.',
+  'licenceActivity.note.rankingMethod': 'The most and least active lists rank people by how often they were active in the chosen service, then by their average activity, then by when they were last active. In the most active list, people with recorded activity across a fully measured period come first, then people with recorded activity whose period was only partly measured, then people measured across the whole period as doing nothing at all. Anyone whose activity could not be measured is left out of the least active list rather than being assumed inactive.',
+  'licenceActivity.note.nobodyRankable': 'Nobody could be ranked for this service and date range: there is no recorded activity, and no complete measurement proving there was none.',
+  'licenceActivity.note.forService': '{service}: {message}',
 
   // Activity bands and coverage statuses
   'licenceActivity.band.high': 'High',
@@ -173,7 +183,7 @@ export const licenceActivity = {
     'People with any imported licence, not necessarily a licence for every service, by {segment}, largest first.',
   'licenceActivity.demographics.capped':
     'Showing only the {count} largest by number of people assigned \u2014 this is not the full list.',
-  'licenceActivity.demographics.unknownBucket': '(No department/country)',
+  'licenceActivity.demographics.unknownBucket': 'Unknown',
 
   // Workload distributions
   'licenceActivity.distribution.activeOfMeasured': '{active} of {measured} active ({rate})',

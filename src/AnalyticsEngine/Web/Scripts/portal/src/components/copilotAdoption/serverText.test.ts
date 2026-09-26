@@ -8,6 +8,7 @@ import {
   copilotAdoptionWarningText,
   coworkRationaleText,
   coworkTierLabel,
+  incompleteDatasetText,
   isCoworkWarning,
   isLicenceOpportunityWarning,
   recommendedActionText,
@@ -140,6 +141,19 @@ describe('Copilot Adoption server-authored text reproduction', () => {
     )).toBe('Ni la importación de auditoría de Copilot ni el informe de uso de Copilot de Microsoft tienen datos para este periodo, por lo que todos los usuarios con licencia aparecerán como sin uso. Compruebe la página Estado antes de actuar sobre estos números.');
   });
 
+  it('names the datasets that could not be loaded in the reader language, leaving English and unknown names as sent', () => {
+    setActiveLanguage('es');
+    expect(incompleteDatasetText(tEs, 'licence types')).toBe('tipos de licencia');
+    expect(incompleteDatasetText(tEs, 'Cowork usage-report snapshot period')).toBe('periodo de instantánea del informe de uso de Cowork');
+    expect(incompleteDatasetText(tEs, 'a dataset this build does not know')).toBe('a dataset this build does not know');
+    // An inherited property name must not resolve to a key.
+    expect(incompleteDatasetText(tEs, 'constructor')).toBe('constructor');
+
+    setActiveLanguage('en');
+    expect(incompleteDatasetText(tEn, 'licence types')).toBe('licence types');
+    expect(incompleteDatasetText(tEn, 'Cowork usage-report snapshot period')).toBe('Cowork usage-report snapshot period');
+  });
+
   it('formats warning numbers with the active locale', () => {
     setActiveLanguage('es');
     expect(copilotAdoptionWarningText(
@@ -206,7 +220,7 @@ describe('Copilot Adoption server-authored text reproduction', () => {
         },
       },
       'Could not load licensed user detail: Timeout from Contoso SQL',
-    )).toBe('No se pudo cargar detalle de usuarios con licencia: Timeout from Contoso SQL');
+    )).toBe('Error al cargar detalle de usuarios con licencia: Timeout from Contoso SQL');
   });
 
   it('uses Spanish singular grammar for the usage-report source warning', () => {
@@ -247,6 +261,10 @@ describe('Copilot Adoption server-authored text reproduction', () => {
       { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'CoworkReadiness' } },
       { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'CoworkAgentLookup' } },
       { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'CoworkUserCredits' } },
+      // The usage-report probes: when they fail the tab would otherwise show only "report not available".
+      { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'CoworkReportDate' } },
+      { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'CoworkReportPeriod' } },
+      { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'CopilotReportDate' } },
       { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'LicenceOpportunities' } },
       { key: COPILOT_ADOPTION_WARNING_KEYS.LicenceCandidatesAuditOnly },
     ];
@@ -256,6 +274,8 @@ describe('Copilot Adoption server-authored text reproduction', () => {
       'couldNotLoad:CoworkReadiness',
       'couldNotLoad:CoworkAgentLookup',
       'couldNotLoad:CoworkUserCredits',
+      'couldNotLoad:CoworkReportDate',
+      'couldNotLoad:CoworkReportPeriod',
     ]);
   });
 

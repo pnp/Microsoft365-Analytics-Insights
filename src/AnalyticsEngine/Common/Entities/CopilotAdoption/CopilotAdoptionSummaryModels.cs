@@ -972,11 +972,12 @@ namespace Common.Entities.CopilotAdoption
         /// tenant-wide N next to the scoped one.
         ///
         /// Not serialised: it is a build-time detail of how a scoped summary is assembled, and the UI
-        /// only ever renders <see cref="Warnings"/>.
+        /// only ever renders <see cref="Warnings"/> and their <see cref="WarningDetails"/>.
         /// </remarks>
         [JsonIgnore]
         public List<string> SourceWarnings { get; set; } = new List<string>();
 
+        /// <summary>The structured twin of <see cref="SourceWarnings"/>, kept index-aligned with it.</summary>
         [JsonIgnore]
         public List<CopilotAdoptionWarningDetail> SourceWarningDetails { get; set; } = new List<CopilotAdoptionWarningDetail>();
 

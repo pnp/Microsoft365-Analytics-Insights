@@ -62,7 +62,7 @@ const reports: Record<keyof typeof en, string> = {
   'reports.chart.error.noWorkloadSeriesLoaded': 'No se pudo cargar ninguna serie de carga de trabajo. {details}',
   'reports.chart.error.noCompletedUsageWeeksWithData': 'No hay semanas completadas de informes de uso disponibles para cargas de trabajo con datos.',
   'reports.chart.warning.series.loadFailed': '{series}: {error}',
-  'reports.chart.warning.series.notAttempted': '{series}: no se intentó después del tiempo de espera de la base de datos',
+  'reports.chart.warning.series.notAttempted': '{series}: no se intentó tras agotarse el tiempo de espera de la base de datos',
   'reports.chart.warning.series.noSettledData': '{series}: no hay datos de uso consolidados',
   'reports.chart.warning.series.noSettledDataForWeek': '{series}: no hay datos de uso consolidados para la semana del {week}',
   'reports.category.appBreadth.one': '{count} aplicación',

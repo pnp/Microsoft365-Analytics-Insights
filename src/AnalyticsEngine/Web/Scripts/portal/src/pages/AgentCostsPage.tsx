@@ -40,6 +40,7 @@ import type {
   AgentCostUserRow,
   AzureCostBreakdownRow,
   AzureDimension,
+  CopilotCapacitySnapshot,
   CreditDimension,
 } from '../types/agentCosts';
 import Spinner from '../components/Spinner';
@@ -56,6 +57,7 @@ import {
   formatDay,
   formatMoney,
   formatQuantity,
+  capacityConsumptionTypeLabel,
   capacityStatusLabel,
   harnessLabel,
   saveCsv,
@@ -164,6 +166,23 @@ export function ImportFailureBar({ kind, error }: { kind: 'copilotStudio' | 'azu
         <strong>{importFailureWarning(t, kind)}</strong> {error}
       </MessageBarBody>
     </MessageBar>
+  );
+}
+
+/**
+ * "X of Y used (Month to date)" under the capacity tile. The consumption type is Power Platform's stable
+ * identifier ("MonthToDate"), so it is labelled rather than shown raw.
+ */
+export function CapacityUsedHint({ capacity }: { capacity: CopilotCapacitySnapshot }) {
+  const t = useT();
+  return (
+    <>
+      {t('agentCosts.capacity.usedOfEntitled', {
+        consumed: formatCredits(capacity.consumed),
+        entitled: formatCredits(capacity.entitled),
+      })}
+      {capacity.consumptionType ? ` (${capacityConsumptionTypeLabel(capacity.consumptionType, t)})` : ''}
+    </>
   );
 }
 
@@ -626,11 +645,7 @@ export default function AgentCostsPage() {
                   <span className={styles.kpiValue}>{formatCredits(summary.capacity.available)}</span>
                   <span className={styles.kpiLabel}>{t('agentCosts.capacity.availableNow')}</span>
                   <span className={styles.kpiHint}>
-                    {t('agentCosts.capacity.usedOfEntitled', {
-                      consumed: formatCredits(summary.capacity.consumed),
-                      entitled: formatCredits(summary.capacity.entitled),
-                    })}
-                    {summary.capacity.consumptionType ? ` (${summary.capacity.consumptionType})` : ''}
+                    <CapacityUsedHint capacity={summary.capacity} />
                   </span>
                 </div>
                 <div className={styles.kpi}>

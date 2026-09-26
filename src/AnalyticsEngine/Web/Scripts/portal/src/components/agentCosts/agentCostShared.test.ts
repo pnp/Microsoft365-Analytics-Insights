@@ -59,6 +59,7 @@ describe('capacityStatusLabel', () => {
     expect(capacityStatusLabel('MonthToDate', es)).toBe('Mes hasta la fecha');
     expect(capacityStatusLabel('WithinCapacity', es)).toBe('Dentro de la capacidad');
     expect(capacityStatusLabel('Overage', es)).toBe('Exceso');
+    expect(capacityStatusLabel('CoveredOverage', es)).toBe('Exceso cubierto');
     expect(capacityStatusLabel('NewStatus', es)).toBe('NewStatus');
   });
 });

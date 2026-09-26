@@ -93,7 +93,7 @@ describe('DataSourceSummary', () => {
       translateStatic('es', key, values);
 
     expect(measureLabel('copilot.microsoftReportPrompts', 'Copilot prompts counted by Microsoft, averaged across the readings', es))
-      .toBe('solicitudes de Copilot contadas por Microsoft, promediadas entre las lecturas');
+      .toBe('indicaciones de Copilot contadas por Microsoft, promediadas entre las lecturas');
     expect(coverageMessage('m365.notImported', 'Collection is switched on for this service, but no report has arrived yet.', es))
       .toBe('La recopilación está activada para este servicio, pero aún no ha llegado ningún informe.');
     expect(measureLabel(null, 'New server measure', es)).toBe('New server measure');
@@ -105,7 +105,15 @@ describe('DataSourceSummary', () => {
     const es = (key: Parameters<typeof translateStatic>[1], values?: Parameters<typeof translateStatic>[2]) =>
       translateStatic('es', key, values);
 
-    expect(demographicName(es, { id: 0, name: 'Unknown' })).toBe('(Sin departamento/país)');
+    expect(demographicName(es, { id: 0, name: 'Unknown' })).toBe('Desconocido');
     expect(demographicName(es, { id: 42, name: 'Unknown' })).toBe('Unknown');
+  });
+
+  it('shows English readers the same "Unknown" the server names the id 0 bucket, as the export does', () => {
+    const en = (key: Parameters<typeof translateStatic>[1], values?: Parameters<typeof translateStatic>[2]) =>
+      translateStatic('en', key, values);
+
+    expect(demographicName(en, { id: 0, name: 'Unknown' })).toBe('Unknown');
+    expect(demographicName(en, { id: 7, name: 'Research' })).toBe('Research');
   });
 });

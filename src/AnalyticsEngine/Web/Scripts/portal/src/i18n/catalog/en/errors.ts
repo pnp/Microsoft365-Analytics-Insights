@@ -30,7 +30,6 @@ export const errors = {
   'errors.agentCosts.azureBreakdownFailed': "Couldn't load the Azure cost breakdown ({status}).",
   'errors.agentCosts.topUsersFailed': "Couldn't load the per-user credit consumption ({status}).",
   'errors.agentCosts.filtersFailed': "Couldn't load the available filters ({status}).",
-  'errors.agentCosts.serverFailed': 'The agent cost figures could not be loaded. Check the Agent Costs imports and try again.',
   'errors.agentCosts.loadFailed': 'The agent cost figures could not be loaded. If this keeps happening, check the database is reachable and that the agent cost imports have run at least once.',
 
   // Copilot adoption API
@@ -74,6 +73,7 @@ export const errors = {
   'errors.licenceActivity.invalidRequest': "That request wasn't valid. Check the selected dates and filters.",
   'errors.licenceActivity.anotherReportPreparing': 'Another licence report is being prepared right now. Try again in a few seconds.',
   'errors.licenceActivity.licenceReportingBusy': 'Licence reporting is busy. Try again in a few seconds.',
+  'errors.licenceActivity.loadFailed': 'Licence activity could not be loaded. Retry the request. Reference: {reference}',
   'errors.licenceActivity.validation.supplyBothDates': 'Supply both from and to dates in YYYY-MM-DD format.',
   'errors.licenceActivity.validation.dateRange': 'Choose 7 to 180 inclusive UTC dates, ending before today. Custom ranges are never rounded.',
   'errors.licenceActivity.validation.earliestDate': 'The earliest supported date is 1753-01-01.',

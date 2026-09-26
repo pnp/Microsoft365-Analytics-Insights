@@ -11,7 +11,7 @@ import type {
 import { AdoptionBand, AgentHealth } from '../../types/copilotAdoption';
 import { formatCount } from '../shared/KpiGrid';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
-import { activeLocale, formatNumber, plural, type TFunction, type TranslationKey, type TranslationValues } from '../../i18n';
+import { activeLocale, EN_CATALOG, formatNumber, plural, type TFunction, type TranslationKey, type TranslationValues } from '../../i18n';
 
 function catalogText(t: TFunction, key: TranslationKey, fallback: string, values?: TranslationValues): string {
   if (activeLocale().startsWith('en')) return fallback;
@@ -63,7 +63,12 @@ const OPPORTUNITY_WARNING_KEYS = new Set<string>([
   COPILOT_ADOPTION_WARNING_KEYS.AuditMissingUsingUsageReport,
 ]);
 
+// Every query whose failure the Cowork tab must show. serverAuthoredText.test.ts fails when the service
+// gains a CopilotAdoptionQueries.Cowork* query that is missing here - the English 'cowork' substring this
+// replaced caught those by accident, including the usage-report date and period probes.
 const COWORK_WARNING_QUERIES = new Set<string>([
+  'CoworkReportDate',
+  'CoworkReportPeriod',
   'CoworkAgentLookup',
   'CoworkReadiness',
   'CoworkCreditProbe',
@@ -135,6 +140,38 @@ export function isLicenceOpportunityWarning(detail: CopilotAdoptionWarningDetail
 export function reclaimCaveatText(t: TFunction, key: string | null | undefined, fallback: string | null | undefined): string {
   if (!key) return fallback ?? '';
   return catalogText(t, key as TranslationKey, fallback ?? '');
+}
+
+/**
+ * The datasets the "figures incomplete" banner names (`summary.incompleteReasons`). Each is a
+ * compile-time English phrase the service passes to MarkFiguresIncomplete / StepOutput.MarkIncomplete;
+ * the English catalog entry is that phrase verbatim, so it is recognised by exact match and shown from the
+ * catalog in the reader's language. An unrecognised name is shown as sent. serverAuthoredText.test.ts reads
+ * the service and fails when a dataset is missing here.
+ */
+export const INCOMPLETE_DATASET_KEYS: readonly TranslationKey[] = [
+  'copilotAdoption.server.dataset.licenceTypes',
+  'copilotAdoption.server.dataset.copilotAuditData',
+  'copilotAdoption.server.dataset.copilotInteractionBackfillCheck',
+  'copilotAdoption.server.dataset.copilotInteractionsAwaitingBackfill',
+  'copilotAdoption.server.dataset.copilotUsageReport',
+  'copilotAdoption.server.dataset.copilotUsageReportSnapshotPeriod',
+  'copilotAdoption.server.dataset.coworkUsageReport',
+  'copilotAdoption.server.dataset.coworkUsageReportSnapshotPeriod',
+  'copilotAdoption.server.dataset.m365UsageReports',
+  'copilotAdoption.server.dataset.copilotUsageReportAnonymisationCheck',
+  'copilotAdoption.server.dataset.copilotLicenceAssignments',
+  'copilotAdoption.server.dataset.licensedUserDetail',
+  'copilotAdoption.server.dataset.weeklyCopilotAuditCoverage',
+  'copilotAdoption.server.dataset.unlicensedCopilotUsers',
+  'copilotAdoption.server.dataset.licenceOpportunities',
+  'copilotAdoption.server.dataset.coworkAgentLookup',
+  'copilotAdoption.server.dataset.coworkReadiness',
+];
+
+export function incompleteDatasetText(t: TFunction, dataset: string): string {
+  const key = INCOMPLETE_DATASET_KEYS.find((candidate) => EN_CATALOG[candidate] === dataset);
+  return key ? catalogText(t, key, dataset) : dataset;
 }
 
 export function adoptionBandLabel(t: TFunction, band: AdoptionBand | string, fallback: string): string {
