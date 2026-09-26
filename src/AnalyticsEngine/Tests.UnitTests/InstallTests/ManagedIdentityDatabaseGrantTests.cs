@@ -243,6 +243,30 @@ namespace Tests.UnitTests.InstallTests
         }
 
         /// <summary>
+        /// For a user named apart, the remedy names THAT user, with the Automation account's own client ID - not the
+        /// App Service's user it was kept apart from, which running the remedy as printed would otherwise collide with.
+        /// </summary>
+        [TestMethod]
+        public async Task Grant_SqlFailure_ForAUserNamedApart_LogsTheRemedyForThatUser()
+        {
+            var logger = new RecordingLogger();
+            var task = new SqlIdentityAccessTask(logger, null,
+                new StubIdentitySource { Answer = new SystemAssignedIdentityIds(ObjectId, ClientId) })
+            {
+                ScriptRunner = (connectionString, sql) => throw NewSqlException()
+            };
+
+            var granted = await task.GrantDatabaseAccessAsync(ConnectionString, ManagedIdentityOwner.AutomationAccount,
+                "contosoanalytics", ObjectId, SiteId, new[] { "db_owner" }, "contosoanalytics (Automation account)");
+
+            Assert.IsFalse(granted);
+            var error = logger.Entries.Single(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Error);
+            StringAssert.Contains(error.Message,
+                $"run: CREATE USER [contosoanalytics (Automation account)] WITH SID = {SqlContainedUserScript.ToSqlSid(ClientId)}, TYPE = E; then add it to db_owner.");
+            StringAssert.Contains(error.Message, "runbooks");
+        }
+
+        /// <summary>
         /// Only an Automation account that shares the App Service's name - compared the way SQL Server compares
         /// user names, ignoring case - is named apart. Every other install keeps the user names it already has.
         /// </summary>
@@ -325,6 +349,11 @@ namespace Tests.UnitTests.InstallTests
             var warning = logger.Entries.Single(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
             StringAssert.Contains(warning.Message, "shares its name with the App Service");
             StringAssert.Contains(warning.Message, "runbooks");
+
+            // InstallSummary keeps only the first 240 characters of a warning, and that is all a headless run shows.
+            var action = warning.Message.IndexOf("and re-run.", StringComparison.Ordinal);
+            Assert.IsTrue(action >= 0 && action + "and re-run.".Length <= 240,
+                $"The action must survive the summary's 240-character cut, but ends at {action + "and re-run.".Length}.");
 
             // The ordinary case is unchanged: no client ID means FROM EXTERNAL PROVIDER under the identity's own name.
             granted = await new SqlIdentityAccessTask(NullLogger.Instance, null, unknown) { ScriptRunner = runner.Run }

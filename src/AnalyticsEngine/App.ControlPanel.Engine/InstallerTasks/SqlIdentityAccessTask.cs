@@ -202,13 +202,13 @@ namespace App.ControlPanel.Engine.InstallerTasks
             {
                 // FROM EXTERNAL PROVIDER takes the user name AS the Entra display name to resolve, so a user named
                 // apart cannot use it - and falling back to the shared display name would find the other identity's
-                // user already there, skip the CREATE, and add THAT user to this identity's roles.
+                // user already there, skip the CREATE, and add THAT user to this identity's roles. The action comes
+                // first because the end-of-run summary keeps only the first 240 characters of a warning.
                 _logger.LogWarning(
-                    $"Skipping the database permission grant for the {ownerName} managed identity '{principalName}': it shares " +
-                    "its name with the App Service, so SQL Server cannot resolve it by name, and its application (client) ID " +
-                    "could not be read from Azure Resource Manager or Microsoft Graph (the reason is reported above). " +
-                    $"{DescribeImpact(owner)} Make sure the installer's app registration can read the {ownerName} in Azure " +
-                    "Resource Manager, or grant it 'Application.Read.All', and re-run.");
+                    $"Skipped the database grant for the {ownerName} managed identity '{principalName}': let the installer read the " +
+                    $"{ownerName} in Azure Resource Manager (or grant it 'Application.Read.All') and re-run. {DescribeImpact(owner)} " +
+                    "It shares its name with the App Service, so SQL Server cannot resolve it by name, and its application (client) " +
+                    "ID could not be read from Azure Resource Manager or Microsoft Graph (the reason is logged above).");
                 return false;
             }
 
