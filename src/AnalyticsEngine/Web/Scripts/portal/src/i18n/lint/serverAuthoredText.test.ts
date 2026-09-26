@@ -1840,4 +1840,15 @@ describe('Copilot Adoption server warning text', () => {
     expect(source).toContain('summary.ReclaimCaveatKey = CopilotAdoptionWarningKeys.ReclaimCaveat;');
     expect(EN_CATALOG['copilotAdoption.server.reclaimCaveat']).toBe(csharpStringLiteralValue(fallback));
   });
+
+  it('does not filter Copilot Adoption warning panels by English substrings', () => {
+    const sources = [
+      join(process.cwd(), 'src', 'components', 'copilotAdoption', 'CoworkPanel.tsx'),
+      join(process.cwd(), 'src', 'components', 'copilotAdoption', 'OpportunitiesPanel.tsx'),
+    ].map((file) => readFileSync(file, 'utf8')).join('\n');
+
+    expect(sources).not.toMatch(/includes\(['"](cowork|licence opportunit|usage report)/i);
+    expect(sources).toContain('isCoworkWarning');
+    expect(sources).toContain('isLicenceOpportunityWarning');
+  });
 });
