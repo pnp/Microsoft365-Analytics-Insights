@@ -31,6 +31,7 @@ import { DocumentText16Regular, TextBulletListSquare16Regular } from '@fluentui/
 import { fetchInstallLog } from '../api/installLogApi';
 import type { InstallLogEntry } from '../types/installLog';
 import Spinner from '../components/Spinner';
+import { formatDateParts, useT, useTNode } from '../i18n';
 
 const useStyles = makeStyles({
   configJson: {
@@ -77,6 +78,8 @@ const useStyles = makeStyles({
 
 export default function InstallLogPage() {
   const styles = useStyles();
+  const t = useT();
+  const tNode = useTNode();
   const [entries, setEntries] = useState<InstallLogEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -88,7 +91,7 @@ export default function InstallLogPage() {
         if (!cancelled) setEntries(e);
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load the install log.');
+        if (!cancelled) setError(err instanceof Error ? err.message : t('admin.installLog.loadFailed'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -100,15 +103,14 @@ export default function InstallLogPage() {
 
   return (
     <div>
-      <Title3 block>Install Log</Title3>
+      <Title3 block>{t('admin.installLog.title')}</Title3>
       <Body1 block style={{ marginTop: '8px' }}>
-        History of configurations applied to the solution (the <code>sys_configs</code> table). The most recent entry
-        is the current configuration.
+        {tNode('admin.installLog.description', { table: <code>sys_configs</code> })}
       </Body1>
 
       {loading && (
         <div style={{ textAlign: 'center', padding: '32px' }}>
-          <Spinner size={80} label="Loading install log..." />
+          <Spinner size={80} label={t('admin.installLog.loading')} />
         </div>
       )}
       {error && (
@@ -119,30 +121,30 @@ export default function InstallLogPage() {
 
       {!loading && entries && (
         <Card className={styles.card}>
-          <Table aria-label="Install log" size="small">
+          <Table aria-label={t('admin.installLog.ariaLabel')} size="small">
             <TableHeader>
               <TableRow>
-                <TableHeaderCell style={{ width: 200 }}>Applied</TableHeaderCell>
-                <TableHeaderCell style={{ width: 220 }}>Installed by</TableHeaderCell>
-                <TableHeaderCell>Messages</TableHeaderCell>
-                <TableHeaderCell style={{ width: 130 }}>Configuration</TableHeaderCell>
+                <TableHeaderCell style={{ width: 200 }}>{t('admin.installLog.columnApplied')}</TableHeaderCell>
+                <TableHeaderCell style={{ width: 220 }}>{t('admin.installLog.columnInstalledBy')}</TableHeaderCell>
+                <TableHeaderCell>{t('admin.installLog.columnMessages')}</TableHeaderCell>
+                <TableHeaderCell style={{ width: 130 }}>{t('admin.installLog.columnConfiguration')}</TableHeaderCell>
               </TableRow>
             </TableHeader>
             <TableBody>
               {entries.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={4}>
-                    <Text style={{ color: tokens.colorNeutralForeground3 }}>No configurations applied yet.</Text>
+                    <Text style={{ color: tokens.colorNeutralForeground3 }}>{t('admin.installLog.noneApplied')}</Text>
                   </TableCell>
                 </TableRow>
               )}
               {entries.map((e) => (
                 <TableRow key={e.id}>
                   <TableCell>
-                    {new Date(e.dateApplied).toLocaleString()}
+                    {formatDateParts(new Date(e.dateApplied), { dateStyle: 'short', timeStyle: 'medium' })}
                     {e.isCurrent && (
                       <Badge appearance="filled" color="brand" size="small" style={{ marginLeft: 8 }}>
-                        Current
+                        {t('admin.installLog.current')}
                       </Badge>
                     )}
                   </TableCell>
@@ -152,18 +154,25 @@ export default function InstallLogPage() {
                       <Dialog>
                         <DialogTrigger disableButtonEnhancement>
                           <Button appearance="subtle" size="small" icon={<TextBulletListSquare16Regular />}>
-                            View log
+                            {t('admin.installLog.viewLog')}
                           </Button>
                         </DialogTrigger>
                         <DialogSurface className={styles.dialogSurface} mountNode={undefined}>
                           <DialogBody>
-                            <DialogTitle>Install log — {new Date(e.dateApplied).toLocaleString()}</DialogTitle>
+                            <DialogTitle>
+                              {t('admin.installLog.dialogTitle', {
+                                appliedAt: formatDateParts(new Date(e.dateApplied), {
+                                  dateStyle: 'short',
+                                  timeStyle: 'medium',
+                                }),
+                              })}
+                            </DialogTitle>
                             <DialogContent>
                               <pre className={styles.logViewer}>{e.messages}</pre>
                             </DialogContent>
                             <DialogActions>
                               <DialogTrigger disableButtonEnhancement>
-                                <Button appearance="primary">Close</Button>
+                                <Button appearance="primary">{t('admin.installLog.close')}</Button>
                               </DialogTrigger>
                             </DialogActions>
                           </DialogBody>
@@ -178,7 +187,7 @@ export default function InstallLogPage() {
                       <Popover withArrow trapFocus>
                         <PopoverTrigger disableButtonEnhancement>
                           <Button appearance="subtle" size="small" icon={<DocumentText16Regular />}>
-                            View config
+                            {t('admin.installLog.viewConfig')}
                           </Button>
                         </PopoverTrigger>
                         <PopoverSurface>

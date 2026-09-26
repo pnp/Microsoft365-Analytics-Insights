@@ -217,6 +217,41 @@ namespace Tests.UnitTests
                 }
             }
         };
+
+        /// <summary>
+        /// The portal shows a coverage measure or message from its catalog by the key sent beside it, so the key
+        /// must be on the wire however the object was made. Coverage is not only read from SQL: the read model
+        /// clones it (<c>LicenceActivityReadModel.CloneCoverage</c>) and the store builds the disabled-Microsoft-365
+        /// entry in C# (<c>SqlLicenceActivityStore.DisabledM365Part</c>). Keys stamped on only at SQL load were lost on
+        /// both paths, and the Spanish page showed the server's English there.
+        /// </summary>
+        [TestMethod]
+        public void CoverageAndEvidence_SerialiseTheirDisplayKeys_HoweverTheyWereBuilt()
+        {
+            var coverage = new LicenceActivityCoverage
+            {
+                Measure = "counts published by Microsoft",
+                Message = "The Microsoft 365 usage-report import is switched off, so nothing can be measured for this service. That is not the same as nobody using it.",
+            };
+            var evidence = new LicenceActivityEvidence { Measure = "Copilot use counted per active week" };
+
+            var coverageJson = Newtonsoft.Json.Linq.JObject.Parse(JsonConvert.SerializeObject(coverage));
+            var evidenceJson = Newtonsoft.Json.Linq.JObject.Parse(JsonConvert.SerializeObject(evidence));
+
+            Assert.AreEqual("m365.published", (string)coverageJson["measureKey"]);
+            Assert.AreEqual("m365.disabled", (string)coverageJson["messageKey"]);
+            Assert.AreEqual("copilot.auditActiveWeeks", (string)evidenceJson["measureKey"],
+                "the users table shows each person's measure too, so evidence carries the same key");
+        }
+
+        [TestMethod]
+        public void Coverage_TextTheServerDoesNotRecognise_SendsNoKey_SoThePortalShowsItAsIs()
+        {
+            var coverage = new LicenceActivityCoverage { Measure = "a measure this build has never seen", Message = null };
+
+            Assert.IsNull(coverage.MeasureKey);
+            Assert.IsNull(coverage.MessageKey);
+        }
     }
 
     [TestClass]

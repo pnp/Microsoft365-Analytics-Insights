@@ -11,6 +11,7 @@ using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot;
 
 namespace Tests.UnitTests
@@ -383,6 +384,77 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task CoworkLoader_TreatsUnknownReportFunctionBadRequestAsNotAvailable()
+        {
+            var source = new FakeCopilotReportSource(new GraphHttpException(
+                HttpStatusCode.BadRequest,
+                "https://graph.microsoft.com/beta/reports/getMicrosoft365CopilotCoworkUsageUserDetail(period='D30')",
+                "{ 'error': { 'code': 'BadRequest', 'message': \"Resource not found for the segment 'getMicrosoft365CopilotCoworkUsageUserDetail'.\" } }",
+                null));
+            var persistence = new FakeCoworkUsagePersistenceManager();
+
+            var rows = await new CoworkUsageUserDetailLoader(
+                    source,
+                    AnalyticsLogger.ConsoleOnlyTracer(),
+                    userGroupsCache: null,
+                    userGroupsFilter: null,
+                    persistence: persistence)
+                .LoadAndSaveAsync(new CopilotReportRequest(CopilotReportNames.CoworkUsageUserDetail, "D28"));
+
+            Assert.AreEqual(0, rows);
+            Assert.AreEqual(1, source.Requests.Count);
+            Assert.AreEqual(1, persistence.ImportLogs.Count);
+            Assert.AreEqual(CopilotReportNames.CoworkUsageUserDetail, persistence.ImportLogs[0].ReportName);
+            Assert.AreEqual(0, persistence.ImportLogs[0].RowsRead);
+            StringAssert.StartsWith(persistence.ImportLogs[0].Error, "Report not available:");
+            Assert.AreEqual(0, persistence.UpsertRequests.Count, "An unavailable report must not write data rows.");
+        }
+
+        [TestMethod]
+        public async Task CoworkLoader_StillTreats404AsNotAvailable()
+        {
+            var source = new FakeCopilotReportSource(new GraphResourceNotFoundException(
+                "https://graph.microsoft.com/beta/reports/getMicrosoft365CopilotCoworkUsageUserDetail(period='D30')",
+                "{ 'error': { 'code': 'itemNotFound', 'message': 'Report not found.' } }",
+                null));
+            var persistence = new FakeCoworkUsagePersistenceManager();
+
+            var rows = await new CoworkUsageUserDetailLoader(
+                    source,
+                    AnalyticsLogger.ConsoleOnlyTracer(),
+                    userGroupsCache: null,
+                    userGroupsFilter: null,
+                    persistence: persistence)
+                .LoadAndSaveAsync(new CopilotReportRequest(CopilotReportNames.CoworkUsageUserDetail, "D28"));
+
+            Assert.AreEqual(0, rows);
+            Assert.AreEqual(1, persistence.ImportLogs.Count);
+            StringAssert.StartsWith(persistence.ImportLogs[0].Error, "Report not available:");
+        }
+
+        [TestMethod]
+        public async Task CoworkLoader_RethrowsOtherBadRequests()
+        {
+            var source = new FakeCopilotReportSource(new GraphHttpException(
+                HttpStatusCode.BadRequest,
+                "https://graph.microsoft.com/beta/reports/getMicrosoft365CopilotCoworkUsageUserDetail(period='D30')",
+                "{ 'error': { 'code': 'BadRequest', 'message': 'Invalid period specified.' } }",
+                null));
+            var persistence = new FakeCoworkUsagePersistenceManager();
+
+            await Assert.ThrowsExceptionAsync<GraphHttpException>(() => new CoworkUsageUserDetailLoader(
+                    source,
+                    AnalyticsLogger.ConsoleOnlyTracer(),
+                    userGroupsCache: null,
+                    userGroupsFilter: null,
+                    persistence: persistence)
+                .LoadAndSaveAsync(new CopilotReportRequest(CopilotReportNames.CoworkUsageUserDetail, "D28")));
+
+            Assert.AreEqual(1, persistence.ImportLogs.Count);
+            Assert.IsFalse(persistence.ImportLogs[0].Error.StartsWith("Report not available:", StringComparison.Ordinal));
+        }
+
+        [TestMethod]
         public void UserDetailParser_ReadsEveryVersion2Value()
         {
             var row = CopilotUsageUserDetailParser.Parse(Report(UserDetailJsonV2)).Single();
@@ -495,6 +567,137 @@ namespace Tests.UnitTests
         }
 
         // ---- Persistence ---------------------------------------------------------------------------
+
+        /// <summary>
+        /// Drives the real SQL persistence of the first-party Cowork report against the test database. It
+        /// bulk-copies through EF's own connection, which is a Microsoft.Data.SqlClient connection
+        /// (SPOInsightsDBConfiguration, #511). While that file still imported System.Data.SqlClient the cast
+        /// threw InvalidCastException on every call, so no Cowork row was ever saved - and every fake-backed
+        /// Cowork test above passed regardless.
+        /// </summary>
+        [TestMethod]
+        public async Task CoworkSqlPersistence_WritesRowsAndSkipsUnchangedOnes()
+        {
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var upn = $"cowork.persistence.{Guid.NewGuid():N}@contoso.com";
+            // A date far enough out that it can't collide with anything else in the shared test database.
+            var reportDate = new DateTime(2031, 4, 1);
+
+            int userId;
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var user = new User { UserPrincipalName = upn };
+                db.users.Add(user);
+                await db.SaveChangesAsync();
+                userId = user.ID;
+            }
+
+            try
+            {
+                var row = new CoworkUsageUserDetailRow
+                {
+                    ReportRefreshDate = reportDate,
+                    UserPrincipalName = upn,
+                    ReportPeriodDays = 28,
+                    TotalTasks = 12,
+                    ScheduledTasks = 4,
+                    UserInitiatedTasks = 8,
+                    ActiveDays = 6,
+                    LastActivityDate = reportDate.AddDays(-1),
+                    RetainedUser = true,
+                };
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var persistence = new SqlCoworkUsagePersistenceManager(db, logger);
+
+                    Assert.AreEqual(1, (await persistence.UpsertUserDetailAsync(new[] { row })).Written, "The first import writes the row.");
+                    Assert.AreEqual(0, (await persistence.UpsertUserDetailAsync(new[] { row })).Written, "Re-importing unchanged data must write nothing.");
+
+                    row.TotalTasks = 15;
+                    Assert.AreEqual(1, (await persistence.UpsertUserDetailAsync(new[] { row })).Written, "A revised figure must be written.");
+                }
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var stored = await db.Database.SqlQuery<int?>(
+                        "SELECT total_tasks FROM dbo.cowork_usage_user_activity_log WHERE user_id = @p0 AND [date] = @p1 AND report_period_days = 28",
+                        userId, reportDate).ToListAsync();
+                    CollectionAssert.AreEqual(new int?[] { 15 }, stored, "Exactly one row, carrying the revised figure.");
+                }
+            }
+            finally
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    await db.Database.ExecuteSqlCommandAsync(
+                        "DELETE FROM dbo.cowork_usage_user_activity_log WHERE user_id = @p0; DELETE FROM dbo.users WHERE id = @p0;",
+                        userId);
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task CoworkSqlPersistence_ARepeatedUserInOneReport_IsSavedOnceNotRejected()
+        {
+            // The MERGE's target has a UNIQUE index on (date, user_id, report_period_days), and MERGE rejects a
+            // source that repeats a key. User ids resolve case-insensitively, so two spellings of one UPN are the
+            // same user - which used to fail the whole statement, so not one Cowork row saved, every cycle.
+            var logger = AnalyticsLogger.ConsoleOnlyTracer();
+            var upn = $"cowork.repeat.{Guid.NewGuid():N}@contoso.com";
+            var reportDate = new DateTime(2031, 4, 2);
+
+            int userId;
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var user = new User { UserPrincipalName = upn };
+                db.users.Add(user);
+                await db.SaveChangesAsync();
+                userId = user.ID;
+            }
+
+            try
+            {
+                CoworkUsageUserDetailRow Row(string reportedUpn, int totalTasks) => new CoworkUsageUserDetailRow
+                {
+                    ReportRefreshDate = reportDate,
+                    UserPrincipalName = reportedUpn,
+                    ReportPeriodDays = 28,
+                    TotalTasks = totalTasks,
+                    ActiveDays = 3,
+                };
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var persistence = new SqlCoworkUsagePersistenceManager(db, logger);
+
+                    var result = await persistence.UpsertUserDetailAsync(new[] { Row(upn, 3), Row(upn.ToUpperInvariant(), 7) });
+                    Assert.AreEqual(1, result.Written, "Two report rows for one user, date and period are one stored row.");
+
+                    // And again once the row exists, which is MERGE's other failure mode (error 8672, updating one
+                    // target row twice).
+                    result = await persistence.UpsertUserDetailAsync(new[] { Row(upn, 9), Row(upn.ToUpperInvariant(), 11) });
+                    Assert.AreEqual(1, result.Written);
+                }
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var stored = await db.Database.SqlQuery<int?>(
+                        "SELECT total_tasks FROM dbo.cowork_usage_user_activity_log WHERE user_id = @p0 AND [date] = @p1 AND report_period_days = 28",
+                        userId, reportDate).ToListAsync();
+                    CollectionAssert.AreEqual(new int?[] { 11 }, stored, "One row, carrying the last value the report gave for that user.");
+                }
+            }
+            finally
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    await db.Database.ExecuteSqlCommandAsync(
+                        "DELETE FROM dbo.cowork_usage_user_activity_log WHERE user_id = @p0; DELETE FROM dbo.users WHERE id = @p0;",
+                        userId);
+                }
+            }
+        }
 
         [TestMethod]
         public async Task AggregateLoader_ReImportingTheSameWindowDoesNotDuplicateRows()
@@ -835,13 +1038,49 @@ namespace Tests.UnitTests
         private class FakeCopilotReportSource : ICopilotReportSource
         {
             private readonly List<JObject> _report;
+            private readonly Exception _exception;
+            public List<CopilotReportRequest> Requests { get; } = new List<CopilotReportRequest>();
 
             public FakeCopilotReportSource(List<JObject> report)
             {
                 _report = report;
             }
 
-            public Task<List<JObject>> LoadReportAsync(CopilotReportRequest request) => Task.FromResult(_report);
+            public FakeCopilotReportSource(Exception exception)
+            {
+                _exception = exception;
+            }
+
+            public Task<List<JObject>> LoadReportAsync(CopilotReportRequest request)
+            {
+                Requests.Add(request);
+                if (_exception != null) throw _exception;
+                return Task.FromResult(_report);
+            }
+        }
+
+        private class FakeCoworkUsagePersistenceManager : ICoworkUsagePersistenceManager
+        {
+            public List<CopilotUsageReportImportLog> ImportLogs { get; } = new List<CopilotUsageReportImportLog>();
+            public List<IReadOnlyList<CoworkUsageUserDetailRow>> UpsertRequests { get; } = new List<IReadOnlyList<CoworkUsageUserDetailRow>>();
+
+            public Task<CopilotUsageUpsertResult> UpsertUserDetailAsync(IReadOnlyList<CoworkUsageUserDetailRow> rows)
+            {
+                UpsertRequests.Add(rows);
+                return Task.FromResult(new CopilotUsageUpsertResult { Inserted = rows?.Count ?? 0 });
+            }
+
+            public Task RecordReportLoadAsync(CopilotUsageReportImportLog importLog)
+            {
+                ImportLogs.Add(importLog);
+                return Task.CompletedTask;
+            }
+
+            public Task RecordReportLoadAfterFailureAsync(CopilotUsageReportImportLog importLog)
+            {
+                ImportLogs.Add(importLog);
+                return Task.CompletedTask;
+            }
         }
     }
 }

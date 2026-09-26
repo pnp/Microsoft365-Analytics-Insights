@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, fireEvent } from '@testing-library/react';
 import { renderWithProvider } from '../test/renderWithProvider';
+import { loadCatalog } from '../i18n';
 import type {
   CopilotAdoptionAvailability,
   CopilotAdoptionOptions,
@@ -24,6 +25,7 @@ const { default: CopilotAdoptionPage } = await import('./CopilotAdoptionPage');
 
 const OPTIONS: CopilotAdoptionOptions = {
   windowDays: 28,
+  activationWindowDays: 28,
   historyDays: 365,
   workingDaysPerWeek: 5,
   frequencyTargetRatio: 0.6,
@@ -69,10 +71,21 @@ const OPTIONS: CopilotAdoptionOptions = {
   coworkFluencyMinScore: 50,
   coworkRegularMinActiveDays: 3,
   coworkAgentFamiliarityUplift: 10,
-  coworkMinutesSavedPerMeeting: 10,
-  coworkMinutesSavedPerMailThread: 5,
-  coworkMinutesSavedPerDocument: 15,
+  copilotMinutesSavedPerMeeting: 10,
+  copilotMinutesSavedPerMailThread: 5,
+  copilotMinutesSavedPerDocument: 15,
   coworkEstimateLowerBoundRatio: 0.5,
+  coworkMinutesSavedPerTask: 6,
+  coworkOrganiseMeetingsShare: 0.25,
+  coworkOrganiseMeetingsMinutes: 6,
+  coworkPrepareMeetingsShare: 0.1,
+  coworkPrepareMeetingsMinutes: 6,
+  coworkSendEmailShare: 0.05,
+  coworkSendEmailMinutes: 6,
+  coworkPostInTeamsShare: 0.01,
+  coworkPostInTeamsMinutes: 6,
+  coworkCreateDocumentsShare: 0.02,
+  coworkCreateDocumentsMinutes: 6,
   usageReportLagDays: 3,
   topSegments: 10,
   minSeatsPerSegment: 5,
@@ -91,11 +104,17 @@ function incompleteSummary(): CopilotAdoptionSummary {
     fromUtc: '2025-12-04T00:00:00Z',
     toUtc: '2026-01-01T00:00:00Z',
     dataSources: {
-      auditEvents: false,
-      usageReport: false,
-      activityReport: false,
-      agentActivity: false,
-      coworkUsageReport: false,
+      auditAvailable: false,
+      copilotUsageReportAvailable: false,
+      coworkUsageReportAvailable: false,
+      m365UsageReportsAvailable: false,
+      userMetadataAvailable: false,
+      copilotUsageReportDate: null,
+      copilotUsageReportPeriodDays: 0,
+      coworkUsageReportDate: null,
+      coworkUsageReportPeriodDays: 0,
+      m365UsageReportDate: null,
+      copilotUsageReportObfuscated: false,
     },
     seatLicenceTypes: [],
     licensedUsers: 0,
@@ -153,9 +172,14 @@ function incompleteSummary(): CopilotAdoptionSummary {
     coworkValueEstimate: {
       isModelled: false,
       cohortUsers: 0,
-      addressableMeetings: 0,
-      addressableMailThreads: 0,
-      addressableDocuments: 0,
+      coworkTaskUsers: 0,
+      observedCoworkTasks: 0,
+      projectedCoworkUsers: 0,
+      activities: [],
+      projectedCoworkTasks: 0,
+      coworkTasks: 0,
+      observedTasksPerPersonPerMonth: 0,
+      observedTaskRateUsers: 0,
       hoursPerMonthLow: 0,
       hoursPerMonthHigh: 0,
       assumptions: [],
@@ -210,7 +234,7 @@ function incompleteSummary(): CopilotAdoptionSummary {
     warnings: ['Copilot adoption figures are incomplete because licence types could not be loaded.'],
     figuresIncomplete: true,
     incompleteReasons: ['licence types'],
-  };
+  } as unknown as CopilotAdoptionSummary;
 }
 
 describe('CopilotAdoptionPage accountability roll-up', () => {
@@ -246,6 +270,53 @@ describe('CopilotAdoptionPage accountability roll-up', () => {
     expect(screen.getAllByText(/figures are incomplete/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/Aggregate-only view by direct manager/i)).toBeInTheDocument();
   });
+
+  it('renders the accountability dimension and empty group label in Spanish', async () => {
+    await loadCatalog('es');
+    const summary = incompleteSummary();
+    summary.figuresIncomplete = false;
+    summary.warnings = [];
+    summary.incompleteReasons = [];
+    summary.licensedUsers = 5;
+    summary.scoredUsers = 5;
+    summary.accountabilityDimension = 'department';
+    summary.accountabilityDimensionLabel = 'Department';
+    summary.options = { ...summary.options, accountabilityDimension: 'department' };
+    summary.accountabilityRollup = [{
+      segment: '(no department)',
+      emptySegmentKey: 'noDepartment',
+      licensedUsers: 5,
+      activeUsers: 0,
+      habitualUsers: 0,
+      neverUsedUsers: 5,
+      adoptionRatePct: 0,
+      averageAdoptionScore: 0,
+      reclaimableSeats: 5,
+      reclaimCertainSeats: 0,
+      reclaimProbableSeats: 5,
+      reclaimReviewSeats: 0,
+      reclaimExcludedUsers: 0,
+      reclaimUsers: 5,
+      reengageUsers: 0,
+      coachUsers: 0,
+      broadenUsers: 0,
+      growUsers: 0,
+      sustainUsers: 0,
+      advocateUsers: 0,
+      reviewUsers: 0,
+      excludedUsers: 0,
+      opportunityUsers: 5,
+    }];
+    fetchAdoptionSummary.mockResolvedValue(summary);
+
+    renderWithProvider(<CopilotAdoptionPage />, { language: 'es' });
+    fireEvent.click(await screen.findByRole('tab', { name: 'Vista de analista' }));
+
+    await waitFor(() => expect(screen.getByText('Resumen de responsabilidad')).toBeInTheDocument());
+    expect(screen.getByText(/Vista solo agregada por departamento/)).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Departamento' })).toBeInTheDocument();
+    expect(screen.getByText('(sin departamento)')).toBeInTheDocument();
+    expect(screen.queryByText('Department')).not.toBeInTheDocument();
+    expect(screen.queryByText('(no department)')).not.toBeInTheDocument();
+  });
 });
-
-

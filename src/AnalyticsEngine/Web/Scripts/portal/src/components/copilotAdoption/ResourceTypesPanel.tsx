@@ -2,6 +2,8 @@ import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import { CopilotResourceTypeKind } from '../../types/copilotAdoption';
 import type { AdoptionResourceTypeRow } from '../../types/copilotAdoption';
 import { formatValue, seriesColor, seriesColorLight } from '../charts/chartCommon';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
+import { useT, type TranslationKey } from '../../i18n';
 
 /**
  * The groups, in the order they are shown, with the wording the Excel workbook uses for the same
@@ -10,33 +12,26 @@ import { formatValue, seriesColor, seriesColorLight } from '../charts/chartCommo
  * Tenant content first because it is the only group that answers "what content is Copilot working
  * on"; unclassified last because it is a residue rather than a finding.
  */
-const GROUPS: { kind: CopilotResourceTypeKind; title: string; explanation: string }[] = [
+const GROUPS: { kind: CopilotResourceTypeKind; titleKey: TranslationKey; explanationKey: TranslationKey }[] = [
   {
     kind: CopilotResourceTypeKind.TenantContent,
-    title: 'Tenant content',
-    explanation:
-      'Kinds of organisational content - file types and Microsoft Graph entities. Undercounted: a file '
-      + 'Copilot cited is typed CITATION instead of by its file type.',
+    titleKey: 'copilotAdoptionAgents.resourceTypes.group.tenantContent.title',
+    explanationKey: 'copilotAdoptionAgents.resourceTypes.group.tenantContent.explanation',
   },
   {
     kind: CopilotResourceTypeKind.UsageRole,
-    title: 'How it was used',
-    explanation:
-      'How the resource was used, not what it is. A citation can be either tenant content or a web page, '
-      + 'so these references are counted here and nowhere else.',
+    titleKey: 'copilotAdoptionAgents.resourceTypes.group.usageRole.title',
+    explanationKey: 'copilotAdoptionAgents.resourceTypes.group.usageRole.explanation',
   },
   {
     kind: CopilotResourceTypeKind.ExternalGrounding,
-    title: 'Grounding from outside the tenant',
-    explanation: 'Grounding from outside the organisation. Not tenant content.',
+    titleKey: 'copilotAdoptionAgents.resourceTypes.group.externalGrounding.title',
+    explanationKey: 'copilotAdoptionAgents.resourceTypes.group.externalGrounding.explanation',
   },
   {
     kind: CopilotResourceTypeKind.Unclassified,
-    title: 'Unclassified',
-    explanation:
-      'Values this version does not recognise, and references whose type was empty. Microsoft publishes no '
-      + 'list of possible values and can add new ones at any time, so these are shown as-is rather than '
-      + 'counted as content.',
+    titleKey: 'copilotAdoptionAgents.resourceTypes.group.unclassified.title',
+    explanationKey: 'copilotAdoptionAgents.resourceTypes.group.unclassified.explanation',
   },
 ];
 
@@ -117,9 +112,10 @@ type ResourceTypesPanelProps = {
  */
 export default function ResourceTypesPanel({ rows }: ResourceTypesPanelProps) {
   const styles = useStyles();
+  const t = useT();
 
   if (rows.length === 0) {
-    return <div className={styles.empty}>No data for this period.</div>;
+    return <div className={styles.empty}>{t('copilotAdoptionAgents.resourceTypes.empty')}</div>;
   }
 
   const max = Math.max(...rows.map((r) => r.value), 1);
@@ -145,19 +141,27 @@ export default function ResourceTypesPanel({ rows }: ResourceTypesPanelProps) {
           <div className={styles.group} key={group.kind}>
             <div className={styles.groupHead}>
               <Text size={200} weight="semibold">
-                {group.title}
+                {t(group.titleKey)}
               </Text>
               <Text size={100} className={styles.explanation}>
-                {group.explanation}
+                {t(group.explanationKey)}
               </Text>
             </div>
             {groupRows.map((r) => {
               const pct = Math.max(1, (r.value / max) * 100);
+              const label = serverPlaceholderText(t, r.label);
 
               return (
-                <div className={styles.row} key={r.label} title={`${r.label}: ${formatValue(r.value)} References`}>
+                <div
+                  className={styles.row}
+                  key={r.label}
+                  title={t('copilotAdoptionAgents.resourceTypes.referenceTitle', {
+                    label,
+                    count: formatValue(r.value),
+                  })}
+                >
                   <Text size={200} className={styles.label}>
-                    {r.label}
+                    {label}
                   </Text>
                   <div className={styles.track}>
                     <div

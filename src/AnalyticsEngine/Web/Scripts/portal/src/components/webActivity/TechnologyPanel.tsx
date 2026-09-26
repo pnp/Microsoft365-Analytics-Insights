@@ -13,9 +13,11 @@ import DonutChart from '../charts/DonutChart';
 import StackedAreaChart from '../charts/StackedAreaChart';
 import { KpiGrid, type KpiDefinition } from '../shared/KpiGrid';
 import { seriesColor } from '../charts/chartCommon';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import type { WebActivityPlatformRow, WebActivityTechnology } from '../../types/webActivity';
+import { useT } from '../../i18n';
 import {
-  DWELL_CAVEAT,
+  dwellCaveat,
   FailedQueryNote,
   SectionCard,
   WindowNote,
@@ -50,6 +52,7 @@ export default function TechnologyPanel({
   exporting: boolean;
 }) {
   const styles = useWebActivityStyles();
+  const t = useT();
   const kpis = data.kpis;
 
   // Listed rows plus an explicit remainder, so a truncated leaderboard cannot imply it accounts
@@ -57,85 +60,72 @@ export default function TechnologyPanel({
   const deviceCategories = withRemainder(
     data.devices.map((d) => ({ label: d.name, value: d.pageViews })),
     kpis.knownDevicePageViews,
-    'Other devices',
+    t('webActivity.technology.otherDevices'),
   );
   const osCategories = withRemainder(
     data.operatingSystems.map((o) => ({ label: o.name, value: o.pageViews })),
     kpis.pageViews,
-    'Other / unknown',
+    t('webActivity.common.otherUnknown'),
   );
 
   const items: KpiDefinition[] = [
     {
       key: 'browsers',
-      label: 'Browsers',
+      label: t('webActivity.technology.browsers'),
       value: formatCount(kpis.browsers),
       hint:
         kpis.unknownBrowserPageViews > 0
-          ? `${formatCount(kpis.unknownBrowserPageViews)} views unidentified`
+          ? t('webActivity.technology.kpi.viewsUnidentifiedHint', { count: formatCount(kpis.unknownBrowserPageViews) })
           : undefined,
       info: {
-        what: 'Distinct browser versions seen.',
-        how:
-          'Application Insights records browser and version together, so "Chrome 128" and '
-          + '"Chrome 129" are two entries. That is what makes this list useful for spotting an old '
-          + 'build still in the estate, and what makes the count itself large.',
+        what: t('webActivity.technology.kpi.browsersWhat'),
+        how: t('webActivity.technology.kpi.browsersHow'),
       },
     },
     {
       key: 'os',
-      label: 'Operating systems',
+      label: t('webActivity.technology.operatingSystems'),
       value: formatCount(kpis.operatingSystems),
-      info: { what: 'Distinct operating systems seen.', how: 'Derived from the browser user agent.' },
+      info: { what: t('webActivity.technology.kpi.operatingSystemsWhat'), how: t('webActivity.technology.kpi.operatingSystemsHow') },
     },
     {
       key: 'devices',
-      label: 'Device types',
+      label: t('webActivity.technology.kpi.deviceTypes'),
       value: formatCount(kpis.devices),
       info: {
-        what: 'Distinct device descriptions seen.',
-        how: 'Free text from Application Insights rather than a fixed list, so spelling varies between browsers.',
+        what: t('webActivity.technology.kpi.deviceTypesWhat'),
+        how: t('webActivity.technology.kpi.deviceTypesHow'),
       },
     },
     {
       key: 'mobile',
-      label: 'Mobile share',
+      label: t('webActivity.technology.kpi.mobileShare'),
       value: formatPct(kpis.mobilePct),
       info: {
-        what: 'Page views from a phone or tablet, as a share of the views whose device is known.',
-        how:
-          'The denominator is deliberately the KNOWN devices, not all page views: hits with no '
-          + 'device are unmeasured, and folding them in would show a FALLING mobile share whenever '
-          + 'device detection got worse. Classification is a documented name-matching heuristic - '
-          + 'an unrecognised device counts as not-mobile rather than being guessed at.',
+        what: t('webActivity.technology.kpi.mobileShareWhat'),
+        how: t('webActivity.technology.kpi.mobileHow'),
       },
     },
     {
       key: 'load',
-      label: 'Average load',
+      label: t('webActivity.technology.kpi.averageLoad'),
       value: formatSeconds(kpis.averageLoadSeconds),
       tone: loadTone(kpis.averageLoadSeconds),
       info: {
-        what: 'Mean page load time as reported by the browser.',
-        how: 'Views with no browser-reported load time are excluded rather than counted as zero.',
+        what: t('webActivity.technology.kpi.averageLoadWhat'),
+        how: t('webActivity.technology.kpi.averageLoadHow'),
       },
     },
     {
       key: 'p95',
-      label: '95th percentile load',
+      label: t('webActivity.technology.kpi.p95Load'),
       value: kpis.p95AtCeiling
-        ? `\u2265${formatSeconds(kpis.loadCeilingSeconds)}`
+        ? t('webActivity.technology.kpi.p95AtLeast', { seconds: formatSeconds(kpis.loadCeilingSeconds) })
         : formatSeconds(kpis.p95LoadSeconds),
       tone: loadTone(kpis.p95LoadSeconds),
       info: {
-        what: 'The load time one page view in twenty is worse than.',
-        how:
-          'Estimated from a quarter-second histogram rather than an exact percentile, because an '
-          + 'exact one has to sort every page view in the window and is the single query on this '
-          + 'page most likely to time out. The estimate is rounded UP to the bucket edge, so within '
-          + 'the measured range it never flatters the slow tail. Loads slower than the histogram '
-          + 'ceiling all share one bucket, so past it the figure is shown as "at least" - the real '
-          + 'value could be far worse.',
+        what: t('webActivity.technology.kpi.p95LoadWhat'),
+        how: t('webActivity.technology.kpi.p95How'),
       },
     },
   ];
@@ -154,16 +144,16 @@ export default function TechnologyPanel({
 
       <div className={styles.grid}>
         <SectionCard
-          title="Browsers"
-          description="Page views per browser version, with what each one experienced."
+          title={t('webActivity.technology.browsers')}
+          description={t('webActivity.technology.browsersDescription')}
           query={queryFor(data.queries, 'tech-browsers')}
           isEmpty={data.browsers.length === 0}
         >
-          <PlatformTable rows={data.browsers} heading="Browser" />
+          <PlatformTable rows={data.browsers} heading={t('webActivity.technology.browser')} />
         </SectionCard>
 
         <SectionCard
-          title="Devices"
+          title={t('webActivity.technology.devices')}
           query={queryFor(data.queries, 'tech-devices')}
           isEmpty={data.devices.length === 0}
         >
@@ -171,22 +161,22 @@ export default function TechnologyPanel({
             categories={deviceCategories}
             colours={deviceCategories.map((_, i) => seriesColor(i))}
             centreValue={formatPct(kpis.mobilePct)}
-            centreLabel="mobile"
+            centreLabel={t('webActivity.technology.mobileLower')}
           />
         </SectionCard>
 
         <SectionCard
-          title="Operating systems"
+          title={t('webActivity.technology.operatingSystems')}
           query={queryFor(data.queries, 'tech-os')}
           isEmpty={data.operatingSystems.length === 0}
         >
-          <CategoryBarChart categories={osCategories} valueLabel="Page views" showShare />
+          <CategoryBarChart categories={osCategories} valueLabel={t('webActivity.common.pageViews')} showShare />
         </SectionCard>
 
         <SectionCard
-          title="Load time by browser"
-          description="Average seconds to load, per browser version."
-          note="A single browser version far above the others is usually an extension or a policy setting, not the page."
+          title={t('webActivity.technology.loadByBrowser.title')}
+          description={t('webActivity.technology.loadByBrowser.description')}
+          note={t('webActivity.technology.loadByBrowser.note')}
           query={queryFor(data.queries, 'tech-browsers')}
           isEmpty={data.browsers.every((b) => b.averageLoadSeconds === null)}
         >
@@ -194,25 +184,25 @@ export default function TechnologyPanel({
             categories={data.browsers
               .filter((b) => b.averageLoadSeconds !== null)
               .map((b) => ({ label: b.name, value: Math.round((b.averageLoadSeconds ?? 0) * 100) / 100 }))}
-            valueLabel="Seconds"
+            valueLabel={t('webActivity.technology.seconds')}
           />
         </SectionCard>
       </div>
 
       <div className={styles.stack}>
         <SectionCard
-          title="Device mix over time"
-          description="Weekly page views per device, stacked - the trend that decides whether a responsive-design project is worth funding."
+          title={t('webActivity.technology.deviceMix.title')}
+          description={t('webActivity.technology.deviceMix.description')}
           query={queryFor(data.queries, 'tech-device-over-time')}
           isEmpty={data.deviceOverTime.length === 0}
         >
-          <StackedAreaChart series={toStackedSeries(data.deviceOverTime)} valueLabel="Page views" />
+          <StackedAreaChart series={toStackedSeries(data.deviceOverTime)} valueLabel={t('webActivity.common.pageViews')} />
         </SectionCard>
 
         <SectionCard
-          title="Detail"
-          description="Browser, device, operating system and city together, ranked by visits."
-          note={DWELL_CAVEAT}
+          title={t('webActivity.technology.detail.title')}
+          description={t('webActivity.technology.detail.description')}
+          note={dwellCaveat(t)}
           query={queryFor(data.queries, 'tech-detail')}
           isEmpty={data.detail.length === 0}
           actions={
@@ -223,33 +213,33 @@ export default function TechnologyPanel({
               onClick={onExportDetail}
               disabled={exporting}
             >
-              Export
+              {t('webActivity.common.export')}
             </Button>
           }
         >
           <div className={styles.tableWrap}>
-            <Table size="small" aria-label="Technology detail">
+            <Table size="small" aria-label={t('webActivity.technology.detail.aria')}>
               <TableHeader>
                 <TableRow>
-                  <TableHeaderCell>Browser</TableHeaderCell>
-                  <TableHeaderCell>Device</TableHeaderCell>
-                  <TableHeaderCell>OS</TableHeaderCell>
-                  <TableHeaderCell>City</TableHeaderCell>
-                  <TableHeaderCell className={styles.numeric}>Visits</TableHeaderCell>
-                  <TableHeaderCell className={styles.numeric}>Visitors</TableHeaderCell>
-                  <TableHeaderCell className={styles.numeric}>Page views</TableHeaderCell>
-                  <TableHeaderCell className={styles.numeric}>Per visit</TableHeaderCell>
-                  <TableHeaderCell className={styles.numeric}>Avg time</TableHeaderCell>
-                  <TableHeaderCell className={styles.numeric}>Avg load</TableHeaderCell>
+                  <TableHeaderCell>{t('webActivity.technology.browser')}</TableHeaderCell>
+                  <TableHeaderCell>{t('webActivity.technology.device')}</TableHeaderCell>
+                  <TableHeaderCell>{t('webActivity.technology.os')}</TableHeaderCell>
+                  <TableHeaderCell>{t('webActivity.geography.city')}</TableHeaderCell>
+                  <TableHeaderCell className={styles.numeric}>{t('webActivity.common.visits')}</TableHeaderCell>
+                  <TableHeaderCell className={styles.numeric}>{t('webActivity.common.visitors')}</TableHeaderCell>
+                  <TableHeaderCell className={styles.numeric}>{t('webActivity.common.pageViews')}</TableHeaderCell>
+                  <TableHeaderCell className={styles.numeric}>{t('webActivity.common.perVisit')}</TableHeaderCell>
+                  <TableHeaderCell className={styles.numeric}>{t('webActivity.common.avgTime')}</TableHeaderCell>
+                  <TableHeaderCell className={styles.numeric}>{t('webActivity.common.avgLoad')}</TableHeaderCell>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {data.detail.map((row, index) => (
                   <TableRow key={`${row.browser}|${row.device}|${row.operatingSystem}|${row.city}|${index}`}>
-                    <TableCell className={styles.td}>{row.browser}</TableCell>
-                    <TableCell className={styles.td}>{row.device}</TableCell>
-                    <TableCell className={styles.td}>{row.operatingSystem}</TableCell>
-                    <TableCell className={styles.td}>{row.city}</TableCell>
+                    <TableCell className={styles.td}>{serverPlaceholderText(t, row.browser)}</TableCell>
+                    <TableCell className={styles.td}>{serverPlaceholderText(t, row.device)}</TableCell>
+                    <TableCell className={styles.td}>{serverPlaceholderText(t, row.operatingSystem)}</TableCell>
+                    <TableCell className={styles.td}>{serverPlaceholderText(t, row.city)}</TableCell>
                     <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.visits)}</TableCell>
                     <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.visitors)}</TableCell>
                     <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.pageViews)}</TableCell>
@@ -275,6 +265,7 @@ export default function TechnologyPanel({
 
 function PlatformTable({ rows, heading }: { rows: WebActivityPlatformRow[]; heading: string }) {
   const styles = useWebActivityStyles();
+  const t = useT();
 
   return (
     <div className={styles.tableWrap}>
@@ -282,17 +273,17 @@ function PlatformTable({ rows, heading }: { rows: WebActivityPlatformRow[]; head
         <TableHeader>
           <TableRow>
             <TableHeaderCell>{heading}</TableHeaderCell>
-            <TableHeaderCell className={styles.numeric}>Page views</TableHeaderCell>
-            <TableHeaderCell className={styles.numeric}>Share</TableHeaderCell>
-            <TableHeaderCell className={styles.numeric}>Avg load</TableHeaderCell>
+            <TableHeaderCell className={styles.numeric}>{t('webActivity.common.pageViews')}</TableHeaderCell>
+            <TableHeaderCell className={styles.numeric}>{t('webActivity.common.share')}</TableHeaderCell>
+            <TableHeaderCell className={styles.numeric}>{t('webActivity.common.avgLoad')}</TableHeaderCell>
           </TableRow>
         </TableHeader>
         <TableBody>
           {rows.map((row) => (
             <TableRow key={row.name}>
               <TableCell className={styles.td}>
-                <div className={styles.ellipsis} title={row.name}>
-                  {row.name}
+                <div className={styles.ellipsis} title={serverPlaceholderText(t, row.name)}>
+                  {serverPlaceholderText(t, row.name)}
                 </div>
               </TableCell>
               <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.pageViews)}</TableCell>

@@ -103,6 +103,7 @@
     <Compile Include="Models\Config\AppRegistrationCredentials.cs" />
     <Compile Include="Models\Base64Serialisable.cs" />
     <Compile Include="Models\DatabaseUpgradeInfo.cs" />
+    <Compile Include="Models\DatabaseUpgradeRequest.cs" />
     <Compile Include="Models\OrgUrlStore.cs" />
     <Compile Include="Models\Enums.cs" />
     <Compile Include="Models\AppServicePublishInfo.cs" />
@@ -122,6 +123,7 @@
     <Compile Include="SPO\SharePointModelBuilder\ValueLookups\Models.cs" />
     <Compile Include="SPO\SharePointModelBuilder\ValueLookups\JsonObjectToStringLookup.cs" />
     <Compile Include="InstallSummary.cs" />
+    <Compile Include="InstallerNetworkProxy.cs" />
     <Compile Include="PreInstallAdvisor.cs" />
     <Compile Include="SolutionInstaller.cs" />
     <Compile Include="Models\AzureSubscription.cs" />

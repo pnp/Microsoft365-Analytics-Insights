@@ -1,5 +1,7 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { ReportMatrix } from '../../types/reports';
+import { useT } from '../../i18n';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { formatValue, formatCompact } from './chartCommon';
 
 type MatrixChartProps = {
@@ -111,6 +113,7 @@ const useStyles = makeStyles({
  * exist. Rather than print a total that is right on one grid and wrong on another, none is shown.
  */
 export default function MatrixChart({ matrix, valueLabel }: MatrixChartProps) {
+  const t = useT();
   const styles = useStyles();
 
   const { rows, columns, cells, rowLabel, columnLabel, shadeByRow } = matrix;
@@ -125,7 +128,7 @@ export default function MatrixChart({ matrix, valueLabel }: MatrixChartProps) {
   }
 
   if (rows.length === 0 || columns.length === 0 || total <= 0) {
-    return <div className={styles.empty}>No data for this period.</div>;
+    return <div className={styles.empty}>{t('charts.empty.noDataForPeriod')}</div>;
   }
 
   const valueAt = (row: string, column: string): number => values.get(`${row}\u0000${column}`) ?? 0;
@@ -145,8 +148,8 @@ export default function MatrixChart({ matrix, valueLabel }: MatrixChartProps) {
                 {rowLabel}
               </th>
               {columns.map((column) => (
-                <th key={column} className={styles.columnHead} scope="col" title={column}>
-                  {column}
+                <th key={column} className={styles.columnHead} scope="col" title={serverPlaceholderText(t, column)}>
+                  {serverPlaceholderText(t, column)}
                 </th>
               ))}
             </tr>
@@ -154,10 +157,11 @@ export default function MatrixChart({ matrix, valueLabel }: MatrixChartProps) {
           <tbody>
             {rows.map((row) => {
               const max = shadeByRow ? (rowMax.get(row) ?? 0) : gridMax;
+              const rowText = serverPlaceholderText(t, row);
               return (
                 <tr key={row}>
-                  <th className={styles.rowHead} scope="row" title={row}>
-                    {row}
+                  <th className={styles.rowHead} scope="row" title={rowText}>
+                    {rowText}
                   </th>
                   {columns.map((column) => {
                     const value = valueAt(row, column);
@@ -166,7 +170,7 @@ export default function MatrixChart({ matrix, valueLabel }: MatrixChartProps) {
                         key={column}
                         className={styles.cell}
                         style={{ backgroundColor: shade(value, max), color: textColour(value, max) }}
-                        title={`${row} / ${column}: ${formatValue(value)} ${valueLabel}`}
+                        title={t('charts.matrix.cellTitle', { row: rowText, column: serverPlaceholderText(t, column), value: formatValue(value), valueLabel })}
                       >
                         {value > 0 ? formatCompact(value) : ''}
                       </td>
@@ -181,15 +185,16 @@ export default function MatrixChart({ matrix, valueLabel }: MatrixChartProps) {
 
       <div className={styles.legend}>
         <Text size={100} className={styles.muted}>
-          {columnLabel}
-          {shadeByRow ? ' \u00b7 shaded within each row \u00b7 none' : ' \u00b7 none'}
+          {t(shadeByRow ? 'charts.matrix.legendShadedByRow' : 'charts.matrix.legendShadedOverall', {
+            columnLabel,
+          })}
         </Text>
         <span className={styles.swatch} style={{ backgroundColor: shade(0, 1) }} />
         {[0.25, 0.5, 0.75, 1].map((fraction) => (
           <span key={fraction} className={styles.swatch} style={{ backgroundColor: shade(fraction, 1) }} />
         ))}
         <Text size={100} className={styles.muted}>
-          most
+          {t('charts.matrix.most')}
         </Text>
       </div>
     </div>

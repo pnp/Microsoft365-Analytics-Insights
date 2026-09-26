@@ -26,7 +26,11 @@ import type { SystemStatus } from '../types/systemStatus';
 import type { ConfigSection } from '../types/health';
 import type { UpdateCheck } from '../types/updateCheck';
 import { formatUtc } from '../components/health/healthShared';
+import { serverPlaceholderText } from '../components/shared/serverPlaceholder';
 import Spinner from '../components/Spinner';
+import { EN_CATALOG, useT, useTNode, type TFunction } from '../i18n';
+import { buildLabelText } from '../product';
+import { enabledImportLabelText } from './InsightsOverviewPage';
 
 const useStyles = makeStyles({
   cards: {
@@ -63,17 +67,80 @@ const useStyles = makeStyles({
   },
 });
 
+export const WEBHOOK_STATUS_DETAIL_TEXT: Record<string, Parameters<TFunction>[0]> = Object.freeze({
+  [EN_CATALOG['admin.serviceConfiguration.webhook.detail.webAppUrlMissing']]:
+    'admin.serviceConfiguration.webhook.detail.webAppUrlMissing',
+});
+
+export function webhookStatusDetail(t: TFunction, detail: string | null): string | null {
+  if (!detail) return detail;
+  const key = WEBHOOK_STATUS_DETAIL_TEXT[detail];
+  return key ? t(key) : detail;
+}
+
+function matchTemplate(template: string, text: string): Record<string, string> | null {
+  const names: string[] = [];
+  const pattern = template
+    .split(/(\{\w+\})/)
+    .map((part) => {
+      const placeholder = /^\{(\w+)\}$/.exec(part);
+      if (!placeholder) return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      names.push(placeholder[1]);
+      return '(.+?)';
+    })
+    .join('');
+  const match = new RegExp(`^${pattern}$`).exec(text);
+  return match ? Object.fromEntries(names.map((name, index) => [name, match[index + 1]])) : null;
+}
+
+/**
+ * UpdateChecker's fixed error sentences, most specific first. Each English catalog entry is the server's
+ * sentence verbatim with its variable parts as placeholders, so a match yields the facts and the sentence
+ * is shown from the catalog in the reader's language. `rateLimitedSoon` is the rate-limit sentence when
+ * GitHub sends no reset time and the server writes the English word "shortly" in its place.
+ *
+ * serverAuthoredText.test.ts reads UpdateChecker.cs and fails when these and the server's sentences
+ * disagree in either direction. Anything unrecognised is shown as the server sent it.
+ */
+export const UPDATE_CHECK_ERROR_KEYS = [
+  'admin.serviceConfiguration.updates.error.rateLimitedSoon',
+  'admin.serviceConfiguration.updates.error.rateLimited',
+  'admin.serviceConfiguration.updates.error.releasesNotFound',
+  'admin.serviceConfiguration.updates.error.httpStatus',
+  'admin.serviceConfiguration.updates.error.timeout',
+  'admin.serviceConfiguration.updates.error.unreachable',
+  'admin.serviceConfiguration.updates.error.failed',
+  'admin.serviceConfiguration.updates.error.devBuild',
+  'admin.serviceConfiguration.updates.error.currentBuildUnreadable',
+  'admin.serviceConfiguration.updates.error.latestBuildUnreadable',
+] as const satisfies readonly Parameters<TFunction>[0][];
+
+export function updateCheckErrorText(t: TFunction, error: string | null): string | null {
+  if (!error) return error;
+  for (const key of UPDATE_CHECK_ERROR_KEYS) {
+    const facts = matchTemplate(EN_CATALOG[key], error);
+    if (facts) return t(key, facts);
+  }
+  return error;
+}
+
 function WebhookSubscriptionBadge({ status }: { status: SystemStatus }) {
+  const t = useT();
+  const tNode = useTNode();
   switch (status.callWebhookState) {
     case 'Active':
       return (
         <span>
           <Badge appearance="filled" color="success">
-            Active
+            {t('admin.serviceConfiguration.webhook.active')}
           </Badge>
           {status.callWebhookExpiry && (
             <Text size={200} style={{ marginLeft: 8 }}>
-              renews automatically; expires {new Date(status.callWebhookExpiry).toUTCString()}
+              {t('admin.serviceConfiguration.webhook.renewsAutomatically', {
+                // formatUtc, not Date.toUTCString(): toUTCString is English in every locale
+                // ("Thu, 25 Sep 2026 ..."), so a Spanish page printed English day and month names.
+                expiry: formatUtc(status.callWebhookExpiry),
+              })}
             </Text>
           )}
         </span>
@@ -82,12 +149,12 @@ function WebhookSubscriptionBadge({ status }: { status: SystemStatus }) {
       return (
         <div>
           <Badge appearance="filled" color="danger">
-            No active subscription found
+            {t('admin.serviceConfiguration.webhook.noActiveSubscription')}
           </Badge>
           <Text size={200} block style={{ marginTop: 4 }}>
-            The importer web-job registers and renews this on every import cycle. If it stays missing, check the importer
-            web-job is running and that its app registration has the <code>CallRecords.Read.All</code> Microsoft Graph
-            application permission.
+            {tNode('admin.serviceConfiguration.webhook.missingHelp', {
+              permission: <code>{t('admin.serviceConfiguration.webhook.callRecordsPermission')}</code>,
+            })}
           </Text>
         </div>
       );
@@ -95,15 +162,15 @@ function WebhookSubscriptionBadge({ status }: { status: SystemStatus }) {
       return (
         <div>
           <Badge appearance="filled" color="warning">
-            Couldn't check
+            {t('admin.serviceConfiguration.webhook.couldNotCheck')}
           </Badge>
           <Text size={200} block style={{ marginTop: 4 }}>
-            {status.callWebhookStatusDetail}
+            {webhookStatusDetail(t, status.callWebhookStatusDetail)}
           </Text>
         </div>
       );
     default:
-      return <Text>Not applicable - Teams calls import is disabled</Text>;
+      return <Text>{t('admin.serviceConfiguration.webhook.notApplicable')}</Text>;
   }
 }
 
@@ -113,6 +180,8 @@ function WebhookSubscriptionBadge({ status }: { status: SystemStatus }) {
  * which matters because plenty of these deployments have no outbound internet at all.
  */
 function UpdateCheckCard({ styles }: { styles: ReturnType<typeof useStyles> }) {
+  const t = useT();
+  const tNode = useTNode();
   const [checking, setChecking] = useState(false);
   const [result, setResult] = useState<UpdateCheck | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -123,7 +192,7 @@ function UpdateCheckCard({ styles }: { styles: ReturnType<typeof useStyles> }) {
     try {
       setResult(await fetchUpdateCheck());
     } catch (e) {
-      setFailure(e instanceof Error ? e.message : 'Update check failed.');
+      setFailure(e instanceof Error ? e.message : t('admin.serviceConfiguration.updates.checkFailed'));
     } finally {
       setChecking(false);
     }
@@ -131,19 +200,20 @@ function UpdateCheckCard({ styles }: { styles: ReturnType<typeof useStyles> }) {
 
   return (
     <Card>
-      <CardHeader header={<Subtitle2>Software updates</Subtitle2>} />
+      <CardHeader header={<Subtitle2>{t('admin.serviceConfiguration.updates.title')}</Subtitle2>} />
       <Body1>
-        Compares the build this site is running against the latest published release on GitHub. Nothing is
-        sent to GitHub until you press the button.
+        {t('admin.serviceConfiguration.updates.description')}
       </Body1>
 
       <div className={styles.updateRow}>
         <Button appearance="primary" onClick={onCheck} disabled={checking}>
-          {checking ? 'Checking...' : 'Check for updates'}
+          {checking
+            ? t('admin.serviceConfiguration.updates.checking')
+            : t('admin.serviceConfiguration.updates.checkForUpdates')}
         </Button>
         {result && (
           <Text size={200} className={styles.muted}>
-            Checked {formatUtc(result.checkedAtUtc)}
+            {t('admin.serviceConfiguration.updates.checked', { checkedAt: formatUtc(result.checkedAtUtc) })}
           </Text>
         )}
       </div>
@@ -156,19 +226,24 @@ function UpdateCheckCard({ styles }: { styles: ReturnType<typeof useStyles> }) {
 
       {result && (
         <>
-          <Table aria-label="Update check" size="small">
+          <Table aria-label={t('admin.serviceConfiguration.updates.ariaLabel')} size="small">
             <TableBody>
               <TableRow>
-                <TableCell className={styles.label}>This site is running</TableCell>
-                <TableCell className={styles.value}>{result.currentBuildLabel ?? 'Unknown'}</TableCell>
+                <TableCell className={styles.label}>{t('admin.serviceConfiguration.updates.currentBuildLabel')}</TableCell>
+                <TableCell className={styles.value}>{buildLabelText(t, result.currentBuildLabel) ?? t('admin.common.unknown')}</TableCell>
               </TableRow>
               <TableRow>
-                <TableCell className={styles.label}>Latest published release</TableCell>
+                <TableCell className={styles.label}>{t('admin.serviceConfiguration.updates.latestReleaseLabel')}</TableCell>
                 <TableCell className={styles.value}>
-                  {result.latestReleaseName ?? (result.latestBuild != null ? `Build ${result.latestBuild}` : 'Unknown')}
+                  {buildLabelText(t, result.latestReleaseName) ??
+                    (result.latestBuild != null
+                      ? t('admin.serviceConfiguration.updates.build', { build: result.latestBuild })
+                      : t('admin.common.unknown'))}
                   {result.latestPublishedUtc && (
                     <Text size={200} block className={styles.muted}>
-                      Published {formatUtc(result.latestPublishedUtc)}
+                      {t('admin.serviceConfiguration.updates.published', {
+                        publishedAt: formatUtc(result.latestPublishedUtc),
+                      })}
                     </Text>
                   )}
                 </TableCell>
@@ -179,24 +254,30 @@ function UpdateCheckCard({ styles }: { styles: ReturnType<typeof useStyles> }) {
           {result.updateAvailable ? (
             <MessageBar intent="warning">
               <MessageBarBody>
-                <strong>An update is available.</strong> This site is on build {result.currentBuild}; build{' '}
-                {result.latestBuild} has been released.{' '}
-                {result.latestReleaseUrl && (
-                  <Link href={result.latestReleaseUrl} target="_blank" rel="noreferrer">
-                    Open the release notes and downloads
-                  </Link>
+                {tNode(
+                  result.latestReleaseUrl
+                    ? 'admin.serviceConfiguration.updates.updateAvailableWithLink'
+                    : 'admin.serviceConfiguration.updates.updateAvailableNoLink',
+                  {
+                    lead: <strong>{t('admin.serviceConfiguration.updates.updateAvailableLead')}</strong>,
+                    currentBuild: result.currentBuild,
+                    latestBuild: result.latestBuild,
+                    releaseLink: result.latestReleaseUrl ? (
+                      <Link href={result.latestReleaseUrl} target="_blank" rel="noreferrer">
+                        {t('admin.serviceConfiguration.updates.openReleaseNotes')}
+                      </Link>
+                    ) : null,
+                  },
                 )}
-                . Read the release notes before upgrading - they call out any database migrations and
-                configuration changes.
               </MessageBarBody>
             </MessageBar>
           ) : result.checkError ? (
             <MessageBar intent="info">
               <MessageBarBody>
-                {result.checkError}{' '}
+                {updateCheckErrorText(t, result.checkError)}{' '}
                 {result.latestReleaseUrl && (
                   <Link href={result.latestReleaseUrl} target="_blank" rel="noreferrer">
-                    Open the latest release
+                    {t('admin.serviceConfiguration.updates.openLatestRelease')}
                   </Link>
                 )}
               </MessageBarBody>
@@ -204,12 +285,12 @@ function UpdateCheckCard({ styles }: { styles: ReturnType<typeof useStyles> }) {
           ) : (
             <MessageBar intent="success">
               <MessageBarBody>
-                This site is up to date - no newer release has been published.
+                {t('admin.serviceConfiguration.updates.upToDate')}
                 {result.latestReleaseUrl && (
                   <>
                     {' '}
                     <Link href={result.latestReleaseUrl} target="_blank" rel="noreferrer">
-                      View the current release
+                      {t('admin.serviceConfiguration.updates.viewCurrentRelease')}
                     </Link>
                   </>
                 )}
@@ -238,6 +319,7 @@ function UpdateCheckCard({ styles }: { styles: ReturnType<typeof useStyles> }) {
  */
 export default function ServiceConfigurationPage() {
   const styles = useStyles();
+  const t = useT();
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [health, setHealth] = useState<ConfigSection | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -250,7 +332,7 @@ export default function ServiceConfigurationPage() {
         if (!cancelled) setStatus(s);
       })
       .catch((e: any) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load the service configuration.');
+        if (!cancelled) setError(e instanceof Error ? e.message : t('admin.serviceConfiguration.loadFailed'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -279,19 +361,19 @@ export default function ServiceConfigurationPage() {
     try {
       const token = await testWebhook(url);
       if (token === 'test') {
-        toast.success(`Success. Got back test-token "${token}"`);
+        toast.success(t('admin.serviceConfiguration.webhook.testSuccess', { token }));
       } else {
-        toast.error(`Unexpected response. Got back response body "${token}"`);
+        toast.error(t('admin.serviceConfiguration.webhook.testUnexpectedResponse', { token }));
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Webhook test failed.');
+      toast.error(e instanceof Error ? e.message : t('admin.serviceConfiguration.webhook.testFailed'));
     }
   };
 
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '32px' }}>
-        <Spinner size={100} label="Loading service configuration..." />
+        <Spinner size={100} label={t('admin.serviceConfiguration.loading')} />
       </div>
     );
   }
@@ -299,52 +381,56 @@ export default function ServiceConfigurationPage() {
   if (error || !status) {
     return (
       <MessageBar intent="error">
-        <MessageBarBody>{error ?? 'No configuration available.'}</MessageBarBody>
+        <MessageBarBody>{error ?? t('admin.serviceConfiguration.noConfiguration')}</MessageBarBody>
       </MessageBar>
     );
   }
 
   return (
     <div>
-      <Title3 block>Service configuration{status.buildLabel ? ` - ${status.buildLabel}` : ''}</Title3>
+      <Title3 block>
+        {status.buildLabel
+          ? t('admin.serviceConfiguration.titleWithBuild', { buildLabel: buildLabelText(t, status.buildLabel) })
+          : t('admin.serviceConfiguration.title')}
+      </Title3>
 
       <div className={styles.cards}>
         <UpdateCheckCard styles={styles} />
 
         <Card>
-          <CardHeader header={<Subtitle2>Azure resources</Subtitle2>} />
-          <Body1>These are the resources this deployment is configured to use:</Body1>
-          <Table aria-label="Azure resources" size="small">
+          <CardHeader header={<Subtitle2>{t('admin.serviceConfiguration.azureResources.title')}</Subtitle2>} />
+          <Body1>{t('admin.serviceConfiguration.azureResources.description')}</Body1>
+          <Table aria-label={t('admin.serviceConfiguration.azureResources.ariaLabel')} size="small">
             <TableBody>
               <TableRow>
                 <TableCell className={styles.label}>SQL Server</TableCell>
                 <TableCell className={styles.value}>{status.webAppConfigSQL}</TableCell>
               </TableRow>
               <TableRow>
-                <TableCell className={styles.label}>Redis SSL Endpoint</TableCell>
-                <TableCell className={styles.value}>{status.webAppConfigRedis}</TableCell>
+                <TableCell className={styles.label}>{t('admin.serviceConfiguration.azureResources.redisSslEndpoint')}</TableCell>
+                <TableCell className={styles.value}>{serverPlaceholderText(t, status.webAppConfigRedis)}</TableCell>
               </TableRow>
               <TableRow>
-                <TableCell className={styles.label}>Cognitive Services Endpoint</TableCell>
+                <TableCell className={styles.label}>{t('admin.serviceConfiguration.azureResources.cognitiveServicesEndpoint')}</TableCell>
                 <TableCell className={styles.value}>{status.webAppConfigCognitive}</TableCell>
               </TableRow>
               <TableRow>
-                <TableCell className={styles.label}>Cognitive Services Enabled</TableCell>
+                <TableCell className={styles.label}>{t('admin.serviceConfiguration.azureResources.cognitiveServicesEnabled')}</TableCell>
                 <TableCell className={styles.value}>
                   {status.cognitiveServiceEnabled ? (
-                    <Text>Yes - cognitive analytics will be available</Text>
+                    <Text>{t('admin.serviceConfiguration.azureResources.cognitiveAnalyticsAvailable')}</Text>
                   ) : (
-                    <Text>No - cognitive analytics are disabled</Text>
+                    <Text>{t('admin.serviceConfiguration.azureResources.cognitiveAnalyticsDisabled')}</Text>
                   )}
                 </TableCell>
               </TableRow>
               <TableRow>
                 <TableCell className={styles.label}>Service Bus</TableCell>
-                <TableCell className={styles.value}>{status.webAppConfigServiceBus}</TableCell>
+                <TableCell className={styles.value}>{serverPlaceholderText(t, status.webAppConfigServiceBus)}</TableCell>
               </TableRow>
               {health?.webAppUrl && (
                 <TableRow>
-                  <TableCell className={styles.label}>Web app URL</TableCell>
+                  <TableCell className={styles.label}>{t('admin.serviceConfiguration.azureResources.webAppUrl')}</TableCell>
                   <TableCell className={styles.value}>{health.webAppUrl}</TableCell>
                 </TableRow>
               )}
@@ -354,50 +440,60 @@ export default function ServiceConfigurationPage() {
 
         {health && (
           <Card>
-            <CardHeader header={<Subtitle2>Imports and schema</Subtitle2>} />
+            <CardHeader header={<Subtitle2>{t('admin.serviceConfiguration.importsAndSchema.title')}</Subtitle2>} />
             {health.configError && (
               <MessageBar intent="warning">
-                <MessageBarBody>Couldn't load configuration: {health.configError}</MessageBarBody>
+                <MessageBarBody>
+                  {t('admin.serviceConfiguration.importsAndSchema.configLoadFailed', { error: health.configError })}
+                </MessageBarBody>
               </MessageBar>
             )}
 
             <Body1>
-              Which import workloads are turned on - so an empty report reads as "feature off", not "broken".
+              {t('admin.serviceConfiguration.importsAndSchema.description')}
             </Body1>
             {health.enabledImports.length > 0 ? (
               <div className={styles.chips}>
                 {health.enabledImports.map((f) => (
                   <Badge key={f} appearance="tint" color="brand">
-                    {f}
+                    {enabledImportLabelText(t, f)}
                   </Badge>
                 ))}
               </div>
             ) : (
-              <Text size={200}>None enabled in this app's config.</Text>
+              <Text size={200}>{t('admin.serviceConfiguration.importsAndSchema.noneEnabled')}</Text>
             )}
 
-            <Table aria-label="Schema state" size="small">
+            <Table aria-label={t('admin.serviceConfiguration.importsAndSchema.schemaStateAriaLabel')} size="small">
               <TableBody>
                 <TableRow>
-                  <TableCell className={styles.label}>Schema / migration version</TableCell>
+                  <TableCell className={styles.label}>{t('admin.serviceConfiguration.importsAndSchema.schemaVersion')}</TableCell>
                   <TableCell className={styles.value}>
                     {health.schemaError ? (
-                      <Text size={200}>Couldn't check: {health.schemaError}</Text>
+                      <Text size={200}>
+                        {t('admin.serviceConfiguration.importsAndSchema.schemaCheckFailed', {
+                          error: health.schemaError,
+                        })}
+                      </Text>
                     ) : health.schemaUpToDate === true ? (
                       <Badge appearance="filled" color="success">
-                        Up to date with this build
+                        {t('admin.serviceConfiguration.importsAndSchema.upToDate')}
                       </Badge>
                     ) : health.schemaUpToDate === false ? (
                       <div>
                         <Badge appearance="filled" color="danger">
-                          {health.pendingMigrations.length} migration(s) pending
+                          {t('admin.serviceConfiguration.importsAndSchema.pendingMigrations', {
+                            count: health.pendingMigrations.length,
+                          })}
                         </Badge>{' '}
                         <Text size={200}>
-                          The database is behind this build - run the upgrader. ({health.pendingMigrations.join(', ')})
+                          {t('admin.serviceConfiguration.importsAndSchema.databaseBehind', {
+                            migrations: health.pendingMigrations.join(', '),
+                          })}
                         </Text>
                       </div>
                     ) : (
-                      <Text size={200}>Unknown.</Text>
+                      <Text size={200}>{t('admin.common.unknownWithPeriod')}</Text>
                     )}
                   </TableCell>
                 </TableRow>
@@ -407,25 +503,25 @@ export default function ServiceConfigurationPage() {
         )}
 
         <Card>
-          <CardHeader header={<Subtitle2>Teams calls</Subtitle2>} />
-          <Table aria-label="Teams calls configuration" size="small">
+          <CardHeader header={<Subtitle2>{t('admin.serviceConfiguration.teamsCalls.title')}</Subtitle2>} />
+          <Table aria-label={t('admin.serviceConfiguration.teamsCalls.ariaLabel')} size="small">
             <TableBody>
               <TableRow>
-                <TableCell className={styles.label}>Teams Calls Import</TableCell>
+                <TableCell className={styles.label}>{t('admin.serviceConfiguration.teamsCalls.importLabel')}</TableCell>
                 <TableCell className={styles.value}>
                   {status.callsImportEnabled ? (
                     <Badge appearance="tint" color="success">
-                      Enabled
+                      {t('admin.common.enabled')}
                     </Badge>
                   ) : (
                     <Badge appearance="tint" color="informative">
-                      Disabled - Teams call records are not being imported
+                      {t('admin.serviceConfiguration.teamsCalls.disabled')}
                     </Badge>
                   )}
                 </TableCell>
               </TableRow>
               <TableRow>
-                <TableCell className={styles.label}>Graph Call Webhook Endpoint</TableCell>
+                <TableCell className={styles.label}>{t('admin.serviceConfiguration.teamsCalls.webhookEndpoint')}</TableCell>
                 <TableCell className={styles.value}>
                   <Text>{status.webhookEndpointUrl}</Text>
                   {status.webhookEndpointUrl && (
@@ -434,18 +530,20 @@ export default function ServiceConfigurationPage() {
                       size="small"
                       onClick={() => onTestWebhook(status.webhookEndpointUrl!)}
                     >
-                      test webhook with validation POST
+                      {t('admin.serviceConfiguration.teamsCalls.testWebhook')}
                     </Button>
                   )}
                 </TableCell>
               </TableRow>
               <TableRow>
-                <TableCell className={styles.label}>Calls Webhook Subscription</TableCell>
+                <TableCell className={styles.label}>{t('admin.serviceConfiguration.teamsCalls.webhookSubscription')}</TableCell>
                 <TableCell className={styles.value}>
                   <WebhookSubscriptionBadge status={status} />
                   {health?.webhookExpiryUtc && (
                     <Text size={200} block>
-                      Health check last saw it expiring {formatUtc(health.webhookExpiryUtc)}.
+                      {t('admin.serviceConfiguration.teamsCalls.healthCheckExpiry', {
+                        expiry: formatUtc(health.webhookExpiryUtc),
+                      })}
                     </Text>
                   )}
                 </TableCell>

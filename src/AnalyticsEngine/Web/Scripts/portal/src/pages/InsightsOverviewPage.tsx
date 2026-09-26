@@ -9,6 +9,8 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
+import { useT, type TFunction, type TranslationKey } from '../i18n';
+import { buildLabelText } from '../product';
 import { fetchSystemStatus } from '../api/systemStatusApi';
 import { fetchHealthData, fetchHealthSummary } from '../api/healthApi';
 import type { SystemStatus } from '../types/systemStatus';
@@ -58,6 +60,40 @@ const useStyles = makeStyles({
   },
 });
 
+const phrase = (...parts: string[]) => parts.join(' ');
+
+export const ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY: Record<string, { english: string; key: TranslationKey }> = {
+  ActivityLog: { english: 'Activity/audit', key: 'overview.enabledImport.activityLog' },
+  Copilot: { english: 'Copilot', key: 'overview.enabledImport.copilot' },
+  CopilotInteractionHistory: {
+    english: phrase('Copilot', 'AI', 'interaction', 'history', '(tenant-wide', 'unless', 'scoped)'),
+    key: 'overview.enabledImport.copilotInteractionHistory',
+  },
+  ImportPowerPlatform: { english: 'Power Platform', key: 'overview.enabledImport.powerPlatform' },
+  ImportDlp: { english: phrase('DLP', 'policy', 'events'), key: 'overview.enabledImport.dlpPolicyEvents' },
+  GraphUsersMetadata: { english: 'User metadata', key: 'overview.enabledImport.userMetadata' },
+  GraphUsageReports: { english: 'Usage reports', key: 'overview.enabledImport.usageReports' },
+  GraphCopilotUsageReports: {
+    english: phrase('Copilot', 'usage', 'reports', '(Graph)'),
+    key: 'overview.enabledImport.copilotUsageReportsGraph',
+  },
+  GraphTeams: { english: 'Teams', key: 'overview.enabledImport.teams' },
+  WebTraffic: { english: 'Web traffic', key: 'overview.enabledImport.webTraffic' },
+  SentEmails: { english: 'Sent emails', key: 'overview.enabledImport.sentEmails' },
+  Calls: { english: 'Teams calls', key: 'overview.enabledImport.teamsCalls' },
+  CopilotStudioCredits: { english: phrase('Copilot', 'Studio', 'credits', '(billed)'), key: 'overview.enabledImport.copilotStudioCredits' },
+  AzureCostManagement: { english: phrase('Azure', 'costs', '(Cost', 'Management)'), key: 'overview.enabledImport.azureCosts' },
+};
+
+const ENABLED_IMPORT_KEY_BY_ENGLISH = new Map(
+  Object.values(ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY).map((entry) => [entry.english, entry.key]),
+);
+
+export function enabledImportLabelText(t: TFunction, serverLabel: string): string {
+  const key = ENABLED_IMPORT_KEY_BY_ENGLISH.get(serverLabel);
+  return key ? t(key) : serverLabel;
+}
+
 /**
  * Insights landing page: what data the solution holds, whether it is still arriving and healthy, and
  * where to go next.
@@ -75,6 +111,7 @@ const useStyles = makeStyles({
  * 60s-cached and single-flight server-side, so repeat visits are effectively free.
  */
 export default function InsightsOverviewPage() {
+  const t = useT();
   const styles = useStyles();
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -90,7 +127,7 @@ export default function InsightsOverviewPage() {
         if (!cancelled) setStatus(s);
       })
       .catch((e: any) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load the data overview.');
+        if (!cancelled) setError(e instanceof Error ? e.message : t('overview.page.loadError'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -108,12 +145,12 @@ export default function InsightsOverviewPage() {
         if (!cancelled) setHealth(s);
       })
       .catch((e: any) => {
-        if (!cancelled) setHealthError(e instanceof Error ? e.message : 'unknown error');
+        if (!cancelled) setHealthError(e instanceof Error ? e.message : t('overview.page.unknownError'));
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     let cancelled = false;
@@ -137,7 +174,7 @@ export default function InsightsOverviewPage() {
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '32px' }}>
-        <Spinner size={100} label="Loading data overview..." />
+        <Spinner size={100} label={t('overview.page.loading')} />
       </div>
     );
   }
@@ -145,7 +182,7 @@ export default function InsightsOverviewPage() {
   if (error || !status) {
     return (
       <MessageBar intent="error">
-        <MessageBarBody>{error ?? 'No data overview available.'}</MessageBarBody>
+        <MessageBarBody>{error ?? t('overview.page.noDataAvailable')}</MessageBarBody>
       </MessageBar>
     );
   }
@@ -153,35 +190,33 @@ export default function InsightsOverviewPage() {
   return (
     <div>
       <div className={styles.header}>
-        <Title3 as="h1">Overview</Title3>
+        <Title3 as="h1">{t('overview.page.title')}</Title3>
         {status.buildLabel && (
           <Badge appearance="tint" color="informative">
-            {status.buildLabel}
+            {buildLabelText(t, status.buildLabel)}
           </Badge>
         )}
       </div>
       <Text className={styles.lede}>
-        Microsoft 365 Advanced Analytics collects activity from across your tenant into your own database.
-        Here is what it holds, whether it is still arriving, and where to go next.
+        {t('overview.page.lede')}
       </Text>
 
       <div className={styles.sections}>
         <section>
           <div className={styles.sectionHeading}>
-            <Subtitle2 as="h2">Your data</Subtitle2>
+            <Subtitle2 as="h2">{t('overview.page.yourDataHeading')}</Subtitle2>
             <Text size={200} className={styles.sectionNote}>
               {status.importSettingsKnown
-                ? 'Only the workloads switched on for this deployment are shown.'
-                : "Import settings couldn't be read, so every figure is shown."}
+                ? t('overview.page.importSettingsKnown')
+                : t('overview.page.importSettingsUnknown')}
             </Text>
           </div>
 
           {counts.length === 0 ? (
             <MessageBar intent="info">
               <MessageBarBody>
-                No imports are switched on for this deployment, so there is nothing to summarise yet. Enable
-                them in the installer, then check{' '}
-                <a href="#/admin/health">Administration &rarr; Service health</a>.
+                {t('overview.page.noImportsPrefix')}{' '}
+                <a href="#/admin/health">{t('overview.page.serviceHealthLink')}</a>.
               </MessageBarBody>
             </MessageBar>
           ) : (
@@ -191,9 +226,7 @@ export default function InsightsOverviewPage() {
                 <div className={styles.banner}>
                   <MessageBar intent="warning">
                     <MessageBarBody>
-                      Every figure is still zero. That is normal for the first few hours after an install - if
-                      it persists, check <a href="#/admin/health">Administration &rarr; Service health</a> to
-                      see whether the imports are running.
+                      {t('overview.page.zeroFiguresPrefix')} <a href="#/admin/health">{t('overview.page.serviceHealthLink')}</a> {t('overview.page.zeroFiguresSuffix')}
                     </MessageBarBody>
                   </MessageBar>
                 </div>
@@ -204,11 +237,11 @@ export default function InsightsOverviewPage() {
           {status.enabledImports.length > 0 && (
             <div className={styles.imports}>
               <Text size={200} className={styles.sectionNote}>
-                Imports switched on:
+                {t('overview.page.importsSwitchedOn')}
               </Text>
               {status.enabledImports.map((name) => (
                 <Badge key={name} appearance="outline" color="informative">
-                  {name}
+                  {enabledImportLabelText(t, name)}
                 </Badge>
               ))}
             </div>
@@ -227,9 +260,9 @@ export default function InsightsOverviewPage() {
 
         <section>
           <div className={styles.sectionHeading}>
-            <Subtitle2 as="h2">Where to next</Subtitle2>
+            <Subtitle2 as="h2">{t('overview.page.whereToNextHeading')}</Subtitle2>
             <Text size={200} className={styles.sectionNote}>
-              The parts of the portal that apply to this deployment.
+              {t('overview.page.whereToNextNote')}
             </Text>
           </div>
           <WhereToNext availableKeys={countKeys} />

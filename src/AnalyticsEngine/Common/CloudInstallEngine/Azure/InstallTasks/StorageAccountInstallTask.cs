@@ -63,9 +63,21 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 var desiredAccess = _allowPublicAccess ? StoragePublicNetworkAccess.Enabled : StoragePublicNetworkAccess.Disabled;
                 if (storageAccount.Data.PublicNetworkAccess == null || storageAccount.Data.PublicNetworkAccess.Value != desiredAccess)
                 {
-                    _logger.LogInformation($"Updating storage account '{name}' public network access to '{desiredAccess}'...");
-                    patch.PublicNetworkAccess = desiredAccess;
-                    needsPatch = true;
+                    if (_allowPublicAccess && storageAccount.Data.PublicNetworkAccess == StoragePublicNetworkAccess.Disabled)
+                    {
+                        _logger.LogWarning($"Storage account '{name}' public network access is 'Disabled'. The installer will not re-enable it automatically; on a public install this blocks the audit blob checkpoint unless the deployment is moved to private networking.");
+                    }
+                    else
+                    {
+                        _logger.LogInformation($"Updating storage account '{name}' public network access to '{desiredAccess}'...");
+                        patch.PublicNetworkAccess = desiredAccess;
+                        needsPatch = true;
+                    }
+                }
+
+                if (_allowPublicAccess && storageAccount.Data.NetworkRuleSet?.DefaultAction == StorageNetworkDefaultAction.Deny)
+                {
+                    _logger.LogWarning($"Storage account '{name}' firewall default action is 'Deny' (selected networks). The installer will not change the storage firewall rules automatically; on a public install this blocks the audit blob checkpoint because same-region App Service traffic cannot be allowed with storage IP rules.");
                 }
 
                 if (needsPatch)

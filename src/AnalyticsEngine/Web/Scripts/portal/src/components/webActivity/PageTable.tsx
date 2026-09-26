@@ -1,7 +1,8 @@
 import { Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow, Text } from '@fluentui/react-components';
 import type { WebActivityPageRow } from '../../types/webActivity';
+import { useT } from '../../i18n';
 import {
-  DWELL_CAVEAT,
+  dwellCaveat,
   formatCount,
   formatDuration,
   formatPct,
@@ -41,7 +42,7 @@ export type PageTableColumns = {
 export default function PageTable({
   rows,
   columns,
-  valueHeading = 'Page views',
+  valueHeading,
   dwellFootnote,
   label,
 }: {
@@ -54,6 +55,7 @@ export default function PageTable({
   label: string;
 }) {
   const styles = useWebActivityStyles();
+  const t = useT();
   const show = {
     site: true,
     uniquePageViews: true,
@@ -70,15 +72,15 @@ export default function PageTable({
       <Table size="small" aria-label={label}>
         <TableHeader>
           <TableRow>
-            <TableHeaderCell>Page</TableHeaderCell>
-            {show.site && <TableHeaderCell>Site</TableHeaderCell>}
-            <TableHeaderCell className={styles.numeric}>{valueHeading}</TableHeaderCell>
-            {show.uniquePageViews && <TableHeaderCell className={styles.numeric}>Unique</TableHeaderCell>}
-            {show.dwell && <TableHeaderCell className={styles.numeric}>Avg time</TableHeaderCell>}
-            {show.load && <TableHeaderCell className={styles.numeric}>Avg load</TableHeaderCell>}
-            {show.entries && <TableHeaderCell className={styles.numeric}>Entries</TableHeaderCell>}
-            {show.exits && <TableHeaderCell className={styles.numeric}>Exits</TableHeaderCell>}
-            {show.bounce && <TableHeaderCell className={styles.numeric}>Bounce</TableHeaderCell>}
+            <TableHeaderCell>{t('webActivity.common.page')}</TableHeaderCell>
+            {show.site && <TableHeaderCell>{t('webActivity.common.site')}</TableHeaderCell>}
+            <TableHeaderCell className={styles.numeric}>{valueHeading ?? t('webActivity.common.pageViews')}</TableHeaderCell>
+            {show.uniquePageViews && <TableHeaderCell className={styles.numeric}>{t('webActivity.common.unique')}</TableHeaderCell>}
+            {show.dwell && <TableHeaderCell className={styles.numeric}>{t('webActivity.common.avgTime')}</TableHeaderCell>}
+            {show.load && <TableHeaderCell className={styles.numeric}>{t('webActivity.common.avgLoad')}</TableHeaderCell>}
+            {show.entries && <TableHeaderCell className={styles.numeric}>{t('webActivity.common.entries')}</TableHeaderCell>}
+            {show.exits && <TableHeaderCell className={styles.numeric}>{t('webActivity.common.exits')}</TableHeaderCell>}
+            {show.bounce && <TableHeaderCell className={styles.numeric}>{t('webActivity.common.bounce')}</TableHeaderCell>}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -124,7 +126,7 @@ export default function PageTable({
                 <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.exits)}</TableCell>
               )}
               {show.bounce && (
-                <TableCell className={`${styles.td} ${styles.numeric}`} title={`${formatCount(row.bounces)} bounces`}>
+                <TableCell className={`${styles.td} ${styles.numeric}`} title={t('webActivity.pageTable.bouncesTitle', { count: formatCount(row.bounces) })}>
                   {formatPct(row.bouncePct)}
                 </TableCell>
               )}
@@ -134,7 +136,7 @@ export default function PageTable({
       </Table>
       {dwellFootnote && show.dwell && (
         <Text size={100} className={styles.muted} style={{ display: 'block', marginTop: '6px' }}>
-          {DWELL_CAVEAT}
+          {dwellCaveat(t)}
         </Text>
       )}
     </div>

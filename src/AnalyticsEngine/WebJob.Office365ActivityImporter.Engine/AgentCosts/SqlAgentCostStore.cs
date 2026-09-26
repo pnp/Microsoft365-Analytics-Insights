@@ -34,6 +34,9 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
             using (var db = _dbContextFactory.Create())
             {
+                // Manual change detection for the batch - see DisableAutoDetectChanges.
+                DisableAutoDetectChanges(db);
+
                 // Scoped to the usage-date range being written so the unique index on
                 // (usage_date, dimension_hash) can seek. A lookup on the hash alone would have to scan,
                 // because the hash is not the leading key column.
@@ -45,6 +48,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                     .ToListAsync();
 
                 var byHash = BuildIndex(stored, r => r.DimensionHash);
+                var added = new List<CopilotStudioCreditDaily>();
 
                 foreach (var row in rows)
                 {
@@ -63,7 +67,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                     }
                     else
                     {
-                        db.CopilotStudioCreditDaily.Add(row);
+                        added.Add(row);
 
                         // Indexed as well, so a duplicate within this same batch updates the pending row
                         // rather than adding a second one that would violate the unique index.
@@ -71,7 +75,8 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                     }
                 }
 
-                await db.SaveChangesAsync();
+                db.CopilotStudioCreditDaily.AddRange(added);
+                await SaveDetectedChangesAsync(db);
                 return rows.Count;
             }
         }
@@ -112,6 +117,11 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
             using (var db = _dbContextFactory.Create())
             {
+                // Manual change detection for the batch - see DisableAutoDetectChanges. This is the method
+                // that meets the biggest batches: an unfiltered subscription import is one row per resource,
+                // meter and day, easily 10^5 rows for a window.
+                DisableAutoDetectChanges(db);
+
                 DateTime windowFrom, windowTo;
                 if (from.HasValue && to.HasValue)
                 {
@@ -137,6 +147,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 var stored = await storedQuery.ToListAsync();
                 var byHash = BuildIndex(stored, r => r.RowHash);
                 var incomingHashes = new HashSet<string>(incoming.Select(r => r.RowHash), StringComparer.Ordinal);
+                var added = new List<AzureCostDaily>();
 
                 foreach (var row in incoming)
                 {
@@ -149,10 +160,12 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                     }
                     else
                     {
-                        db.AzureCostDaily.Add(row);
+                        added.Add(row);
                         byHash[row.RowHash] = row;
                     }
                 }
+
+                db.AzureCostDaily.AddRange(added);
 
                 if (!string.IsNullOrEmpty(scope))
                 {
@@ -166,7 +179,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                     }
                 }
 
-                await db.SaveChangesAsync();
+                await SaveDetectedChangesAsync(db);
                 return incoming.Count;
             }
         }
@@ -177,6 +190,9 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
             using (var db = _dbContextFactory.Create())
             {
+                // Manual change detection for the batch - see DisableAutoDetectChanges.
+                DisableAutoDetectChanges(db);
+
                 var from = rows.Min(r => r.UsageDate).Date;
                 var to = rows.Max(r => r.UsageDate).Date;
 
@@ -185,6 +201,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                     .ToListAsync();
 
                 var byHash = BuildIndex(stored, r => r.DimensionHash);
+                var added = new List<CopilotStudioCreditUserDaily>();
 
                 foreach (var row in rows)
                 {
@@ -197,12 +214,13 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                     }
                     else
                     {
-                        db.CopilotStudioCreditUserDaily.Add(row);
+                        added.Add(row);
                         byHash[row.DimensionHash] = row;
                     }
                 }
 
-                await db.SaveChangesAsync();
+                db.CopilotStudioCreditUserDaily.AddRange(added);
+                await SaveDetectedChangesAsync(db);
                 return rows.Count;
             }
         }
@@ -234,6 +252,36 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 db.AgentCostImportLogs.Add(log);
                 await db.SaveChangesAsync();
             }
+        }
+
+        /// <summary>
+        /// Switches a batch write to manual change detection.
+        /// </summary>
+        /// <remarks>
+        /// EF6 runs <c>DetectChanges</c> over EVERY tracked entity on each <c>Add</c> while
+        /// <c>AutoDetectChangesEnabled</c> is on, so adding N rows on top of the tracked stored window costs
+        /// O(N^2). That is invisible for a filtered Copilot import of a few hundred rows and minutes to hours
+        /// for the documented unfiltered first run of a busy subscription, inside the importer cycle.
+        /// Measured on LocalDB with synthetic Azure cost rows: 5,000 rows took 23.2 s before and 6.7 s after;
+        /// 20,000 rows took 167 s before and 28 s after. The old add loop alone went from 15 s to 140 s for
+        /// 4x the rows, which is the quadratic term.
+        /// <see cref="SaveDetectedChangesAsync"/> runs detection exactly once, so the in-place updates to
+        /// already-stored rows are still saved.
+        /// </remarks>
+        private static void DisableAutoDetectChanges(DbContext db)
+        {
+            db.Configuration.AutoDetectChangesEnabled = false;
+        }
+
+        /// <summary>
+        /// Detects the batch's changes once, then saves. Required after <see cref="DisableAutoDetectChanges"/>:
+        /// with automatic detection off, <c>SaveChanges</c> no longer looks for modified properties itself,
+        /// and every restated figure would be silently dropped.
+        /// </summary>
+        private static Task<int> SaveDetectedChangesAsync(DbContext db)
+        {
+            db.ChangeTracker.DetectChanges();
+            return db.SaveChangesAsync();
         }
 
         /// <summary>

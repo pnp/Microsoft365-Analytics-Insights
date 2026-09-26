@@ -1,7 +1,9 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
-import type { AdoptionHabitBucket } from '../../types/copilotAdoption';
+import type { AdoptionHabitBucket, CopilotAdoptionOptions } from '../../types/copilotAdoption';
+import { useT } from '../../i18n';
 import DonutChart from '../charts/DonutChart';
 import { formatCount, formatPct } from '../shared/KpiGrid';
+import { habitBucketLabel, habitBucketRangeLabel } from './serverText';
 
 /**
  * Cold-to-warm with frequency, and deliberately grey for "Infrequent" - on most tenants that tile
@@ -79,15 +81,15 @@ const useStyles = makeStyles({
  * for reading a single bucket precisely; the ring is for seeing the balance between them in one
  * glance, which is the thing an executive takes away.
  */
-export default function HabitStrip({ buckets }: { buckets: AdoptionHabitBucket[] }) {
+export default function HabitStrip({ buckets, options }: { buckets: AdoptionHabitBucket[]; options?: CopilotAdoptionOptions }) {
   const styles = useStyles();
+  const t = useT();
 
   const total = buckets.reduce((sum, b) => sum + b.users, 0);
   if (total === 0) {
     return (
       <div className={styles.empty}>
-        No user was active in this period, so there is no habit to measure. The reclaimable-licence figure is
-        the one that matters here.
+        {t('copilotAdoption.habitStrip.empty')}
       </div>
     );
   }
@@ -98,14 +100,14 @@ export default function HabitStrip({ buckets }: { buckets: AdoptionHabitBucket[]
         {buckets.map((b) => (
           <div key={b.label} className={styles.tile} style={{ backgroundColor: BUCKET_COLOUR[b.label] ?? '#605e5c' }}>
             <Text size={300} className={styles.bucket}>
-              {b.label}
+              {habitBucketLabel(t, b.label)}
             </Text>
             <Text size={200} className={styles.range}>
-              {b.rangeLabel}
+              {options ? habitBucketRangeLabel(t, b.label, options, b.rangeLabel) : b.rangeLabel}
             </Text>
             <span className={styles.users}>{formatCount(b.users)}</span>
             <Text size={200} className={styles.share}>
-              {formatPct(b.sharePct)} of active users
+              {t('copilotAdoption.habitStrip.ofActiveUsers', { pct: formatPct(b.sharePct) })}
             </Text>
           </div>
         ))}
@@ -113,10 +115,10 @@ export default function HabitStrip({ buckets }: { buckets: AdoptionHabitBucket[]
 
       <div className={styles.donut}>
         <DonutChart
-          categories={buckets.map((b) => ({ label: b.label, value: b.users }))}
+          categories={buckets.map((b) => ({ label: habitBucketLabel(t, b.label), value: b.users }))}
           colours={buckets.map((b) => BUCKET_COLOUR[b.label] ?? '#605e5c')}
           centreValue={formatCount(total)}
-          centreLabel="active users"
+          centreLabel={t('copilotAdoption.habitStrip.centreLabel')}
           size={150}
         />
       </div>

@@ -53,11 +53,20 @@ export type TeamsBucket = {
 export type TeamsAvailability = {
   usageReportsAvailable: boolean;
   callsAvailable: boolean;
+  serviceBusAvailable: boolean;
   teamsAnalyticsAvailable: boolean;
   cognitiveAvailable: boolean;
   userMetadataAvailable: boolean;
   authorisedTeams: number;
   totalTeams: number;
+  /**
+   * Whether the team counts above were actually read.
+   *
+   * They are plain numbers, with a count the server could not produce collapsed to 0, so this is
+   * the only way to tell "no teams discovered" from "the count query did not return". Treating the
+   * two alike tells an administrator their import has found nothing when it was never asked.
+   */
+  teamCountsKnown: boolean;
   available: boolean;
   reasons: string[];
 };

@@ -1,5 +1,7 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { CoworkQuadrantPoint, CopilotAdoptionOptions } from '../../types/copilotAdoption';
+import { useT, useTNode, type TFunction, type TranslationKey } from '../../i18n';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 
 const WIDTH = 720;
 const HEIGHT = 380;
@@ -76,12 +78,43 @@ function quadrantOf(point: CoworkQuadrantPoint, loadBar: number, fluencyBar: num
  * normal for a chart whose entire audience is people looking at a deck in a meeting. Same reasoning
  * as the band initials on the intensity scatter.
  */
-const QUADRANT_KEY: Array<{ id: Quadrant; initial: string; label: string; meaning: string }> = [
-  { id: 'ready', initial: 'R', label: 'Ready now', meaning: 'Fluent and loaded - enable Cowork here first' },
-  { id: 'coach', initial: 'C', label: 'Coach first', meaning: 'Has the work, needs the Copilot habit' },
-  { id: 'lowLoad', initial: 'L', label: 'Low load', meaning: 'Fluent, but little to delegate' },
-  { id: 'neither', initial: '-', label: 'Not indicated', meaning: 'Below both bars' },
+const QUADRANT_KEY: Array<{ id: Quadrant; initial: string; labelKey: TranslationKey; meaningKey: TranslationKey }> = [
+  {
+    id: 'ready',
+    initial: 'R',
+    labelKey: 'copilotAdoptionCowork.quadrant.ready.label',
+    meaningKey: 'copilotAdoptionCowork.quadrant.ready.meaning',
+  },
+  {
+    id: 'coach',
+    initial: 'C',
+    labelKey: 'copilotAdoptionCowork.quadrant.coach.label',
+    meaningKey: 'copilotAdoptionCowork.quadrant.coach.meaning',
+  },
+  {
+    id: 'lowLoad',
+    initial: 'L',
+    labelKey: 'copilotAdoptionCowork.quadrant.lowLoad.label',
+    meaningKey: 'copilotAdoptionCowork.quadrant.lowLoad.meaning',
+  },
+  {
+    id: 'neither',
+    initial: '-',
+    labelKey: 'copilotAdoptionCowork.quadrant.neither.label',
+    meaningKey: 'copilotAdoptionCowork.quadrant.neither.meaning',
+  },
 ];
+
+function pointTitle(t: TFunction, point: CoworkQuadrantPoint): string {
+  return t('copilotAdoptionCowork.quadrant.tooltip', {
+    segment: serverPlaceholderText(t, point.segment),
+    seats: point.licensedUsers,
+    load: Math.round(point.coordinationLoadScore),
+    fluency: Math.round(point.fluencyScore),
+    regularUsers: point.regularCoworkUsers,
+    primeCandidates: point.primeCandidates,
+  });
+}
 
 /**
  * Departments plotted as coordination load (how much delegable, multi-step work they carry) against
@@ -106,12 +139,13 @@ export default function CoworkQuadrant({
   options: CopilotAdoptionOptions;
 }) {
   const styles = useStyles();
+  const t = useT();
+  const tNode = useTNode();
 
   if (points.length === 0) {
     return (
       <div className={styles.empty}>
-        Not enough Copilot seats in any one department to plot. Departments need at least the minimum
-        seat count to appear, so a small tenant legitimately shows nothing here.
+        {t('copilotAdoptionCowork.quadrant.empty')}
       </div>
     );
   }
@@ -144,7 +178,7 @@ export default function CoworkQuadrant({
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         width="100%"
         role="img"
-        aria-label="Departments plotted by coordination load against Copilot fluency"
+        aria-label={t('copilotAdoptionCowork.quadrant.ariaLabel')}
       >
         {/* Quadrant tint. Only the ready corner is tinted - shading all four would turn the plot into
             a colour field and bury the bubbles that carry the data. */}
@@ -186,10 +220,10 @@ export default function CoworkQuadrant({
         />
 
         <text x={barX + 6} y={PAD.top + 12} fontSize="11" fill={tokens.colorNeutralForeground3}>
-          Enough work to delegate &#8594;
+          {t('copilotAdoptionCowork.quadrant.enoughWorkToDelegate')}
         </text>
         <text x={PAD.left + 4} y={barY - 6} fontSize="11" fill={tokens.colorNeutralForeground3}>
-          Fluent enough to delegate &#8593;
+          {t('copilotAdoptionCowork.quadrant.fluentEnoughToDelegate')}
         </text>
 
         {/* Corner label for the only quadrant that is an instruction. */}
@@ -201,7 +235,7 @@ export default function CoworkQuadrant({
           textAnchor="end"
           fill={QUADRANT_COLOURS.ready}
         >
-          Ready for Cowork
+          {t('copilotAdoptionCowork.quadrant.readyForCowork')}
         </text>
 
         {[0, 25, 50, 75, 100].map((tick) => (
@@ -228,7 +262,7 @@ export default function CoworkQuadrant({
           textAnchor="middle"
           fill={tokens.colorNeutralForeground2}
         >
-          Coordination load (0-100)
+          {t('copilotAdoptionCowork.quadrant.coordinationLoadAxis')}
         </text>
         <text
           x={14}
@@ -238,7 +272,7 @@ export default function CoworkQuadrant({
           fill={tokens.colorNeutralForeground2}
           transform={`rotate(-90 14 ${PAD.top + plotHeight / 2})`}
         >
-          Copilot fluency (0-100)
+          {t('copilotAdoptionCowork.quadrant.copilotFluencyAxis')}
         </text>
 
         {ordered.map((point) => {
@@ -251,12 +285,7 @@ export default function CoworkQuadrant({
           return (
             <g key={point.segment}>
               <title>
-                {`${point.segment}\n` +
-                  `${point.licensedUsers} Copilot seat(s)\n` +
-                  `Coordination load ${Math.round(point.coordinationLoadScore)}/100\n` +
-                  `Copilot fluency ${Math.round(point.fluencyScore)}/100\n` +
-                  `Already using Cowork regularly (observed): ${point.regularCoworkUsers}\n` +
-                  `Prime candidates (predicted): ${point.primeCandidates}`}
+                {pointTitle(t, point)}
               </title>
               <circle
                 cx={cx}
@@ -291,17 +320,18 @@ export default function CoworkQuadrant({
             <span className={styles.legendSwatch} style={{ backgroundColor: QUADRANT_COLOURS[entry.id] }}>
               {entry.initial}
             </span>
-            {entry.label} - {entry.meaning}
+            {t('copilotAdoptionCowork.quadrant.legendEntry', {
+              label: t(entry.labelKey),
+              meaning: t(entry.meaningKey),
+            })}
           </span>
         ))}
       </div>
 
       <Text size={200} className={styles.caption}>
-        Bubble size is the number of Copilot seats in the department, so a large slow department outranks a
-        tiny keen one. Both axes are fixed at 0-100 rather than fitted to your data, so the dividing lines
-        sit in the same place in every report and two runs can be compared directly. A department&#8217;s
-        position is a <strong>prediction</strong> built from its workload and Copilot use - only the
-        &#8220;already using Cowork&#8221; figure in the tooltip is observed.
+        {tNode('copilotAdoptionCowork.quadrant.caption', {
+          prediction: <strong>{t('copilotAdoptionCowork.quadrant.prediction')}</strong>,
+        })}
       </Text>
     </div>
   );

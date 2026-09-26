@@ -1,0 +1,73 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { apiFetch } from './http';
+import { fetchUserSummary } from './userLookupApi';
+import { loadCatalog } from '../i18n';
+import { setActiveLanguage } from '../i18n/runtime';
+
+vi.mock('./http', () => ({ apiFetch: vi.fn() }));
+
+const mockedFetch = vi.mocked(apiFetch);
+
+function jsonResponse(body: unknown, status: number): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
+beforeEach(() => {
+  mockedFetch.mockReset();
+  setActiveLanguage('en');
+});
+
+describe('userLookupApi errors', () => {
+  it('uses the portal language for a known not-found response, keeping the UPN that was looked up', async () => {
+    await loadCatalog('es');
+    setActiveLanguage('es');
+    mockedFetch.mockResolvedValue(jsonResponse({
+      code: 'userNotFound',
+      message: "No user found with UPN 'missing@contoso.com'.",
+      upn: 'missing@contoso.com',
+    }, 404));
+
+    await expect(fetchUserSummary('missing@contoso.com')).rejects.toThrow("No se encontró ningún usuario con el UPN 'missing@contoso.com'.");
+    await expect(fetchUserSummary('missing@contoso.com')).rejects.not.toThrow('No user found');
+  });
+
+  it('shows English readers exactly the not-found sentence the server wrote', async () => {
+    const serverMessage = "No user found with UPN 'missing@contoso.com'.";
+    mockedFetch.mockResolvedValue(jsonResponse({ code: 'userNotFound', message: serverMessage, upn: 'missing@contoso.com' }, 404));
+
+    await expect(fetchUserSummary('  missing@contoso.com ')).rejects.toThrow(new Error(serverMessage));
+  });
+
+  it('keeps the server sentence when a not-found reply carries no UPN fact', async () => {
+    await loadCatalog('es');
+    setActiveLanguage('es');
+    mockedFetch.mockResolvedValue(jsonResponse({ code: 'userNotFound', message: "No user found with UPN 'x@contoso.com'." }, 404));
+
+    await expect(fetchUserSummary('x@contoso.com')).rejects.toThrow("No user found with UPN 'x@contoso.com'.");
+  });
+
+  it('keeps the server message for an unrecognised failure', async () => {
+    mockedFetch.mockResolvedValue(jsonResponse({ message: 'A newer server-side validation failed.' }, 422));
+
+    await expect(fetchUserSummary('ada@contoso.com')).rejects.toThrow('A newer server-side validation failed.');
+  });
+
+  it('does not turn every 404 into a missing-user message', async () => {
+    mockedFetch.mockResolvedValue(jsonResponse({ message: 'Route missing.' }, 404));
+
+    await expect(fetchUserSummary('ada@contoso.com')).rejects.toThrow('Request failed (404)');
+  });
+
+  it('uses catalogued text for coded bad requests instead of server English', async () => {
+    await loadCatalog('es');
+    setActiveLanguage('es');
+    mockedFetch.mockResolvedValue(jsonResponse({
+      code: 'unknownCategory',
+      category: 'not-a-category',
+      message: "Unknown category 'not-a-category'.",
+    }, 400));
+
+    await expect(fetchUserSummary('ada@contoso.com')).rejects.toThrow("Categoría desconocida 'not-a-category'.");
+    await expect(fetchUserSummary('ada@contoso.com')).rejects.not.toThrow('Unknown category');
+  });
+});

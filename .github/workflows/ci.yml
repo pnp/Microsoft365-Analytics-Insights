@@ -295,6 +295,32 @@ jobs:
           else
             echo "LABEL=Stable build ${{ env.BuildId }}" >> $GITHUB_ENV
           fi
+      # GitHub's automatic release notes anchor on the most recent tag *reachable from the commit
+      # being released*. Stable tags sit on `main`'s release merge commits, which are not ancestors
+      # of `dev`, so a `dev` testing build cannot see any of them and walks back to the last
+      # *testing* tag instead. That is how "Testing build 1836" came out anchored on tag 1826,
+      # re-listing four stable releases' worth of changes that had already shipped, when its real
+      # delta over stable was a single pull request.
+      #
+      # Anchoring explicitly on the last published stable release makes every build's changelog
+      # answer the question a reader actually has: what is in this build that is not in the stable
+      # release I am running? An empty value restores the automatic behaviour, which is what should
+      # happen before the first stable release exists, or if its tag has been deleted.
+      - name: Resolve changelog baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prev=$(gh api "repos/${{ github.repository }}/releases?per_page=100" \
+            --jq 'map(select(.draft == false and .prerelease == false)) | first | .tag_name // empty') || prev=""
+          if [ -n "$prev" ] && ! gh api "repos/${{ github.repository }}/git/ref/tags/$prev" > /dev/null 2>&1; then
+            echo "::warning::Last published stable release '$prev' has no tag; falling back to automatic anchoring."
+            prev=""
+          fi
+          if [ -z "$prev" ]; then
+            echo "::warning::Could not resolve a published stable release to anchor the changelog on; falling back to automatic anchoring."
+          fi
+          echo "Changelog baseline: ${prev:-<automatic>}"
+          echo "PREVIOUS_STABLE_TAG=$prev" >> "$GITHUB_ENV"
       - name: Create release
         uses: ncipollo/release-action@v1.21.0
         id: create_release
@@ -310,5 +336,6 @@ jobs:
           commit: ${{ github.sha }}
           # bodyFile:  CHANGELOG.md
           generateReleaseNotes: true
+          generateReleaseNotesPreviousTag: ${{ env.PREVIOUS_STABLE_TAG }}
           artifacts: "${{ env.BASE }}/**/*.zip"
           artifactContentType: application/zip

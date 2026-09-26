@@ -1,3 +1,4 @@
+import { translateActive } from '../i18n/runtime';
 import { apiFetch } from './http';
 import type { ProfilingStatus, TraceLogPage } from '../types/profilingStatus';
 
@@ -12,7 +13,7 @@ export async function fetchProfilingStatus(): Promise<ProfilingStatus> {
   });
 
   if (!response.ok) {
-    throw new Error(`Couldn't load profiling status (${response.status}).`);
+    throw new Error(translateActive('errors.profiling.statusFailed', { status: response.status }));
   }
 
   return response.json() as Promise<ProfilingStatus>;
@@ -27,7 +28,7 @@ export async function fetchTraceLogs(page: number, pageSize: number): Promise<Tr
   });
 
   if (!response.ok) {
-    throw new Error(`Couldn't load profiling trace logs (${response.status}).`);
+    throw new Error(translateActive('errors.profiling.traceLogsFailed', { status: response.status }));
   }
 
   return response.json() as Promise<TraceLogPage>;

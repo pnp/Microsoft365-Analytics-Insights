@@ -20,7 +20,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
     }
 
     /// <summary>
-    /// Names of the three Graph Microsoft 365 Copilot usage report functions.
+    /// Names of the Graph Microsoft 365 Copilot usage report functions this importer understands.
     /// </summary>
     /// <remarks>
     /// Aliases <see cref="Common.Entities.Entities.UsageReports.CopilotUsageReportNames"/>, which is where
@@ -42,7 +42,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
     }
 
     /// <summary>
-    /// A request for one of the three Graph Microsoft 365 Copilot usage reports.
+    /// A request for one of the Graph Microsoft 365 Copilot usage reports this importer understands.
     ///
     /// Two things about these endpoints are easy to get wrong and silently produce a worse dataset rather
     /// than an error, so they are enforced here rather than left to each caller:

@@ -17,6 +17,7 @@ import type { UserDataSummary } from '../types/userData';
 import Spinner from '../components/Spinner';
 import UserProfileCard from '../components/userlookup/UserProfileCard';
 import CategoryTable from '../components/userlookup/CategoryTable';
+import { useT, useTNode } from '../i18n';
 
 const useStyles = makeStyles({
   form: {
@@ -45,6 +46,8 @@ const useStyles = makeStyles({
  */
 export default function UserLookupPage() {
   const styles = useStyles();
+  const t = useT();
+  const tNode = useTNode();
   const [upnInput, setUpnInput] = useState('');
   const [searchedUpn, setSearchedUpn] = useState('');
   const [loading, setLoading] = useState(false);
@@ -65,7 +68,7 @@ export default function UserLookupPage() {
       const result = await fetchUserSummary(upn);
       setSummary(result);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Lookup failed.');
+      setError(err instanceof Error ? err.message : t('admin.userLookup.page.lookupFailed'));
     } finally {
       setLoading(false);
     }
@@ -73,28 +76,29 @@ export default function UserLookupPage() {
 
   return (
     <div>
-      <Title3 block>User Data Lookup</Title3>
+      <Title3 block>{t('admin.userLookup.page.title')}</Title3>
       <Body1 block style={{ marginTop: '8px' }}>
-        Enter a user's UPN (user principal name, e.g. <code>jane.doe@contoso.com</code>) to see all of the data held
-        for them in the analytics database.
+        {tNode('admin.userLookup.page.description', {
+          exampleUpn: <code>{t('admin.userLookup.page.exampleUpn')}</code>,
+        })}
       </Body1>
 
       <form onSubmit={onSubmit} className={styles.form}>
         <Input
           className={styles.input}
-          placeholder="user@contoso.com"
+          placeholder={t('admin.userLookup.page.upnPlaceholder')}
           value={upnInput}
           onChange={(_e: any, data: any) => setUpnInput(data.value)}
-          aria-label="User principal name"
+          aria-label={t('admin.userLookup.page.upnAriaLabel')}
         />
         <Button type="submit" appearance="primary" icon={<SearchRegular />} disabled={loading || !upnInput.trim()}>
-          Look up
+          {t('admin.userLookup.page.lookupButton')}
         </Button>
       </form>
 
       {loading && (
         <div style={{ textAlign: 'center', padding: '32px' }}>
-          <Spinner size={80} label="Looking up user data..." />
+          <Spinner size={80} label={t('admin.userLookup.page.loading')} />
         </div>
       )}
       {error && (
@@ -104,7 +108,7 @@ export default function UserLookupPage() {
       )}
 
       {!loading && !error && summary === null && searchedUpn === '' && (
-        <Text className={styles.muted}>No user looked up yet.</Text>
+        <Text className={styles.muted}>{t('admin.userLookup.page.noUserLookedUp')}</Text>
       )}
 
       {!loading && summary && (

@@ -1,0 +1,144 @@
+/**
+ * English text for the messages the API layer raises and the pages put on screen.
+ *
+ * These live in `src/api/*.ts`, which throws `Error`s whose `message` a page renders directly.
+ * They are outside React, so they are resolved with `translateActive()` from `src/i18n/runtime`
+ * rather than `useT()`.
+ *
+ * Worth translating even though they are errors - arguably especially because they are errors.
+ * An English failure message in the middle of a Spanish page is what a reader sees at the moment
+ * something has already gone wrong, and it is the point at which they are least able to guess.
+ *
+ * Every key here must have a Spanish counterpart in `../es/errors.ts`; the type of that module
+ * makes a missing one a build failure.
+ */
+export const errors = {
+  // Shared API/session errors
+  'errors.http.sessionExpired': 'Your session has expired. Reload the page to sign in again.',
+  'errors.userLookup.requestFailed': 'Request failed ({status})',
+  'errors.userLookup.notFound': "No user found with UPN '{upn}'.",
+  'errors.userLookup.missingUpn': "A 'upn' query parameter is required.",
+  'errors.userLookup.unknownCategory': "Unknown category '{category}'.",
+  'errors.userLookup.categoryNoDrilldown': "Category '{category}' does not support drill-down.",
+
+  // Agent costs API
+  'errors.agentCosts.availabilityFailed': "Couldn't load the agent cost availability ({status}).",
+  'errors.agentCosts.summaryFailed': "Couldn't load the agent cost summary ({status}).",
+  'errors.agentCosts.trendFailed': "Couldn't load the daily credit trend ({status}).",
+  'errors.agentCosts.breakdownFailed': "Couldn't load the credit breakdown ({status}).",
+  'errors.agentCosts.detailFailed': "Couldn't load the detailed credit rows ({status}).",
+  'errors.agentCosts.azureBreakdownFailed': "Couldn't load the Azure cost breakdown ({status}).",
+  'errors.agentCosts.topUsersFailed': "Couldn't load the per-user credit consumption ({status}).",
+  'errors.agentCosts.filtersFailed': "Couldn't load the available filters ({status}).",
+  'errors.agentCosts.loadFailed': 'The agent cost figures could not be loaded. If this keeps happening, check the database is reachable and that the agent cost imports have run at least once.',
+
+  // Copilot adoption API
+  'errors.copilotAdoption.analysisStillRunning': "The Copilot adoption analysis is taking longer than expected and hasn't finished yet. It is still running on the server - reload the page in a few minutes.",
+  'errors.copilotAdoption.analysisStillRunningWithReference': "The Copilot adoption analysis is taking longer than expected and hasn't finished yet. It is still running on the server - reload the page in a few minutes. If this keeps happening, include reference {runId} when you report it.",
+  'errors.copilotAdoption.availabilityFailed': "Couldn't load the Copilot adoption availability ({status}).",
+  'errors.copilotAdoption.summaryFailed': "Couldn't load the Copilot adoption summary ({status}).",
+  'errors.copilotAdoption.filtersFailed': "Couldn't load the Copilot adoption filters ({status}).",
+  'errors.copilotAdoption.licensedUsersFailed': "Couldn't load the licensed Copilot users ({status}).",
+  'errors.copilotAdoption.opportunitiesFailed': "Couldn't load the Copilot licence opportunities ({status}).",
+  'errors.copilotAdoption.coworkFailed': "Couldn't load the Cowork readiness list ({status}).",
+  'errors.copilotAdoption.queriesFailed': "Couldn't load the Copilot adoption queries ({status}).",
+
+  // DLP API
+  'errors.dlp.availabilityFailed': "Couldn't load DLP availability ({status}).",
+  'errors.dlp.summaryFailed': "Couldn't load DLP summary ({status}).",
+
+  // Health API
+  'errors.health.summaryFailed': "Couldn't load system health ({status}).",
+  'errors.health.dataFailed': "Couldn't load data overview ({status}).",
+  'errors.health.livenessFailed': "Couldn't load import liveness ({status}).",
+  'errors.health.exceptionsFailed': "Couldn't load exceptions ({status}).",
+  'errors.health.componentsFailed': "Couldn't load component health ({status}).",
+  'errors.health.configFailed': "Couldn't load configuration ({status}).",
+
+  // Install/profiling/status APIs
+  'errors.installLog.loadFailed': "Couldn't load the install log ({status}).",
+  'errors.profiling.statusFailed': "Couldn't load profiling status ({status}).",
+  'errors.profiling.traceLogsFailed': "Couldn't load profiling trace logs ({status}).",
+  'errors.systemStatus.loadFailed': "Couldn't load system status ({status}).",
+  'errors.updateCheck.failed': "Couldn't check for updates ({status}).",
+
+  // Licence activity API
+  'errors.licenceActivity.figuresExpired': 'These figures are no longer being held. Refresh the report to bring back an up-to-date set.',
+  'errors.licenceActivity.figuresExpiredForAction': 'These figures are no longer being held. Refresh the report to bring back an up-to-date set before continuing or exporting.',
+  'errors.licenceActivity.licenceNotOnScreen': 'That licence is not part of the figures currently on screen. Refresh the report and try again.',
+  'errors.licenceActivity.summaryUsersMismatch': 'The summary and the user list are no longer from the same set of figures. Refresh the report before exporting.',
+  'errors.licenceActivity.userDetailsImportOff': 'Licence activity is not available: the user details import is switched off on this deployment.',
+  'errors.licenceActivity.userDetailsImportOffSpecific': 'This report needs the user details import turned on, so that licences can be matched to the people who hold them.',
+  'errors.licenceActivity.badRequest': 'That request was rejected. Check the selected dates and filters.',
+  'errors.licenceActivity.invalidRequest': "That request wasn't valid. Check the selected dates and filters.",
+  'errors.licenceActivity.anotherReportPreparing': 'Another licence report is being prepared right now. Try again in a few seconds.',
+  'errors.licenceActivity.licenceReportingBusy': 'Licence reporting is busy. Try again in a few seconds.',
+  'errors.licenceActivity.loadFailed': 'Licence activity could not be loaded. Retry the request. Reference: {reference}',
+  'errors.licenceActivity.validation.supplyBothDates': 'Supply both from and to dates in YYYY-MM-DD format.',
+  'errors.licenceActivity.validation.dateRange': 'Choose 7 to 180 inclusive UTC dates, ending before today. Custom ranges are never rounded.',
+  'errors.licenceActivity.validation.earliestDate': 'The earliest supported date is 1753-01-01.',
+  'errors.licenceActivity.validation.invalidIds': 'Licence IDs must be positive; demographic IDs must be zero (unknown) or positive.',
+  'errors.licenceActivity.validation.invalidWorkload': 'Choose teams, outlook, onedrive, sharepoint or copilot.',
+  'errors.licenceActivity.validation.invalidSort': 'Choose a supported sort and asc or desc direction.',
+  'errors.licenceActivity.validation.invalidPaging': 'Top and pageSize must be 1 to 100; page must be 1 to 10000.',
+  'errors.licenceActivity.validation.invalidSearch': 'Search must contain at most 100 characters and no control characters.',
+  'errors.licenceActivity.validation.dateFormat': 'Dates must use YYYY-MM-DD format.',
+  'errors.licenceActivity.availabilityBusy': 'The server is busy or could not prepare the licence activity availability. Try again in a moment.',
+  'errors.licenceActivity.availabilityForbidden': 'You do not have permission to view the licence activity availability.',
+  'errors.licenceActivity.availabilityFailed': "Couldn't load the licence activity availability ({status}).",
+  'errors.licenceActivity.overviewBusy': 'The server is busy or could not prepare the licence activity overview. Try again in a moment.',
+  'errors.licenceActivity.overviewForbidden': 'You do not have permission to view the licence activity overview.',
+  'errors.licenceActivity.overviewFailed': "Couldn't load the licence activity overview ({status}).",
+  'errors.licenceActivity.usersBusy': 'The server is busy or could not prepare the licensed users. Try again in a moment.',
+  'errors.licenceActivity.usersForbidden': 'You do not have permission to view the licensed users.',
+  'errors.licenceActivity.usersFailed': "Couldn't load the licensed users ({status}).",
+  'errors.licenceActivity.excelExportBusy': 'The server is busy or could not prepare the Excel export. Try again in a moment.',
+  'errors.licenceActivity.excelExportForbidden': 'You do not have permission to view the Excel export.',
+  'errors.licenceActivity.excelExportFailed': "Couldn't load the Excel export ({status}).",
+
+  // Reports API
+  'errors.reports.areasFailed': "Couldn't load report areas ({status}).",
+  'errors.reports.copilotReportFailed': "Couldn't load the copilot report ({status}).",
+  'errors.reports.copilotAgentsReportFailed': "Couldn't load the copilot-agents report ({status}).",
+  'errors.reports.usageReportFailed': "Couldn't load the usage report ({status}).",
+  'errors.reports.officeAppsReportFailed': "Couldn't load the office-apps report ({status}).",
+  'errors.reports.spoAuditReportFailed': "Couldn't load the spo-audit report ({status}).",
+  'errors.reports.webTrafficReportFailed': "Couldn't load the web-traffic report ({status}).",
+  'errors.reports.callsReportFailed': "Couldn't load the calls report ({status}).",
+  'errors.reports.emailsReportFailed': "Couldn't load the emails report ({status}).",
+
+  // Teams Explorer API
+  'errors.teamsExplorer.dataSourcesFailed': "Couldn't load the Teams data sources ({status}).",
+  'errors.teamsExplorer.overviewFailed': "Couldn't load the Teams overview ({status}).",
+  'errors.teamsExplorer.adoptionFailed': "Couldn't load Teams adoption ({status}).",
+  'errors.teamsExplorer.meetingsFailed': "Couldn't load Teams meetings and calls ({status}).",
+  'errors.teamsExplorer.collaborationFailed': "Couldn't load teams and channels ({status}).",
+  'errors.teamsExplorer.conversationsFailed': "Couldn't load conversation insights ({status}).",
+  'errors.teamsExplorer.peopleFailed': "Couldn't load Teams people ({status}).",
+  'errors.teamsExplorer.exportPeopleFailed': "Couldn't export people ({status}).",
+  'errors.teamsExplorer.exportDormantFailed': "Couldn't export dormant ({status}).",
+  'errors.teamsExplorer.exportTeamsFailed': "Couldn't export teams ({status}).",
+  'errors.teamsExplorer.exportChannelsFailed': "Couldn't export channels ({status}).",
+  'errors.teamsExplorer.exportAdoptionFailed': "Couldn't export adoption ({status}).",
+
+  // Web activity API
+  'errors.webActivity.dataSourcesFailed': "Couldn't load the web traffic data sources ({status}).",
+  'errors.webActivity.overviewFailed': "Couldn't load the web activity overview ({status}).",
+  'errors.webActivity.visitsFailed': "Couldn't load visits ({status}).",
+  'errors.webActivity.pagesFailed': "Couldn't load page views ({status}).",
+  'errors.webActivity.journeysFailed': "Couldn't load visitor journeys ({status}).",
+  'errors.webActivity.geographyFailed': "Couldn't load geography ({status}).",
+  'errors.webActivity.searchFailed': "Couldn't load web searches ({status}).",
+  'errors.webActivity.technologyFailed': "Couldn't load technology ({status}).",
+  'errors.webActivity.exportPagesFailed': "Couldn't export pages ({status}).",
+  'errors.webActivity.exportQuietPagesFailed': "Couldn't export quiet-pages ({status}).",
+  'errors.webActivity.exportSlowPagesFailed': "Couldn't export slow-pages ({status}).",
+  'errors.webActivity.exportEntryPagesFailed': "Couldn't export entry-pages ({status}).",
+  'errors.webActivity.exportExitPagesFailed': "Couldn't export exit-pages ({status}).",
+  'errors.webActivity.exportTransitionsFailed': "Couldn't export transitions ({status}).",
+  'errors.webActivity.exportFlowsFailed': "Couldn't export flows ({status}).",
+  'errors.webActivity.exportSearchTermsFailed': "Couldn't export search-terms ({status}).",
+  'errors.webActivity.exportTechnologyFailed': "Couldn't export technology ({status}).",
+} as const;
+
+export default errors;

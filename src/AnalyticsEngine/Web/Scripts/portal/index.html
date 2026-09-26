@@ -29,6 +29,11 @@
     window.o365AnalyticsAgentCostsAPI = baseUrl + "api/AgentCosts";
     window.o365AnalyticsHealthAPI = baseUrl + "api/Health";
     window.o365AnalyticsUpdateCheckAPI = baseUrl + "api/UpdateCheck";
+
+    // The running build, substituted by HomeController when it serves this file (see
+    // HomeController.InjectBuildLabel). Left as the literal placeholder by `npm run dev`, which
+    // serves index.html straight from disk - the SPA reads that, and "DEV_BUILD", as "unknown".
+    window.o365AnalyticsBuildLabel = "__BuildLabel__";
   </script>
 </head>
 

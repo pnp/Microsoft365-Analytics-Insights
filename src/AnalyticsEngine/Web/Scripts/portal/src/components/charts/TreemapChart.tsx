@@ -1,5 +1,7 @@
 import { makeStyles, tokens } from '@fluentui/react-components';
 import type { ReportCategory } from '../../types/reports';
+import { formatNumber, useT } from '../../i18n';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { formatValue, seriesColor } from './chartCommon';
 
 const useStyles = makeStyles({
@@ -149,11 +151,12 @@ export default function TreemapChart({
   valueLabel: string;
   height?: number;
 }) {
+  const t = useT();
   const styles = useStyles();
 
   const data = categories.filter((c) => c.value > 0);
   if (data.length === 0) {
-    return <div className={styles.empty}>No data for this period.</div>;
+    return <div className={styles.empty}>{t('charts.empty.noDataForPeriod')}</div>;
   }
 
   const sorted = [...data].sort((a, b) => b.value - a.value);
@@ -172,7 +175,7 @@ export default function TreemapChart({
   );
 
   return (
-    <div className={styles.root} style={{ height: `${height}px` }} role="img" aria-label={`${valueLabel} by category`}>
+    <div className={styles.root} style={{ height: `${height}px` }} role="img" aria-label={t('charts.treemap.ariaLabel', { valueLabel })}>
       {rects.map((r) => {
         const share = (r.value / total) * 100;
         const heightPx = (r.h / LAYOUT_H) * height;
@@ -191,9 +194,9 @@ export default function TreemapChart({
               height: `calc(${(r.h / LAYOUT_H) * 100}% - 3px)`,
               backgroundColor: seriesColor(r.index),
             }}
-            title={`${r.label}: ${formatValue(r.value)} ${valueLabel} (${Math.round(share * 10) / 10}%)`}
+            title={t('charts.treemap.tileTitle', { label: serverPlaceholderText(t, r.label), value: formatValue(r.value), valueLabel, percent: formatNumber(Math.round(share * 10) / 10) })}
           >
-            <span className={styles.label}>{r.label}</span>
+            <span className={styles.label}>{serverPlaceholderText(t, r.label)}</span>
             {/* Only show the value when the tile is tall enough for a second line. A clipped
                 half-height number is worse than none, and the tooltip always carries it. */}
             {heightPx >= 40 && <span className={styles.value}>{formatValue(r.value)}</span>}

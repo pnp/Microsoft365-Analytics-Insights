@@ -231,6 +231,12 @@ namespace Web.AnalyticsWeb.Models.Health
         public string Status { get; set; }
         [JsonProperty("detail")]
         public string Detail { get; set; }
+        [JsonProperty("reasonKey")]
+        public string ReasonKey { get; set; }
+        [JsonProperty("errorCode")]
+        public string ErrorCode { get; set; }
+        [JsonProperty("httpStatus")]
+        public int? HttpStatus { get; set; }
         [JsonProperty("daysToExpiry")]
         public int? DaysToExpiry { get; set; }
         [JsonProperty("lastSeenUtc")]
@@ -241,8 +247,12 @@ namespace Web.AnalyticsWeb.Models.Health
     {
         [JsonProperty("jobName")]
         public string JobName { get; set; }
+        [JsonProperty("jobKey")]
+        public string JobKey { get; set; }
         [JsonProperty("lastCycleUtc")]
         public DateTime? LastCycleUtc { get; set; }
+        [JsonProperty("durationSeconds")]
+        public double? DurationSeconds { get; set; }
         [JsonProperty("duration")]
         public string Duration { get; set; }
     }

@@ -10,6 +10,7 @@
 // Working in UTC (not local) matches the server's `nowUtc.Date`, so a viewer east of UTC can't pick a
 // date the server then rejects as "in the future".
 
+import { translateActive, type TFunction, type TranslationKey } from '../../i18n';
 import type { DateRange } from '../../types/licenceActivity';
 
 /** The preset windows offered as one-click buttons, in ascending length. Every preset ENDS on the
@@ -18,14 +19,14 @@ import type { DateRange } from '../../types/licenceActivity';
 export const PRESETS = [7, 28, 90, 180] as const;
 export type PresetDays = (typeof PRESETS)[number];
 
-export const PRESET_LABELS: Record<PresetDays, string> = {
-  7: 'Last settled week',
-  28: 'Last 4 fully settled weeks',
+export const PRESET_LABEL_KEYS: Record<PresetDays, TranslationKey> = {
+  7: 'licenceActivity.dateRange.preset.lastSettledWeek',
+  28: 'licenceActivity.dateRange.preset.last4FullySettledWeeks',
   // NOT "Last 90/180 days": like every preset these END on the latest settled Sunday, which is 3-9
   // days before today, so the window is 90/180 days ending THEN - not the 90/180 days up to today.
   // The 7/28 labels were already honest about this; these two were not.
-  90: 'Last 90 settled days',
-  180: 'Last 180 settled days',
+  90: 'licenceActivity.dateRange.preset.last90SettledDays',
+  180: 'licenceActivity.dateRange.preset.last180SettledDays',
 };
 
 /** Backend LicenceActivityQuery.MinimumDays / MaximumDays; overridable from the availability payload. */
@@ -131,30 +132,31 @@ export type RangeValidation = { ok: true } | { ok: false; error: string };
  */
 export function validateRange(
   range: DateRange,
-  opts: { now?: Date; minDays?: number; maxDays?: number } = {},
+  opts: { now?: Date; minDays?: number; maxDays?: number; t?: TFunction } = {},
 ): RangeValidation {
   const now = opts.now ?? new Date();
   const minDays = opts.minDays ?? DEFAULT_MIN_DAYS;
   const maxDays = opts.maxDays ?? DEFAULT_MAX_DAYS;
+  const t = opts.t ?? translateActive;
 
   if (!isValidDateString(range.from) || !isValidDateString(range.to)) {
-    return { ok: false, error: 'Enter both a start and end date.' };
+    return { ok: false, error: t('licenceActivity.dateRange.error.enterBothDates') };
   }
   if (range.from < MIN_SUPPORTED_DATE) {
-    return { ok: false, error: `The earliest supported date is ${MIN_SUPPORTED_DATE}.` };
+    return { ok: false, error: t('licenceActivity.dateRange.error.earliestSupportedDate', { date: MIN_SUPPORTED_DATE }) };
   }
   if (range.from > range.to) {
-    return { ok: false, error: 'The start date must be on or before the end date.' };
+    return { ok: false, error: t('licenceActivity.dateRange.error.startOnOrBeforeEnd') };
   }
   if (range.to > latestEndString(now)) {
-    return { ok: false, error: 'The end date must be before today (reporting covers whole past days).' };
+    return { ok: false, error: t('licenceActivity.dateRange.error.endBeforeToday') };
   }
   const span = diffDaysInclusive(range.from, range.to);
   if (span < minDays) {
-    return { ok: false, error: `The range must be at least ${minDays} days.` };
+    return { ok: false, error: t('licenceActivity.dateRange.error.rangeAtLeastDays', { days: minDays }) };
   }
   if (span > maxDays) {
-    return { ok: false, error: `The range cannot be longer than ${maxDays} days.` };
+    return { ok: false, error: t('licenceActivity.dateRange.error.rangeNoLongerThanDays', { days: maxDays }) };
   }
   return { ok: true };
 }

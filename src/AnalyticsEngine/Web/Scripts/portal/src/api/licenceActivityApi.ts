@@ -1,3 +1,5 @@
+import { translateActive } from '../i18n/runtime';
+import type { TranslationKey } from '../i18n/catalog';
 import { apiFetch } from './http';
 import type {
   LicenceActivityAvailability,
@@ -44,6 +46,36 @@ export class LicenceActivityApiError extends Error {
   }
 }
 
+type LicenceActivityFailureKeys = {
+  busy: TranslationKey;
+  forbidden: TranslationKey;
+  http: TranslationKey;
+};
+
+const AVAILABILITY_FAILURE_KEYS: LicenceActivityFailureKeys = {
+  busy: 'errors.licenceActivity.availabilityBusy',
+  forbidden: 'errors.licenceActivity.availabilityForbidden',
+  http: 'errors.licenceActivity.availabilityFailed',
+};
+
+const OVERVIEW_FAILURE_KEYS: LicenceActivityFailureKeys = {
+  busy: 'errors.licenceActivity.overviewBusy',
+  forbidden: 'errors.licenceActivity.overviewForbidden',
+  http: 'errors.licenceActivity.overviewFailed',
+};
+
+const USERS_FAILURE_KEYS: LicenceActivityFailureKeys = {
+  busy: 'errors.licenceActivity.usersBusy',
+  forbidden: 'errors.licenceActivity.usersForbidden',
+  http: 'errors.licenceActivity.usersFailed',
+};
+
+const EXPORT_FAILURE_KEYS: LicenceActivityFailureKeys = {
+  busy: 'errors.licenceActivity.excelExportBusy',
+  forbidden: 'errors.licenceActivity.excelExportForbidden',
+  http: 'errors.licenceActivity.excelExportFailed',
+};
+
 function kindForStatus(status: number): LicenceActivityErrorKind {
   switch (status) {
     case 503:
@@ -63,41 +95,74 @@ function kindForStatus(status: number): LicenceActivityErrorKind {
   }
 }
 
-function fallbackMessage(kind: LicenceActivityErrorKind, status: number, what: string): string {
+function fallbackMessage(kind: LicenceActivityErrorKind, status: number, keys: LicenceActivityFailureKeys): string {
   switch (kind) {
     case 'busy':
-      return `The server is busy or could not prepare ${what}. Try again in a moment.`;
+      return translateActive(keys.busy);
     case 'expired':
-      return `These figures are no longer being held. Refresh the report to bring back an up-to-date set.`;
+      return translateActive('errors.licenceActivity.figuresExpired');
     case 'forbidden':
-      return `You do not have permission to view ${what}.`;
+      return translateActive(keys.forbidden);
     case 'precondition':
-      return `Licence activity is not available: the user details import is switched off on this deployment.`;
+      return translateActive('errors.licenceActivity.userDetailsImportOff');
     case 'badRequest':
-      return `That request was rejected. Check the selected dates and filters.`;
+      return translateActive('errors.licenceActivity.badRequest');
     default:
-      return `Couldn't load ${what} (${status}).`;
+      return translateActive(keys.http, { status });
   }
 }
 
-/** Reads the server's `{ message }` error body without consuming the original response. */
-async function readServerMessage(response: Response): Promise<string | null> {
+export const ERROR_CODE_KEYS: Record<string, TranslationKey> = {
+  licenceNotOnScreen: 'errors.licenceActivity.licenceNotOnScreen',
+  summaryUsersMismatch: 'errors.licenceActivity.summaryUsersMismatch',
+  figuresExpiredForAction: 'errors.licenceActivity.figuresExpiredForAction',
+  figuresExpired: 'errors.licenceActivity.figuresExpired',
+  anotherReportPreparing: 'errors.licenceActivity.anotherReportPreparing',
+  licenceReportingBusy: 'errors.licenceActivity.licenceReportingBusy',
+  userDetailsImportOff: 'errors.licenceActivity.userDetailsImportOffSpecific',
+  invalidRequest: 'errors.licenceActivity.invalidRequest',
+  supplyBothDates: 'errors.licenceActivity.validation.supplyBothDates',
+  dateRange: 'errors.licenceActivity.validation.dateRange',
+  earliestDate: 'errors.licenceActivity.validation.earliestDate',
+  invalidIds: 'errors.licenceActivity.validation.invalidIds',
+  invalidWorkload: 'errors.licenceActivity.validation.invalidWorkload',
+  invalidSort: 'errors.licenceActivity.validation.invalidSort',
+  invalidPaging: 'errors.licenceActivity.validation.invalidPaging',
+  invalidSearch: 'errors.licenceActivity.validation.invalidSearch',
+  dateFormat: 'errors.licenceActivity.validation.dateFormat',
+  loadFailed: 'errors.licenceActivity.loadFailed',
+};
+
+/** Reads the server's error body without consuming the original response. */
+async function readServerError(response: Response): Promise<{ code?: string; message?: string; reference?: string } | null> {
   try {
-    const body = (await response.clone().json()) as { message?: unknown } | null;
-    return body && typeof body.message === 'string' ? body.message : null;
+    const body = (await response.clone().json()) as { code?: unknown; message?: unknown; reference?: unknown } | null;
+    if (!body) return null;
+    return {
+      code: typeof body.code === 'string' ? body.code : undefined,
+      message: typeof body.message === 'string' ? body.message : undefined,
+      reference: typeof body.reference === 'string' ? body.reference : undefined,
+    };
   } catch {
     return null;
   }
 }
 
-/** Turns a non-OK response into a typed error, preferring the server's message. */
-async function errorFor(response: Response, what: string): Promise<LicenceActivityApiError> {
+/** Turns a non-OK response into a typed error, preferring catalogued text for known states. */
+async function errorFor(response: Response, keys: LicenceActivityFailureKeys): Promise<LicenceActivityApiError> {
   const kind = kindForStatus(response.status);
-  const message = (await readServerMessage(response)) ?? fallbackMessage(kind, response.status, what);
+  const serverError = await readServerError(response);
+  const codeKey = serverError?.code ? ERROR_CODE_KEYS[serverError.code] : undefined;
+  const message = codeKey
+    // `reference` is the failed run's id (loadFailed): a fact the admin quotes when reporting the failure.
+    ? translateActive(codeKey, { reference: serverError?.reference ?? '' })
+    : kind === 'http'
+      ? serverError?.message ?? fallbackMessage(kind, response.status, keys)
+      : fallbackMessage(kind, response.status, keys);
   return new LicenceActivityApiError(kind, response.status, message);
 }
 
-async function getJson<T>(path: string, what: string, signal?: AbortSignal): Promise<T> {
+async function getJson<T>(path: string, failureKeys: LicenceActivityFailureKeys, signal?: AbortSignal): Promise<T> {
   const response = await apiFetch(`${baseUrl()}${path}`, {
     method: 'GET',
     headers: { Accept: 'application/json' },
@@ -105,7 +170,7 @@ async function getJson<T>(path: string, what: string, signal?: AbortSignal): Pro
   });
 
   if (!response.ok) {
-    throw await errorFor(response, what);
+    throw await errorFor(response, failureKeys);
   }
 
   return response.json() as Promise<T>;
@@ -113,7 +178,7 @@ async function getJson<T>(path: string, what: string, signal?: AbortSignal): Pro
 
 /** Which parts of the tool this deployment can show, and the allowed window bounds. */
 export function fetchAvailability(signal?: AbortSignal): Promise<LicenceActivityAvailability> {
-  return getJson<LicenceActivityAvailability>('/availability', 'the licence activity availability', signal);
+  return getJson<LicenceActivityAvailability>('/availability', AVAILABILITY_FAILURE_KEYS, signal);
 }
 
 function overviewQuery(params: OverviewParams): URLSearchParams {
@@ -128,7 +193,7 @@ function overviewQuery(params: OverviewParams): URLSearchParams {
 export function fetchOverview(params: OverviewParams, signal?: AbortSignal): Promise<LicenceActivityOverview> {
   return getJson<LicenceActivityOverview>(
     `/overview?${overviewQuery(params)}`,
-    'the licence activity overview',
+    OVERVIEW_FAILURE_KEYS,
     signal,
   );
 }
@@ -153,7 +218,7 @@ function usersQuery(params: UsersParams): URLSearchParams {
  * lists and the current browse page together.
  */
 export function fetchUsers(params: UsersParams, signal?: AbortSignal): Promise<LicenceActivityUsers> {
-  return getJson<LicenceActivityUsers>(`/users?${usersQuery(params)}`, 'the licensed users', signal);
+  return getJson<LicenceActivityUsers>(`/users?${usersQuery(params)}`, USERS_FAILURE_KEYS, signal);
 }
 
 /** Pulls a filename out of a Content-Disposition header, if the server set one. */
@@ -209,7 +274,7 @@ export async function downloadExport(params: ExportParams, signal?: AbortSignal)
   });
 
   if (!response.ok) {
-    throw await errorFor(response, 'the Excel export');
+    throw await errorFor(response, EXPORT_FAILURE_KEYS);
   }
 
   // Belt and braces: never save a JSON error body as an .xlsx. The server returns the spreadsheet
@@ -217,7 +282,7 @@ export async function downloadExport(params: ExportParams, signal?: AbortSignal)
   // visibly rather than handing the user a "workbook" that is really an error document.
   const contentType = response.headers.get('Content-Type') ?? '';
   if (contentType.includes('application/json')) {
-    throw await errorFor(response, 'the Excel export');
+    throw await errorFor(response, EXPORT_FAILURE_KEYS);
   }
 
   const blob = await response.blob();

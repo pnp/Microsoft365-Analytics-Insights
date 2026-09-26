@@ -1,5 +1,7 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { ReportCategory } from '../../types/reports';
+import { useT } from '../../i18n';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { formatValue, seriesColor } from './chartCommon';
 
 const useStyles = makeStyles({
@@ -51,10 +53,11 @@ type WordCloudProps = {
  * convey nothing.
  */
 export default function WordCloud({ categories, valueLabel }: WordCloudProps) {
+  const t = useT();
   const styles = useStyles();
 
   if (categories.length === 0) {
-    return <div className={styles.empty}>No data for this period.</div>;
+    return <div className={styles.empty}>{t('charts.empty.noDataForPeriod')}</div>;
   }
 
   const values = categories.map((c) => c.value);
@@ -79,14 +82,14 @@ export default function WordCloud({ categories, valueLabel }: WordCloudProps) {
         <Text
           key={c.label}
           className={styles.word}
-          title={`${c.label}: ${formatValue(c.value)} ${valueLabel}`}
+          title={t('charts.wordCloud.wordTitle', { label: serverPlaceholderText(t, c.label), value: formatValue(c.value), valueLabel })}
           style={{
             fontSize: `${fontFor(c.value).toFixed(1)}px`,
             color: seriesColor(i),
             fontWeight: c.value >= max * 0.6 ? 600 : 400,
           }}
         >
-          {c.label}
+          {serverPlaceholderText(t, c.label)}
         </Text>
       ))}
     </div>

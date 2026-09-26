@@ -16,7 +16,16 @@ namespace Web.AnalyticsWeb.Models.LicenceActivity
     internal sealed class LicenceActivityFailedException : Exception
     {
         public LicenceActivityFailedException(string runId)
-            : base("Licence activity could not be loaded. Retry the request. Reference: " + runId) { }
+            : base("Licence activity could not be loaded. Retry the request. Reference: " + runId)
+        {
+            RunId = runId;
+        }
+
+        /// <summary>
+        /// The failed run's reference. The controller sends it as a fact beside a stable error code, so the
+        /// portal can say "could not be loaded" in the reader's language and still quote the reference.
+        /// </summary>
+        public string RunId { get; }
     }
 
     internal static class LicenceActivityConcurrency

@@ -1,3 +1,5 @@
+import { translateActive } from '../i18n/runtime';
+import type { TranslationKey } from '../i18n/catalog';
 import { apiFetch } from './http';
 import type {
   WebActivityAvailability,
@@ -13,7 +15,19 @@ import type {
 
 const baseUrl = (): string => `${window.location.origin}/api/WebActivity`;
 
-async function getJson<T>(path: string, what: string, signal?: AbortSignal): Promise<T> {
+const WEB_ACTIVITY_EXPORT_FAILURE_KEYS: Record<WebActivityExportSection, TranslationKey> = {
+  pages: 'errors.webActivity.exportPagesFailed',
+  'quiet-pages': 'errors.webActivity.exportQuietPagesFailed',
+  'slow-pages': 'errors.webActivity.exportSlowPagesFailed',
+  'entry-pages': 'errors.webActivity.exportEntryPagesFailed',
+  'exit-pages': 'errors.webActivity.exportExitPagesFailed',
+  transitions: 'errors.webActivity.exportTransitionsFailed',
+  flows: 'errors.webActivity.exportFlowsFailed',
+  'search-terms': 'errors.webActivity.exportSearchTermsFailed',
+  technology: 'errors.webActivity.exportTechnologyFailed',
+};
+
+async function getJson<T>(path: string, failureKey: TranslationKey, signal?: AbortSignal): Promise<T> {
   const response = await apiFetch(`${baseUrl()}/${path}`, {
     method: 'GET',
     headers: { Accept: 'application/json' },
@@ -21,7 +35,7 @@ async function getJson<T>(path: string, what: string, signal?: AbortSignal): Pro
   });
 
   if (!response.ok) {
-    throw new Error(`Couldn't load ${what} (${response.status}).`);
+    throw new Error(translateActive(failureKey, { status: response.status }));
   }
 
   return response.json() as Promise<T>;
@@ -29,35 +43,35 @@ async function getJson<T>(path: string, what: string, signal?: AbortSignal): Pro
 
 /** Which web-traffic sources are switched on, and what to tell the admin about the ones that are not. */
 export function fetchWebActivityAvailability(signal?: AbortSignal): Promise<WebActivityAvailability> {
-  return getJson<WebActivityAvailability>('availability', 'the web traffic data sources', signal);
+  return getJson<WebActivityAvailability>('availability', 'errors.webActivity.dataSourcesFailed', signal);
 }
 
 export function fetchWebActivityOverview(days: number, signal?: AbortSignal): Promise<WebActivityOverview> {
-  return getJson<WebActivityOverview>(`overview?days=${days}`, 'the web activity overview', signal);
+  return getJson<WebActivityOverview>(`overview?days=${days}`, 'errors.webActivity.overviewFailed', signal);
 }
 
 export function fetchWebActivityVisits(days: number, signal?: AbortSignal): Promise<WebActivityVisits> {
-  return getJson<WebActivityVisits>(`visits?days=${days}`, 'visits', signal);
+  return getJson<WebActivityVisits>(`visits?days=${days}`, 'errors.webActivity.visitsFailed', signal);
 }
 
 export function fetchWebActivityPages(days: number, signal?: AbortSignal): Promise<WebActivityPages> {
-  return getJson<WebActivityPages>(`pages?days=${days}`, 'page views', signal);
+  return getJson<WebActivityPages>(`pages?days=${days}`, 'errors.webActivity.pagesFailed', signal);
 }
 
 export function fetchWebActivityJourneys(days: number, signal?: AbortSignal): Promise<WebActivityJourneys> {
-  return getJson<WebActivityJourneys>(`journeys?days=${days}`, 'visitor journeys', signal);
+  return getJson<WebActivityJourneys>(`journeys?days=${days}`, 'errors.webActivity.journeysFailed', signal);
 }
 
 export function fetchWebActivityGeography(days: number, signal?: AbortSignal): Promise<WebActivityGeography> {
-  return getJson<WebActivityGeography>(`geography?days=${days}`, 'geography', signal);
+  return getJson<WebActivityGeography>(`geography?days=${days}`, 'errors.webActivity.geographyFailed', signal);
 }
 
 export function fetchWebActivitySearch(days: number, signal?: AbortSignal): Promise<WebActivitySearch> {
-  return getJson<WebActivitySearch>(`search?days=${days}`, 'web searches', signal);
+  return getJson<WebActivitySearch>(`search?days=${days}`, 'errors.webActivity.searchFailed', signal);
 }
 
 export function fetchWebActivityTechnology(days: number, signal?: AbortSignal): Promise<WebActivityTechnology> {
-  return getJson<WebActivityTechnology>(`technology?days=${days}`, 'technology', signal);
+  return getJson<WebActivityTechnology>(`technology?days=${days}`, 'errors.webActivity.technologyFailed', signal);
 }
 
 /**
@@ -83,7 +97,7 @@ export async function downloadWebActivityExport(
   });
 
   if (!response.ok) {
-    throw new Error(`Couldn't export ${section} (${response.status}).`);
+    throw new Error(translateActive(WEB_ACTIVITY_EXPORT_FAILURE_KEYS[section], { status: response.status }));
   }
 
   const blob = await response.blob();

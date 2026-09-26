@@ -1,5 +1,7 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { ReportCategory } from '../../types/reports';
+import { useT } from '../../i18n';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { formatValue, seriesColor, seriesColorLight } from './chartCommon';
 
 const useStyles = makeStyles({
@@ -85,10 +87,11 @@ type CategoryBarChartProps = {
  * stays within one hue so it never changes which category a colour identifies.
  */
 export default function CategoryBarChart({ categories, valueLabel, showShare, valueSuffix }: CategoryBarChartProps) {
+  const t = useT();
   const styles = useStyles();
 
   if (categories.length === 0) {
-    return <div className={styles.empty}>No data for this period.</div>;
+    return <div className={styles.empty}>{t('charts.empty.noDataForPeriod')}</div>;
   }
 
   const suffix = valueSuffix ?? '';
@@ -100,15 +103,16 @@ export default function CategoryBarChart({ categories, valueLabel, showShare, va
       {categories.map((c, i) => {
         const pct = Math.max(1, (c.value / max) * 100);
         const share = total > 0 ? (c.value / total) * 100 : 0;
+        const label = serverPlaceholderText(t, c.label);
 
         return (
           <div
             className={styles.row}
             key={c.label}
-            title={`${c.label}: ${formatValue(c.value)}${suffix} ${valueLabel}`}
+            title={t('charts.categoryBar.rowTitle', { label, value: `${formatValue(c.value)}${suffix}`, valueLabel })}
           >
             <Text size={200} className={styles.label}>
-              {c.label}
+              {label}
             </Text>
             <div className={styles.track}>
               <div

@@ -44,25 +44,26 @@ import type {
   TeamsOverview,
   TeamsPeople,
 } from '../types/teamsExplorer';
+import { useT, type TranslationKey } from '../i18n';
 
 /** The windows the API accepts. Anything else is snapped server-side, so these must agree with it. */
-const WINDOWS = [
-  { days: 7, label: 'Last 7 days' },
-  { days: 28, label: 'Last 28 days' },
-  { days: 90, label: 'Last 90 days' },
-  { days: 180, label: 'Last 180 days' },
-  { days: 365, label: 'Last 365 days' },
+const WINDOWS: { days: number; labelKey: TranslationKey }[] = [
+  { days: 7, labelKey: 'teamsExplorer.page.window.last7Days' },
+  { days: 28, labelKey: 'teamsExplorer.page.window.last28Days' },
+  { days: 90, labelKey: 'teamsExplorer.page.window.last90Days' },
+  { days: 180, labelKey: 'teamsExplorer.page.window.last180Days' },
+  { days: 365, labelKey: 'teamsExplorer.page.window.last365Days' },
 ];
 
 type TabKey = 'overview' | 'adoption' | 'meetings' | 'collaboration' | 'conversations' | 'people';
 
-const TABS: { key: TabKey; label: string }[] = [
-  { key: 'overview', label: 'Overview' },
-  { key: 'adoption', label: 'Adoption & reach' },
-  { key: 'meetings', label: 'Meetings & calls' },
-  { key: 'collaboration', label: 'Teams & channels' },
-  { key: 'conversations', label: 'Conversation insights' },
-  { key: 'people', label: 'People' },
+const TABS: { key: TabKey; labelKey: TranslationKey }[] = [
+  { key: 'overview', labelKey: 'teamsExplorer.page.tab.overview' },
+  { key: 'adoption', labelKey: 'teamsExplorer.page.tab.adoption' },
+  { key: 'meetings', labelKey: 'teamsExplorer.page.tab.meetings' },
+  { key: 'collaboration', labelKey: 'teamsExplorer.page.tab.collaboration' },
+  { key: 'conversations', labelKey: 'teamsExplorer.page.tab.conversations' },
+  { key: 'people', labelKey: 'teamsExplorer.page.tab.people' },
 ];
 
 const useStyles = makeStyles({
@@ -103,6 +104,7 @@ const useStyles = makeStyles({
  */
 export default function TeamsExplorerPage() {
   const styles = useStyles();
+  const t = useT();
 
   const [days, setDays] = useState(28);
   const [groupBy, setGroupBy] = useState<TeamsGrouping>('department');
@@ -147,7 +149,7 @@ export default function TeamsExplorerPage() {
       .then(setAvailability)
       .catch((e: unknown) => {
         if (controller.signal.aborted) return;
-        setAvailabilityError(e instanceof Error ? e.message : 'Failed to load the Teams data sources.');
+        setAvailabilityError(e instanceof Error ? e.message : t('teamsExplorer.page.error.loadDataSources'));
       });
 
     return () => controller.abort();
@@ -197,7 +199,7 @@ export default function TeamsExplorerPage() {
         if (controller.signal.aborted) return;
         // A failed load must be retryable, so drop the "loaded" marker for this key.
         delete loadedRef.current[key];
-        setError(e instanceof Error ? e.message : 'Failed to load this section.');
+        setError(e instanceof Error ? e.message : t('teamsExplorer.page.error.loadSection'));
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
@@ -213,14 +215,14 @@ export default function TeamsExplorerPage() {
       setExporting(true);
       try {
         await downloadTeamsExport(section, days, groupBy);
-        toast.success('Export downloaded');
+      toast.success(t('teamsExplorer.page.toast.exportDownloaded'));
       } catch (e: unknown) {
-        toast.error(e instanceof Error ? e.message : 'The export failed.');
+      toast.error(e instanceof Error ? e.message : t('teamsExplorer.page.toast.exportFailed'));
       } finally {
         setExporting(false);
       }
     },
-    [days, groupBy],
+    [days, groupBy, t],
   );
 
   const hasData =
@@ -235,11 +237,9 @@ export default function TeamsExplorerPage() {
     <div>
       <div className={styles.header}>
         <div>
-          <Title3>Teams Explorer</Title3>
+          <Title3>{t('teamsExplorer.page.title')}</Title3>
           <Body1 block className={styles.intro}>
-            How Microsoft Teams is actually being used: who has adopted it, how habitually, what the
-            meeting load looks like, which teams and channels are alive, and where the governance
-            gaps are. Every figure carries its definition and the SQL behind it.
+            {t('teamsExplorer.page.intro')}
           </Body1>
         </div>
 
@@ -247,11 +247,11 @@ export default function TeamsExplorerPage() {
           <Select
             value={String(days)}
             onChange={(_: any, d: any) => setDays(Number(d.value))}
-            aria-label="Reporting period"
+            aria-label={t('teamsExplorer.page.reportingPeriodAria')}
           >
             {WINDOWS.map((w) => (
               <option key={w.days} value={w.days}>
-                {w.label}
+                {t(w.labelKey)}
               </option>
             ))}
           </Select>
@@ -261,7 +261,7 @@ export default function TeamsExplorerPage() {
             onClick={() => setReloadToken((n) => n + 1)}
             disabled={loading}
           >
-            Refresh
+            {t('teamsExplorer.page.refresh')}
           </Button>
         </div>
       </div>
@@ -277,8 +277,7 @@ export default function TeamsExplorerPage() {
       {availability && !availability.available && (
         <MessageBar intent="warning" style={{ marginTop: '12px' }}>
           <MessageBarBody>
-            None of the Teams imports are switched on, so this page has nothing to report. The
-            details above say exactly what to enable.
+            {t('teamsExplorer.page.noImports')}
           </MessageBarBody>
         </MessageBar>
       )}
@@ -287,11 +286,11 @@ export default function TeamsExplorerPage() {
         className={styles.tabs}
         selectedValue={selectedTab}
         onTabSelect={onTabSelect}
-        aria-label="Teams Explorer sections"
+        aria-label={t('teamsExplorer.page.sectionsAria')}
       >
         {TABS.map((tab) => (
           <Tab key={tab.key} value={tab.key}>
-            {tab.label}
+            {t(tab.labelKey)}
           </Tab>
         ))}
       </TabList>
@@ -303,7 +302,7 @@ export default function TeamsExplorerPage() {
           </MessageBar>
         )}
 
-        {loading && !hasData && <Spinner label="Loading Teams data..." />}
+        {loading && !hasData && <Spinner label={t('teamsExplorer.page.loading')} />}
 
         {selectedTab === 'overview' && overview && <OverviewPanel data={overview} />}
 
@@ -345,8 +344,7 @@ export default function TeamsExplorerPage() {
       </div>
 
       <Text size={200} className={styles.muted} style={{ marginTop: '20px', display: 'block' }}>
-        This page replaces the archived Teams Power BI template. It reads the base tables directly
-        rather than the legacy reporting views, so it reflects what the importer actually collected.
+        {t('teamsExplorer.page.archivedTemplateNote')}
       </Text>
     </div>
   );

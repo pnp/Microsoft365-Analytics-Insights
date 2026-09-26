@@ -1,6 +1,7 @@
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace ActivityImporter.Engine.ActivityAPI.Copilot
@@ -21,6 +22,9 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
         /// <summary>A site's default document library drive (with SharePointIds populated). Accepts a site id or a host:/path address.</summary>
         Task<Drive> GetSiteDriveAsync(string siteIdentifier);
+
+        /// <summary>A bounded page of a site's document library drives (with SharePointIds populated).</summary>
+        Task<IReadOnlyList<Drive>> GetSiteDocumentLibraryDrivesAsync(string siteIdentifier, int maxDrives);
 
         /// <summary>A site by id or by host:/path address.</summary>
         Task<Site> GetSiteAsync(string siteIdentifier);
@@ -58,6 +62,16 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
         public Task<Drive> GetSiteDriveAsync(string siteIdentifier)
             => _graphServiceClient.Sites[siteIdentifier].Drive.GetAsync(rc => { rc.QueryParameters.Select = new[] { "SharePointIds" }; });
+
+        public async Task<IReadOnlyList<Drive>> GetSiteDocumentLibraryDrivesAsync(string siteIdentifier, int maxDrives)
+        {
+            var drives = await _graphServiceClient.Sites[siteIdentifier].Drives.GetAsync(rc =>
+            {
+                rc.QueryParameters.Select = new[] { "id", "name", "sharePointIds", "webUrl" };
+                rc.QueryParameters.Top = maxDrives;
+            });
+            return drives?.Value ?? new List<Drive>();
+        }
 
         public Task<Site> GetSiteAsync(string siteIdentifier)
             => _graphServiceClient.Sites[siteIdentifier].GetAsync();

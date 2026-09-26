@@ -1778,8 +1778,9 @@ namespace Tests.UnitTests
         /// The page used to take per-SKU seat prices typed into its header and publish an "idle licence
         /// spend" figure from them. That was withdrawn deliberately: a price typed into a report header
         /// is not a source of truth about what a tenant pays, and a money figure derived from one gets
-        /// quoted in a renewal negotiation as though it were. The only value estimate the product makes
-        /// is the Cowork time saving, and that is reported in hours.
+        /// quoted in a renewal negotiation as though it were. The only value estimates the product makes
+        /// are the time-saved models - the licence estimate and the Cowork estimate - and both are
+        /// reported in hours.
         ///
         /// Asserted over the serialised payload rather than over a property list, because the way this
         /// comes back is somebody re-adding a currency field to a nested model.
@@ -1813,7 +1814,7 @@ namespace Tests.UnitTests
                 Assert.IsFalse(
                     json.IndexOf(banned, StringComparison.OrdinalIgnoreCase) >= 0,
                     $"The Copilot Adoption summary must not carry '{banned}'. This report deliberately talks about "
-                    + "seats and people, and about time saved for Cowork - never about money.");
+                    + "seats and people, and about time saved in hours - never about money.");
             }
 
             // The seat COUNTS are still published: they are observed, not priced.
@@ -2071,6 +2072,8 @@ namespace Tests.UnitTests
 
             Assert.AreEqual("(no manager)", analysis.Summary.AccountabilityRollup.Single().Segment,
                 "Users with no manager must be visible as their own accountability group, not silently dropped.");
+            Assert.AreEqual("noManager", analysis.Summary.AccountabilityRollup.Single().EmptySegmentKey,
+                "The API must flag product-authored empty labels so the SPA can translate them without touching tenant data.");
         }
 
         [TestMethod]
@@ -2108,6 +2111,22 @@ namespace Tests.UnitTests
             Assert.AreEqual(CopilotAdoptionAccountabilityDimensions.Department, analysis.Summary.AccountabilityDimension);
             Assert.AreEqual("Department", analysis.Summary.AccountabilityDimensionLabel);
             Assert.AreEqual("Finance", analysis.Summary.AccountabilityRollup.Single().Segment);
+            Assert.IsNull(analysis.Summary.AccountabilityRollup.Single().EmptySegmentKey,
+                "Real tenant department names must not be flagged for translation.");
+        }
+
+        [TestMethod]
+        public void AccountabilityRollup_SerialisesEmptySegmentKeyAsCamelCaseContract()
+        {
+            var row = CopilotAdoptionService.SummariseAccountability(
+                "(no department)",
+                Enumerable.Range(0, 5).Select(i => ScoredUser($"nodept{i}@contoso.com", 0, AdoptionBand.NeverUsed)),
+                "noDepartment");
+
+            var json = JsonConvert.SerializeObject(row);
+
+            StringAssert.Contains(json, "\"emptySegmentKey\":\"noDepartment\"",
+                "The Web project has no camel-case resolver; additive API fields must carry their JSON name explicitly.");
         }
 
         [TestMethod]
@@ -2359,6 +2378,13 @@ namespace Tests.UnitTests
             Assert.IsTrue(
                 analysis.Summary.Warnings.Any(w => w.Contains("Microsoft prompt counts are not added")),
                 "The summary must disclose that a visible share of rows came from a different source.");
+            AssertWarningDetailsMatchEnglish(analysis.Summary);
+            Assert.IsTrue(
+                analysis.Summary.WarningDetails.Any(d =>
+                    d.Key == CopilotAdoptionWarningKeys.UsageReportSourcedUsers
+                    && Convert.ToInt32(d.Values["count"]) == 6
+                    && Convert.ToDouble(d.Values["percentage"]) == 50d),
+                "The translated warning needs the raw count and percentage, not a pre-formatted English string.");
         }
 
         [TestMethod]
@@ -2401,6 +2427,13 @@ namespace Tests.UnitTests
             Assert.IsTrue(
                 analysis.Summary.Warnings.Any(w => w.Contains("held back for window mismatch")),
                 "The warning must name the reconciling figure so the gap is explainable on screen.");
+            AssertWarningDetailsMatchEnglish(analysis.Summary);
+            Assert.IsTrue(
+                analysis.Summary.WarningDetails.Any(d =>
+                    d.Key == CopilotAdoptionWarningKeys.UsageReportWindowMismatch
+                    && Convert.ToInt32(d.Values["reportDays"]) == 90
+                    && Convert.ToInt32(d.Values["analysisDays"]) == 28),
+                "The translated mismatch warning needs both window lengths as numbers.");
         }
 
         [TestMethod]
@@ -2509,6 +2542,78 @@ namespace Tests.UnitTests
                     + summary.ReclaimSeatsHeldBackForReview,
                 "NeverUsed + Dormant + ReclaimSeatsFromActiveBands must equal "
                 + "ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview.");
+        }
+
+        private static void AssertWarningDetailsMatchEnglish(CopilotAdoptionSummary summary)
+        {
+            Assert.AreEqual(summary.Warnings.Count, summary.WarningDetails.Count,
+                "Structured warning details must stay index-aligned with the compatibility English warnings.");
+
+            for (var i = 0; i < summary.Warnings.Count; i++)
+            {
+                Assert.AreEqual(
+                    summary.Warnings[i],
+                    CopilotAdoptionWarnings.RenderEnglish(summary.WarningDetails[i].Key, summary.WarningDetails[i].Values),
+                    "The structured warning must render back to the English compatibility string at the same index.");
+            }
+        }
+
+        [TestMethod]
+        public void WarningTemplates_RenderTheLegacyEnglishCompatibilityText()
+        {
+            var cases = new Dictionary<string, Tuple<Dictionary<string, object>, string>>
+            {
+                { CopilotAdoptionWarningKeys.NoLicenceInformation, Case("No licence information has been imported, so Copilot licences cannot be identified. Enable the user metadata import to use this tool.") },
+                { CopilotAdoptionWarningKeys.NoCopilotLicences, Case("No Microsoft 365 Copilot licences were found in this tenant. Adoption cannot be reported until at least one Copilot licence is assigned and the user import has run.") },
+                { CopilotAdoptionWarningKeys.CopilotBackfillPending, Case("Some Copilot interactions have not finished being upgraded to the new reporting format, so every Copilot figure below is currently too low. This repairs itself automatically on the next few import cycles - re-run this report once the importer has caught up. If it persists, check that the Office 365 activity importer web job is running.") },
+                { CopilotAdoptionWarningKeys.CopilotUsageReportConcealed, Case("This tenant has 'concealed user information' enabled, so Microsoft's per-user Copilot report returns hashed identities and cannot be used. Per-user figures below come from the Copilot audit log, which is unaffected by that setting.") },
+                { CopilotAdoptionWarningKeys.NoCopilotData, Case("Neither the Copilot audit import nor Microsoft's Copilot usage report has any data for this period, so every licensed user will appear as unused. Check the Health page before acting on these numbers.") },
+                { CopilotAdoptionWarningKeys.AuditMissingUsingUsageReport, Case("The Copilot audit import has no data for this period, so per-user engagement is derived from Microsoft's own usage report. That report covers Microsoft's aggregation window rather than the period selected here, and excludes unlicensed Copilot Chat use entirely.") },
+                // The two cap warnings are the one deliberate English change here: dev interpolated the caps
+                // with no format ("capped at 5000 agents"); they now group thousands like every other count
+                // in these warnings ("5,000"). Every other expected string is dev's text verbatim.
+                { CopilotAdoptionWarningKeys.AgentInventoryCapped, Case("The agent inventory was capped at 1,234 agents, so the agent figures are a floor rather than a total.", "maxAgents", 1234) },
+                { CopilotAdoptionWarningKeys.UnlicensedUsageCapped, Case("Unlicensed Copilot usage was capped at 1,234 users, so those figures are a floor rather than a total.", "maxUsers", 1234) },
+                { CopilotAdoptionWarningKeys.LicensedUserDetailCapped, Case("Only the first 1,234 licensed users were analysed. The figures below therefore describe that subset, not the whole tenant. The subset is ordered by internal user id for reproducibility, so the oldest user records are over-represented and the newest user records are excluded first.", "maxUsers", 1234) },
+                { CopilotAdoptionWarningKeys.LicensedUsersSubset, Case("This tenant holds 5,000 Copilot licences, but only 1,234 users could be analysed in one pass. Every rate and breakdown below describes those 1,234 users, not the whole tenant - they are not tenant-wide figures and must not be quoted as such. Because the drill-down query is ordered by internal user id, the oldest user records are over-represented and the newest joiners or newly onboarded subsidiaries are excluded first; the subset is reproducible, but not representative.", "licensedUsers", 5000, "scoredUsers", 1234) },
+                { CopilotAdoptionWarningKeys.LicenceOpportunitiesNoSources, Case("Licence opportunities need either the Copilot audit import or the Microsoft 365 usage reports. Neither has data, so no candidates can be identified.") },
+                { CopilotAdoptionWarningKeys.LicenceCandidatesAuditOnly, Case("The Microsoft 365 usage reports are not available, so licence candidates are ranked only on unlicensed Copilot Chat use. Heavy Microsoft 365 users who have never tried Copilot will not appear.") },
+                { CopilotAdoptionWarningKeys.CoworkReadinessNoSources, Case("Cowork readiness needs the Cowork usage report, the Copilot audit import or the Microsoft 365 usage reports. None has data for this period, so no readiness assessment is possible.") },
+                { CopilotAdoptionWarningKeys.CoworkM365UsageMissing, Case("The Microsoft 365 usage reports are not available, so coordination load cannot be measured. Everyone will score zero on that axis and no one will be identified as a Cowork candidate. Enable the Microsoft 365 usage report import to use this tab.") },
+                { CopilotAdoptionWarningKeys.CoworkUsageReportMissing, Case("The first-party Cowork usage report is not available, so Cowork task counts, automation ratio and retention cannot be measured. Audit-derived Cowork interactions are retained only as a reconciliation signal.") },
+                { CopilotAdoptionWarningKeys.CoworkAuditMissing, Case("The Copilot audit import has no data for this period, so Cowork audit interactions cannot be reconciled against Microsoft's Cowork task report.") },
+                { CopilotAdoptionWarningKeys.UsageReportSourcedUsers, Case("1 licensed user (50.0%) were scored from Microsoft's Copilot usage report because the audit import had no per-user signal for them. Their Microsoft prompt counts are not added to audit interaction totals, concentration, intensity or licensed/unlicensed interaction comparisons.", "count", 1, "userPlural", string.Empty, "percentage", 50d) },
+                { CopilotAdoptionWarningKeys.UsageReportWindowMismatch, Case("Microsoft's pinned Copilot usage-report period is D90, but this analysis window is D28. Report-sourced rows are kept in the adoption population so active people are not marked as never used, but a report-sourced row that would otherwise be a PROBABLE reclaim is excluded from reclaimable-seat totals rather than normalising prompt counts across unlike windows. Certain (disabled-account) seats are never held back this way, because a disabled account is not an inference from an absence of use. The band breakdown therefore counts more idle seats than the reclaim figure does; the difference is reported as \"held back for window mismatch\".", "reportDays", 90, "analysisDays", 28) },
+                { CopilotAdoptionWarningKeys.CoworkEligibilityUnknown, Case("Cowork adoption percentage is suppressed because Cowork eligibility is controlled by spending-policy scope and this import does not know that denominator. The deprecated Cowork agent entry is not used as an eligibility source.") },
+                { CopilotAdoptionWarningKeys.PurchasedSeatsUnknown, Case("Purchased and unassigned Copilot seats are unknown because Graph subscribedSkus/prepaidUnits has not been imported. Grant Organization.Read.All and rerun the user metadata import; the report deliberately does not show zero for unassigned seats when the purchase inventory is missing.") },
+                { CopilotAdoptionWarningKeys.SkuSeatMismatch, Case("Purchased and assigned Copilot seats disagree for Contoso Copilot SKU: Graph reports 1,234 purchased but 1,200 assigned, so unassigned seats are shown as Unknown rather than zero.", "skuName", "Contoso Copilot SKU", "purchased", 1234, "assigned", 1200) },
+                { CopilotAdoptionWarningKeys.CoworkFluencyMissingAll, Case("Cowork readiness was measured, but the licensed-user analysis it takes Copilot fluency from did not complete, so the tab could not be scored. This is NOT a missing usage report import - the Cowork signals imported fine. Check the Health page and re-run.") },
+                { CopilotAdoptionWarningKeys.CoworkFluencyPartial, Case("Cowork readiness: 1,234 of 5,678 seat holders were scored without a Copilot fluency figure, because they fall outside the 2,000-row licensed-user analysis this tab joins against. Their fluency reads as 0 rather than as unknown, so they band lower than they should - most will show as \"build fluency first\". Treat the tier of those rows as unreliable; the rest of the tab is unaffected.", "withoutFluency", 1234, "total", 5678, "maxLicensed", 2000) },
+                { CopilotAdoptionWarningKeys.CouldNotLoad, Case("Could not load licensed user detail: timeout", "description", "licensed user detail", "query", "LicensedUserDetail", "message", "timeout") },
+            };
+
+            CollectionAssert.AreEquivalent(
+                CopilotAdoptionWarnings.EnglishTemplates.Keys.ToList(),
+                cases.Keys.ToList(),
+                "Every structured warning key needs a golden English compatibility assertion.");
+
+            foreach (var entry in cases)
+            {
+                Assert.AreEqual(
+                    entry.Value.Item2,
+                    CopilotAdoptionWarnings.RenderEnglish(entry.Key, entry.Value.Item1),
+                    entry.Key);
+            }
+        }
+
+        private static Tuple<Dictionary<string, object>, string> Case(string expected, params object[] values)
+        {
+            var dictionary = new Dictionary<string, object>(StringComparer.Ordinal);
+            for (var i = 0; i < values.Length; i += 2)
+            {
+                dictionary[(string)values[i]] = values[i + 1];
+            }
+            return Tuple.Create(dictionary, expected);
         }
 
         [TestMethod]

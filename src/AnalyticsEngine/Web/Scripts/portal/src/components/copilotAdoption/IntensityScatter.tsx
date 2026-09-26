@@ -1,6 +1,8 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { AdoptionIntensityPoint, CopilotAdoptionOptions } from '../../types/copilotAdoption';
+import { useT, type TranslationKey } from '../../i18n';
 import { formatValue } from '../charts/chartCommon';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { scoreColour } from './adoptionShared';
 
 /**
@@ -22,11 +24,11 @@ function bandInitial(
   return '-';
 }
 
-const BAND_KEY: Array<{ initial: string; label: string; score: (b: ScatterBands) => number }> = [
-  { initial: 'C', label: 'Champion', score: (b) => b.champion },
-  { initial: 'E', label: 'Established', score: (b) => b.established },
-  { initial: 'D', label: 'Developing', score: (b) => b.developing },
-  { initial: 'T', label: 'Trialling', score: () => 1 },
+const BAND_KEY: Array<{ initial: string; labelKey: TranslationKey; score: (b: ScatterBands) => number }> = [
+  { initial: 'C', labelKey: 'copilotAdoption.intensityScatter.band.champion', score: (b) => b.champion },
+  { initial: 'E', labelKey: 'copilotAdoption.intensityScatter.band.established', score: (b) => b.established },
+  { initial: 'D', labelKey: 'copilotAdoption.intensityScatter.band.developing', score: (b) => b.developing },
+  { initial: 'T', labelKey: 'copilotAdoption.intensityScatter.band.trialling', score: () => 1 },
 ];
 
 type ScatterBands = { champion: number; established: number; developing: number };
@@ -97,12 +99,12 @@ export default function IntensityScatter({
   options: CopilotAdoptionOptions;
 }) {
   const styles = useStyles();
+  const t = useT();
 
   if (points.length === 0) {
     return (
       <div className={styles.empty}>
-        Not enough licensed users in any department to plot. Departments need at least the minimum licence
-        count to appear.
+        {t('copilotAdoption.intensityScatter.empty')}
       </div>
     );
   }
@@ -182,7 +184,7 @@ export default function IntensityScatter({
 
   return (
     <div className={styles.root}>
-      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%" role="img" aria-label="Copilot usage frequency against intensity by department">
+      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%" role="img" aria-label={t('copilotAdoption.intensityScatter.ariaLabel')}>
         {yTickValues.map((t) => (
           <g key={`y${t}`}>
             <line
@@ -228,7 +230,7 @@ export default function IntensityScatter({
           fontSize={11}
           fill={tokens.colorNeutralForeground3}
         >
-          Active days per user, per month
+          {t('copilotAdoption.intensityScatter.axis.activeDays')}
         </text>
         <text
           x={-(PAD.top + plotH / 2)}
@@ -238,7 +240,7 @@ export default function IntensityScatter({
           fontSize={11}
           fill={tokens.colorNeutralForeground3}
         >
-          Interactions per active day
+          {t('copilotAdoption.intensityScatter.axis.interactionsPerDay')}
         </text>
 
         {showQuadrants && (
@@ -263,14 +265,14 @@ export default function IntensityScatter({
             />
 
             <text x={xOf(xMedian) + 5} y={PAD.top - 20} fontSize={10} fill={tokens.colorNeutralForeground3}>
-              median frequency
+              {t('copilotAdoption.intensityScatter.median.frequency')}
             </text>
             <text x={PAD.left + 4} y={yOf(yMedian) - 5} fontSize={10} fill={tokens.colorNeutralForeground3}>
-              median intensity
+              {t('copilotAdoption.intensityScatter.median.intensity')}
             </text>
 
             <text x={PAD.left + 6} y={PAD.top + 12} fontSize={11} fontWeight={600} fill={tokens.colorNeutralForeground3}>
-              Deep but occasional
+              {t('copilotAdoption.intensityScatter.quadrant.deepOccasional')}
             </text>
             <text
               x={WIDTH - PAD.right - 6}
@@ -280,7 +282,7 @@ export default function IntensityScatter({
               fontWeight={600}
               fill={tokens.colorPaletteGreenForeground1}
             >
-              Embedded
+              {t('copilotAdoption.intensityScatter.quadrant.embedded')}
             </text>
             <text
               x={PAD.left + 6}
@@ -289,7 +291,7 @@ export default function IntensityScatter({
               fontWeight={600}
               fill={tokens.colorPaletteRedForeground1}
             >
-              Barely started
+              {t('copilotAdoption.intensityScatter.quadrant.barelyStarted')}
             </text>
             <text
               x={WIDTH - PAD.right - 6}
@@ -299,7 +301,7 @@ export default function IntensityScatter({
               fontWeight={600}
               fill={tokens.colorNeutralForeground3}
             >
-              Frequent but shallow
+              {t('copilotAdoption.intensityScatter.quadrant.frequentShallow')}
             </text>
           </g>
         )}
@@ -308,10 +310,11 @@ export default function IntensityScatter({
           const cx = xOf(p.activeDaysPerUser);
           const cy = yOf(p.actionsPerActiveDay);
           const r = rOf(p.licensedUsers);
+          const segment = serverPlaceholderText(t, p.segment);
 
           // Roughly 6px per character at this font size - close enough to reserve a sensible box
           // without measuring text, which would need a DOM round trip on every render.
-          const labelW = p.segment.length * 6;
+          const labelW = segment.length * 6;
           const above = tryPlace(cx, cy - r - 5, labelW);
           const below = above ? false : tryPlace(cx, cy + r + 16, labelW);
 
@@ -326,10 +329,7 @@ export default function IntensityScatter({
                 stroke={scoreColour(p.activeUserAverageScore, bands)}
               >
                 <title>
-                  {`${p.segment}: ${formatValue(p.licensedUsers)} licences, ${formatValue(p.activeUsers)} active. ` +
-                    `${formatValue(p.activeDaysPerUser)} active days a month, ` +
-                    `${formatValue(p.actionsPerActiveDay)} interactions per active day. ` +
-                    `Average engagement of its active users ${formatValue(p.activeUserAverageScore)}.`}
+                  {t('copilotAdoption.intensityScatter.pointTitle', { segment, licences: formatValue(p.licensedUsers), active: formatValue(p.activeUsers), activeDays: formatValue(p.activeDaysPerUser), interactions: formatValue(p.actionsPerActiveDay), engagement: formatValue(p.activeUserAverageScore) })}
                 </title>
               </circle>
 
@@ -356,7 +356,7 @@ export default function IntensityScatter({
                   fill={tokens.colorNeutralForeground2}
                   style={{ pointerEvents: 'none' }}
                 >
-                  {p.segment}
+                  {segment}
                 </text>
               )}
             </g>
@@ -374,18 +374,13 @@ export default function IntensityScatter({
             >
               {k.initial}
             </span>
-            {k.label}
+            {t(k.labelKey)}
           </span>
         ))}
       </div>
 
       <Text size={200} className={styles.caption}>
-        Bubble area is proportional to the number of licences the department holds; colour <em>and</em> the letter
-        inside each bubble both give the average engagement band of its <em>active</em> users, so the chart
-        still reads in greyscale or to a colour-blind reader. The dashed lines are your own medians, not fixed
-        targets - each quadrant is "compared with your other departments". Only users who were active at least
-        once are averaged, so a department is not dragged towards the origin by licences that were never used;
-        those are idle seats, assessed by the reclaim confidence tiers.
+        {t('copilotAdoption.intensityScatter.caption')}
       </Text>
     </div>
   );

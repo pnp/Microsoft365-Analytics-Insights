@@ -164,7 +164,8 @@ namespace Common.Entities.LicenceActivity
             await RequireResultAsync(reader, true, cancellationToken,
                 "Workload", "Status", "Source", "ExpectedSamples").ConfigureAwait(false);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                result.Coverage.Add(new LicenceActivityCoverage
+            {
+                var coverage = new LicenceActivityCoverage
                 {
                     Workload = ReadString(reader, "Workload"),
                     Status = ReadString(reader, "Status"),
@@ -180,7 +181,9 @@ namespace Common.Entities.LicenceActivity
                     ExpectedSamples = ReadInt32(reader, "ExpectedSamples"),
                     ObservedSamples = ReadInt32(reader, "ObservedSamples"),
                     UnmatchedUsers = ReadInt32(reader, "UnmatchedUsers")
-                });
+                };
+                result.Coverage.Add(coverage);
+            }
             await RequireResultAsync(reader, false, cancellationToken, "WorkloadName", "SnapshotDate").ConfigureAwait(false);
             var byWorkload = result.Coverage.ToDictionary(c => c.Workload, StringComparer.Ordinal);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))

@@ -2,6 +2,7 @@ import { useId, useState } from 'react';
 import { makeStyles, tokens, Card, Text, Badge, Button } from '@fluentui/react-components';
 import { ChevronDown16Regular, ChevronRight16Regular } from '@fluentui/react-icons';
 import type { LicenceActivityCoverage } from '../../types/licenceActivity';
+import { useT } from '../../i18n';
 import CoveragePanel from './CoveragePanel';
 import { statusMeta, type StatusTone } from './statuses';
 import { formatAge } from './format';
@@ -70,7 +71,7 @@ interface StatusCount {
   count: number;
 }
 
-function summariseStatuses(coverage: LicenceActivityCoverage[]): StatusCount[] {
+function summariseStatuses(coverage: LicenceActivityCoverage[], t: ReturnType<typeof useT>): StatusCount[] {
   const counts = new Map<string, number>();
   for (const entry of coverage) counts.set(entry.status, (counts.get(entry.status) ?? 0) + 1);
 
@@ -81,7 +82,7 @@ function summariseStatuses(coverage: LicenceActivityCoverage[]): StatusCount[] {
   });
 
   return ordered.map((status) => {
-    const meta = statusMeta(status);
+    const meta = statusMeta(status, t);
     return { status, label: meta.label, tone: meta.tone, count: counts.get(status) ?? 0 };
   });
 }
@@ -96,10 +97,11 @@ function summariseStatuses(coverage: LicenceActivityCoverage[]): StatusCount[] {
  */
 export default function DataSourceSummary({ coverage, generatedUtc, expiresUtc, now }: DataSourceSummaryProps) {
   const styles = useStyles();
+  const t = useT();
   const [open, setOpen] = useState(false);
   const panelId = useId();
 
-  const statuses = summariseStatuses(coverage);
+  const statuses = summariseStatuses(coverage, t);
   const available = statuses.find((s) => s.status === 'available')?.count ?? 0;
   const total = coverage.length;
 
@@ -108,22 +110,28 @@ export default function DataSourceSummary({ coverage, generatedUtc, expiresUtc, 
       <div className={styles.head}>
         <div className={styles.headText}>
           <Text size={200} weight="semibold" className={styles.title}>
-            Where these figures come from
+            {t('licenceActivity.coverage.title')}
           </Text>
           {total > 0 ? (
-            <div className={styles.chips} aria-label={`${available} of ${total} services measured in full`}>
+            <div
+              className={styles.chips}
+              aria-label={t('licenceActivity.dataSource.servicesMeasuredAria', {
+                available: String(available),
+                total: String(total),
+              })}
+            >
               {statuses.map((s) => (
                 <Badge key={s.status} appearance="tint" color={s.tone} size="small">
                   {s.count} {s.label}
                 </Badge>
               ))}
               <Text size={200} className={styles.generated}>
-                &middot; prepared {formatAge(generatedUtc, now)}
+                {t('licenceActivity.dataSource.prepared', { age: formatAge(generatedUtc, t, now) })}
               </Text>
             </div>
           ) : (
             <Text size={200} className={styles.generated}>
-              No source information was reported for these figures.
+              {t('licenceActivity.coverage.noSourceInfo')}
             </Text>
           )}
         </div>
@@ -135,7 +143,7 @@ export default function DataSourceSummary({ coverage, generatedUtc, expiresUtc, 
           aria-controls={panelId}
           onClick={() => setOpen((v) => !v)}
         >
-          {open ? 'Hide data sources' : 'Show data sources'}
+          {open ? t('licenceActivity.dataSource.hide') : t('licenceActivity.dataSource.show')}
         </Button>
       </div>
 

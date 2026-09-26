@@ -66,6 +66,10 @@ export interface UserDataDetailRow {
   title: string | null;
   /** Secondary descriptor (operation, recipient, url, etc.). */
   detail: string | null;
+  /** Stable key for product-authored detail text, when available. */
+  detailKey: string | null;
+  /** ISO date/time fact used by `detailKey`, when available. */
+  detailDateUtc: string | null;
 }
 
 export interface UserDataDetailResponse {

@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using ReportAreaData = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportAreaData;
 using ReportChart = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportChart;
+using ReportSeriesWarning = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportSeriesWarning;
 using ReportsAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.ReportsAPIController;
 
 namespace Tests.UnitTests
@@ -85,12 +86,19 @@ namespace Tests.UnitTests
                 chart,
                 rows,
                 new List<string> { "Outlook: query timed out" },
-                new List<DateTime> { week });
+                new List<DateTime> { week },
+                new List<ReportSeriesWarning>
+                {
+                    new ReportSeriesWarning { Series = "Outlook", Reason = "loadFailed", Error = "query timed out" },
+                });
 
             Assert.IsNull(result.Error);
             Assert.AreEqual(1, result.Series.Count);
             Assert.AreEqual("Teams", result.Series[0].Name);
             StringAssert.Contains(result.Warning, "Outlook: query timed out");
+            Assert.AreEqual("loadFailed", result.SeriesWarnings.Single().Reason);
+            Assert.AreEqual("Outlook", result.SeriesWarnings.Single().Series);
+            Assert.AreEqual("query timed out", result.SeriesWarnings.Single().Error);
         }
 
         [TestMethod]
@@ -116,6 +124,8 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, result.Series.Count);
             Assert.AreEqual("Teams", result.Series[0].Name);
             StringAssert.Contains(result.Warning, "Viva Engage: no settled usage data");
+            Assert.AreEqual("noSettledData", result.SeriesWarnings.Single().Reason);
+            Assert.AreEqual("Viva Engage", result.SeriesWarnings.Single().Series);
         }
 
         [TestMethod]
@@ -137,6 +147,8 @@ namespace Tests.UnitTests
                 new List<DateTime> { week });
 
             Assert.IsNotNull(result.Error);
+            Assert.AreEqual("noWorkloadSeriesLoaded", result.ErrorKey);
+            Assert.AreEqual("noSettledData", result.SeriesWarnings.Single().Reason);
             Assert.IsNull(result.Series);
         }
 
@@ -185,6 +197,8 @@ namespace Tests.UnitTests
 
             StringAssert.Contains(result.Warning, "Viva Engage",
                 "A workload that stopped producing data must be reported, not silently truncated.");
+            Assert.AreEqual("noSettledDataForWeek", result.SeriesWarnings.Single().Reason);
+            Assert.AreEqual(week3, result.SeriesWarnings.Single().Week);
         }
 
         [TestMethod]

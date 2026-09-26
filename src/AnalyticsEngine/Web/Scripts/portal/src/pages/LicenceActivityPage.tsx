@@ -18,6 +18,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowDownload16Regular } from '@fluentui/react-icons';
 import { fetchAvailability, fetchOverview, downloadExport } from '../api/licenceActivityApi';
+import { useT } from '../i18n';
 import type {
   DateRange,
   LicenceActivityAvailability,
@@ -31,8 +32,10 @@ import SkuAssignments from '../components/licenceActivity/SkuAssignments';
 import SelectedLicenceBar from '../components/licenceActivity/SelectedLicenceBar';
 import WorkloadDistributions from '../components/licenceActivity/WorkloadDistributions';
 import DemographicBreakdown from '../components/licenceActivity/DemographicBreakdown';
+import { demographicName } from '../components/licenceActivity/DemographicBreakdown';
 import UsersDrillDown from '../components/licenceActivity/UsersDrillDown';
 import ApiErrorBar, { describeError } from '../components/licenceActivity/ApiErrorBar';
+import { serverMessageText } from '../components/licenceActivity/serverNotes';
 import { presetRange } from '../components/licenceActivity/dateRange';
 import { formatCount } from '../components/licenceActivity/format';
 import {
@@ -146,6 +149,7 @@ type LaTab = 'overview' | 'byService' | 'byDemographic' | 'people';
  */
 export default function LicenceActivityPage() {
   const styles = useStyles();
+  const t = useT();
 
   const [availability, setAvailability] = useState<LicenceActivityAvailability | null>(null);
   const [availabilityError, setAvailabilityError] = useState<unknown>(null);
@@ -327,46 +331,39 @@ export default function LicenceActivityPage() {
       <div className={styles.header}>
         <div>
           <div className={styles.titleRow}>
-            <Title3>Licence activity</Title3>
-            <Badge appearance="tint" color="brand" size="medium">Preview</Badge>
+            <Title3>{t('licenceActivity.page.title')}</Title3>
+            <Badge appearance="tint" color="brand" size="medium">
+              {t('licenceActivity.page.preview')}
+            </Badge>
           </div>
-          <Body1 block className={styles.intro}>
-            Which licences are assigned, and how much are the people who hold them actually using each Microsoft 365
-            service. Each service is shown on its own and never blended into a single score. Missing or incomplete
-            reporting data is shown as &quot;Unknown&quot;, not proof of no activity.
-          </Body1>
-          <Text role="note" block size={200} className={styles.previewNote}>
-            This report is in preview. Figures are kept for up to 5 minutes before being worked out again, so a very
-            recent import may not appear straight away, and the first look at a new date range takes longer. Nothing
-            here is a judgement of anyone&apos;s productivity, or a recommendation to take a licence away &mdash; it is
-            evidence of activity only.
-          </Text>
+          <Body1 block className={styles.intro}>{t('licenceActivity.page.intro')}</Body1>
+          <Text role="note" block size={200} className={styles.previewNote}>{t('licenceActivity.page.previewNote')}</Text>
         </div>
       </div>
 
       {availabilityLoading && (
         <div className={styles.center}>
-          <Spinner size={80} label="Checking availability..." />
+          <Spinner size={80} label={t('licenceActivity.page.checkingAvailability')} />
         </div>
       )}
 
       {availabilityError != null && (
         <ApiErrorBar
           error={availabilityError}
-          fallback="Failed to check licence activity availability."
+          fallback={t('licenceActivity.page.availabilityFailed')}
           onRetry={() => window.location.reload()}
-          retryLabel="Reload"
+          retryLabel={t('licenceActivity.page.reload')}
         />
       )}
 
       {availability && !availability.available && (
         <MessageBar intent="info" style={{ marginTop: '16px' }}>
           <MessageBarBody>
-            Licence activity reporting is not available on this deployment.
+            {t('licenceActivity.page.notAvailable')}
             {availability.messages.length > 0 && (
               <ul style={{ margin: '6px 0 0 0', paddingInlineStart: '20px' }}>
                 {availability.messages.map((m) => (
-                  <li key={m}>{m}</li>
+                  <li key={m}>{serverMessageText(t, m)}</li>
                 ))}
               </ul>
             )}
@@ -381,7 +378,7 @@ export default function LicenceActivityPage() {
               <MessageBarBody>
                 <ul style={{ margin: 0, paddingInlineStart: '20px' }}>
                   {availability.messages.map((m) => (
-                    <li key={m}>{m}</li>
+                    <li key={m}>{serverMessageText(t, m)}</li>
                   ))}
                 </ul>
               </MessageBarBody>
@@ -392,7 +389,7 @@ export default function LicenceActivityPage() {
             <div className={styles.controlRow}>
               <div className={styles.field}>
                 <Text size={200} className={styles.fieldLabel}>
-                  Reporting window
+                  {t('licenceActivity.page.reportingWindow')}
                 </Text>
                 <DateRangeControl
                   value={range}
@@ -404,48 +401,48 @@ export default function LicenceActivityPage() {
 
               <div className={styles.field}>
                 <Text size={200} className={styles.fieldLabel}>
-                  Department
+                  {t('licenceActivity.common.department')}
                 </Text>
                 <Select
                   value={departmentId == null ? '' : String(departmentId)}
-                  aria-label="Filter by department"
+                  aria-label={t('licenceActivity.page.filterByDepartment')}
                   disabled={departmentOptions.options.length === 0}
                   onChange={(_e: unknown, d: { value: string }) => setDepartmentId(d.value === '' ? null : Number(d.value))}
                 >
-                  <option value="">All departments</option>
+                  <option value="">{t('licenceActivity.page.allDepartments')}</option>
                   {departmentOptions.options.map((dept) => (
                     <option key={dept.id} value={dept.id}>
-                      {dept.name}
+                      {demographicName(t, dept)}
                     </option>
                   ))}
                 </Select>
                 {departmentOptions.truncated && (
                   <Text size={100} className={styles.muted}>
-                    Showing up to {formatCount(DEMOGRAPHIC_OPTION_CAP)} recent options; some may be hidden.
+                    {t('licenceActivity.page.recentOptionsHidden', { count: formatCount(DEMOGRAPHIC_OPTION_CAP) })}
                   </Text>
                 )}
               </div>
 
               <div className={styles.field}>
                 <Text size={200} className={styles.fieldLabel}>
-                  Country
+                  {t('licenceActivity.common.country')}
                 </Text>
                 <Select
                   value={countryId == null ? '' : String(countryId)}
-                  aria-label="Filter by country"
+                  aria-label={t('licenceActivity.page.filterByCountry')}
                   disabled={countryOptions.options.length === 0}
                   onChange={(_e: unknown, d: { value: string }) => setCountryId(d.value === '' ? null : Number(d.value))}
                 >
-                  <option value="">All countries</option>
+                  <option value="">{t('licenceActivity.page.allCountries')}</option>
                   {countryOptions.options.map((country) => (
                     <option key={country.id} value={country.id}>
-                      {country.name}
+                      {demographicName(t, country)}
                     </option>
                   ))}
                 </Select>
                 {countryOptions.truncated && (
                   <Text size={100} className={styles.muted}>
-                    Showing up to {formatCount(DEMOGRAPHIC_OPTION_CAP)} recent options; some may be hidden.
+                    {t('licenceActivity.page.recentOptionsHidden', { count: formatCount(DEMOGRAPHIC_OPTION_CAP) })}
                   </Text>
                 )}
               </div>
@@ -458,9 +455,9 @@ export default function LicenceActivityPage() {
                   content={
                     overview && !overviewLoading
                       ? exportUsersId
-                        ? 'An Excel copy of the summary plus the exact people currently listed in the People tab. Built from the figures already on screen, so it matches what you can see.'
-                        : 'An Excel copy of the licence and service summary (totals only). Built from the figures already on screen.'
-                      : 'Available once the report has loaded.'
+                        ? t('licenceActivity.page.exportSummaryAndPeopleTooltip')
+                        : t('licenceActivity.page.exportSummaryTooltip')
+                      : t('licenceActivity.page.exportUnavailableTooltip')
                   }
                 >
                   <Button
@@ -469,7 +466,7 @@ export default function LicenceActivityPage() {
                     disabled={!overview || overviewLoading || exporting}
                     onClick={onExport}
                   >
-                    {exporting ? 'Exporting...' : 'Export to Excel'}
+                    {exporting ? t('licenceActivity.page.exporting') : t('licenceActivity.page.exportToExcel')}
                   </Button>
                 </Tooltip>
               </div>
@@ -478,16 +475,16 @@ export default function LicenceActivityPage() {
             {exportError != null && (
               <ApiErrorBar
                 error={exportError}
-                fallback="Couldn't export the workbook."
+                fallback={t('licenceActivity.page.exportFailed')}
                 onRetry={exportExpired ? refreshSnapshots : onExport}
-                retryLabel={exportExpired ? 'Refresh' : 'Try again'}
+                retryLabel={exportExpired ? t('licenceActivity.common.refresh') : t('licenceActivity.page.tryAgain')}
               />
             )}
           </Card>
 
           {overviewLoading && (
             <div className={styles.center}>
-              <Spinner size={80} label="Loading licence activity..." />
+              <Spinner size={80} label={t('licenceActivity.page.loading')} />
             </div>
           )}
 
@@ -495,7 +492,7 @@ export default function LicenceActivityPage() {
             <div style={{ marginTop: '16px' }}>
               <ApiErrorBar
                 error={overviewError}
-                fallback="Failed to load the licence activity overview."
+                fallback={t('licenceActivity.page.overviewFailed')}
                 onRetry={reloadOverview}
               />
             </div>
@@ -514,7 +511,7 @@ export default function LicenceActivityPage() {
                   <MessageBarBody>
                     <ul style={{ margin: 0, paddingInlineStart: '20px' }}>
                       {overview.messages.map((m) => (
-                        <li key={m}>{m}</li>
+                        <li key={m}>{serverMessageText(t, m, overview.coverage)}</li>
                       ))}
                     </ul>
                   </MessageBarBody>
@@ -523,16 +520,16 @@ export default function LicenceActivityPage() {
 
               <TabList selectedValue={tab} onTabSelect={onTabSelect}>
                 <Tab id="la-tab-overview" value="overview" aria-controls="la-panel-overview">
-                  Overview
+                  {t('licenceActivity.page.tabOverview')}
                 </Tab>
                 <Tab id="la-tab-byService" value="byService" aria-controls="la-panel-byService">
-                  By service
+                  {t('licenceActivity.page.tabByService')}
                 </Tab>
                 <Tab id="la-tab-byDemographic" value="byDemographic" aria-controls="la-panel-byDemographic">
-                  By department &amp; country
+                  {t('licenceActivity.page.tabByDemographic')}
                 </Tab>
                 <Tab id="la-tab-people" value="people" aria-controls="la-panel-people">
-                  People
+                  {t('licenceActivity.page.tabPeople')}
                 </Tab>
               </TabList>
 
@@ -569,10 +566,10 @@ export default function LicenceActivityPage() {
                 <div className={styles.panelInner}>
                   <div className={styles.sectionHead}>
                     <Text weight="semibold" size={500}>
-                      Activity by service
+                      {t('licenceActivity.page.activityByService')}
                     </Text>
                     <Text size={200} className={styles.muted}>
-                      Each Microsoft 365 service on its own, never blended into a single score
+                      {t('licenceActivity.page.activityByServiceSubtitle')}
                     </Text>
                   </div>
                   {selectedLicence ? (
@@ -587,7 +584,7 @@ export default function LicenceActivityPage() {
                   ) : (
                     <Card>
                       <Text className={styles.muted}>
-                        Choose a licence on the Overview tab to see how much each service is used.
+                        {t('licenceActivity.page.chooseLicenceOverview')}
                       </Text>
                     </Card>
                   )}
@@ -604,28 +601,28 @@ export default function LicenceActivityPage() {
                 <div className={styles.panelInner}>
                   <div className={styles.sectionHead}>
                     <Text weight="semibold" size={500}>
-                      Activity by department and country
+                      {t('licenceActivity.page.activityByDemographic')}
                     </Text>
                     <Text size={200} className={styles.muted}>
-                      Where the licences sit in the organisation, and how much they are being used
+                      {t('licenceActivity.page.activityByDemographicSubtitle')}
                     </Text>
                   </div>
                   {overview.demographicsTruncated && (
                     <Text size={200} className={styles.muted}>
-                      The department and country lists are capped, so they may not show every one.
+                      {t('licenceActivity.page.demographicCapped')}
                     </Text>
                   )}
                   {overview.departments.length > 0 || overview.countries.length > 0 ? (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                       <DemographicBreakdown
-                        title="By department"
-                        segmentLabel="Department"
+                        title={t('licenceActivity.page.byDepartment')}
+                        segmentLabel={t('licenceActivity.common.department')}
                         rows={overview.departments}
                         truncated={overview.demographicsTruncated}
                       />
                       <DemographicBreakdown
-                        title="By country"
-                        segmentLabel="Country"
+                        title={t('licenceActivity.page.byCountry')}
+                        segmentLabel={t('licenceActivity.common.country')}
                         rows={overview.countries}
                         truncated={overview.demographicsTruncated}
                       />
@@ -633,7 +630,7 @@ export default function LicenceActivityPage() {
                   ) : (
                     <Card>
                       <Text className={styles.muted}>
-                        No department or country breakdown is available for this selection.
+                        {t('licenceActivity.page.noDemographicBreakdown')}
                       </Text>
                     </Card>
                   )}
@@ -650,10 +647,10 @@ export default function LicenceActivityPage() {
                 <div className={styles.panelInner}>
                   <div className={styles.sectionHead}>
                     <Text weight="semibold" size={500}>
-                      People holding this licence
+                      {t('licenceActivity.page.peopleHoldingLicence')}
                     </Text>
                     <Text size={200} className={styles.muted}>
-                      Who is and isn&apos;t using a licence
+                      {t('licenceActivity.page.peopleSubtitle')}
                     </Text>
                   </div>
                   {selectedLicence ? (
@@ -677,8 +674,7 @@ export default function LicenceActivityPage() {
                   ) : (
                     <Card>
                       <Text className={styles.muted}>
-                        Select a licence on the Overview tab to see who is most and least active, or to
-                        browse everyone who holds it.
+                        {t('licenceActivity.page.selectLicenceForPeople')}
                       </Text>
                     </Card>
                   )}

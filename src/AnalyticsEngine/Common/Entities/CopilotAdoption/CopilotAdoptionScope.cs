@@ -135,6 +135,8 @@ namespace Common.Entities.CopilotAdoption
 
                 LicensedUsers = Narrow(analysis.LicensedUsers, u => u.EmailDomain, domain),
                 Opportunities = Narrow(analysis.Opportunities, o => o.EmailDomain, domain),
+                // The cap is applied to the tenant-wide ranking, so a narrowed list inherits it.
+                OpportunitiesCapped = analysis.OpportunitiesCapped,
                 CoworkReadiness = Narrow(analysis.CoworkReadiness, c => c.EmailDomain, domain),
                 CoworkSignals = Narrow(analysis.CoworkSignals, s => s.EmailDomain, domain),
                 UnlicensedUsers = Narrow(analysis.UnlicensedUsers, u => u.EmailDomain, domain),
@@ -187,6 +189,12 @@ namespace Common.Entities.CopilotAdoption
                 // pass, with this domain's own numbers in it.
                 Warnings = new List<string>(tenant.SourceWarnings ?? new List<string>()),
                 SourceWarnings = new List<string>(tenant.SourceWarnings ?? new List<string>()),
+                WarningDetails = (tenant.SourceWarningDetails ?? new List<CopilotAdoptionWarningDetail>())
+                    .Select(d => d.Clone())
+                    .ToList(),
+                SourceWarningDetails = (tenant.SourceWarningDetails ?? new List<CopilotAdoptionWarningDetail>())
+                    .Select(d => d.Clone())
+                    .ToList(),
             };
         }
 

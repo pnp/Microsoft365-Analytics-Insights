@@ -2,7 +2,9 @@ import { useCallback, useMemo, useState, type ComponentType } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Badge, Tab, TabList, Text, Title3, makeStyles, tokens, type SelectTabEventHandler } from '@fluentui/react-components';
 import { fetchHealthSummary } from '../api/healthApi';
-import { AUTO_REFRESH_MS, formatUtc, overallColor, useHealthSection } from '../components/health/healthShared';
+import { formatNumber, useT, type TranslationKey } from '../i18n';
+import { buildLabelText } from '../product';
+import { AUTO_REFRESH_MS, formatUtc, healthStatusText, overallColor, useHealthSection } from '../components/health/healthShared';
 import OverviewPanel from '../components/health/OverviewPanel';
 import LivenessPanel from '../components/health/LivenessPanel';
 import ExceptionsPanel from '../components/health/ExceptionsPanel';
@@ -37,11 +39,11 @@ const useStyles = makeStyles({
 // The lazy-loaded detail sub-sections. Each panel fetches only its own endpoint, and only once its
 // tab has been opened (see below). Overview is handled separately - it shares the summary fetch that
 // also feeds the header badge.
-const DETAIL_PANELS: { key: string; label: string; Panel: ComponentType<{ active: boolean }> }[] = [
-  { key: 'liveness', label: 'Import liveness', Panel: LivenessPanel },
-  { key: 'exceptions', label: 'Exceptions', Panel: ExceptionsPanel },
-  { key: 'components', label: 'Component health', Panel: ComponentsPanel },
-  { key: 'data', label: 'Data overview', Panel: DataPanel },
+const DETAIL_PANELS: { key: string; labelKey: TranslationKey; Panel: ComponentType<{ active: boolean }> }[] = [
+  { key: 'liveness', labelKey: 'health.tabs.importLiveness', Panel: LivenessPanel },
+  { key: 'exceptions', labelKey: 'health.tabs.exceptions', Panel: ExceptionsPanel },
+  { key: 'components', labelKey: 'health.tabs.componentHealth', Panel: ComponentsPanel },
+  { key: 'data', labelKey: 'health.tabs.dataOverview', Panel: DataPanel },
 ];
 
 /**
@@ -53,6 +55,7 @@ const RELOCATED_SECTIONS: Record<string, string> = {
 };
 
 export default function HealthPage() {
+  const t = useT();
   const styles = useStyles();
   const navigate = useNavigate();
   const [selected, setSelected] = useState('overview');
@@ -101,25 +104,23 @@ export default function HealthPage() {
   return (
     <div>
       <div className={styles.headerRow}>
-        <Title3>System Health{buildLabel ? ` - ${buildLabel}` : ''}</Title3>
+        <Title3>{t('health.page.title', { buildLabel: buildLabel ? ` - ${buildLabelText(t, buildLabel)}` : '' })}</Title3>
         <Badge appearance="filled" size="large" color={overallColor(overallStatus)}>
-          {overallStatus ?? 'Checking...'}
+          {overallStatus ? healthStatusText(overallStatus, t) : t('health.status.checking')}
         </Badge>
       </div>
 
       <Text className={styles.desc}>
-        Pick a sub-section below - each one loads its own data on demand and auto-refreshes every {AUTO_REFRESH_MS / 1000}
-        s while open (cached server-side). This complements the Azure Monitor alert rules (which push when something
-        breaks) - it's the at-a-glance green board.
-        {summary.data ? ` Overview loaded ${formatUtc(summary.data.loadedAtUtc)}.` : ''}
+        {t('health.page.description', { seconds: formatNumber(AUTO_REFRESH_MS / 1000) })}
+        {summary.data ? ` ${t('health.page.overviewLoaded', { when: formatUtc(summary.data.loadedAtUtc) })}` : ''}
       </Text>
 
       <div className={styles.tabBar}>
         <TabList selectedValue={selected} onTabSelect={onTabSelect}>
-          <Tab value="overview">Overview</Tab>
-          {DETAIL_PANELS.map(({ key, label }) => (
+          <Tab value="overview">{t('health.tabs.overview')}</Tab>
+          {DETAIL_PANELS.map(({ key, labelKey }) => (
             <Tab key={key} value={key}>
-              {label}
+              {t(labelKey)}
             </Tab>
           ))}
         </TabList>
@@ -133,8 +134,7 @@ export default function HealthPage() {
       {detailPanels}
 
       <Text size={200} className={styles.muted}>
-        To be alerted (not just to look), set up the Azure Monitor / Application Insights alert rules in the Health
-        Alerts wiki guide. The same custom events shown here back those alerts.
+        {t('health.page.alertsGuidance')}
       </Text>
     </div>
   );

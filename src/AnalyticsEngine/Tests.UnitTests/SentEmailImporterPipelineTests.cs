@@ -1,8 +1,11 @@
 using Common.Entities;
+using Common.Entities.Config;
 using Common.Entities.Entities.Email;
+using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
+using System.Data.Entity;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -492,6 +495,286 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, SentEmailLoadResult.Empty.Messages.Count);
             Assert.AreEqual(0, SentEmailLoadResult.Empty.DeltaTokenReads);
             Assert.AreEqual(0, SentEmailLoadResult.Empty.DeltaTokenWrites);
+            Assert.IsNull(SentEmailLoadResult.Empty.NextDeltaToken);
+        }
+
+        #endregion
+
+        #region Delta-token commit gate
+
+        [TestMethod]
+        public async Task ImportSentEmailsForUser_PhaseAFailure_DoesNotCommitDeltaToken_AndReplaySavesMail()
+        {
+            var user = await CreateSavedUserAsync("phase-a");
+            var messageId = "i618-phase-a-" + Guid.NewGuid().ToString("N");
+            var source = new RecordingSentEmailSourceLoader(user, Msg(messageId, user.Mail, new[] { "recipient-a@contoso.com" }, "Καλημέρα κόσμε"));
+            var committer = new RecordingDeltaTokenCommitter();
+            var importer = NewImporter(source, committer);
+            importer.FailureInjectionPhase = SentEmailPersistenceFailurePhase.PhaseA;
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => importer.ImportSentEmailsForUser(user));
+
+            Assert.IsFalse(committer.TryGetToken(user, out _), "A failed parent save must not advance the user's delta token.");
+            Assert.AreEqual(0, await CountSentEmailsAsync(messageId), "The failed phase-A transaction should leave no parent row behind.");
+
+            importer.FailureInjectionPhase = SentEmailPersistenceFailurePhase.None;
+            await importer.ImportSentEmailsForUser(user);
+
+            Assert.AreEqual(2, source.LoadCount, "The unsaved message must be loaded again on the next run.");
+            Assert.IsTrue(committer.TryGetToken(user, out var token));
+            Assert.AreEqual(source.NextDeltaToken, token);
+            Assert.AreEqual(1, await CountSentEmailsAsync(messageId));
+            Assert.AreEqual(1, await CountRecipientsAsync(messageId));
+        }
+
+        [TestMethod]
+        public async Task ImportSentEmailsForUser_PhaseBFailure_RollsBackParent_AndReplayLeavesNoOrphan()
+        {
+            var user = await CreateSavedUserAsync("phase-b");
+            var messageId = "i618-phase-b-" + Guid.NewGuid().ToString("N");
+            var source = new RecordingSentEmailSourceLoader(user, Msg(messageId, user.Mail, new[] { "recipient-b@contoso.com" }, "Καλημέρα κόσμε"));
+            var committer = new RecordingDeltaTokenCommitter();
+            var importer = NewImporter(source, committer);
+            importer.FailureInjectionPhase = SentEmailPersistenceFailurePhase.PhaseB;
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => importer.ImportSentEmailsForUser(user));
+
+            Assert.IsFalse(committer.TryGetToken(user, out _), "A failed recipient save must not advance the user's delta token.");
+            Assert.AreEqual(0, await CountSentEmailsAsync(messageId), "The transaction must roll back the parent row when phase B fails.");
+
+            importer.FailureInjectionPhase = SentEmailPersistenceFailurePhase.None;
+            await importer.ImportSentEmailsForUser(user);
+
+            Assert.AreEqual(2, source.LoadCount, "The rolled-back message must be loaded again on the next run.");
+            Assert.AreEqual(1, await CountSentEmailsAsync(messageId));
+            Assert.AreEqual(1, await CountRecipientsAsync(messageId), "Replay should persist parent and recipients together.");
+        }
+
+        [TestMethod]
+        public async Task ImportSentEmailsForUsers_HappyPath_CommitsEachDeltaTokenOnceAfterRowsAreSaved()
+        {
+            var alice = await CreateSavedUserAsync("happy-alice");
+            var bob = await CreateSavedUserAsync("happy-bob");
+            var aliceMessageId = "i618-happy-a-" + Guid.NewGuid().ToString("N");
+            var bobMessageId = "i618-happy-b-" + Guid.NewGuid().ToString("N");
+            var source = new RecordingSentEmailSourceLoader(
+                (alice, Msg(aliceMessageId, alice.Mail, new[] { "recipient-ha@contoso.com" }, "Καλημέρα κόσμε")),
+                (bob, Msg(bobMessageId, bob.Mail, new[] { "recipient-hb@contoso.com" }, "Καλημέρα κόσμε")));
+            var committer = new RecordingDeltaTokenCommitter(async (user, token) =>
+            {
+                var expectedMessageId = user.ID == alice.ID ? aliceMessageId : bobMessageId;
+                Assert.AreEqual(1, await CountRecipientsAsync(expectedMessageId),
+                    "Delta tokens must be committed only after the user's parent and recipient rows are durable.");
+            });
+            var importer = NewImporter(source, committer, userChunkSize: 25);
+
+            await importer.ImportSentEmailsForUser(alice);
+            await importer.ImportSentEmailsForUser(bob);
+
+            Assert.AreEqual(2, committer.WriteCount);
+            Assert.IsTrue(committer.TryGetToken(alice, out var aliceToken));
+            Assert.IsTrue(committer.TryGetToken(bob, out var bobToken));
+            Assert.AreEqual(source.NextDeltaToken, aliceToken);
+            Assert.AreEqual(source.NextDeltaToken, bobToken);
+        }
+
+        [TestMethod]
+        public async Task ImportSentEmailsForUser_ExistingParentWithoutRecipients_IsRepairedAndTokenCommitted()
+        {
+            var user = await CreateSavedUserAsync("repair");
+            var messageId = "i618-repair-" + Guid.NewGuid().ToString("N");
+            var recipient = "recipient-repair-" + Guid.NewGuid().ToString("N") + "@contoso.com";
+            await SeedOrphanParentAsync(user, messageId);
+
+            var source = new RecordingSentEmailSourceLoader(user, Msg(messageId, user.Mail, new[] { recipient }, "Καλημέρα κόσμε"));
+            var committer = new RecordingDeltaTokenCommitter();
+            var importer = NewImporter(source, committer);
+
+            await importer.ImportSentEmailsForUser(user);
+
+            Assert.AreEqual(1, await CountSentEmailsAsync(messageId), "Repair must reuse the existing parent rather than insert a duplicate.");
+            Assert.AreEqual(1, await CountRecipientsAsync(messageId), "A historical parent with no recipients should be repaired when Graph replays it.");
+            Assert.IsTrue(committer.TryGetToken(user, out var token));
+            Assert.AreEqual(source.NextDeltaToken, token);
+        }
+
+        /// <summary>
+        /// One recipient address that SQL refuses must not strand the other new addresses resolved in the same
+        /// batch. Here it is a stored address repeated with a trailing blank: distinct in memory, but equal under
+        /// SQL's comparison, so the unique index rejects it - and SaveChanges is all-or-nothing, so the sender's
+        /// brand-new address was rolled back with it. The message then failed its chunk on the unresolved
+        /// sender, and because the delta token now waits for the chunk to save (#629), it failed again on every
+        /// cycle, taking every later chunk and Graph section with it.
+        /// </summary>
+        [TestMethod]
+        public async Task ImportSentEmailsForUser_OneRefusedRecipientAddress_DoesNotStrandTheRestOfItsBatch()
+        {
+            var user = await CreateSavedUserAsync("refused-address");
+            var messageId = "i618-refused-address-" + Guid.NewGuid().ToString("N");
+            var storedRecipient = ("stored-recipient-" + Guid.NewGuid().ToString("N") + "@contoso.com").ToLowerInvariant();
+            var newRecipient = ("new-recipient-" + Guid.NewGuid().ToString("N") + "@contoso.com").ToLowerInvariant();
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.EmailAddresses.Add(new EmailAddress { Address = storedRecipient });
+                await db.SaveChangesAsync();
+            }
+
+            var source = new RecordingSentEmailSourceLoader(user,
+                Msg(messageId, user.Mail, new[] { newRecipient, storedRecipient + " " }, "Καλημέρα κόσμε"));
+            var committer = new RecordingDeltaTokenCommitter();
+            var importer = NewImporter(source, committer);
+
+            await importer.ImportSentEmailsForUser(user);
+
+            Assert.AreEqual(1, await CountSentEmailsAsync(messageId), "The message must be saved despite the refused recipient address.");
+            Assert.AreEqual(2, await CountRecipientsAsync(messageId),
+                "Both recipients resolve: the new one inserted on its own, the trailing-blank twin onto the stored row.");
+            Assert.IsTrue(committer.TryGetToken(user, out var token), "The chunk saved, so its delta token must be committed.");
+            Assert.AreEqual(source.NextDeltaToken, token);
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                Assert.AreEqual(1, await db.EmailAddresses.CountAsync(e => e.Address == storedRecipient),
+                    "The refused twin must map onto the stored address, not add a second row.");
+            }
+        }
+
+        /// <summary>
+        /// The other side of the fallback above: only refusals that are permanent may leave an address
+        /// unresolved. Any other failure inserting a recipient's address must fail the chunk and keep its delta
+        /// token, not save the message without that recipient and commit the token, which would lose the
+        /// recipient for good because the message is never read again.
+        /// </summary>
+        /// <remarks>
+        /// Failures EF's execution strategy recognises as transient are retried inside SaveChanges and surface
+        /// as <c>RetryLimitExceededException</c> before the fallback is ever reached. What does reach it is a
+        /// <c>DbUpdateException</c> for anything the strategy does not classify, so that is what this injects:
+        /// an error on exactly that INSERT that is neither a duplicate nor a value too long for the column.
+        /// </remarks>
+        [TestMethod]
+        public async Task ImportSentEmailsForUser_TransientFailureInsertingARecipientAddress_KeepsTheTokenForARetry()
+        {
+            var user = await CreateSavedUserAsync("transient-address");
+            var messageId = "i618-transient-address-" + Guid.NewGuid().ToString("N");
+            var steadyRecipient = ("steady-recipient-" + Guid.NewGuid().ToString("N") + "@contoso.com").ToLowerInvariant();
+            var flakyRecipient = ("flaky-recipient-" + Guid.NewGuid().ToString("N") + "@contoso.com").ToLowerInvariant();
+
+            var source = new RecordingSentEmailSourceLoader(user,
+                Msg(messageId, user.Mail, new[] { steadyRecipient, flakyRecipient }, "Καλημέρα κόσμε"));
+            var committer = new RecordingDeltaTokenCommitter();
+            var importer = NewImporter(source, committer);
+
+            var failFlakyInsert = new FailAddressInsertInterceptor(flakyRecipient);
+            System.Data.Entity.Infrastructure.Interception.DbInterception.Add(failFlakyInsert);
+            try
+            {
+                await Assert.ThrowsExceptionAsync<System.Data.Entity.Infrastructure.DbUpdateException>(
+                    () => importer.ImportSentEmailsForUser(user));
+            }
+            finally
+            {
+                System.Data.Entity.Infrastructure.Interception.DbInterception.Remove(failFlakyInsert);
+            }
+
+            Assert.IsTrue(failFlakyInsert.Failures >= 2, "Both the batch insert and the one-by-one retry must have hit the failure.");
+            Assert.IsFalse(committer.TryGetToken(user, out _), "A transient failure must not advance the user's delta token.");
+            Assert.AreEqual(0, await CountSentEmailsAsync(messageId), "Nothing is saved for a chunk that failed.");
+
+            await importer.ImportSentEmailsForUser(user);
+
+            Assert.AreEqual(2, source.LoadCount, "The message must be read again on the next run.");
+            Assert.AreEqual(1, await CountSentEmailsAsync(messageId));
+            Assert.AreEqual(2, await CountRecipientsAsync(messageId), "The retry must save the message with both recipients.");
+            Assert.IsTrue(committer.TryGetToken(user, out var token));
+            Assert.AreEqual(source.NextDeltaToken, token);
+        }
+
+        /// <summary>
+        /// Fails EF's INSERT of one email address with an error that is neither a duplicate nor a truncation, and
+        /// that EF's execution strategy does not retry - as a failure it cannot classify would. Everything else,
+        /// including the lookup that follows a refusal, runs normally.
+        /// </summary>
+        private sealed class FailAddressInsertInterceptor : System.Data.Entity.Infrastructure.Interception.DbCommandInterceptor
+        {
+            private readonly string _address;
+
+            public FailAddressInsertInterceptor(string address)
+            {
+                _address = address;
+            }
+
+            public int Failures { get; private set; }
+
+            public override void ReaderExecuting(System.Data.Common.DbCommand command,
+                System.Data.Entity.Infrastructure.Interception.DbCommandInterceptionContext<System.Data.Common.DbDataReader> interceptionContext)
+            {
+                if (IsInsertOfTheAddress(command))
+                {
+                    Failures++;
+                    interceptionContext.Exception = new InvalidOperationException("Simulated unclassified SQL failure.");
+                }
+            }
+
+            public override void NonQueryExecuting(System.Data.Common.DbCommand command,
+                System.Data.Entity.Infrastructure.Interception.DbCommandInterceptionContext<int> interceptionContext)
+            {
+                if (IsInsertOfTheAddress(command))
+                {
+                    Failures++;
+                    interceptionContext.Exception = new InvalidOperationException("Simulated unclassified SQL failure.");
+                }
+            }
+
+            private bool IsInsertOfTheAddress(System.Data.Common.DbCommand command)
+            {
+                return command.CommandText.IndexOf("INSERT", StringComparison.OrdinalIgnoreCase) >= 0
+                    && command.CommandText.IndexOf("email_addresses", StringComparison.OrdinalIgnoreCase) >= 0
+                    && command.Parameters.Cast<System.Data.Common.DbParameter>().Any(p => string.Equals(p.Value as string, _address, StringComparison.Ordinal));
+            }
+        }
+
+        [TestMethod]
+        public async Task ImportSentEmailsForUsers_DuplicateOrphanRepairInChunk_IsDedupedAndCommitsTokens()
+        {
+            var alice = await CreateSavedUserAsync("repair-alice");
+            var bob = await CreateSavedUserAsync("repair-bob");
+            var charlie = await CreateSavedUserAsync("repair-charlie");
+            var orphanMessageId = "i618-repair-dupe-" + Guid.NewGuid().ToString("N");
+            var nextMessageId = "i618-repair-next-" + Guid.NewGuid().ToString("N");
+            var recipient = "recipient-repair-dupe-" + Guid.NewGuid().ToString("N") + "@contoso.com";
+            await SeedOrphanParentAsync(alice, orphanMessageId);
+
+            var source = new RecordingSentEmailSourceLoader(
+                (alice, Msg(orphanMessageId, alice.Mail, new[] { recipient }, "Καλημέρα κόσμε")),
+                (bob, Msg(orphanMessageId, bob.Mail, new[] { recipient }, "Καλημέρα κόσμε")),
+                (charlie, Msg(nextMessageId, charlie.Mail, new[] { "recipient-next@contoso.com" }, "Καλημέρα κόσμε")));
+            var committer = new RecordingDeltaTokenCommitter();
+            var importer = NewImporter(source, committer);
+
+            await importer.ImportSentEmailsForUsersForTest(new List<User> { alice, bob, charlie });
+
+            Assert.AreEqual(1, await CountSentEmailsAsync(orphanMessageId), "The existing orphan parent should be reused.");
+            Assert.AreEqual(1, await CountRecipientsAsync(orphanMessageId), "Cross-user orphan repair must insert the shared recipient pair once.");
+            Assert.AreEqual(1, await CountSentEmailsAsync(nextMessageId), "Later work in the chunk should still run.");
+            Assert.AreEqual(1, await CountRecipientsAsync(nextMessageId), "Later work in the chunk should still persist recipients.");
+            Assert.AreEqual(3, committer.WriteCount);
+            Assert.IsTrue(committer.TryGetToken(alice, out _));
+            Assert.IsTrue(committer.TryGetToken(bob, out _));
+            Assert.IsTrue(committer.TryGetToken(charlie, out _));
+        }
+
+        [TestMethod]
+        public void AddDistinctRecipientPair_SkipsDuplicatePairs()
+        {
+            var pairs = new List<(int SentEmailId, int RecipientAddressId)>();
+            var seen = new HashSet<(int SentEmailId, int RecipientAddressId)>();
+
+            Assert.IsTrue(SentEmailImporter.AddDistinctRecipientPair(pairs, seen, 10, 20));
+            Assert.IsFalse(SentEmailImporter.AddDistinctRecipientPair(pairs, seen, 10, 20));
+            Assert.IsTrue(SentEmailImporter.AddDistinctRecipientPair(pairs, seen, 10, 21));
+
+            CollectionAssert.AreEqual(
+                new[] { (SentEmailId: 10, RecipientAddressId: 20), (SentEmailId: 10, RecipientAddressId: 21) },
+                pairs);
         }
 
         #endregion
@@ -602,6 +885,141 @@ namespace Tests.UnitTests
                 ToRecipients = to == null ? null : to.Select(Recipient).ToList(),
             };
             return msg;
+        }
+
+        private static GraphSentMessage Msg(string id, string from, IEnumerable<string> to, string subject)
+        {
+            var msg = Msg(id, from, to);
+            msg.Subject = subject;
+            return msg;
+        }
+
+        private static SentEmailImporter NewImporter(
+            RecordingSentEmailSourceLoader source,
+            RecordingDeltaTokenCommitter committer,
+            int userChunkSize = 25)
+            => new SentEmailImporter(
+                AnalyticsLogger.ConsoleOnlyTracer(),
+                new AppConfig(),
+                source,
+                NullSentEmailSentimentScorer.Instance,
+                userChunkSize: userChunkSize,
+                graphLoadParallelism: 1,
+                deltaTokenCommitter: committer);
+
+        private static async Task<User> CreateSavedUserAsync(string label)
+        {
+            var unique = Guid.NewGuid().ToString("N");
+            var user = new User
+            {
+                UserPrincipalName = $"{label}-{unique}@contoso.com",
+                Mail = $"{label}-{unique}@contoso.com",
+                AzureAdId = "00000000-0000-0000-0000-000000000000"
+            };
+
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.users.Add(user);
+                await db.SaveChangesAsync();
+            }
+
+            return user;
+        }
+
+        private static async Task<int> CountSentEmailsAsync(string graphMessageId)
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                return await db.SentEmails.CountAsync(s => s.GraphMessageId == graphMessageId);
+            }
+        }
+
+        private static async Task<int> CountRecipientsAsync(string graphMessageId)
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                return await db.SentEmailRecipients
+                    .CountAsync(r => r.SentEmail.GraphMessageId == graphMessageId);
+            }
+        }
+
+        private static async Task SeedOrphanParentAsync(User user, string graphMessageId)
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var sender = new EmailAddress { Address = ("sender-" + Guid.NewGuid().ToString("N") + "@contoso.com").ToLowerInvariant() };
+                db.EmailAddresses.Add(sender);
+                await db.SaveChangesAsync();
+
+                db.SentEmails.Add(new SentEmail
+                {
+                    Subject = "Καλημέρα κόσμε",
+                    SentDate = DateTime.UtcNow,
+                    GraphMessageId = graphMessageId,
+                    FromAddressID = sender.ID,
+                    UserID = user.ID
+                });
+                await db.SaveChangesAsync();
+            }
+        }
+
+        private sealed class RecordingSentEmailSourceLoader : ISentEmailSourceLoader
+        {
+            private readonly Dictionary<int, GraphSentMessage> _messagesByUserId;
+
+            public RecordingSentEmailSourceLoader(User user, GraphSentMessage message)
+                : this((user, message))
+            {
+            }
+
+            public RecordingSentEmailSourceLoader(params (User User, GraphSentMessage Message)[] messages)
+            {
+                _messagesByUserId = messages.ToDictionary(m => m.User.ID, m => m.Message);
+            }
+
+            public string NextDeltaToken { get; } = "delta-after-success";
+            public int LoadCount { get; private set; }
+
+            public Task<bool> HasMailReadAccessAsync() => Task.FromResult(true);
+
+            public Task<SentEmailLoadResult> LoadSentEmailsForUserAsync(User user, bool includeBody)
+            {
+                LoadCount++;
+                return Task.FromResult(new SentEmailLoadResult
+                {
+                    Messages = _messagesByUserId.TryGetValue(user.ID, out var message)
+                        ? new List<GraphSentMessage> { message }
+                        : new List<GraphSentMessage>(),
+                    DeltaTokenReads = 1,
+                    DeltaTokenWrites = 0,
+                    NextDeltaToken = NextDeltaToken
+                });
+            }
+        }
+
+        private sealed class RecordingDeltaTokenCommitter : ISentEmailDeltaTokenCommitter
+        {
+            private readonly Dictionary<int, string> _tokensByUserId = new Dictionary<int, string>();
+            private readonly Func<User, string, Task> _onCommit;
+
+            public RecordingDeltaTokenCommitter(Func<User, string, Task> onCommit = null)
+            {
+                _onCommit = onCommit;
+            }
+
+            public int WriteCount { get; private set; }
+
+            public async Task CommitDeltaTokenAsync(User user, string deltaToken)
+            {
+                if (_onCommit != null)
+                    await _onCommit(user, deltaToken);
+
+                _tokensByUserId[user.ID] = deltaToken;
+                WriteCount++;
+            }
+
+            public bool TryGetToken(User user, out string token)
+                => _tokensByUserId.TryGetValue(user.ID, out token);
         }
 
         #endregion

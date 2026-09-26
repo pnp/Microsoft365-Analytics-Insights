@@ -1,4 +1,5 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
+import { formatDateParts, useT } from '../../i18n';
 import { formatValue } from './chartCommon';
 
 /** One cell: a day (0 = Monday) and hour, with its value. */
@@ -16,7 +17,17 @@ type HeatmapChartProps = {
   footnote?: string;
 };
 
-const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+/**
+ * The seven row labels, Monday first, in the portal language - "Mon" in English, "lun" in Spanish.
+ *
+ * Formatted from a known Monday (1 January 2024) rather than typed out: the English list that used
+ * to be here rendered on every Spanish heatmap, and the untranslated-text gate cannot see a
+ * three-letter word in an array.
+ */
+function weekdayLabels(): string[] {
+  return Array.from({ length: 7 }, (_, day) =>
+    formatDateParts(new Date(Date.UTC(2024, 0, 1 + day)), { weekday: 'short', timeZone: 'UTC' }));
+}
 
 /** Hour labels are thinned to every third hour; a label per column is unreadable at any width. */
 const HOUR_LABEL_EVERY = 3;
@@ -94,7 +105,10 @@ const useStyles = makeStyles({
  *    colours mean categories, which they do not.
  */
 export default function HeatmapChart({ cells, valueLabel, footnote }: HeatmapChartProps) {
+  const t = useT();
   const styles = useStyles();
+  // formatDateParts follows the portal language, which the provider sets before this renders.
+  const days = weekdayLabels();
 
   const values = new Map<string, number>();
   let max = 0;
@@ -110,7 +124,7 @@ export default function HeatmapChart({ cells, valueLabel, footnote }: HeatmapCha
   }
 
   if (total <= 0) {
-    return <div className={styles.empty}>No data for this period.</div>;
+    return <div className={styles.empty}>{t('charts.empty.noDataForPeriod')}</div>;
   }
 
   return (
@@ -123,14 +137,15 @@ export default function HeatmapChart({ cells, valueLabel, footnote }: HeatmapCha
           </span>
         ))}
 
-        {DAYS.map((day, dayIndex) => (
+        {days.map((day, dayIndex) => (
           <Row
-            key={day}
+            key={dayIndex}
             day={day}
             dayIndex={dayIndex}
             values={values}
             max={max}
             valueLabel={valueLabel}
+            t={t}
             dayLabelClass={styles.dayLabel}
             cellClass={styles.cell}
           />
@@ -139,14 +154,14 @@ export default function HeatmapChart({ cells, valueLabel, footnote }: HeatmapCha
 
       <div className={styles.legend}>
         <Text size={100} className={styles.muted}>
-          None
+          {t('charts.legend.none')}
         </Text>
         <span className={styles.swatch} style={{ backgroundColor: shade(0, 1) }} />
         {[0.25, 0.5, 0.75, 1].map((fraction) => (
           <span key={fraction} className={styles.swatch} style={{ backgroundColor: shade(fraction, 1) }} />
         ))}
         <Text size={100} className={styles.muted}>
-          {formatValue(max)} {valueLabel}
+          {t('charts.legend.maxValue', { value: formatValue(max), valueLabel })}
         </Text>
       </div>
 
@@ -170,6 +185,7 @@ function Row({
   values,
   max,
   valueLabel,
+  t,
   dayLabelClass,
   cellClass,
 }: {
@@ -178,6 +194,7 @@ function Row({
   values: Map<string, number>;
   max: number;
   valueLabel: string;
+  t: ReturnType<typeof useT>;
   dayLabelClass: string;
   cellClass: string;
 }) {
@@ -191,7 +208,7 @@ function Row({
             key={`${dayIndex}:${hour}`}
             className={cellClass}
             style={{ backgroundColor: shade(value, max) }}
-            title={`${day} ${String(hour).padStart(2, '0')}:00 - ${formatValue(value)} ${valueLabel}`}
+            title={t('charts.heatmap.cellTitle', { day, hour: String(hour).padStart(2, '0'), value: formatValue(value), valueLabel })}
           />
         );
       })}

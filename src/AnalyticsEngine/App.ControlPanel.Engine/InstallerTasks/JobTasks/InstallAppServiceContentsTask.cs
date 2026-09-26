@@ -334,11 +334,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var handler = new HttpClientHandler();
             if (proxyConfig.UseProxy)
             {
-                var proxy = new WebProxy(proxyConfig.Host, proxyConfig.Port);
-                proxy.Credentials = proxyConfig.IntegratedAuth
-                    ? CredentialCache.DefaultCredentials
-                    : new NetworkCredential(proxyConfig.Username, proxyConfig.Password);
-                handler.Proxy = proxy;
+                // Built from the normalised address, never new WebProxy(Host, Port) - see
+                // InstallerProxyConfig.TryGetProxyAddress for the .NET Framework quirk that made a host typed
+                // as "http://proxy.contoso.com" resolve to a proxy called "http" (#613).
+                handler.Proxy = InstallerNetworkProxy.CreateWebProxy(proxyConfig);
                 handler.UseProxy = true;
             }
             return handler;
