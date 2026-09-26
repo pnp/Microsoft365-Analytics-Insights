@@ -88,9 +88,9 @@ export interface ReportChart {
   valueSuffix: string | null;
   sql: string;
   error: string | null;
-  errorKey: string | null;
+  errorKey?: string | null;
   warning: string | null;
-  seriesWarnings: ReportSeriesWarning[] | null;
+  seriesWarnings?: ReportSeriesWarning[] | null;
 }
 
 /** The set of charts for one report area over the requested window. */

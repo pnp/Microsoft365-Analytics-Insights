@@ -132,7 +132,7 @@ namespace Tests.UnitTests
 
             foreach (var field in expected)
             {
-                StringAssert.Contains(typings, field + ":",
+                Assert.IsTrue(typings.Contains(field + ":") || typings.Contains(field + "?:"),
                     $"types/reports.ts does not declare '{field}', so the SPA cannot read it.");
             }
 
