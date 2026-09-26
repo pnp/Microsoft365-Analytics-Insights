@@ -1821,8 +1821,13 @@ describe('Teams authorisation server errors', () => {
     expect(sentences.length, 'an ApiErrorModel whose message is not literal text').toBe(opened);
     expect(sentences).toEqual([EN_CATALOG['admin.teams.teamList.redisNotConfigured']]);
     // A reply carrying text some other way (an anonymous { message }) would skip the check above.
-    expect([...source.matchAll(/\bContent\s*\(/g)].length, 'a Teams authorisation Content(...) reply that is not an ApiErrorModel')
-      .toBe([...source.matchAll(/\bContent\s*\(\s*HttpStatusCode\.\w+,\s*new ApiErrorModel\(/g)].length);
+    // net10: ASP.NET Core writes Web API 2's `Content(HttpStatusCode.X, body)` as
+    // `StatusCode((int)HttpStatusCode.X, body)`, the same status and body. Both spellings are read here:
+    // matching only the Web API 2 one finds no reply on this branch, and this check passes as 0 == 0.
+    const replyCalls = [...source.matchAll(/\b(?:Content|StatusCode)\s*\(/g)].length;
+    expect(replyCalls, 'Teams authorisation replies not found').toBeGreaterThan(0);
+    expect(replyCalls, 'a Teams authorisation Content(...) reply that is not an ApiErrorModel')
+      .toBe([...source.matchAll(/\b(?:Content|StatusCode)\s*\(\s*(?:\(int\)\s*)?HttpStatusCode\.\w+,\s*new ApiErrorModel\(/g)].length);
   });
 });
 
@@ -1863,8 +1868,10 @@ describe('User lookup server errors', () => {
     // reply that is not an ApiErrorModel, would reach Spanish readers in English.
     const firstArgs = [...source.matchAll(/new ApiErrorModel\(\s*([^,)]+)/g)].map((m) => m[1].trim());
     expect(sortedUnique(firstArgs), 'ApiErrorModel message arguments').toEqual(['message', 'result.ErrorMessage']);
-    const contents = [...source.matchAll(/\bContent\s*\(\s*HttpStatusCode\.(\w+),\s*([A-Za-z]+)/g)].map((m) => `${m[1]}:${m[2]}`);
-    expect(contents.length, 'a Content(...) reply the gate cannot read').toBe([...source.matchAll(/\bContent\s*\(/g)].length);
+    // net10: `StatusCode((int)HttpStatusCode.X, body)` is the ASP.NET Core spelling of Web API 2's
+    // `Content(HttpStatusCode.X, body)`; both are read (see the Teams authorisation gate above).
+    const contents = [...source.matchAll(/\b(?:Content|StatusCode)\s*\(\s*(?:\(int\)\s*)?HttpStatusCode\.(\w+),\s*([A-Za-z]+)/g)].map((m) => `${m[1]}:${m[2]}`);
+    expect(contents.length, 'a Content(...) reply the gate cannot read').toBe([...source.matchAll(/\b(?:Content|StatusCode)\s*\(/g)].length);
     expect(contents.sort()).toEqual(['BadRequest:BadRequestError', 'NotFound:new']);
   });
 
@@ -2262,10 +2269,12 @@ describe('API error-code drift checks', () => {
     // Replies WITHOUT a code are shown to the reader as the server wrote them. Only these three are allowed:
     // bad-request replies to malformed requests the portal never makes. A new one would be English on a
     // Spanish page, so it must get a code and a catalog entry instead.
-    const replies = [...source.matchAll(/\bContent\s*\(\s*HttpStatusCode\.\w+,\s*new\b[^;]*;/g)].map((m) => m[0]);
+    // net10: `StatusCode((int)HttpStatusCode.X, body)` is the ASP.NET Core spelling of Web API 2's
+    // `Content(HttpStatusCode.X, body)`; both are read (see the Teams authorisation gate).
+    const replies = [...source.matchAll(/\b(?:Content|StatusCode)\s*\(\s*(?:\(int\)\s*)?HttpStatusCode\.\w+,\s*new\b[^;]*;/g)].map((m) => m[0]);
     // Every Content(...) reply must be one this gate can read: a body built elsewhere and passed in as a
     // variable would otherwise be invisible to both checks below.
-    expect(replies.length, 'an Agent Costs Content(...) reply whose body is not written inline').toBe([...source.matchAll(/\bContent\s*\(/g)].length);
+    expect(replies.length, 'an Agent Costs Content(...) reply whose body is not written inline').toBe([...source.matchAll(/\b(?:Content|StatusCode)\s*\(/g)].length);
     const uncoded = replies
       .filter((reply) => !/\bcode\s*=/.test(reply))
       .map((reply) => /\bmessage\s*=\s*(\$?"(?:[^"\\]|\\.)*"|[\w.]+)/.exec(reply)?.[1] ?? reply);
