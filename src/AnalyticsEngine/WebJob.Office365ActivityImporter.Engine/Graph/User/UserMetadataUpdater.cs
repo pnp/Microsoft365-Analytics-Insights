@@ -1,6 +1,7 @@
 ﻿using Azure.Core;
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.UserOrgs;
 using DataUtils;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
@@ -28,6 +29,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private UserLicenseProcessor _licenseProcessor;
         private UserDataMapper _dataMapper;
 
+        /// <summary>
+        /// Reads the admin-configured org types. Injectable so the org step can be exercised without a
+        /// database; built from the configured SQL connection string otherwise.
+        /// </summary>
+        private readonly IUserOrgTypeStore _orgTypeStore;
+
+        /// <summary>Writes the resolved org values. Injectable for the same reason.</summary>
+        private readonly IUserOrgAssignmentStore _orgAssignmentStore;
+
         public UserMetadataUpdater(AnalyticsLogger logger, AppConfig settings, TokenCredential creds, ManualGraphCallClient manualGraphCallClient, IClock clock = null)
             : base(logger, settings)
         {
@@ -53,6 +63,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             _userLoader = new GraphUserLoader(manualGraphCallClient, deltaProvider, _logger, graphServiceClient);
             _contextFactory = DefaultAnalyticsDbContextFactory.Instance;
+            _orgTypeStore = CreateOrgTypeStore(settings, logger);
+            _orgAssignmentStore = CreateOrgAssignmentStore(settings, logger);
             InitializeHelpers();
         }
 
@@ -67,13 +79,66 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <summary>
         /// Constructor with an injectable user loader and database context factory (#372).
         /// </summary>
-        public UserMetadataUpdater(AnalyticsLogger logger, AppConfig settings, IUserMetadataLoader userLoader, IAnalyticsDbContextFactory contextFactory, IClock clock = null)
+        public UserMetadataUpdater(
+            AnalyticsLogger logger,
+            AppConfig settings,
+            IUserMetadataLoader userLoader,
+            IAnalyticsDbContextFactory contextFactory,
+            IClock clock = null,
+            IUserOrgTypeStore orgTypeStore = null,
+            IUserOrgAssignmentStore orgAssignmentStore = null)
             : base(logger, settings)
         {
             _userLoader = userLoader;
             _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
             _clock = clock ?? SystemClock.Instance;
+            _orgTypeStore = orgTypeStore ?? CreateOrgTypeStore(settings, logger);
+            _orgAssignmentStore = orgAssignmentStore ?? CreateOrgAssignmentStore(settings, logger);
             InitializeHelpers();
+        }
+
+        /// <summary>
+        /// Builds the org type store, or returns <c>null</c> when no SQL connection string is
+        /// configured. Null means "user orgs are not available", which the import treats as "no org
+        /// types configured" rather than as an error - the feature is optional and must never be able
+        /// to stop the user import.
+        /// </summary>
+        private static IUserOrgTypeStore CreateOrgTypeStore(AppConfig settings, AnalyticsLogger logger)
+        {
+            var connectionString = settings?.ConnectionStrings?.SQL;
+            if (string.IsNullOrWhiteSpace(connectionString))
+            {
+                return null;
+            }
+
+            try
+            {
+                return UserOrgStores.CreateTypeStore(connectionString);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning($"User import - could not prepare the user organisation store: {ex.Message}. Organisation values will not be imported.");
+                return null;
+            }
+        }
+
+        private static IUserOrgAssignmentStore CreateOrgAssignmentStore(AppConfig settings, AnalyticsLogger logger)
+        {
+            var connectionString = settings?.ConnectionStrings?.SQL;
+            if (string.IsNullOrWhiteSpace(connectionString))
+            {
+                return null;
+            }
+
+            try
+            {
+                return UserOrgStores.CreateAssignmentStore(connectionString);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning($"User import - could not prepare the user organisation store: {ex.Message}. Organisation values will not be imported.");
+                return null;
+            }
         }
 
         private void InitializeHelpers()
@@ -111,6 +176,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     await _userLoader.DeltaValueProvider.ClearDeltaToken();
                 }
+
+                // Work out which user-org attributes to ask Graph for, BEFORE the load. The selection
+                // also qualifies the delta-token cache key, so a change to the configured attributes
+                // discards the stored token and the next cycle re-enumerates every user once - which is
+                // the only thing that populates a newly selected property for users who have not
+                // otherwise changed. See GraphUserOrgSelection.
+                var entraOrgTypes = await LoadEnabledEntraOrgTypes();
+                _userLoader.SetOrgSelection(GraphUserOrgSelection.FromTypes(entraOrgTypes));
 
                 // Load from Graph & update delta code once done
                 var allActiveGraphUsers = await _userLoader.LoadAllActiveUsers();
@@ -369,6 +442,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     phaseResults.LicenceRefreshSucceeded = true;
                 }
 
+                // Apply the org values last, once every Graph user is guaranteed to have a dbo.users row
+                // (the insert phase above creates the missing ones) so their ids can be resolved.
+                await ApplyUserOrgValues(allActiveGraphUsers, entraOrgTypes, dbUsersByUpn, phaseResults, importCycleLastUpdatedUtc);
+
                 _logger.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - complete. Inserted {insertedDbUsers.Count.ToString("N0")} new users, updated metadata for {existingUsersUpdated.ToString("N0")} existing users (from {allActiveGraphUsers.Count.ToString("N0")} Graph users)");
 
                 // All insert/metadata/license work succeeded. Now and ONLY now is it
@@ -399,6 +476,207 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 allDbUsers?.Clear();
             }
         }
+
+        #region User organisations
+
+        /// <summary>
+        /// Reads the enabled, Entra-sourced org types.
+        /// </summary>
+        /// <remarks>
+        /// Never throws. User organisations are an optional feature layered onto the user import, and a
+        /// database that has not been migrated yet - the web-jobs deliberately do not run migrations -
+        /// simply has no such tables. Letting that stop the whole user import would be a far worse
+        /// outcome than importing without org values.
+        /// </remarks>
+        private async Task<IReadOnlyList<Common.Entities.UserOrgs.UserOrgType>> LoadEnabledEntraOrgTypes()
+        {
+            if (_orgTypeStore == null)
+            {
+                return new Common.Entities.UserOrgs.UserOrgType[0];
+            }
+
+            try
+            {
+                var types = await _orgTypeStore.GetEnabledEntraTypesAsync();
+                if (types.Count > 0)
+                {
+                    _logger.LogInformation($"User import - {types.Count} user organisation type(s) will be read from Entra.");
+                }
+                return types;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    $"User import - could not read the configured user organisation types ({ex.Message}). "
+                    + "Continuing without organisation values. If this persists, check the database is upgraded to this build.");
+                return new Common.Entities.UserOrgs.UserOrgType[0];
+            }
+        }
+
+        /// <summary>
+        /// Resolves each Graph user's configured org attributes and merges the result.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Skipped entirely when Graph rejected the org properties earlier in the cycle. That response
+        /// carries no org attributes at all, so applying it would read as "every user's value was
+        /// cleared" and wipe the assignments the admin is trying to fix.
+        /// </para>
+        /// <para>
+        /// Never throws, for the same reason as <see cref="LoadEnabledEntraOrgTypes"/>: the user import
+        /// proper has already succeeded by this point, and failing here would roll the whole cycle back
+        /// and stop the delta token being committed.
+        /// </para>
+        /// <para>
+        /// Records each type's refresh time once its values are applied - or once the cycle found
+        /// nothing to change, which is the usual delta outcome and just as much a confirmation. Not when
+        /// Graph rejected the attributes or the merge failed: the time going stale is exactly what tells
+        /// an administrator the values have stopped being refreshed.
+        /// </para>
+        /// </remarks>
+        private async Task ApplyUserOrgValues(
+            List<GraphUser> graphUsers,
+            IReadOnlyList<Common.Entities.UserOrgs.UserOrgType> orgTypes,
+            Dictionary<string, Common.Entities.User> dbUsersByUpn,
+            UserImportPhaseResults phaseResults,
+            DateTime cycleStartedUtc)
+        {
+            if (orgTypes == null || orgTypes.Count == 0 || _orgAssignmentStore == null)
+            {
+                return;
+            }
+
+            if (_userLoader.OrgSelectionWasRejected)
+            {
+                // Not a failure of this phase - there was simply nothing to apply, and withholding the
+                // delta token would re-read the whole tenant every cycle for as long as the attribute
+                // stayed broken without ever making progress.
+                _logger.LogWarning(
+                    "User import - skipping user organisation values this cycle: Graph rejected the configured "
+                    + "attributes, so the response does not contain them. Existing organisation values are left "
+                    + "untouched rather than being cleared.");
+                return;
+            }
+
+            try
+            {
+                IReadOnlyList<string> skipped;
+                var parsed = UserOrgMappingRules.ParseOrgTypes(orgTypes, out skipped);
+
+                if (skipped.Count > 0)
+                {
+                    _logger.LogError(
+                        $"User import - skipping {skipped.Count} organisation type(s) whose Entra attribute could "
+                        + $"not be understood: {string.Join(", ", skipped)}. Re-save them on the User organisations page.");
+                }
+
+                if (parsed.Count == 0)
+                {
+                    return;
+                }
+
+                // The expected source kind and per-type generation are passed so the merge can drop
+                // anything whose org type has been switched away from Entra, disabled, or repointed
+                // at a different attribute since this cycle read its configuration. That read happened
+                // before 200,000 users were loaded from Graph, which is minutes of window in which an
+                // admin can change it - and undoing their change would leave values no later import
+                // ever corrects. Source kind alone is not enough: a repoint leaves the type enabled
+                // and Entra-sourced throughout, so only the generation catches it.
+                var expectedGenerations = orgTypes
+                    .Where(t => t != null)
+                    .GroupBy(t => t.Id)
+                    .ToDictionary(g => g.Key, g => g.First().SourceGeneration);
+
+                // Reuse the dictionary the import already built rather than re-querying dbo.users: at
+                // 200k users that would be a second full table read for no new information.
+                var userIdsByUpn = new Dictionary<string, int>(dbUsersByUpn.Count, StringComparer.OrdinalIgnoreCase);
+                foreach (var pair in dbUsersByUpn)
+                {
+                    if (pair.Value != null && pair.Value.ID > 0)
+                    {
+                        userIdsByUpn[pair.Key] = pair.Value.ID;
+                    }
+                }
+
+                var updates = UserOrgMappingRules.BuildUpdates(graphUsers, parsed, userIdsByUpn);
+                if (updates.Count > 0)
+                {
+                    var result = await _orgAssignmentStore.MergeAsync(
+                        updates, UserOrgSourceKind.EntraAttribute, expectedGenerations);
+
+                    _logger.LogInformation(
+                        $"User import - user organisations: {result.Applied.ToString("N0")} assignment(s) set, "
+                        + $"{result.Cleared.ToString("N0")} cleared, {result.ValuesCreated.ToString("N0")} new organisation value(s) "
+                        + $"across {parsed.Count} organisation type(s).");
+
+                    if (result.FencedOut > 0)
+                    {
+                        // An org type was reconfigured while this cycle was loading users from Graph, so
+                        // its updates were dropped rather than applied over the top of the change. The
+                        // token is withheld because those users will not appear in a delta again unless
+                        // they change: committing it would strand them with stale values indefinitely.
+                        _logger.LogWarning(
+                            $"User import - {result.FencedOut.ToString("N0")} organisation update(s) were skipped because "
+                            + "their organisation type was reconfigured while this cycle was running. The delta token "
+                            + "will not be committed, so the next cycle re-reads them.");
+
+                        phaseResults.UserOrgsSucceeded = false;
+                    }
+                }
+
+                // Only the types this cycle actually read. One skipped as unparseable was not refreshed,
+                // and a reconfigured one is filtered out by the store's own fence.
+                var refreshed = parsed
+                    .Select(p => p.OrgTypeId)
+                    .Distinct()
+                    .Where(expectedGenerations.ContainsKey)
+                    .ToDictionary(id => id, id => expectedGenerations[id]);
+
+                await RecordOrgTypesRefreshed(refreshed, cycleStartedUtc);
+            }
+            catch (Exception ex)
+            {
+                // The rest of the import keeps its results - this must never fail the user import. But
+                // the delta token is withheld, because committing it would throw away the very
+                // enumeration these values needed. See UserImportPhaseResults.UserOrgsSucceeded.
+                phaseResults.UserOrgsSucceeded = false;
+
+                _logger.LogError(
+                    $"User import - failed to apply user organisation values ({ex.Message}). The rest of the user "
+                    + "import completed, but the Graph delta token will NOT be committed, so the next cycle re-reads "
+                    + "the users needed to populate them.");
+            }
+        }
+
+        /// <summary>
+        /// Records when these org types were refreshed, for the "Last refreshed" column on the admin page.
+        /// </summary>
+        /// <remarks>
+        /// Never throws, and never withholds the delta token. The values themselves are already applied;
+        /// failing to record when is a stale label, not stale data, and re-reading the tenant to fix a
+        /// label would cost far more than it is worth.
+        /// </remarks>
+        private async Task RecordOrgTypesRefreshed(IReadOnlyDictionary<int, int> expectedGenerations, DateTime cycleStartedUtc)
+        {
+            if (_orgTypeStore == null || expectedGenerations.Count == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                await _orgTypeStore.RecordEntraRefreshAsync(expectedGenerations, cycleStartedUtc);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    $"User import - organisation values were applied, but recording when they were refreshed failed "
+                    + $"({ex.Message}). The User organisations page will show an older 'Last refreshed' time until "
+                    + "the next cycle records it.");
+            }
+        }
+
+        #endregion
 
         private async Task UpdateDbUserWithGraphData(AnalyticsEntitiesContext db, GraphUser graphUser, List<GraphUser> allGraphUsers, List<Common.Entities.User> allDbUsers, Common.Entities.User dbUser, bool readUserSkus, Dictionary<string, Common.Entities.User> dbUsersByAadId = null, DateTime? lastUpdatedUtc = null)
         {

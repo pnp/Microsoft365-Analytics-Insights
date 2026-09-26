@@ -115,6 +115,12 @@ export const ALLOWED_LITERALS = new Set<string>([
   'No',
   'Total',
   'Error',
+  // Example values shown as input placeholders on the User organisations page. Both are literal
+  // identifiers rather than prose: `extensionAttribute1` is the exact name of a Microsoft Entra
+  // property an administrator has to type character-for-character, and the sample address is a
+  // shape, not a sentence. Translating either would make the example wrong.
+  'extensionAttribute1',
+  'someone@contoso.com',
   // Microsoft Spanish UI/reporting terminology keeps these English words: Teams modality "Audio"
   // and Microsoft 365 usage-report platform "Web".
   'Audio',

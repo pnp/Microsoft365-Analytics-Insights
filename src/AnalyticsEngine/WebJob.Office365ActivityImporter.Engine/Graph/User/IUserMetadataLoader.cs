@@ -16,6 +16,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         IDeltaValueProvider DeltaValueProvider { get; }
 
         /// <summary>
+        /// Declares which user-org attributes this import cycle should also read from Graph.
+        /// </summary>
+        /// <remarks>
+        /// Must be called before <see cref="LoadAllActiveUsers"/>. The implementation derives both the
+        /// <c>$select</c> and the delta-token cache key from the same selection, so that a token minted
+        /// under one set of properties is never reused under another - Graph freezes <c>$select</c> for
+        /// the life of a token, so reusing one would silently return the old property set forever.
+        /// </remarks>
+        void SetOrgSelection(GraphUserOrgSelection orgSelection);
+
+        /// <summary>
+        /// Whether Graph rejected the configured org attributes during this cycle, so the load fell back
+        /// to reading users without them. Org values must not be written when this is <c>true</c>: the
+        /// response carries no org properties, so every user would look as though their value had been
+        /// cleared.
+        /// </summary>
+        bool OrgSelectionWasRejected { get; }
+
+        /// <summary>
         /// Loads all active users from the external source
         /// </summary>
         /// <returns>List of active users</returns>

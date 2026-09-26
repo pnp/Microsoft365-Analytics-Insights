@@ -44,6 +44,7 @@ const app: Record<keyof typeof en, string> = {
   'app.route.profiling': 'Generaci\u00f3n de perfiles',
   'app.route.teamsPermissions': 'Permisos de Teams',
   'app.route.userLookup': 'Consulta de datos de usuario',
+  'app.route.userOrgs': 'Organizaciones de usuario',
   'app.route.configuration': 'Configuraci\u00f3n del servicio',
 };
 

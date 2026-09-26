@@ -241,6 +241,12 @@
     <Compile Include="Controllers\TeamsAuthAPIController.cs" />
     <Compile Include="Controllers\UpdateCheckAPIController.cs" />
     <Compile Include="Controllers\UserDataLookupAPIController.cs" />
+    <Compile Include="Controllers\UserOrgAPIController.cs" />
+    <Compile Include="Models\UserOrgs\UserOrgApiModels.cs" />
+    <Compile Include="Models\UserOrgs\UserOrgAdminService.cs" />
+    <Compile Include="Models\UserOrgs\UserOrgGraphProbe.cs" />
+    <Compile Include="Models\UserOrgs\UserOrgImportDispatcher.cs" />
+    <Compile Include="Models\UserOrgs\UserOrgMembershipService.cs" />
     <Compile Include="Global.asax.cs">
       <DependentUpon>Global.asax</DependentUpon>
     </Compile>

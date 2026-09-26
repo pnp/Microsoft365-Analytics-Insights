@@ -1,0 +1,609 @@
+using Microsoft.Data.SqlClient;
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace Common.Entities.UserOrgs
+{
+    /// <summary>
+    /// SQL Server implementation of <see cref="IUserOrgImportJobStore"/>.
+    /// </summary>
+    /// <remarks>
+    /// The job and its staged rows live in the database rather than in web-process memory, so an
+    /// App Service recycle mid-import leaves a visible, resumable record instead of a request that
+    /// silently stopped existing. It also gives the admin page an audit trail of who imported what.
+    /// </remarks>
+    internal sealed class SqlUserOrgImportJobStore : SqlUserOrgStoreBase, IUserOrgImportJobStore
+    {
+        /// <summary>
+        /// The job columns, in the order <see cref="ReadJob"/> reads them.
+        /// </summary>
+        /// <remarks>
+        /// Shared rather than written out again wherever a job is selected. A second hand-written
+        /// list drifts the moment a column is added, and it fails as a null-read deep inside
+        /// <see cref="ReadJob"/> rather than anywhere near the query that is actually wrong.
+        /// </remarks>
+        internal const string JobColumns =
+            "id, org_type_id, mode, status, file_name, started_by, queued_utc, started_utc, finished_utc, "
+            + "heartbeat_utc, rows_total, rows_applied, rows_cleared, rows_unknown_upn, rows_invalid, confirm_clear, "
+            + "expected_generation, error_message";
+
+        /// <summary>The same columns, qualified with a table alias for a query that needs one.</summary>
+        internal static string JobColumnsFor(string alias)
+        {
+            var columns = JobColumns.Split(',');
+            for (var i = 0; i < columns.Length; i++)
+            {
+                columns[i] = alias + "." + columns[i].Trim();
+            }
+            return string.Join(", ", columns);
+        }
+
+        public SqlUserOrgImportJobStore(string connectionString) : base(connectionString)
+        {
+        }
+
+        public async Task<int> CreateJobWithRowsAsync(
+            UserOrgImportJob job,
+            IReadOnlyList<UserOrgStagedRow> rows,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            if (job == null)
+            {
+                throw new ArgumentNullException(nameof(job));
+            }
+
+            const string insertJobSql = @"
+SET NOCOUNT ON;
+
+DECLARE @lockResult INT, @lockName NVARCHAR(255) = N'user_org_type_' + CAST(@orgTypeId AS NVARCHAR(20));
+
+-- The same application lock the apply takes, so queueing and applying for one org type cannot
+-- interleave. Taken before anything is read, so the checks below see a settled state. A short
+-- timeout on purpose: this runs inside an administrator's HTTP request, and 'an import is already
+-- in progress' is the honest answer when a live worker holds the lock - far better than hanging the
+-- upload for the ten minutes a large merge may take.
+EXEC @lockResult = sp_getapplock
+    @Resource = @lockName, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 15000;
+
+IF @lockResult < 0
+BEGIN
+    RAISERROR('USERORG_ACTIVE_JOB', 16, 1);
+    RETURN;
+END
+
+-- The org type must still be CSV-sourced and enabled, and must not have been reset since. It is
+-- checked in the caller too, but that happens before a file of up to half a million rows is parsed,
+-- so an admin reconfiguring the type in the meantime would otherwise have a CSV import land on it
+-- afterwards. Re-checked here because this is inside the transaction that admits the job.
+IF NOT EXISTS (SELECT 1 FROM dbo.user_org_types
+               WHERE id = @orgTypeId AND source_kind = 2 AND is_enabled = 1
+                 AND (@expectedGeneration IS NULL OR source_generation = @expectedGeneration))
+BEGIN
+    RAISERROR('USERORG_NOT_CSV_SOURCED', 16, 1);
+    RETURN;
+END
+
+-- The active-job check happens HERE, inside the transaction and holding a range lock, rather than in
+-- the caller. Checking first and inserting afterwards left a window wide enough to drive a lorry
+-- through - the whole CSV parse sat between them - so two admins uploading at once could both see no
+-- active job and queue competing imports for the same organisation type, producing a nondeterministic
+-- winner or a deadlock.
+IF EXISTS (SELECT 1 FROM dbo.user_org_import_jobs WITH (UPDLOCK, HOLDLOCK)
+           WHERE org_type_id = @orgTypeId
+             AND (
+                  -- Pending, but only while it could still plausibly be picked up. A job whose
+                  -- dispatch was lost to an App Service recycle after the rows were staged would
+                  -- otherwise block every later upload for this organisation type forever.
+                  (status = 1 AND queued_utc > DATEADD(SECOND, -@pendingStaleSecs, SYSUTCDATETIME()))
+                  -- Running, and still reporting progress.
+               OR (status = 2 AND ISNULL(heartbeat_utc, started_utc) > DATEADD(SECOND, -@runningStaleSecs, SYSUTCDATETIME()))
+             ))
+BEGIN
+    RAISERROR('USERORG_ACTIVE_JOB', 16, 1);
+    RETURN;
+END
+
+-- Retire whatever the check above decided was no longer alive, in the SAME transaction that admits
+-- the replacement. Leaving it Pending would let a late dispatch claim and apply a file the admin has
+-- already superseded; TryClaimJobAsync only accepts status = 1, so moving it off Pending here is what
+-- actually fences that. Leaving it Running would also leave the portal reporting two live imports.
+DECLARE @superseded TABLE (id INT NOT NULL);
+
+UPDATE dbo.user_org_import_jobs
+SET status = 4,
+    finished_utc = SYSUTCDATETIME(),
+    error_message = @supersededMessage
+OUTPUT INSERTED.id INTO @superseded (id)
+WHERE org_type_id = @orgTypeId
+  AND status IN (1, 2);
+
+DELETE s
+FROM dbo.user_org_import_staging s
+WHERE EXISTS (SELECT 1 FROM @superseded x WHERE x.id = s.job_id);
+
+INSERT INTO dbo.user_org_import_jobs
+    (org_type_id, mode, status, file_name, started_by, queued_utc, rows_total, rows_invalid, confirm_clear, expected_generation)
+OUTPUT INSERTED.id
+VALUES (@orgTypeId, @mode, @status, @fileName, @startedBy, SYSUTCDATETIME(), @rowsTotal, @rowsInvalid, @confirmClear, @expectedGeneration);";
+
+            using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
+            using (var tx = connection.BeginTransaction())
+            {
+                int jobId;
+                using (var cmd = Command(connection, insertJobSql, tx))
+                {
+                    cmd.Parameters.Add("@orgTypeId", SqlDbType.Int).Value = job.OrgTypeId;
+                    cmd.Parameters.Add("@mode", SqlDbType.TinyInt).Value = (byte)job.Mode;
+                    cmd.Parameters.Add("@status", SqlDbType.TinyInt).Value = (byte)UserOrgImportStatus.Pending;
+                    cmd.Parameters.Add("@fileName", SqlDbType.NVarChar, 260).Value = DbValue(job.FileName);
+                    cmd.Parameters.Add("@startedBy", SqlDbType.NVarChar, 256).Value = job.StartedBy ?? string.Empty;
+                    cmd.Parameters.Add("@rowsTotal", SqlDbType.Int).Value = rows == null ? 0 : rows.Count;
+                    cmd.Parameters.Add("@rowsInvalid", SqlDbType.Int).Value = job.RowsInvalid;
+                    cmd.Parameters.Add("@confirmClear", SqlDbType.Bit).Value = job.ConfirmClear;
+                    cmd.Parameters.Add("@expectedGeneration", SqlDbType.Int).Value =
+                        job.ExpectedGeneration.HasValue ? (object)job.ExpectedGeneration.Value : DBNull.Value;
+                    cmd.Parameters.Add("@pendingStaleSecs", SqlDbType.Int).Value =
+                        (int)UserOrgImportRunner.StalePendingThreshold.TotalSeconds;
+                    cmd.Parameters.Add("@runningStaleSecs", SqlDbType.Int).Value =
+                        (int)UserOrgImportRunner.StaleHeartbeatThreshold.TotalSeconds;
+                    cmd.Parameters.Add("@supersededMessage", SqlDbType.NVarChar, 2000).Value =
+                        UserOrgImportRunner.SupersededMessage;
+
+                    object id;
+                    try
+                    {
+                        id = await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (SqlException ex) when (ex.Message.IndexOf("USERORG_ACTIVE_JOB", StringComparison.Ordinal) >= 0)
+                    {
+                        throw new UserOrgValidationException(
+                            "An import for this organisation type is already in progress. Wait for it to finish "
+                            + "before starting another.", ex);
+                    }
+                    catch (SqlException ex) when (ex.Message.IndexOf("USERORG_NOT_CSV_SOURCED", StringComparison.Ordinal) >= 0)
+                    {
+                        throw new UserOrgValidationException(
+                            "That organisation type no longer takes its values from a CSV file - it was changed "
+                            + "while this file was being read. Reload the page and check the configuration.", ex);
+                    }
+
+                    if (id == null || id == DBNull.Value)
+                    {
+                        throw new UserOrgValidationException(
+                            "The import could not be queued. Try again in a moment.");
+                    }
+
+                    jobId = Convert.ToInt32(id);
+                }
+
+                if (rows != null && rows.Count > 0)
+                {
+                    var table = BuildStagingTable(jobId, rows);
+
+                    using (var bulkCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, tx))
+                    {
+                        bulkCopy.DestinationTableName = "dbo.user_org_import_staging";
+                        bulkCopy.BatchSize = 10000;
+                        bulkCopy.BulkCopyTimeout = CommandTimeoutSeconds;
+                        bulkCopy.ColumnMappings.Add("job_id", "job_id");
+                        bulkCopy.ColumnMappings.Add("line_number", "line_number");
+                        bulkCopy.ColumnMappings.Add("upn", "upn");
+                        bulkCopy.ColumnMappings.Add("org_value", "org_value");
+
+                        await bulkCopy.WriteToServerAsync(table, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+
+                tx.Commit();
+                return jobId;
+            }
+        }
+
+        public async Task<UserOrgImportJob> GetJobAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
+            using (var cmd = Command(connection, "SELECT " + JobColumns + " FROM dbo.user_org_import_jobs WHERE id = @id"))
+            {
+                cmd.Parameters.Add("@id", SqlDbType.Int).Value = jobId;
+
+                using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadJob(reader) : null;
+                }
+            }
+        }
+
+        public async Task<UserOrgImportJob> GetActiveJobForTypeAsync(
+            int orgTypeId,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            const string sql = @"
+SELECT TOP (1) " + JobColumns + @"
+FROM dbo.user_org_import_jobs
+WHERE org_type_id = @orgTypeId AND status IN (1, 2)
+ORDER BY id DESC;";
+
+            using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
+            using (var cmd = Command(connection, sql))
+            {
+                cmd.Parameters.Add("@orgTypeId", SqlDbType.Int).Value = orgTypeId;
+
+                using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadJob(reader) : null;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Claims a pending job.
+        /// </summary>
+        /// <remarks>
+        /// The <c>status = 1</c> predicate inside the UPDATE is what makes this safe: the check and the
+        /// transition happen in one atomic statement, so two web instances racing for the same job
+        /// cannot both win and import the file twice.
+        /// </remarks>
+        public async Task<bool> TryClaimJobAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            const string sql = @"
+UPDATE dbo.user_org_import_jobs
+SET status = 2, started_utc = SYSUTCDATETIME(), heartbeat_utc = SYSUTCDATETIME()
+WHERE id = @id AND status = 1;";
+
+            using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
+            using (var cmd = Command(connection, sql))
+            {
+                cmd.Parameters.Add("@id", SqlDbType.Int).Value = jobId;
+                var affected = await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                return affected == 1;
+            }
+        }
+
+        public async Task HeartbeatAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
+            using (var cmd = Command(connection, "UPDATE dbo.user_org_import_jobs SET heartbeat_utc = SYSUTCDATETIME() WHERE id = @id AND status = 2"))
+            {
+                cmd.Parameters.Add("@id", SqlDbType.Int).Value = jobId;
+                await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Applies a claimed job's staged rows.
+        /// </summary>
+        /// <remarks>
+        /// Runs inside one transaction. That matters most for Replace: clearing the users absent from
+        /// the file and applying the ones present must be all-or-nothing, or a failure half way leaves
+        /// the org type emptied but not repopulated. On a large tenant this does hold locks on
+        /// <c>user_org_assignments</c> for the duration, which is the correct trade - a partially
+        /// applied Replace would be far worse than a slow one.
+        /// </remarks>
+        public async Task<UserOrgImportJob> ApplyAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
+            using (var tx = connection.BeginTransaction())
+            {
+                using (var cmd = Command(connection, ApplySql, tx))
+                {
+                    cmd.Parameters.Add("@jobId", SqlDbType.Int).Value = jobId;
+
+                    try
+                    {
+                        await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (SqlException ex) when (ex.Message.IndexOf("USERORG_JOB_NOT_RUNNABLE", StringComparison.Ordinal) >= 0)
+                    {
+                        throw new UserOrgJobSupersededException(
+                            "This import was overtaken by a later one for the same organisation type, so it was not applied.",
+                            ex);
+                    }
+                    catch (SqlException ex) when (ex.Message.IndexOf("USERORG_NOT_CSV_SOURCED", StringComparison.Ordinal) >= 0)
+                    {
+                        throw new UserOrgValidationException(
+                            "This organisation type was reconfigured after the file was uploaded, so the file was "
+                            + "not imported. Check the type's settings and upload it again if it is still the file "
+                            + "you want.", ex);
+                    }
+                    catch (SqlException ex) when (ex.Message.IndexOf("USERORG_UNCONFIRMED_CLEAR", StringComparison.Ordinal) >= 0)
+                    {
+                        throw new UserOrgValidationException(
+                            "This replace would clear users the file does not cover, and it was not confirmed. "
+                            + "The organisation values have not been changed. Preview the file again - another "
+                            + "import may have run since - and confirm before continuing, or use Merge.",
+                            ex);
+                    }
+                }
+
+                UserOrgImportJob job;
+                using (var cmd = Command(connection, "SELECT " + JobColumns + " FROM dbo.user_org_import_jobs WHERE id = @id", tx))
+                {
+                    cmd.Parameters.Add("@id", SqlDbType.Int).Value = jobId;
+                    using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        job = await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadJob(reader) : null;
+                    }
+                }
+
+                tx.Commit();
+                return job;
+            }
+        }
+
+        public async Task CompleteJobAsync(
+            int jobId,
+            UserOrgImportStatus status,
+            string errorMessage,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            // The staged rows are deleted on completion: they are a work queue, not a record. The job
+            // row keeps the counts, so the audit trail survives without carrying a copy of every UPN in
+            // the customer's file around forever.
+            //
+            // Only a job that is still live (Pending or Running) can be completed. A job that has
+            // already reached a terminal status must not be rewritten - specifically, a worker that was
+            // superseded because it went quiet (see CreateJobWithRowsAsync) must not be able to report
+            // its own outcome over the top of that and leave the portal claiming two finished imports
+            // raced to the same result. The staging delete is deliberately left unconditional so the
+            // rows are cleaned up either way.
+            const string sql = @"
+UPDATE dbo.user_org_import_jobs
+SET status = @status,
+    finished_utc = SYSUTCDATETIME(),
+    error_message = @error
+WHERE id = @id AND status IN (1, 2);
+
+DELETE FROM dbo.user_org_import_staging WHERE job_id = @id;";
+
+            using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
+            using (var cmd = Command(connection, sql))
+            {
+                cmd.Parameters.Add("@id", SqlDbType.Int).Value = jobId;
+                cmd.Parameters.Add("@status", SqlDbType.TinyInt).Value = (byte)status;
+                cmd.Parameters.Add("@error", SqlDbType.NVarChar, 2000).Value =
+                    DbValue(errorMessage == null ? null : Truncate(errorMessage, 2000));
+
+                await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Resolves the staged UPNs to users and applies them, honouring the job's Replace/Merge mode.
+        /// </summary>
+        internal const string ApplySql = @"
+SET NOCOUNT ON;
+
+DECLARE @orgTypeId INT, @mode TINYINT, @confirmClear BIT, @expectedGeneration INT, @lockResult INT, @lockName NVARCHAR(255);
+
+-- Read the org type first, unlocked, purely to name the lock. The authoritative read happens below,
+-- once the lock is held.
+SELECT @orgTypeId = org_type_id FROM dbo.user_org_import_jobs WHERE id = @jobId;
+
+IF @orgTypeId IS NULL
+BEGIN
+    RAISERROR('USERORG_JOB_NOT_RUNNABLE', 16, 1);
+    RETURN;
+END
+
+SET @lockName = N'user_org_type_' + CAST(@orgTypeId AS NVARCHAR(20));
+
+-- An application lock, not a lock on the job row. Everything that queues, applies, reconfigures or
+-- deletes work for one org type takes this same lock, so those operations cannot interleave - but
+-- the job row itself stays writable, which matters because the heartbeat runs on its own connection
+-- and must keep reporting progress for the whole merge. Holding a transaction-duration UPDLOCK on
+-- the job row instead blocked every heartbeat until the apply committed, so any import taking
+-- longer than StaleHeartbeatThreshold was reported to the admin as interrupted while it was in fact
+-- running perfectly. It also inverted the lock order against deleting an org type, which took
+-- staging before jobs.
+--
+-- If the lock cannot be taken, a live worker holds it. That is the right answer to refuse on: a
+-- worker that has genuinely died releases it when its connection is torn down and its transaction
+-- rolls back.
+EXEC @lockResult = sp_getapplock
+    @Resource = @lockName, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 600000;
+
+IF @lockResult < 0
+BEGIN
+    RAISERROR('USERORG_JOB_NOT_RUNNABLE', 16, 1);
+    RETURN;
+END
+
+-- Still Running? That is the fence against a worker that went quiet, was superseded and had its
+-- staged rows deleted underneath it - applying anyway means a Replace matches nobody, so it deletes
+-- EVERY assignment for the org type.
+--
+-- Reset first. A SELECT that matches no rows leaves its assignment variables at whatever they
+-- already held, so without this @orgTypeId would keep the value the unlocked read above put in it
+-- and the fence would pass in exactly the cases it exists to catch.
+SET @orgTypeId = NULL;
+
+SELECT @orgTypeId = org_type_id, @mode = mode, @confirmClear = confirm_clear, @expectedGeneration = expected_generation
+FROM dbo.user_org_import_jobs
+WHERE id = @jobId AND status = 2;
+
+IF @orgTypeId IS NULL
+BEGIN
+    RAISERROR('USERORG_JOB_NOT_RUNNABLE', 16, 1);
+    RETURN;
+END
+
+-- And is the type still the one this file was uploaded for? An admin can reconfigure it between the
+-- upload and the worker running. Source kind alone is too weak a question: a type switched to Entra
+-- and back is CSV-sourced again, with its values deliberately discarded in between, so the
+-- generation is what actually says the mapping is unchanged. Reported separately from the fence
+-- above because nothing has retired this job - the caller has to record the outcome itself.
+--
+-- UPDLOCK, HOLDLOCK because this apply writes the type row at the end (its refresh time), and every
+-- writer in this feature takes the TYPE row before that type's values and assignments. Writing it
+-- last without holding it from here would invert that order against the Entra merge, which holds
+-- type rows while it writes - and the merge is the one writer the application lock does not cover.
+-- An update lock still lets readers through; only the final write blocks them, briefly.
+IF NOT EXISTS (SELECT 1 FROM dbo.user_org_types WITH (UPDLOCK, HOLDLOCK)
+               WHERE id = @orgTypeId AND source_kind = 2 AND is_enabled = 1
+                 AND (@expectedGeneration IS NULL OR source_generation = @expectedGeneration))
+BEGIN
+    RAISERROR('USERORG_NOT_CSV_SOURCED', 16, 1);
+    RETURN;
+END
+
+DECLARE @rowsTotal INT = (SELECT COUNT(*) FROM dbo.user_org_import_staging WHERE job_id = @jobId);
+DECLARE @distinctUpns INT = (SELECT COUNT(DISTINCT upn) FROM dbo.user_org_import_staging WHERE job_id = @jobId);
+
+-- Resolve each UPN to a user, keeping the LAST line for a UPN the file lists more than once: a
+-- repeated person is treated as a correction, which is what an admin editing a spreadsheet expects.
+-- Partitioning uses the database collation, so two spellings differing only in case are one person.
+CREATE TABLE #user_org_matched (user_id INT NOT NULL PRIMARY KEY, org_value NVARCHAR(848) NULL);
+
+INSERT INTO #user_org_matched (user_id, org_value)
+SELECT u.id, latest.org_value
+FROM (
+    SELECT s.upn,
+           s.org_value,
+           ROW_NUMBER() OVER (PARTITION BY s.upn ORDER BY s.line_number DESC) AS rn
+    FROM dbo.user_org_import_staging s
+    WHERE s.job_id = @jobId
+) latest
+JOIN dbo.users u ON u.user_name = latest.upn
+WHERE latest.rn = 1;
+
+DECLARE @matched INT = (SELECT COUNT(*) FROM #user_org_matched);
+DECLARE @unknown INT = CASE WHEN @distinctUpns > @matched THEN @distinctUpns - @matched ELSE 0 END;
+
+-- The Replace confirmation is re-tested HERE, inside the transaction that does the deleting, using
+-- the DELETE's own predicate so the two cannot disagree. The web request checked it as well, but
+-- another administrator's import can queue, run and finish between that check and this one - and
+-- then a Replace the admin was told would clear nobody clears everybody. Placed before the first
+-- write so the refusal leaves the database untouched even without the caller's rollback.
+IF @mode = 1 AND @confirmClear = 0
+   AND EXISTS (SELECT 1
+               FROM dbo.user_org_assignments a
+               WHERE a.org_type_id = @orgTypeId
+                 AND NOT EXISTS (SELECT 1 FROM #user_org_matched m
+                                 WHERE m.user_id = a.user_id AND m.org_value IS NOT NULL))
+BEGIN
+    DROP TABLE #user_org_matched;
+    RAISERROR('USERORG_UNCONFIRMED_CLEAR', 16, 1);
+    RETURN;
+END
+
+-- Register any value we have not seen for this org type before.
+INSERT INTO dbo.user_org_values (org_type_id, name)
+SELECT DISTINCT @orgTypeId, m.org_value
+FROM #user_org_matched m
+WHERE m.org_value IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM dbo.user_org_values v
+                  WHERE v.org_type_id = @orgTypeId AND v.name = m.org_value);
+
+DECLARE @cleared INT = 0, @applied INT = 0;
+
+IF @mode = 1
+BEGIN
+    -- Replace: the file is the complete membership of this org type, so anyone it does not give a
+    -- value to loses theirs - including users it lists with a blank value.
+    DELETE a
+    FROM dbo.user_org_assignments a
+    WHERE a.org_type_id = @orgTypeId
+      AND NOT EXISTS (SELECT 1 FROM #user_org_matched m
+                      WHERE m.user_id = a.user_id AND m.org_value IS NOT NULL);
+    SET @cleared = @@ROWCOUNT;
+END
+ELSE
+BEGIN
+    -- Merge: only the users the file actually mentions change, and only a blank value clears.
+    DELETE a
+    FROM dbo.user_org_assignments a
+    JOIN #user_org_matched m ON m.user_id = a.user_id
+    WHERE a.org_type_id = @orgTypeId AND m.org_value IS NULL;
+    SET @cleared = @@ROWCOUNT;
+END
+
+UPDATE a
+SET a.org_value_id = v.id,
+    a.last_updated_utc = SYSUTCDATETIME()
+FROM dbo.user_org_assignments a
+JOIN #user_org_matched m ON m.user_id = a.user_id
+JOIN dbo.user_org_values v ON v.org_type_id = @orgTypeId AND v.name = m.org_value
+WHERE a.org_type_id = @orgTypeId
+  AND m.org_value IS NOT NULL
+  AND a.org_value_id <> v.id;
+SET @applied = @@ROWCOUNT;
+
+INSERT INTO dbo.user_org_assignments (user_id, org_type_id, org_value_id)
+SELECT m.user_id, @orgTypeId, v.id
+FROM #user_org_matched m
+JOIN dbo.user_org_values v ON v.org_type_id = @orgTypeId AND v.name = m.org_value
+WHERE m.org_value IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM dbo.user_org_assignments a
+                  WHERE a.user_id = m.user_id AND a.org_type_id = @orgTypeId);
+SET @applied = @applied + @@ROWCOUNT;
+
+-- rows_invalid is recorded when the file is parsed, not here, so it is deliberately left alone.
+UPDATE dbo.user_org_import_jobs
+SET rows_total = @rowsTotal,
+    rows_applied = @applied,
+    rows_cleared = @cleared,
+    rows_unknown_upn = @unknown,
+    heartbeat_utc = SYSUTCDATETIME()
+WHERE id = @jobId;
+
+-- In the same transaction as the writes, so the refresh time and the values cannot disagree - even
+-- when the file changed nobody, which is still a confirmation that the values are current.
+UPDATE dbo.user_org_types SET last_refreshed_utc = SYSUTCDATETIME() WHERE id = @orgTypeId;
+
+DROP TABLE #user_org_matched;";
+
+        internal static DataTable BuildStagingTable(int jobId, IReadOnlyList<UserOrgStagedRow> rows)
+        {
+            var table = new DataTable();
+            table.Columns.Add("job_id", typeof(int));
+            table.Columns.Add("line_number", typeof(int));
+            table.Columns.Add("upn", typeof(string));
+            table.Columns.Add("org_value", typeof(string));
+
+            foreach (var row in rows)
+            {
+                var value = UserOrgRules.NormaliseOrgValue(row.OrgValue);
+                table.Rows.Add(
+                    jobId,
+                    row.LineNumber,
+                    row.Upn,
+                    value == null ? (object)DBNull.Value : value);
+            }
+
+            return table;
+        }
+
+        internal static UserOrgImportJob ReadJob(SqlDataReader reader)
+        {
+            return new UserOrgImportJob
+            {
+                Id = reader.GetInt32(0),
+                OrgTypeId = reader.GetInt32(1),
+                Mode = (UserOrgImportMode)reader.GetByte(2),
+                Status = (UserOrgImportStatus)reader.GetByte(3),
+                FileName = ReadString(reader, 4),
+                StartedBy = ReadString(reader, 5),
+                QueuedUtc = reader.GetDateTime(6),
+                StartedUtc = ReadNullableDate(reader, 7),
+                FinishedUtc = ReadNullableDate(reader, 8),
+                HeartbeatUtc = ReadNullableDate(reader, 9),
+                RowsTotal = reader.GetInt32(10),
+                RowsApplied = reader.GetInt32(11),
+                RowsCleared = reader.GetInt32(12),
+                RowsUnknownUpn = reader.GetInt32(13),
+                RowsInvalid = reader.GetInt32(14),
+                ConfirmClear = reader.GetBoolean(15),
+                ExpectedGeneration = reader.IsDBNull(16) ? (int?)null : reader.GetInt32(16),
+                ErrorMessage = ReadString(reader, 17),
+            };
+        }
+
+        private static string Truncate(string value, int maxLength)
+        {
+            return value.Length <= maxLength ? value : value.Substring(0, maxLength);
+        }
+    }
+}

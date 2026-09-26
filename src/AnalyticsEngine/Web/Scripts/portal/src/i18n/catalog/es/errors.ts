@@ -15,6 +15,15 @@ const errors: Record<keyof typeof en, string> = {
   'errors.userLookup.unknownCategory': "Categoría desconocida '{category}'.",
   'errors.userLookup.categoryNoDrilldown': "La categoría '{category}' no admite el desglose.",
 
+  // User organisations API
+  'errors.userOrgs.requestFailed': 'La solicitud ha fallado ({status})',
+  'errors.userOrgs.fileUnreadable': 'No se ha podido leer el archivo.',
+  'errors.userOrgs.importNotStarted': 'No se ha podido iniciar la importaci\u00f3n.',
+  'errors.userOrgs.saveFailed': 'No se ha podido guardar el tipo de organizaci\u00f3n.',
+  'errors.userOrgs.loadFailed': 'No se han podido cargar los tipos de organizaci\u00f3n.',
+  'errors.userOrgs.deleteFailed': 'No se ha podido eliminar el tipo de organizaci\u00f3n.',
+  'errors.userOrgs.testFailed': 'No se ha podido probar el atributo.',
+
   // Agent costs API
   'errors.agentCosts.availabilityFailed': 'No se ha podido cargar la disponibilidad de costes de agentes ({status}).',
   'errors.agentCosts.summaryFailed': 'No se ha podido cargar el resumen de costes de agentes ({status}).',

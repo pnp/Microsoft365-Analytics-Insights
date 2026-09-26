@@ -1,0 +1,59 @@
+using System;
+
+namespace Common.Entities.UserOrgs
+{
+    /// <summary>
+    /// Builds the SQL Server adapters for the user-org ports.
+    /// </summary>
+    /// <remarks>
+    /// The adapters themselves are internal: callers - the importer, the web API, the tests - depend on
+    /// <see cref="IUserOrgTypeStore"/>, <see cref="IUserOrgAssignmentStore"/> and
+    /// <see cref="IUserOrgImportJobStore"/>, never on the SQL classes. That is what lets the import and
+    /// upload logic be tested against fakes with no database, and it keeps the raw SQL in one place.
+    /// </remarks>
+    public static class UserOrgStores
+    {
+        public static IUserOrgTypeStore CreateTypeStore(string connectionString)
+        {
+            return new SqlUserOrgTypeStore(Require(connectionString));
+        }
+
+        public static IUserOrgAssignmentStore CreateAssignmentStore(string connectionString)
+        {
+            return new SqlUserOrgAssignmentStore(Require(connectionString));
+        }
+
+        /// <summary>
+        /// The UPN existence lookup. The same object as
+        /// <see cref="CreateAssignmentStore"/> returns - it is one SQL adapter exposed through two
+        /// narrow ports, so a caller that only needs to check UPNs does not gain the ability to write
+        /// assignments.
+        /// </summary>
+        public static IUserOrgUserLookup CreateUserLookup(string connectionString)
+        {
+            return new SqlUserOrgAssignmentStore(Require(connectionString));
+        }
+
+        public static IUserOrgImportJobStore CreateImportJobStore(string connectionString)
+        {
+            return new SqlUserOrgImportJobStore(Require(connectionString));
+        }
+
+        /// <summary>The read-only "who is in each organisation" queries behind the admin page.</summary>
+        public static IUserOrgMembershipReader CreateMembershipReader(string connectionString)
+        {
+            return new SqlUserOrgMembershipReader(Require(connectionString));
+        }
+
+        private static string Require(string connectionString)
+        {
+            if (string.IsNullOrWhiteSpace(connectionString))
+            {
+                throw new ArgumentException(
+                    "A connection string to the Analytics database is required.", nameof(connectionString));
+            }
+
+            return connectionString;
+        }
+    }
+}

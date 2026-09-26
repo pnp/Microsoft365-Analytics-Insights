@@ -1,0 +1,1874 @@
+using Common.Entities.Migrations;
+using Common.Entities.UserOrgs;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+
+namespace Tests.UnitTests
+{
+    /// <summary>
+    /// The user-org SQL adapters, exercised against a real SQL Server built from the migration's own
+    /// <see cref="UserOrganisations.Up_Sql"/>.
+    /// </summary>
+    /// <remarks>
+    /// A scratch database per test class rather than the shared unit-test database: these tests delete
+    /// whole org types and every assignment under them, which would be destructive to anything else
+    /// running concurrently.
+    ///
+    /// <c>dbo.users</c> is created with production's exact column types - notably
+    /// <c>user_name varchar(250)</c>. Declaring it <c>nvarchar</c> here would make the UPN-matching
+    /// assertions self-fulfilling and prove nothing about the real schema.
+    /// </remarks>
+    [TestClass]
+    public class UserOrgStoreSqlTests
+    {
+        private const string GreekOrgName = "Καλημέρα κόσμε";
+
+        private static ScratchDatabase _db;
+        private static IUserOrgTypeStore _types;
+        private static IUserOrgAssignmentStore _assignments;
+        private static IUserOrgImportJobStore _jobs;
+        private static IUserOrgMembershipReader _membership;
+
+        [ClassInitialize]
+        public static void ClassInit(TestContext context)
+        {
+            _db = ScratchDatabase.Create("userorgs");
+
+            // Production shape: user_name is varchar(250), because an Entra UPN is ASCII by policy, while
+            // department and job title are nvarchar(100) lookups (AbstractEFEntityWithName.Name), because
+            // those are free text that routinely carries non-Latin scripts.
+            _db.Execute(@"
+CREATE TABLE dbo.user_departments (
+    id int IDENTITY(1,1) NOT NULL CONSTRAINT PK_user_departments PRIMARY KEY CLUSTERED,
+    name nvarchar(100) NULL
+);
+CREATE TABLE dbo.user_job_titles (
+    id int IDENTITY(1,1) NOT NULL CONSTRAINT PK_user_job_titles PRIMARY KEY CLUSTERED,
+    name nvarchar(100) NULL
+);
+CREATE TABLE dbo.users (
+    id int IDENTITY(1,1) NOT NULL CONSTRAINT PK_users PRIMARY KEY CLUSTERED,
+    user_name varchar(250) NOT NULL,
+    account_enabled bit NULL,
+    department_id int NULL CONSTRAINT FK_users_department REFERENCES dbo.user_departments (id),
+    job_title_id int NULL CONSTRAINT FK_users_job_title REFERENCES dbo.user_job_titles (id)
+);");
+
+            _db.Execute(UserOrganisations.Up_Sql);
+
+            _types = UserOrgStores.CreateTypeStore(_db.ConnectionString);
+            _assignments = UserOrgStores.CreateAssignmentStore(_db.ConnectionString);
+            _jobs = UserOrgStores.CreateImportJobStore(_db.ConnectionString);
+            _membership = UserOrgStores.CreateMembershipReader(_db.ConnectionString);
+        }
+
+        [ClassCleanup]
+        public static void ClassCleanup()
+        {
+            _db?.Dispose();
+        }
+
+        [TestInitialize]
+        public void Reset()
+        {
+            _db.Execute(@"
+DELETE FROM dbo.user_org_import_staging;
+DELETE FROM dbo.user_org_import_jobs;
+DELETE FROM dbo.user_org_assignments;
+DELETE FROM dbo.user_org_values;
+DELETE FROM dbo.user_org_types;
+DELETE FROM dbo.users;
+DELETE FROM dbo.user_departments;
+DELETE FROM dbo.user_job_titles;");
+        }
+
+        private int AddUser(string upn)
+        {
+            return Convert.ToInt32(_db.Scalar(
+                $"INSERT INTO dbo.users (user_name) OUTPUT INSERTED.id VALUES ('{upn.Replace("'", "''")}');"));
+        }
+
+        /// <summary>A user with the directory details the membership list shows.</summary>
+        private int AddUser(string upn, string department, string jobTitle, bool? accountEnabled)
+        {
+            return Convert.ToInt32(_db.Scalar($@"
+DECLARE @d int = NULL, @j int = NULL;
+IF {Literal(department)} IS NOT NULL
+BEGIN
+    SELECT @d = id FROM dbo.user_departments WHERE name = {Literal(department)};
+    IF @d IS NULL BEGIN INSERT INTO dbo.user_departments (name) VALUES ({Literal(department)}); SET @d = SCOPE_IDENTITY(); END
+END
+IF {Literal(jobTitle)} IS NOT NULL
+BEGIN
+    SELECT @j = id FROM dbo.user_job_titles WHERE name = {Literal(jobTitle)};
+    IF @j IS NULL BEGIN INSERT INTO dbo.user_job_titles (name) VALUES ({Literal(jobTitle)}); SET @j = SCOPE_IDENTITY(); END
+END
+INSERT INTO dbo.users (user_name, account_enabled, department_id, job_title_id)
+OUTPUT INSERTED.id
+VALUES ('{upn.Replace("'", "''")}', {(accountEnabled.HasValue ? (accountEnabled.Value ? "1" : "0") : "NULL")}, @d, @j);"));
+        }
+
+        private static string Literal(string value)
+        {
+            return value == null ? "NULL" : "N'" + value.Replace("'", "''") + "'";
+        }
+
+        private static UserOrgType CsvType(string name)
+        {
+            return new UserOrgType { Name = name, SourceKind = UserOrgSourceKind.CsvUpload, IsEnabled = true };
+        }
+
+        private int Count(string sql)
+        {
+            return Convert.ToInt32(_db.Scalar(sql));
+        }
+
+        private void Execute(string sql)
+        {
+            _db.Execute(sql);
+        }
+
+        #region Org type CRUD
+
+        [TestMethod]
+        public async Task CreateAndGet_RoundTripsAnOrgType()
+        {
+            var id = await _types.CreateAsync(new UserOrgType
+            {
+                Name = "Cost Centre",
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "EXTENSIONATTRIBUTE7",
+                IsEnabled = true,
+            });
+
+            var loaded = await _types.GetAsync(id);
+
+            Assert.AreEqual("Cost Centre", loaded.Name);
+            Assert.AreEqual(UserOrgSourceKind.EntraAttribute, loaded.SourceKind);
+            Assert.AreEqual(
+                "extensionAttribute7",
+                loaded.EntraAttributeName,
+                "The attribute must be stored canonically, or the same slot could be configured twice under two spellings.");
+            Assert.IsTrue(loaded.IsEnabled);
+            Assert.IsNull(loaded.ModifiedUtc);
+        }
+
+        [TestMethod]
+        public async Task Create_RejectsADuplicateNameWithAnAdminReadableMessage()
+        {
+            await _types.CreateAsync(CsvType("Business Unit"));
+
+            try
+            {
+                await _types.CreateAsync(CsvType("business unit"));
+                Assert.Fail("A duplicate name should have been rejected.");
+            }
+            catch (UserOrgValidationException ex)
+            {
+                StringAssert.Contains(ex.Message, "already exists");
+            }
+        }
+
+        [TestMethod]
+        public async Task Create_RejectsAnInvalidEntraAttribute()
+        {
+            try
+            {
+                await _types.CreateAsync(new UserOrgType
+                {
+                    Name = "Bad",
+                    SourceKind = UserOrgSourceKind.EntraAttribute,
+                    EntraAttributeName = "extensionAttribute99",
+                });
+                Assert.Fail("An out-of-range slot should have been rejected before it reached SQL.");
+            }
+            catch (UserOrgValidationException ex)
+            {
+                StringAssert.Contains(ex.Message, "extensionAttribute15");
+            }
+        }
+
+        [TestMethod]
+        public async Task Create_ClearsAnyAttributeOnACsvSourcedType()
+        {
+            // Leaving a stale attribute behind would quietly add a property to the Graph $select for a
+            // type that no longer reads from Graph - and therefore change the delta-token key too.
+            var id = await _types.CreateAsync(new UserOrgType
+            {
+                Name = "From spreadsheet",
+                SourceKind = UserOrgSourceKind.CsvUpload,
+                EntraAttributeName = "extensionAttribute2",
+            });
+
+            Assert.IsNull((await _types.GetAsync(id)).EntraAttributeName);
+        }
+
+        [TestMethod]
+        public async Task Update_ChangesTheTypeAndStampsModified()
+        {
+            var id = await _types.CreateAsync(CsvType("Initial"));
+            var type = await _types.GetAsync(id);
+
+            type.Name = "Renamed";
+            type.IsEnabled = false;
+            await _types.UpdateAsync(type, false, false);
+
+            var loaded = await _types.GetAsync(id);
+            Assert.AreEqual("Renamed", loaded.Name);
+            Assert.IsFalse(loaded.IsEnabled);
+            Assert.IsNotNull(loaded.ModifiedUtc);
+        }
+
+        [TestMethod]
+        public async Task Update_WithClearDiscardsEverythingTheOldSourcePutThere()
+        {
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(new UserOrgType
+            {
+                Name = "Cost Centre",
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "extensionAttribute1",
+                IsEnabled = true,
+            });
+
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, typeId, "From Entra") });
+            Assert.AreEqual(1, (await _assignments.GetForUserAsync(user)).Count);
+
+            var type = await _types.GetAsync(typeId);
+            type.SourceKind = UserOrgSourceKind.CsvUpload;
+            type.EntraAttributeName = null;
+            await _types.UpdateAsync(type, true, true);
+
+            Assert.AreEqual(
+                0,
+                (await _assignments.GetForUserAsync(user)).Count,
+                "Values read from a source that is no longer the source of truth must not survive the switch.");
+            Assert.AreEqual(
+                0,
+                Count($"SELECT COUNT(*) FROM dbo.user_org_values WHERE org_type_id = {typeId}"),
+                "The old source's value list would otherwise keep offering organisations nothing is in.");
+            Assert.AreEqual(UserOrgSourceKind.CsvUpload, (await _types.GetAsync(typeId)).SourceKind);
+        }
+
+        [TestMethod]
+        public async Task Update_OfAMissingTypeClearsNothing()
+        {
+            // The clear and the update are one transaction precisely so neither can happen alone.
+            var user = AddUser("a@contoso.com");
+            var survivor = await _types.CreateAsync(CsvType("Survivor"));
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, survivor, "Kept") });
+
+            try
+            {
+                await _types.UpdateAsync(
+                    new UserOrgType { Id = 987654, Name = "Ghost", SourceKind = UserOrgSourceKind.CsvUpload },
+                    true,
+                    true);
+                Assert.Fail("Updating a deleted type should be reported.");
+            }
+            catch (UserOrgValidationException)
+            {
+            }
+
+            Assert.AreEqual(1, (await _assignments.GetForUserAsync(user)).Count);
+        }
+
+        [TestMethod]
+        public async Task Update_OfAMissingTypeIsReportedRatherThanSilentlyIgnored()
+        {
+            try
+            {
+                await _types.UpdateAsync(new UserOrgType
+                {
+                    Id = 987654,
+                    Name = "Ghost",
+                    SourceKind = UserOrgSourceKind.CsvUpload,
+                }, false, false);
+                Assert.Fail("Updating a deleted type should be reported.");
+            }
+            catch (UserOrgValidationException ex)
+            {
+                StringAssert.Contains(ex.Message, "no longer exists");
+            }
+        }
+
+        [TestMethod]
+        public async Task GetEnabledEntraTypes_ExcludesDisabledAndCsvTypes()
+        {
+            await _types.CreateAsync(new UserOrgType
+            {
+                Name = "Enabled Entra",
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "extensionAttribute1",
+                IsEnabled = true,
+            });
+            await _types.CreateAsync(new UserOrgType
+            {
+                Name = "Disabled Entra",
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "extensionAttribute2",
+                IsEnabled = false,
+            });
+            await _types.CreateAsync(CsvType("A CSV one"));
+
+            var enabled = await _types.GetEnabledEntraTypesAsync();
+
+            CollectionAssert.AreEqual(new[] { "Enabled Entra" }, enabled.Select(t => t.Name).ToArray());
+        }
+
+        [TestMethod]
+        public async Task Delete_RemovesEverythingHangingOffTheType()
+        {
+            var userId = AddUser("person@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Doomed"));
+            var keptTypeId = await _types.CreateAsync(CsvType("Survivor"));
+
+            await _assignments.MergeAsync(new[]
+            {
+                new UserOrgAssignmentUpdate(userId, typeId, "Value"),
+                new UserOrgAssignmentUpdate(userId, keptTypeId, "Keep me"),
+            });
+
+            await _jobs.CreateJobWithRowsAsync(
+                new UserOrgImportJob { OrgTypeId = typeId, Mode = UserOrgImportMode.Merge, StartedBy = "admin" },
+                new[] { new UserOrgStagedRow(1, "person@contoso.com", "Value") });
+
+            await _types.DeleteAsync(typeId);
+
+            Assert.IsNull(await _types.GetAsync(typeId));
+            Assert.AreEqual(0, Count($"SELECT COUNT(*) FROM dbo.user_org_assignments WHERE org_type_id = {typeId}"));
+            Assert.AreEqual(0, Count($"SELECT COUNT(*) FROM dbo.user_org_values WHERE org_type_id = {typeId}"));
+            Assert.AreEqual(0, Count($"SELECT COUNT(*) FROM dbo.user_org_import_jobs WHERE org_type_id = {typeId}"));
+            Assert.AreEqual(0, Count("SELECT COUNT(*) FROM dbo.user_org_import_staging"));
+
+            Assert.AreEqual(
+                1,
+                Count($"SELECT COUNT(*) FROM dbo.user_org_assignments WHERE org_type_id = {keptTypeId}"),
+                "Deleting one org type must not touch another.");
+        }
+
+        [TestMethod]
+        public async Task GetSummaries_ReportsCountsAndTheLatestImport()
+        {
+            var a = AddUser("a@contoso.com");
+            var b = AddUser("b@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Counted"));
+            await _types.CreateAsync(CsvType("Empty"));
+
+            await _assignments.MergeAsync(new[]
+            {
+                new UserOrgAssignmentUpdate(a, typeId, "One"),
+                new UserOrgAssignmentUpdate(b, typeId, "Two"),
+            });
+
+            var firstJob = await _jobs.CreateJobWithRowsAsync(
+                new UserOrgImportJob { OrgTypeId = typeId, Mode = UserOrgImportMode.Merge, StartedBy = "admin" },
+                new UserOrgStagedRow[0]);
+
+            // Finished before the next one is queued: a job that is still pending or running now blocks
+            // a second import for the same org type, which is the point of that guard.
+            await _jobs.CompleteJobAsync(firstJob, UserOrgImportStatus.Succeeded, null);
+
+            var latestJob = await _jobs.CreateJobWithRowsAsync(
+                new UserOrgImportJob { OrgTypeId = typeId, Mode = UserOrgImportMode.Replace, StartedBy = "admin" },
+                new UserOrgStagedRow[0]);
+
+            var summaries = await _types.GetSummariesAsync();
+
+            var counted = summaries.Single(s => s.Type.Name == "Counted");
+            Assert.AreEqual(2, counted.AssignedUserCount);
+            Assert.AreEqual(2, counted.DistinctValueCount);
+            Assert.AreEqual(latestJob, counted.LastImport.Id, "The most recent job should win.");
+            Assert.AreNotEqual(firstJob, counted.LastImport.Id);
+
+            var empty = summaries.Single(s => s.Type.Name == "Empty");
+            Assert.AreEqual(0, empty.AssignedUserCount);
+            Assert.AreEqual(0, empty.DistinctValueCount);
+            Assert.IsNull(empty.LastImport, "A type that has never been imported has no last import.");
+        }
+
+        #endregion
+
+        #region Assignment merge
+
+        [TestMethod]
+        public async Task Merge_CreatesValuesAndAssignsThem()
+        {
+            var a = AddUser("a@contoso.com");
+            var b = AddUser("b@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+
+            var result = await _assignments.MergeAsync(new[]
+            {
+                new UserOrgAssignmentUpdate(a, typeId, "Retail"),
+                new UserOrgAssignmentUpdate(b, typeId, "Retail"),
+            });
+
+            Assert.AreEqual(2, result.Applied);
+            Assert.AreEqual(1, result.ValuesCreated, "One distinct value shared by two users.");
+            Assert.AreEqual(0, result.Cleared);
+            Assert.AreEqual(2, Count("SELECT COUNT(*) FROM dbo.user_org_assignments"));
+        }
+
+        [TestMethod]
+        public async Task Merge_IsIdempotentAndDoesNotDuplicateValues()
+        {
+            var a = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var update = new[] { new UserOrgAssignmentUpdate(a, typeId, "Retail") };
+
+            await _assignments.MergeAsync(update);
+            var second = await _assignments.MergeAsync(update);
+
+            Assert.AreEqual(0, second.Applied, "Re-applying an unchanged value should be a no-op.");
+            Assert.AreEqual(0, second.ValuesCreated);
+            Assert.AreEqual(1, Count("SELECT COUNT(*) FROM dbo.user_org_values"));
+        }
+
+        [TestMethod]
+        public async Task Merge_RepointsAChangedValue()
+        {
+            var a = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(a, typeId, "Retail") });
+            var result = await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(a, typeId, "Wholesale") });
+
+            Assert.AreEqual(1, result.Applied);
+            Assert.AreEqual(
+                1,
+                Count("SELECT COUNT(*) FROM dbo.user_org_assignments"),
+                "A user still has exactly one value per org type.");
+
+            var values = await _assignments.GetForUserAsync(a);
+            Assert.AreEqual("Wholesale", values.Single().Value);
+        }
+
+        [TestMethod]
+        public async Task Merge_NullValueClearsTheAssignment()
+        {
+            var a = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(a, typeId, "Retail") });
+            var result = await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(a, typeId, null) });
+
+            Assert.AreEqual(1, result.Cleared);
+            Assert.AreEqual(0, (await _assignments.GetForUserAsync(a)).Count);
+        }
+
+        [TestMethod]
+        public async Task Merge_LeavesUsersAbsentFromTheBatchAlone()
+        {
+            // This is the single most important property of the merge. /users/delta only returns the
+            // users that changed, so if absence meant "no value" a routine delta cycle would wipe the
+            // org values of the entire tenant.
+            var changed = AddUser("changed@contoso.com");
+            var untouched = AddUser("untouched@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+
+            await _assignments.MergeAsync(new[]
+            {
+                new UserOrgAssignmentUpdate(changed, typeId, "Before"),
+                new UserOrgAssignmentUpdate(untouched, typeId, "Kept"),
+            });
+
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(changed, typeId, "After") });
+
+            Assert.AreEqual("After", (await _assignments.GetForUserAsync(changed)).Single().Value);
+            Assert.AreEqual(
+                "Kept",
+                (await _assignments.GetForUserAsync(untouched)).Single().Value,
+                "A user missing from the batch must keep their value.");
+        }
+
+        [TestMethod]
+        public async Task Merge_CollapsesDuplicateSlotsAndReportsThem()
+        {
+            var a = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+
+            var result = await _assignments.MergeAsync(new[]
+            {
+                new UserOrgAssignmentUpdate(a, typeId, "First"),
+                new UserOrgAssignmentUpdate(a, typeId, "Second"),
+            });
+
+            Assert.AreEqual(1, result.DuplicatesCollapsed);
+            Assert.AreEqual("Second", (await _assignments.GetForUserAsync(a)).Single().Value);
+        }
+
+        [TestMethod]
+        public async Task Merge_KeepsDifferentOrgTypesIndependent()
+        {
+            var a = AddUser("a@contoso.com");
+            var costCentre = await _types.CreateAsync(CsvType("Cost Centre"));
+            var businessUnit = await _types.CreateAsync(CsvType("Business Unit"));
+
+            await _assignments.MergeAsync(new[]
+            {
+                new UserOrgAssignmentUpdate(a, costCentre, "CC-1"),
+                new UserOrgAssignmentUpdate(a, businessUnit, "Retail"),
+            });
+
+            var values = await _assignments.GetForUserAsync(a);
+
+            Assert.AreEqual(2, values.Count, "A user can be in one org per type, across many types.");
+            CollectionAssert.AreEqual(
+                new[] { "Business Unit", "Cost Centre" },
+                values.Select(v => v.OrgTypeName).ToArray(),
+                "Ordered by org type name.");
+        }
+
+        [TestMethod]
+        public async Task Merge_PreservesNonLatinOrgNames()
+        {
+            var a = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(a, typeId, GreekOrgName) });
+
+            Assert.AreEqual(
+                GreekOrgName,
+                (await _assignments.GetForUserAsync(a)).Single().Value,
+                "Org values are nvarchar precisely so a non-Latin name survives storage.");
+        }
+
+        [TestMethod]
+        public async Task Merge_SkipsAUserDeletedMidImportRatherThanFailingTheBatch()
+        {
+            // A user removed between the caller building the batch and the merge running is not worth
+            // failing a 200,000-row import over.
+            var present = AddUser("present@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+
+            var result = await _assignments.MergeAsync(new[]
+            {
+                new UserOrgAssignmentUpdate(present, typeId, "Fine"),
+                new UserOrgAssignmentUpdate(999999, typeId, "Vanished"),
+            });
+
+            Assert.AreEqual(1, result.Applied);
+            Assert.AreEqual("Fine", (await _assignments.GetForUserAsync(present)).Single().Value);
+        }
+
+        [TestMethod]
+        public async Task Merge_TruncatesAnOverLongValueRatherThanFailing()
+        {
+            var a = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var tooLong = new string('x', UserOrgRules.MaxOrgValueLength + 25);
+
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(a, typeId, tooLong) });
+
+            Assert.AreEqual(
+                UserOrgRules.MaxOrgValueLength,
+                (await _assignments.GetForUserAsync(a)).Single().Value.Length);
+        }
+
+        [TestMethod]
+        public async Task Merge_OfAnEmptyBatchDoesNothing()
+        {
+            var result = await _assignments.MergeAsync(new UserOrgAssignmentUpdate[0]);
+
+            Assert.AreEqual(0, result.Applied);
+            Assert.AreEqual(0, result.Cleared);
+            Assert.AreEqual(0, result.ValuesCreated);
+        }
+
+        [TestMethod]
+        public async Task ClearAllForType_RemovesOnlyThatTypesAssignments()
+        {
+            var a = AddUser("a@contoso.com");
+            var one = await _types.CreateAsync(CsvType("One"));
+            var two = await _types.CreateAsync(CsvType("Two"));
+
+            await _assignments.MergeAsync(new[]
+            {
+                new UserOrgAssignmentUpdate(a, one, "X"),
+                new UserOrgAssignmentUpdate(a, two, "Y"),
+            });
+
+            var cleared = await _assignments.ClearAllForTypeAsync(one);
+
+            Assert.AreEqual(1, cleared);
+            Assert.AreEqual("Y", (await _assignments.GetForUserAsync(a)).Single().Value);
+        }
+
+        #endregion
+
+        #region CSV import jobs
+
+        private async Task<int> QueueJob(int typeId, UserOrgImportMode mode, params UserOrgStagedRow[] rows)
+        {
+            return await QueueJob(typeId, mode, true, rows);
+        }
+
+        private async Task<int> QueueJob(int typeId, UserOrgImportMode mode, bool confirmClear, params UserOrgStagedRow[] rows)
+        {
+            var type = await _types.GetAsync(typeId);
+            return await _jobs.CreateJobWithRowsAsync(
+                new UserOrgImportJob
+                {
+                    OrgTypeId = typeId,
+                    Mode = mode,
+                    StartedBy = "admin@contoso.com",
+                    FileName = "orgs.csv",
+                    ConfirmClear = confirmClear,
+                    ExpectedGeneration = type == null ? (int?)null : type.SourceGeneration,
+                },
+                rows);
+        }
+
+        [TestMethod]
+        public async Task Apply_RefusesAFileQueuedBeforeTheTypeWasResetAndRestored()
+        {
+            // The ABA case. Switching a type to Entra and back leaves it CSV-sourced and enabled, so a
+            // check on source kind alone passes - but the values were deliberately discarded in
+            // between, and letting the older file land afterwards silently puts them back.
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", "Old"));
+            await _jobs.TryClaimJobAsync(jobId);
+
+            // Away and back, exactly as two saves on the admin page would leave it.
+            var type = await _types.GetAsync(typeId);
+            type.SourceKind = UserOrgSourceKind.EntraAttribute;
+            type.EntraAttributeName = "extensionAttribute1";
+            await _types.UpdateAsync(type, true, true);
+
+            type = await _types.GetAsync(typeId);
+            type.SourceKind = UserOrgSourceKind.CsvUpload;
+            type.EntraAttributeName = null;
+            await _types.UpdateAsync(type, true, true);
+
+            try
+            {
+                await _jobs.ApplyAsync(jobId);
+                Assert.Fail("A file queued before the type was reset must not apply.");
+            }
+            catch (UserOrgValidationException ex)
+            {
+                StringAssert.Contains(ex.Message, "reconfigured");
+            }
+
+            Assert.AreEqual(0, (await _assignments.GetForUserAsync(user)).Count);
+        }
+
+        [TestMethod]
+        public async Task Apply_RefusesAJobWhoseTypeWasDisabled()
+        {
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", "X"));
+            await _jobs.TryClaimJobAsync(jobId);
+
+            Execute($"UPDATE dbo.user_org_types SET is_enabled = 0 WHERE id = {typeId}");
+
+            try
+            {
+                await _jobs.ApplyAsync(jobId);
+                Assert.Fail("A disabled type must not receive a queued import.");
+            }
+            catch (UserOrgValidationException)
+            {
+            }
+
+            Assert.AreEqual(0, (await _assignments.GetForUserAsync(user)).Count);
+        }
+
+        [TestMethod]
+        public async Task Merge_SkipsATypeRepointedAtADifferentAttributeMidCycle()
+        {
+            // A repoint leaves the type enabled and Entra-sourced the whole time, so the source-kind
+            // check passes and a batch read from the OLD attribute writes back exactly the values the
+            // repoint had just discarded. Only the generation catches it.
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(new UserOrgType
+            {
+                Name = "Cost Centre",
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "extensionAttribute1",
+                IsEnabled = true,
+            });
+
+            var generationWhenTheCycleStarted = (await _types.GetAsync(typeId)).SourceGeneration;
+
+            var type = await _types.GetAsync(typeId);
+            type.EntraAttributeName = "extensionAttribute2";
+            await _types.UpdateAsync(type, true, true);
+
+            var result = await _assignments.MergeAsync(
+                new[] { new UserOrgAssignmentUpdate(user, typeId, "Read from the old attribute") },
+                UserOrgSourceKind.EntraAttribute,
+                new Dictionary<int, int> { { typeId, generationWhenTheCycleStarted } });
+
+            Assert.AreEqual(0, result.Applied);
+            Assert.AreEqual(0, (await _assignments.GetForUserAsync(user)).Count);
+        }
+
+        [TestMethod]
+        public async Task Merge_AppliesWhenTheGenerationStillMatches()
+        {
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(new UserOrgType
+            {
+                Name = "Cost Centre",
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "extensionAttribute1",
+                IsEnabled = true,
+            });
+
+            var generation = (await _types.GetAsync(typeId)).SourceGeneration;
+
+            var result = await _assignments.MergeAsync(
+                new[] { new UserOrgAssignmentUpdate(user, typeId, "Retail") },
+                UserOrgSourceKind.EntraAttribute,
+                new Dictionary<int, int> { { typeId, generation } });
+
+            Assert.AreEqual(1, result.Applied);
+            Assert.AreEqual("Retail", (await _assignments.GetForUserAsync(user)).Single().Value);
+        }
+
+        [TestMethod]
+        public async Task Apply_RefusesAJobThatWasSupersededWhileItWasStillAlive()
+        {
+            // The worst thing this feature can do. A worker that went quiet - a long pause, a stalled
+            // connection - can be superseded and have its staged rows deleted underneath it. Applying
+            // anyway means a Replace matches nobody, so it DELETES every assignment for the org type;
+            // and if that commits after the replacement's own apply, it silently empties a type the
+            // portal is reporting as freshly imported.
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, typeId, "Keep me") });
+
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Replace, new UserOrgStagedRow(1, "a@contoso.com", "New"));
+            await _jobs.TryClaimJobAsync(jobId);
+
+            // Superseded mid-flight, exactly as CreateJobWithRowsAsync would do it.
+            Execute($"UPDATE dbo.user_org_import_jobs SET status = 4 WHERE id = {jobId}");
+            Execute($"DELETE FROM dbo.user_org_import_staging WHERE job_id = {jobId}");
+
+            try
+            {
+                await _jobs.ApplyAsync(jobId);
+                Assert.Fail("A superseded job must not apply.");
+            }
+            catch (UserOrgJobSupersededException)
+            {
+            }
+
+            Assert.AreEqual(
+                "Keep me",
+                (await _assignments.GetForUserAsync(user)).Single().Value,
+                "A superseded Replace with no staged rows would otherwise wipe the whole org type.");
+        }
+
+        [TestMethod]
+        public async Task Apply_RefusesAnUnconfirmedReplaceThatWouldClearSomeone()
+        {
+            // The web request checks this too, but its answer can be minutes old by the time the
+            // worker runs, and another admin's import can queue, run and finish in between. Only the
+            // apply transaction can answer it authoritatively.
+            var kept = AddUser("kept@contoso.com");
+            var lost = AddUser("lost@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            await _assignments.MergeAsync(new[]
+            {
+                new UserOrgAssignmentUpdate(kept, typeId, "Retail"),
+                new UserOrgAssignmentUpdate(lost, typeId, "Wholesale"),
+            });
+
+            var jobId = await QueueJob(
+                typeId, UserOrgImportMode.Replace, false, new UserOrgStagedRow(1, "kept@contoso.com", "Retail"));
+            await _jobs.TryClaimJobAsync(jobId);
+
+            try
+            {
+                await _jobs.ApplyAsync(jobId);
+                Assert.Fail("An unconfirmed destructive replace must be refused.");
+            }
+            catch (UserOrgValidationException ex)
+            {
+                StringAssert.Contains(ex.Message, "not confirmed");
+            }
+
+            Assert.AreEqual(2, Count($"SELECT COUNT(*) FROM dbo.user_org_assignments WHERE org_type_id = {typeId}"),
+                "The refusal must leave the database exactly as it was.");
+        }
+
+        [TestMethod]
+        public async Task Apply_AllowsAnUnconfirmedReplaceThatClearsNobody()
+        {
+            // The gate is about the blast radius, not about the mode. A Replace that covers everybody
+            // is not destructive and must not need a confirmation the admin was never shown.
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, typeId, "Retail") });
+
+            var jobId = await QueueJob(
+                typeId, UserOrgImportMode.Replace, false, new UserOrgStagedRow(1, "a@contoso.com", "Wholesale"));
+            await _jobs.TryClaimJobAsync(jobId);
+
+            await _jobs.ApplyAsync(jobId);
+
+            Assert.AreEqual("Wholesale", (await _assignments.GetForUserAsync(user)).Single().Value);
+        }
+
+        [TestMethod]
+        public async Task QueueingIsRefusedIfTheTypeStoppedBeingCsvSourcedWhileTheFileWasRead()
+        {
+            // The caller checks the source before parsing a file that may run to half a million rows.
+            // An admin switching the type to Entra in that window would otherwise get a CSV import
+            // landing on a type that no longer takes one.
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            Execute(
+                "UPDATE dbo.user_org_types SET source_kind = 1, entra_attribute_name = 'extensionAttribute1' "
+                + $"WHERE id = {typeId}");
+
+            try
+            {
+                await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", "X"));
+                Assert.Fail("A CSV import must not be queued against a type that is no longer CSV-sourced.");
+            }
+            catch (UserOrgValidationException ex)
+            {
+                StringAssert.Contains(ex.Message, "no longer takes its values from a CSV file");
+            }
+        }
+
+        [TestMethod]
+        public async Task Update_BumpsTheSourceGenerationOnlyWhenValuesAreDiscarded()
+        {
+            // The generation feeds the Graph delta-token cache key. Bumping it when nothing was
+            // discarded would cost a 200,000-user re-enumeration for a rename; not bumping it when
+            // values WERE discarded lets a later configuration land back on a key that still holds a
+            // token, leaving the emptied type permanently unpopulated.
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            Assert.AreEqual(1, (await _types.GetAsync(typeId)).SourceGeneration);
+
+            var type = await _types.GetAsync(typeId);
+            type.Name = "Renamed";
+            await _types.UpdateAsync(type, false, false);
+            Assert.AreEqual(1, (await _types.GetAsync(typeId)).SourceGeneration, "A rename must not bump it.");
+
+            type = await _types.GetAsync(typeId);
+            type.SourceKind = UserOrgSourceKind.EntraAttribute;
+            type.EntraAttributeName = "extensionAttribute1";
+            await _types.UpdateAsync(type, true, true);
+            Assert.AreEqual(2, (await _types.GetAsync(typeId)).SourceGeneration, "Discarding values must bump it.");
+        }
+
+        [TestMethod]
+        public async Task Apply_RefusesAJobWhoseTypeStoppedBeingCsvSourced()
+        {
+            // An admin can switch the type between the upload and the worker running. That switch
+            // clears the assignments; letting the queued file land afterwards silently undoes it.
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", "X"));
+            await _jobs.TryClaimJobAsync(jobId);
+
+            Execute(
+                "UPDATE dbo.user_org_types SET source_kind = 1, entra_attribute_name = 'extensionAttribute1' "
+                + $"WHERE id = {typeId}");
+
+            try
+            {
+                await _jobs.ApplyAsync(jobId);
+                Assert.Fail("A CSV job must not apply to a type that is no longer CSV-sourced.");
+            }
+            catch (UserOrgValidationException ex)
+            {
+                StringAssert.Contains(ex.Message, "reconfigured");
+            }
+
+            Assert.AreEqual(0, (await _assignments.GetForUserAsync(user)).Count);
+        }
+
+        [TestMethod]
+        public async Task Apply_LeavesTheHeartbeatRowWritable()
+        {
+            // The apply used to fence itself by holding a transaction-duration UPDLOCK on the job
+            // row. The heartbeat runs on its own connection and writes that same row, so it blocked
+            // for the whole merge - and any import longer than StaleHeartbeatThreshold was then
+            // reported to the admin as interrupted while it was running perfectly.
+            //
+            // What this pins is that a heartbeat issued against a job being applied still lands, and
+            // that neither side deadlocks. It deliberately does NOT assert on elapsed time: the apply
+            // of one staged row is far too quick to observe a block, and an assertion that compared
+            // two SYSUTCDATETIME() readings taken microseconds apart failed on CI, where the system
+            // clock tick is coarse enough for both to land in the same one. The timestamp is
+            // backdated first so the comparison cannot depend on clock granularity at all.
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", "X"));
+            await _jobs.TryClaimJobAsync(jobId);
+
+            Execute(
+                "UPDATE dbo.user_org_import_jobs SET heartbeat_utc = DATEADD(MINUTE, -30, SYSUTCDATETIME()) "
+                + $"WHERE id = {jobId}");
+            var before = (await _jobs.GetJobAsync(jobId)).HeartbeatUtc;
+
+            var apply = _jobs.ApplyAsync(jobId);
+            await _jobs.HeartbeatAsync(jobId);
+            await apply;
+
+            var after = (await _jobs.GetJobAsync(jobId)).HeartbeatUtc;
+            Assert.IsTrue(
+                after > before,
+                "A heartbeat issued while the apply ran must land rather than being lost or deadlocked.");
+            Assert.AreEqual("X", (await _assignments.GetForUserAsync(user)).Single().Value);
+        }
+
+        [TestMethod]
+        public async Task DeletingATypeWhileAJobIsRunningIsRefusedRatherThanDeadlocking()
+        {
+            // Deleting used to take staging before jobs, the opposite order to the apply, which is how
+            // a deadlock between deleting a type and importing into it becomes possible. Both now take
+            // the same per-type application lock, so one waits rather than racing.
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", "X"));
+
+            await _types.DeleteAsync(typeId);
+
+            Assert.IsNull(await _jobs.GetJobAsync(jobId), "Deleting the type takes its jobs with it.");
+            Assert.AreEqual(
+                0,
+                Count($"SELECT COUNT(*) FROM dbo.user_org_import_staging WHERE job_id = {jobId}"),
+                "The staged rows go with the job through the foreign key's cascade.");
+        }
+
+        [TestMethod]
+        public async Task Update_BumpsTheSourceGenerationWhenATypeIsDisabled()
+        {
+            // Not obvious, and it is the whole point. Disabling discards nothing - the values stay on
+            // user lookup - but it DOES make the Entra merge fence that type's updates out, while the
+            // cycle still commits its delta token. If the generation did not move, re-enabling would
+            // rebuild the same cache key and resume from a token that has already advanced past those
+            // users, so they would never be re-read and would stay stale indefinitely.
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(new UserOrgType
+            {
+                Name = "Cost Centre",
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "extensionAttribute1",
+                IsEnabled = true,
+            });
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, typeId, "Retail") });
+
+            var type = await _types.GetAsync(typeId);
+            type.IsEnabled = false;
+            await _types.UpdateAsync(type, false, true);
+
+            var disabled = await _types.GetAsync(typeId);
+            Assert.AreEqual(2, disabled.SourceGeneration, "Disabling must invalidate the stored delta token.");
+            Assert.AreEqual(
+                1,
+                (await _assignments.GetForUserAsync(user)).Count,
+                "Disabling must not discard the values - only deleting or repointing the type does that.");
+
+            type = await _types.GetAsync(typeId);
+            type.IsEnabled = true;
+            await _types.UpdateAsync(type, false, true);
+
+            Assert.AreEqual(3, (await _types.GetAsync(typeId)).SourceGeneration);
+        }
+
+        [TestMethod]
+        public async Task Merge_ReportsWhatItFencedOutSoTheTokenCanBeWithheld()
+        {
+            // A silent drop is the dangerous shape here: the users whose updates were discarded will
+            // not appear in a delta again unless they change, so a cycle that commits its token after
+            // discarding them strands them with stale values. The count is what lets the caller
+            // withhold the token instead.
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(new UserOrgType
+            {
+                Name = "Cost Centre",
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "extensionAttribute1",
+                IsEnabled = true,
+            });
+
+            Execute($"UPDATE dbo.user_org_types SET is_enabled = 0 WHERE id = {typeId}");
+
+            var result = await _assignments.MergeAsync(
+                new[] { new UserOrgAssignmentUpdate(user, typeId, "Retail") },
+                UserOrgSourceKind.EntraAttribute);
+
+            Assert.AreEqual(1, result.FencedOut);
+            Assert.AreEqual(0, result.Applied);
+        }
+
+        [TestMethod]
+        public async Task Merge_ReportsNothingFencedWhenEverythingApplies()
+        {
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(new UserOrgType
+            {
+                Name = "Cost Centre",
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "extensionAttribute1",
+                IsEnabled = true,
+            });
+
+            var result = await _assignments.MergeAsync(
+                new[] { new UserOrgAssignmentUpdate(user, typeId, "Retail") },
+                UserOrgSourceKind.EntraAttribute);
+
+            Assert.AreEqual(0, result.FencedOut);
+            Assert.AreEqual(1, result.Applied);
+        }
+
+        [TestMethod]
+        public async Task Merge_SkipsTypesThatChangedSourceWhileTheImportWasRunning()
+        {
+            // A user-metadata cycle reads its org types, then spends minutes loading 200,000 users
+            // from Graph. An admin who switches a type to CSV in that window has their change undone
+            // if the merge writes anyway - and a later CSV Merge never touches users the file does not
+            // mention, so those values would then survive indefinitely.
+            var user = AddUser("a@contoso.com");
+            var entraType = await _types.CreateAsync(new UserOrgType
+            {
+                Name = "Cost Centre",
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "extensionAttribute1",
+                IsEnabled = true,
+            });
+
+            Execute($"UPDATE dbo.user_org_types SET source_kind = 2, entra_attribute_name = NULL WHERE id = {entraType}");
+
+            var result = await _assignments.MergeAsync(
+                new[] { new UserOrgAssignmentUpdate(user, entraType, "From Entra") },
+                UserOrgSourceKind.EntraAttribute);
+
+            Assert.AreEqual(0, result.Applied);
+            Assert.AreEqual(0, (await _assignments.GetForUserAsync(user)).Count);
+        }
+
+        [TestMethod]
+        public async Task Merge_WithoutAnExpectedSourceStillWritesEverything()
+        {
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+
+            var result = await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, typeId, "Retail") });
+
+            Assert.AreEqual(1, result.Applied);
+        }
+
+        [TestMethod]
+        public async Task CreateJob_StagesItsRowsAndStartsPending()
+        {
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+
+            var jobId = await QueueJob(
+                typeId,
+                UserOrgImportMode.Merge,
+                new UserOrgStagedRow(1, "a@contoso.com", "Retail"),
+                new UserOrgStagedRow(2, "b@contoso.com", "Wholesale"));
+
+            var job = await _jobs.GetJobAsync(jobId);
+
+            Assert.AreEqual(UserOrgImportStatus.Pending, job.Status);
+            Assert.AreEqual(2, job.RowsTotal);
+            Assert.AreEqual("orgs.csv", job.FileName);
+            Assert.AreEqual(2, Count($"SELECT COUNT(*) FROM dbo.user_org_import_staging WHERE job_id = {jobId}"));
+        }
+
+        [TestMethod]
+        public async Task TryClaimJob_SucceedsOnceAndThenRefuses()
+        {
+            // Two web instances polling the same pending job must not both import the file.
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge);
+
+            Assert.IsTrue(await _jobs.TryClaimJobAsync(jobId));
+            Assert.IsFalse(await _jobs.TryClaimJobAsync(jobId), "A claimed job must not be claimable again.");
+
+            var job = await _jobs.GetJobAsync(jobId);
+            Assert.AreEqual(UserOrgImportStatus.Running, job.Status);
+            Assert.IsNotNull(job.StartedUtc);
+            Assert.IsNotNull(job.HeartbeatUtc);
+        }
+
+        [TestMethod]
+        public async Task Apply_MergeMode_OnlyTouchesTheUsersInTheFile()
+        {
+            var inFile = AddUser("infile@contoso.com");
+            var notInFile = AddUser("notinfile@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+
+            await _assignments.MergeAsync(new[]
+            {
+                new UserOrgAssignmentUpdate(inFile, typeId, "Old"),
+                new UserOrgAssignmentUpdate(notInFile, typeId, "Untouched"),
+            });
+
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "infile@contoso.com", "New"));
+            await _jobs.TryClaimJobAsync(jobId);
+            var job = await _jobs.ApplyAsync(jobId);
+
+            Assert.AreEqual(1, job.RowsApplied);
+            Assert.AreEqual(0, job.RowsCleared);
+            Assert.AreEqual("New", (await _assignments.GetForUserAsync(inFile)).Single().Value);
+            Assert.AreEqual(
+                "Untouched",
+                (await _assignments.GetForUserAsync(notInFile)).Single().Value,
+                "Merge must leave users the file does not mention alone.");
+        }
+
+        [TestMethod]
+        public async Task Apply_ReplaceMode_ClearsUsersMissingFromTheFile()
+        {
+            var inFile = AddUser("infile@contoso.com");
+            var notInFile = AddUser("notinfile@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+
+            await _assignments.MergeAsync(new[]
+            {
+                new UserOrgAssignmentUpdate(inFile, typeId, "Old"),
+                new UserOrgAssignmentUpdate(notInFile, typeId, "Will be cleared"),
+            });
+
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Replace, new UserOrgStagedRow(1, "infile@contoso.com", "New"));
+            await _jobs.TryClaimJobAsync(jobId);
+            var job = await _jobs.ApplyAsync(jobId);
+
+            Assert.AreEqual(1, job.RowsApplied);
+            Assert.AreEqual(1, job.RowsCleared);
+            Assert.AreEqual("New", (await _assignments.GetForUserAsync(inFile)).Single().Value);
+            Assert.AreEqual(
+                0,
+                (await _assignments.GetForUserAsync(notInFile)).Count,
+                "Replace treats the file as the complete membership of the org type.");
+        }
+
+        [TestMethod]
+        public async Task Apply_ReplaceMode_DoesNotTouchOtherOrgTypes()
+        {
+            var user = AddUser("a@contoso.com");
+            var replaced = await _types.CreateAsync(CsvType("Replaced"));
+            var other = await _types.CreateAsync(CsvType("Other"));
+
+            await _assignments.MergeAsync(new[]
+            {
+                new UserOrgAssignmentUpdate(user, replaced, "Gone"),
+                new UserOrgAssignmentUpdate(user, other, "Safe"),
+            });
+
+            var jobId = await QueueJob(replaced, UserOrgImportMode.Replace);
+            await _jobs.TryClaimJobAsync(jobId);
+            await _jobs.ApplyAsync(jobId);
+
+            var values = await _assignments.GetForUserAsync(user);
+            Assert.AreEqual("Safe", values.Single().Value);
+        }
+
+        [TestMethod]
+        public async Task Apply_BlankValueClearsInBothModes()
+        {
+            foreach (var mode in new[] { UserOrgImportMode.Merge, UserOrgImportMode.Replace })
+            {
+                Reset();
+                var user = AddUser("a@contoso.com");
+                var typeId = await _types.CreateAsync(CsvType("Team"));
+                await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, typeId, "Before") });
+
+                var jobId = await QueueJob(typeId, mode, new UserOrgStagedRow(1, "a@contoso.com", "   "));
+                await _jobs.TryClaimJobAsync(jobId);
+                var job = await _jobs.ApplyAsync(jobId);
+
+                Assert.AreEqual(1, job.RowsCleared, $"{mode}: a blank value should clear.");
+                Assert.AreEqual(0, (await _assignments.GetForUserAsync(user)).Count, mode.ToString());
+            }
+        }
+
+        [TestMethod]
+        public async Task Apply_CountsUnknownUpnsWithoutFailing()
+        {
+            var known = AddUser("known@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+
+            var jobId = await QueueJob(
+                typeId,
+                UserOrgImportMode.Merge,
+                new UserOrgStagedRow(1, "known@contoso.com", "Retail"),
+                new UserOrgStagedRow(2, "ghost@contoso.com", "Nowhere"),
+                new UserOrgStagedRow(3, "another-ghost@contoso.com", "Nowhere"));
+
+            await _jobs.TryClaimJobAsync(jobId);
+            var job = await _jobs.ApplyAsync(jobId);
+
+            Assert.AreEqual(2, job.RowsUnknownUpn);
+            Assert.AreEqual(1, job.RowsApplied);
+            Assert.AreEqual("Retail", (await _assignments.GetForUserAsync(known)).Single().Value);
+        }
+
+        [TestMethod]
+        public async Task Apply_MatchesUpnsCaseInsensitivelyAndTakesTheLastDuplicateLine()
+        {
+            var user = AddUser("Person@Contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+
+            var jobId = await QueueJob(
+                typeId,
+                UserOrgImportMode.Merge,
+                new UserOrgStagedRow(1, "person@contoso.com", "First"),
+                new UserOrgStagedRow(2, "PERSON@CONTOSO.COM", "Second"));
+
+            await _jobs.TryClaimJobAsync(jobId);
+            var job = await _jobs.ApplyAsync(jobId);
+
+            Assert.AreEqual(0, job.RowsUnknownUpn, "UPN matching follows the database's case-insensitive collation.");
+            Assert.AreEqual(
+                "Second",
+                (await _assignments.GetForUserAsync(user)).Single().Value,
+                "A person listed twice is treated as a correction - the later line wins.");
+        }
+
+        [TestMethod]
+        public async Task Apply_PreservesNonLatinOrgNamesFromAFile()
+        {
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", GreekOrgName));
+            await _jobs.TryClaimJobAsync(jobId);
+            await _jobs.ApplyAsync(jobId);
+
+            Assert.AreEqual(GreekOrgName, (await _assignments.GetForUserAsync(user)).Single().Value);
+        }
+
+        [TestMethod]
+        public async Task CompleteJob_RecordsTheOutcomeAndDiscardsStagedRows()
+        {
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", "X"));
+            await _jobs.TryClaimJobAsync(jobId);
+
+            await _jobs.CompleteJobAsync(jobId, UserOrgImportStatus.Succeeded, null);
+
+            var job = await _jobs.GetJobAsync(jobId);
+            Assert.AreEqual(UserOrgImportStatus.Succeeded, job.Status);
+            Assert.IsNotNull(job.FinishedUtc);
+            Assert.AreEqual(
+                0,
+                Count($"SELECT COUNT(*) FROM dbo.user_org_import_staging WHERE job_id = {jobId}"),
+                "Staged rows are a work queue, not a permanent copy of the customer's file.");
+        }
+
+        [TestMethod]
+        public async Task CompleteJob_TruncatesAnOverLongErrorInsteadOfFailing()
+        {
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge);
+
+            await _jobs.CompleteJobAsync(jobId, UserOrgImportStatus.Failed, new string('e', 5000));
+
+            var job = await _jobs.GetJobAsync(jobId);
+            Assert.AreEqual(UserOrgImportStatus.Failed, job.Status);
+            Assert.AreEqual(2000, job.ErrorMessage.Length);
+        }
+
+        [TestMethod]
+        public async Task CompleteJob_CannotRewriteAJobThatHasAlreadyFinished()
+        {
+            // A worker that was superseded because it stopped reporting progress must not be able to
+            // report its own outcome over the top of that verdict. Without this a job declared dead -
+            // and whose replacement has already been admitted and may already have run - could still
+            // flip itself to Succeeded, leaving the portal claiming two finished imports for the same
+            // org type with no way to tell which one the data came from.
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge);
+
+            await _jobs.CompleteJobAsync(jobId, UserOrgImportStatus.Failed, "the first verdict");
+            await _jobs.CompleteJobAsync(jobId, UserOrgImportStatus.Succeeded, null);
+
+            var job = await _jobs.GetJobAsync(jobId);
+            Assert.AreEqual(UserOrgImportStatus.Failed, job.Status);
+            Assert.AreEqual("the first verdict", job.ErrorMessage);
+        }
+
+        [TestMethod]
+        public async Task QueueingOverAStaleJobRetiresItRatherThanLeavingTwoLive()
+        {
+            // The guard lets a new import through once the previous one has gone quiet for longer than
+            // StaleHeartbeatThreshold. Leaving that one Pending would let a late dispatch still claim
+            // and apply a file the admin has already superseded, because TryClaimJobAsync accepts any
+            // job that is still Pending. Moving it off Pending here is what actually fences that.
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var stale = await QueueJob(typeId, UserOrgImportMode.Replace, new UserOrgStagedRow(1, "a@contoso.com", "X"));
+
+            Execute(
+                "UPDATE dbo.user_org_import_jobs SET queued_utc = DATEADD(MINUTE, -30, SYSUTCDATETIME()) "
+                + $"WHERE id = {stale}");
+
+            var replacement = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", "Y"));
+
+            var staleJob = await _jobs.GetJobAsync(stale);
+            Assert.AreEqual(UserOrgImportStatus.Failed, staleJob.Status, "The abandoned job must not stay claimable.");
+            StringAssert.Contains(staleJob.ErrorMessage, "overtaken");
+            Assert.IsFalse(
+                await _jobs.TryClaimJobAsync(stale),
+                "A superseded job must not be claimable by a late dispatch.");
+
+            Assert.AreEqual(
+                0,
+                Count($"SELECT COUNT(*) FROM dbo.user_org_import_staging WHERE job_id = {stale}"),
+                "The superseded job's staged rows are dead weight and must go with it.");
+            Assert.AreEqual(
+                1,
+                Count($"SELECT COUNT(*) FROM dbo.user_org_import_staging WHERE job_id = {replacement}"),
+                "The replacement's own rows must survive.");
+        }
+
+        [TestMethod]
+        public async Task FindAssignedUpns_ReportsOnlyUsersWhoHoldAValueForThatType()
+        {
+            // The Replace preflight depends on this. Counting the users a file COVERS instead gives the
+            // wrong answer precisely when it matters: a file covering a large population that barely
+            // overlaps the assigned one would subtract to zero and suppress the warning at the moment
+            // it is about to wipe everybody.
+            var assigned = AddUser("assigned@contoso.com");
+            AddUser("exists-but-unassigned@contoso.com");
+            var otherType = AddUser("other-type@contoso.com");
+
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var second = await _types.CreateAsync(CsvType("Other"));
+
+            await _assignments.MergeAsync(new[]
+            {
+                new UserOrgAssignmentUpdate(assigned, typeId, "Retail"),
+                new UserOrgAssignmentUpdate(otherType, second, "Elsewhere"),
+            });
+
+            var lookup = UserOrgStores.CreateUserLookup(_db.ConnectionString);
+
+            var found = await lookup.FindAssignedUpnsAsync(typeId, new[]
+            {
+                "assigned@contoso.com",
+                "exists-but-unassigned@contoso.com",
+                "other-type@contoso.com",
+                "ghost@contoso.com",
+            });
+
+            CollectionAssert.AreEqual(
+                new[] { "assigned@contoso.com" },
+                found.ToArray(),
+                "Only a user who holds a value for THIS org type counts as kept.");
+        }
+
+        [TestMethod]
+        public async Task FindAssignedUpns_MatchesCaseInsensitively()
+        {
+            var userId = AddUser("Person@Contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(userId, typeId, "Retail") });
+
+            var lookup = UserOrgStores.CreateUserLookup(_db.ConnectionString);
+            var found = await lookup.FindAssignedUpnsAsync(typeId, new[] { "person@contoso.com" });
+
+            Assert.AreEqual(1, found.Count);
+        }
+
+        [TestMethod]
+        public async Task FindAssignedUpns_HandlesAnEmptyRequest()
+        {
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var lookup = UserOrgStores.CreateUserLookup(_db.ConnectionString);
+
+            Assert.AreEqual(0, (await lookup.FindAssignedUpnsAsync(typeId, new string[0])).Count);
+            Assert.AreEqual(0, (await lookup.FindAssignedUpnsAsync(typeId, null)).Count);
+        }
+
+        [TestMethod]
+        public async Task QueueingASecondJobForTheSameTypeIsRefusedAtomically()
+        {
+            // The check and the insert happen in one transaction holding a range lock, because the
+            // caller's pre-check had the whole CSV parse between it and the insert - a window wide
+            // enough for two admins uploading at once to both see no active job and queue competing
+            // imports for the same org type.
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            await QueueJob(typeId, UserOrgImportMode.Merge);
+
+            try
+            {
+                await QueueJob(typeId, UserOrgImportMode.Replace);
+                Assert.Fail("A second concurrent import for the same org type must be refused.");
+            }
+            catch (UserOrgValidationException ex)
+            {
+                StringAssert.Contains(ex.Message, "already in progress");
+            }
+
+            Assert.AreEqual(
+                1,
+                Count($"SELECT COUNT(*) FROM dbo.user_org_import_jobs WHERE org_type_id = {typeId}"),
+                "The refused job must not have been created.");
+        }
+
+        [TestMethod]
+        public async Task AnotherOrgTypeCanBeImportedAtTheSameTime()
+        {
+            var one = await _types.CreateAsync(CsvType("One"));
+            var two = await _types.CreateAsync(CsvType("Two"));
+
+            await QueueJob(one, UserOrgImportMode.Merge);
+            await QueueJob(two, UserOrgImportMode.Merge);
+
+            Assert.AreEqual(2, Count("SELECT COUNT(*) FROM dbo.user_org_import_jobs"));
+        }
+
+        [TestMethod]
+        public async Task AStrandedPendingJobDoesNotBlockLaterImportsForever()
+        {
+            // The rows are staged and the job committed before the worker is dispatched, so a recycle
+            // in that window leaves a job nobody will ever claim. Because pending counts as active, it
+            // would otherwise block every later upload for this org type permanently.
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var stranded = await QueueJob(typeId, UserOrgImportMode.Merge);
+
+            _db.Execute(
+                "UPDATE dbo.user_org_import_jobs SET queued_utc = DATEADD(HOUR, -2, SYSUTCDATETIME()) "
+                + $"WHERE id = {stranded};");
+
+            var replacement = await QueueJob(typeId, UserOrgImportMode.Merge);
+
+            Assert.AreNotEqual(stranded, replacement, "A new import must be allowed once the old one is clearly dead.");
+        }
+
+        [TestMethod]
+        public async Task GetActiveJobForType_FindsPendingAndRunningOnly()
+        {
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+
+            Assert.IsNull(await _jobs.GetActiveJobForTypeAsync(typeId));
+
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge);
+            Assert.AreEqual(jobId, (await _jobs.GetActiveJobForTypeAsync(typeId)).Id, "Pending counts as active.");
+
+            await _jobs.TryClaimJobAsync(jobId);
+            Assert.AreEqual(jobId, (await _jobs.GetActiveJobForTypeAsync(typeId)).Id, "Running counts as active.");
+
+            await _jobs.CompleteJobAsync(jobId, UserOrgImportStatus.Succeeded, null);
+            Assert.IsNull(await _jobs.GetActiveJobForTypeAsync(typeId), "A finished job is not active.");
+        }
+
+        [TestMethod]
+        public async Task Heartbeat_MovesOnlyWhileRunning()
+        {
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge);
+
+            await _jobs.HeartbeatAsync(jobId);
+            Assert.IsNull(
+                (await _jobs.GetJobAsync(jobId)).HeartbeatUtc,
+                "A pending job has not started, so it has no heartbeat.");
+
+            await _jobs.TryClaimJobAsync(jobId);
+            var afterClaim = (await _jobs.GetJobAsync(jobId)).HeartbeatUtc;
+            Assert.IsNotNull(afterClaim);
+
+            await Task.Delay(30);
+            await _jobs.HeartbeatAsync(jobId);
+            Assert.IsTrue(
+                (await _jobs.GetJobAsync(jobId)).HeartbeatUtc >= afterClaim,
+                "A running job's heartbeat should move forward.");
+        }
+
+        #endregion
+
+        #region Last refreshed
+
+        private static readonly DateTime CycleStart = new DateTime(2026, 3, 4, 5, 6, 0, DateTimeKind.Utc);
+
+        private async Task<int> CreateEntraType(string name, string attribute, bool enabled = true)
+        {
+            return await _types.CreateAsync(new UserOrgType
+            {
+                Name = name,
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = attribute,
+                IsEnabled = enabled,
+            });
+        }
+
+        [TestMethod]
+        public async Task RecordEntraRefresh_StampsOnlyTypesTheCycleActuallyRefreshed()
+        {
+            // The same fence as the merge. A type switched to CSV, disabled or repointed while the cycle
+            // was loading users was not refreshed by it, and must not be reported as though it had been.
+            var refreshed = await CreateEntraType("Refreshed", "extensionAttribute1");
+            var repointed = await CreateEntraType("Repointed", "extensionAttribute2");
+            var disabled = await CreateEntraType("Disabled", "extensionAttribute3");
+            var switched = await CreateEntraType("Switched", "extensionAttribute4");
+            var readAtCycleStart = (await _types.GetAllAsync()).ToDictionary(t => t.Id, t => t.SourceGeneration);
+
+            var type = await _types.GetAsync(repointed);
+            type.EntraAttributeName = "extensionAttribute5";
+            await _types.UpdateAsync(type, true, true);
+            Execute($"UPDATE dbo.user_org_types SET is_enabled = 0 WHERE id = {disabled}");
+            Execute($"UPDATE dbo.user_org_types SET source_kind = 2, entra_attribute_name = NULL WHERE id = {switched}");
+
+            var stamped = await _types.RecordEntraRefreshAsync(readAtCycleStart, CycleStart);
+
+            Assert.AreEqual(1, stamped);
+            Assert.AreEqual(CycleStart, (await _types.GetAsync(refreshed)).LastRefreshedUtc);
+            Assert.IsNull((await _types.GetAsync(repointed)).LastRefreshedUtc);
+            Assert.IsNull((await _types.GetAsync(disabled)).LastRefreshedUtc);
+            Assert.IsNull((await _types.GetAsync(switched)).LastRefreshedUtc);
+
+            var summary = (await _types.GetSummariesAsync()).Single(s => s.Type.Id == refreshed);
+            Assert.AreEqual(CycleStart, summary.Type.LastRefreshedUtc, "The admin page reads it from the summaries.");
+        }
+
+        [TestMethod]
+        public async Task RecordEntraRefresh_NeverMovesATimeBackwards()
+        {
+            // An older cycle that finishes late must not make a type look staler than it is.
+            var typeId = await CreateEntraType("Cost Centre", "extensionAttribute1");
+            var generations = new Dictionary<int, int> { { typeId, 1 } };
+
+            await _types.RecordEntraRefreshAsync(generations, CycleStart);
+            await _types.RecordEntraRefreshAsync(generations, CycleStart.AddHours(-1));
+
+            Assert.AreEqual(CycleStart, (await _types.GetAsync(typeId)).LastRefreshedUtc);
+
+            await _types.RecordEntraRefreshAsync(generations, CycleStart.AddHours(1));
+            Assert.AreEqual(CycleStart.AddHours(1), (await _types.GetAsync(typeId)).LastRefreshedUtc);
+        }
+
+        [TestMethod]
+        public async Task RecordEntraRefresh_OfNothingIsANoOp()
+        {
+            Assert.AreEqual(0, await _types.RecordEntraRefreshAsync(new Dictionary<int, int>(), CycleStart));
+            Assert.AreEqual(0, await _types.RecordEntraRefreshAsync(null, CycleStart));
+        }
+
+        [TestMethod]
+        public async Task Update_ThatDiscardsTheValuesAlsoForgetsWhenTheyWereRefreshed()
+        {
+            // The time vouches for values. Once the values are gone, keeping it would claim a refresh
+            // of a source the type no longer uses.
+            var typeId = await CreateEntraType("Cost Centre", "extensionAttribute1");
+            await _types.RecordEntraRefreshAsync(new Dictionary<int, int> { { typeId, 1 } }, CycleStart);
+
+            var type = await _types.GetAsync(typeId);
+            type.EntraAttributeName = "extensionAttribute2";
+            await _types.UpdateAsync(type, true, true);
+
+            Assert.IsNull((await _types.GetAsync(typeId)).LastRefreshedUtc);
+        }
+
+        [TestMethod]
+        public async Task Update_ThatKeepsTheValuesKeepsWhenTheyWereRefreshed()
+        {
+            // Disabling and renaming keep the values on user lookup, so the time still describes them.
+            var typeId = await CreateEntraType("Cost Centre", "extensionAttribute1");
+            await _types.RecordEntraRefreshAsync(new Dictionary<int, int> { { typeId, 1 } }, CycleStart);
+
+            var type = await _types.GetAsync(typeId);
+            type.Name = "Renamed";
+            type.IsEnabled = false;
+            await _types.UpdateAsync(type, false, true);
+
+            Assert.AreEqual(CycleStart, (await _types.GetAsync(typeId)).LastRefreshedUtc);
+        }
+
+        [TestMethod]
+        public async Task Apply_RecordsTheRefreshOnlyWhenTheFileIsApplied()
+        {
+            AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+
+            var refused = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", "X"));
+            await _jobs.TryClaimJobAsync(refused);
+            Execute($"UPDATE dbo.user_org_types SET is_enabled = 0 WHERE id = {typeId}");
+            try
+            {
+                await _jobs.ApplyAsync(refused);
+                Assert.Fail("A disabled type must not receive a queued import.");
+            }
+            catch (UserOrgValidationException)
+            {
+            }
+
+            Assert.IsNull((await _types.GetAsync(typeId)).LastRefreshedUtc, "A refused import refreshed nothing.");
+
+            await _jobs.CompleteJobAsync(refused, UserOrgImportStatus.Failed, "refused");
+            Execute($"UPDATE dbo.user_org_types SET is_enabled = 1 WHERE id = {typeId}");
+            var applied = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", "X"));
+            await _jobs.TryClaimJobAsync(applied);
+            await _jobs.ApplyAsync(applied);
+
+            Assert.IsNotNull((await _types.GetAsync(typeId)).LastRefreshedUtc);
+        }
+
+        [TestMethod]
+        public async Task Apply_RecordsTheRefreshEvenWhenTheFileChangesNobody()
+        {
+            // Re-importing the same file changes nothing, and that is a confirmation, not a non-event.
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, typeId, "X") });
+
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", "X"));
+            await _jobs.TryClaimJobAsync(jobId);
+            var job = await _jobs.ApplyAsync(jobId);
+
+            Assert.AreEqual(0, job.RowsApplied);
+            Assert.IsNotNull((await _types.GetAsync(typeId)).LastRefreshedUtc);
+        }
+
+        #endregion
+
+        #region Value width
+
+        [TestMethod]
+        public void TheValueColumnsAreExactlyAsWideAsTheRuleThatTruncatesForThem()
+        {
+            // NormaliseOrgValue cuts values to MaxOrgValueLength. A column narrower than that fails the
+            // import; a wider one would let the index reject a value the rule had accepted.
+            foreach (var column in new[] { "user_org_values.name", "user_org_import_staging.org_value" })
+            {
+                var parts = column.Split('.');
+                Assert.AreEqual(
+                    UserOrgRules.MaxOrgValueLength * 2,
+                    Count($"SELECT max_length FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.{parts[0]}') AND name = N'{parts[1]}'"),
+                    $"{column} must hold exactly MaxOrgValueLength UTF-16 code units.");
+            }
+        }
+
+        [TestMethod]
+        public async Task Merge_StoresAGreekNameAtTheFullColumnWidth()
+        {
+            // Through the Entra path's temp table and the unique index on (org_type_id, name), which is
+            // what sets the limit: one code unit more and the index rejects the row.
+            var user = AddUser("a@contoso.com");
+            var typeId = await CreateEntraType("Cost Centre", "extensionAttribute1");
+            var fullWidth = string.Concat(Enumerable.Repeat("Ω", UserOrgRules.MaxOrgValueLength));
+
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, typeId, fullWidth) });
+
+            Assert.AreEqual(fullWidth, (await _assignments.GetForUserAsync(user)).Single().Value);
+        }
+
+        [TestMethod]
+        public async Task Apply_StoresAGreekNameAtTheFullColumnWidth()
+        {
+            // Through the CSV path's staging table and its own temp table.
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var fullWidth = string.Concat(Enumerable.Repeat("Ω", UserOrgRules.MaxOrgValueLength));
+
+            var jobId = await QueueJob(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(1, "a@contoso.com", fullWidth));
+            await _jobs.TryClaimJobAsync(jobId);
+            await _jobs.ApplyAsync(jobId);
+
+            Assert.AreEqual(fullWidth, (await _assignments.GetForUserAsync(user)).Single().Value);
+        }
+
+        #endregion
+
+        #region Who is in each organisation
+
+        private int ValueId(int typeId, string name)
+        {
+            return Count($"SELECT id FROM dbo.user_org_values WHERE org_type_id = {typeId} AND name = N'{name.Replace("'", "''")}'");
+        }
+
+        [TestMethod]
+        public async Task Values_ListsEveryOrganisationLargestFirstWithItsSize()
+        {
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var otherType = await _types.CreateAsync(CsvType("Other"));
+            var a = AddUser("a@contoso.com");
+            var b = AddUser("b@contoso.com");
+            var c = AddUser("c@contoso.com");
+
+            await _assignments.MergeAsync(new[]
+            {
+                new UserOrgAssignmentUpdate(a, typeId, "Retail"),
+                new UserOrgAssignmentUpdate(b, typeId, "Retail"),
+                new UserOrgAssignmentUpdate(c, typeId, "Wholesale"),
+                new UserOrgAssignmentUpdate(a, otherType, "Somewhere else"),
+            });
+
+            // An organisation whose last member moved out stays in the list, with nobody in it: the
+            // page's "Distinct values" figure counts it, so hiding it here would make the two disagree.
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(c, typeId, "Ops") });
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(c, typeId, "Wholesale") });
+
+            var page = await _membership.GetValuesAsync(typeId, null, 0, 25);
+
+            CollectionAssert.AreEqual(new[] { "Retail", "Wholesale", "Ops" }, page.Values.Select(v => v.Name).ToArray());
+            CollectionAssert.AreEqual(new[] { 2, 1, 0 }, page.Values.Select(v => v.MemberCount).ToArray());
+            Assert.AreEqual(3, page.TotalCount, "Another org type's organisations must not appear.");
+        }
+
+        [TestMethod]
+        public async Task Values_PagesAndStillCountsEveryMatch()
+        {
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var updates = Enumerable.Range(1, 5)
+                .Select(i => new UserOrgAssignmentUpdate(AddUser($"u{i}@contoso.com"), typeId, $"Org {i}"))
+                .ToArray();
+            await _assignments.MergeAsync(updates);
+
+            var second = await _membership.GetValuesAsync(typeId, null, 2, 2);
+
+            CollectionAssert.AreEqual(
+                new[] { "Org 3", "Org 4" },
+                second.Values.Select(v => v.Name).ToArray(),
+                "Equal sizes fall back to name order, so paging is stable.");
+            Assert.AreEqual(5, second.TotalCount);
+        }
+
+        [TestMethod]
+        public async Task Values_SearchMatchesAnywhereLiterallyAndIgnoringCase()
+        {
+            // %, _ and [ are LIKE wildcards and all three appear in real organisation names.
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var names = new[] { "50% FTE", "500 Club", "Sales_EMEA", "SalesXEMEA", "[Legacy] Finance", "L Finance", GreekOrgName };
+            await _assignments.MergeAsync(names
+                .Select((n, i) => new UserOrgAssignmentUpdate(AddUser($"u{i}@contoso.com"), typeId, n))
+                .ToArray());
+
+            Assert.AreEqual("50% FTE", (await _membership.GetValuesAsync(typeId, "50%", 0, 25)).Values.Single().Name);
+            Assert.AreEqual("Sales_EMEA", (await _membership.GetValuesAsync(typeId, "s_e", 0, 25)).Values.Single().Name);
+            Assert.AreEqual("[Legacy] Finance", (await _membership.GetValuesAsync(typeId, "[legacy]", 0, 25)).Values.Single().Name);
+            Assert.AreEqual(GreekOrgName, (await _membership.GetValuesAsync(typeId, "κόσμε", 0, 25)).Values.Single().Name);
+
+            var blank = await _membership.GetValuesAsync(typeId, "   ", 0, 25);
+            Assert.AreEqual(names.Length, blank.TotalCount, "A blank search lists everything.");
+        }
+
+        [TestMethod]
+        public async Task Values_OfATypeWithNoOrganisationsIsAnEmptyPage()
+        {
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+
+            var page = await _membership.GetValuesAsync(typeId, null, 0, 25);
+
+            Assert.AreEqual(0, page.TotalCount);
+            Assert.AreEqual(0, page.Values.Count);
+        }
+
+        [TestMethod]
+        public async Task Members_ListsAnOrganisationsUsersByUpnWithTheirDirectoryDetails()
+        {
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var zed = AddUser("zed@contoso.com", "Sales", "Account Manager", true);
+            var amy = AddUser("amy@contoso.com", GreekOrgName, null, false);
+            var bob = AddUser("bob@contoso.com");
+            var elsewhere = AddUser("elsewhere@contoso.com", "Sales", null, true);
+
+            await _assignments.MergeAsync(new[]
+            {
+                new UserOrgAssignmentUpdate(zed, typeId, "Retail"),
+                new UserOrgAssignmentUpdate(amy, typeId, "Retail"),
+                new UserOrgAssignmentUpdate(bob, typeId, "Retail"),
+                new UserOrgAssignmentUpdate(elsewhere, typeId, "Wholesale"),
+            });
+
+            var page = await _membership.GetMembersAsync(typeId, ValueId(typeId, "Retail"), null, 0, 50);
+
+            Assert.AreEqual("Retail", page.OrgValueName);
+            Assert.AreEqual(3, page.TotalCount);
+            CollectionAssert.AreEqual(
+                new[] { "amy@contoso.com", "bob@contoso.com", "zed@contoso.com" },
+                page.Members.Select(m => m.UserPrincipalName).ToArray());
+
+            var first = page.Members[0];
+            Assert.AreEqual(amy, first.UserId);
+            Assert.AreEqual(GreekOrgName, first.Department, "Department is free text and must survive in any script.");
+            Assert.IsNull(first.JobTitle);
+            Assert.AreEqual(false, first.AccountEnabled);
+
+            Assert.IsNull(page.Members[1].Department);
+            Assert.IsNull(page.Members[1].AccountEnabled, "An account state the import never recorded is unknown, not enabled.");
+            Assert.AreEqual("Account Manager", page.Members[2].JobTitle);
+        }
+
+        [TestMethod]
+        public async Task Members_PagesByUpnAndStillCountsEveryMatch()
+        {
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            await _assignments.MergeAsync(new[] { "c", "a", "b" }
+                .Select(n => new UserOrgAssignmentUpdate(AddUser($"{n}@contoso.com"), typeId, "Retail"))
+                .ToArray());
+
+            var second = await _membership.GetMembersAsync(typeId, ValueId(typeId, "Retail"), null, 1, 1);
+
+            Assert.AreEqual("b@contoso.com", second.Members.Single().UserPrincipalName);
+            Assert.AreEqual(3, second.TotalCount);
+        }
+
+        [TestMethod]
+        public async Task Members_SearchMatchesTheUpnLiterallyAndIgnoringCase()
+        {
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            await _assignments.MergeAsync(new[] { "first_last@contoso.com", "firstXlast@contoso.com", "other@contoso.com" }
+                .Select(upn => new UserOrgAssignmentUpdate(AddUser(upn), typeId, "Retail"))
+                .ToArray());
+
+            var page = await _membership.GetMembersAsync(typeId, ValueId(typeId, "Retail"), "T_L", 0, 50);
+
+            Assert.AreEqual("first_last@contoso.com", page.Members.Single().UserPrincipalName);
+            Assert.AreEqual(1, page.TotalCount, "The total must count the search, not the whole organisation.");
+        }
+
+        [TestMethod]
+        public async Task Members_SearchWithANonAsciiTermFindsNoAsciiLookalike()
+        {
+            // An ASCII term is sent as varchar to match the varchar UPN column quickly. A non-ASCII one
+            // must not be: converted to varchar it is best-fit mapped, so "łukasz" becomes "lukasz" and
+            // matches a user it does not describe. No UPN can contain "ł", so the right answer is nobody.
+            // ("ł" rather than "é": "é" exists in code page 1252, so it would survive the conversion and
+            // this test would pass even with the bug.)
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(AddUser("lukasz@contoso.com"), typeId, "Retail") });
+
+            var accented = await _membership.GetMembersAsync(typeId, ValueId(typeId, "Retail"), "łukasz", 0, 50);
+            var plain = await _membership.GetMembersAsync(typeId, ValueId(typeId, "Retail"), "LUKASZ", 0, 50);
+
+            Assert.AreEqual(0, accented.TotalCount);
+            Assert.AreEqual(1, plain.TotalCount, "An ASCII search still ignores case.");
+        }
+
+        [TestMethod]
+        public async Task Members_OfAnEmptyOrganisationIsAnEmptyPageNotAMissingOne()
+        {
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var user = AddUser("a@contoso.com");
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, typeId, "Ops") });
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, typeId, "Retail") });
+
+            var page = await _membership.GetMembersAsync(typeId, ValueId(typeId, "Ops"), null, 0, 50);
+
+            Assert.IsNotNull(page);
+            Assert.AreEqual("Ops", page.OrgValueName);
+            Assert.AreEqual(0, page.TotalCount);
+        }
+
+        [TestMethod]
+        public async Task Members_OfAnOrganisationFromAnotherTypeOrThatDoesNotExistIsNotFound()
+        {
+            // A value id is only meaningful within its own org type; one borrowed from another type must
+            // not list that type's members.
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var otherType = await _types.CreateAsync(CsvType("Other"));
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(AddUser("a@contoso.com"), typeId, "Retail") });
+
+            Assert.IsNull(await _membership.GetMembersAsync(otherType, ValueId(typeId, "Retail"), null, 0, 50));
+            Assert.IsNull(await _membership.GetMembersAsync(typeId, 987654, null, 0, 50));
+        }
+
+        #endregion
+    }
+}

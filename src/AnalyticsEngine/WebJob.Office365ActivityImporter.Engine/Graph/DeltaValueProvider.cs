@@ -16,6 +16,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         Task<string> GetDeltaToken(CancellationToken cancellationToken = default);
         Task SetDeltaToken(string deltaToken, CancellationToken cancellationToken = default);
         Task ClearDeltaToken(CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Qualifies the cache key so a stored token is only ever reused for the <c>$select</c> it was
+        /// minted under.
+        /// </summary>
+        /// <param name="qualifier">
+        /// <see cref="GraphUserOrgSelection.DeltaKeyQualifier"/>. Empty or <c>null</c> restores the
+        /// unqualified key, which is what a deployment with no Entra org types uses.
+        /// </param>
+        /// <remarks>
+        /// Set by <see cref="GraphUserLoader"/> alone, from the same
+        /// <see cref="GraphUserOrgSelection"/> it builds the request URL from, so the key and the
+        /// selection cannot drift apart. Nothing else should call this.
+        /// </remarks>
+        void SetKeyQualifier(string qualifier);
     }
 
     public sealed class DeltaTokenUnavailableException : Exception
@@ -67,6 +82,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     {
         private readonly AnalyticsLogger _logger;
         private string _deltaToken;
+        private string _keyQualifier = string.Empty;
         public InProcessDeltaValueProvider(DataUtils.AnalyticsLogger logger)
         {
             _logger = logger;
@@ -100,6 +116,32 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             _logger.LogInformation($"Setting in-memory delta token.");
             _deltaToken = deltaToken;
             return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Drops the buffered token when the selection changes.
+        /// </summary>
+        /// <remarks>
+        /// The Redis provider gets this for free by keying on the qualifier, but this one holds a single
+        /// token in a field. Without discarding it, a deployment with no Redis would keep reusing a
+        /// token minted under the previous <c>$select</c> and the newly configured org attribute would
+        /// never arrive for users who did not otherwise change.
+        /// </remarks>
+        public void SetKeyQualifier(string qualifier)
+        {
+            var normalised = string.IsNullOrEmpty(qualifier) ? string.Empty : qualifier;
+            if (normalised == _keyQualifier)
+            {
+                return;
+            }
+
+            _keyQualifier = normalised;
+            if (!string.IsNullOrEmpty(_deltaToken))
+            {
+                _logger.LogWarning(
+                    "User import - the configured org attributes changed, so the in-memory delta token has been discarded. The next import will enumerate every user once so the new attribute is populated.");
+                _deltaToken = null;
+            }
         }
     }
 
@@ -230,7 +272,35 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </remarks>
         string GetRedisUserDeltaCacheKey()
         {
-            return $"UserDeltaCode-{_appConfig.TenantGUID}-{GraphUserDeltaQuery.SelectVersion}";
+            return $"UserDeltaCode-{_appConfig.TenantGUID}-{GraphUserDeltaQuery.SelectVersion}{_keyQualifier}";
+        }
+
+        /// <summary>
+        /// Extra qualifier covering the runtime-configured user-org attributes.
+        /// </summary>
+        /// <remarks>
+        /// Empty by default and empty whenever no Entra org types are configured, so the key is
+        /// byte-identical to the one this product has always used. That is deliberate: qualifying it
+        /// unconditionally would discard every existing customer's delta token on upgrade and make the
+        /// next import a full enumeration of the whole tenant, for a feature they may never turn on.
+        /// </remarks>
+        private string _keyQualifier = string.Empty;
+
+        public void SetKeyQualifier(string qualifier)
+        {
+            var normalised = string.IsNullOrEmpty(qualifier) ? string.Empty : qualifier;
+            if (normalised == _keyQualifier)
+            {
+                return;
+            }
+
+            _keyQualifier = normalised;
+
+            // The in-process safety net holds the last token this process committed, and it is returned
+            // when Redis cannot be read. That token was minted under the PREVIOUS selection, so keeping
+            // it across a qualifier change would hand a later cycle a token for a different query -
+            // exactly what qualifying the key exists to prevent, arriving through the outage path.
+            _lastKnownCommittedDeltaToken = null;
         }
     }
 }

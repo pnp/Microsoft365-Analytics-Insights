@@ -39,6 +39,7 @@ function formatUtc(value: string | null): string {
 export default function UserProfileCard({ profile }: { profile: UserProfile }) {
   const styles = useStyles();
   const t = useT();
+  const orgs = profile.orgs ?? [];
   const rows: Array<[string, string]> = [
     ['UPN', profile.userPrincipalName || '—'],
     ['Mail', profile.mail || '—'],
@@ -53,6 +54,12 @@ export default function UserProfileCard({ profile }: { profile: UserProfile }) {
     [t('admin.userLookup.profile.stateOrProvince'), profile.stateOrProvince || '—'],
     [t('admin.userLookup.profile.postalCode'), profile.postalCode || '—'],
     [t('admin.userLookup.profile.manager'), profile.managerUserPrincipalName || '—'],
+    // One row per configured org type. The label is the name the ADMINISTRATOR gave the type, so it
+    // is deliberately not translated - it is tenant data, like the value beside it, and a
+    // translation catalogue cannot contain something invented at runtime. Nothing is added when no
+    // org types are configured, which is how a deployment that has not adopted the feature sees
+    // this page unchanged.
+    ...orgs.map((org) => [org.orgTypeName, org.value || '—'] as [string, string]),
     [t('admin.userLookup.profile.lastUpdatedUtc'), formatUtc(profile.lastUpdatedUtc ?? profile.lastUpdated)],
   ];
 

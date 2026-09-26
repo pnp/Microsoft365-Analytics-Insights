@@ -1,0 +1,497 @@
+using Common.Entities.UserOrgs;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+using System.Collections.Generic;
+using System.Linq;
+using WebJob.Office365ActivityImporter.Engine.Graph;
+
+namespace Tests.UnitTests
+{
+    /// <summary>
+    /// The link between the configured org attributes, the Graph <c>$select</c>, and the delta-token
+    /// cache key.
+    /// </summary>
+    /// <remarks>
+    /// These two facts have to move together. Graph freezes <c>$select</c> when a delta token is minted,
+    /// so a token created without an org attribute keeps returning responses without it forever. If the
+    /// token key did not follow the selection, adding an org type would appear to work and then silently
+    /// never populate for any user who did not otherwise change - which on an established tenant is
+    /// almost everybody.
+    /// </remarks>
+    [TestClass]
+    public class GraphUserOrgSelectionTests
+    {
+        [TestMethod]
+        public void NoOrgTypes_ProducesTheExactKeyAndSelectUsedBeforeThisFeature()
+        {
+            // The upgrade guarantee. Qualifying the key unconditionally would discard every existing
+            // customer's delta token and turn their next import into a full re-enumeration of the whole
+            // tenant, for a feature they may never turn on.
+            foreach (var selection in new[]
+                     {
+                         GraphUserOrgSelection.None,
+                         GraphUserOrgSelection.FromAttributeNames(null),
+                         GraphUserOrgSelection.FromAttributeNames(new string[0]),
+                     })
+            {
+                Assert.IsTrue(selection.IsEmpty);
+                Assert.AreEqual(string.Empty, selection.DeltaKeyQualifier);
+                Assert.AreEqual(
+                    GraphUserDeltaQuery.Select,
+                    selection.BuildSelect(GraphUserDeltaQuery.Select),
+                    "With no org types the request must be byte-identical to the one this product has always issued.");
+            }
+        }
+
+        [TestMethod]
+        public void ConfiguringAnOrgAttribute_ChangesBothTheSelectAndTheKey()
+        {
+            var selection = GraphUserOrgSelection.FromAttributeNames(new[] { "extensionAttribute7" });
+
+            Assert.IsFalse(selection.IsEmpty);
+            StringAssert.Contains(selection.BuildSelect(GraphUserDeltaQuery.Select), "onPremisesExtensionAttributes");
+            Assert.AreNotEqual(string.Empty, selection.DeltaKeyQualifier);
+            StringAssert.StartsWith(selection.DeltaKeyQualifier, "-o");
+        }
+
+        [TestMethod]
+        public void TheKeyQualifierIsStableAcrossCalls()
+        {
+            // A qualifier that moved between runs would discard the delta token on every web-job
+            // restart. This is why it is a SHA-256 of the fragments and not string.GetHashCode, which
+            // is randomised per process on modern .NET.
+            var a = GraphUserOrgSelection.FromAttributeNames(new[] { "extensionAttribute7", "employeeType" });
+            var b = GraphUserOrgSelection.FromAttributeNames(new[] { "extensionAttribute7", "employeeType" });
+
+            Assert.AreEqual(a.DeltaKeyQualifier, b.DeltaKeyQualifier);
+        }
+
+        [TestMethod]
+        public void TheKeyQualifierIgnoresTheOrderTypesComeBackFromTheDatabase()
+        {
+            var a = GraphUserOrgSelection.FromAttributeNames(new[] { "employeeType", "extensionAttribute7" });
+            var b = GraphUserOrgSelection.FromAttributeNames(new[] { "extensionAttribute7", "employeeType" });
+
+            Assert.AreEqual(
+                a.DeltaKeyQualifier,
+                b.DeltaKeyQualifier,
+                "Ordering must not invalidate a perfectly good delta token.");
+        }
+
+        [TestMethod]
+        public void TwoSlotsOfTheSameContainerStillChangeTheKey()
+        {
+            // The qualifier must follow what is EXTRACTED, not what is requested. All fifteen
+            // extensionAttribute slots arrive under one Graph property, so switching from slot 3 to
+            // slot 9 leaves $select identical - but the value now being read is different, and it is
+            // only read for users who happen to appear in a delta. Without invalidating the token the
+            // new organisation type would stay empty for everyone who does not otherwise change, which
+            // on an established tenant is almost everybody. That is precisely the failure this whole
+            // design exists to prevent, arriving through a different door.
+            var three = GraphUserOrgSelection.FromAttributeNames(new[] { "extensionAttribute3" });
+            var nine = GraphUserOrgSelection.FromAttributeNames(new[] { "extensionAttribute9" });
+
+            Assert.AreEqual(
+                three.BuildSelect("id"),
+                nine.BuildSelect("id"),
+                "The Graph request really is identical - which is exactly why the key cannot be derived from it.");
+            Assert.AreNotEqual(three.DeltaKeyQualifier, nine.DeltaKeyQualifier);
+        }
+
+        [TestMethod]
+        public void AddingASecondSlotOfTheSameContainerChangesTheKey()
+        {
+            var one = GraphUserOrgSelection.FromAttributeNames(new[] { "extensionAttribute3" });
+            var two = GraphUserOrgSelection.FromAttributeNames(new[] { "extensionAttribute3", "extensionAttribute9" });
+
+            Assert.AreEqual(one.BuildSelect("id"), two.BuildSelect("id"));
+            Assert.AreNotEqual(
+                one.DeltaKeyQualifier,
+                two.DeltaKeyQualifier,
+                "A second org type on the same container must still force the re-read that populates it.");
+        }
+
+        [TestMethod]
+        public void BothEmployeeOrgDataPropertiesAreDistinguished()
+        {
+            // Same trap, different container.
+            var costCentre = GraphUserOrgSelection.FromAttributeNames(new[] { "employeeOrgData.costCenter" });
+            var division = GraphUserOrgSelection.FromAttributeNames(new[] { "employeeOrgData.division" });
+
+            Assert.AreEqual(costCentre.BuildSelect("id"), division.BuildSelect("id"));
+            Assert.AreNotEqual(costCentre.DeltaKeyQualifier, division.DeltaKeyQualifier);
+        }
+
+        [TestMethod]
+        public void RenamingAnOrgTypeDoesNotChangeTheKey()
+        {
+            // The qualifier is derived from the attributes, not from anything the admin can relabel, so
+            // a rename must not cost a full tenant re-enumeration.
+            var a = GraphUserOrgSelection.FromAttributeNames(new[] { "extensionAttribute3", "employeeType" });
+            var b = GraphUserOrgSelection.FromAttributeNames(new[] { "employeeType", "extensionAttribute3" });
+
+            Assert.AreEqual(a.DeltaKeyQualifier, b.DeltaKeyQualifier);
+        }
+
+        [TestMethod]
+        public void AddingADifferentContainerDoesChangeTheKey()
+        {
+            var one = GraphUserOrgSelection.FromAttributeNames(new[] { "extensionAttribute3" });
+            var two = GraphUserOrgSelection.FromAttributeNames(new[] { "extensionAttribute3", "employeeType" });
+
+            Assert.AreNotEqual(
+                one.DeltaKeyQualifier,
+                two.DeltaKeyQualifier,
+                "A genuinely new property must invalidate the token, or it would never be populated.");
+        }
+
+        private static UserOrgType EntraType(int id, string attribute, int generation = 1)
+        {
+            return new UserOrgType
+            {
+                Id = id,
+                Name = "Type " + id,
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = attribute,
+                IsEnabled = true,
+                SourceGeneration = generation,
+            };
+        }
+
+        [TestMethod]
+        public void NoOrgTypesStillProducesTheLegacyKey_FromTypes()
+        {
+            Assert.AreEqual(string.Empty, GraphUserOrgSelection.FromTypes(null).DeltaKeyQualifier);
+            Assert.AreEqual(string.Empty, GraphUserOrgSelection.FromTypes(new UserOrgType[0]).DeltaKeyQualifier);
+        }
+
+        [TestMethod]
+        public void RepointingATypeAwayAndBackDoesNotReuseTheOriginalToken()
+        {
+            // The attribute names alone cannot tell "still mapped this way" from "mapped this way
+            // again, after the values were thrown away". Both look identical, so the second one lands
+            // on the FIRST key - which still holds a delta token. Graph answers that token with only
+            // the users changed since it was minted, so everybody else stays permanently unassigned in
+            // a type that had just been emptied. The source generation is what separates them.
+            var before = GraphUserOrgSelection.FromTypes(new[] { EntraType(1, "extensionAttribute1", generation: 1) });
+            var afterRepointingAway = GraphUserOrgSelection.FromTypes(new[] { EntraType(1, "extensionAttribute2", generation: 2) });
+            var afterComingBack = GraphUserOrgSelection.FromTypes(new[] { EntraType(1, "extensionAttribute1", generation: 3) });
+
+            Assert.AreNotEqual(before.DeltaKeyQualifier, afterRepointingAway.DeltaKeyQualifier);
+            Assert.AreNotEqual(
+                before.DeltaKeyQualifier,
+                afterComingBack.DeltaKeyQualifier,
+                "Coming back to an attribute must not come back to its old delta token.");
+        }
+
+        [TestMethod]
+        public void RecreatingADeletedTypeDoesNotReuseItsOldToken()
+        {
+            // Same trap by a different route: the replacement has the same attribute but a new
+            // identity, and no assignments at all.
+            var original = GraphUserOrgSelection.FromTypes(new[] { EntraType(1, "extensionAttribute1") });
+            var recreated = GraphUserOrgSelection.FromTypes(new[] { EntraType(2, "extensionAttribute1") });
+
+            Assert.AreNotEqual(original.DeltaKeyQualifier, recreated.DeltaKeyQualifier);
+        }
+
+        [TestMethod]
+        public void AnUnchangedConfigurationKeepsItsToken()
+        {
+            // The other half of the contract. If the mapping has not changed, the key must not move -
+            // otherwise every import cycle would re-enumerate the whole tenant.
+            var a = GraphUserOrgSelection.FromTypes(new[] { EntraType(1, "extensionAttribute1"), EntraType(2, "employeeType") });
+            var b = GraphUserOrgSelection.FromTypes(new[] { EntraType(2, "employeeType"), EntraType(1, "extensionAttribute1") });
+
+            Assert.AreEqual(a.DeltaKeyQualifier, b.DeltaKeyQualifier, "Order out of the database must not matter.");
+
+            var renamed = EntraType(1, "extensionAttribute1");
+            renamed.Name = "Something else entirely";
+            var c = GraphUserOrgSelection.FromTypes(new[] { renamed, EntraType(2, "employeeType") });
+
+            Assert.AreEqual(a.DeltaKeyQualifier, c.DeltaKeyQualifier, "A rename must not cost a re-enumeration.");
+        }
+
+        [TestMethod]
+        public void FromTypes_SelectsTheSamePropertiesAsFromAttributeNames()
+        {
+            var fromTypes = GraphUserOrgSelection.FromTypes(
+                new[] { EntraType(1, "extensionAttribute3"), EntraType(2, "employeeOrgData.costCenter") });
+            var fromNames = GraphUserOrgSelection.FromAttributeNames(
+                new[] { "extensionAttribute3", "employeeOrgData.costCenter" });
+
+            CollectionAssert.AreEqual(fromNames.SelectFragments.ToList(), fromTypes.SelectFragments.ToList());
+            CollectionAssert.AreEqual(
+                fromNames.CanonicalAttributeNames.ToList(), fromTypes.CanonicalAttributeNames.ToList());
+        }
+
+        [TestMethod]
+        public void BuildSelect_DoesNotDuplicateAPropertyTheBaseQueryAlreadyNames()
+        {
+            // Graph rejects a repeated property in $select, and that 400 would fail the entire request.
+            var selection = GraphUserOrgSelection.FromSpecs(new[] { ParseSpec("employeeType") });
+
+            var built = selection.BuildSelect("id,employeeType,mail");
+
+            Assert.AreEqual("id,employeeType,mail", built);
+            Assert.AreEqual(
+                1,
+                built.Split(',').Count(p => p.Trim() == "employeeType"),
+                "The property must appear exactly once.");
+        }
+
+        [TestMethod]
+        public void BuildSelect_IgnoresCasingWhenDeDuplicating()
+        {
+            var selection = GraphUserOrgSelection.FromSpecs(new[] { ParseSpec("employeeType") });
+
+            Assert.AreEqual("id,EMPLOYEETYPE", selection.BuildSelect("id,EMPLOYEETYPE"));
+        }
+
+        [TestMethod]
+        public void BuildSelect_AppendsToTheRealDeltaQueryWithoutLosingAnything()
+        {
+            var selection = GraphUserOrgSelection.FromAttributeNames(
+                new[] { "extensionAttribute1", "employeeOrgData.costCenter" });
+
+            var built = selection.BuildSelect(GraphUserDeltaQuery.Select);
+            var properties = built.Split(',').Select(p => p.Trim()).ToList();
+
+            foreach (var original in GraphUserDeltaQuery.Select.Split(',').Select(p => p.Trim()))
+            {
+                CollectionAssert.Contains(properties, original, $"'{original}' must survive.");
+            }
+
+            CollectionAssert.Contains(properties, "onPremisesExtensionAttributes");
+            CollectionAssert.Contains(properties, "employeeOrgData");
+            Assert.AreEqual(properties.Count, properties.Distinct().Count(), "No property may repeat.");
+        }
+
+        [TestMethod]
+        public void UnparseableAttributesAreReportedRatherThanThrown()
+        {
+            // One unreadable row of configuration must not be able to stop the user import.
+            var selection = GraphUserOrgSelection.FromAttributeNames(new[] { "extensionAttribute1", "nonsense" });
+
+            CollectionAssert.AreEqual(new[] { "nonsense" }, selection.UnparseableAttributeNames.ToArray());
+            CollectionAssert.AreEqual(new[] { "onPremisesExtensionAttributes" }, selection.SelectFragments.ToArray());
+        }
+
+        private static EntraOrgAttributeSpec ParseSpec(string name)
+        {
+            EntraOrgAttributeSpec spec;
+            string error;
+            Assert.IsTrue(EntraOrgAttributeSpec.TryParse(name, out spec, out error), error);
+            return spec;
+        }
+    }
+
+    /// <summary>
+    /// Turning a batch of Graph users into org assignment updates.
+    /// </summary>
+    [TestClass]
+    public class UserOrgMappingRulesTests
+    {
+        private const string GreekOrgName = "Καλημέρα κόσμε";
+
+        [TestMethod]
+        public void ExtensionDataKeepsOrgAttributesAndNothingElse()
+        {
+            // The delta query selects assignedLicenses and assignedPlans as defence-in-depth for
+            // change detection; nothing reads their contents. Before extension data existed
+            // Newtonsoft dropped them. Left unmodelled they would now be retained as JToken trees on
+            // every GraphUser, and the loader holds the whole enumeration until the organisation
+            // merge at the end of the cycle - so at 200,000 users, where one E5 mailbox carries
+            // scores of service plans, that is millions of retained objects. It would hit every
+            // deployment, including those with no organisation types configured at all.
+            const string json = @"{
+                ""userPrincipalName"": ""a@contoso.com"",
+                ""department"": ""Retail"",
+                ""assignedLicenses"": [ { ""skuId"": ""00000000-0000-0000-0000-000000000000"" } ],
+                ""assignedPlans"": [ { ""service"": ""exchange"", ""capabilityStatus"": ""Enabled"" } ],
+                ""onPremisesExtensionAttributes"": { ""extensionAttribute1"": ""CC-1042"" }
+            }";
+
+            var user = Newtonsoft.Json.JsonConvert.DeserializeObject<GraphUser>(json);
+
+            Assert.AreEqual("a@contoso.com", user.UserPrincipalName);
+            Assert.AreEqual("Retail", user.Department, "Typed properties must keep their existing mapping.");
+
+            CollectionAssert.AreEquivalent(
+                new[] { "onPremisesExtensionAttributes" },
+                user.AdditionalProperties.Keys.ToList(),
+                "Extension data must retain the organisation attributes and nothing else. Anything "
+                + "added to the delta query's $select that organisations do not need has to be "
+                + "modelled on GraphUser, or it is kept for every user in the tenant.");
+        }
+
+        private static GraphUser User(string upn, string extensionAttributesJson = null)
+        {
+            var user = new GraphUser { UserPrincipalName = upn };
+            if (extensionAttributesJson != null)
+            {
+                user.AdditionalProperties = Newtonsoft.Json.JsonConvert
+                    .DeserializeObject<Dictionary<string, Newtonsoft.Json.Linq.JToken>>(extensionAttributesJson);
+            }
+            return user;
+        }
+
+        private static UserOrgTypeAttribute Type(int id, string attribute)
+        {
+            EntraOrgAttributeSpec spec;
+            string error;
+            Assert.IsTrue(EntraOrgAttributeSpec.TryParse(attribute, out spec, out error), error);
+            return new UserOrgTypeAttribute(id, spec);
+        }
+
+        private static Dictionary<string, int> Users(params KeyValuePair<string, int>[] pairs)
+        {
+            var map = new Dictionary<string, int>(System.StringComparer.OrdinalIgnoreCase);
+            foreach (var pair in pairs)
+            {
+                map[pair.Key] = pair.Value;
+            }
+            return map;
+        }
+
+        private static KeyValuePair<string, int> Pair(string upn, int id)
+        {
+            return new KeyValuePair<string, int>(upn, id);
+        }
+
+        [TestMethod]
+        public void BuildUpdates_ResolvesAValuePerConfiguredOrgType()
+        {
+            var graphUsers = new[]
+            {
+                User("a@contoso.com", @"{ ""onPremisesExtensionAttributes"": { ""extensionAttribute1"": ""CC-1"", ""extensionAttribute2"": ""Retail"" } }"),
+            };
+            var types = new[] { Type(10, "extensionAttribute1"), Type(11, "extensionAttribute2") };
+
+            var updates = UserOrgMappingRules.BuildUpdates(graphUsers, types, Users(Pair("a@contoso.com", 5)));
+
+            Assert.AreEqual(2, updates.Count);
+            Assert.AreEqual("CC-1", updates.Single(u => u.OrgTypeId == 10).OrgValue);
+            Assert.AreEqual("Retail", updates.Single(u => u.OrgTypeId == 11).OrgValue);
+            Assert.IsTrue(updates.All(u => u.UserId == 5));
+        }
+
+        [TestMethod]
+        public void BuildUpdates_EmitsANullSoAMissingAttributeClearsTheValue()
+        {
+            // The user is in this response precisely because something about them changed, so an
+            // attribute that is no longer there has genuinely gone - and the assignment must go with it.
+            var graphUsers = new[] { User("a@contoso.com", @"{ ""onPremisesExtensionAttributes"": { } }") };
+
+            var updates = UserOrgMappingRules.BuildUpdates(
+                graphUsers, new[] { Type(10, "extensionAttribute1") }, Users(Pair("a@contoso.com", 5)));
+
+            Assert.AreEqual(1, updates.Count);
+            Assert.IsNull(updates[0].OrgValue);
+        }
+
+        [TestMethod]
+        public void BuildUpdates_TreatsAnExplicitNullTheSameAsAnAbsentKey()
+        {
+            var absent = UserOrgMappingRules.BuildUpdates(
+                new[] { User("a@contoso.com", "{ }") },
+                new[] { Type(10, "extensionAttribute1") },
+                Users(Pair("a@contoso.com", 5)));
+
+            var explicitNull = UserOrgMappingRules.BuildUpdates(
+                new[] { User("a@contoso.com", @"{ ""onPremisesExtensionAttributes"": { ""extensionAttribute1"": null } }") },
+                new[] { Type(10, "extensionAttribute1") },
+                Users(Pair("a@contoso.com", 5)));
+
+            Assert.IsNull(absent.Single().OrgValue);
+            Assert.IsNull(explicitNull.Single().OrgValue);
+        }
+
+        [TestMethod]
+        public void BuildUpdates_ProducesNothingForUsersNotInTheBatch()
+        {
+            // This is what stops a routine delta cycle, which returns only changed users, from wiping
+            // the org values of the whole tenant.
+            var updates = UserOrgMappingRules.BuildUpdates(
+                new[] { User("changed@contoso.com", @"{ ""employeeType"": ""Staff"" }") },
+                new[] { Type(10, "employeeType") },
+                Users(Pair("changed@contoso.com", 1), Pair("untouched@contoso.com", 2)));
+
+            Assert.AreEqual(1, updates.Count);
+            Assert.AreEqual(1, updates[0].UserId);
+        }
+
+        [TestMethod]
+        public void BuildUpdates_SkipsGraphUsersWithNoDatabaseRow()
+        {
+            var updates = UserOrgMappingRules.BuildUpdates(
+                new[] { User("ghost@contoso.com", @"{ ""employeeType"": ""Staff"" }") },
+                new[] { Type(10, "employeeType") },
+                Users(Pair("someone-else@contoso.com", 1)));
+
+            Assert.AreEqual(0, updates.Count);
+        }
+
+        [TestMethod]
+        public void BuildUpdates_MatchesUpnsCaseInsensitively()
+        {
+            var updates = UserOrgMappingRules.BuildUpdates(
+                new[] { User("Person@Contoso.com", @"{ ""employeeType"": ""Staff"" }") },
+                new[] { Type(10, "employeeType") },
+                Users(Pair("person@contoso.com", 7)));
+
+            Assert.AreEqual(7, updates.Single().UserId);
+        }
+
+        [TestMethod]
+        public void BuildUpdates_NormalisesTheValue()
+        {
+            var updates = UserOrgMappingRules.BuildUpdates(
+                new[] { User("a@contoso.com", @"{ ""employeeType"": ""   "" }") },
+                new[] { Type(10, "employeeType") },
+                Users(Pair("a@contoso.com", 1)));
+
+            Assert.IsNull(updates.Single().OrgValue, "A whitespace-only attribute means no value.");
+        }
+
+        [TestMethod]
+        public void BuildUpdates_PreservesNonLatinValues()
+        {
+            var json = Newtonsoft.Json.JsonConvert.SerializeObject(
+                new Dictionary<string, object> { { "employeeType", GreekOrgName } });
+
+            var updates = UserOrgMappingRules.BuildUpdates(
+                new[] { User("a@contoso.com", json) },
+                new[] { Type(10, "employeeType") },
+                Users(Pair("a@contoso.com", 1)));
+
+            Assert.AreEqual(GreekOrgName, updates.Single().OrgValue);
+        }
+
+        [TestMethod]
+        public void BuildUpdates_HandlesNullAndEmptyInputs()
+        {
+            Assert.AreEqual(0, UserOrgMappingRules.BuildUpdates(null, new[] { Type(10, "employeeType") }, Users()).Count);
+            Assert.AreEqual(0, UserOrgMappingRules.BuildUpdates(new GraphUser[0], null, Users()).Count);
+            Assert.AreEqual(0, UserOrgMappingRules.BuildUpdates(new GraphUser[0], new UserOrgTypeAttribute[0], Users()).Count);
+            Assert.AreEqual(0, UserOrgMappingRules.BuildUpdates(new GraphUser[] { null }, new[] { Type(10, "employeeType") }, Users()).Count);
+        }
+
+        [TestMethod]
+        public void ParseOrgTypes_SkipsAndReportsTypesWhoseAttributeNoLongerParses()
+        {
+            IReadOnlyList<string> skipped;
+
+            var parsed = UserOrgMappingRules.ParseOrgTypes(
+                new[]
+                {
+                    new UserOrgType { Id = 1, Name = "Good", EntraAttributeName = "extensionAttribute1" },
+                    new UserOrgType { Id = 2, Name = "Broken", EntraAttributeName = "nonsense" },
+                },
+                out skipped);
+
+            Assert.AreEqual(1, parsed.Count);
+            Assert.AreEqual(1, parsed[0].OrgTypeId);
+            CollectionAssert.AreEqual(new[] { "Broken" }, skipped.ToArray());
+        }
+    }
+}

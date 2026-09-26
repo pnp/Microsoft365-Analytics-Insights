@@ -47,7 +47,48 @@ namespace Web.AnalyticsWeb.Models.UserDataLookup
                     .Include(u => u.LicenseLookups.Select(l => l.License))
                     .FirstOrDefaultAsync(u => u.UserPrincipalName == upn);
 
-                return user == null ? null : BuildProfile(user);
+                if (user == null)
+                {
+                    return null;
+                }
+
+                var profile = BuildProfile(user);
+                profile.Orgs = await LoadOrgsAsync(db, user.ID).ConfigureAwait(false);
+                return profile;
+            }
+        }
+
+        /// <summary>
+        /// Loads the user's configured organisation values.
+        /// </summary>
+        /// <remarks>
+        /// Raw SQL and its own try/catch, because the <c>user_org_*</c> tables are not part of the EF
+        /// model and are created by a migration the database may not have yet - the web-jobs
+        /// deliberately do not migrate. A deployment that has not upgraded should see the rest of the
+        /// user profile exactly as before, not a broken page.
+        /// </remarks>
+        private static async Task<List<UserOrgValueModel>> LoadOrgsAsync(AnalyticsEntitiesContext db, int userId)
+        {
+            const string sql = @"
+SELECT t.name AS OrgTypeName, v.name AS Value
+FROM dbo.user_org_assignments a
+JOIN dbo.user_org_types t ON t.id = a.org_type_id
+JOIN dbo.user_org_values v ON v.id = a.org_value_id
+WHERE a.user_id = @userId
+ORDER BY t.name;";
+
+            try
+            {
+                var rows = await db.Database
+                    .SqlQuery<UserOrgValueModel>(sql, new Microsoft.Data.SqlClient.SqlParameter("@userId", userId))
+                    .ToListAsync()
+                    .ConfigureAwait(false);
+                return rows;
+            }
+            catch (Exception)
+            {
+                // No user_org tables on this database yet. Organisations are simply not shown.
+                return new List<UserOrgValueModel>();
             }
         }
 

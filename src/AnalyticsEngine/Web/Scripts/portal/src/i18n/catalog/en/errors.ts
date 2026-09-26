@@ -21,6 +21,15 @@ export const errors = {
   'errors.userLookup.unknownCategory': "Unknown category '{category}'.",
   'errors.userLookup.categoryNoDrilldown': "Category '{category}' does not support drill-down.",
 
+  // User organisations API
+  'errors.userOrgs.requestFailed': 'Request failed ({status})',
+  'errors.userOrgs.fileUnreadable': 'The file could not be read.',
+  'errors.userOrgs.importNotStarted': 'The import could not be started.',
+  'errors.userOrgs.saveFailed': 'The organisation type could not be saved.',
+  'errors.userOrgs.loadFailed': 'The organisation types could not be loaded.',
+  'errors.userOrgs.deleteFailed': 'The organisation type could not be deleted.',
+  'errors.userOrgs.testFailed': 'The attribute could not be tested.',
+
   // Agent costs API
   'errors.agentCosts.availabilityFailed': "Couldn't load the agent cost availability ({status}).",
   'errors.agentCosts.summaryFailed': "Couldn't load the agent cost summary ({status}).",
