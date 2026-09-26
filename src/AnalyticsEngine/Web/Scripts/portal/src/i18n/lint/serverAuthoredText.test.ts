@@ -1953,9 +1953,14 @@ function licenceCoverageSentences(): string[] {
   // one, so an interpolated, computed or defaulted (`?? "..."`) sentence fails here rather than going unkeyed.
   const builders = ['SqlLicenceActivityStore.cs', 'SqlLicenceActivityReadModelLoader.cs', 'LicenceActivityReadModel.cs']
     .map((file) => readFileSync(join(LICENCE_ACTIVITY_DIR, file), 'utf8'));
+  // Each value must be followed (across line breaks) by the ',', '}' or ';' that ends the assignment, and
+  // every assignment must parse: a default on the next line (`?? "..."`) or any other unreadable shape
+  // fails the count instead of being skipped.
+  const opened = builders.reduce((count, source) => count + [...source.matchAll(/\b(?:Measure|Message)\s*=(?![=>])/g)].length, 0);
   const assignments = builders.flatMap((source) => [...source.matchAll(
-    /\b(?:Measure|Message)\s*=(?![=>])\s*("(?:[^"\\]|\\.)*"|\w+\([^)]*\)(?=\s*[,}\r\n])|[^,\n]+)/g,
+    /\b(?:Measure|Message)\s*=(?![=>])\s*("(?:[^"\\]|\\.)*"|\w+\([^)]*\)|[^,\n]+?)(?=\s*[,};])/g,
   )].map((m) => m[1].trim()));
+  expect(assignments.length, 'a coverage Measure/Message assignment the gate cannot read').toBe(opened);
   expect(sortedUnique(assignments.filter((value) => !value.startsWith('"'))), 'a non-literal coverage Measure/Message in a coverage builder')
     .toEqual(sortedUnique([
       'ReadNullableString(reader, "Message")', 'ReadString(reader, "Measure")', 'string.Empty',
