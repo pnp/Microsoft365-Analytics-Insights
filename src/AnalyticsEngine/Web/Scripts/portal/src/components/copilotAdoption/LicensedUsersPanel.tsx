@@ -29,10 +29,20 @@ import type {
   LicensedUserPage,
 } from '../../types/copilotAdoption';
 import Spinner from '../Spinner';
-import { BandBadge, ScoreBar, scoreColour, SortableTh, useAdoptionTableStyles } from './adoptionShared';
+import {
+  BandBadge,
+  PartialPrintNote,
+  PrintedFilters,
+  ScoreBar,
+  printedSearch,
+  scoreColour,
+  SortableTh,
+  useAdoptionTableStyles,
+} from './adoptionShared';
+import { usePrintAllRows } from '../shared/printPreparation';
 import { formatCount, formatDate, formatPct, weightSharePct } from '../shared/KpiGrid';
 import ActionPlan, { ActionBadge } from './ActionPlan';
-import { useT, useTNode, type TFunction } from '../../i18n';
+import { useT, useTNode, type TFunction, type TranslationKey } from '../../i18n';
 import {
   adoptionBandLabel,
   actionLabel,
@@ -49,6 +59,15 @@ const PAGE_SIZE = 50;
  * from its own header, so the old sort drop-down was a second way to do the same thing.
  */
 const DEFAULT_SORT_BY = 'score';
+
+/** The reclaim-tier drop-down, in order. Shared with the printout, which states the option chosen. */
+const RECLAIM_OPTIONS: Array<{ value: string; labelKey: TranslationKey }> = [
+  { value: '', labelKey: 'copilotAdoptionUsers.licensed.allReclaimTiers' },
+  { value: 'certain', labelKey: 'copilotAdoptionUsers.licensed.certainReclaim' },
+  { value: 'probable', labelKey: 'copilotAdoptionUsers.licensed.probableReclaim' },
+  { value: 'review', labelKey: 'copilotAdoptionUsers.licensed.reviewBeforeReclaim' },
+  { value: 'excluded', labelKey: 'copilotAdoptionUsers.licensed.excludedFromReclaim' },
+];
 
 const useStyles = makeStyles({
   filters: {
@@ -220,6 +239,19 @@ export default function LicensedUsersPanel({
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
 
+  // The whole list while a print is being produced; the page on screen the rest of the time.
+  const printRows = usePrintAllRows<LicensedUserAdoptionRow>({
+    enabled: !loading && data !== null,
+    total: data?.total ?? 0,
+    loadedRows: data?.rows.length ?? 0,
+    loadPage: (skip, take, signal) => fetchLicensedUsers(windowDays, filters, skip, take, seatLicenceTypeIds, signal),
+  });
+  const rows = printRows ?? data?.rows ?? [];
+
+  const selectedBand = filters.bands.length === 1 ? filters.bands[0] : null;
+  const selectedAction = filters.actions.length === 1 ? actionPlan.find((a) => a.code === filters.actions[0]) : undefined;
+  const reclaimOption = RECLAIM_OPTIONS.find((o) => o.value === filters.reclaimEligibility);
+
   const scoreWeights = [options.frequencyWeight, options.depthWeight, options.breadthWeight];
   const weightSum = scoreWeights.reduce((total, w) => total + w, 0);
   const bands = {
@@ -228,16 +260,18 @@ export default function LicensedUsersPanel({
     developing: options.developingScore,
   };
 
-  // Only the actions that actually appear in the rows on screen. Showing all seven when the filter
-  // has narrowed the list to one band would be padding, not explanation.
+  // Only the actions that actually appear in the rows on screen - or on paper, where that is the
+  // whole list. Showing all seven when the filter has narrowed the list to one band would be
+  // padding, not explanation.
   const visibleActions = useMemo(() => {
-    const present = new Set((data?.rows ?? []).map((r) => r.recommendedActionCode));
+    const present = new Set(rows.map((r) => r.recommendedActionCode));
     return actionPlan.filter((a) => present.has(a.code));
-  }, [data, actionPlan]);
+  }, [rows, actionPlan]);
 
   return (
     <Card>
-      <div className={styles.filters}>
+      {/* Chrome: nothing here can be used on paper. What it is set to is printed below instead. */}
+      <div className={styles.filters} data-print="hide">
         <Input
           className={styles.grow}
           value={searchDraft}
@@ -285,11 +319,11 @@ export default function LicensedUsersPanel({
           aria-label={t('copilotAdoptionUsers.licensed.filterReclaimAria')}
           onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, reclaimEligibility: d.value }))}
         >
-          <option value="">{t('copilotAdoptionUsers.licensed.allReclaimTiers')}</option>
-          <option value="certain">{t('copilotAdoptionUsers.licensed.certainReclaim')}</option>
-          <option value="probable">{t('copilotAdoptionUsers.licensed.probableReclaim')}</option>
-          <option value="review">{t('copilotAdoptionUsers.licensed.reviewBeforeReclaim')}</option>
-          <option value="excluded">{t('copilotAdoptionUsers.licensed.excludedFromReclaim')}</option>
+          {RECLAIM_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {t(o.labelKey)}
+            </option>
+          ))}
         </Select>
 
         <Select
@@ -335,6 +369,40 @@ export default function LicensedUsersPanel({
           {t('copilotAdoptionUsers.common.exportCsv')}
         </Button>
       </div>
+
+      <PrintedFilters
+        filters={[
+          printedSearch(t, filters.search),
+          {
+            label: t('copilotAdoptionUsers.licensed.bandHeader'),
+            value:
+              selectedBand === null
+                ? t('copilotAdoptionUsers.licensed.allEngagementBands')
+                : adoptionBandLabel(
+                    t,
+                    selectedBand,
+                    (filterOptions?.bands ?? []).find((b) => b.value === selectedBand)?.name ?? String(selectedBand),
+                  ),
+          },
+          {
+            label: t('copilotAdoptionUsers.licensed.actionHeader'),
+            value:
+              filters.actions.length === 1
+                ? actionLabel(t, filters.actions[0], selectedAction?.label ?? filters.actions[0])
+                : t('copilotAdoptionUsers.licensed.allRecommendedActions'),
+          },
+          {
+            label: t('copilotAdoptionUsers.licensed.reclaimTierHeader'),
+            value: t(reclaimOption?.labelKey ?? 'copilotAdoptionUsers.licensed.allReclaimTiers'),
+          },
+          {
+            label: t('copilotAdoptionUsers.common.department'),
+            value: filters.department || t('copilotAdoptionUsers.common.allDepartments'),
+          },
+          filters.coworkOnly && { value: t('copilotAdoptionUsers.licensed.coworkUsersOnly') },
+          filters.disabledOnly && { value: t('copilotAdoptionUsers.licensed.disabledAccountsOnly') },
+        ]}
+      />
 
       {error && (
         <MessageBar intent="error">
@@ -560,7 +628,7 @@ export default function LicensedUsersPanel({
               </tr>
             </thead>
             <tbody>
-              {data.rows.map((row) => (
+              {rows.map((row) => (
                 <tr key={row.userId}>
                   <td className={`${table.td} ${table.stickyLeft}`}>
                     <span className={styles.upn}>
@@ -652,28 +720,32 @@ export default function LicensedUsersPanel({
         <div className={styles.footer}>
           <Text size={200} className={styles.muted}>
             {t('copilotAdoptionUsers.licensed.showingUsers', {
-              start: formatCount(data.skip + 1),
-              end: formatCount(Math.min(data.skip + PAGE_SIZE, data.total)),
+              start: formatCount(printRows ? 1 : data.skip + 1),
+              end: formatCount(printRows ? printRows.length : Math.min(data.skip + PAGE_SIZE, data.total)),
               total: formatCount(data.total),
             })}
           </Text>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <Button size="small" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
-              {t('copilotAdoptionUsers.common.previous')}
-            </Button>
-            <Text size={200} className={styles.muted}>
-              {t('copilotAdoptionUsers.common.page', { page: page + 1, totalPages })}
-            </Text>
-            <Button
-              size="small"
-              disabled={page + 1 >= totalPages}
-              onClick={() => setPage((p) => p + 1)}
-            >
-              {t('copilotAdoptionUsers.common.next')}
-            </Button>
-          </div>
+          {/* A printout holds the whole list, so there is no page to turn to. */}
+          {!printRows && (
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }} data-print="hide">
+              <Button size="small" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
+                {t('copilotAdoptionUsers.common.previous')}
+              </Button>
+              <Text size={200} className={styles.muted}>
+                {t('copilotAdoptionUsers.common.page', { page: page + 1, totalPages })}
+              </Text>
+              <Button
+                size="small"
+                disabled={page + 1 >= totalPages}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                {t('copilotAdoptionUsers.common.next')}
+              </Button>
+            </div>
+          )}
         </div>
       )}
+      {!loading && data && <PartialPrintNote shownRows={rows.length} totalRows={data.total} />}
     </Card>
   );
 }

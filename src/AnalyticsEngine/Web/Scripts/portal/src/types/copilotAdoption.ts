@@ -173,11 +173,35 @@ export interface CopilotAdoptionOptions {
   coworkRegularMinActiveDays: number;
   coworkAgentFamiliarityUplift: number;
 
-  coworkMinutesSavedPerMeeting: number;
-  coworkMinutesSavedPerMailThread: number;
-  coworkMinutesSavedPerDocument: number;
+  /**
+   * Minutes Microsoft 365 Copilot is assumed to save per meeting, email and document. They drive the
+   * licence estimate. Named `coworkMinutesSavedPer*` until the licence estimate was split out.
+   */
+  copilotMinutesSavedPerMeeting: number;
+  copilotMinutesSavedPerMailThread: number;
+  copilotMinutesSavedPerDocument: number;
+  /** The conservative share of every minutes-saved assumption. Shared by both estimates. */
   coworkEstimateLowerBoundRatio: number;
-  /** Null means no monetary figure is produced at all - there is no defensible default. */
+  /**
+   * Minutes Cowork is assumed to save per task already in Microsoft's Cowork report, on top of Copilot.
+   * No study has measured it.
+   */
+  coworkMinutesSavedPerTask: number;
+  /**
+   * For each kind of work Cowork could take on (`CoworkActivity`), the share of it handed to Cowork
+   * (0 to 1) and the minutes Cowork saves on each piece, on top of Copilot. Assumptions, all of them -
+   * see CoworkActivities.cs. Named so the Excel export can send a reader's figure back under the same key.
+   */
+  coworkOrganiseMeetingsShare: number;
+  coworkOrganiseMeetingsMinutes: number;
+  coworkPrepareMeetingsShare: number;
+  coworkPrepareMeetingsMinutes: number;
+  coworkSendEmailShare: number;
+  coworkSendEmailMinutes: number;
+  coworkPostInTeamsShare: number;
+  coworkPostInTeamsMinutes: number;
+  coworkCreateDocumentsShare: number;
+  coworkCreateDocumentsMinutes: number;
 
   usageReportLagDays: number;
   topSegments: number;
@@ -324,6 +348,7 @@ export interface AdoptionCombinedSegmentRow {
 
 /** Adoption, reclaim and next-action counts for one accountable unit. */
 export interface AccountabilityRollupRow extends AdoptionSegmentRow {
+  emptySegmentKey?: string | null;
   reclaimableSeats: number;
   reclaimCertainSeats: number;
   reclaimProbableSeats: number;
@@ -370,6 +395,7 @@ export interface CopilotAdoptionSummary {
   expiredReclaimExclusions: number;
   tooNewToJudgeUsers: number;
   reclaimCaveat: string | null;
+  reclaimCaveatKey?: string | null;
   reclaimSeatsHeldBackForWindowMismatch: number;
   reclaimSeatsHeldBackForReview: number;
   reclaimSeatsFromActiveBands: number;
@@ -413,10 +439,27 @@ export interface CopilotAdoptionSummary {
   coworkQuadrant: CoworkQuadrantPoint[];
   coworkByDepartment: CoworkSegmentRow[];
   coworkCreditPosition: CoworkCreditPosition;
+  /**
+   * The modelled Cowork estimate for the people ready for Cowork now (the recommended policy cohort):
+   * the time Cowork could give back on top of what their Copilot licences already save.
+   */
   coworkValueEstimate: CoworkValueEstimate;
+  /**
+   * The same model over every scored Copilot seat holder - the ceiling if everyone used Cowork.
+   * Optional only so a fixture written before it existed still type-checks; the server always sends it.
+   */
+  coworkFullRolloutEstimate?: CoworkValueEstimate;
 
   unlicensedActiveUsers: number;
   recommendedForLicence: number;
+  /**
+   * The modelled licence estimate: the time Microsoft 365 Copilot could give back to every person
+   * recommended for a licence. Empty (no cohort) when nobody is recommended or the Microsoft 365 usage
+   * reports are unavailable. Optional only so older fixtures still type-check.
+   */
+  licenceOpportunityEstimate?: LicenceValueEstimate;
+  /** The same model over the recommended candidates already using Copilot Chat without a licence. */
+  licenceChatUsersEstimate?: LicenceValueEstimate;
 
   funnel: ReportCategory[];
   bandBreakdown: ReportCategory[];
@@ -461,6 +504,7 @@ export interface CopilotAdoptionSummary {
 
   options: CopilotAdoptionOptions;
   warnings: string[];
+  warningDetails?: CopilotAdoptionWarningDetail[];
 
   /**
    * True when a query the headline figures are DERIVED FROM failed, so everything below describes an
@@ -588,6 +632,7 @@ export interface LicensedUserPage {
   take: number;
   rows: LicensedUserAdoptionRow[];
   warnings: string[];
+  warningDetails?: CopilotAdoptionWarningDetail[];
 }
 
 export interface LicenceOpportunityPage {
@@ -596,6 +641,12 @@ export interface LicenceOpportunityPage {
   take: number;
   rows: LicenceOpportunityRow[];
   warnings: string[];
+  warningDetails?: CopilotAdoptionWarningDetail[];
+}
+
+export interface CopilotAdoptionWarningDetail {
+  key: string;
+  values?: Record<string, string | number | boolean | null>;
 }
 
 /** Distinct values for the filter drop-downs, derived from the loaded analysis. */
@@ -734,21 +785,83 @@ export interface CoworkCreditPosition {
 }
 
 /**
- * The modelled time/cost estimate.
+ * The kinds of work the Cowork estimate models for people not yet running Cowork tasks: each thing
+ * Microsoft says Cowork does, against the count Microsoft's usage reports keep of people doing it by
+ * hand. In the order the server publishes and sums them - see `COWORK_ACTIVITIES`.
+ */
+export type CoworkActivity = 'organiseMeetings' | 'prepareMeetings' | 'sendEmail' | 'postInTeams' | 'createDocuments';
+
+/** What one cohort already does by hand of one kind of work, a month. Observed, not modelled. */
+export interface CoworkActivityVolume {
+  activity: CoworkActivity;
+  /** Done by hand a month by the people not yet running Cowork tasks. */
+  volumePerMonth: number;
+}
+
+/**
+ * The modelled Cowork estimate for one cohort: the time Cowork could give back ON TOP of what Microsoft
+ * 365 Copilot already saves - the value of enabling Cowork, paid for in Copilot Credits.
  *
- * The `addressable*` volumes are observed; the hours and money are those volumes multiplied by an
- * assumption. `assumptions` travels with the numbers so no component can render a figure without it.
+ * The Cowork tasks already in Microsoft's report, at minutes per task; and for everyone else, each kind
+ * of work they already do by hand x the share of it handed to Cowork x the minutes saved on each piece.
+ * The volumes are observed; the shares and minutes are assumptions no study has tested. There is
+ * deliberately no Copilot layer: these people already hold a licence, and the time it gives back is not
+ * Cowork's to claim.
+ *
+ * `assumptions` travels with the numbers so no component can render a figure without it. The portal
+ * recomputes the hours from the published inputs whenever the reader enters their own assumptions -
+ * see `components/copilotAdoption/coworkTimeSaved.ts`.
  */
 export interface CoworkValueEstimate {
   isModelled: boolean;
   cohortUsers: number;
+  /** People in the cohort with Cowork tasks in Microsoft's Cowork report. Observed. */
+  coworkTaskUsers: number;
+  /** Their tasks, restated as a month. Observed. */
+  observedCoworkTasks: number;
+  /** Everyone else in the cohort, modelled from the work they already do. */
+  projectedCoworkUsers: number;
+  /** That work, a month, one entry per kind - every kind present, in `COWORK_ACTIVITIES` order. Observed. */
+  activities: CoworkActivityVolume[];
+  /** Pieces of work a month handed to Cowork: each volume x its share, summed, then rounded. */
+  projectedCoworkTasks: number;
+  /** Observed tasks plus the pieces of work handed over. */
+  coworkTasks: number;
+  /**
+   * The tenant's own Cowork users' average tasks a month - the sense check, not an input. Zero when
+   * nobody has Cowork tasks in the report.
+   */
+  observedTasksPerPersonPerMonth: number;
+  /** How many people that average is of. */
+  observedTaskRateUsers: number;
+  hoursPerMonthLow: number;
+  hoursPerMonthHigh: number;
+  // No monetary fields, and none anywhere else in this report: the estimate is modelled, and a money
+  // figure derived from it would be quoted as though it were measured. See CoworkValueEstimate in
+  // CopilotAdoptionCoworkModels.cs.
+  assumptions: string[];
+}
+
+/**
+ * The modelled licence estimate: the time Microsoft 365 Copilot could give back to people recommended
+ * for a licence - observed meetings, emails and documents times the minutes Copilot is assumed to save
+ * on each, evidenced by published studies of Microsoft 365 Copilot.
+ *
+ * See `LicenceValueEstimate` in CopilotAdoptionTimeSavedModels.cs. No monetary fields.
+ */
+export interface LicenceValueEstimate {
+  isModelled: boolean;
+  cohortUsers: number;
+  /** Meetings a month across the cohort. Observed. */
   addressableMeetings: number;
+  /** Emails sent and read a month across the cohort. Observed. */
   addressableMailThreads: number;
+  /** SharePoint and OneDrive documents viewed or edited a month across the cohort. Observed. */
   addressableDocuments: number;
   hoursPerMonthLow: number;
   hoursPerMonthHigh: number;
-  // No monetary fields: this estimate is modelled, and currency is reported only against idle
-  // licence spend, which is measured. See CoworkValueEstimate in CopilotAdoptionCoworkModels.cs.
+  /** True when the candidate list reached its row cap, so the figure is a floor. */
+  candidatesCapped: boolean;
   assumptions: string[];
 }
 
@@ -814,6 +927,7 @@ export interface CoworkReadinessPage {
   take: number;
   rows: CoworkReadinessRow[];
   warnings: string[];
+  warningDetails?: CopilotAdoptionWarningDetail[];
 }
 
 /** Filter/sort state for the Cowork readiness list. */
@@ -829,4 +943,3 @@ export interface CoworkFilters {
   sortBy: string;
   sortDesc: boolean;
 }
-

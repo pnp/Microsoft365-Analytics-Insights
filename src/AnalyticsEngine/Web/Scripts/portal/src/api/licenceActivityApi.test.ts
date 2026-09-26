@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { apiFetch } from './http';
 import { LicenceActivityApiError, downloadExport, fetchOverview, fetchUsers } from './licenceActivityApi';
+import { loadCatalog } from '../i18n';
+import { setActiveLanguage } from '../i18n/runtime';
 
 vi.mock('./http', () => ({ apiFetch: vi.fn() }));
 
@@ -17,6 +19,7 @@ function lastUrl(): string {
 
 beforeEach(() => {
   mockedFetch.mockReset();
+  setActiveLanguage('en');
 });
 
 describe('licenceActivityApi query building', () => {
@@ -58,7 +61,9 @@ describe('licenceActivityApi query building', () => {
 });
 
 describe('licenceActivityApi error mapping', () => {
-  it('maps statuses to kinds and prefers the server message', async () => {
+  it('maps known statuses to kinds and uses catalogued messages instead of server English', async () => {
+    await loadCatalog('es');
+    setActiveLanguage('es');
     const cases: { status: number; kind: string }[] = [
       { status: 503, kind: 'busy' },
       { status: 410, kind: 'expired' },
@@ -70,11 +75,11 @@ describe('licenceActivityApi error mapping', () => {
     ];
 
     for (const { status, kind } of cases) {
-      mockedFetch.mockImplementation(async () => jsonResponse({ message: `msg ${status}` }, status));
+      mockedFetch.mockImplementation(async () => jsonResponse({ message: `The server wrote English ${status}.` }, status));
       await expect(fetchOverview({ from: '2026-05-01', to: '2026-05-19' })).rejects.toMatchObject({
         kind,
         status,
-        message: `msg ${status}`,
+        message: expect.not.stringContaining('The server wrote English'),
       });
     }
   });
@@ -87,15 +92,59 @@ describe('licenceActivityApi error mapping', () => {
     });
   });
 
-  it('surfaces cold-range admission pressure without inventing a query timeout or polling', async () => {
+  it('surfaces cold-range admission pressure as the localised busy condition without polling', async () => {
+    await loadCatalog('es');
+    setActiveLanguage('es');
     mockedFetch.mockResolvedValue(jsonResponse({
+      code: 'anotherReportPreparing',
       message: 'Another licence report snapshot is loading. Retry in a few seconds.',
     }, 503));
     await expect(fetchOverview({ from: '2026-05-01', to: '2026-05-19' })).rejects.toMatchObject({
       kind: 'busy',
-      message: 'Another licence report snapshot is loading. Retry in a few seconds.',
+      message: 'Se está preparando otro informe de licencias ahora mismo. Inténtelo de nuevo en unos segundos.',
     });
     expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses coded validation messages instead of the generic bad-request text', async () => {
+    mockedFetch.mockResolvedValue(jsonResponse({
+      code: 'dateRange',
+      message: 'Choose 7 to 180 inclusive UTC dates, ending before today. Custom ranges are never rounded.',
+    }, 400));
+
+    await expect(fetchOverview({ from: '2026-05-01', to: '2026-05-19' })).rejects.toMatchObject({
+      kind: 'badRequest',
+      message: 'Choose 7 to 180 inclusive UTC dates, ending before today. Custom ranges are never rounded.',
+    });
+  });
+
+  it('keeps the generic localised message when a non-http status has no recognised code', async () => {
+    mockedFetch.mockResolvedValue(jsonResponse({ message: 'A future licence error.' }, 410));
+
+    await expect(fetchOverview({ from: '2026-05-01', to: '2026-05-19' })).rejects.toMatchObject({
+      kind: 'expired',
+      message: 'These figures are no longer being held. Refresh the report to bring back an up-to-date set.',
+    });
+  });
+
+  it('keeps the failed run reference in either language when a snapshot could not be loaded', async () => {
+    // LicenceActivityFailedException's reply: the English message still carries the reference, and the
+    // code and reference travel beside it so a Spanish reader gets both the sentence and the reference.
+    const serverMessage = 'Licence activity could not be loaded. Retry the request. Reference: run-7f3a';
+    mockedFetch.mockImplementation(async () => jsonResponse({ code: 'loadFailed', message: serverMessage, reference: 'run-7f3a' }, 503));
+
+    setActiveLanguage('en');
+    await expect(fetchOverview({ from: '2026-05-01', to: '2026-05-19' })).rejects.toMatchObject({
+      kind: 'busy',
+      message: serverMessage,
+    });
+
+    await loadCatalog('es');
+    setActiveLanguage('es');
+    await expect(fetchOverview({ from: '2026-05-01', to: '2026-05-19' })).rejects.toMatchObject({
+      kind: 'busy',
+      message: 'No se pudo cargar la actividad de licencias. Vuelva a intentar la solicitud. Referencia: run-7f3a',
+    });
   });
 });
 

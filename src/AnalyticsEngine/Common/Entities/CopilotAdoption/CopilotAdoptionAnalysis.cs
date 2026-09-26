@@ -19,6 +19,19 @@ namespace Common.Entities.CopilotAdoption
 
         public List<LicenceOpportunityRow> Opportunities { get; set; } = new List<LicenceOpportunityRow>();
 
+        /// <summary>
+        /// True when the licence-opportunity query returned
+        /// <see cref="CopilotAdoptionOptions.MaxOpportunityCandidates"/> rows, so candidates beyond the cap
+        /// were never scored.
+        /// </summary>
+        /// <remarks>
+        /// Held here rather than derived from <see cref="Opportunities"/> because the cap is applied
+        /// tenant-wide: a view narrowed to one email domain holds fewer rows than the cap, yet that
+        /// domain's weaker candidates may still have been cut. The licence estimate reads it to say its
+        /// figure may be a floor.
+        /// </remarks>
+        public bool OpportunitiesCapped { get; set; }
+
         /// <summary>Every Copilot agent seen in the history window, with its health verdict.</summary>
         public List<AgentUsageRow> Agents { get; set; } = new List<AgentUsageRow>();
 

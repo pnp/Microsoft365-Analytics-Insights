@@ -20,6 +20,19 @@ namespace Common.Entities.CopilotAdoption
     /// </summary>
     public class CopilotAdoptionDiagnostics
     {
+        /// <summary>
+        /// The Application Insights correlation id of the run that produced this result - the same value as
+        /// <c>RunId</c> / <c>operation_Id</c> on its <c>CopilotAdoptionLifecycle</c> and
+        /// <c>CopilotAdoptionAnalysis</c> events. Null when telemetry was not running.
+        /// </summary>
+        /// <remarks>
+        /// Published so a browser trace (HAR) or a screenshot of the summary JSON can be tied to the exact run
+        /// in telemetry. Without it the only join was the timestamp and the window, which is ambiguous as soon
+        /// as two periods are analysed at once. A random GUID carries no tenant data.
+        /// </remarks>
+        [JsonProperty("runId")]
+        public string RunId { get; set; }
+
         /// <summary>Wall-clock time for the whole analysis.</summary>
         [JsonProperty("totalMs")]
         public long TotalMs { get; set; }

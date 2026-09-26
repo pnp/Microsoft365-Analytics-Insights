@@ -15,6 +15,7 @@ import { formatNumber, useT } from '../../i18n';
 import {
   CYCLE_SLA_HOURS,
   SectionFrame,
+  formatHealthDuration,
   formatUtc,
   freshnessColor,
   howLongAgo,
@@ -69,7 +70,7 @@ export default function LivenessPanel({ active }: { active: boolean }) {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <Text size={200}>{job.duration}</Text>
+                        <Text size={200}>{formatHealthDuration(job.durationSeconds, job.duration, t)}</Text>
                       </TableCell>
                     </TableRow>
                   ))}

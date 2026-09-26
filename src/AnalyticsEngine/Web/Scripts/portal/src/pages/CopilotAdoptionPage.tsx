@@ -57,12 +57,30 @@ import EmailDomainPanel from '../components/copilotAdoption/EmailDomainPanel';
 import { ConcentrationBar, CombinedSegmentTable } from '../components/copilotAdoption/CombinedViews';
 import InfoTip from '../components/shared/InfoTip';
 import PrintButton from '../components/shared/PrintButton';
+import { PRINT_ROW_LIMIT } from '../components/shared/printPreparation';
+import { serverPlaceholderText } from '../components/shared/serverPlaceholder';
 import DismissibleWarnings from '../components/shared/DismissibleWarnings';
 import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
 import type { KpiDefinition } from '../components/shared/KpiGrid';
-import { activeLocale, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
-import { adoptionBandLabel, availabilityMessages, scoreProfileLabel } from '../components/copilotAdoption/serverText';
+import { activeLocale, formatNumber, plural, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
+import {
+  adoptionBandLabel,
+  availabilityMessages,
+  copilotAdoptionWarningIdentity,
+  copilotAdoptionWarningText,
+  incompleteDatasetText,
+  reclaimCaveatText,
+  scoreProfileLabel,
+} from '../components/copilotAdoption/serverText';
+import {
+  compactHoursRange,
+  projectCoworkTimeSaved,
+  projectLicenceTimeSaved,
+  timeSavedExportParams,
+  useTimeSavedAssumptions,
+  type TimeSavedAssumptions,
+} from '../components/copilotAdoption/coworkTimeSaved';
 
 const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
   { value: 7, labelKey: 'copilotAdoption.page.window.last7Days' },
@@ -72,6 +90,48 @@ const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
 ];
 
 type AdoptionTab = 'executive' | 'analyst' | 'licensed' | 'cowork' | 'unlicensed' | 'agents' | 'opportunities' | 'method';
+
+type AccountabilityDimensionText = {
+  labelKey: TranslationKey;
+  aggregateViewKey: TranslationKey;
+  safeViewKey: TranslationKey;
+};
+
+export const ACCOUNTABILITY_DIMENSION_TEXT: Record<string, AccountabilityDimensionText> = {
+  directManager: {
+    labelKey: 'copilotAdoption.page.accountability.dimension.directManager.label',
+    aggregateViewKey: 'copilotAdoption.page.accountability.aggregateView.directManager',
+    safeViewKey: 'copilotAdoption.page.accountability.safeView.directManager',
+  },
+  department: {
+    labelKey: 'copilotAdoption.page.accountability.dimension.department.label',
+    aggregateViewKey: 'copilotAdoption.page.accountability.aggregateView.department',
+    safeViewKey: 'copilotAdoption.page.accountability.safeView.department',
+  },
+  country: {
+    labelKey: 'copilotAdoption.page.accountability.dimension.country.label',
+    aggregateViewKey: 'copilotAdoption.page.accountability.aggregateView.country',
+    safeViewKey: 'copilotAdoption.page.accountability.safeView.country',
+  },
+  office: {
+    labelKey: 'copilotAdoption.page.accountability.dimension.office.label',
+    aggregateViewKey: 'copilotAdoption.page.accountability.aggregateView.office',
+    safeViewKey: 'copilotAdoption.page.accountability.safeView.office',
+  },
+  company: {
+    labelKey: 'copilotAdoption.page.accountability.dimension.company.label',
+    aggregateViewKey: 'copilotAdoption.page.accountability.aggregateView.company',
+    safeViewKey: 'copilotAdoption.page.accountability.safeView.company',
+  },
+};
+
+export const ACCOUNTABILITY_EMPTY_SEGMENT_KEYS: Record<string, TranslationKey> = {
+  noManager: 'copilotAdoption.page.accountability.empty.noManager',
+  noDepartment: 'copilotAdoption.page.accountability.empty.noDepartment',
+  noCountry: 'copilotAdoption.page.accountability.empty.noCountry',
+  noOffice: 'copilotAdoption.page.accountability.empty.noOffice',
+  noCompany: 'copilotAdoption.page.accountability.empty.noCompany',
+};
 
 /**
  * The tab strip, in order.
@@ -294,6 +354,8 @@ export default function CopilotAdoptionPage() {
   const [filterOptions, setFilterOptions] = useState<AdoptionFilterOptions | null>(null);
   const [sql, setSql] = useState<Record<string, string> | null>(null);
   const lastSummaryScope = useRef<string | null>(null);
+  // The reader's own time-saved figures, if any, so the Excel report models the hours on screen.
+  const timeSaved = useTimeSavedAssumptions(summary);
 
   useEffect(() => {
     let cancelled = false;
@@ -391,6 +453,12 @@ export default function CopilotAdoptionPage() {
     setTab('opportunities');
   };
 
+  /** Where a headline tile's link takes the reader - the tab that explains the figure. */
+  const openTab = (next: AdoptionTab) => {
+    setDrillAction(undefined);
+    setTab(next);
+  };
+
   return (
     <div>
       <div className={styles.header}>
@@ -433,7 +501,10 @@ export default function CopilotAdoptionPage() {
           )}
           {availability?.available && (
             <PrintButton
-              tooltip={t('copilotAdoption.page.controls.printTooltip', { v0: t(TAB_LABEL_KEYS[tab]) })}
+              tooltip={t('copilotAdoption.page.controls.printTooltip', {
+                v0: t(TAB_LABEL_KEYS[tab]),
+                limit: formatCount(PRINT_ROW_LIMIT),
+              })}
             />
           )}
           {availability?.available && (
@@ -452,7 +523,7 @@ export default function CopilotAdoptionPage() {
                 appearance="primary"
                 icon={<ArrowDownload16Regular />}
                 as="a"
-                href={summary ? workbookExportUrl(windowDays, undefined, emailDomain) : undefined}
+                href={summary ? workbookExportUrl(windowDays, undefined, emailDomain, timeSavedExportParams(timeSaved)) : undefined}
                 disabled={!summary}
               >{t('copilotAdoption.page.controls.excelReport')}</Button>
             </Tooltip>
@@ -530,14 +601,21 @@ export default function CopilotAdoptionPage() {
                       warning: <strong>{t('copilotAdoption.page.incomplete.warning')}</strong>,
                       missing:
                         summary.incompleteReasons.length > 0
-                          ? `${t('copilotAdoption.page.incomplete.missingPrefix')} ${summary.incompleteReasons.join(', ')}. `
+                          ? `${t('copilotAdoption.page.incomplete.missingPrefix')} ${summary.incompleteReasons.map((reason) => incompleteDatasetText(t, reason)).join(', ')}. `
                           : '',
                     })}
                   </MessageBarBody>
                 </MessageBar>
               )}
 
-              {summary.warnings.length > 0 && <DismissibleWarnings messages={summary.warnings} />}
+              {summary.warnings.length > 0 && (
+                <DismissibleWarnings
+                  messages={summary.warnings.map((warning, index) =>
+                    copilotAdoptionWarningText(t, summary.warningDetails?.[index], warning))}
+                  identities={summary.warnings.map((warning, index) =>
+                    copilotAdoptionWarningIdentity(summary.warningDetails?.[index], warning))}
+                />
+              )}
 
               {/* Stated on screen, every time. A dashboard silently showing one subsidiary is the
                   fastest way to get a licence decision wrong, and the domain drop-down is easy to
@@ -553,7 +631,11 @@ export default function CopilotAdoptionPage() {
                               v0: describeUnscopedSections(t, summary.unscopedSections ?? []),
                             })}`
                           : '',
-                      link: <Link onClick={() => setEmailDomain(null)}>{t('copilotAdoption.page.scopeBanner.showAllDomains')}</Link>,
+                      link: (
+                        <Link onClick={() => setEmailDomain(null)} data-print="hide">
+                          {t('copilotAdoption.page.scopeBanner.showAllDomains')}
+                        </Link>
+                      ),
                     })}
                   </MessageBarBody>
                 </MessageBar>
@@ -576,6 +658,7 @@ export default function CopilotAdoptionPage() {
                     onDrillToAction={drillToAction}
                     onShowLicensedDetails={showLicensedDetails}
                     onShowOpportunityDetails={showOpportunityDetails}
+                    onOpenTab={openTab}
                     selectedEmailDomain={emailDomain}
                     onSelectEmailDomain={setEmailDomain}
                   />
@@ -586,6 +669,7 @@ export default function CopilotAdoptionPage() {
                   summary={summary}
                   sql={sql}
                   onDrillToAction={drillToAction}
+                  onOpenTab={openTab}
                   selectedEmailDomain={emailDomain}
                   onSelectEmailDomain={setEmailDomain}
                 />
@@ -638,6 +722,7 @@ export default function CopilotAdoptionPage() {
                 <OpportunitiesPanel
                   key={emailDomain ?? 'all'}
                   windowDays={windowDays}
+                  summary={summary}
                   filterOptions={filterOptions}
                   options={summary.options}
                   guidanceLinks={summary.guidanceLinks}
@@ -715,6 +800,7 @@ function ExecutiveTab({
   onDrillToAction,
   onShowLicensedDetails,
   onShowOpportunityDetails,
+  onOpenTab,
   selectedEmailDomain,
   onSelectEmailDomain,
 }: {
@@ -722,13 +808,15 @@ function ExecutiveTab({
   onDrillToAction?: (code: string) => void;
   onShowLicensedDetails: () => void;
   onShowOpportunityDetails: () => void;
+  onOpenTab?: (tab: AdoptionTab) => void;
   selectedEmailDomain?: string | null;
   onSelectEmailDomain?: (domain: string | null) => void;
 }) {
   const styles = useStyles();
   const t = useT();
   const o = summary.options;
-  const kpis = buildExecutiveKpis(summary, t);
+  const { assumptions: timeSavedAssumptions } = useTimeSavedAssumptions(summary);
+  const kpis = buildExecutiveKpis(summary, t, timeSavedAssumptions, onOpenTab);
   return (
     <>
       <KpiGrid items={kpis} />
@@ -768,7 +856,8 @@ function ExecutiveTab({
               sublabel={t('copilotAdoption.page.gauge.establishedOrChampion', { count: formatCount(summary.habitualUsers) })}
             />
           </div>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}>
+          {/* Drill-through into another tab. On paper there is no other tab to drill into. */}
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }} data-print="hide">
             <Button appearance="secondary" onClick={onShowLicensedDetails}>{t('copilotAdoption.page.reviewLicensedUsers')}</Button>
             {summary.recommendedForLicence > 0 && (
               <Button appearance="secondary" onClick={onShowOpportunityDetails}>{t('copilotAdoption.page.reviewLicenceCandidates')}</Button>
@@ -959,7 +1048,7 @@ function ExecutiveDepartmentTable({ summary }: { summary: CopilotAdoptionSummary
       <tbody>
         {rows.map((row) => (
           <tr key={row.segment}>
-            <td className={styles.skuCell}>{row.segment}</td>
+            <td className={styles.skuCell}>{serverPlaceholderText(t, row.segment)}</td>
             <td className={styles.skuCell}>{formatPct(row.habitRatePct)}</td>
             <td className={styles.skuCell}>{formatCount(row.licensedUsers)}</td>
             <td className={styles.skuCell}>{formatCount(row.idleSeats)}</td>
@@ -978,26 +1067,58 @@ function ExecutiveDepartmentTable({ summary }: { summary: CopilotAdoptionSummary
   );
 }
 
+function accountabilityDimensionCopy(summary: CopilotAdoptionSummary, t: TFunction): {
+  label: string;
+  aggregateView: string;
+  safeView: string;
+} {
+  const dimension = summary.accountabilityDimension ?? 'directManager';
+  const text = ACCOUNTABILITY_DIMENSION_TEXT[dimension];
+  const fallbackLabel = summary.accountabilityDimensionLabel ?? t(ACCOUNTABILITY_DIMENSION_TEXT.directManager.labelKey);
+
+  if (!text) {
+    const fallbackDescription = fallbackLabel.toLowerCase();
+    return {
+      label: fallbackLabel,
+      aggregateView: t('copilotAdoption.page.aggregateOnlyViewSortedLargestAbsoluteOpportunityFirstGroups', {
+        v0: fallbackDescription,
+        v1: summary.options.minSeatsPerSegment,
+      }),
+      safeView: t('copilotAdoption.page.leaderSafeAggregateViewSeatsAdoptionHabitReclaimTiers', {
+        v0: fallbackDescription,
+      }),
+    };
+  }
+
+  return {
+    label: t(text.labelKey),
+    aggregateView: t(text.aggregateViewKey, { minSeats: summary.options.minSeatsPerSegment }),
+    safeView: t(text.safeViewKey),
+  };
+}
+
 /** The analyst view: every diagnostic chart and the SQL popovers admins use to verify them. */
 function AnalystTab({
   summary,
   sql,
   onDrillToAction,
+  onOpenTab,
   selectedEmailDomain,
   onSelectEmailDomain,
 }: {
   summary: CopilotAdoptionSummary;
   sql: Record<string, string> | null;
   onDrillToAction?: (code: string) => void;
+  onOpenTab?: (tab: AdoptionTab) => void;
   selectedEmailDomain?: string | null;
   onSelectEmailDomain?: (domain: string | null) => void;
 }) {
   const styles = useStyles();
   const t = useT();
-  const kpis = buildKpis(summary, t);
+  const { assumptions: timeSavedAssumptions } = useTimeSavedAssumptions(summary);
+  const kpis = buildKpis(summary, t, timeSavedAssumptions, onOpenTab);
   const o = summary.options;
-  const accountabilityDimensionLabel = summary.accountabilityDimensionLabel ?? 'Direct manager';
-  const accountabilityDimensionDescription = accountabilityDimensionLabel.toLowerCase();
+  const accountabilityCopy = accountabilityDimensionCopy(summary, t);
 
   // The band slices and the action plan are built from the users actually scored, which is capped by
   // MaxLicensedUsersScored. That cap is far above any real Copilot deployment and raises an explicit
@@ -1158,16 +1279,13 @@ function AnalystTab({
           <div>
             <Text weight="semibold" size={400}>{t('copilotAdoption.page.accountabilityRollUp')}</Text>
             <Text size={200} block className={styles.muted}>
-              {t('copilotAdoption.page.aggregateOnlyViewSortedLargestAbsoluteOpportunityFirstGroups', {
-                v0: accountabilityDimensionDescription,
-                v1: o.minSeatsPerSegment,
-              })}
+              {accountabilityCopy.aggregateView}
             </Text>
           </div>
           <InfoTip
             title={t('copilotAdoption.page.accountabilityRollUp2')}
             content={{
-              what: t('copilotAdoption.page.leaderSafeAggregateViewSeatsAdoptionHabitReclaimTiers', { v0: accountabilityDimensionDescription }),
+              what: accountabilityCopy.safeView,
               how: t('copilotAdoption.page.theDimensionDefaultsDirectManagerUsersManagerGroupedExplicitly', { v0: o.minSeatsPerSegment }),
               source:
                 t('copilotAdoption.page.thisDeliberatelyAddNamedPerUserLeaderViewDrill'),
@@ -1177,7 +1295,7 @@ function AnalystTab({
         <div className={styles.cardBody}>
           <AccountabilityRollupTable
             rows={summary.accountabilityRollup}
-            segmentLabel={accountabilityDimensionLabel}
+            segmentLabel={accountabilityCopy.label}
           />
         </div>
       </Card>
@@ -1363,7 +1481,11 @@ function AnalystTab({
           </div>
           <div className={styles.cardBody}>
             <RadarChart
-              axes={['Frequency', 'Depth', 'Breadth']}
+              axes={[
+                t('copilotAdoption.page.radar.axis.frequency'),
+                t('copilotAdoption.page.radar.axis.depth'),
+                t('copilotAdoption.page.radar.axis.breadth'),
+              ]}
               series={summary.scoreProfiles.map((p, i) => ({
                 name: `${scoreProfileLabel(t, p.label)} (${formatCount(p.users)})`,
                 colour: i === 0 ? '#0f6cbd' : '#107c10',
@@ -1602,43 +1724,49 @@ function AccountabilityRollupTable({
         </tr>
       </thead>
       <tbody>
-        {rows.map((row) => (
-          <tr key={row.segment}>
-            <td className={styles.skuCell}>{row.segment}</td>
-            <td className={styles.skuCell}>{formatCount(row.licensedUsers)}</td>
-            <td className={styles.skuCell}>
-              {t('copilotAdoption.page.active', {
-                v0: formatPct(row.adoptionRatePct),
-                v1: formatCount(row.activeUsers),
-              })}
-            </td>
-            <td className={styles.skuCell}>
-              {t('copilotAdoption.page.habitual', {
-                v0: formatPct(row.licensedUsers === 0 ? 0 : (row.habitualUsers / row.licensedUsers) * 100),
-                v1: formatCount(row.habitualUsers),
-              })}
-            </td>
-            <td className={styles.skuCell}>
-              {t('copilotAdoption.page.reclaimableCertainProbableReview', {
-                v0: formatCount(row.reclaimableSeats),
-                v1: formatCount(row.reclaimCertainSeats),
-                v2: formatCount(row.reclaimProbableSeats),
-                v3: formatCount(row.reclaimReviewSeats),
-              })}
-            </td>
-            <td className={styles.skuCell}>
-              {t('copilotAdoption.page.needActionReclaimWinBackCoachBroadenDeepenReview', {
-                v0: formatCount(row.opportunityUsers),
-                v1: formatCount(row.reclaimUsers),
-                v2: formatCount(row.reengageUsers),
-                v3: formatCount(row.coachUsers),
-                v4: formatCount(row.broadenUsers),
-                v5: formatCount(row.growUsers),
-                v6: formatCount(row.reviewUsers),
-              })}
-            </td>
-          </tr>
-        ))}
+        {rows.map((row) => {
+          const segment = row.emptySegmentKey && ACCOUNTABILITY_EMPTY_SEGMENT_KEYS[row.emptySegmentKey]
+            ? t(ACCOUNTABILITY_EMPTY_SEGMENT_KEYS[row.emptySegmentKey])
+            : row.segment;
+
+          return (
+            <tr key={row.segment}>
+              <td className={styles.skuCell}>{segment}</td>
+              <td className={styles.skuCell}>{formatCount(row.licensedUsers)}</td>
+              <td className={styles.skuCell}>
+                {t('copilotAdoption.page.active', {
+                  v0: formatPct(row.adoptionRatePct),
+                  v1: formatCount(row.activeUsers),
+                })}
+              </td>
+              <td className={styles.skuCell}>
+                {t('copilotAdoption.page.habitual', {
+                  v0: formatPct(row.licensedUsers === 0 ? 0 : (row.habitualUsers / row.licensedUsers) * 100),
+                  v1: formatCount(row.habitualUsers),
+                })}
+              </td>
+              <td className={styles.skuCell}>
+                {t('copilotAdoption.page.reclaimableCertainProbableReview', {
+                  v0: formatCount(row.reclaimableSeats),
+                  v1: formatCount(row.reclaimCertainSeats),
+                  v2: formatCount(row.reclaimProbableSeats),
+                  v3: formatCount(row.reclaimReviewSeats),
+                })}
+              </td>
+              <td className={styles.skuCell}>
+                {t('copilotAdoption.page.needActionReclaimWinBackCoachBroadenDeepenReview', {
+                  v0: formatCount(row.opportunityUsers),
+                  v1: formatCount(row.reclaimUsers),
+                  v2: formatCount(row.reengageUsers),
+                  v3: formatCount(row.coachUsers),
+                  v4: formatCount(row.broadenUsers),
+                  v5: formatCount(row.growUsers),
+                  v6: formatCount(row.reviewUsers),
+                })}
+              </td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );
@@ -1902,6 +2030,14 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 })}
               </Text>
               <Text>{t('copilotAdoption.page.disabledAccountsExcludedCandidateListHoweverKeptLicensedUser')}</Text>
+              <Text>
+                {tNode('copilotAdoption.page.method.licenceTimeSaved', {
+                  heading: <strong>{t('copilotAdoption.page.method.licenceTimeSavedHeading')}</strong>,
+                  meetingMinutes: formatNumber(o.copilotMinutesSavedPerMeeting, { maximumFractionDigits: 2 }),
+                  mailMinutes: formatNumber(o.copilotMinutesSavedPerMailThread, { maximumFractionDigits: 2 }),
+                  documentMinutes: formatNumber(o.copilotMinutesSavedPerDocument, { maximumFractionDigits: 2 }),
+                })}
+              </Text>
             </div>
           </AccordionPanel>
         </AccordionItem>
@@ -1955,11 +2091,9 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 })}
               </Text>
               <Text>
-                {tNode('copilotAdoption.page.thisProductCannotMeasureTimeSavedMeetingEmailDocument', {
-                  heading: <strong>{t('copilotAdoption.page.theTimeSavedEstimateModelMeasurement')}</strong>,
-                  meetingMinutes: o.coworkMinutesSavedPerMeeting,
-                  mailMinutes: o.coworkMinutesSavedPerMailThread,
-                  documentMinutes: o.coworkMinutesSavedPerDocument,
+                {tNode('copilotAdoption.page.method.coworkTimeSaved', {
+                  heading: <strong>{t('copilotAdoption.page.method.coworkTimeSavedHeading')}</strong>,
+                  taskMinutes: formatNumber(o.coworkMinutesSavedPerTask, { maximumFractionDigits: 2 }),
                 })}
               </Text>
               <Text>
@@ -2116,16 +2250,132 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
 }
 
 /** The Executive view keeps only the board-pack headlines; the Analyst view keeps the full KPI set. */
-function buildExecutiveKpis(summary: CopilotAdoptionSummary, t: TFunction): KpiDefinition[] {
-  const executiveKeys = new Set(['licensed', 'adoption', 'habit', 'reclaim', 'unlicensed', 'candidates']);
-  return buildKpis(summary, t).filter((item) => executiveKeys.has(item.key));
+function buildExecutiveKpis(
+  summary: CopilotAdoptionSummary,
+  t: TFunction,
+  timeSaved: TimeSavedAssumptions,
+  onOpenTab?: (tab: AdoptionTab) => void,
+): KpiDefinition[] {
+  const executiveKeys = new Set([
+    'licensed',
+    'adoption',
+    'habit',
+    'reclaim',
+    'unlicensed',
+    'candidates',
+    'licenceTimeSaved',
+    'coworkTimeSaved',
+  ]);
+  return buildKpis(summary, t, timeSaved, onOpenTab).filter((item) => executiveKeys.has(item.key));
+}
+
+/**
+ * The two modelled time-back figures, promoted to the overview - one tile per decision.
+ *
+ * "Time back from licensing" sizes buying Copilot licences for the people recommended for one, with
+ * minutes evidenced by published Copilot studies. "Time back from Cowork" sizes enabling Cowork, paid
+ * for in Copilot Credits, for the people ready for it now - on top of what their licences already
+ * save, and resting on an assumption no study has tested. They are never added together: they justify
+ * different decisions on different evidence, and a sum would recreate the blended figure that let
+ * Copilot's evidence stand behind Cowork's.
+ *
+ * Built from the same projections and assumptions as the tabs that explain them - the reader's own
+ * for this session, or the product defaults - so the overview can never quote a model differently
+ * from its tab. Each is badged and drawn as modelled, links to its tab, and is absent rather than a
+ * modelled zero when there is nobody to model. The values use compact numbers where they are shorter
+ * in the reader's language, so a seven-digit range still fits the tile and the "h" never wraps onto a
+ * line of its own.
+ */
+function buildTimeSavedKpis(
+  summary: CopilotAdoptionSummary,
+  t: TFunction,
+  assumptions: TimeSavedAssumptions,
+  onOpenTab?: (tab: AdoptionTab) => void,
+): KpiDefinition[] {
+  const o = summary.options;
+  const items: KpiDefinition[] = [];
+  const percent = formatNumber(assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 });
+  const minutes = (value: number) => formatNumber(value, { maximumFractionDigits: 2 });
+
+  const licence = projectLicenceTimeSaved(summary.licenceOpportunityEstimate, assumptions, o);
+  if (licence) {
+    items.push({
+      key: 'licenceTimeSaved',
+      label: t('copilotAdoption.page.kpi.licenceTimeSaved.label'),
+      value: t('copilotAdoption.page.kpi.hoursValue', { range: compactHoursRange(t, licence.hoursLow, licence.hoursHigh) }),
+      hint: t(
+        plural(licence.cohortUsers, 'copilotAdoption.page.kpi.licenceTimeSaved.hint.one', 'copilotAdoption.page.kpi.licenceTimeSaved.hint.other'),
+        { users: formatCount(licence.cohortUsers) },
+      ),
+      tone: 'opportunity',
+      modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
+      action: onOpenTab
+        ? { label: t('copilotAdoption.page.kpi.licenceTimeSaved.open'), onClick: () => onOpenTab('opportunities') }
+        : undefined,
+      info: {
+        what: t('copilotAdoption.page.kpi.licenceTimeSaved.what'),
+        how: t('copilotAdoption.page.kpi.licenceTimeSaved.how'),
+        formula: t('copilotAdoption.page.kpi.licenceTimeSaved.formula', {
+          meeting: minutes(assumptions.meetingMinutes),
+          email: minutes(assumptions.emailMinutes),
+          document: minutes(assumptions.documentMinutes),
+          percent,
+        }),
+        source: t('copilotAdoption.page.kpi.licenceTimeSaved.source'),
+      },
+    });
+  }
+
+  if (summary.coworkReadinessAvailable) {
+    // The people ready now lead, as on the Cowork tab: that is the spending-policy decision. When
+    // nobody is ready, the ceiling stands in - and says it is every seat holder, not the ready few.
+    const ready = projectCoworkTimeSaved(summary.coworkValueEstimate, assumptions, o);
+    const cowork = ready ?? projectCoworkTimeSaved(summary.coworkFullRolloutEstimate, assumptions, o);
+    if (cowork) {
+      items.push({
+        key: 'coworkTimeSaved',
+        label: t('copilotAdoption.page.kpi.coworkTimeSaved.label'),
+        value: t('copilotAdoption.page.kpi.hoursValue', { range: compactHoursRange(t, cowork.hoursLow, cowork.hoursHigh) }),
+        hint: ready
+          ? t(
+              plural(ready.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.other'),
+              { users: formatCount(ready.cohortUsers) },
+            )
+          : t(
+              plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.other'),
+              { users: formatCount(cowork.cohortUsers) },
+            ),
+        tone: 'opportunity',
+        modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
+        action: onOpenTab
+          ? { label: t('copilotAdoption.page.kpi.coworkTimeSaved.open'), onClick: () => onOpenTab('cowork') }
+          : undefined,
+        info: {
+          what: t('copilotAdoption.page.kpi.coworkTimeSaved.what'),
+          how: t('copilotAdoption.page.kpi.coworkTimeSaved.how'),
+          formula: t('copilotAdoption.page.kpi.coworkTimeSaved.formula', {
+            taskMinutes: minutes(assumptions.taskMinutes),
+            percent,
+          }),
+          source: t('copilotAdoption.page.kpi.coworkTimeSaved.source'),
+        },
+      });
+    }
+  }
+
+  return items;
 }
 
 /**
  * The headline figures used by the Analyst view. The Executive view filters this list down to the
  * board-pack subset so the two views cannot drift apart.
  */
-function buildKpis(summary: CopilotAdoptionSummary, t: TFunction): KpiDefinition[] {
+function buildKpis(
+  summary: CopilotAdoptionSummary,
+  t: TFunction,
+  timeSaved: TimeSavedAssumptions,
+  onOpenTab?: (tab: AdoptionTab) => void,
+): KpiDefinition[] {
   const o = summary.options;
   const seatSkus = (summary.seatLicenceTypes ?? []).filter((l) => l.isCopilotSeat);
   const scoreWeights = [o.frequencyWeight, o.depthWeight, o.breadthWeight];
@@ -2211,7 +2461,10 @@ function buildKpis(summary: CopilotAdoptionSummary, t: TFunction): KpiDefinition
       tone: summary.reclaimableSeats > 0 ? 'critical' : 'good',
       info: {
         what: t('copilotAdoption.page.licencesSafeEnoughIncludeActionableReclaimTotalDisabledAccounts'),
-        how: t('copilotAdoption.page.newUserProtectedDaysUsingGraphUserCreateddatetimeAccount', { v0: o.reclaimGraceDays, v1: summary.reclaimCaveat ?? '' }),
+        how: t('copilotAdoption.page.newUserProtectedDaysUsingGraphUserCreateddatetimeAccount', {
+          v0: o.reclaimGraceDays,
+          v1: reclaimCaveatText(t, summary.reclaimCaveatKey, summary.reclaimCaveat),
+        }),
         // Two independent mechanisms hold seats back - confidence tiering and a Microsoft
         // report-period mismatch - so the formula has to state both, or a reader adding up the band
         // breakdown finds a gap nothing on the page accounts for.
@@ -2333,6 +2586,9 @@ function buildKpis(summary: CopilotAdoptionSummary, t: TFunction): KpiDefinition
         t('copilotAdoption.page.disabledAccountsUsersNoRecordedActivityAllExcludedMicrosoft'),
     },
   });
+
+  // Last: a model follows the measurements it is built on, never leads them.
+  items.push(...buildTimeSavedKpis(summary, t, timeSaved, onOpenTab));
 
   return items;
 }

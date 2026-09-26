@@ -7,7 +7,7 @@ import { formatNumber, useT, type TFunction } from '../../i18n';
 import { BAND_METHOD_KEY, bandColour, bandForeground, bandLabel, frequencyPct } from './bands';
 import { DASH, formatAge, formatDate } from './format';
 import { statusMeta } from './statuses';
-import { sourceLabel } from './sources';
+import { measureLabel, sourceLabel } from './sources';
 import { useLaTableStyles } from './tableStyles';
 
 const useStyles = makeStyles({
@@ -176,7 +176,7 @@ function AllWorkloadsDetail({ user }: { user: LicenceActivityUser }) {
                 <td className={styles.detailCell}>
                   <Text size={200}>
                     {sourceLabel(ev?.source, t) || DASH}
-                    {ev?.measure ? ` \u00b7 ${ev.measure}` : ''}
+                    {measureLabel(ev?.measureKey, ev?.measure, t) ? ` \u00b7 ${measureLabel(ev?.measureKey, ev?.measure, t)}` : ''}
                   </Text>
                 </td>
                 <td className={styles.detailCell}>

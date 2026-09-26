@@ -5,6 +5,7 @@ using System;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
@@ -47,8 +48,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         throw notFound;
                     }
 
-                    _logger.LogError(ex, $"Got HTTP exception calling {url}: {ex.Message}. Response body: {callResponseBody}");
-                    throw new GraphHttpException(callResponse.StatusCode, url, callResponseBody, ex);
+                    var graphException = CreateGraphHttpException(callResponse, url, callResponseBody, ex);
+                    _logger.LogError(graphException, $"Got HTTP exception calling {url}: {graphException.Message}. Response body: {callResponseBody}");
+                    throw graphException;
                 }
 
                 return callResponseBody;
@@ -78,8 +80,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             throw notFound;
                         }
 
-                        _logger.LogError(ex, $"Got HTTP exception calling {url}: {ex.Message}. Response body: {callResponseBody}");
-                        throw new GraphHttpException(callResponse.StatusCode, url, callResponseBody, ex);
+                        var graphException = CreateGraphHttpException(callResponse, url, callResponseBody, ex);
+                        _logger.LogError(graphException, $"Got HTTP exception calling {url}: {graphException.Message}. Response body: {callResponseBody}");
+                        throw graphException;
                     }
                 }
 
@@ -116,8 +119,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         throw notFound;
                     }
 
-                    _logger.LogError(ex, $"Got HTTP exception calling {url}: {ex.Message}. Response body: {callResponseBody}");
-                    throw new GraphHttpException(callResponse.StatusCode, url, callResponseBody, ex);
+                    var graphException = CreateGraphHttpException(callResponse, url, callResponseBody, ex);
+                    _logger.LogError(graphException, $"Got HTTP exception calling {url}: {graphException.Message}. Response body: {callResponseBody}");
+                    throw graphException;
                 }
 
                 // Get call
@@ -134,6 +138,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 jsonStringAction?.Invoke(callResponseBody);
                 return dto;
             }
+        }
+
+        private static GraphHttpException CreateGraphHttpException(HttpResponseMessage response, string url, string responseBody, Exception innerException)
+        {
+            return new GraphHttpException(response.StatusCode, url, responseBody, innerException, "GET", GetGraphRequestId(response));
+        }
+
+        private static string GetGraphRequestId(HttpResponseMessage response)
+        {
+            if (response == null)
+            {
+                return null;
+            }
+
+            return response.Headers.TryGetValues("request-id", out var requestIds)
+                ? requestIds.FirstOrDefault()
+                : null;
         }
     }
 }

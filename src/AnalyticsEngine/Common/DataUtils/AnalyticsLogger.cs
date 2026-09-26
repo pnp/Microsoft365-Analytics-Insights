@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Threading;
 
 namespace DataUtils
 {
@@ -15,7 +16,7 @@ namespace DataUtils
             return logLevel == LogLevel.Information || logLevel == LogLevel.Warning || logLevel == LogLevel.Error || logLevel == LogLevel.Critical;
         }
 
-        public IDisposable BeginScope<TState>(TState state)
+        public virtual IDisposable BeginScope<TState>(TState state)
         {
             return null;
         }
@@ -28,6 +29,9 @@ namespace DataUtils
     /// </summary>
     public class AnalyticsLogger : BaseAnalyticsLogger
     {
+        private const string ExceptionTelemetryTrackedKey = "DataUtils.AnalyticsLogger.ExceptionTelemetryTracked";
+        private static readonly AsyncLocal<string> CurrentOperationId = new AsyncLocal<string>();
+
         private TelemetryClient AppInsights { get; set; }
 
         #region Constructors
@@ -70,6 +74,21 @@ namespace DataUtils
 
         #endregion
 
+        public override IDisposable BeginScope<TState>(TState state)
+        {
+            var operationId = TryGetOperationId(state);
+            return string.IsNullOrEmpty(operationId)
+                ? null
+                : BeginOperationScope(operationId);
+        }
+
+        public IDisposable BeginOperationScope(string operationId)
+        {
+            var previous = CurrentOperationId.Value;
+            CurrentOperationId.Value = operationId;
+            return new OperationScope(() => CurrentOperationId.Value = previous);
+        }
+
         public void TrackException(Exception ex)
         {
             TrackException(ex, null, null);
@@ -80,16 +99,35 @@ namespace DataUtils
             IDictionary<string, string> properties,
             string operationId)
         {
-            if (AppInsights != null)
+            if (AppInsights != null && ex != null)
             {
-                var telemetry = new ExceptionTelemetry(ex);
-                if (!string.IsNullOrEmpty(operationId))
+                var safeDetails = ex as IExceptionTelemetryDetails;
+                if (safeDetails != null && !TryMarkExceptionAsTracked(ex))
                 {
-                    telemetry.Context.Operation.Id = operationId;
+                    return;
+                }
+
+                var telemetry = new ExceptionTelemetry(safeDetails?.ToTelemetryException() ?? ex);
+                if (safeDetails != null && !string.IsNullOrEmpty(safeDetails.TelemetryProblemId))
+                {
+                    telemetry.ProblemId = safeDetails.TelemetryProblemId;
+                }
+
+                var effectiveOperationId = operationId ?? CurrentOperationId.Value;
+                if (!string.IsNullOrEmpty(effectiveOperationId))
+                {
+                    telemetry.Context.Operation.Id = effectiveOperationId;
                 }
                 if (!string.IsNullOrEmpty(AppInsights.Context.Operation.Name))
                 {
                     telemetry.Context.Operation.Name = AppInsights.Context.Operation.Name;
+                }
+                if (safeDetails?.TelemetryProperties != null)
+                {
+                    foreach (var property in safeDetails.TelemetryProperties)
+                    {
+                        telemetry.Properties[property.Key] = property.Value;
+                    }
                 }
                 if (properties != null)
                 {
@@ -109,7 +147,16 @@ namespace DataUtils
 
             if (AppInsights != null)
             {
-                AppInsights.TrackTrace(sayWut, severityLevel);
+                var telemetry = new TraceTelemetry(sayWut, severityLevel);
+                if (!string.IsNullOrEmpty(CurrentOperationId.Value))
+                {
+                    telemetry.Context.Operation.Id = CurrentOperationId.Value;
+                }
+                if (!string.IsNullOrEmpty(AppInsights.Context.Operation.Name))
+                {
+                    telemetry.Context.Operation.Name = AppInsights.Context.Operation.Name;
+                }
+                AppInsights.TrackTrace(telemetry);
             }
         }
 
@@ -196,9 +243,10 @@ namespace DataUtils
                 {
                     telemetry.Timestamp = timestamp.Value;
                 }
-                if (!string.IsNullOrEmpty(operationId))
+                var effectiveOperationId = operationId ?? CurrentOperationId.Value;
+                if (!string.IsNullOrEmpty(effectiveOperationId))
                 {
-                    telemetry.Context.Operation.Id = operationId;
+                    telemetry.Context.Operation.Id = effectiveOperationId;
                 }
                 if (!string.IsNullOrEmpty(AppInsights.Context.Operation.Name))
                 {
@@ -241,7 +289,8 @@ namespace DataUtils
         /// <param name="status">Result of the check.</param>
         /// <param name="detail">Optional free-text reason. MUST NOT contain secrets or customer data.</param>
         /// <param name="daysToExpiry">Optional; for <see cref="HealthComponent.Credential"/>, days until the credential expires.</param>
-        public void TrackHealthCheck(HealthComponent component, HealthStatus status, string detail = null, int? daysToExpiry = null)
+        /// <param name="reasonKey">Optional stable key the web portal can translate while keeping <paramref name="detail"/> as an English fallback.</param>
+        public void TrackHealthCheck(HealthComponent component, HealthStatus status, string detail = null, int? daysToExpiry = null, string reasonKey = null)
         {
             var context = new Dictionary<string, string>
             {
@@ -255,6 +304,10 @@ namespace DataUtils
             if (daysToExpiry.HasValue)
             {
                 context.Add("DaysToExpiry", daysToExpiry.Value.ToString(CultureInfo.InvariantCulture));
+            }
+            if (!string.IsNullOrEmpty(reasonKey))
+            {
+                context.Add("ReasonKey", reasonKey);
             }
             TrackEvent(AnalyticsEvent.HealthCheck, context);
         }
@@ -293,9 +346,18 @@ namespace DataUtils
         /// <param name="windowDays">Reporting window the analysis was run for.</param>
         /// <param name="totalMs">Wall-clock duration of the whole analysis.</param>
         /// <param name="stepDurationsMs">Per-step wall-clock durations, keyed by step name.</param>
-        /// <param name="warningCount">How many figures degraded. Non-zero means the report is incomplete.</param>
-        /// <param name="timedOut">Whether any step hit the query timeout - the signal that matters most.</param>
+        /// <param name="warningCount">
+        /// How many caveats the page shows. Informational only: most real tenants carry at least one caveat
+        /// that is not a failure (for example the Cowork eligibility note), so this no longer decides
+        /// <c>Outcome</c>.
+        /// </param>
+        /// <param name="timedOut">Whether any query was classified as a timeout - the signal that matters most.</param>
         /// <param name="slowestStep">Name of the slowest step, for triage without unpacking the measurements.</param>
+        /// <param name="figuresIncomplete">Whether any dataset failed to load, so some figures are too low or missing.</param>
+        /// <param name="incompleteReasonCount">How many datasets failed.</param>
+        /// <param name="failedQueryCount">How many queries failed, of any kind.</param>
+        /// <param name="timedOutQueryCount">How many of those were timeouts.</param>
+        /// <param name="failedSteps">Comma-separated names of the failed steps (compile-time constants).</param>
         public void TrackCopilotAdoptionAnalysis(
             int windowDays,
             long totalMs,
@@ -303,21 +365,43 @@ namespace DataUtils
             int warningCount,
             bool timedOut,
             string slowestStep,
-            string operationId = null)
+            string operationId = null,
+            bool figuresIncomplete = false,
+            int incompleteReasonCount = 0,
+            int failedQueryCount = 0,
+            int timedOutQueryCount = 0,
+            string failedSteps = null)
         {
+            // Degraded means something FAILED, not that the page carries a caveat. It used to be
+            // "WarningCount > 0", which was true on nearly every real tenant - one caveat is added on every run
+            // that sees any Cowork use - so an alert on it fired constantly and hid the runs that had actually
+            // lost data.
+            var degraded = figuresIncomplete || failedQueryCount > 0 || !string.IsNullOrEmpty(failedSteps);
+
             var context = new Dictionary<string, string>
             {
                 { "WindowDays", windowDays.ToString(CultureInfo.InvariantCulture) },
                 { "WarningCount", warningCount.ToString(CultureInfo.InvariantCulture) },
                 { "TimedOut", timedOut ? "true" : "false" },
-                { "Outcome", warningCount == 0 ? "Complete" : "Degraded" },
+                { "Outcome", degraded ? "Degraded" : "Complete" },
+                { "FiguresIncomplete", figuresIncomplete ? "true" : "false" },
             };
             if (!string.IsNullOrEmpty(slowestStep))
             {
                 context.Add("SlowestStep", slowestStep);
             }
+            if (!string.IsNullOrEmpty(failedSteps))
+            {
+                context.Add("FailedSteps", failedSteps);
+            }
 
-            var metrics = new Dictionary<string, double> { { "TotalMs", totalMs } };
+            var metrics = new Dictionary<string, double>
+            {
+                { "TotalMs", totalMs },
+                { "FailedQueryCount", failedQueryCount },
+                { "TimedOutQueryCount", timedOutQueryCount },
+                { "IncompleteReasonCount", incompleteReasonCount },
+            };
             if (stepDurationsMs != null)
             {
                 foreach (var step in stepDurationsMs)
@@ -380,6 +464,69 @@ namespace DataUtils
             CopilotAdoptionLifecycle,
             LicenceActivityLifecycle,
             UsageReportSaveStage
+        }
+
+        private static bool TryMarkExceptionAsTracked(Exception ex)
+        {
+            lock (ex)
+            {
+                if (ex.Data.Contains(ExceptionTelemetryTrackedKey))
+                {
+                    return false;
+                }
+
+                ex.Data[ExceptionTelemetryTrackedKey] = true;
+                return true;
+            }
+        }
+
+        private static string TryGetOperationId<TState>(TState state)
+        {
+            if (state is IEnumerable<KeyValuePair<string, object>> objectPairs)
+            {
+                foreach (var pair in objectPairs)
+                {
+                    if (IsOperationIdKey(pair.Key))
+                    {
+                        return pair.Value?.ToString();
+                    }
+                }
+            }
+
+            if (state is IEnumerable<KeyValuePair<string, string>> stringPairs)
+            {
+                foreach (var pair in stringPairs)
+                {
+                    if (IsOperationIdKey(pair.Key))
+                    {
+                        return pair.Value;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static bool IsOperationIdKey(string key)
+        {
+            return string.Equals(key, "OperationId", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(key, "operation_Id", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private sealed class OperationScope : IDisposable
+        {
+            private Action _dispose;
+
+            public OperationScope(Action dispose)
+            {
+                _dispose = dispose;
+            }
+
+            public void Dispose()
+            {
+                var dispose = Interlocked.Exchange(ref _dispose, null);
+                dispose?.Invoke();
+            }
         }
     }
 }

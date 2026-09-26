@@ -47,6 +47,10 @@ interface DemographicBreakdownProps {
   truncated: boolean;
 }
 
+export function demographicName(t: ReturnType<typeof useT>, row: Pick<LicenceActivityDemographic, 'id' | 'name'>): string {
+  return row.id === 0 ? t('licenceActivity.demographics.unknownBucket') : row.name;
+}
+
 /**
  * An aggregate breakdown of a demographic dimension (department or country): assigned users and the
  * five workload distributions per segment, straight from the overview DTO - not merely the filter
@@ -103,7 +107,7 @@ function DemographicBreakdown({ title, segmentLabel, rows, truncated }: Demograp
           <tbody>
             {shown.map((seg) => (
               <tr key={seg.id}>
-                <td className={table.td}>{seg.name}</td>
+                <td className={table.td}>{demographicName(t, seg)}</td>
                 <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(seg.assignedUsers)}</td>
                 {WORKLOADS.map((w) => {
                   const dist = seg.workloads.find((d) => d.workload === w.key) ?? { ...EMPTY, workload: w.key };

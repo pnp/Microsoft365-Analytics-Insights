@@ -186,6 +186,12 @@ namespace Web.AnalyticsWeb.Models
 
         [JsonProperty("detail")]
         public string Detail { get; set; }
+
+        [JsonProperty("detailKey")]
+        public string DetailKey { get; set; }
+
+        [JsonProperty("detailDateUtc")]
+        public DateTime? DetailDateUtc { get; set; }
     }
 
     /// <summary>
@@ -214,12 +220,28 @@ namespace Web.AnalyticsWeb.Models
     /// </summary>
     public class ApiErrorModel
     {
+        [JsonProperty("code")]
+        public string Code { get; set; }
+
         [JsonProperty("message")]
         public string Message { get; set; }
 
-        public ApiErrorModel(string message)
+        [JsonProperty("category")]
+        public string Category { get; set; }
+
+        /// <summary>
+        /// The UPN a not-found lookup searched for, as the service normalised it: a fact beside the
+        /// <c>userNotFound</c> code, so the portal can say "no user found" in the reader's language and
+        /// still name who was looked up.
+        /// </summary>
+        [JsonProperty("upn")]
+        public string Upn { get; set; }
+
+        public ApiErrorModel(string message, string code = null, string category = null)
         {
             Message = message;
+            Code = code;
+            Category = category;
         }
     }
 }

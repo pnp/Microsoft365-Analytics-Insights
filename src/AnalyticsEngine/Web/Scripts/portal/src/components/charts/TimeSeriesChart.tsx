@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { ReportSeries, ReportTimePoint } from '../../types/reports';
 import { useT } from '../../i18n';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import {
   formatCompact,
   formatValue,
@@ -278,7 +279,7 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
             <div key={s.name} className={styles.tooltipRow}>
               <span className={styles.tooltipLabel}>
                 <span className={styles.swatch} style={{ backgroundColor: seriesColor(si) }} />
-                <Text size={200}>{series.length > 1 ? s.name : valueLabel}</Text>
+                <Text size={200}>{series.length > 1 ? serverPlaceholderText(t, s.name) : valueLabel}</Text>
               </span>
               <Text size={200} weight="semibold">
                 {s.points[hover.index]?.value == null
@@ -295,7 +296,7 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
           {series.map((s, si) => (
             <span key={s.name} className={styles.legendItem}>
               <span className={styles.swatch} style={{ backgroundColor: seriesColor(si) }} />
-              <Text size={200}>{s.name}</Text>
+              <Text size={200}>{serverPlaceholderText(t, s.name)}</Text>
             </span>
           ))}
           {hasGaps && gapNote && (

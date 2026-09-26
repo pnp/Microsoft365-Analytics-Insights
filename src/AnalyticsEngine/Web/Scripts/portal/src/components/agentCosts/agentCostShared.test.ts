@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  capacityConsumptionTypeLabel,
+  capacityStatusLabel,
   DASH,
   detailRowsToCsv,
   formatCount,
@@ -8,6 +10,7 @@ import {
   formatMoney,
   windowOfDays,
 } from './agentCostShared';
+import { loadCatalog, translateStatic } from '../../i18n';
 import type { AgentCostDetailRow } from '../../types/agentCosts';
 
 describe('formatCredits', () => {
@@ -45,6 +48,32 @@ describe('formatCount', () => {
   it('distinguishes a measured zero from an unknown', () => {
     expect(formatCount(0)).toBe('0');
     expect(formatCount(null)).toBe(DASH);
+  });
+});
+
+describe('capacityStatusLabel', () => {
+  it('translates known Copilot Credit capacity codes and falls back to unknown raw codes', async () => {
+    await loadCatalog('es');
+    const es = (key: Parameters<typeof translateStatic>[1], values?: Parameters<typeof translateStatic>[2]) =>
+      translateStatic('es', key, values);
+
+    expect(capacityStatusLabel('MonthToDate', es)).toBe('Mes hasta la fecha');
+    expect(capacityStatusLabel('WithinCapacity', es)).toBe('Dentro de la capacidad');
+    expect(capacityStatusLabel('Overage', es)).toBe('Exceso');
+    expect(capacityStatusLabel('CoveredOverage', es)).toBe('Exceso cubierto');
+    expect(capacityStatusLabel('NewStatus', es)).toBe('NewStatus');
+  });
+
+  it('reads the capacity codes as words for English readers too', () => {
+    const en = (key: Parameters<typeof translateStatic>[1], values?: Parameters<typeof translateStatic>[2]) =>
+      translateStatic('en', key, values);
+
+    expect(capacityStatusLabel('WithinCapacity', en)).toBe('Within capacity');
+    expect(capacityStatusLabel('Overage', en)).toBe('Overage');
+    expect(capacityStatusLabel('CoveredOverage', en)).toBe('Covered overage');
+    expect(capacityConsumptionTypeLabel('MonthToDate', en)).toBe('Month to date');
+    expect(capacityConsumptionTypeLabel('BillingPeriodToDate', en)).toBe('BillingPeriodToDate');
+    expect(capacityConsumptionTypeLabel(null, en)).toBe('');
   });
 });
 
@@ -113,5 +142,13 @@ describe('detailRowsToCsv', () => {
     const csv = detailRowsToCsv([row()]);
     expect(csv).toContain('2026-09-03');
     expect(csv).not.toContain('2026-09-03T00:00:00Z');
+  });
+
+  it('exports harness labels in the CSV header language, not the current portal language', () => {
+    const csv = detailRowsToCsv([row({ harness: 'NotAssessed' })], (key) =>
+      key === 'agentCosts.harness.noFeatureReported' ? 'Sin característica notificada' : key);
+
+    expect(csv).toContain('No feature reported');
+    expect(csv).not.toContain('Sin característica notificada');
   });
 });

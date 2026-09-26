@@ -63,6 +63,15 @@ export const common = {
   'common.warnings.show.other': 'Show {count} data warnings',
   'common.warnings.hide': 'Hide these warnings',
 
+  // Print button
+  'common.print.preparing': 'Preparing\u2026',
+  'common.print.tooManyRows.title': 'Too many rows to print',
+  'common.print.tooManyRows.body':
+    '{rows} rows match this list\u2019s filters, and a list prints in full only up to {limit} rows. Narrow the list with its filters and print again, or export it to get every row.',
+  'common.print.failed.title': 'Could not prepare the printout',
+  'common.print.failed.body':
+    'The full list could not be loaded for printing, so nothing was printed. Try again in a moment.',
+
   // SQL popover
   'common.sql.title': 'SQL to reproduce this',
   'common.sql.buttonLabel': 'SQL',
@@ -78,6 +87,34 @@ export const common = {
   'common.sentiment.band.neutral': 'neutral',
   'common.sentiment.band.leaningPositive': 'leaning positive',
   'common.sentiment.band.positive': 'positive',
+
+  // Placeholder labels the SERVER writes into data - the bucket for rows with no department, the
+  // roll-up of every site outside the top N. Word for word what the C# and SQL write: the SPA
+  // recognises them by these values (see components/shared/serverPlaceholder.ts), and
+  // serverAuthoredText.test.ts fails when the server's list and this one disagree.
+  'common.serverPlaceholder.noDepartment': '(no department)',
+  'common.serverPlaceholder.noDepartmentCapitalised': '(No department)',
+  'common.serverPlaceholder.noCountry': '(no country)',
+  'common.serverPlaceholder.noOffice': '(no office)',
+  'common.serverPlaceholder.noCompany': '(no company)',
+  'common.serverPlaceholder.noManager': '(no manager)',
+  'common.serverPlaceholder.noDomain': '(no domain)',
+  'common.serverPlaceholder.noDomainCapitalised': '(No domain)',
+  'common.serverPlaceholder.noReasonRecorded': '(no reason recorded)',
+  'common.serverPlaceholder.unknown': '(unknown)',
+  'common.serverPlaceholder.unknownSite': '(unknown site)',
+  'common.serverPlaceholder.otherSites': '(other sites)',
+  'common.serverPlaceholder.unknownCountry': '(unknown country)',
+  'common.serverPlaceholder.otherCountries': '(other countries)',
+  'common.serverPlaceholder.unknownDevice': '(unknown device)',
+  'common.serverPlaceholder.otherDevices': '(other devices)',
+  'common.serverPlaceholder.untitledElement': '(untitled element)',
+  'common.serverPlaceholder.unnamedAgent': '(unnamed agent)',
+  'common.serverPlaceholder.notSet': '(not set)',
+  'common.serverPlaceholder.notStated': '(not stated)',
+  'common.serverPlaceholder.none': '(none)',
+  'common.serverPlaceholder.disabled': '(disabled)',
+  'common.serverPlaceholder.redisNotConfigured': '(not configured - Teams deep analytics disabled)',
 } as const;
 
 export default common;

@@ -21,7 +21,8 @@ import SqlPopover from '../SqlPopover';
 import InfoTip from '../shared/InfoTip';
 import { KpiGrid, formatCount, formatDate } from '../shared/KpiGrid';
 import type { KpiDefinition } from '../shared/KpiGrid';
-import { useAdoptionTableStyles } from './adoptionShared';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
+import { PrintedFilters, printedSearch, useAdoptionTableStyles } from './adoptionShared';
 import { useT, type TFunction } from '../../i18n';
 import { agentHealthReason } from './serverText';
 
@@ -341,7 +342,8 @@ export default function AgentsPanel({
         </div>
 
         <div className={styles.cardBody}>
-          <div className={styles.filters}>
+          {/* Chrome: nothing here can be used on paper. What it is set to is printed below instead. */}
+          <div className={styles.filters} data-print="hide">
             <Input
               className={styles.search}
               value={search}
@@ -392,6 +394,25 @@ export default function AgentsPanel({
             </Text>
           </div>
 
+          <PrintedFilters
+            filters={[
+              printedSearch(t, search),
+              {
+                label: t('copilotAdoptionAgents.agents.table.verdict'),
+                value: health
+                  ? healthLabel(Number(health) as AgentHealth, t)
+                  : t('copilotAdoptionAgents.agents.inventory.filterHealth.all'),
+              },
+              customOnly && { value: t('copilotAdoptionAgents.agents.inventory.customOnly.label') },
+              {
+                value: t('copilotAdoptionAgents.agents.inventory.visibleCount', {
+                  visible: formatCount(visible.length),
+                  total: formatCount(agents.length),
+                }),
+              },
+            ]}
+          />
+
           {visible.length === 0 ? (
             <div className={styles.empty}>{t('copilotAdoptionAgents.agents.inventory.noMatches')}</div>
           ) : (
@@ -416,7 +437,7 @@ export default function AgentsPanel({
                         <td className={table.td}>
                           <span className={styles.agentName}>
                             <Text size={200} weight="semibold">
-                              {agent.name}
+                              {serverPlaceholderText(t, agent.name)}
                             </Text>
                             {agent.agentKey && (
                               <Text size={100} className={styles.agentKey} title={agent.agentKey}>

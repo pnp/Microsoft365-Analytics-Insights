@@ -1,6 +1,7 @@
 ﻿using Common.Entities.Copilot;
 using Common.Entities.AgentCosts;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data.Entity;
 using Microsoft.Data.SqlClient;
@@ -84,6 +85,15 @@ namespace Common.Entities.CopilotAdoption
         private readonly int _maxConcurrentSteps;
         private readonly ICopilotAdoptionRunTelemetry _telemetry;
 
+        /// <summary>
+        /// The first swallowed failure of each step in the current analysis. The sequential steps' queries go
+        /// through the shared Safe* helpers rather than a <see cref="StepOutput"/>, so this is how their
+        /// StepFailed event can say why they degraded. Reset by <see cref="AnalyseAsync"/>; like the telemetry
+        /// it reports to, an instance serves one analysis at a time.
+        /// </summary>
+        private readonly ConcurrentDictionary<string, CopilotAdoptionFailure> _firstStepFailures =
+            new ConcurrentDictionary<string, CopilotAdoptionFailure>(StringComparer.Ordinal);
+
         public CopilotAdoptionService(
             CopilotAdoptionOptions options = null,
             IAnalyticsDbContextFactory contextFactory = null,
@@ -113,6 +123,7 @@ namespace Common.Entities.CopilotAdoption
             // has already given up there is no point starting - and no point continuing between the
             // sequential probes either (see RunStepsAsync).
             cancellationToken.ThrowIfCancellationRequested();
+            _firstStepFailures.Clear();
 
             var nowUtc = DateTime.UtcNow;            var windowStart = CopilotAdoptionScoring.WindowStartUtc(nowUtc, _options.WindowDays);
             var historyStart = CopilotAdoptionScoring.WindowStartUtc(
@@ -137,6 +148,7 @@ namespace Common.Entities.CopilotAdoption
                 CopilotAdoptionSteps.LicenceTypes,
                 CopilotAdoptionQueries.LicenceTypes,
                 summary.Warnings,
+                summary.WarningDetails,
                 "licence types", cancellationToken);
             licenceTypesWatch.Stop();
 
@@ -146,11 +158,13 @@ namespace Common.Entities.CopilotAdoption
             // share of the total and left the first two database round trips invisible to an operator.
             summary.Diagnostics.Record(
                 CopilotAdoptionSteps.LicenceTypes, licenceTypesWatch.ElapsedMilliseconds, licenceTypes == null);
+            _firstStepFailures.TryGetValue(CopilotAdoptionSteps.LicenceTypes, out var licenceTypesFailure);
             _telemetry.StepCompleted(
                 licenceTypesOperation,
                 CopilotAdoptionSteps.LicenceTypes,
                 licenceTypesWatch.ElapsedMilliseconds,
-                licenceTypes == null);
+                licenceTypes == null,
+                licenceTypesFailure);
 
             if (licenceTypes == null || licenceTypes.Count == 0)
             {
@@ -162,9 +176,11 @@ namespace Common.Entities.CopilotAdoption
                     summary.MarkFiguresIncomplete("licence types");
                 }
 
-                summary.Warnings.Add(
-                    "No licence information has been imported, so Copilot licences cannot be identified. "
-                    + "Enable the user metadata import to use this tool.");
+                CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.NoLicenceInformation);
+
+                // Set here too, or a run that stops at its first query reports a total of zero - and the
+                // completion telemetry would say the database answered instantly.
+                summary.Diagnostics.TotalMs = (long)(DateTime.UtcNow - nowUtc).TotalMilliseconds;
                 return analysis;
             }
 
@@ -189,9 +205,7 @@ namespace Common.Entities.CopilotAdoption
 
             if (seatIds.Count == 0)
             {
-                summary.Warnings.Add(
-                    "No Microsoft 365 Copilot licences were found in this tenant. Adoption cannot be reported "
-                    + "until at least one Copilot licence is assigned and the user import has run.");
+                CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.NoCopilotLicences);
                 // The licence-opportunity side still works with no seats at all - that is exactly the
                 // "should we buy Copilot?" case - so carry on rather than returning here.
             }
@@ -209,6 +223,7 @@ namespace Common.Entities.CopilotAdoption
                 CopilotAdoptionSteps.DataSourceProbes,
                 CopilotAdoptionQueries.AuditDataProbe,
                 summary.Warnings,
+                summary.WarningDetails,
                 "Copilot audit data probe",
                 () => summary.MarkFiguresIncomplete("Copilot audit data"),
                 cancellationToken,
@@ -226,6 +241,7 @@ namespace Common.Entities.CopilotAdoption
                 CopilotAdoptionSteps.DataSourceProbes,
                 CopilotAdoptionQueries.PendingBackfillProbe,
                 summary.Warnings,
+                summary.WarningDetails,
                 "Copilot interaction backfill probe",
                 () => summary.MarkFiguresIncomplete("Copilot interaction backfill check"),
                 cancellationToken) == 1;
@@ -233,11 +249,7 @@ namespace Common.Entities.CopilotAdoption
             if (backfillPending)
             {
                 summary.MarkFiguresIncomplete("Copilot interactions awaiting backfill");
-                summary.Warnings.Add(
-                    "Some Copilot interactions have not finished being upgraded to the new reporting format, "
-                    + "so every Copilot figure below is currently too low. This repairs itself automatically "
-                    + "on the next few import cycles - re-run this report once the importer has caught up. "
-                    + "If it persists, check that the Office 365 activity importer web job is running.");
+                CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.CopilotBackfillPending);
             }
 
             summary.DataSources.CopilotUsageReportDate = await SafeDateAsync(
@@ -245,6 +257,7 @@ namespace Common.Entities.CopilotAdoption
                 CopilotAdoptionSteps.DataSourceProbes,
                 CopilotAdoptionQueries.CopilotReportDate,
                 summary.Warnings,
+                summary.WarningDetails,
                 "Copilot usage-report snapshot date",
                 () => summary.MarkFiguresIncomplete("Copilot usage report"),
                 cancellationToken,
@@ -260,6 +273,7 @@ namespace Common.Entities.CopilotAdoption
                     CopilotAdoptionSteps.DataSourceProbes,
                     CopilotAdoptionQueries.CopilotReportPeriod,
                     summary.Warnings,
+                    summary.WarningDetails,
                     "Copilot usage-report snapshot period",
                     // Failing to zero here does NOT disable the report join - it pins it to
                     // report_period_days IS NULL, which no current row matches, so every licensed user
@@ -275,6 +289,7 @@ namespace Common.Entities.CopilotAdoption
                 CopilotAdoptionSteps.DataSourceProbes,
                 CopilotAdoptionQueries.CoworkReportDate,
                 summary.Warnings,
+                summary.WarningDetails,
                 "Cowork usage-report snapshot date",
                 () => summary.MarkFiguresIncomplete("Cowork usage report"),
                 cancellationToken,
@@ -288,6 +303,7 @@ namespace Common.Entities.CopilotAdoption
                     CopilotAdoptionSteps.DataSourceProbes,
                     CopilotAdoptionQueries.CoworkReportPeriod,
                     summary.Warnings,
+                    summary.WarningDetails,
                     "Cowork usage-report snapshot period",
                     () => summary.MarkFiguresIncomplete("Cowork usage-report snapshot period"),
                     cancellationToken,
@@ -300,6 +316,7 @@ namespace Common.Entities.CopilotAdoption
                 CopilotAdoptionSteps.DataSourceProbes,
                 CopilotAdoptionQueries.M365ReportDate,
                 summary.Warnings,
+                summary.WarningDetails,
                 "Microsoft 365 usage-report snapshot date",
                 () => summary.MarkFiguresIncomplete("Microsoft 365 usage reports"),
                 cancellationToken,
@@ -311,6 +328,7 @@ namespace Common.Entities.CopilotAdoption
                 CopilotAdoptionSteps.DataSourceProbes,
                 CopilotAdoptionQueries.CopilotReportAnonymisation,
                 summary.Warnings,
+                summary.WarningDetails,
                 "Copilot usage-report anonymisation check",
                 // Left defaulting to "not obfuscated" on failure rather than failing closed: flipping it
                 // would silently discard the per-user report source, trading one invisible degradation
@@ -321,38 +339,34 @@ namespace Common.Entities.CopilotAdoption
 
             probeWatch.Stop();
 
-            // Six sequential round trips, each of which can gate a whole section of the report. Left
-            // sequential on purpose: they are cheap existence probes, and the licensed-user and
-            // opportunity queries below cannot be shaped until their answers are known.
-            summary.Diagnostics.Record(CopilotAdoptionSteps.DataSourceProbes, probeWatch.ElapsedMilliseconds);
+            // Six to eight sequential round trips (the two report-period probes run only when a snapshot
+            // exists), each of which can gate a whole section of the report. Left sequential on purpose: they
+            // are cheap existence probes, and the licensed-user and opportunity queries below cannot be
+            // shaped until their answers are known.
+            var probesFailed = _firstStepFailures.TryGetValue(
+                CopilotAdoptionSteps.DataSourceProbes, out var probesFailure);
+            summary.Diagnostics.Record(
+                CopilotAdoptionSteps.DataSourceProbes, probeWatch.ElapsedMilliseconds, probesFailed);
             _telemetry.StepCompleted(
                 probesOperation,
                 CopilotAdoptionSteps.DataSourceProbes,
                 probeWatch.ElapsedMilliseconds,
-                false);
+                probesFailed,
+                probesFailure);
 
             if (summary.DataSources.CopilotUsageReportObfuscated)
             {
-                summary.Warnings.Add(
-                    "This tenant has 'concealed user information' enabled, so Microsoft's per-user Copilot "
-                    + "report returns hashed identities and cannot be used. Per-user figures below come from "
-                    + "the Copilot audit log, which is unaffected by that setting.");
+                CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.CopilotUsageReportConcealed);
             }
 
             if (!summary.DataSources.AuditAvailable && !summary.DataSources.CopilotUsageReportAvailable)
             {
-                summary.Warnings.Add(
-                    "Neither the Copilot audit import nor Microsoft's Copilot usage report has any data for "
-                    + "this period, so every licensed user will appear as unused. Check the Health page before "
-                    + "acting on these numbers.");
+                CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.NoCopilotData);
             }
 
             if (!summary.DataSources.AuditAvailable && summary.DataSources.CopilotUsageReportAvailable)
             {
-                summary.Warnings.Add(
-                    "The Copilot audit import has no data for this period, so per-user engagement is derived "
-                    + "from Microsoft's own usage report. That report covers Microsoft's aggregation window "
-                    + "rather than the period selected here, and excludes unlicensed Copilot Chat use entirely.");
+                CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.AuditMissingUsingUsageReport);
             }
 
             // ----- 3-5. The heavy steps ---------------------------------------------------------
@@ -405,7 +419,7 @@ namespace Common.Entities.CopilotAdoption
             _telemetry.Checkpoint(CopilotAdoptionTelemetryStages.ScoringStarted);
             var scoringWatch = System.Diagnostics.Stopwatch.StartNew();
             var scoringFailed = false;
-            string scoringExceptionType = null;
+            CopilotAdoptionFailure scoringFailure = null;
             try
             {
                 FinaliseSummary(analysis);
@@ -413,7 +427,7 @@ namespace Common.Entities.CopilotAdoption
             catch (Exception ex)
             {
                 scoringFailed = true;
-                scoringExceptionType = ex.GetBaseException().GetType().Name;
+                scoringFailure = CopilotAdoptionFailure.From(ex);
                 throw;
             }
             finally
@@ -426,7 +440,7 @@ namespace Common.Entities.CopilotAdoption
                     CopilotAdoptionSteps.Scoring,
                     scoringWatch.ElapsedMilliseconds,
                     scoringFailed,
-                    scoringExceptionType);
+                    scoringFailure);
                 _telemetry.Checkpoint(
                     CopilotAdoptionTelemetryStages.ScoringCompleted, scoringWatch.ElapsedMilliseconds);
             }
@@ -477,6 +491,14 @@ namespace Common.Entities.CopilotAdoption
             /// <summary>Warnings raised by this step, in the order it raised them.</summary>
             public List<string> Warnings { get; } = new List<string>();
 
+            /// <summary>Structured warnings matching <see cref="Warnings"/> by index.</summary>
+            public List<CopilotAdoptionWarningDetail> WarningDetails { get; } = new List<CopilotAdoptionWarningDetail>();
+
+            public void AddWarning(string key, IDictionary<string, object> values = null)
+            {
+                CopilotAdoptionWarnings.Add(Warnings, WarningDetails, key, values);
+            }
+
             /// <summary>The queries this step ran, for the SQL tab.</summary>
             public Dictionary<string, string> Sql { get; } = new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -497,10 +519,17 @@ namespace Common.Entities.CopilotAdoption
             /// </remarks>
             public bool QueryFailed { get; private set; }
 
+            /// <summary>
+            /// The first failure recorded in this step, so the step's own <c>StepFailed</c> event can say WHY
+            /// (a timeout, a deadlock, a missing table) rather than only that one of its queries failed.
+            /// </summary>
+            public CopilotAdoptionFailure FirstFailure { get; private set; }
+
             /// <summary>Records that a query in this step failed. See <see cref="QueryFailed"/>.</summary>
-            public void MarkQueryFailed()
+            public void MarkQueryFailed(CopilotAdoptionFailure failure = null)
             {
                 QueryFailed = true;
+                if (FirstFailure == null && failure != null) FirstFailure = failure;
             }
 
             /// <summary>Buffered equivalent of <see cref="CopilotAdoptionSummary.MarkFiguresIncomplete"/>.</summary>
@@ -551,6 +580,11 @@ namespace Common.Entities.CopilotAdoption
                             analysis.Summary.Warnings.Add(warning);
                         }
 
+                        foreach (var detail in step.Output.WarningDetails)
+                        {
+                            analysis.Summary.WarningDetails.Add(detail.Clone());
+                        }
+
                         foreach (var reason in step.Output.IncompleteReasons)
                         {
                             analysis.Summary.MarkFiguresIncomplete(reason);
@@ -573,7 +607,7 @@ namespace Common.Entities.CopilotAdoption
 
             var operationId = _telemetry.StepStarted(step.Name);
             var watch = System.Diagnostics.Stopwatch.StartNew();
-            string exceptionType = null;
+            CopilotAdoptionFailure failure = null;
             try
             {
                 await step.Work(step.Output);
@@ -581,7 +615,7 @@ namespace Common.Entities.CopilotAdoption
             catch (Exception ex)
             {
                 step.Failed = true;
-                exceptionType = ex.GetBaseException().GetType().Name;
+                failure = CopilotAdoptionFailure.From(ex, cancellationToken.IsCancellationRequested);
                 throw;
             }
             finally
@@ -599,7 +633,7 @@ namespace Common.Entities.CopilotAdoption
                     step.Name,
                     step.DurationMs,
                     step.Failed,
-                    exceptionType);
+                    failure ?? step.Output.FirstFailure);
                 gate.Release();
             }
         }
@@ -658,9 +692,9 @@ namespace Common.Entities.CopilotAdoption
 
             if (analysis.Agents.Count >= _options.MaxAgents)
             {
-                output.Warnings.Add(
-                    $"The agent inventory was capped at {_options.MaxAgents} agents, so the agent figures are "
-                    + "a floor rather than a total.");
+                output.AddWarning(
+                    CopilotAdoptionWarningKeys.AgentInventoryCapped,
+                    new Dictionary<string, object> { { "maxAgents", _options.MaxAgents } });
             }
 
             var byDeptSql = CopilotAdoptionSql.AgentUsageByDepartmentSql();
@@ -730,9 +764,9 @@ namespace Common.Entities.CopilotAdoption
 
                 if (summary.Unlicensed.Truncated)
                 {
-                    output.Warnings.Add(
-                        $"Unlicensed Copilot usage was capped at {_options.MaxUnlicensedUsersScored} users, so "
-                        + "those figures are a floor rather than a total.");
+                    output.AddWarning(
+                        CopilotAdoptionWarningKeys.UnlicensedUsageCapped,
+                        new Dictionary<string, object> { { "maxUsers", _options.MaxUnlicensedUsersScored } });
                 }
             }
 
@@ -906,11 +940,12 @@ namespace Common.Entities.CopilotAdoption
 
             if (rows.Count >= _options.MaxLicensedUsersScored)
             {
-                output.Warnings.Add(
-                    $"Only the first {_options.MaxLicensedUsersScored:N0} licensed users were analysed. "
-                    + "The figures below therefore describe that subset, not the whole tenant. The subset is "
-                    + "ordered by internal user id for reproducibility, so the oldest user records are "
-                    + "over-represented and the newest user records are excluded first.");
+                output.AddWarning(
+                    CopilotAdoptionWarningKeys.LicensedUserDetailCapped,
+                    new Dictionary<string, object>
+                    {
+                        { "maxUsers", _options.MaxLicensedUsersScored },
+                    });
             }
 
             foreach (var row in rows)
@@ -1095,9 +1130,7 @@ namespace Common.Entities.CopilotAdoption
 
             if (!includeAudit && !includeM365 && !includeCoworkReport)
             {
-                output.Warnings.Add(
-                    "Licence opportunities need either the Copilot audit import or the Microsoft 365 usage "
-                    + "reports. Neither has data, so no candidates can be identified.");
+                output.AddWarning(CopilotAdoptionWarningKeys.LicenceOpportunitiesNoSources);
                 return;
             }
 
@@ -1136,11 +1169,12 @@ namespace Common.Entities.CopilotAdoption
 
             if (!includeM365)
             {
-                output.Warnings.Add(
-                    "The Microsoft 365 usage reports are not available, so licence candidates are ranked only "
-                    + "on unlicensed Copilot Chat use. Heavy Microsoft 365 users who have never tried Copilot "
-                    + "will not appear.");
+                output.AddWarning(CopilotAdoptionWarningKeys.LicenceCandidatesAuditOnly);
             }
+
+            // TOP (@maxRows) returned a full page: candidates below the cut were never scored, so every
+            // figure built from this list - the licence estimate above all - is a floor rather than a total.
+            analysis.OpportunitiesCapped = rows.Count >= _options.MaxOpportunityCandidates;
 
             analysis.Opportunities = rows
                 .Select(r => CopilotAdoptionScoring.ScoreOpportunity(r, _options))
@@ -1187,9 +1221,7 @@ namespace Common.Entities.CopilotAdoption
 
             if (!includeAudit && !includeM365 && !includeCoworkReport)
             {
-                output.Warnings.Add(
-                    "Cowork readiness needs the Cowork usage report, the Copilot audit import or the Microsoft 365 usage "
-                    + "reports. None has data for this period, so no readiness assessment is possible.");
+                output.AddWarning(CopilotAdoptionWarningKeys.CoworkReadinessNoSources);
                 return;
             }
 
@@ -1258,24 +1290,17 @@ namespace Common.Entities.CopilotAdoption
 
             if (!includeM365)
             {
-                output.Warnings.Add(
-                    "The Microsoft 365 usage reports are not available, so coordination load cannot be "
-                    + "measured. Everyone will score zero on that axis and no one will be identified as a "
-                    + "Cowork candidate. Enable the Microsoft 365 usage report import to use this tab.");
+                output.AddWarning(CopilotAdoptionWarningKeys.CoworkM365UsageMissing);
             }
 
             if (!includeCoworkReport)
             {
-                output.Warnings.Add(
-                    "The first-party Cowork usage report is not available, so Cowork task counts, automation ratio "
-                    + "and retention cannot be measured. Audit-derived Cowork interactions are retained only as a reconciliation signal.");
+                output.AddWarning(CopilotAdoptionWarningKeys.CoworkUsageReportMissing);
             }
 
             if (!includeAudit)
             {
-                output.Warnings.Add(
-                    "The Copilot audit import has no data for this period, so Cowork audit interactions cannot be "
-                    + "reconciled against Microsoft's Cowork task report.");
+                output.AddWarning(CopilotAdoptionWarningKeys.CoworkAuditMissing);
             }
 
             // Credits are a decoration on this tab, not a load-bearing figure, and they come from a
@@ -1397,6 +1422,7 @@ namespace Common.Entities.CopilotAdoption
             // instead of either losing "the audit import is behind" or quoting the tenant-wide count of
             // report-sourced users next to one subsidiary's figures.
             summary.SourceWarnings = new List<string>(summary.Warnings);
+            summary.SourceWarningDetails = summary.WarningDetails.Select(d => d.Clone()).ToList();
 
             SummarisePurchasedSeatCapacity(summary);
             summary.GuidanceCatalogueVersion = CopilotAdoptionGuidanceCatalogue.Version;
@@ -1429,35 +1455,39 @@ namespace Common.Entities.CopilotAdoption
 
             if (summary.ScoredUsers > 0 && summary.ScoredUsers < summary.LicensedUsers)
             {
-                summary.Warnings.Add(
-                    $"This tenant holds {summary.LicensedUsers:N0} Copilot licences, but only {summary.ScoredUsers:N0} "
-                    + "users could be analysed in one pass. Every rate and breakdown below describes those "
-                    + $"{summary.ScoredUsers:N0} users, not the whole tenant - they are not tenant-wide figures "
-                    + "and must not be quoted as such. Because the drill-down query is ordered by internal user id, "
-                    + "the oldest user records are over-represented and the newest joiners or newly onboarded "
-                    + "subsidiaries are excluded first; the subset is reproducible, but not representative.");
+                CopilotAdoptionWarnings.Add(
+                    summary,
+                    CopilotAdoptionWarningKeys.LicensedUsersSubset,
+                    new Dictionary<string, object>
+                    {
+                        { "licensedUsers", summary.LicensedUsers },
+                        { "scoredUsers", summary.ScoredUsers },
+                    });
             }
 
             if (summary.UsageReportSourcedUsers > 0)
             {
-                summary.Warnings.Add(
-                    $"{summary.UsageReportSourcedUsers:N0} licensed user{(summary.UsageReportSourcedUsers == 1 ? string.Empty : "s")} "
-                    + $"({summary.UsageReportSourcedUserPct:N1}%) were scored from Microsoft's Copilot usage report because "
-                    + "the audit import had no per-user signal for them. Their Microsoft prompt counts are not added to "
-                    + "audit interaction totals, concentration, intensity or licensed/unlicensed interaction comparisons.");
+                CopilotAdoptionWarnings.Add(
+                    summary,
+                    CopilotAdoptionWarningKeys.UsageReportSourcedUsers,
+                    new Dictionary<string, object>
+                    {
+                        { "count", summary.UsageReportSourcedUsers },
+                        { "userPlural", summary.UsageReportSourcedUsers == 1 ? string.Empty : "s" },
+                        { "percentage", summary.UsageReportSourcedUserPct },
+                    });
             }
 
             if (summary.UsageReportWindowMismatch)
             {
-                summary.Warnings.Add(
-                    $"Microsoft's pinned Copilot usage-report period is D{summary.DataSources.CopilotUsageReportPeriodDays}, "
-                    + $"but this analysis window is D{analysisWindowDays}. Report-sourced rows are kept in the adoption "
-                    + "population so active people are not marked as never used, but a report-sourced row that would "
-                    + "otherwise be a PROBABLE reclaim is excluded from reclaimable-seat totals rather than normalising "
-                    + "prompt counts across unlike windows. Certain (disabled-account) seats are never held back this "
-                    + "way, because a disabled account is not an inference from an absence of use. The band breakdown "
-                    + "therefore counts more idle seats than the reclaim figure does; the difference is reported as "
-                    + "\"held back for window mismatch\".");
+                CopilotAdoptionWarnings.Add(
+                    summary,
+                    CopilotAdoptionWarningKeys.UsageReportWindowMismatch,
+                    new Dictionary<string, object>
+                    {
+                        { "reportDays", summary.DataSources.CopilotUsageReportPeriodDays },
+                        { "analysisDays", analysisWindowDays },
+                    });
             }
 
             summary.ActiveUsers = users.Count(u => u.Band > AdoptionBand.Dormant);
@@ -1516,6 +1546,7 @@ namespace Common.Entities.CopilotAdoption
                 && (IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Review)
                     || IsReclaimTier(u, CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded)));
 
+            summary.ReclaimCaveatKey = CopilotAdoptionWarningKeys.ReclaimCaveat;
             summary.ReclaimCaveat = "Reclaim excludes admin exclusions and separates review-only cases. Leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from Microsoft 365 usage data.";
             PopulateAssignedIdleBySku(summary, users);
             // Report-sourced rows carry Microsoft's prompt count in Interactions. Do not publish a total
@@ -1564,7 +1595,7 @@ namespace Common.Entities.CopilotAdoption
                 : null;
             if (!summary.CoworkEligibilityKnown && summary.CoworkUsers > 0)
             {
-                summary.Warnings.Add("Cowork adoption percentage is suppressed because Cowork eligibility is controlled by spending-policy scope and this import does not know that denominator. The deprecated Cowork agent entry is not used as an eligibility source.");
+                CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.CoworkEligibilityUnknown);
             }
             // Only claim a Cowork signal when Cowork was actually seen in either source. On a tenant that has
             // not been enabled for it, "0% Cowork adoption" reads as a failure rather than as "not available".
@@ -1594,14 +1625,33 @@ namespace Common.Entities.CopilotAdoption
             summary.CombinedByDepartment = BuildCombinedSegments(analysis);
 
             var opportunities = analysis.Opportunities ?? new List<LicenceOpportunityRow>();
-            summary.RecommendedForLicence = opportunities.Count(o => o.Recommended);
-            summary.OpportunityByDepartment = opportunities
-                .Where(o => o.Recommended)
+            var recommended = opportunities.Where(o => o.Recommended).ToList();
+            summary.RecommendedForLicence = recommended.Count;
+            summary.OpportunityByDepartment = recommended
                 .GroupBy(o => string.IsNullOrWhiteSpace(o.Department) ? "(no department)" : o.Department.Trim())
                 .Select(g => new AdoptionCategory { Label = g.Key, Value = g.Count() })
                 .OrderByDescending(c => c.Value)
                 .Take(_options.TopSegments)
                 .ToList();
+
+            // The licence estimate: what Microsoft 365 Copilot could give back to the people recommended
+            // for a seat - the figure a licence purchase is justified with, and the only place the Copilot
+            // minutes are applied. Modelled only when the Microsoft 365 usage reports supplied the volumes
+            // it multiplies: without them every candidate has zero meetings, emails and documents, and
+            // "0 hours" would read as a finding about the candidates rather than as a missing import.
+            var volumesObserved = summary.DataSources?.M365UsageReportsAvailable ?? false;
+            summary.LicenceOpportunityEstimate = volumesObserved
+                ? CopilotAdoptionScoring.EstimateLicenceValue(recommended, _options, analysis.OpportunitiesCapped)
+                : new LicenceValueEstimate();
+
+            // Beside it, the candidates already using Copilot Chat without a licence: the same definition
+            // as the list's "Already using Copilot" filter, so a reader can bring up exactly these people.
+            summary.LicenceChatUsersEstimate = volumesObserved
+                ? CopilotAdoptionScoring.EstimateLicenceValue(
+                    recommended.Where(o => o.UnlicensedCopilotInteractions > 0).ToList(),
+                    _options,
+                    analysis.OpportunitiesCapped)
+                : new LicenceValueEstimate();
 
             // Last, because it reads the licensed, unlicensed, opportunity and Cowork populations
             // together - the point of the domain view is that those four answer one question per
@@ -1770,20 +1820,24 @@ namespace Common.Entities.CopilotAdoption
                 ? copilotSkus.Sum(l => l.UnassignedUnits.GetValueOrDefault())
                 : (int?)null;
 
-            if (hasCopilotSkus && !allPurchasedKnown && !summary.Warnings.Any(w => w.Contains("subscribedSkus/prepaidUnits")))
+            if (hasCopilotSkus && !allPurchasedKnown && !summary.WarningDetails.Any(w => w.Key == CopilotAdoptionWarningKeys.PurchasedSeatsUnknown))
             {
-                summary.Warnings.Add(
-                    "Purchased and unassigned Copilot seats are unknown because Graph subscribedSkus/prepaidUnits "
-                    + "has not been imported. Grant Organization.Read.All and rerun the user metadata import; the "
-                    + "report deliberately does not show zero for unassigned seats when the purchase inventory is missing.");
+                CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.PurchasedSeatsUnknown);
             }
 
             foreach (var licence in copilotSkus.Where(l => l.PurchasedUnits.HasValue && !l.UnassignedUnits.HasValue))
             {
-                var warning = $"Purchased and assigned Copilot seats disagree for {licence.SkuPartNumber ?? licence.Name}: Graph reports {licence.PurchasedUnits.Value:N0} purchased but {licence.AssignedUsers:N0} assigned, so unassigned seats are shown as Unknown rather than zero.";
-                if (!summary.Warnings.Contains(warning))
+                var values = new Dictionary<string, object>
                 {
-                    summary.Warnings.Add(warning);
+                    { "skuName", licence.SkuPartNumber ?? licence.Name },
+                    { "purchased", licence.PurchasedUnits.Value },
+                    { "assigned", licence.AssignedUsers },
+                };
+                if (!summary.WarningDetails.Any(w => w.Key == CopilotAdoptionWarningKeys.SkuSeatMismatch
+                    && w.Values.TryGetValue("skuName", out var skuName)
+                    && string.Equals(Convert.ToString(skuName), Convert.ToString(values["skuName"]), StringComparison.Ordinal)))
+                {
+                    CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.SkuSeatMismatch, values);
                 }
             }
         }
@@ -2027,10 +2081,7 @@ namespace Common.Entities.CopilotAdoption
                 // what tells the tab's own diagnostic channel that the fault was upstream rather than the
                 // missing usage-report import its unavailable card would otherwise blame.
                 summary.CoworkReadinessAvailable = false;
-                summary.Warnings.Add(
-                    "Cowork readiness was measured, but the licensed-user analysis it takes Copilot fluency "
-                    + "from did not complete, so the tab could not be scored. This is NOT a missing usage "
-                    + "report import - the Cowork signals imported fine. Check the Health page and re-run.");
+                CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.CoworkFluencyMissingAll);
                 return;
             }
 
@@ -2078,13 +2129,15 @@ namespace Common.Entities.CopilotAdoption
                 // the excluded users cannot be pulled in by changing the period: SeatUsers is a licence
                 // lookup with no date predicate, so the population and its id ordering are the same on
                 // every window.
-                summary.Warnings.Add(
-                    $"Cowork readiness: {withoutFluency:N0} of {signals.Count:N0} seat holders were scored "
-                    + "without a Copilot fluency figure, because they fall outside the "
-                    + $"{_options.MaxLicensedUsersScored:N0}-row licensed-user analysis this tab joins "
-                    + "against. Their fluency reads as 0 rather than as unknown, so they band lower than "
-                    + "they should - most will show as \"build fluency first\". Treat the tier of those "
-                    + "rows as unreliable; the rest of the tab is unaffected.");
+                CopilotAdoptionWarnings.Add(
+                    summary,
+                    CopilotAdoptionWarningKeys.CoworkFluencyPartial,
+                    new Dictionary<string, object>
+                    {
+                        { "withoutFluency", withoutFluency },
+                        { "total", signals.Count },
+                        { "maxLicensed", _options.MaxLicensedUsersScored },
+                    });
             }
 
             // Ordered so the people to act on are first: recommended before not, then by the strength of
@@ -2117,8 +2170,28 @@ namespace Common.Entities.CopilotAdoption
             summary.CoworkByDepartment = BuildCoworkSegments(rows);
             summary.CoworkQuadrant = BuildCoworkQuadrant(summary.CoworkByDepartment);
 
-            summary.CoworkValueEstimate = CopilotAdoptionScoring.EstimateCoworkValue(
-                rows.Where(r => r.RecommendForPolicy).ToList(), _options);
+            // The tenant's own Cowork users' average task rate - everyone with tasks in Microsoft's Cowork
+            // report - computed once and shared by both cohorts, so they quote the same sense check. It is
+            // not an input: everyone not yet running Cowork tasks is modelled from their own activity.
+            var coworkReportPeriodDays = summary.DataSources?.CoworkUsageReportPeriodDays ?? 0;
+            var coworkTaskRate = CopilotAdoptionScoring.CoworkObservedTaskRate(rows, coworkReportPeriodDays, _options);
+
+            // Modelled only when the Microsoft 365 usage reports supplied the activity it multiplies, for
+            // the same reason as the licence estimate: without them everyone has zero meetings, emails,
+            // messages and files, and "0 hours" would read as a finding that Cowork has nothing to take on
+            // rather than as a missing import. The tab says which it is.
+            var activityObserved = summary.DataSources?.M365UsageReportsAvailable ?? false;
+
+            summary.CoworkValueEstimate = activityObserved
+                ? CopilotAdoptionScoring.EstimateCoworkValue(
+                    rows.Where(r => r.RecommendForPolicy).ToList(), _options, coworkReportPeriodDays, coworkTaskRate)
+                : new CoworkValueEstimate();
+
+            // The ceiling: every scored seat holder, not only the people ready today. Same rows, same
+            // options, same arithmetic - so the cohort above can never model more time than this.
+            summary.CoworkFullRolloutEstimate = activityObserved
+                ? CopilotAdoptionScoring.EstimateCoworkValue(rows, _options, coworkReportPeriodDays, coworkTaskRate)
+                : new CoworkValueEstimate();
         }
 
         /// <summary>
@@ -2491,7 +2564,7 @@ namespace Common.Entities.CopilotAdoption
             return users
                 .GroupBy(u => AccountabilityKey(u, resolved))
                 .Where(g => g.Count() >= _options.MinSeatsPerSegment)
-                .Select(g => SummariseAccountability(g.Key, g.ToList()))
+                .Select(g => SummariseAccountability(g.Key, g.ToList(), EmptyAccountabilitySegmentKey(resolved, g.Key)))
                 .OrderByDescending(r => r.OpportunityUsers)
                 .ThenByDescending(r => r.ReclaimableSeats)
                 .ThenByDescending(r => r.NeverUsedUsers)
@@ -2502,13 +2575,15 @@ namespace Common.Entities.CopilotAdoption
 
         internal static AccountabilityRollupRow SummariseAccountability(
             string segment,
-            IEnumerable<LicensedUserAdoptionRow> users)
+            IEnumerable<LicensedUserAdoptionRow> users,
+            string emptySegmentKey = null)
         {
             var list = users as IList<LicensedUserAdoptionRow> ?? users?.ToList() ?? new List<LicensedUserAdoptionRow>();
             var baseRow = CopilotAdoptionScoring.Summarise(segment, list);
             var row = new AccountabilityRollupRow
             {
                 Segment = baseRow.Segment,
+                EmptySegmentKey = emptySegmentKey,
                 LicensedUsers = baseRow.LicensedUsers,
                 ActiveUsers = baseRow.ActiveUsers,
                 HabitualUsers = baseRow.HabitualUsers,
@@ -2585,6 +2660,23 @@ namespace Common.Entities.CopilotAdoption
             }
         }
 
+        internal static string EmptyAccountabilitySegmentKey(string dimension, string segment)
+        {
+            switch (NormaliseAccountabilityDimension(dimension))
+            {
+                case CopilotAdoptionAccountabilityDimensions.Department:
+                    return string.Equals(segment, "(no department)", StringComparison.Ordinal) ? "noDepartment" : null;
+                case CopilotAdoptionAccountabilityDimensions.Country:
+                    return string.Equals(segment, "(no country)", StringComparison.Ordinal) ? "noCountry" : null;
+                case CopilotAdoptionAccountabilityDimensions.Office:
+                    return string.Equals(segment, "(no office)", StringComparison.Ordinal) ? "noOffice" : null;
+                case CopilotAdoptionAccountabilityDimensions.Company:
+                    return string.Equals(segment, "(no company)", StringComparison.Ordinal) ? "noCompany" : null;
+                default:
+                    return string.Equals(segment, "(no manager)", StringComparison.Ordinal) ? "noManager" : null;
+            }
+        }
+
         private static double HabitRatePct(AdoptionSegmentRow segment)
         {
             return segment.LicensedUsers > 0
@@ -2618,13 +2710,15 @@ namespace Common.Entities.CopilotAdoption
             string step,
             string queryName,
             List<string> warnings,
+            List<CopilotAdoptionWarningDetail> warningDetails,
             string description,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            Action<CopilotAdoptionFailure> onFailure = null)
         {
             var operationId = _telemetry.QueryStarted(step, queryName);
             var watch = System.Diagnostics.Stopwatch.StartNew();
             var failed = false;
-            string exceptionType = null;
+            CopilotAdoptionFailure failure = null;
             try
             {
                 return await query();
@@ -2632,7 +2726,11 @@ namespace Common.Entities.CopilotAdoption
             catch (Exception ex)
             {
                 failed = true;
-                exceptionType = ex.GetBaseException().GetType().Name;
+
+                // Classified for telemetry with the SQL error number and the whole exception chain, not just
+                // the innermost type: a command timeout's innermost exception is a Win32Exception, which on
+                // its own is indistinguishable from a network failure.
+                failure = CopilotAdoptionFailure.From(ex, cancellationToken.IsCancellationRequested);
 
                 // Cancellation is decided by the TOKEN, not by the exception type. A token-triggered
                 // abort surfaces from EF6 / SqlClient as any of TaskCanceledException, SqlException
@@ -2657,7 +2755,18 @@ namespace Common.Entities.CopilotAdoption
                 // unpredictably. Rethrowing the latter faulted the whole analysis and returned a 500, so
                 // the same timeout produced a degraded page on one run and an error on the next - see
                 // issue #360.
-                warnings.Add($"Could not load {description}: {InnermostMessage(ex)}");
+                CopilotAdoptionWarnings.Add(
+                    warnings,
+                    warningDetails,
+                    CopilotAdoptionWarningKeys.CouldNotLoad,
+                    new Dictionary<string, object>
+                    {
+                        { "description", description },
+                        { "query", queryName },
+                        { "message", InnermostMessage(ex) },
+                    });
+                if (step != null && failure != null) _firstStepFailures.TryAdd(step, failure);
+                onFailure?.Invoke(failure);
                 return null;
             }
             finally
@@ -2669,7 +2778,7 @@ namespace Common.Entities.CopilotAdoption
                     queryName,
                     watch.ElapsedMilliseconds,
                     failed,
-                    exceptionType);
+                    failure);
             }
         }
 
@@ -2686,9 +2795,11 @@ namespace Common.Entities.CopilotAdoption
             CancellationToken cancellationToken)
         {
             // SafeAsync returns null exactly when it swallowed a failure, which is what makes this work
-            // without every call site having to remember to report it.
+            // without every call site having to remember to report it. The callback carries WHY, so the
+            // step's own StepFailed event can name the failure kind.
             var rows = await SafeAsync(
-                query, step, queryName, output.Warnings, description, cancellationToken);
+                query, step, queryName, output.Warnings, output.WarningDetails, description, cancellationToken,
+                failure => output.MarkQueryFailed(failure));
             if (rows == null) output.MarkQueryFailed();
             return rows;
         }
@@ -2698,12 +2809,13 @@ namespace Common.Entities.CopilotAdoption
             string step,
             string queryName,
             List<string> warnings,
+            List<CopilotAdoptionWarningDetail> warningDetails,
             string description,
             CancellationToken cancellationToken,
             params SqlParameter[] parameters)
         {
             return await SafeScalarAsync(
-                sql, step, queryName, warnings, description, null, cancellationToken, parameters);
+                sql, step, queryName, warnings, warningDetails, description, null, cancellationToken, parameters);
         }
 
         /// <summary>Step-scoped <see cref="SafeScalarAsync(string, List{string}, string, Action, CancellationToken, SqlParameter[])"/>.</summary>
@@ -2748,6 +2860,7 @@ namespace Common.Entities.CopilotAdoption
             string step,
             string queryName,
             List<string> warnings,
+            List<CopilotAdoptionWarningDetail> warningDetails,
             string description,
             Action onFailure,
             CancellationToken cancellationToken,
@@ -2758,6 +2871,7 @@ namespace Common.Entities.CopilotAdoption
                 step,
                 queryName,
                 warnings,
+                warningDetails,
                 description,
                 cancellationToken);
 
@@ -2775,12 +2889,13 @@ namespace Common.Entities.CopilotAdoption
             string step,
             string queryName,
             List<string> warnings,
+            List<CopilotAdoptionWarningDetail> warningDetails,
             string description,
             CancellationToken cancellationToken,
             params SqlParameter[] parameters)
         {
             return await SafeDateAsync(
-                sql, step, queryName, warnings, description, null, cancellationToken, parameters);
+                sql, step, queryName, warnings, warningDetails, description, null, cancellationToken, parameters);
         }
 
         /// <summary>
@@ -2797,6 +2912,7 @@ namespace Common.Entities.CopilotAdoption
             string step,
             string queryName,
             List<string> warnings,
+            List<CopilotAdoptionWarningDetail> warningDetails,
             string description,
             Action onFailure,
             CancellationToken cancellationToken,
@@ -2807,6 +2923,7 @@ namespace Common.Entities.CopilotAdoption
                 step,
                 queryName,
                 warnings,
+                warningDetails,
                 description,
                 cancellationToken);
 

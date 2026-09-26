@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, Fragment } from 'react';
+import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import {
   makeStyles,
   tokens,
@@ -11,9 +11,18 @@ import {
   Badge,
   MessageBar,
   MessageBarBody,
+  Tab,
+  TabList,
   Tooltip,
 } from '@fluentui/react-components';
-import { ArrowDownload16Regular, ArrowClockwise16Regular } from '@fluentui/react-icons';
+import {
+  ArrowDownload16Regular,
+  ArrowClockwise16Regular,
+  ArrowTrendingLines20Regular,
+  Clock20Regular,
+  DataScatter20Regular,
+  PeopleList20Regular,
+} from '@fluentui/react-icons';
 import { fetchCowork, coworkExportUrl } from '../../api/copilotAdoptionApi';
 import type {
   AdoptionFilterOptions,
@@ -33,24 +42,43 @@ import {
   DetailSections,
   DetailStat,
   DetailStats,
+  ExpandAllButton,
   ExpandableUserCell,
+  PartialPrintNote,
+  PrintedFilters,
   ScoreBar,
+  printedSearch,
+  revealElement,
   useAdoptionTableStyles,
   useRowExpansion,
 } from './adoptionShared';
+import { usePrintAllRows } from '../shared/printPreparation';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { formatCount, formatDate } from '../shared/KpiGrid';
-import { formatNumber, plural, useT, useTNode, type TFunction, type TranslationKey } from '../../i18n';
+import { formatNumber, useT, useTNode, type TFunction, type TranslationKey } from '../../i18n';
 // Credits are fractional and a per-user total over a short window is routinely below 1.
 // formatCount is documented as a WHOLE-number formatter, so it renders a real 0.4 as "0" -
 // the same "we do not know" / "it is nothing" conflation the null path here is careful to
 // avoid, and the reason formatCredits exists (agentCostShared.test.ts pins
 // formatCredits(0.000125) !== '0'). Every credit figure on this tab uses it.
-import { formatCredits } from '../agentCosts/agentCostShared';
+import { capacityStatusLabel, formatCredits } from '../agentCosts/agentCostShared';
 import InfoTip from '../shared/InfoTip';
 import CoworkQuadrant from './CoworkQuadrant';
-import { coworkRationaleText, coworkTierLabel } from './serverText';
+import CoworkTimeSavedHero from './CoworkTimeSavedHero';
+import CoworkTimeSavedModel from './CoworkTimeSavedModel';
+import { useTimeSavedAssumptions } from './coworkTimeSaved';
+import { copilotAdoptionWarningText, coworkRationaleText, coworkTierLabel, isCoworkWarning } from './serverText';
 
 const PAGE_SIZE = 50;
+
+/**
+ * The tab's sections, in order.
+ *
+ * The tab used to be one long scroll - explanation, tiers, quadrant, rollout table, credits, estimate
+ * and a fifty-row list - and the list buried everything above it. Each section now answers one
+ * question, under a headline that answers the one everybody asks first.
+ */
+type CoworkSection = 'timeSaved' | 'readiness' | 'rollout' | 'people';
 
 /**
  * The scheduled / user-initiated split, naming only the halves Microsoft actually reported.
@@ -123,6 +151,13 @@ function coworkTierText(
 const useStyles = makeStyles({
   section: {
     marginBottom: '16px',
+  },
+  sectionNav: {
+    marginBottom: '12px',
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: tokens.colorNeutralStroke2,
+    scrollMarginTop: '12px',
   },
   sectionHeader: {
     display: 'flex',
@@ -243,19 +278,6 @@ const useStyles = makeStyles({
     fontWeight: 600,
     fontVariantNumeric: 'tabular-nums',
   },
-  estimateRange: {
-    fontSize: '26px',
-    fontWeight: 700,
-    fontVariantNumeric: 'tabular-nums',
-  },
-  assumptionList: {
-    margin: '8px 0 0',
-    paddingLeft: '20px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '3px',
-    color: tokens.colorNeutralForeground3,
-  },
   emptyState: {
     display: 'flex',
     flexDirection: 'column',
@@ -300,16 +322,22 @@ function BasisBadge({ basis }: { basis: CoworkBasis }) {
 }
 
 /**
- * The Cowork readiness tab.
+ * The Cowork tab.
+ *
+ * Opens on its headline - how much time Copilot and Cowork could give back, with the working one
+ * click away - and then splits into four sections that each answer one question: how the time-saved
+ * model works and what the evidence is, who is ready, where a rollout should start, and who to put
+ * in the spending policy.
  *
  * Cowork has no licence of its own: it needs a Microsoft 365 Copilot licence as a prerequisite and is
  * then billed by consumption against Copilot Credits, with access granted by a spending policy scoped
- * to users or groups. So this tab is not "who should we buy something for" - it is "who should we put
- * in that policy", and every affordance here is built around producing that list.
+ * to users or groups. So the people section is not "who should we buy something for" - it is "who
+ * should we put in that policy", and every affordance there is built around producing that list.
  *
  * The evidence/inference split is the load-bearing idea. Two of the six tiers are observed; four are
- * predictions. Presenting the second kind as the first would be the most damaging thing this page
- * could do, so the distinction is a column, a badge, a filter and a caption rather than a footnote.
+ * predictions; and the time saved is a model. Presenting either of the last two as the first would be
+ * the most damaging thing this page could do, so the distinction is a column, a badge, a filter and a
+ * caption rather than a footnote.
  */
 export default function CoworkPanel({
   windowDays,
@@ -357,15 +385,27 @@ export default function CoworkPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  const { isExpanded, toggle: toggleRow, collapseAll } = useRowExpansion();
+  const { isExpanded, toggle: toggleRow, resetRows, expandAll, collapseAll, allExpanded } = useRowExpansion();
+  const [section, setSection] = useState<CoworkSection>('timeSaved');
+  const timeSaved = useTimeSavedAssumptions(summary);
+  // Requests, not flags: each click must act again, including a second click on a section that is
+  // already open - which is exactly when a plain setSection() changes nothing the reader can see.
+  const [assumptionFocusRequest, setAssumptionFocusRequest] = useState(0);
+  const [sectionRevealRequest, setSectionRevealRequest] = useState(0);
+  const sectionNavRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (sectionRevealRequest) revealElement(sectionNavRef.current);
+  }, [sectionRevealRequest]);
 
   const available = summary.coworkReadinessAvailable;
 
   useEffect(() => setPage(0), [filters, windowDays]);
 
   // Paging or re-filtering replaces the rows under an open detail, so the expander would end up
-  // describing whoever happens to land on that line next.
-  useEffect(() => collapseAll(), [filters, windowDays, page, collapseAll]);
+  // describing whoever happens to land on that line next. "Expand all" survives it: that is a
+  // choice about the whole list, not about the rows that happened to be on screen.
+  useEffect(() => resetRows(), [filters, windowDays, page, resetRows]);
 
   useEffect(() => {
     // Nothing to fetch when the analysis did not run: the rows cannot exist, and firing the request
@@ -408,32 +448,56 @@ export default function CoworkPanel({
   );
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
-  const estimate = summary.coworkValueEstimate;
+
+  // The whole list while a print is being produced; the page on screen the rest of the time. Only
+  // while the people section is the one showing: a hidden section is not printed, so its list must
+  // not hold the printout up or refuse it for being long.
+  const printRows = usePrintAllRows<CoworkReadinessRow>({
+    enabled: available && section === 'people' && !loading && data !== null,
+    total: data?.total ?? 0,
+    loadedRows: data?.rows.length ?? 0,
+    loadPage: (skip, take, signal) => fetchCowork(windowDays, filters, skip, take, seatLicenceTypeIds, signal),
+  });
+  const rows = printRows ?? data?.rows ?? [];
+  const selectedTier = summary.coworkTiers.find((tier) => tier.code === filters.tiers[0]);
+  const sortOption = SORT_OPTIONS.find((o) => o.value === sortValue);
+
   const credits = summary.coworkCreditPosition;
-  const estimateLowerBoundPercent = Math.min(1, Math.max(0, options.coworkEstimateLowerBoundRatio)) * 100;
-  const estimateWorkingDaysPerMonth = Math.max(
-    1,
-    options.habitBucketNormalisationDays * (options.workingDaysPerWeek / 7),
-  );
   const coworkRegularMinActiveDays = formatNumber(Math.max(1, options.coworkRegularMinActiveDays));
   // The detail row spans every column the header renders. The credit figures live inside the detail
   // panel rather than in a column, so this is now fixed.
   const detailColSpan = 8;
 
-  const toggleTier = (tier: CoworkTier) =>
-    setFilters((f) => ({
-      ...f,
-      tiers: f.tiers.includes(tier) ? f.tiers.filter((t) => t !== tier) : [tier],
-      recommendedOnly: false,
-    }));
+  /**
+   * Opens the people section, optionally re-filtered - how a tier card or the headline hands the
+   * reader the exact list it just counted, now that the list is no longer directly underneath. The
+   * section strip is scrolled into view with it, because the list opens below the headline and would
+   * otherwise start below the fold on a laptop screen.
+   */
+  const showPeople = (next?: Partial<CoworkFilters>) => {
+    if (next) {
+      setSearchDraft('');
+      setFilters((f) => ({ ...f, ...next }));
+    }
+    setSection('people');
+    setSectionRevealRequest((n) => n + 1);
+  };
+
+  /** Takes the reader to the editable figures - from any section, including the one already open. */
+  const adjustAssumptions = () => {
+    setSection('timeSaved');
+    setAssumptionFocusRequest((n) => n + 1);
+  };
+
+  const selectTier = (tier: CoworkTier) => showPeople({ tiers: [tier], recommendedOnly: false });
 
   if (!available) {
     // Read from the SUMMARY, not from `data`: the effect above deliberately does not fetch when the
     // analysis is unavailable, so `data` is always null on this branch. The summary is a prop and is
     // always present, which is what makes the diagnosis below reachable at all.
-    const coworkWarnings = (summary.warnings ?? []).filter((w) =>
-      w.toLowerCase().includes('cowork'),
-    );
+    const coworkWarnings = (summary.warnings ?? [])
+      .map((warning, index) => ({ warning, detail: summary.warningDetails?.[index] }))
+      .filter(({ detail }) => isCoworkWarning(detail));
 
     return (
       <Card>
@@ -443,9 +507,9 @@ export default function CoworkPanel({
           </Text>
           {coworkWarnings.length > 0 ? (
             <div className={styles.warnings}>
-              {coworkWarnings.map((warning) => (
-                <MessageBar key={warning} intent="warning">
-                  <MessageBarBody>{warning}</MessageBarBody>
+              {coworkWarnings.map(({ warning, detail }) => (
+                <MessageBar key={`${detail?.key ?? warning}:${warning}`} intent="warning">
+                  <MessageBarBody>{copilotAdoptionWarningText(t, detail, warning)}</MessageBarBody>
                 </MessageBar>
               ))}
             </div>
@@ -466,17 +530,55 @@ export default function CoworkPanel({
 
   return (
     <div>
-      {/* ---------- What this is ---------- */}
+      {/* ---------- The headline ---------- */}
+      <CoworkTimeSavedHero
+        summary={summary}
+        options={options}
+        timeSaved={timeSaved}
+        onAdjust={adjustAssumptions}
+        onShowPeople={() => showPeople({ recommendedOnly: true, tiers: [] })}
+      />
+
+      <div className={styles.sectionNav} data-print="hide" ref={sectionNavRef}>
+        <TabList
+          selectedValue={section}
+          onTabSelect={(_e, d) => setSection(d.value as CoworkSection)}
+          aria-label={t('copilotAdoptionCowork.sections.ariaLabel')}
+        >
+          <Tab value="timeSaved" icon={<Clock20Regular />}>
+            {t('copilotAdoptionCowork.sections.timeSaved')}
+          </Tab>
+          <Tab value="readiness" icon={<DataScatter20Regular />}>
+            {t('copilotAdoptionCowork.sections.readiness')}
+          </Tab>
+          <Tab value="rollout" icon={<ArrowTrendingLines20Regular />}>
+            {t('copilotAdoptionCowork.sections.rollout')}
+          </Tab>
+          <Tab value="people" icon={<PeopleList20Regular />}>
+            {summary.coworkRecommendedForPolicy > 0
+              ? t('copilotAdoptionCowork.sections.peopleWithCount', {
+                  count: formatCount(summary.coworkRecommendedForPolicy),
+                })
+              : t('copilotAdoptionCowork.sections.people')}
+          </Tab>
+        </TabList>
+      </div>
+
+      {/* ---------- Time saved: the model behind the headline ---------- */}
+      <div role="tabpanel" aria-label={t('copilotAdoptionCowork.sections.timeSaved')} hidden={section !== 'timeSaved'}>
+        <CoworkTimeSavedModel
+          summary={summary}
+          options={options}
+          timeSaved={timeSaved}
+          focusRequest={assumptionFocusRequest}
+        />
+      </div>
+
+      {/* ---------- Readiness: who is ready, and why ---------- */}
+      <div role="tabpanel" aria-label={t('copilotAdoptionCowork.sections.readiness')} hidden={section !== 'readiness'}>
       <Card className={styles.section}>
         <Text weight="semibold" block>
-          {t('copilotAdoptionCowork.intro.title')}
-        </Text>
-        <Text size={200} className={styles.sectionNote}>
-          {tNode('copilotAdoptionCowork.intro.policyScope', {
-            noLicence: <strong>{t('copilotAdoptionCowork.intro.noLicence')}</strong>,
-            policyScope: <strong>{t('copilotAdoptionCowork.intro.policyScopeStrong')}</strong>,
-            addTo: <strong>{t('copilotAdoptionCowork.intro.addTo')}</strong>,
-          })}
+          {t('copilotAdoptionCowork.readiness.title')}
         </Text>
         <Text size={200} className={styles.sectionNote}>
           {tNode('copilotAdoptionCowork.intro.twoAxes', {
@@ -495,7 +597,7 @@ export default function CoworkPanel({
                 key={tier.code}
                 type="button"
                 className={`${styles.tierCard} ${active ? styles.tierCardActive : ''}`}
-                onClick={() => toggleTier(tier.code)}
+                onClick={() => selectTier(tier.code)}
               >
                 <div className={styles.tierTop}>
                   <Text size={200} weight="semibold">
@@ -511,8 +613,8 @@ export default function CoworkPanel({
             );
           })}
         </div>
-        <Text size={100} className={styles.muted}>
-          {t('copilotAdoptionCowork.tiers.filterInstruction')}
+        <Text size={100} className={styles.muted} data-print="hide">
+          {t('copilotAdoptionCowork.tiers.openInstruction')}
         </Text>
       </Card>
 
@@ -542,8 +644,20 @@ export default function CoworkPanel({
         </Text>
         <CoworkQuadrant points={summary.coworkQuadrant} options={options} />
       </Card>
+      </div>
 
-      {/* ---------- Rollout order ---------- */}
+      {/* ---------- Rollout plan: where to start, and the credits it draws on ---------- */}
+      <div role="tabpanel" aria-label={t('copilotAdoptionCowork.sections.rollout')} hidden={section !== 'rollout'}>
+      {summary.coworkByDepartment.length === 0 && (
+        <Card className={styles.section}>
+          <Text weight="semibold" block>
+            {t('copilotAdoptionCowork.rollout.title')}
+          </Text>
+          <Text size={200} className={styles.sectionNote}>
+            {t('copilotAdoptionCowork.rollout.empty')}
+          </Text>
+        </Card>
+      )}
       {summary.coworkByDepartment.length > 0 && (
         <Card className={styles.section}>
           <Text weight="semibold" block>
@@ -569,7 +683,7 @@ export default function CoworkPanel({
               <tbody>
                 {summary.coworkByDepartment.map((row) => (
                   <tr key={row.segment}>
-                    <td className={table.td}>{row.segment}</td>
+                    <td className={table.td}>{serverPlaceholderText(t, row.segment)}</td>
                     <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.licensedUsers)}</td>
                     <td className={`${table.td} ${table.tdNumeric}`}>
                       {formatCount(row.primeCandidates)}
@@ -648,7 +762,7 @@ export default function CoworkPanel({
                 <Text size={200} className={styles.muted} block>
                   {t('copilotAdoptionCowork.creditsHeadroom.status')}
                 </Text>
-                <span className={styles.creditValue}>{credits.status}</span>
+                <span className={styles.creditValue}>{capacityStatusLabel(credits.status, t)}</span>
               </div>
             )}
           </div>
@@ -659,87 +773,24 @@ export default function CoworkPanel({
           )}
         </Card>
       )}
+      </div>
 
-      {/* ---------- The modelled estimate ---------- */}
-      {estimate && estimate.cohortUsers > 0 && (
-        <Card className={styles.section}>
-          <div className={styles.sectionHeader}>
-            <Text weight="semibold">{t('copilotAdoptionCowork.estimate.title')}</Text>
-          </div>
-          <MessageBar intent="info">
-            <MessageBarBody>
-              {t('copilotAdoptionCowork.estimate.warning')}
-            </MessageBarBody>
-          </MessageBar>
-
-          <div style={{ marginTop: '12px' }}>
-            <span className={styles.estimateRange}>
-              {t('copilotAdoptionCowork.estimate.hoursRange', {
-                low: formatCount(estimate.hoursPerMonthLow),
-                high: formatCount(estimate.hoursPerMonthHigh),
-              })}
-            </span>
-            <Text size={200} className={styles.muted}>
-              {' '}
-              {t('copilotAdoptionCowork.estimate.perMonthAcrossRecommended', {
-                users: formatCount(estimate.cohortUsers),
-              })}
-            </Text>
-          </div>
-
-          <Text size={200} block style={{ marginTop: '10px' }}>
-            {t('copilotAdoptionCowork.estimate.observedAddressableWork', {
-              meetings: formatCount(estimate.addressableMeetings),
-              emails: formatCount(estimate.addressableMailThreads),
-              documents: formatCount(estimate.addressableDocuments),
-            })}
-          </Text>
-
-          <ul className={styles.assumptionList}>
-            <li key="estimate-assumption-saves">
-              <Text size={100}>
-                {t('copilotAdoptionCowork.estimate.assumption.saves', {
-                  meetingMinutes: formatNumber(options.coworkMinutesSavedPerMeeting, { maximumFractionDigits: 15 }),
-                  emailMinutes: formatNumber(options.coworkMinutesSavedPerMailThread, { maximumFractionDigits: 15 }),
-                  documentMinutes: formatNumber(options.coworkMinutesSavedPerDocument, { maximumFractionDigits: 15 }),
-                })}
-              </Text>
-            </li>
-            <li key="estimate-assumption-lowerBound">
-              <Text size={100}>
-                {t('copilotAdoptionCowork.estimate.assumption.lowerBound', {
-                  percent: formatNumber(estimateLowerBoundPercent, { maximumFractionDigits: 15 }),
-                })}
-              </Text>
-            </li>
-            <li key="estimate-assumption-volumes">
-              <Text size={100}>
-                {t(
-                  plural(
-                    estimate.cohortUsers,
-                    'copilotAdoptionCowork.estimate.assumption.volumes.one',
-                    'copilotAdoptionCowork.estimate.assumption.volumes.other',
-                  ),
-                  {
-                    users: formatNumber(estimate.cohortUsers),
-                    workingDays: formatNumber(estimateWorkingDaysPerMonth, { maximumFractionDigits: 15 }),
-                  },
-                )}
-              </Text>
-            </li>
-            <li key="estimate-assumption-notMeasured">
-              <Text size={100}>{t('copilotAdoptionCowork.estimate.assumption.notMeasured')}</Text>
-            </li>
-            <li key="estimate-assumption-noMoney">
-              <Text size={100}>{t('copilotAdoptionCowork.estimate.assumption.noMoney')}</Text>
-            </li>
-          </ul>
-        </Card>
-      )}
-
-      {/* ---------- The people ---------- */}
+      {/* ---------- People: the spending-policy list ---------- */}
+      <div role="tabpanel" aria-label={t('copilotAdoptionCowork.sections.people')} hidden={section !== 'people'}>
       <Card>
-        <div className={styles.filters}>
+        <Text weight="semibold" block>
+          {t('copilotAdoptionCowork.intro.title')}
+        </Text>
+        <Text size={200} className={styles.sectionNote}>
+          {tNode('copilotAdoptionCowork.intro.policyScope', {
+            noLicence: <strong>{t('copilotAdoptionCowork.intro.noLicence')}</strong>,
+            policyScope: <strong>{t('copilotAdoptionCowork.intro.policyScopeStrong')}</strong>,
+            addTo: <strong>{t('copilotAdoptionCowork.intro.addTo')}</strong>,
+          })}
+        </Text>
+
+        {/* Chrome: nothing here can be used on paper. What it is set to is printed below instead. */}
+        <div className={styles.filters} data-print="hide">
           <Input
             className={styles.grow}
             value={searchDraft}
@@ -753,6 +804,28 @@ export default function CoworkPanel({
           <Button size="small" onClick={() => setFilters((f) => ({ ...f, search: searchDraft }))}>
             {t('copilotAdoptionCowork.filters.searchButton')}
           </Button>
+
+          {/* The tier cards used to sit directly above this list and were its tier filter. They now
+              live in their own section, so the filter has to be here too - or a list narrowed from a
+              tier card could not be seen to be narrowed, let alone widened again. */}
+          <Select
+            value={filters.tiers[0] ?? ''}
+            aria-label={t('copilotAdoptionCowork.filters.tierAria')}
+            onChange={(_e: any, d: any) =>
+              setFilters((f) => ({
+                ...f,
+                tiers: d.value ? [d.value as CoworkTier] : [],
+                recommendedOnly: d.value ? false : f.recommendedOnly,
+              }))
+            }
+          >
+            <option value="">{t('copilotAdoptionCowork.filters.allVerdicts')}</option>
+            {summary.coworkTiers.map((tier) => (
+              <option key={tier.code} value={tier.code}>
+                {coworkTierText(t, tier.code, 'label', tier.label, coworkRegularMinActiveDays)}
+              </option>
+            ))}
+          </Select>
 
           <Select
             value={filters.department}
@@ -807,6 +880,12 @@ export default function CoworkPanel({
 
           <div className={styles.spacer} />
 
+          <ExpandAllButton
+            allExpanded={allExpanded}
+            onExpandAll={expandAll}
+            onCollapseAll={collapseAll}
+            disabled={rows.length === 0}
+          />
           <Button
             size="small"
             appearance="subtle"
@@ -825,19 +904,41 @@ export default function CoworkPanel({
           </Tooltip>
         </div>
 
+        <PrintedFilters
+          filters={[
+            printedSearch(t, filters.search),
+            {
+              label: t('copilotAdoptionCowork.people.verdict'),
+              value: selectedTier
+                ? coworkTierText(t, selectedTier.code, 'label', selectedTier.label, coworkRegularMinActiveDays)
+                : t('copilotAdoptionCowork.filters.allVerdicts'),
+            },
+            {
+              label: t('copilotAdoptionCowork.table.department'),
+              value: filters.department || t('copilotAdoptionCowork.filters.allDepartments'),
+            },
+            sortOption && { label: t('copilotAdoption.shared.printedFilters.sortedBy'), value: t(sortOption.labelKey) },
+            filters.recommendedOnly && { value: t('copilotAdoptionCowork.filters.policyListOnly') },
+            filters.coworkUsersOnly && { value: t('copilotAdoptionCowork.filters.alreadyUsingCowork') },
+          ]}
+        />
+
         {error && (
           <MessageBar intent="error">
             <MessageBarBody>{error}</MessageBarBody>
           </MessageBar>
         )}
 
-        {!loading && (data?.warnings ?? []).filter((w) => w.toLowerCase().includes('cowork')).length > 0 && (
+        {!loading && (data?.warnings ?? [])
+          .map((warning, index) => ({ warning, detail: data?.warningDetails?.[index] }))
+          .filter(({ detail }) => isCoworkWarning(detail)).length > 0 && (
           <div className={styles.warnings}>
             {(data?.warnings ?? [])
-              .filter((w) => w.toLowerCase().includes('cowork'))
-              .map((warning) => (
-                <MessageBar key={warning} intent="warning">
-                  <MessageBarBody>{warning}</MessageBarBody>
+              .map((warning, index) => ({ warning, detail: data?.warningDetails?.[index] }))
+              .filter(({ detail }) => isCoworkWarning(detail))
+              .map(({ warning, detail }) => (
+                <MessageBar key={`${detail?.key ?? warning}:${warning}`} intent="warning">
+                  <MessageBarBody>{copilotAdoptionWarningText(t, detail, warning)}</MessageBarBody>
                 </MessageBar>
               ))}
           </div>
@@ -857,6 +958,7 @@ export default function CoworkPanel({
             <Button
               size="small"
               onClick={clearPanelFilters}
+              data-print="hide"
             >
               {t('copilotAdoptionCowork.actions.clearFilters')}
             </Button>
@@ -936,7 +1038,7 @@ export default function CoworkPanel({
                 </tr>
               </thead>
               <tbody>
-                {data.rows.map((row) => {
+                {rows.map((row) => {
                   const open = isExpanded(row.userId);
                   return (
                     <Fragment key={row.userId}>
@@ -1185,29 +1287,35 @@ export default function CoworkPanel({
           <div className={styles.footer}>
             <Text size={200} className={styles.muted}>
               {t('copilotAdoptionCowork.pagination.showingSeatHolders', {
-                start: formatCount(data.skip + 1),
-                end: formatCount(Math.min(data.skip + PAGE_SIZE, data.total)),
+                start: formatCount(printRows ? 1 : data.skip + 1),
+                end: formatCount(printRows ? printRows.length : Math.min(data.skip + PAGE_SIZE, data.total)),
                 total: formatCount(data.total),
               })}
             </Text>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <Button size="small" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
-                {t('copilotAdoptionCowork.pagination.previous')}
-              </Button>
-              <Text size={200} className={styles.muted}>
-                {t('copilotAdoptionCowork.pagination.pageOf', { page: page + 1, totalPages })}
-              </Text>
-              <Button
-                size="small"
-                disabled={page + 1 >= totalPages}
-                onClick={() => setPage((p) => p + 1)}
-              >
-                {t('copilotAdoptionCowork.pagination.next')}
-              </Button>
-            </div>
+            {/* A printout holds the whole list, so there is no page to turn to - and no Next button
+                on paper to turn it with. */}
+            {!printRows && (
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }} data-print="hide">
+                <Button size="small" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
+                  {t('copilotAdoptionCowork.pagination.previous')}
+                </Button>
+                <Text size={200} className={styles.muted}>
+                  {t('copilotAdoptionCowork.pagination.pageOf', { page: page + 1, totalPages })}
+                </Text>
+                <Button
+                  size="small"
+                  disabled={page + 1 >= totalPages}
+                  onClick={() => setPage((p) => p + 1)}
+                >
+                  {t('copilotAdoptionCowork.pagination.next')}
+                </Button>
+              </div>
+            )}
           </div>
         )}
+        {!loading && data && <PartialPrintNote shownRows={rows.length} totalRows={data.total} />}
       </Card>
+      </div>
     </div>
   );
 }

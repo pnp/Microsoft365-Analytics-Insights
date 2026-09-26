@@ -43,9 +43,11 @@ const useStyles = makeStyles({
  */
 export default function DismissibleWarnings({
   messages,
+  identities,
   style,
 }: {
   messages: string[];
+  identities?: string[];
   style?: CSSProperties;
 }) {
   const styles = useStyles();
@@ -54,7 +56,7 @@ export default function DismissibleWarnings({
 
   if (messages.length === 0) return null;
 
-  const key = messages.join('\u0000');
+  const key = (identities && identities.length === messages.length ? identities : messages).join('\u0000');
 
   if (dismissedKey === key) {
     return (

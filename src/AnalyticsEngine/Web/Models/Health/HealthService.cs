@@ -9,10 +9,12 @@ using DataUtils.AppInsights;
 using DataUtils.Health;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text.RegularExpressions;
 
 namespace Web.AnalyticsWeb.Models.Health
 {
@@ -517,6 +519,9 @@ namespace Web.AnalyticsWeb.Models.Health
                     Component = component,
                     Status = table.GetString(row, "Status"),
                     Detail = table.GetString(row, "Detail"),
+                    ReasonKey = table.GetString(row, "ReasonKey"),
+                    ErrorCode = table.GetString(row, "ErrorCode"),
+                    HttpStatus = table.GetInt(row, "HttpStatus"),
                     DaysToExpiry = table.GetInt(row, "DaysToExpiry"),
                     LastSeenUtc = table.GetDateTimeUtc(row, "LastSeen")
                 });
@@ -586,11 +591,15 @@ namespace Web.AnalyticsWeb.Models.Health
             var cycles = await client.RunQueryAsync(QueryLastCyclePerJob);
             foreach (var row in cycles.Rows)
             {
+                var duration = cycles.GetString(row, "Duration");
+                var durationSeconds = cycles.GetLong(row, "DurationSeconds");
                 section.LastCyclePerJob.Add(new ImportCycleRow
                 {
                     JobName = cycles.GetString(row, "JobName"),
+                    JobKey = cycles.GetString(row, "JobKey"),
                     LastCycleUtc = cycles.GetDateTimeUtc(row, "LastCycle"),
-                    Duration = cycles.GetString(row, "Duration")
+                    DurationSeconds = durationSeconds.HasValue ? (double?)durationSeconds.Value : ParseElapsedSeconds(duration),
+                    Duration = duration
                 });
             }
 
@@ -752,19 +761,38 @@ namespace Web.AnalyticsWeb.Models.Health
 
         #region KQL
 
+        private static readonly Regex LegacyDurationRegex = new Regex(
+            @"^(?<operation>.+): (?:(?<days>\d+) days, )?(?<hours>\d+) hours, (?<minutes>\d+) mins, and (?<seconds>\d+) seconds\.$",
+            RegexOptions.Compiled);
+
+        private static double? ParseElapsedSeconds(string duration)
+        {
+            if (string.IsNullOrWhiteSpace(duration)) return null;
+            var match = LegacyDurationRegex.Match(duration);
+            if (!match.Success) return null;
+
+            int Part(string name)
+                => int.TryParse(match.Groups[name].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : 0;
+
+            return (Part("days") * 24 * 60 * 60)
+                + (Part("hours") * 60 * 60)
+                + (Part("minutes") * 60)
+                + Part("seconds");
+        }
+
         private const string QueryComponentHealth =
             "customEvents " +
             "| where name == \"HealthCheck\" " +
             "| extend Component = tostring(customDimensions.Component) " +
             "| summarize arg_max(timestamp, *) by Component " +
-            "| project Component, Status = tostring(customDimensions.Status), Detail = tostring(customDimensions.Detail), DaysToExpiry = tostring(customDimensions.DaysToExpiry), LastSeen = timestamp " +
+            "| project Component, Status = tostring(customDimensions.Status), Detail = tostring(customDimensions.Detail), ReasonKey = tostring(customDimensions.ReasonKey), ErrorCode = tostring(customDimensions.ErrorCode), HttpStatus = toint(customDimensions.HttpStatus), DaysToExpiry = tostring(customDimensions.DaysToExpiry), LastSeen = timestamp " +
             "| order by Component asc";
 
         private const string QueryLastCyclePerJob =
             "customEvents " +
             "| where name == \"FinishedImportCycle\" " +
             "| summarize arg_max(timestamp, *) by operation_Name " +
-            "| project JobName = operation_Name, LastCycle = timestamp, Duration = tostring(customDimensions.context) " +
+            "| project JobName = operation_Name, JobKey = tostring(customDimensions.OperationName), LastCycle = timestamp, DurationSeconds = tolong(customMeasurements.ElapsedSeconds), Duration = tostring(customDimensions.context) " +
             "| order by JobName asc";
 
         private const string QueryLastSectionImports =
@@ -800,10 +828,30 @@ namespace Web.AnalyticsWeb.Models.Health
             "| summarize Count = count() by type, problemId " +
             "| top 10 by Count desc";
 
+        /// <summary>
+        /// Capacity and read-only failures only, matched on the texts SQL Server and Azure SQL actually return:
+        /// 40544 "has reached its size quota", 1105 "Could not allocate space", 1101 "insufficient disk space",
+        /// 9002 "The transaction log for database ... is full", 3906 "the database is read-only", plus the older
+        /// "database is full" wording. Both the outer and innermost messages are searched because EF wraps the
+        /// SqlException. The 9002 test is the three words "transaction", "log" and "full" in any order, because
+        /// the database name sits in the middle of that sentence.
+        /// </summary>
+        /// <remarks>
+        /// It used to count every SqlException, so a login failure or a timeout told admins to check database
+        /// storage (#609). The error numbers themselves are deliberately not matched: SqlException.Message never
+        /// contains them, so a bare "1105" could only ever match some unrelated message.
+        /// </remarks>
         private const string QuerySqlCapacityExceptions =
             "exceptions " +
             "| where timestamp > ago(24h) " +
-            "| where (outerMessage has \"read-only\") or (outerMessage has \"database is full\") or (outerMessage has \"insufficient disk space\") or (type contains \"SqlException\") " +
+            "| where " +
+            "outerMessage has \"read-only\" or innermostMessage has \"read-only\" " +
+            "or outerMessage contains \"database is full\" or innermostMessage contains \"database is full\" " +
+            "or outerMessage contains \"insufficient disk space\" or innermostMessage contains \"insufficient disk space\" " +
+            "or outerMessage contains \"has reached its size quota\" or innermostMessage contains \"has reached its size quota\" " +
+            "or outerMessage contains \"Could not allocate space\" or innermostMessage contains \"Could not allocate space\" " +
+            "or (outerMessage has \"transaction\" and outerMessage has \"log\" and outerMessage has \"full\") " +
+            "or (innermostMessage has \"transaction\" and innermostMessage has \"log\" and innermostMessage has \"full\") " +
             "| summarize Count = count()";
 
         #endregion

@@ -31,6 +31,75 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task ExecuteHttpCallWithThrottleRetries_HonoursCostManagementRateLimitRetryAfter()
+        {
+            // Microsoft Cost Management throttles with its own x-ms-ratelimit-*-retry-after headers rather than the
+            // standard Retry-After. Ignoring them meant a 2-second fallback that retried straight into the same
+            // limit until the retry budget ran out, failing the scope on every cycle.
+            var clock = new FakeRetryClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+            var handler = SequencedHandler.FromStatuses(clock,
+                HeaderStatus((HttpStatusCode)429, "x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after", "45"),
+                Status(HttpStatusCode.OK));
+
+            using (var client = NewClient(handler, clock, retryBudgetSeconds: 300))
+            using (var response = await client.GetAsyncWithThrottleRetries("https://contoso.example/costs", AnalyticsLogger.ConsoleOnlyTracer()))
+            {
+                Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+            }
+
+            AssertAttemptOffsets(clock, handler, 0, 45);
+        }
+
+        [TestMethod]
+        public void GetRetryAfterHeaderSeconds_TakesTheLongestOfEveryRateLimitHint()
+        {
+            using (var response = new HttpResponseMessage((HttpStatusCode)429))
+            {
+                response.Headers.TryAddWithoutValidation("Retry-After", "10");
+                response.Headers.TryAddWithoutValidation("x-ms-ratelimit-microsoft.costmanagement-entity-retry-after", "20");
+                response.Headers.TryAddWithoutValidation("x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after", "45");
+                response.Headers.TryAddWithoutValidation("x-ms-ratelimit-microsoft.consumption-retry-after", "30");
+
+                // A remaining-quota counter, not a delay: it must never be read as one.
+                response.Headers.TryAddWithoutValidation("x-ms-ratelimit-remaining-subscription-reads", "11999");
+
+                Assert.AreEqual(45, response.GetRetryAfterHeaderSeconds(),
+                    "Each hint names a separate limit, so the longest must have elapsed before a retry can succeed.");
+            }
+        }
+
+        [TestMethod]
+        public void GetRetryAfterHeaderSeconds_ReadsTheSpecDocumentedConsumptionHeaderAlone()
+        {
+            using (var response = new HttpResponseMessage((HttpStatusCode)429))
+            {
+                response.Headers.TryAddWithoutValidation("x-ms-ratelimit-microsoft.consumption-retry-after", "30");
+
+                Assert.AreEqual(30, response.GetRetryAfterHeaderSeconds());
+            }
+        }
+
+        [TestMethod]
+        public void GetRetryAfterHeaderSeconds_IgnoresMalformedRateLimitHints()
+        {
+            using (var malformedOnly = new HttpResponseMessage((HttpStatusCode)429))
+            {
+                malformedOnly.Headers.TryAddWithoutValidation("x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after", "soon");
+
+                Assert.IsNull(malformedOnly.GetRetryAfterHeaderSeconds(),
+                    "An unparseable hint must fall through to the bounded fallback, not be read as zero.");
+            }
+
+            using (var withStandard = new HttpResponseMessage((HttpStatusCode)429))
+            {
+                withStandard.Headers.TryAddWithoutValidation("Retry-After", "7");
+                withStandard.Headers.TryAddWithoutValidation("x-ms-ratelimit-microsoft.costmanagement-qpu-retry-after", "-5");
+
+                Assert.AreEqual(7, withStandard.GetRetryAfterHeaderSeconds());
+            }
+        }
+
+        [TestMethod]
         public async Task ExecuteHttpCallWithThrottleRetries_DelayShorterThanBudgetStillWaitsFullDelay()
         {
             var clock = new FakeRetryClock(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));

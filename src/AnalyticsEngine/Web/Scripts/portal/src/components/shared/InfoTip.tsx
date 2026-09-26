@@ -119,6 +119,7 @@ export default function InfoTip({ title, content }: { title: string; content: In
           icon={<Info16Regular />}
           aria-label={explainLabel}
           title={explainLabel}
+          data-print="hide"
         />
       </PopoverTrigger>
       <PopoverSurface className={styles.surface}>

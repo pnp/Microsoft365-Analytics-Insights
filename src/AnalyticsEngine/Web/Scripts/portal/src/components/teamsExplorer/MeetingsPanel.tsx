@@ -18,12 +18,12 @@ import CategoryBarChart from '../charts/CategoryBarChart';
 import DonutChart from '../charts/DonutChart';
 import HeatmapChart from '../charts/HeatmapChart';
 import { seriesColor } from '../charts/chartCommon';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import type { TeamsMeetings } from '../../types/teamsExplorer';
 import { useT, useTNode } from '../../i18n';
 import {
   SectionCard,
   WindowNote,
-  bucketsToCategories,
   formatCount,
   formatDecimal,
   formatHours,
@@ -31,6 +31,8 @@ import {
   queryFor,
   toCategories,
   translatedBucketsToCategories,
+  translatedCodeBucketsToCategories,
+  translatedCodeLabel,
   useTeamsStyles,
 } from './teamsShared';
 
@@ -284,7 +286,7 @@ export default function MeetingsPanel({
           }
         >
           <DonutChart
-            categories={bucketsToCategories(data.modalityMix)}
+            categories={translatedCodeBucketsToCategories(t, 'modality', data.modalityMix)}
             colours={data.modalityMix.map((_, i) => seriesColor(i))}
             centreValue={formatCount(data.modalityMix.reduce((sum, b) => sum + b.count, 0))}
             centreLabel={t('teamsExplorer.meetings.modalities.centreLabel')}
@@ -331,7 +333,7 @@ export default function MeetingsPanel({
                 })}
               </Text>
               <CategoryBarChart
-                categories={bucketsToCategories(quality.ratings)}
+                categories={translatedCodeBucketsToCategories(t, 'quality', quality.ratings)}
                 valueLabel={t('teamsExplorer.meetings.valueLabel.submissions')}
                 showShare
               />
@@ -356,7 +358,7 @@ export default function MeetingsPanel({
                 <TableBody>
                   {quality.failureReasons.map((row) => (
                     <TableRow key={row.key}>
-                      <TableCell>{row.label}</TableCell>
+                      <TableCell>{serverPlaceholderText(t, row.label)}</TableCell>
                       <TableCell className={styles.numeric}>{formatCount(row.count)}</TableCell>
                       <TableCell className={styles.numeric}>{formatPct(row.sharePct)}</TableCell>
                     </TableRow>

@@ -8,6 +8,7 @@ import enOverview from './en/overview';
 import enReports from './en/reports';
 import enCopilot from './en/copilotAdoption';
 import enCopilotCowork from './en/copilotAdoptionCowork';
+import enCopilotTimeSaved from './en/copilotAdoptionTimeSaved';
 import enCopilotAgents from './en/copilotAdoptionAgents';
 import enCopilotUsers from './en/copilotAdoptionUsers';
 import enTeamsExplorer from './en/teamsExplorer';
@@ -53,6 +54,7 @@ export const EN_MODULES = {
   reports: enReports,
   copilotAdoption: enCopilot,
   copilotAdoptionCowork: enCopilotCowork,
+  copilotAdoptionTimeSaved: enCopilotTimeSaved,
   copilotAdoptionAgents: enCopilotAgents,
   copilotAdoptionUsers: enCopilotUsers,
   teamsExplorer: enTeamsExplorer,

@@ -1,4 +1,4 @@
-import { formatDateParts, formatNumber, translateActive, type TFunction, type TranslationKey } from '../../i18n';
+import { EN_CATALOG, formatDateParts, formatNumber, translateActive, type TFunction, type TranslationKey } from '../../i18n';
 import type { AgentCostDetailRow, AzureDimension, CreditDimension } from '../../types/agentCosts';
 
 /** Shown for a dimension the billing API did not report for a row. */
@@ -70,6 +70,21 @@ const HARNESS_LABEL_KEYS: Record<string, TranslationKey> = {
   NotAssessed: 'agentCosts.harness.noFeatureReported',
 };
 
+export const CAPACITY_STATUS_LABEL_KEYS: Record<string, TranslationKey> = {
+  MonthToDate: 'agentCosts.capacity.status.monthToDate',
+  WithinCapacity: 'agentCosts.capacity.status.withinCapacity',
+  Overage: 'agentCosts.capacity.status.overage',
+  CoveredOverage: 'agentCosts.capacity.status.coveredOverage',
+};
+
+/**
+ * What the capacity `consumed` figure is measured over, as Power Platform reports it (e.g. "MonthToDate").
+ * A stable identifier on the wire, so it is labelled here rather than shown raw.
+ */
+export const CAPACITY_CONSUMPTION_TYPE_LABEL_KEYS: Record<string, TranslationKey> = {
+  MonthToDate: 'agentCosts.capacity.consumptionType.monthToDate',
+};
+
 /**
  * A display label for a stored harness value.
  *
@@ -82,6 +97,26 @@ export function harnessLabel(value: string | null | undefined, t: TFunction = tr
   if (key) return (t ?? translateActive)(key);
   if (value === 'GitHubCopilot') return 'GitHub Copilot';
   return value || t('agentCosts.state.notReported');
+}
+
+function harnessCsvLabel(value: string | null | undefined): string {
+  const key = value ? HARNESS_LABEL_KEYS[value] : undefined;
+  if (key) return EN_CATALOG[key];
+  if (value === 'GitHubCopilot') return 'GitHub Copilot';
+  return value || EN_CATALOG['agentCosts.state.notReported'];
+}
+
+export function capacityStatusLabel(value: string | null | undefined, t: TFunction = translateActive): string {
+  if (!value) return DASH;
+  const key = CAPACITY_STATUS_LABEL_KEYS[value];
+  return key ? t(key) : value;
+}
+
+/** The capacity consumption type as a label; an unrecognised type is shown as sent, never blank. */
+export function capacityConsumptionTypeLabel(value: string | null | undefined, t: TFunction = translateActive): string {
+  if (!value) return '';
+  const key = CAPACITY_CONSUMPTION_TYPE_LABEL_KEYS[value];
+  return key ? t(key) : value;
 }
 
 /** A UTC ISO date as a short date. Rendered in UTC - the underlying grain is a UTC usage day. */
@@ -176,7 +211,7 @@ function csvCell(value: string | number | null | undefined): string {
  * Exported client-side from the rows already fetched, so it always matches exactly what the admin can
  * see - there is no second query that could return different figures than the table they are looking at.
  */
-export function detailRowsToCsv(rows: AgentCostDetailRow[], t?: TFunction): string {
+export function detailRowsToCsv(rows: AgentCostDetailRow[], _t?: TFunction): string {
   const header = [
     'Usage date',
     'Agent',
@@ -197,7 +232,7 @@ export function detailRowsToCsv(rows: AgentCostDetailRow[], t?: TFunction): stri
       r.agentId ?? '',
       r.environmentName ?? '',
       r.environmentId ?? '',
-      harnessLabel(r.harness, t),
+      harnessCsvLabel(r.harness),
       r.featureName ?? '',
       r.billedCredits,
       r.nonBilledCredits ?? '',

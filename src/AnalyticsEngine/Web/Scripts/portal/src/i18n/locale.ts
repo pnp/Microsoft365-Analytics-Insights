@@ -40,6 +40,7 @@ export function activeLocale(): string {
 // these run per table cell on tables with thousands of rows. Cache on the full option shape.
 const numberFormatters = new Map<string, Intl.NumberFormat>();
 const dateFormatters = new Map<string, Intl.DateTimeFormat>();
+const listFormatters = new Map<string, Intl.ListFormat>();
 
 function numberFormatter(options?: Intl.NumberFormatOptions): Intl.NumberFormat {
   const key = `${activeLocaleTag}|${options ? JSON.stringify(options) : ''}`;
@@ -61,6 +62,16 @@ function dateFormatter(options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat
   return formatter;
 }
 
+function listFormatter(options: Intl.ListFormatOptions): Intl.ListFormat {
+  const key = `${activeLocaleTag}|${JSON.stringify(options)}`;
+  let formatter = listFormatters.get(key);
+  if (!formatter) {
+    formatter = new Intl.ListFormat(activeLocaleTag, options);
+    listFormatters.set(key, formatter);
+  }
+  return formatter;
+}
+
 /** A number in the active locale's conventions. */
 export function formatNumber(value: number, options?: Intl.NumberFormatOptions): string {
   return numberFormatter(options).format(value);
@@ -69,6 +80,11 @@ export function formatNumber(value: number, options?: Intl.NumberFormatOptions):
 /** A date in the active locale's conventions. */
 export function formatDateParts(date: Date, options: Intl.DateTimeFormatOptions): string {
   return dateFormatter(options).format(date);
+}
+
+/** A list joined in the active locale's conventions. */
+export function formatList(parts: string[], options: Intl.ListFormatOptions = { style: 'long', type: 'conjunction' }): string {
+  return listFormatter(options).format(parts);
 }
 
 /**

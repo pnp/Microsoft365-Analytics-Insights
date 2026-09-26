@@ -7,6 +7,7 @@ import overview from './overview';
 import reports from './reports';
 import copilotAdoption from './copilotAdoption';
 import copilotAdoptionCowork from './copilotAdoptionCowork';
+import copilotAdoptionTimeSaved from './copilotAdoptionTimeSaved';
 import copilotAdoptionAgents from './copilotAdoptionAgents';
 import copilotAdoptionUsers from './copilotAdoptionUsers';
 import teamsExplorer from './teamsExplorer';
@@ -43,6 +44,7 @@ export const ES_MODULES = {
   reports,
   copilotAdoption,
   copilotAdoptionCowork,
+  copilotAdoptionTimeSaved,
   copilotAdoptionAgents,
   copilotAdoptionUsers,
   teamsExplorer,

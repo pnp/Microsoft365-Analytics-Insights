@@ -1,5 +1,6 @@
 ﻿using Common.Entities;
 using DataUtils;
+using DataUtils.Sql;
 using System;
 using System.Collections.Generic;
 using System.Data;
@@ -103,43 +104,66 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <summary>
         /// Phase 1: Uses SqlBulkCopy for fast bulk insert of minimal user data
         /// </summary>
-        private async Task BulkInsertUsers(AnalyticsEntitiesContext db, List<GraphUser> graphUsers, int batchSize)
+        private Task BulkInsertUsers(AnalyticsEntitiesContext db, List<GraphUser> graphUsers, int batchSize)
         {
-            var connectionString = db.Database.Connection.ConnectionString;
+            return BulkInsertUsers(db.Database.Connection.ConnectionString, graphUsers, batchSize);
+        }
+
+        /// <summary>
+        /// Bulk-inserts <paramref name="graphUsers"/> into <c>dbo.users</c> over one connection.
+        /// </summary>
+        /// <remarks>
+        /// The connection is created through <see cref="AzureSqlTokenAuth.CreateConnection"/> and handed
+        /// to <see cref="SqlBulkCopy"/> already open, exactly as <see cref="SqlUserBulkUpdateWriter"/> does.
+        /// <c>new SqlBulkCopy(connectionString)</c> opens a private connection of its own that neither EF's
+        /// <c>AzureSqlAccessTokenInterceptor</c> nor this helper ever sees, so on an Entra-only Azure SQL
+        /// server - whose connection string carries no login - it connected with no access token and failed
+        /// with <c>Login failed for user ''</c> on every import cycle, taking every later Graph section down
+        /// with it (#609). SQL-authentication connection strings are left untouched by the helper.
+        /// Internal, and keyed on the connection string rather than a context, so the token path can be
+        /// tested without building an EF model.
+        /// </remarks>
+        internal async Task BulkInsertUsers(string connectionString, List<GraphUser> graphUsers, int batchSize)
+        {
             var totalInserted = 0;
 
-            // Process in batches to manage memory.
-            // GetRange instead of Skip().Take() - Skip() walks past i elements every call,
-            // so chunking N items in slices of K costs O(N^2/K). For 200k users in 10k batches
-            // that's a 2M-step linear scan over the list head.
-            for (int batchStart = 0; batchStart < graphUsers.Count; batchStart += batchSize)
+            using (var connection = AzureSqlTokenAuth.CreateConnection(connectionString))
             {
-                var batchCount = Math.Min(batchSize, graphUsers.Count - batchStart);
-                var batch = graphUsers.GetRange(batchStart, batchCount);
-                var dataTable = CreateUserDataTable(batch);
+                await connection.OpenAsync();
 
-                using (var bulkCopy = new SqlBulkCopy(connectionString))
+                // Process in batches to manage memory.
+                // GetRange instead of Skip().Take() - Skip() walks past i elements every call,
+                // so chunking N items in slices of K costs O(N^2/K). For 200k users in 10k batches
+                // that's a 2M-step linear scan over the list head.
+                for (int batchStart = 0; batchStart < graphUsers.Count; batchStart += batchSize)
                 {
-                    bulkCopy.DestinationTableName = "dbo.users";
-                    bulkCopy.BatchSize = batchSize;
-                    bulkCopy.BulkCopyTimeout = 600; // 10 minutes
+                    var batchCount = Math.Min(batchSize, graphUsers.Count - batchStart);
+                    var batch = graphUsers.GetRange(batchStart, batchCount);
+                    var dataTable = CreateUserDataTable(batch);
 
-                    // Map only columns that exist in both GraphUser and the User table
-                    bulkCopy.ColumnMappings.Add("UserPrincipalName", "user_name");
-                    bulkCopy.ColumnMappings.Add("AzureAdId", "azure_ad_id");
-                    bulkCopy.ColumnMappings.Add("AccountEnabled", "account_enabled");
-                    bulkCopy.ColumnMappings.Add("CreatedDateTime", "created_utc");
-                    bulkCopy.ColumnMappings.Add("Mail", "mail");
-                    bulkCopy.ColumnMappings.Add("PostalCode", "postalcode");
+                    using (var bulkCopy = new SqlBulkCopy(connection))
+                    {
+                        bulkCopy.DestinationTableName = "dbo.users";
+                        bulkCopy.BatchSize = batchSize;
+                        bulkCopy.BulkCopyTimeout = 600; // 10 minutes
 
-                    await bulkCopy.WriteToServerAsync(dataTable);
+                        // Map only columns that exist in both GraphUser and the User table
+                        bulkCopy.ColumnMappings.Add("UserPrincipalName", "user_name");
+                        bulkCopy.ColumnMappings.Add("AzureAdId", "azure_ad_id");
+                        bulkCopy.ColumnMappings.Add("AccountEnabled", "account_enabled");
+                        bulkCopy.ColumnMappings.Add("CreatedDateTime", "created_utc");
+                        bulkCopy.ColumnMappings.Add("Mail", "mail");
+                        bulkCopy.ColumnMappings.Add("PostalCode", "postalcode");
+
+                        await bulkCopy.WriteToServerAsync(dataTable);
+                    }
+
+                    totalInserted += batch.Count;
+                    _logger.LogInformation($"User import - Bulk inserted {totalInserted.ToString("N0")}/{graphUsers.Count.ToString("N0")} users to SQL");
+
+                    dataTable.Clear();
+                    dataTable.Dispose();
                 }
-
-                totalInserted += batch.Count;
-                _logger.LogInformation($"User import - Bulk inserted {totalInserted.ToString("N0")}/{graphUsers.Count.ToString("N0")} users to SQL");
-
-                dataTable.Clear();
-                dataTable.Dispose();
             }
         }
 

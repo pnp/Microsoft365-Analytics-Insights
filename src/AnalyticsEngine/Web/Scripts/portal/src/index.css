@@ -66,8 +66,10 @@ body {
  *                           buttons). Removed from the printed output entirely.
  *   data-print="content"  - a layout wrapper between the page root and the report. Flattened so it
  *                           contributes no width limit, gutter or viewport-height floor.
- *   data-print="only"     - rendered on paper only. Used for the scope caption that replaces the
- *                           filter controls, so a printout still says what it is a report of.
+ *   data-print="only"     - rendered on paper only, standing in for a control that is not: the
+ *                           scope caption that replaces the page's filter controls, the line
+ *                           stating a list's filters, the figure typed into an assumption box, and
+ *                           the note on a list printed without its later pages.
  *   data-print="flow"     - a flex or grid stack of report sections, returned to normal block flow
  *                           so the page breaks below actually take effect.
  *   data-print="page-break"
@@ -153,6 +155,21 @@ body {
 
   [data-print='only'] {
     display: block !important;
+  }
+
+  /* An accordion section that is closed on screen prints as a heading with nothing under it - Fluent
+     does not render a closed panel at all - so it is left out, the same way a collapsed list row
+     prints without its detail: what is open is what gets printed. The chevron of an open section is
+     a control, and goes with the rest. Written against Fluent's static class names, like `.fui-Card`
+     below, because an accordion's open state is only exposed as the header button's
+     `aria-expanded`. The child combinators keep a closed section nested inside an open one from
+     hiding its parent. */
+  .fui-AccordionItem:has(> .fui-AccordionHeader > .fui-AccordionHeader__button[aria-expanded='false']) {
+    display: none !important;
+  }
+
+  .fui-AccordionHeader__expandIcon {
+    display: none !important;
   }
 
   /* The running footer: product, build and repository at the foot of every page.

@@ -165,6 +165,18 @@ export const teamsExplorer = {
   'teamsExplorer.bucket.meetingPeriod.afternoon.label': 'Afternoon (12:00-17:00)',
   'teamsExplorer.bucket.meetingPeriod.evening.label': 'Evening (17:00-21:00)',
   'teamsExplorer.bucket.meetingPeriod.night.label': 'Night (after 21:00)',
+  'teamsExplorer.code.modality.audio': 'Audio',
+  'teamsExplorer.code.modality.video': 'Video',
+  'teamsExplorer.code.modality.screenSharing': 'Screen sharing',
+  'teamsExplorer.code.modality.videoBasedScreenSharing': 'Video-based screen sharing',
+  'teamsExplorer.code.modality.data': 'Data',
+  'teamsExplorer.code.quality.excellent': 'Excellent',
+  'teamsExplorer.code.quality.good': 'Good',
+  'teamsExplorer.code.quality.fair': 'Fair',
+  'teamsExplorer.code.quality.poor': 'Poor',
+  'teamsExplorer.code.quality.bad': 'Bad',
+  'teamsExplorer.code.quality.notRated': 'Not rated',
+  'teamsExplorer.code.quality.none': 'No rating',
 
 
   // Server-authored Teams Explorer judgements.

@@ -551,7 +551,7 @@ namespace Tests.UnitTests
             // exported CSV row. A tenant-wide "N users were scored from Microsoft's usage report"
             // stamped on a one-organisation file states a number about a population it does not hold.
             var analysis = TwoCompanyAnalysis();
-            analysis.Summary.Warnings.Add("The Copilot audit import is behind.");
+            CopilotAdoptionWarnings.Add(analysis.Summary, CopilotAdoptionWarningKeys.NoCopilotData);
             var service = Service();
             service.FinaliseSummary(analysis);
 
@@ -561,8 +561,12 @@ namespace Tests.UnitTests
             var rows = CopilotAdoptionScopeFilter.FilterRows(
                 analysis, CopilotAdoptionScope.ForEmailDomain("fabrikam.com"));
 
-            CollectionAssert.Contains(rows.Summary.Warnings, "The Copilot audit import is behind.");
+            CollectionAssert.Contains(
+                rows.Summary.Warnings,
+                CopilotAdoptionWarnings.RenderEnglish(CopilotAdoptionWarningKeys.NoCopilotData));
             CollectionAssert.DoesNotContain(rows.Summary.Warnings, populationWarning);
+            Assert.AreEqual(rows.Summary.Warnings.Count, rows.Summary.WarningDetails.Count);
+            Assert.AreEqual(CopilotAdoptionWarningKeys.NoCopilotData, rows.Summary.WarningDetails.Single().Key);
         }
 
         [TestMethod]

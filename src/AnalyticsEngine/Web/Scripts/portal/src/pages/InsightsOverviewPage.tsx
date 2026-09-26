@@ -10,6 +10,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { useT, type TFunction, type TranslationKey } from '../i18n';
+import { buildLabelText } from '../product';
 import { fetchSystemStatus } from '../api/systemStatusApi';
 import { fetchHealthData, fetchHealthSummary } from '../api/healthApi';
 import type { SystemStatus } from '../types/systemStatus';
@@ -192,7 +193,7 @@ export default function InsightsOverviewPage() {
         <Title3 as="h1">{t('overview.page.title')}</Title3>
         {status.buildLabel && (
           <Badge appearance="tint" color="informative">
-            {status.buildLabel}
+            {buildLabelText(t, status.buildLabel)}
           </Badge>
         )}
       </div>

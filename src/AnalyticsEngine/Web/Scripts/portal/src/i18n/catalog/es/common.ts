@@ -59,6 +59,15 @@ const common: Record<keyof typeof en, string> = {
   'common.warnings.show.other': 'Mostrar {count} avisos sobre los datos',
   'common.warnings.hide': 'Ocultar estos avisos',
 
+  // Bot\u00f3n Imprimir
+  'common.print.preparing': 'Preparando\u2026',
+  'common.print.tooManyRows.title': 'Demasiadas filas para imprimir',
+  'common.print.tooManyRows.body':
+    '{rows} filas coinciden con los filtros de esta lista, y una lista solo se imprime completa hasta {limit} filas. Acote la lista con sus filtros y vuelva a imprimir, o exp\u00f3rtela para obtener todas las filas.',
+  'common.print.failed.title': 'No se ha podido preparar la impresi\u00f3n',
+  'common.print.failed.body':
+    'No se ha podido cargar la lista completa para imprimirla, as\u00ed que no se ha impreso nada. Vuelva a intentarlo dentro de un momento.',
+
   // Ventana emergente de SQL
   'common.sql.title': 'SQL para reproducir este dato',
   'common.sql.buttonLabel': 'SQL',
@@ -74,6 +83,30 @@ const common: Record<keyof typeof en, string> = {
   'common.sentiment.band.neutral': 'neutro',
   'common.sentiment.band.leaningPositive': 'tendencia positiva',
   'common.sentiment.band.positive': 'positivo',
+
+  'common.serverPlaceholder.noDepartment': '(sin departamento)',
+  'common.serverPlaceholder.noDepartmentCapitalised': '(Sin departamento)',
+  'common.serverPlaceholder.noCountry': '(sin país)',
+  'common.serverPlaceholder.noOffice': '(sin oficina)',
+  'common.serverPlaceholder.noCompany': '(sin empresa)',
+  'common.serverPlaceholder.noManager': '(sin responsable)',
+  'common.serverPlaceholder.noDomain': '(sin dominio)',
+  'common.serverPlaceholder.noDomainCapitalised': '(Sin dominio)',
+  'common.serverPlaceholder.noReasonRecorded': '(sin motivo registrado)',
+  'common.serverPlaceholder.unknown': '(desconocido)',
+  'common.serverPlaceholder.unknownSite': '(sitio desconocido)',
+  'common.serverPlaceholder.otherSites': '(otros sitios)',
+  'common.serverPlaceholder.unknownCountry': '(país desconocido)',
+  'common.serverPlaceholder.otherCountries': '(otros países)',
+  'common.serverPlaceholder.unknownDevice': '(dispositivo desconocido)',
+  'common.serverPlaceholder.otherDevices': '(otros dispositivos)',
+  'common.serverPlaceholder.untitledElement': '(elemento sin título)',
+  'common.serverPlaceholder.unnamedAgent': '(agente sin nombre)',
+  'common.serverPlaceholder.notSet': '(sin establecer)',
+  'common.serverPlaceholder.notStated': '(sin indicar)',
+  'common.serverPlaceholder.none': '(ninguno)',
+  'common.serverPlaceholder.disabled': '(deshabilitado)',
+  'common.serverPlaceholder.redisNotConfigured': '(no configurado: análisis profundos de Teams deshabilitados)',
 };
 
 export default common;

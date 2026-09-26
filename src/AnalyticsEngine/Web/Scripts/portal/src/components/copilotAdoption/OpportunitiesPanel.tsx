@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, Fragment } from 'react';
+import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import {
   makeStyles,
   tokens,
@@ -11,15 +11,24 @@ import {
   Badge,
   MessageBar,
   MessageBarBody,
+  Tab,
+  TabList,
   Tooltip,
 } from '@fluentui/react-components';
-import { ArrowDownload16Regular, ArrowClockwise16Regular } from '@fluentui/react-icons';
+import {
+  ArrowDownload16Regular,
+  ArrowClockwise16Regular,
+  Clock20Regular,
+  PeopleList20Regular,
+} from '@fluentui/react-icons';
 import { fetchOpportunities, opportunitiesExportUrl } from '../../api/copilotAdoptionApi';
 import type {
   AdoptionFilterOptions,
   AdoptionGuidanceLink,
   CopilotAdoptionOptions,
+  CopilotAdoptionSummary,
   LicenceOpportunityPage,
+  LicenceOpportunityRow,
   OpportunityFilters,
 } from '../../types/copilotAdoption';
 import Spinner from '../Spinner';
@@ -30,17 +39,33 @@ import {
   DetailSections,
   DetailStat,
   DetailStats,
+  ExpandAllButton,
   ExpandableUserCell,
+  PartialPrintNote,
+  PrintedFilters,
   ScoreBar,
   SortableTh,
+  printedSearch,
+  revealElement,
   useAdoptionTableStyles,
   useRowExpansion,
 } from './adoptionShared';
+import { usePrintAllRows } from '../shared/printPreparation';
 import { formatCount, formatDate } from '../shared/KpiGrid';
 import { useT, useTNode } from '../../i18n';
-import { opportunityRationale, opportunityTierLabel } from './serverText';
+import { copilotAdoptionWarningText, isLicenceOpportunityWarning, opportunityRationale, opportunityTierLabel } from './serverText';
+import LicenceTimeSavedHero from './LicenceTimeSavedHero';
+import LicenceTimeSavedModel from './LicenceTimeSavedModel';
+import { useTimeSavedAssumptions } from './coworkTimeSaved';
 
 const PAGE_SIZE = 50;
+
+/**
+ * The tab's sections. The candidate list is the tab's purpose and opens first; the licence estimate's
+ * working and evidence sit beside it rather than above it, so fifty rows are never pushed below three
+ * evidence cards and a sense check.
+ */
+type OpportunitySection = 'candidates' | 'timeSaved';
 
 /**
  * The default sort. Strongest case first, with proven-demand candidates ahead of merely busy ones.
@@ -50,6 +75,13 @@ const PAGE_SIZE = 50;
 const DEFAULT_SORT_BY = 'score';
 
 const useStyles = makeStyles({
+  sectionNav: {
+    marginBottom: '12px',
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: tokens.colorNeutralStroke2,
+    scrollMarginTop: '12px',
+  },
   filters: {
     display: 'flex',
     flexWrap: 'wrap',
@@ -148,9 +180,14 @@ const DEFAULT_FILTERS: OpportunityFilters = {
  * The "already using Copilot Chat" badge is the single most persuasive thing on this screen - it is
  * evidence of demand rather than an inference from general Microsoft 365 activity - so it is
  * surfaced as its own column and its own filter rather than being buried in the score.
+ *
+ * Above the list sits the time a licence could give back to the people it recommends: the figure a
+ * licence purchase is justified with, and the only place the Copilot minutes are applied. Its working
+ * and the published evidence behind it are one section away.
  */
 export default function OpportunitiesPanel({
   windowDays,
+  summary,
   filterOptions,
   options,
   guidanceLinks,
@@ -158,6 +195,8 @@ export default function OpportunitiesPanel({
   emailDomain,
 }: {
   windowDays: number;
+  /** The analysis the licence estimate is published on, and whose assumptions the reader can change. */
+  summary: CopilotAdoptionSummary;
   filterOptions: AdoptionFilterOptions | null;
   /** The weights and targets actually used, so the score explanation quotes them rather than guessing. */
   options: CopilotAdoptionOptions;
@@ -212,13 +251,40 @@ export default function OpportunitiesPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  const { isExpanded, toggle: toggleRow, collapseAll } = useRowExpansion();
+  const { isExpanded, toggle: toggleRow, resetRows, expandAll, collapseAll, allExpanded } = useRowExpansion();
+
+  const timeSaved = useTimeSavedAssumptions(summary);
+  const [section, setSection] = useState<OpportunitySection>('candidates');
+  // Requests, not flags: each click must act again, including a second click on a section that is
+  // already open - which is exactly when a plain setSection() changes nothing the reader can see.
+  const [assumptionFocusRequest, setAssumptionFocusRequest] = useState(0);
+  const [sectionRevealRequest, setSectionRevealRequest] = useState(0);
+  const sectionNavRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (sectionRevealRequest) revealElement(sectionNavRef.current);
+  }, [sectionRevealRequest]);
+
+  /** Shows exactly the people the headline counts: the recommended candidates. */
+  const showRecommended = () => {
+    setSearchDraft('');
+    setFilters((f) => ({ ...f, recommendedOnly: true }));
+    setSection('candidates');
+    setSectionRevealRequest((n) => n + 1);
+  };
+
+  /** Takes the reader to the editable figures - from either section, including the one already open. */
+  const adjustAssumptions = () => {
+    setSection('timeSaved');
+    setAssumptionFocusRequest((n) => n + 1);
+  };
 
   useEffect(() => setPage(0), [filters, windowDays]);
 
   // Paging or re-filtering replaces the rows under an open detail, so the expander would end up
-  // describing whoever happens to land on that line next.
-  useEffect(() => collapseAll(), [filters, windowDays, page, collapseAll]);
+  // describing whoever happens to land on that line next. "Expand all" survives it: that is a
+  // choice about the whole list, not about the rows that happened to be on screen.
+  useEffect(() => resetRows(), [filters, windowDays, page, resetRows]);
 
   useEffect(() => {
     let cancelled = false;
@@ -261,6 +327,18 @@ export default function OpportunitiesPanel({
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
 
+  // With a licence estimate the tab is sectioned, and a list in the section that is not showing is
+  // not printed - so it must not hold the printout up, or refuse it for being long.
+  const sectioned = (summary?.licenceOpportunityEstimate?.cohortUsers ?? 0) > 0;
+  const printRows = usePrintAllRows<LicenceOpportunityRow>({
+    enabled: (!sectioned || section === 'candidates') && !loading && data !== null,
+    total: data?.total ?? 0,
+    loadedRows: data?.rows.length ?? 0,
+    loadPage: (skip, take, signal) =>
+      fetchOpportunities(windowDays, filters, skip, take, seatLicenceTypeIds, signal),
+  });
+  const rows = printRows ?? data?.rows ?? [];
+
   const filtersActive =
     filters.search !== '' ||
     filters.department !== '' ||
@@ -270,14 +348,15 @@ export default function OpportunitiesPanel({
 
   // Only the warnings that explain an empty or thin candidate list. The page header already carries
   // the full set, and repeating all of them here would bury the one that answers "why is this empty?".
-  const relevantWarnings = (data?.warnings ?? []).filter(
-    (w) => w.toLowerCase().includes('licence opportunit') || w.toLowerCase().includes('usage report'),
-  );
+  const relevantWarnings = (data?.warnings ?? [])
+    .map((warning, index) => ({ warning, detail: data?.warningDetails?.[index] }))
+    .filter(({ detail }) => isLicenceOpportunityWarning(detail));
   const unlicensedGuidance = (guidanceLinks ?? []).filter((l) => l.actionCode === 'unlicensed');
 
-  return (
+  const list = (
     <Card>
-      <div className={styles.filters}>
+      {/* Chrome: nothing here can be used on paper. What it is set to is printed below instead. */}
+      <div className={styles.filters} data-print="hide">
         <Input
           className={styles.grow}
           value={searchDraft}
@@ -323,6 +402,12 @@ export default function OpportunitiesPanel({
 
         <div className={styles.spacer} />
 
+        <ExpandAllButton
+          allExpanded={allExpanded}
+          onExpandAll={expandAll}
+          onCollapseAll={collapseAll}
+          disabled={rows.length === 0}
+        />
         <Button
           size="small"
           appearance="subtle"
@@ -336,6 +421,18 @@ export default function OpportunitiesPanel({
         </Button>
       </div>
 
+      <PrintedFilters
+        filters={[
+          printedSearch(t, filters.search),
+          {
+            label: t('copilotAdoptionUsers.common.department'),
+            value: filters.department || t('copilotAdoptionUsers.common.allDepartments'),
+          },
+          filters.recommendedOnly && { value: t('copilotAdoptionUsers.opportunities.recommendedOnly') },
+          filters.existingCopilotUsersOnly && { value: t('copilotAdoptionUsers.opportunities.alreadyUsingFilter') },
+        ]}
+      />
+
       {error && (
         <MessageBar intent="error">
           <MessageBarBody>{error}</MessageBarBody>
@@ -344,9 +441,9 @@ export default function OpportunitiesPanel({
 
       {!loading && relevantWarnings.length > 0 && (
         <div className={styles.warnings}>
-          {relevantWarnings.map((warning) => (
-            <MessageBar key={warning} intent="warning">
-              <MessageBarBody>{warning}</MessageBarBody>
+          {relevantWarnings.map(({ warning, detail }) => (
+            <MessageBar key={`${detail?.key ?? warning}:${warning}`} intent="warning">
+              <MessageBarBody>{copilotAdoptionWarningText(t, detail, warning)}</MessageBarBody>
             </MessageBar>
           ))}
         </div>
@@ -381,7 +478,7 @@ export default function OpportunitiesPanel({
                   ? t('copilotAdoptionUsers.opportunities.clearFiltersNoCandidates')
                   : t('copilotAdoptionUsers.opportunities.candidatesFoundNoMatches', { count: formatCount(data.total) })}
               </Text>
-              <Button size="small" onClick={clearPanelFilters}>
+              <Button size="small" onClick={clearPanelFilters} data-print="hide">
                 {t('copilotAdoptionUsers.opportunities.clearFilters')}
               </Button>
             </>
@@ -501,7 +598,7 @@ export default function OpportunitiesPanel({
               </tr>
             </thead>
             <tbody>
-              {data.rows.map((row) => {
+              {rows.map((row) => {
                 const open = isExpanded(row.userId);
                 return (
                   <Fragment key={row.userId}>
@@ -659,24 +756,73 @@ export default function OpportunitiesPanel({
         <div className={styles.footer}>
           <Text size={200} className={styles.muted}>
             {t('copilotAdoptionUsers.opportunities.showingCandidates', {
-              start: formatCount(data.skip + 1),
-              end: formatCount(Math.min(data.skip + PAGE_SIZE, data.total)),
+              start: formatCount(printRows ? 1 : data.skip + 1),
+              end: formatCount(printRows ? printRows.length : Math.min(data.skip + PAGE_SIZE, data.total)),
               total: formatCount(data.total),
             })}
           </Text>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <Button size="small" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
-              {t('copilotAdoptionUsers.common.previous')}
-            </Button>
-            <Text size={200} className={styles.muted}>
-              {t('copilotAdoptionUsers.common.page', { page: page + 1, totalPages })}
-            </Text>
-            <Button size="small" disabled={page + 1 >= totalPages} onClick={() => setPage((p) => p + 1)}>
-              {t('copilotAdoptionUsers.common.next')}
-            </Button>
-          </div>
+          {/* A printout holds the whole list, so there is no page to turn to. */}
+          {!printRows && (
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }} data-print="hide">
+              <Button size="small" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
+                {t('copilotAdoptionUsers.common.previous')}
+              </Button>
+              <Text size={200} className={styles.muted}>
+                {t('copilotAdoptionUsers.common.page', { page: page + 1, totalPages })}
+              </Text>
+              <Button size="small" disabled={page + 1 >= totalPages} onClick={() => setPage((p) => p + 1)}>
+                {t('copilotAdoptionUsers.common.next')}
+              </Button>
+            </div>
+          )}
         </div>
       )}
+      {!loading && data && <PartialPrintNote shownRows={rows.length} totalRows={data.total} />}
     </Card>
+  );
+
+  // No estimate - nobody recommended, or no Microsoft 365 usage reports to model from - means no
+  // headline and nothing to show the working for: the list alone, exactly as before.
+  if (!((summary?.licenceOpportunityEstimate?.cohortUsers ?? 0) > 0)) return list;
+
+  return (
+    <div>
+      {/* ---------- The headline ---------- */}
+      <LicenceTimeSavedHero
+        summary={summary}
+        options={options}
+        timeSaved={timeSaved}
+        onAdjust={adjustAssumptions}
+        onShowRecommended={showRecommended}
+      />
+
+      <div className={styles.sectionNav} data-print="hide" ref={sectionNavRef}>
+        <TabList
+          selectedValue={section}
+          onTabSelect={(_e, d) => setSection(d.value as OpportunitySection)}
+          aria-label={t('copilotAdoptionUsers.opportunities.sections.ariaLabel')}
+        >
+          <Tab value="candidates" icon={<PeopleList20Regular />}>
+            {t('copilotAdoptionUsers.opportunities.sections.candidates')}
+          </Tab>
+          <Tab value="timeSaved" icon={<Clock20Regular />}>
+            {t('copilotAdoptionUsers.opportunities.sections.timeSaved')}
+          </Tab>
+        </TabList>
+      </div>
+
+      <div role="tabpanel" aria-label={t('copilotAdoptionUsers.opportunities.sections.candidates')} hidden={section !== 'candidates'}>
+        {list}
+      </div>
+
+      <div role="tabpanel" aria-label={t('copilotAdoptionUsers.opportunities.sections.timeSaved')} hidden={section !== 'timeSaved'}>
+        <LicenceTimeSavedModel
+          summary={summary}
+          options={options}
+          timeSaved={timeSaved}
+          focusRequest={assumptionFocusRequest}
+        />
+      </div>
+    </div>
   );
 }

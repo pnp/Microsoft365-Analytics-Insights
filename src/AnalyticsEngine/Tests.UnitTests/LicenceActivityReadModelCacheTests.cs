@@ -19,6 +19,20 @@ namespace Tests.UnitTests
     {
         private static readonly DateTime Now = new DateTime(2000, 7, 4, 0, 0, 0, DateTimeKind.Utc);
 
+        /// <summary>
+        /// The failed-run 503 sends the run's reference as a fact beside a stable code, so a Spanish reader
+        /// still gets the reference to quote. The English message must stay exactly what it was: it is the
+        /// fallback, and what English readers are shown.
+        /// </summary>
+        [TestMethod]
+        public void FailedException_CarriesTheRunReferenceBesideTheUnchangedEnglishMessage()
+        {
+            var failure = new LicenceActivityFailedException("run-7f3a");
+
+            Assert.AreEqual("run-7f3a", failure.RunId);
+            Assert.AreEqual("Licence activity could not be loaded. Retry the request. Reference: run-7f3a", failure.Message);
+        }
+
         [TestMethod]
         public async Task IdenticalRangesCoalesceAndCallerCancellationDoesNotCancelTheModel()
         {

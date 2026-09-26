@@ -1,4 +1,5 @@
 using Common.Entities;
+using DataUtils.Sql;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -67,7 +68,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var openedHere = conn.State != ConnectionState.Open;
             if (openedHere)
             {
-                await conn.OpenAsync();
+                // Not conn.OpenAsync(): that bypasses EF's Entra token interceptor, and the caller enumerates
+                // every SKU's holders from Graph between its last EF call and this one - long enough on a large
+                // tenant for the token EF attached then to have expired (#609).
+                await AzureSqlTokenAuth.OpenAsync(conn);
             }
 
             try

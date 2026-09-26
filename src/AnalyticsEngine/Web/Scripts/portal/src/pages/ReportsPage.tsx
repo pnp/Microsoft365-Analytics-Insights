@@ -18,7 +18,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowClockwise16Regular } from '@fluentui/react-icons';
 import { fetchReportAreas, fetchReportArea } from '../api/reportsApi';
-import type { ReportAreaData, ReportAreaKey, ReportAreas, ReportChart } from '../types/reports';
+import type { ReportAreaData, ReportAreaKey, ReportAreas, ReportChart, ReportMatrix, ReportSeries, ReportSeriesWarning } from '../types/reports';
 import Spinner from '../components/Spinner';
 import SqlPopover from '../components/SqlPopover';
 import TimeSeriesChart from '../components/charts/TimeSeriesChart';
@@ -49,6 +49,11 @@ const MONTH_OPTIONS = [
   { value: 3, labelKey: 'reports.period.last3Months' },
   { value: 6, labelKey: 'reports.period.last6Months' },
 ] satisfies { value: number; labelKey: TranslationKey }[];
+
+export const OFFICE_PLATFORM_LABEL_KEYS: Record<string, TranslationKey> = {
+  Mobile: 'reports.platform.mobile',
+  Web: 'reports.platform.web',
+};
 
 const useStyles = makeStyles({
   header: {
@@ -329,8 +334,15 @@ function chartTranslationKey(
   return `reports.chart.${key}.${field}` as TranslationKey;
 }
 
-function chartWarningText(t: TFunction, chart: ReportChart): string | null {
+export function reportChartWarningText(t: TFunction, chart: ReportChart): string | null {
   if (!chart.warning) return null;
+
+  if (chart.key === 'usage-active-users' && chart.seriesWarnings?.length) {
+    const details = chart.seriesWarnings.map((warning) => seriesWarningText(t, warning)).join('; ');
+    const catalogKey = 'reports.chart.usage-active-users.warning' as TranslationKey;
+    const translated = t(catalogKey, { details });
+    return translated === catalogKey ? chart.warning : translated;
+  }
 
   const usageWarningParts = EN_CATALOG['reports.chart.usage-active-users.warning'].split('{details}');
   if (chart.key === 'usage-active-users' && chart.warning.startsWith(usageWarningParts[0]) && chart.warning.endsWith(usageWarningParts[1])) {
@@ -356,9 +368,54 @@ function chartWarningText(t: TFunction, chart: ReportChart): string | null {
   return translated === catalogKey ? chart.warning : translated;
 }
 
+function seriesWarningText(t: TFunction, warning: ReportSeriesWarning): string {
+  const values = {
+    series: warning.series,
+    error: warning.error ?? '',
+    week: warning.week ? formatDateParts(new Date(warning.week), { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '',
+  };
+
+  switch (warning.reason) {
+    case 'loadFailed':
+      return t('reports.chart.warning.series.loadFailed', values);
+    case 'notAttempted':
+      return t('reports.chart.warning.series.notAttempted', values);
+    case 'noSettledData':
+      return t('reports.chart.warning.series.noSettledData', values);
+    case 'noSettledDataForWeek':
+      return t('reports.chart.warning.series.noSettledDataForWeek', values);
+    default:
+      return warning.error ? `${warning.series}: ${warning.error}` : warning.series;
+  }
+}
+
+function chartErrorText(t: TFunction, chart: ReportChart): string {
+  if (chart.errorKey === 'noCompletedUsageWeeks') {
+    return t('reports.chart.error.noCompletedUsageWeeks');
+  }
+
+  if (chart.errorKey === 'noWorkloadSeriesLoaded' && chart.seriesWarnings?.length) {
+    const details = chart.seriesWarnings.map((warning) => seriesWarningText(t, warning)).join('; ');
+    return t('reports.chart.error.noWorkloadSeriesLoaded', { details });
+  }
+
+  if (chart.errorKey === 'noCompletedUsageWeeksWithData') {
+    return t('reports.chart.error.noCompletedUsageWeeksWithData');
+  }
+
+  return chart.error ?? '';
+}
+
 const APP_BREADTH_LABEL = /^(\d+) apps?$/;
 
 export function reportCategories(t: TFunction, chart: ReportChart) {
+  if (chart.key === 'office-apps-platform-mix' && chart.categories) {
+    return chart.categories.map((category) => ({
+      ...category,
+      label: reportPlatformLabel(t, category.label),
+    }));
+  }
+
   if (chart.key !== 'office-apps-breadth' || !chart.categories) return chart.categories;
 
   return chart.categories.map((category) => {
@@ -373,6 +430,41 @@ export function reportCategories(t: TFunction, chart: ReportChart) {
       }),
     };
   });
+}
+
+function reportPlatformLabel(t: TFunction, label: string): string {
+  const key = OFFICE_PLATFORM_LABEL_KEYS[label];
+  return key ? t(key) : label;
+}
+
+export function reportSeries(t: TFunction, chart: ReportChart): ReportSeries[] | null {
+  if (chart.key !== 'office-apps-platform-trend' || !chart.series) return chart.series;
+
+  return chart.series.map((series) => ({
+    ...series,
+    name: reportPlatformLabel(t, series.name),
+  }));
+}
+
+export function reportMatrix(t: TFunction, chart: ReportChart): ReportMatrix | null {
+  if (!chart.matrix) return null;
+
+  const matrix = {
+    ...chart.matrix,
+    rowLabel: chartText(t, chart.key, 'rowLabel', chart.matrix.rowLabel),
+    columnLabel: chartText(t, chart.key, 'columnLabel', chart.matrix.columnLabel),
+  };
+
+  if (chart.key !== 'office-apps-platform-matrix') return matrix;
+
+  return {
+    ...matrix,
+    columns: matrix.columns.map((column) => reportPlatformLabel(t, column)),
+    cells: matrix.cells.map((cell) => ({
+      ...cell,
+      column: reportPlatformLabel(t, cell.column),
+    })),
+  };
 }
 
 /** Fetches and renders the charts for a single report area over the chosen window. */
@@ -499,15 +591,11 @@ function ReportAreaView({
         const title = chartText(t, chart.key, 'title', chart.title);
         const description = chartText(t, chart.key, 'description', chart.description);
         const valueLabel = chartText(t, chart.key, 'valueLabel', chart.valueLabel);
-        const warning = chartWarningText(t, chart);
+        const warning = reportChartWarningText(t, chart);
+        const error = chartErrorText(t, chart);
         const categories = reportCategories(t, chart);
-        const matrix = chart.matrix
-          ? {
-              ...chart.matrix,
-              rowLabel: chartText(t, chart.key, 'rowLabel', chart.matrix.rowLabel),
-              columnLabel: chartText(t, chart.key, 'columnLabel', chart.matrix.columnLabel),
-            }
-          : null;
+        const series = reportSeries(t, chart);
+        const matrix = reportMatrix(t, chart);
 
         return (
         <Card key={chart.key} className={styles.chartCard}>
@@ -526,7 +614,7 @@ function ReportAreaView({
           <div className={styles.chartBody}>
             {chart.error ? (
               <MessageBar intent="warning">
-                <MessageBarBody>{t('reports.chart.loadError', { error: chart.error })}</MessageBarBody>
+                <MessageBarBody>{t('reports.chart.loadError', { error })}</MessageBarBody>
               </MessageBar>
             ) : (
               <>
@@ -543,8 +631,8 @@ function ReportAreaView({
                 */}
                 {(!chart.warning || chartHasData(chart)) && (
                   <>
-                    {chart.type === 'timeseries' && chart.series ? (
-                      <TimeSeriesChart series={chart.series} valueLabel={valueLabel} />
+                    {chart.type === 'timeseries' && series ? (
+                      <TimeSeriesChart series={series} valueLabel={valueLabel} />
                     ) : chart.type === 'bar' && categories ? (
                       <CategoryBarChart
                         categories={categories}

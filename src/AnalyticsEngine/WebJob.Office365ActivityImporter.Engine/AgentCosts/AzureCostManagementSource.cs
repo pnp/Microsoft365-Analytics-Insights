@@ -5,6 +5,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -130,8 +131,11 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 ["timeframe"] = "Custom",
                 ["timePeriod"] = new JObject
                 {
-                    ["from"] = fromDate.ToString("yyyy-MM-ddT00:00:00Z"),
-                    ["to"] = toDate.ToString("yyyy-MM-ddT23:59:59Z"),
+                    // Invariant culture, explicitly. A custom format still takes its ':' separator and its calendar
+                    // from the CURRENT culture: on fi-FI this rendered "23.59.59", on th-TH the year 2569 and on
+                    // fa-IR a Persian year - each of which Cost Management rejects or, worse, reads as another date.
+                    ["from"] = fromDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + "T00:00:00Z",
+                    ["to"] = toDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + "T23:59:59Z",
                 },
                 ["dataset"] = new JObject
                 {
@@ -217,8 +221,11 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
         private async Task<JObject> PostJsonAsync(string url, string body, string scope)
         {
+            // The query POST is a read, and the lambda builds fresh content on every attempt, so it is safe to
+            // replay: without this a single 502/503/504 failed the whole scope until the next cycle.
             using (var response = await _httpClient.ExecuteHttpCallWithThrottleRetries(
-                () => _httpClient.PostAsync(url, new StringContent(body, Encoding.UTF8, "application/json")), url))
+                () => _httpClient.PostAsync(url, new StringContent(body, Encoding.UTF8, "application/json")), url,
+                isReplayableIdempotentGet: true))
             {
                 if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
                 {

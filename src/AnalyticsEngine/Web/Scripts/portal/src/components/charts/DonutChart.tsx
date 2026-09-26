@@ -1,6 +1,7 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { ReportCategory } from '../../types/reports';
 import { formatNumber, useT } from '../../i18n';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { formatValue } from './chartCommon';
 
 const useStyles = makeStyles({
@@ -108,7 +109,7 @@ export default function DonutChart({
                 strokeDasharray={`${dash} ${circumference - dash}`}
                 strokeDashoffset={-offset}
               >
-                <title>{t('charts.donut.sliceTitle', { label: c.label, value: formatValue(c.value), percent: formatNumber(Math.round(share * 1000) / 10) })}</title>
+                <title>{t('charts.donut.sliceTitle', { label: serverPlaceholderText(t, c.label), value: formatValue(c.value), percent: formatNumber(Math.round(share * 1000) / 10) })}</title>
               </circle>
             );
             offset += dash;
@@ -142,7 +143,7 @@ export default function DonutChart({
           <div className={styles.legendRow} key={c.label}>
             <span className={styles.swatch} style={{ backgroundColor: colours[i % colours.length] }} />
             <Text size={200} className={styles.legendLabel}>
-              {c.label}
+              {serverPlaceholderText(t, c.label)}
             </Text>
             <Text size={200} weight="semibold" className={styles.legendValue}>
               {t('charts.donut.legendValue', { value: formatValue(c.value), percent: formatNumber(Math.round((c.value / total) * 1000) / 10) })}

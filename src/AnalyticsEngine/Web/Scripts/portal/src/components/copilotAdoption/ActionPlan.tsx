@@ -199,7 +199,7 @@ export default function ActionPlan({
               {onSelect && (
                 <>
                   {' '}
-                  <Text size={200} className={styles.drill}>
+                  <Text size={200} className={styles.drill} data-print="hide">
                     {t('copilotAdoption.actionPlan.showPeople')}
                   </Text>
                 </>

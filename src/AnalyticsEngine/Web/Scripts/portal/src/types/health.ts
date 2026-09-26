@@ -16,13 +16,18 @@ export interface ComponentHealthRow {
   component: string | null;
   status: string | null;
   detail: string | null;
+  reasonKey: string | null;
+  errorCode: string | null;
+  httpStatus: number | null;
   daysToExpiry: number | null;
   lastSeenUtc: string | null;
 }
 
 export interface ImportCycleRow {
   jobName: string | null;
+  jobKey: string | null;
   lastCycleUtc: string | null;
+  durationSeconds: number | null;
   duration: string | null;
 }
 

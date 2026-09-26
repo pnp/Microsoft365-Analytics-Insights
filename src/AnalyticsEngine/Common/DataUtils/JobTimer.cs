@@ -62,11 +62,22 @@ namespace DataUtils
 
         public void TrackFinishedEventAndStopTimer(AnalyticsEvent analyticsEvent)
         {
+            _sw.Stop();
+            var elapsed = _sw.Elapsed;
+            var s = FormatElapsed(_operationName, elapsed);
+            _logger.LogInformation(s);
+            _sw.Reset();
+
             var context = new Dictionary<string, string>
             {
-                { "context", StopAndPrintElapsed() }
+                { "context", s },
+                { "OperationName", _operationName }
             };
-            _logger.TrackEvent(analyticsEvent, context);
+            var metrics = new Dictionary<string, double>
+            {
+                { "ElapsedSeconds", elapsed.TotalSeconds }
+            };
+            _logger.TrackEvent(analyticsEvent, context, metrics);
         }
     }
 }

@@ -167,6 +167,18 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.bucket.meetingPeriod.afternoon.label': 'Tarde (12:00-17:00)',
   'teamsExplorer.bucket.meetingPeriod.evening.label': 'Noche (17:00-21:00)',
   'teamsExplorer.bucket.meetingPeriod.night.label': 'Madrugada (después de las 21:00)',
+  'teamsExplorer.code.modality.audio': 'Audio',
+  'teamsExplorer.code.modality.video': 'Vídeo',
+  'teamsExplorer.code.modality.screenSharing': 'Uso compartido de pantalla',
+  'teamsExplorer.code.modality.videoBasedScreenSharing': 'Uso compartido de pantalla basado en vídeo',
+  'teamsExplorer.code.modality.data': 'Datos',
+  'teamsExplorer.code.quality.excellent': 'Excelente',
+  'teamsExplorer.code.quality.good': 'Buena',
+  'teamsExplorer.code.quality.fair': 'Aceptable',
+  'teamsExplorer.code.quality.poor': 'Deficiente',
+  'teamsExplorer.code.quality.bad': 'Mala',
+  'teamsExplorer.code.quality.notRated': 'Sin valorar',
+  'teamsExplorer.code.quality.none': 'Sin valoración',
 
 
   // Juicios redactados por el servidor para Teams Explorer.
@@ -234,7 +246,7 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.adoption.reachBy.description': 'Dónde ha llegado Teams y dónde no.',
   'teamsExplorer.adoption.reachBy.emptyNoGroups': 'No se pudo agrupar ningún usuario para este periodo.',
   'teamsExplorer.adoption.reachBy.emptyMetadataUnavailable': 'Los metadatos de usuario no se están importando, por lo que no hay nada por lo que agrupar. Active la importación de metadatos de usuario de Graph.',
-  'teamsExplorer.adoption.reachBy.metadataUnavailableNote': 'Los metadatos de usuario no se están importando, por lo que cada grupo mostrará "(not set)".',
+  'teamsExplorer.adoption.reachBy.metadataUnavailableNote': 'Los metadatos de usuario no se están importando, por lo que cada grupo mostrará "(sin establecer)".',
   'teamsExplorer.adoption.groupBy': 'Agrupar por',
   'teamsExplorer.adoption.groupByAria': 'Agrupar el desglose de adopción por',
   'teamsExplorer.adoption.valueLabel.reachPct': '% de alcance',

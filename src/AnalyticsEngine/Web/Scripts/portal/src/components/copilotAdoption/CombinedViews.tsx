@@ -6,6 +6,7 @@ import type {
 import { useT } from '../../i18n';
 import { concentrationLabel } from './serverText';
 import { formatCount, formatPct } from '../shared/KpiGrid';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { useAdoptionTableStyles } from './adoptionShared';
 
 /** Heaviest cohort darkest, so the shape of the power law reads left to right. */
@@ -243,7 +244,7 @@ export function CombinedSegmentTable({ rows }: { rows: AdoptionCombinedSegmentRo
       <tbody>
         {rows.map((r) => (
           <tr key={r.segment}>
-            <td className={table.td}>{r.segment}</td>
+            <td className={table.td}>{serverPlaceholderText(t, r.segment)}</td>
             <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(r.licensedUsers)}</td>
             <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(r.licensedActiveUsers)}</td>
             <td className={styles.heat}>
