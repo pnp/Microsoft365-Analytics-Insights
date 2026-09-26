@@ -32,8 +32,11 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// </summary>
         /// <remarks>
         /// Needed because Azure SQL identifies a service principal - including a managed identity - by its
-        /// application ID, while ARM only reports the object ID of a system-assigned identity. The two are
-        /// different GUIDs, and using the wrong one creates a database user that can never sign in.
+        /// application ID, while a resource's <c>identity</c> block only reports the object ID of a
+        /// system-assigned identity. The two are different GUIDs, and using the wrong one creates a database
+        /// user that can never sign in. For a managed identity this is the fallback: the installer reads the
+        /// application ID from Azure Resource Manager first (<see cref="ArmManagedIdentityApplicationIdSource"/>),
+        /// which needs no directory permission.
         /// </remarks>
         Task<Guid?> ResolveApplicationIdAsync(Guid servicePrincipalObjectId, CancellationToken cancellationToken);
     }

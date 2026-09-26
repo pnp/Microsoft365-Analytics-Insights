@@ -130,17 +130,22 @@ namespace App.ControlPanel.Engine.InstallerTasks
     {
         private readonly ILogger _logger;
         private readonly IEntraPrincipalResolver _resolver;
+        private readonly IManagedIdentityApplicationIdSource _identitySource;
 
-        public SqlIdentityAccessTask(ILogger logger, IEntraPrincipalResolver resolver = null)
+        public SqlIdentityAccessTask(ILogger logger, IEntraPrincipalResolver resolver = null,
+            IManagedIdentityApplicationIdSource identitySource = null)
         {
             _logger = logger;
             _resolver = resolver;
+            _identitySource = identitySource;
         }
 
         /// <summary>
         /// Creates (or repairs) the contained user for <paramref name="principalName"/> and grants it the
         /// database roles the runtime needs.
         /// </summary>
+        /// <param name="owner">The resource the identity belongs to, so the messages name the right one.</param>
+        /// <param name="resourceId">The ARM ID of that resource, which is where the application ID is read from.</param>
         /// <remarks>
         /// <para>
         /// Best-effort by design: it returns false rather than throwing, because a failure here does not
@@ -148,58 +153,51 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// idempotent, so re-running the installer is safe.
         /// </para>
         /// <para>
-        /// <paramref name="principalObjectId"/> is what ARM reports for a system-assigned managed identity,
-        /// but it is NOT what Azure SQL matches the sign-in against: a service principal - which a managed
-        /// identity is - is identified by its <b>application (client) ID</b>. The two are different GUIDs,
-        /// and SQL Server does not validate either, so using the object ID produces a user that exists, sits
-        /// in the right roles, and is refused at every sign-in. So the application ID is resolved from
-        /// Microsoft Graph, and when that is not permitted we let SQL Server resolve the name itself with
-        /// <c>FROM EXTERNAL PROVIDER</c> instead of writing an identifier we know to be wrong.
+        /// <paramref name="principalObjectId"/> is what a resource's <c>identity</c> block reports for a
+        /// system-assigned managed identity, but it is NOT what Azure SQL matches the sign-in against: a
+        /// service principal - which a managed identity is - is identified by its <b>application (client)
+        /// ID</b>. The two are different GUIDs, and SQL Server does not validate either, so using the object
+        /// ID produces a user that exists, sits in the right roles, and is refused at every sign-in. So the
+        /// application ID is read from Azure Resource Manager, then Microsoft Graph, and only when neither can
+        /// supply it do we let SQL Server resolve the name itself with <c>FROM EXTERNAL PROVIDER</c> instead
+        /// of writing an identifier we know to be wrong.
         /// </para>
         /// </remarks>
-        public async Task<bool> GrantDatabaseAccessAsync(string connectionString, string principalName, Guid principalObjectId, IEnumerable<string> roles)
+        public async Task<bool> GrantDatabaseAccessAsync(string connectionString, ManagedIdentityOwner owner, string principalName,
+            Guid principalObjectId, string resourceId, IEnumerable<string> roles)
         {
             if (string.IsNullOrWhiteSpace(connectionString))
             {
                 throw new ArgumentException($"'{nameof(connectionString)}' cannot be null or empty.", nameof(connectionString));
             }
 
+            var ownerName = DescribeOwner(owner);
             if (string.IsNullOrWhiteSpace(principalName) || principalObjectId == Guid.Empty)
             {
                 _logger.LogWarning(
-                    "Skipping the database permission grant for the App Service: it has no system-assigned managed identity yet. " +
+                    $"Skipping the database permission grant for the {ownerName}: it has no system-assigned managed identity yet. " +
                     "Re-run the installer once the identity exists.");
                 return false;
             }
 
             var roleList = roles == null ? new List<string>() : roles.ToList();
 
-            Guid? applicationId = null;
-            if (_resolver != null)
-            {
-                try
-                {
-                    applicationId = await _resolver.ResolveApplicationIdAsync(principalObjectId, CancellationToken.None);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogInformation($"Could not resolve the application ID for '{principalName}': {ex.Message}");
-                }
-            }
+            var applicationId = await ResolveApplicationIdAsync(principalName, principalObjectId, resourceId);
 
             string sql = BuildGrantScript(principalName, applicationId, roleList);
             if (applicationId == null)
             {
                 _logger.LogInformation(
-                    $"Could not read the application ID of managed identity '{principalName}' from Microsoft Graph, so SQL Server " +
-                    "will be asked to resolve the name itself. That needs the SQL Server's own identity to hold the Microsoft " +
-                    "Entra 'Directory Readers' role; if it does not, the grant fails with \"Principal could not be found\" and " +
-                    "you should instead grant the installer's app registration 'Application.Read.All' (or 'Directory.Read.All') " +
-                    "and re-run.");
+                    $"Could not read the application (client) ID of managed identity '{principalName}' from Azure Resource Manager " +
+                    "or Microsoft Graph, so SQL Server will be asked to resolve the name itself. That only works if the SQL Server " +
+                    "has a managed identity of its own holding the Microsoft Entra 'Directory Readers' role; otherwise the grant " +
+                    "fails with \"Principal '...' could not be resolved\". To avoid needing that, make sure the installer's app " +
+                    "registration can read the resource in Azure Resource Manager (any error is reported above), or grant it " +
+                    "'Application.Read.All', and re-run.");
             }
 
             _logger.LogInformation(
-                $"Granting the App Service managed identity '{principalName}' access to the database " +
+                $"Granting the {ownerName} managed identity '{principalName}' access to the database " +
                 $"({string.Join(", ", roleList)})...");
 
             try
@@ -217,21 +215,96 @@ namespace App.ControlPanel.Engine.InstallerTasks
             }
             catch (SqlException ex)
             {
+                // A known application ID gives the operator a statement that needs no directory lookup and
+                // cannot pick the wrong principal when two share a display name.
+                var createUser = applicationId == null
+                    ? $"CREATE USER [{principalName}] FROM EXTERNAL PROVIDER;"
+                    : $"CREATE USER [{principalName}] WITH SID = {SqlContainedUserScript.ToSqlSid(applicationId.Value)}, TYPE = E;";
+
                 _logger.LogError(
-                    $"Could not grant the App Service managed identity '{principalName}' access to the database: {ex.Message}. " +
-                    "The web application and web-jobs will not be able to connect with their managed identity until this is " +
-                    "fixed. Sign in to the database as its Microsoft Entra administrator and run: " +
-                    $"CREATE USER [{principalName}] FROM EXTERNAL PROVIDER; then add it to {string.Join(", ", roleList)}.");
+                    $"Could not grant the {ownerName} managed identity '{principalName}' access to the database: {ex.Message}. " +
+                    $"{DescribeImpact(owner)} Sign in to the database as its Microsoft Entra administrator and run: " +
+                    $"{createUser} then add it to {string.Join(", ", roleList)}.");
                 return false;
             }
             catch (Exception ex)
             {
-                _logger.LogError($"Could not grant the App Service managed identity access to the database: {ex.Message}");
+                _logger.LogError($"Could not grant the {ownerName} managed identity '{principalName}' access to the database: {ex.Message}");
                 return false;
             }
 
-            _logger.LogInformation($"App Service managed identity '{principalName}' now has database access.");
+            _logger.LogInformation($"The {ownerName} managed identity '{principalName}' now has database access.");
             return true;
+        }
+
+        /// <summary>
+        /// Works out the application (client) ID to declare the managed identity's contained user with:
+        /// from Azure Resource Manager when possible, otherwise Microsoft Graph. Null when neither can say.
+        /// </summary>
+        /// <remarks>
+        /// ARM goes first because it needs only read access to the resource, which the installer already
+        /// has, where Graph needs a tenant-wide <c>Application.Read.All</c> grant it often lacks. An ARM
+        /// answer for a different principal than the one being granted is ignored rather than used, because
+        /// writing the wrong SID produces a user that can never sign in.
+        /// </remarks>
+        public async Task<Guid?> ResolveApplicationIdAsync(string principalName, Guid principalObjectId, string resourceId)
+        {
+            if (_identitySource != null && !string.IsNullOrWhiteSpace(resourceId))
+            {
+                try
+                {
+                    var identity = await _identitySource.GetSystemAssignedIdentityAsync(resourceId, CancellationToken.None);
+                    if (identity == null)
+                    {
+                        _logger.LogInformation($"Azure Resource Manager reports no system-assigned managed identity for '{principalName}'.");
+                    }
+                    else if (identity.PrincipalId != principalObjectId)
+                    {
+                        _logger.LogWarning(
+                            $"Ignoring the application ID Azure Resource Manager returned for '{principalName}': it belongs to " +
+                            $"principal '{identity.PrincipalId}', not '{principalObjectId}'. The identity may have been re-created " +
+                            "while the installer was running.");
+                    }
+                    else if (identity.ClientId != Guid.Empty)
+                    {
+                        return identity.ClientId;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogInformation(
+                        $"Could not read the application ID of managed identity '{principalName}' from Azure Resource Manager: {ex.Message}");
+                }
+            }
+
+            if (_resolver != null)
+            {
+                try
+                {
+                    var fromGraph = await _resolver.ResolveApplicationIdAsync(principalObjectId, CancellationToken.None);
+                    if (fromGraph.HasValue && fromGraph.Value != Guid.Empty) return fromGraph;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogInformation($"Could not resolve the application ID for '{principalName}': {ex.Message}");
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>The resource named in the grant's messages.</summary>
+        public static string DescribeOwner(ManagedIdentityOwner owner)
+        {
+            return owner == ManagedIdentityOwner.AutomationAccount ? "Automation account" : "App Service";
+        }
+
+        /// <summary>What stops working while the identity has no database access.</summary>
+        public static string DescribeImpact(ManagedIdentityOwner owner)
+        {
+            return owner == ManagedIdentityOwner.AutomationAccount
+                ? "The Automation account's database maintenance runbooks will not be able to connect until this is fixed."
+                : "The web application and web-jobs will not be able to connect with their managed identity until this is fixed.";
         }
 
         /// <summary>
@@ -249,5 +322,17 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 ? SqlContainedUserScript.CreateUserAndGrantRoles(principalName, applicationId.Value, roles)
                 : SqlContainedUserScript.CreateUserFromExternalProviderAndGrantRoles(principalName, roles);
         }
+    }
+
+    /// <summary>
+    /// The Azure resource a managed identity belongs to, so a database grant's messages name the right one.
+    /// </summary>
+    public enum ManagedIdentityOwner
+    {
+        /// <summary>The App Service that hosts the web application and web-jobs.</summary>
+        AppService,
+
+        /// <summary>The Automation account whose runbooks maintain the database.</summary>
+        AutomationAccount
     }
 }
