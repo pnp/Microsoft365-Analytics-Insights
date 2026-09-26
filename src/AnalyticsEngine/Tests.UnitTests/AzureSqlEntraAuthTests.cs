@@ -1161,8 +1161,8 @@ namespace Tests.UnitTests
 
         /// <summary>
         /// A managed identity is a service principal, so its contained user must carry its application
-        /// (client) ID. ARM only reports the object ID of a system-assigned identity, which is a different
-        /// GUID - writing that one produces a user that can never sign in.
+        /// (client) ID. The resource's own identity block reports only the object ID of a system-assigned
+        /// identity, which is a different GUID - writing that one produces a user that can never sign in.
         /// </summary>
         [TestMethod]
         public void ManagedIdentityGrant_UsesTheApplicationId_NotTheObjectId()
@@ -1181,8 +1181,8 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// When the application ID cannot be read from Graph, fall back to letting SQL Server resolve the
-        /// name - rather than writing an identifier known to be wrong.
+        /// When the application ID cannot be read from Azure Resource Manager or Graph, fall back to letting
+        /// SQL Server resolve the name - rather than writing an identifier known to be wrong.
         /// </summary>
         [TestMethod]
         public void ManagedIdentityGrant_WithoutAnApplicationId_FallsBackToExternalProvider()
