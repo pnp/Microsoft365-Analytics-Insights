@@ -2,6 +2,7 @@ using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.InstallerTasks;
 using Azure.Core;
 using Common.Entities.Installer;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -36,6 +37,16 @@ namespace Tests.UnitTests.InstallTests
         static readonly Guid ObjectId = new Guid("5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d");
         static readonly Guid ClientId = new Guid("1f2e3d4c-5b6a-4978-8695-a4b3c2d1e0f9");
         static readonly Guid SomeOtherPrincipal = new Guid("22222222-2222-2222-2222-222222222222");
+        const string ConnectionString = "Data Source=contoso-sql.database.windows.net;Initial Catalog=analytics;Encrypt=True";
+
+        /// <summary>
+        /// A SqlException has no public constructor. The grant reads only its message, which an uninitialized
+        /// instance still supplies.
+        /// </summary>
+        static SqlException NewSqlException()
+        {
+            return (SqlException)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(SqlException));
+        }
 
         #region Where the application ID comes from
 
@@ -82,22 +93,42 @@ namespace Tests.UnitTests.InstallTests
 
         /// <summary>
         /// An ARM answer for a different principal than the one being granted is not used: another
-        /// identity's client ID as the SID gives a user that can never sign in.
+        /// identity's client ID as the SID gives a user that can never sign in. Nor is Graph then asked about
+        /// the principal ARM has just said the resource no longer has: its answer would be just as stale, and a
+        /// stale SID makes the grant DROP a same-named user whose SID differs. Unknown falls back to resolving
+        /// by name, which finds whichever identity is current.
         /// </summary>
         [TestMethod]
         public async Task ApplicationId_ArmAnswerForAnotherPrincipal_IsIgnored()
         {
+            var staleClientId = new Guid("3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f");
             var arm = new StubIdentitySource { Answer = new SystemAssignedIdentityIds(SomeOtherPrincipal, ClientId) };
-            var graph = new StubApplicationIdResolver { Answer = null };
+            var graph = new StubApplicationIdResolver { Answer = staleClientId };
             var logger = new RecordingLogger();
 
             var applicationId = await new SqlIdentityAccessTask(logger, graph, arm)
                 .ResolveApplicationIdAsync("contosoanalytics", ObjectId, SiteId);
 
-            Assert.IsNull(applicationId);
-            Assert.AreEqual(1, graph.Calls, "Graph is still worth asking.");
+            Assert.IsNull(applicationId, "Neither ARM's answer for another principal nor Graph's for the old one may be used.");
+            Assert.AreEqual(0, graph.Calls, "Graph could only be asked about the principal ARM says the resource no longer has.");
             Assert.IsTrue(logger.Entries.Any(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning
                 && e.Message.Contains(SomeOtherPrincipal.ToString())));
+        }
+
+        /// <summary>
+        /// A 404 names no other principal, so it gives no reason to doubt the one being granted: Graph is
+        /// still asked, as it is when ARM fails outright.
+        /// </summary>
+        [TestMethod]
+        public async Task ApplicationId_ArmReportsNoIdentity_StillAsksGraph()
+        {
+            var graph = new StubApplicationIdResolver { Answer = ClientId };
+
+            var applicationId = await new SqlIdentityAccessTask(NullLogger.Instance, graph, new StubIdentitySource { Answer = null })
+                .ResolveApplicationIdAsync("contosoanalytics", ObjectId, SiteId);
+
+            Assert.AreEqual(ClientId, applicationId);
+            Assert.AreEqual(1, graph.Calls);
         }
 
         /// <summary>
@@ -158,6 +189,150 @@ namespace Tests.UnitTests.InstallTests
             var skipped = logger.Entries.Single();
             StringAssert.Contains(skipped.Message, "Automation account");
             Assert.IsFalse(skipped.Message.Contains("App Service"));
+        }
+
+        #endregion
+
+        #region The grant end to end
+
+        /// <summary>
+        /// Through the whole grant rather than its parts: the script that reaches SQL Server declares the user
+        /// by the client ID ARM returned, never by the object ID the resource's identity block carries.
+        /// </summary>
+        [TestMethod]
+        public async Task Grant_ExecutesAScriptWithTheClientIdSid_NotTheObjectId()
+        {
+            var runner = new RecordingScriptRunner();
+            var task = new SqlIdentityAccessTask(NullLogger.Instance, null,
+                new StubIdentitySource { Answer = new SystemAssignedIdentityIds(ObjectId, ClientId) }) { ScriptRunner = runner.Run };
+
+            var granted = await task.GrantDatabaseAccessAsync(ConnectionString, ManagedIdentityOwner.AppService,
+                "contosoanalytics", ObjectId, SiteId, SqlContainedUserScript.AppServiceRoles);
+
+            Assert.IsTrue(granted);
+            Assert.AreEqual(ConnectionString, runner.ConnectionStrings.Single());
+            var script = runner.Scripts.Single();
+            StringAssert.Contains(script, $"CREATE USER [contosoanalytics] WITH SID = {SqlContainedUserScript.ToSqlSid(ClientId)}, TYPE = E;");
+            Assert.IsFalse(script.Contains(SqlContainedUserScript.ToSqlSid(ObjectId)),
+                "The object ID must never be written as a service principal's SID.");
+        }
+
+        /// <summary>
+        /// When SQL Server refuses, the remedy logged for the operator is the exact WITH SID statement for the
+        /// client ID - the one form that needs no directory lookup.
+        /// </summary>
+        [TestMethod]
+        public async Task Grant_SqlFailure_LogsTheWithSidRemedyForTheClientId()
+        {
+            var logger = new RecordingLogger();
+            var task = new SqlIdentityAccessTask(logger, null,
+                new StubIdentitySource { Answer = new SystemAssignedIdentityIds(ObjectId, ClientId) })
+            {
+                ScriptRunner = (connectionString, sql) => throw NewSqlException()
+            };
+
+            var granted = await task.GrantDatabaseAccessAsync(ConnectionString, ManagedIdentityOwner.AppService,
+                "contosoanalytics", ObjectId, SiteId, SqlContainedUserScript.AppServiceRoles);
+
+            Assert.IsFalse(granted);
+            var error = logger.Entries.Single(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Error);
+            StringAssert.Contains(error.Message,
+                $"run: CREATE USER [contosoanalytics] WITH SID = {SqlContainedUserScript.ToSqlSid(ClientId)}, TYPE = E; then add it to");
+            Assert.IsFalse(error.Message.Contains(SqlContainedUserScript.ToSqlSid(ObjectId)));
+            Assert.IsFalse(error.Message.Contains("FROM EXTERNAL PROVIDER"));
+        }
+
+        /// <summary>
+        /// Only an Automation account that shares the App Service's name - compared the way SQL Server compares
+        /// user names, ignoring case - is named apart. Every other install keeps the user names it already has.
+        /// </summary>
+        [TestMethod]
+        public void DatabaseUserName_OnlyAnAutomationAccountNamedLikeTheAppService_IsNamedApart()
+        {
+            Assert.AreEqual("contosoanalytics (Automation account)",
+                SqlIdentityAccessTask.ChooseDatabaseUserName(ManagedIdentityOwner.AutomationAccount, "contosoanalytics", "contosoanalytics"));
+            Assert.AreEqual("ContosoAnalytics (Automation account)",
+                SqlIdentityAccessTask.ChooseDatabaseUserName(ManagedIdentityOwner.AutomationAccount, "ContosoAnalytics", "contosoanalytics"));
+
+            // Unchanged: different names, no App Service, and the App Service itself.
+            Assert.AreEqual("contosoautomation",
+                SqlIdentityAccessTask.ChooseDatabaseUserName(ManagedIdentityOwner.AutomationAccount, "contosoautomation", "contosoanalytics"));
+            Assert.AreEqual("contosoautomation",
+                SqlIdentityAccessTask.ChooseDatabaseUserName(ManagedIdentityOwner.AutomationAccount, "contosoautomation", null));
+            Assert.AreEqual("contosoanalytics",
+                SqlIdentityAccessTask.ChooseDatabaseUserName(ManagedIdentityOwner.AppService, "contosoanalytics", "contosoanalytics"));
+        }
+
+        /// <summary>
+        /// An App Service and an Automation account given the same name must end up with a user each. Sharing one,
+        /// the Automation account's WITH SID script dropped the App Service's user on every run: both grants
+        /// reported success and the web-jobs were refused at sign-in.
+        /// </summary>
+        [TestMethod]
+        public async Task Grant_SameNamedIdentities_GetAUserEach_AndNeitherDropsTheOther()
+        {
+            const string AutomationId = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/contoso/providers/Microsoft.Automation/automationAccounts/ContosoAnalytics";
+            var automationObjectId = new Guid("6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e");
+            var automationClientId = new Guid("2e3d4c5b-6a79-4887-96a5-b4c3d2e1f0a9");
+            var runner = new RecordingScriptRunner();
+
+            // In the installer's order: the App Service, then the Automation account - here differing only in case,
+            // which SQL Server ignores.
+            await new SqlIdentityAccessTask(NullLogger.Instance, null,
+                new StubIdentitySource { Answer = new SystemAssignedIdentityIds(ObjectId, ClientId) }) { ScriptRunner = runner.Run }
+                .GrantDatabaseAccessAsync(ConnectionString, ManagedIdentityOwner.AppService, "contosoanalytics", ObjectId, SiteId,
+                    SqlContainedUserScript.AppServiceRoles,
+                    SqlIdentityAccessTask.ChooseDatabaseUserName(ManagedIdentityOwner.AppService, "contosoanalytics", "contosoanalytics"));
+
+            await new SqlIdentityAccessTask(NullLogger.Instance, null,
+                new StubIdentitySource { Answer = new SystemAssignedIdentityIds(automationObjectId, automationClientId) }) { ScriptRunner = runner.Run }
+                .GrantDatabaseAccessAsync(ConnectionString, ManagedIdentityOwner.AutomationAccount, "ContosoAnalytics", automationObjectId,
+                    AutomationId, new[] { "db_owner" },
+                    SqlIdentityAccessTask.ChooseDatabaseUserName(ManagedIdentityOwner.AutomationAccount, "ContosoAnalytics", "contosoanalytics"));
+
+            Assert.AreEqual(2, runner.Scripts.Count);
+            var appScript = runner.Scripts[0];
+            var automationScript = runner.Scripts[1];
+
+            StringAssert.Contains(appScript, $"CREATE USER [contosoanalytics] WITH SID = {SqlContainedUserScript.ToSqlSid(ClientId)}, TYPE = E;");
+            StringAssert.Contains(automationScript,
+                $"CREATE USER [ContosoAnalytics (Automation account)] WITH SID = {SqlContainedUserScript.ToSqlSid(automationClientId)}, TYPE = E;");
+
+            // The Automation account's script must not be able to touch the App Service's user at all.
+            Assert.IsFalse(automationScript.IndexOf("[contosoanalytics]", StringComparison.OrdinalIgnoreCase) >= 0,
+                "The Automation account's grant must not DROP or re-role the App Service's user.");
+            Assert.IsFalse(automationScript.IndexOf("N'contosoanalytics'", StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        /// <summary>
+        /// A user named apart can only be declared by client ID. Without one, falling back to the shared display
+        /// name would find the App Service's user, skip the CREATE, and add THAT user to db_owner - so the grant
+        /// is skipped, loudly. An identity with a name of its own still falls back to FROM EXTERNAL PROVIDER.
+        /// </summary>
+        [TestMethod]
+        public async Task Grant_NamedApartWithoutAClientId_IsSkipped_ButAnOrdinaryGrantStillFallsBack()
+        {
+            var logger = new RecordingLogger();
+            var runner = new RecordingScriptRunner();
+            var unknown = new StubIdentitySource { Failure = new InvalidOperationException("Azure Resource Manager returned 403 (Forbidden)") };
+
+            var granted = await new SqlIdentityAccessTask(logger, null, unknown) { ScriptRunner = runner.Run }
+                .GrantDatabaseAccessAsync(ConnectionString, ManagedIdentityOwner.AutomationAccount, "contosoanalytics", ObjectId,
+                    SiteId, new[] { "db_owner" }, "contosoanalytics (Automation account)");
+
+            Assert.IsFalse(granted);
+            Assert.AreEqual(0, runner.Scripts.Count, "Nothing may run against the database without the client ID.");
+            var warning = logger.Entries.Single(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
+            StringAssert.Contains(warning.Message, "shares its name with the App Service");
+            StringAssert.Contains(warning.Message, "runbooks");
+
+            // The ordinary case is unchanged: no client ID means FROM EXTERNAL PROVIDER under the identity's own name.
+            granted = await new SqlIdentityAccessTask(NullLogger.Instance, null, unknown) { ScriptRunner = runner.Run }
+                .GrantDatabaseAccessAsync(ConnectionString, ManagedIdentityOwner.AutomationAccount, "contosoautomation", ObjectId,
+                    SiteId, new[] { "db_owner" }, "contosoautomation");
+
+            Assert.IsTrue(granted);
+            StringAssert.Contains(runner.Scripts.Single(), "CREATE USER [contosoautomation] FROM EXTERNAL PROVIDER;");
         }
 
         #endregion
@@ -267,6 +442,20 @@ namespace Tests.UnitTests.InstallTests
                 Calls++;
                 if (Failure != null) throw Failure;
                 return Task.FromResult(Answer);
+            }
+        }
+
+        /// <summary>Stands in for the database: records what the grant would run instead of running it.</summary>
+        sealed class RecordingScriptRunner
+        {
+            public List<string> ConnectionStrings { get; } = new List<string>();
+            public List<string> Scripts { get; } = new List<string>();
+
+            public Task Run(string connectionString, string sql)
+            {
+                ConnectionStrings.Add(connectionString);
+                Scripts.Add(sql);
+                return Task.CompletedTask;
             }
         }
 
