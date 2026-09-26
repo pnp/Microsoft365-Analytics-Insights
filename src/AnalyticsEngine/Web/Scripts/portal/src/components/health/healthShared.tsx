@@ -10,7 +10,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import Spinner from '../Spinner';
-import { formatDateParts, formatNumber, translateActive, useT, type TFunction } from '../../i18n';
+import { formatDateParts, formatList, formatNumber, translateActive, useT, type TFunction } from '../../i18n';
 import { health as enHealth } from '../../i18n/catalog/en/health';
 import type { TranslationKey } from '../../i18n';
 import type { ComponentHealthRow, DataOverviewSection, HealthSectionBase, HealthStatusName, HourCount } from '../../types/health';
@@ -109,7 +109,7 @@ export function formatHealthDuration(totalSeconds: number | null | undefined, fa
     durationPart(seconds, 'health.duration.second', 'health.duration.seconds', t),
   ];
 
-  return t('health.duration.parts', { parts: parts.join(', ') });
+  return t('health.duration.parts', { parts: formatList(parts) });
 }
 
 export function translateHealthComponentName(component: string | null | undefined, t: TFunction): string {

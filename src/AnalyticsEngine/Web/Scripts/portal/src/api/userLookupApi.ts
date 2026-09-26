@@ -12,12 +12,12 @@ async function getJson<T>(url: string): Promise<T> {
   });
 
   if (!response.ok) {
-    let message = response.status === 404
-      ? translateActive('errors.userLookup.notFound')
-      : translateActive('errors.userLookup.requestFailed', { status: response.status });
+    let message = translateActive('errors.userLookup.requestFailed', { status: response.status });
     try {
-      const body = await response.json();
-      if (response.status !== 404 && body && typeof body.message === 'string') {
+      const body = await response.json() as { code?: unknown; message?: unknown } | null;
+      if (response.status === 404 && body?.code === 'userNotFound') {
+        message = translateActive('errors.userLookup.notFound');
+      } else if (response.status !== 404 && body && typeof body.message === 'string') {
         message = body.message;
       }
     } catch {

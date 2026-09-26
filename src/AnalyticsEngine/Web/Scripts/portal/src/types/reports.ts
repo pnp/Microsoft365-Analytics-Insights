@@ -29,6 +29,16 @@ export interface ReportSeries {
   points: ReportTimePoint[];
 }
 
+export type ReportSeriesWarningReason = 'loadFailed' | 'notAttempted' | 'noSettledData' | 'noSettledDataForWeek';
+
+/** Structured reason for a workload series that could not be fully charted. */
+export interface ReportSeriesWarning {
+  series: string;
+  reason: ReportSeriesWarningReason | string;
+  week: string | null;
+  error: string | null;
+}
+
 /** One bar of a categorical chart. */
 export interface ReportCategory {
   label: string;
@@ -78,7 +88,9 @@ export interface ReportChart {
   valueSuffix: string | null;
   sql: string;
   error: string | null;
+  errorKey: string | null;
   warning: string | null;
+  seriesWarnings: ReportSeriesWarning[] | null;
 }
 
 /** The set of charts for one report area over the requested window. */

@@ -1,4 +1,4 @@
-import { formatDateParts, formatNumber, translateActive, type TFunction, type TranslationKey } from '../../i18n';
+import { EN_CATALOG, formatDateParts, formatNumber, translateActive, type TFunction, type TranslationKey } from '../../i18n';
 import type { AgentCostDetailRow, AzureDimension, CreditDimension } from '../../types/agentCosts';
 
 /** Shown for a dimension the billing API did not report for a row. */
@@ -88,6 +88,13 @@ export function harnessLabel(value: string | null | undefined, t: TFunction = tr
   if (key) return (t ?? translateActive)(key);
   if (value === 'GitHubCopilot') return 'GitHub Copilot';
   return value || t('agentCosts.state.notReported');
+}
+
+function harnessCsvLabel(value: string | null | undefined): string {
+  const key = value ? HARNESS_LABEL_KEYS[value] : undefined;
+  if (key) return EN_CATALOG[key];
+  if (value === 'GitHubCopilot') return 'GitHub Copilot';
+  return value || EN_CATALOG['agentCosts.state.notReported'];
 }
 
 export function capacityStatusLabel(value: string | null | undefined, t: TFunction = translateActive): string {
@@ -188,7 +195,7 @@ function csvCell(value: string | number | null | undefined): string {
  * Exported client-side from the rows already fetched, so it always matches exactly what the admin can
  * see - there is no second query that could return different figures than the table they are looking at.
  */
-export function detailRowsToCsv(rows: AgentCostDetailRow[], t?: TFunction): string {
+export function detailRowsToCsv(rows: AgentCostDetailRow[], _t?: TFunction): string {
   const header = [
     'Usage date',
     'Agent',
@@ -209,7 +216,7 @@ export function detailRowsToCsv(rows: AgentCostDetailRow[], t?: TFunction): stri
       r.agentId ?? '',
       r.environmentName ?? '',
       r.environmentId ?? '',
-      harnessLabel(r.harness, t),
+      harnessCsvLabel(r.harness),
       r.featureName ?? '',
       r.billedCredits,
       r.nonBilledCredits ?? '',

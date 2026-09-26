@@ -251,6 +251,7 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 return Content(HttpStatusCode.InternalServerError, new
                 {
+                    code = "agentCostsLoadFailed",
                     message = "The agent cost figures could not be loaded. If this keeps happening, check the "
                         + "database is reachable and that the agent cost imports have run at least once.",
                     detail = ex.Message,

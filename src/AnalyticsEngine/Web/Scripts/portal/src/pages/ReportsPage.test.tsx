@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { screen, fireEvent, waitFor } from '@testing-library/react';
 import { renderWithProvider } from '../test/renderWithProvider';
-import ReportsPage, { reportCategories, reportMatrix, reportSeries } from './ReportsPage';
+import ReportsPage, { reportCategories, reportChartWarningText, reportMatrix, reportSeries } from './ReportsPage';
 import { fetchReportAreas, fetchReportArea } from '../api/reportsApi';
 import { fetchAvailability } from '../api/licenceActivityApi';
 import { loadCatalog, translateStatic } from '../i18n';
@@ -45,7 +45,9 @@ const baseChart = (overrides: Partial<ReportChart>): ReportChart => ({
   valueSuffix: null,
   sql: 'SELECT 1',
   error: null,
+  errorKey: null,
   warning: null,
+  seriesWarnings: null,
   ...overrides,
 });
 
@@ -249,7 +251,7 @@ describe('ReportsPage', () => {
         { label: 'Web', value: 7 },
       ],
     }));
-    expect(categories?.map((c) => c.label)).toEqual(['Windows', 'Mac', 'Móvil', 'Navegador']);
+    expect(categories?.map((c) => c.label)).toEqual(['Windows', 'Mac', 'Móvil', 'Web']);
 
     const series = reportSeries(es, baseChart({
       key: 'office-apps-platform-trend',
@@ -259,7 +261,7 @@ describe('ReportsPage', () => {
         { name: 'Web', points: [] },
       ],
     }));
-    expect(series?.map((s) => s.name)).toEqual(['Móvil', 'Navegador']);
+    expect(series?.map((s) => s.name)).toEqual(['Móvil', 'Web']);
 
     const matrix = reportMatrix(es, baseChart({
       key: 'office-apps-platform-matrix',
@@ -276,8 +278,27 @@ describe('ReportsPage', () => {
         shadeByRow: true,
       },
     }));
-    expect(matrix?.columns).toEqual(['Móvil', 'Navegador']);
-    expect(matrix?.cells.map((cell) => cell.column)).toEqual(['Móvil', 'Navegador']);
+    expect(matrix?.columns).toEqual(['Móvil', 'Web']);
+    expect(matrix?.cells.map((cell) => cell.column)).toEqual(['Móvil', 'Web']);
+  });
+
+  it('translates structured usage-series warnings without translating workload or exception data', async () => {
+    await loadCatalog('es');
+    const es = (key: Parameters<typeof translateStatic>[1], values?: Parameters<typeof translateStatic>[2]) =>
+      translateStatic('es', key, values);
+
+    const warning = reportChartWarningText(es, baseChart({
+      key: 'usage-active-users',
+      warning: 'Some workload series are unavailable: Outlook: database failed; Teams: no settled usage data for the week of 2026-06-15.',
+      seriesWarnings: [
+        { series: 'Outlook', reason: 'loadFailed', error: 'database failed', week: null },
+        { series: 'Teams', reason: 'noSettledDataForWeek', error: null, week: '2026-06-15T00:00:00Z' },
+      ],
+    }));
+
+    expect(warning).toContain('Algunas series de cargas de trabajo no están disponibles: Outlook: database failed; Teams: no hay datos de uso consolidados para la semana del');
+    expect(warning).not.toContain('Some workload series are unavailable');
+    expect(warning).not.toContain('2026-06-15');
   });
 
   /**

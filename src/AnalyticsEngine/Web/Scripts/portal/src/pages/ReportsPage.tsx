@@ -18,7 +18,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowClockwise16Regular } from '@fluentui/react-icons';
 import { fetchReportAreas, fetchReportArea } from '../api/reportsApi';
-import type { ReportAreaData, ReportAreaKey, ReportAreas, ReportChart, ReportMatrix, ReportSeries } from '../types/reports';
+import type { ReportAreaData, ReportAreaKey, ReportAreas, ReportChart, ReportMatrix, ReportSeries, ReportSeriesWarning } from '../types/reports';
 import Spinner from '../components/Spinner';
 import SqlPopover from '../components/SqlPopover';
 import TimeSeriesChart from '../components/charts/TimeSeriesChart';
@@ -334,8 +334,15 @@ function chartTranslationKey(
   return `reports.chart.${key}.${field}` as TranslationKey;
 }
 
-function chartWarningText(t: TFunction, chart: ReportChart): string | null {
+export function reportChartWarningText(t: TFunction, chart: ReportChart): string | null {
   if (!chart.warning) return null;
+
+  if (chart.key === 'usage-active-users' && chart.seriesWarnings?.length) {
+    const details = chart.seriesWarnings.map((warning) => seriesWarningText(t, warning)).join('; ');
+    const catalogKey = 'reports.chart.usage-active-users.warning' as TranslationKey;
+    const translated = t(catalogKey, { details });
+    return translated === catalogKey ? chart.warning : translated;
+  }
 
   const usageWarningParts = EN_CATALOG['reports.chart.usage-active-users.warning'].split('{details}');
   if (chart.key === 'usage-active-users' && chart.warning.startsWith(usageWarningParts[0]) && chart.warning.endsWith(usageWarningParts[1])) {
@@ -359,6 +366,44 @@ function chartWarningText(t: TFunction, chart: ReportChart): string | null {
   if (chart.warning !== EN_CATALOG[catalogKey]) return chart.warning;
   const translated = t(catalogKey);
   return translated === catalogKey ? chart.warning : translated;
+}
+
+function seriesWarningText(t: TFunction, warning: ReportSeriesWarning): string {
+  const values = {
+    series: warning.series,
+    error: warning.error ?? '',
+    week: warning.week ? formatDateParts(new Date(warning.week), { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '',
+  };
+
+  switch (warning.reason) {
+    case 'loadFailed':
+      return t('reports.chart.warning.series.loadFailed', values);
+    case 'notAttempted':
+      return t('reports.chart.warning.series.notAttempted', values);
+    case 'noSettledData':
+      return t('reports.chart.warning.series.noSettledData', values);
+    case 'noSettledDataForWeek':
+      return t('reports.chart.warning.series.noSettledDataForWeek', values);
+    default:
+      return warning.error ? `${warning.series}: ${warning.error}` : warning.series;
+  }
+}
+
+function chartErrorText(t: TFunction, chart: ReportChart): string {
+  if (chart.errorKey === 'noCompletedUsageWeeks') {
+    return t('reports.chart.error.noCompletedUsageWeeks');
+  }
+
+  if (chart.errorKey === 'noWorkloadSeriesLoaded' && chart.seriesWarnings?.length) {
+    const details = chart.seriesWarnings.map((warning) => seriesWarningText(t, warning)).join('; ');
+    return t('reports.chart.error.noWorkloadSeriesLoaded', { details });
+  }
+
+  if (chart.errorKey === 'noCompletedUsageWeeksWithData') {
+    return t('reports.chart.error.noCompletedUsageWeeksWithData');
+  }
+
+  return chart.error ?? '';
 }
 
 const APP_BREADTH_LABEL = /^(\d+) apps?$/;
@@ -546,7 +591,8 @@ function ReportAreaView({
         const title = chartText(t, chart.key, 'title', chart.title);
         const description = chartText(t, chart.key, 'description', chart.description);
         const valueLabel = chartText(t, chart.key, 'valueLabel', chart.valueLabel);
-        const warning = chartWarningText(t, chart);
+        const warning = reportChartWarningText(t, chart);
+        const error = chartErrorText(t, chart);
         const categories = reportCategories(t, chart);
         const series = reportSeries(t, chart);
         const matrix = reportMatrix(t, chart);
@@ -568,7 +614,7 @@ function ReportAreaView({
           <div className={styles.chartBody}>
             {chart.error ? (
               <MessageBar intent="warning">
-                <MessageBarBody>{t('reports.chart.loadError', { error: chart.error })}</MessageBarBody>
+                <MessageBarBody>{t('reports.chart.loadError', { error })}</MessageBarBody>
               </MessageBar>
             ) : (
               <>

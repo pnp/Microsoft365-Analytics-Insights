@@ -96,13 +96,35 @@ describe('licenceActivityApi error mapping', () => {
     await loadCatalog('es');
     setActiveLanguage('es');
     mockedFetch.mockResolvedValue(jsonResponse({
+      code: 'anotherReportPreparing',
       message: 'Another licence report snapshot is loading. Retry in a few seconds.',
     }, 503));
     await expect(fetchOverview({ from: '2026-05-01', to: '2026-05-19' })).rejects.toMatchObject({
       kind: 'busy',
-      message: expect.stringContaining('ocupado'),
+      message: 'Se está preparando otro informe de licencias ahora mismo. Inténtelo de nuevo en unos segundos.',
     });
     expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses coded validation messages instead of the generic bad-request text', async () => {
+    mockedFetch.mockResolvedValue(jsonResponse({
+      code: 'dateRange',
+      message: 'Choose 7 to 180 inclusive UTC dates, ending before today. Custom ranges are never rounded.',
+    }, 400));
+
+    await expect(fetchOverview({ from: '2026-05-01', to: '2026-05-19' })).rejects.toMatchObject({
+      kind: 'badRequest',
+      message: 'Choose 7 to 180 inclusive UTC dates, ending before today. Custom ranges are never rounded.',
+    });
+  });
+
+  it('keeps the generic localised message when a non-http status has no recognised code', async () => {
+    mockedFetch.mockResolvedValue(jsonResponse({ message: 'A future licence error.' }, 410));
+
+    await expect(fetchOverview({ from: '2026-05-01', to: '2026-05-19' })).rejects.toMatchObject({
+      kind: 'expired',
+      message: 'These figures are no longer being held. Refresh the report to bring back an up-to-date set.',
+    });
   });
 });
 

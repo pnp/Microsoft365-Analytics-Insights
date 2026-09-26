@@ -63,6 +63,7 @@ export {
   activeLocale,
   formatNumber,
   formatDateParts,
+  formatList,
   compareStrings,
 } from './locale';
 

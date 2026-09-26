@@ -172,7 +172,7 @@ const REPORTS_CONTROLLERS = [
 /** `RunTimeSeriesAsync("copilot-interactions", "Copilot interactions per week", ...` */
 const CHART_CALL = /Run(?:TimeSeries|MultiTimeSeries|GroupedTimeSeries|GroupedCategory|Category|Matrix)Async\(\s*"([^"]+)"/g;
 /** Object-initialiser charts which do not flow through a Run* helper. */
-const CHART_KEY_PROPERTY = /Key\s*=\s*"([^"]+)"/g;
+const CHART_KEY_PROPERTY = /(?:^|[{\s,])Key\s*=\s*"([^"]+)"/g;
 /** `CopilotAttachChart` uses one local constant for several branches. */
 const CHART_KEY_CONST = /const\s+string\s+key\s*=\s*"([^"]+)"/g;
 
@@ -241,6 +241,8 @@ describe('Reports chart metadata', () => {
     const orphans = Object.keys(EN_CATALOG)
       .filter((key) => key.startsWith('reports.chart.'))
       .filter((key) => !['reports.chart.sqlTitle', 'reports.chart.loadError', 'reports.chart.noData'].includes(key))
+      .filter((key) => !key.startsWith('reports.chart.error.'))
+      .filter((key) => !key.startsWith('reports.chart.warning.series.'))
       .filter((key) => !expected.has(key));
 
     expect(
@@ -1693,13 +1695,25 @@ describe('Service Configuration webhook status details', () => {
 describe('Service Configuration update-check errors', () => {
   it('keeps UpdateChecker server-authored errors aligned with the SPA catalog templates', () => {
     const source = readFileSync(join(process.cwd(), '..', '..', 'Models', 'UpdateCheck', 'UpdateChecker.cs'), 'utf8');
-    expect(source).toContain('Timed out after {_timeout.TotalSeconds:0}s contacting github.com');
-    expect(source).toContain("update checks can't work from here - check the release page manually instead.");
-    expect(source).toContain("Couldn't reach github.com to check for updates: {InnerMostMessage(ex)}");
-    expect(source).toContain('Update check failed: {InnerMostMessage(ex)}');
-    expect(EN_CATALOG['admin.serviceConfiguration.updates.error.timeout']).toContain('{seconds}');
-    expect(EN_CATALOG['admin.serviceConfiguration.updates.error.unreachable']).toContain('{error}');
-    expect(EN_CATALOG['admin.serviceConfiguration.updates.error.failed']).toContain('{error}');
+    function assignmentTemplate(marker: string): string {
+      const markerAt = source.indexOf(marker);
+      expect(markerAt, `${marker} not found`).toBeGreaterThanOrEqual(0);
+      const start = source.lastIndexOf('result.Error =', markerAt);
+      expect(start, `assignment for ${marker} not found`).toBeGreaterThanOrEqual(0);
+      const statement = source.slice(start, source.indexOf('\n            }', start));
+      return [...statement.matchAll(/\$?"((?:[^"\\]|\\.)*)"/g)]
+        .map((m) => csharpStringLiteralValue(m[1]))
+        .join('')
+        .replace('{_timeout.TotalSeconds:0}', '{seconds}')
+        .replace('{InnerMostMessage(ex)}', '{error}');
+    }
+
+    expect(EN_CATALOG['admin.serviceConfiguration.updates.error.timeout'])
+      .toBe(assignmentTemplate('Timed out after'));
+    expect(EN_CATALOG['admin.serviceConfiguration.updates.error.unreachable'])
+      .toBe(assignmentTemplate("Couldn't reach github.com"));
+    expect(EN_CATALOG['admin.serviceConfiguration.updates.error.failed'])
+      .toBe(assignmentTemplate('Update check failed'));
   });
 });
 
@@ -1877,5 +1891,42 @@ describe('Copilot Adoption server warning text', () => {
     expect(sources).not.toMatch(/includes\(['"](cowork|licence opportunit|usage report)/i);
     expect(sources).toContain('isCoworkWarning');
     expect(sources).toContain('isLicenceOpportunityWarning');
+  });
+});
+
+describe('Reports partial-data warning facts', () => {
+  it('catalogues every structured usage-series warning reason the server can send', () => {
+    const source = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'ReportsAPIController.cs'), 'utf8');
+    const reasons = [...source.matchAll(/Reason\s*=\s*"([^"]+)"/g)].map((m) => m[1]).sort();
+
+    expect(reasons).toEqual(['loadFailed', 'noSettledData', 'noSettledDataForWeek', 'notAttempted']);
+
+    const missing = reasons
+      .map((reason) => `reports.chart.warning.series.${reason}`)
+      .filter((key) => !(key in EN_CATALOG));
+
+    expect(
+      missing,
+      'ReportsAPIController added a structured partial-data warning reason without a matching\n' +
+        'catalog entry, so the SPA would fall back to server-authored English. Add the key to\n' +
+        'src/i18n/catalog/{en,es}/reports.ts.',
+    ).toEqual([]);
+  });
+
+  it('catalogues every structured usage-series chart error the server can send', () => {
+    const source = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'ReportsAPIController.cs'), 'utf8');
+    const errorStatements = [...source.matchAll(/ErrorKey\s*=[^;]+;/g)].map((m) => m[0]).join('\n');
+    const errorKeys = [...errorStatements.matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+
+    expect(errorKeys).toEqual(['noCompletedUsageWeeks', 'noCompletedUsageWeeksWithData', 'noWorkloadSeriesLoaded']);
+
+    const missing = errorKeys
+      .map((errorKey) => `reports.chart.error.${errorKey}`)
+      .filter((key) => !(key in EN_CATALOG));
+
+    expect(
+      missing,
+      'ReportsAPIController added a structured chart error key without a matching catalog entry.',
+    ).toEqual([]);
   });
 });

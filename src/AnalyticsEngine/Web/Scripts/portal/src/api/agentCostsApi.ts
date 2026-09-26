@@ -1,5 +1,5 @@
 import { translateActive } from '../i18n/runtime';
-import { EN_CATALOG, type TranslationKey } from '../i18n/catalog';
+import type { TranslationKey } from '../i18n/catalog';
 import { apiFetch } from './http';
 import type {
   AgentCostAvailability,
@@ -30,11 +30,15 @@ export class AgentCostsApiError extends Error {
   }
 }
 
-/** Reads the server's `{ message }` error body without consuming the original response. */
-async function readServerMessage(response: Response): Promise<string | null> {
+/** Reads the server's error body without consuming the original response. */
+async function readServerError(response: Response): Promise<{ code?: string; message?: string } | null> {
   try {
-    const body = (await response.clone().json()) as { message?: unknown } | null;
-    return body && typeof body.message === 'string' ? body.message : null;
+    const body = (await response.clone().json()) as { code?: unknown; message?: unknown } | null;
+    if (!body) return null;
+    return {
+      code: typeof body.code === 'string' ? body.code : undefined,
+      message: typeof body.message === 'string' ? body.message : undefined,
+    };
   } catch {
     return null;
   }
@@ -48,11 +52,10 @@ async function getJson<T>(path: string, failureKey: TranslationKey, signal?: Abo
   });
 
   if (!response.ok) {
-    const serverMessage = await readServerMessage(response);
-    const knownServerFailurePrefix = EN_CATALOG['errors.agentCosts.serverFailed'].split(' Check ')[0];
-    const message = response.status === 500 && serverMessage?.startsWith(knownServerFailurePrefix)
+    const serverError = await readServerError(response);
+    const message = response.status === 500 && serverError?.code === 'agentCostsLoadFailed'
       ? translateActive('errors.agentCosts.serverFailed')
-      : serverMessage ?? translateActive(failureKey, { status: response.status });
+      : serverError?.message ?? translateActive(failureKey, { status: response.status });
     throw new AgentCostsApiError(response.status, message);
   }
 

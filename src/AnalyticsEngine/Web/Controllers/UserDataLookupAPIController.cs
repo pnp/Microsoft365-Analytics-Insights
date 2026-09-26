@@ -62,7 +62,7 @@ namespace Web.AnalyticsWeb.Controllers
                 case UserDataLookupStatus.BadRequest:
                     return Content(HttpStatusCode.BadRequest, new ApiErrorModel(result.ErrorMessage));
                 case UserDataLookupStatus.UserNotFound:
-                    return Content(HttpStatusCode.NotFound, new ApiErrorModel(result.ErrorMessage));
+                    return Content(HttpStatusCode.NotFound, new ApiErrorModel(result.ErrorMessage, "userNotFound"));
                 default:
                     return Ok(result.Value);
             }

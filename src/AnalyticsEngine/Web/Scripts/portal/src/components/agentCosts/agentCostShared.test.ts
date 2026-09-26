@@ -129,4 +129,12 @@ describe('detailRowsToCsv', () => {
     expect(csv).toContain('2026-09-03');
     expect(csv).not.toContain('2026-09-03T00:00:00Z');
   });
+
+  it('exports harness labels in the CSV header language, not the current portal language', () => {
+    const csv = detailRowsToCsv([row({ harness: 'NotAssessed' })], (key) =>
+      key === 'agentCosts.harness.noFeatureReported' ? 'Sin característica notificada' : key);
+
+    expect(csv).toContain('No feature reported');
+    expect(csv).not.toContain('Sin característica notificada');
+  });
 });

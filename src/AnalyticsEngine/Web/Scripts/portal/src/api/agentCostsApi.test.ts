@@ -22,7 +22,8 @@ describe('agentCostsApi errors', () => {
     await loadCatalog('es');
     setActiveLanguage('es');
     mockedFetch.mockResolvedValue(jsonResponse({
-      message: 'The agent cost figures could not be loaded. If this keeps happening, check the Agent Costs imports.',
+      code: 'agentCostsLoadFailed',
+      message: 'A changed English server message that must not be matched by prose.',
     }, 500));
 
     await expect(fetchSummary({ from: '2026-09-01', to: '2026-09-25' })).rejects.toThrow(
@@ -37,5 +38,15 @@ describe('agentCostsApi errors', () => {
     mockedFetch.mockResolvedValue(jsonResponse({ message: 'A future Agent Costs error.' }, 500));
 
     await expect(fetchSummary({ from: '2026-09-01', to: '2026-09-25' })).rejects.toThrow('A future Agent Costs error.');
+  });
+
+  it('does not translate a 500 only because its English message has the old prefix', async () => {
+    mockedFetch.mockResolvedValue(jsonResponse({
+      message: 'The agent cost figures could not be loaded. A different server error.',
+    }, 500));
+
+    await expect(fetchSummary({ from: '2026-09-01', to: '2026-09-25' })).rejects.toThrow(
+      'The agent cost figures could not be loaded. A different server error.',
+    );
   });
 });

@@ -12,6 +12,7 @@ using ReportAreasModel = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportAreasModel;
 using ReportChart = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportChart;
 using ReportMatrix = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportMatrix;
 using ReportMatrixCell = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportMatrixCell;
+using ReportSeriesWarning = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportSeriesWarning;
 using ReportsAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.ReportsAPIController;
 
 namespace Tests.UnitTests
@@ -49,7 +50,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void EveryReportModelPropertyDeclaresACamelCaseWireName()
         {
-            foreach (var type in new[] { typeof(ReportAreasModel), typeof(ReportChart), typeof(ReportMatrix), typeof(ReportMatrixCell) })
+            foreach (var type in new[] { typeof(ReportAreasModel), typeof(ReportChart), typeof(ReportMatrix), typeof(ReportMatrixCell), typeof(ReportSeriesWarning) })
             {
                 foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
                 {
@@ -123,7 +124,7 @@ namespace Tests.UnitTests
         {
             var typings = ReportsTypeScriptSource();
 
-            var expected = new[] { typeof(ReportAreasModel), typeof(ReportChart), typeof(ReportMatrix), typeof(ReportMatrixCell) }
+            var expected = new[] { typeof(ReportAreasModel), typeof(ReportChart), typeof(ReportMatrix), typeof(ReportMatrixCell), typeof(ReportSeriesWarning) }
                 .SelectMany(t => t.GetProperties(BindingFlags.Public | BindingFlags.Instance))
                 .Select(p => p.GetCustomAttribute<JsonPropertyAttribute>()?.PropertyName)
                 .Where(n => !string.IsNullOrEmpty(n))

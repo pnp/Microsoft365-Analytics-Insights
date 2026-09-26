@@ -58,10 +58,17 @@ const reports: Record<keyof typeof en, string> = {
   'reports.chart.sqlTitle': 'SQL de este gráfico',
   'reports.chart.loadError': 'No se ha podido cargar este gráfico: {error}',
   'reports.chart.noData': 'Sin datos para este periodo.',
+  'reports.chart.error.noCompletedUsageWeeks': 'No hay semanas completadas de informes de uso disponibles.',
+  'reports.chart.error.noWorkloadSeriesLoaded': 'No se pudo cargar ninguna serie de carga de trabajo. {details}',
+  'reports.chart.error.noCompletedUsageWeeksWithData': 'No hay semanas completadas de informes de uso disponibles para cargas de trabajo con datos.',
+  'reports.chart.warning.series.loadFailed': '{series}: {error}',
+  'reports.chart.warning.series.notAttempted': '{series}: no se intentó después del tiempo de espera de la base de datos',
+  'reports.chart.warning.series.noSettledData': '{series}: no hay datos de uso consolidados',
+  'reports.chart.warning.series.noSettledDataForWeek': '{series}: no hay datos de uso consolidados para la semana del {week}',
   'reports.category.appBreadth.one': '{count} aplicación',
   'reports.category.appBreadth.other': '{count} aplicaciones',
   'reports.platform.mobile': 'Móvil',
-  'reports.platform.web': 'Navegador',
+  'reports.platform.web': 'Web',
 
 
   // Metadatos de gráficos de informes redactados por el servidor.
@@ -159,7 +166,7 @@ const reports: Record<keyof typeof en, string> = {
   'reports.chart.office-apps-copilot-attach.valueLabel': 'Adopción',
   'reports.chart.office-apps-copilot-attach.warning': 'La importación del informe de uso de Copilot está desactivada, así que no hay nada con lo que comparar el uso de aplicaciones. Habilite "Informes de uso de Copilot (Graph)" en el instalador para rellenar este gráfico. Los gráficos de aplicaciones y plataformas anteriores no lo necesitan.',
   'reports.chart.office-apps-copilot-attach.warning.confirmFailed': 'Todas las aplicaciones devolvieron una adopción del 0 %, pero no se pudo confirmar si realmente llegó un informe de uso de Copilot para este periodo ({error}), por lo que no se muestran las cifras. Actualice para intentarlo de nuevo.',
-  'reports.chart.office-apps-copilot-attach.warning.noReportRows': 'La importación del informe de uso de Copilot está activada, pero aún no ha llegado ningún informe de uso de Copilot para este periodo, por lo que no se puede medir la adopción. No es lo mismo que que nadie use Copilot. Compruebe la importación del informe de uso de Copilot en la página Estado del servicio.',
+  'reports.chart.office-apps-copilot-attach.warning.noReportRows': 'La importación del informe de uso de Copilot está activada, pero aún no ha llegado ningún informe de uso de Copilot para este periodo, por lo que no se puede medir la adopción. Eso no significa que nadie use Copilot. Compruebe la importación del informe de uso de Copilot en la página Estado del servicio.',
 };
 
 export default reports;

@@ -167,7 +167,7 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.bucket.meetingPeriod.afternoon.label': 'Tarde (12:00-17:00)',
   'teamsExplorer.bucket.meetingPeriod.evening.label': 'Noche (17:00-21:00)',
   'teamsExplorer.bucket.meetingPeriod.night.label': 'Madrugada (después de las 21:00)',
-  'teamsExplorer.code.modality.audio': 'Voz',
+  'teamsExplorer.code.modality.audio': 'Audio',
   'teamsExplorer.code.modality.video': 'Vídeo',
   'teamsExplorer.code.modality.screenSharing': 'Uso compartido de pantalla',
   'teamsExplorer.code.quality.excellent': 'Excelente',

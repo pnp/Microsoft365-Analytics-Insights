@@ -358,7 +358,7 @@ export default function MeetingsPanel({
                 <TableBody>
                   {quality.failureReasons.map((row) => (
                     <TableRow key={row.key}>
-                      <TableCell>{serverPlaceholderText(t, translatedCodeLabel(t, 'quality', row.key))}</TableCell>
+                      <TableCell>{serverPlaceholderText(t, row.label)}</TableCell>
                       <TableCell className={styles.numeric}>{formatCount(row.count)}</TableCell>
                       <TableCell className={styles.numeric}>{formatPct(row.sharePct)}</TableCell>
                     </TableRow>

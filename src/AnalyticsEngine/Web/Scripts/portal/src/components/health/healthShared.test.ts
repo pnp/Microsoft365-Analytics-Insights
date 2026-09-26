@@ -8,7 +8,7 @@ import {
   translateHealthComponentName,
   translateHealthReasonText,
 } from './healthShared';
-import { loadCatalog, translateActive, translateStatic } from '../../i18n';
+import { loadCatalog, setActiveLanguage, translateActive, translateStatic } from '../../i18n';
 
 describe('translateHealthReasonText', () => {
   const en = (key: Parameters<typeof translateActive>[0], values?: Parameters<typeof translateActive>[1]) => translateStatic('en', key, values);
@@ -68,14 +68,22 @@ describe('translateHealthReasonText', () => {
 
     it('formats numeric liveness durations in the active language instead of showing server English', async () => {
       await loadCatalog('es');
+      setActiveLanguage('es');
 
       const es = (key: Parameters<typeof translateActive>[0], values?: Parameters<typeof translateActive>[1]) => translateStatic('es', key, values);
       expect(formatHealthDuration(90_061, 'Audit events import: 1 days, 1 hours, 1 mins, and 1 seconds.', es))
-        .toBe('1 día, 1 hora, 1 minuto, 1 segundo.');
+        .toBe('1 día, 1 hora, 1 minuto y 1 segundo.');
       expect(formatHealthDuration(3_662, 'Audit events import: 1 hours, 1 mins, and 2 seconds.', es))
-        .toBe('1 hora, 1 minuto, 2 segundos.');
+        .toBe('1 hora, 1 minuto y 2 segundos.');
+      expect(formatHealthDuration(63, null, es)).toBe('0 horas, 1 minuto y 3 segundos.');
       expect(formatHealthDuration(null, 'Audit events import: 1 hours, 1 mins, and 2 seconds.', es))
         .toBe('Audit events import: 1 hours, 1 mins, and 2 seconds.');
+      setActiveLanguage('en');
+    });
+
+    it('uses the English list separator for English duration strings', () => {
+      setActiveLanguage('en');
+      expect(formatHealthDuration(63, null, en)).toBe('0 hours, 1 min and 3 seconds.');
     });
   });
 });

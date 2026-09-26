@@ -194,12 +194,16 @@ namespace Web.AnalyticsWeb.Models
     /// </summary>
     public class ApiErrorModel
     {
+        [JsonProperty("code")]
+        public string Code { get; set; }
+
         [JsonProperty("message")]
         public string Message { get; set; }
 
-        public ApiErrorModel(string message)
+        public ApiErrorModel(string message, string code = null)
         {
             Message = message;
+            Code = code;
         }
     }
 }
