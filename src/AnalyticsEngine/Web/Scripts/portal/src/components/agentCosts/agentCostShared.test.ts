@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  capacityConsumptionTypeLabel,
   capacityStatusLabel,
   DASH,
   detailRowsToCsv,
@@ -61,6 +62,18 @@ describe('capacityStatusLabel', () => {
     expect(capacityStatusLabel('Overage', es)).toBe('Exceso');
     expect(capacityStatusLabel('CoveredOverage', es)).toBe('Exceso cubierto');
     expect(capacityStatusLabel('NewStatus', es)).toBe('NewStatus');
+  });
+
+  it('reads the capacity codes as words for English readers too', () => {
+    const en = (key: Parameters<typeof translateStatic>[1], values?: Parameters<typeof translateStatic>[2]) =>
+      translateStatic('en', key, values);
+
+    expect(capacityStatusLabel('WithinCapacity', en)).toBe('Within capacity');
+    expect(capacityStatusLabel('Overage', en)).toBe('Overage');
+    expect(capacityStatusLabel('CoveredOverage', en)).toBe('Covered overage');
+    expect(capacityConsumptionTypeLabel('MonthToDate', en)).toBe('Month to date');
+    expect(capacityConsumptionTypeLabel('BillingPeriodToDate', en)).toBe('BillingPeriodToDate');
+    expect(capacityConsumptionTypeLabel(null, en)).toBe('');
   });
 });
 

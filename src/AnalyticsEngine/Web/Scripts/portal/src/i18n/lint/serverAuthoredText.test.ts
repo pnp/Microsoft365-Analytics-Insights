@@ -1752,11 +1752,19 @@ describe('Copilot Adoption Cowork row tier labels', () => {
 });
 
 describe('Service Configuration webhook status details', () => {
-  it('keeps the known SystemStatus webhook detail aligned with the SPA translation map', () => {
+  it('translates every fixed webhook detail SystemStatus writes, and nothing else is a sentence', async () => {
+    const { WEBHOOK_STATUS_DETAIL_TEXT } = await import('../../pages/ServiceConfigurationPage');
     const source = readFileSync(join(process.cwd(), '..', '..', 'Models', 'SystemStatus.cs'), 'utf8');
-    const detail = /CallWebhookStatusDetail\s*=\s*"([^"]+)"/.exec(source)?.[1] ?? '';
-    expect(detail).toBe("WebAppURL is not configured, so the webhook subscription URL can't be determined.");
-    expect(EN_CATALOG['admin.serviceConfiguration.webhook.detail.webAppUrlMissing']).toBe(detail);
+    const opened = [...source.matchAll(/\bCallWebhookStatusDetail\s*=(?!=)/g)].length;
+    const assigned = [...source.matchAll(/\bCallWebhookStatusDetail\s*=\s*("(?:[^"\\]|\\.)*"|[\w.]+)\s*;/g)].map((m) => m[1]);
+    expect(assigned.length, 'a CallWebhookStatusDetail assignment the gate cannot read').toBe(opened);
+
+    // The non-literal assignments carry data, not sentences: the cached detail and an exception message.
+    expect(assigned.filter((value) => !value.startsWith('"')).sort()).toEqual(['cached.Detail', 'ex.Message']);
+    const sentences = assigned.filter((value) => value.startsWith('"')).map((value) => csharpStringLiteralValue(value.slice(1, -1)));
+    expect(sentences).toEqual(["WebAppURL is not configured, so the webhook subscription URL can't be determined."]);
+    expect(sortedUnique(Object.keys(WEBHOOK_STATUS_DETAIL_TEXT)), 'WEBHOOK_STATUS_DETAIL_TEXT must translate exactly these').toEqual(sortedUnique(sentences));
+    expect(EN_CATALOG['admin.serviceConfiguration.webhook.detail.webAppUrlMissing']).toBe(sentences[0]);
   });
 });
 
@@ -1805,12 +1813,45 @@ describe('Service Configuration update-check errors', () => {
 describe('Teams authorisation server errors', () => {
   it('keeps the Redis prerequisite error aligned with the SPA catalog entry', () => {
     const source = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'TeamsAuthAPIController.cs'), 'utf8');
-    // The whole sentence, literals joined: teamAuthErrorText matches it exactly, so text appended on the
-    // server alone would reach a Spanish reader in English.
-    const statement = /new ApiErrorModel\(\s*((?:"(?:[^"\\]|\\.)*"\s*\+?\s*)+)\)\);/.exec(source)?.[1];
-    expect(statement, 'Redis ApiErrorModel sentence not found').toBeTruthy();
-    const serverSentence = [...statement!.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => csharpStringLiteralValue(m[1])).join('');
-    expect(EN_CATALOG['admin.teams.teamList.redisNotConfigured']).toBe(serverSentence);
+    // Every ApiErrorModel the controller builds, literals joined: teamAuthErrorText matches the sentence
+    // exactly, so text appended on the server, or a second sentence, would reach a Spanish reader in English.
+    const opened = [...source.matchAll(/new ApiErrorModel\(/g)].length;
+    const sentences = [...source.matchAll(/new ApiErrorModel\(\s*((?:"(?:[^"\\]|\\.)*"\s*\+?\s*)+)\)/g)]
+      .map((m) => [...m[1].matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((part) => csharpStringLiteralValue(part[1])).join(''));
+    expect(sentences.length, 'an ApiErrorModel whose message is not literal text').toBe(opened);
+    expect(sentences).toEqual([EN_CATALOG['admin.teams.teamList.redisNotConfigured']]);
+  });
+});
+
+describe('User lookup server errors', () => {
+  const service = () => readFileSync(join(process.cwd(), '..', '..', 'Models', 'UserDataLookup', 'UserDataLookupService.cs'), 'utf8');
+  const controller = () => readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'UserDataLookupAPIController.cs'), 'utf8');
+
+  it('catalogues every sentence UserDataLookupService writes, with its interpolations as placeholders', () => {
+    const source = service();
+    const opened = [...source.matchAll(/\.(?:BadRequest|UserNotFound)\(/g)].length;
+    const sentences = [...source.matchAll(/\.(?:BadRequest|UserNotFound)\(\s*\$?"((?:[^"\\]|\\.)*)"\s*\)/g)].map((m) => csharpStringLiteralValue(m[1]));
+    expect(sentences.length, 'a BadRequest/UserNotFound whose message is not one literal').toBe(opened);
+    expect(sortedUnique(sentences)).toEqual(sortedUnique([
+      EN_CATALOG['errors.userLookup.missingUpn'],
+      EN_CATALOG['errors.userLookup.unknownCategory'],
+      EN_CATALOG['errors.userLookup.categoryNoDrilldown'],
+      EN_CATALOG['errors.userLookup.notFound'],
+    ]));
+  });
+
+  it('keeps the controller deriving each code from those same sentences, and sending the UPN fact', () => {
+    // BadRequestError reads the service's English to pick a code (a known soft spot): pin its prefixes to
+    // the catalog, which the spec above pins to the service, so a reword fails here, not in production.
+    const source = controller().replace(/\s+/g, ' ');
+    const [unknownPrefix, unknownSuffix] = EN_CATALOG['errors.userLookup.unknownCategory'].split('{category}');
+    const [noDrilldownPrefix, noDrilldownSuffix] = EN_CATALOG['errors.userLookup.categoryNoDrilldown'].split('{category}');
+    expect(source).toContain(`if (message == "${EN_CATALOG['errors.userLookup.missingUpn']}")`);
+    expect(source).toContain(`const string unknownPrefix = "${unknownPrefix}";`);
+    expect(source).toContain(`message.EndsWith("${unknownSuffix}")`);
+    expect(source).toContain(`const string noDrilldownPrefix = "${noDrilldownPrefix}";`);
+    expect(source).toContain(`const string noDrilldownSuffix = "${noDrilldownSuffix}";`);
+    expect(source).toContain('new ApiErrorModel(result.ErrorMessage, "userNotFound") { Upn = UserDataLookupRules.Normalise(upn), }');
   });
 });
 
@@ -1838,12 +1879,13 @@ function licenceDisplayKeySwitch(name: 'MeasureKeyFor' | 'MessageKeyFor'): Map<s
 function licenceCoverageSentences(): string[] {
   const sql = readFileSync(join(LICENCE_ACTIVITY_DIR, 'LicenceActivitySql.cs'), 'utf8');
   const store = readFileSync(join(LICENCE_ACTIVITY_DIR, 'SqlLicenceActivityStore.cs'), 'utf8');
-  // SQL literals, apart from diagnostics (PRINT) and dynamic SQL (sp_executesql). Three or more words is a
-  // sentence someone reads; codes ('available') and bucket names (N'Unknown') are single words.
+  // SQL literals, apart from diagnostics (PRINT) and dynamic SQL (sp_executesql). Three or more words, or
+  // anything ending like a sentence, is text someone reads; codes ('available') and bucket names
+  // (N'Unknown') are single bare words.
   const sqlSentences = [...sql.matchAll(/(PRINT\s+|sp_executesql\s+)?N'((?:[^']|'')*)'/g)]
     .filter((m) => !m[1])
     .map((m) => m[2].replace(/''/g, "'"))
-    .filter((literal) => literal.trim().split(/\s+/).length >= 3);
+    .filter((literal) => literal.trim().split(/\s+/).length >= 3 || /[.!?]$/.test(literal.trim()));
   // The Microsoft 365 measures are passed from C# into the SQL template; the store also builds coverage in C#.
   const m365Measures = [...sql.matchAll(/AppendM365Overview\([^;]*?"((?:[^"\\]|\\.)*)",\s*sources\.UsageReports\)/g)]
     .map((m) => csharpStringLiteralValue(m[1]));
@@ -2012,7 +2054,11 @@ describe('Copilot Adoption server warning text', () => {
   it('names every figures-incomplete dataset from the catalog, with the service English verbatim', async () => {
     const { INCOMPLETE_DATASET_KEYS } = await import('../../components/copilotAdoption/serverText');
     const service = readFileSync(COPILOT_ADOPTION_SERVICE, 'utf8');
-    const calls = [...service.matchAll(/\bMark(?:FiguresIncomplete|Incomplete)\s*\(([^)]*)\)/g)].map((m) => m[1].trim());
+    // A literal is parsed whole (a name may itself contain parentheses), and every call must parse: an
+    // argument the pattern cannot read - an interpolation, a concatenation - fails the count below.
+    const opened = [...service.matchAll(/\bMark(?:FiguresIncomplete|Incomplete)\s*\(/g)].length;
+    const calls = [...service.matchAll(/\bMark(?:FiguresIncomplete|Incomplete)\s*\(\s*("(?:[^"\\]|\\.)*"|[^)"]*?)\s*\)/g)].map((m) => m[1].trim());
+    expect(calls.length, 'a MarkFiguresIncomplete/MarkIncomplete argument the gate cannot read').toBe(opened);
     const literals = calls.filter((arg) => /^"(?:[^"\\]|\\.)*"$/.test(arg)).map((arg) => csharpStringLiteralValue(arg.slice(1, -1)));
 
     // The only non-literal uses are StepOutput.MarkIncomplete's own parameter and the step merge, which
@@ -2125,6 +2171,20 @@ describe('API error-code drift checks', () => {
     const codes = [...source.matchAll(/\bcode\s*=\s*"(\w+)"/g)].map((m) => m[1]);
     expect(codes.length, 'Agent Costs coded responses not found').toBeGreaterThan(0);
     expect(codes.filter((code) => !pairs.has(code)), 'Agent Costs error code whose message could not be extracted').toEqual([]);
+
+    // Replies WITHOUT a code are shown to the reader as the server wrote them. Only these three are allowed:
+    // bad-request replies to malformed requests the portal never makes. A new one would be English on a
+    // Spanish page, so it must get a code and a catalog entry instead.
+    const replies = [...source.matchAll(/Content\(HttpStatusCode\.\w+,\s*new\b[^;]*;/g)].map((m) => m[0]);
+    const uncoded = replies
+      .filter((reply) => !/\bcode\s*=/.test(reply))
+      .map((reply) => /\bmessage\s*=\s*(\$?"(?:[^"\\]|\\.)*"|[\w.]+)/.exec(reply)?.[1] ?? reply);
+    expect(replies.length, 'Agent Costs replies not found').toBeGreaterThanOrEqual(4);
+    expect(uncoded.sort(), 'a new uncoded Agent Costs reply').toEqual([
+      '$"\'{dimension}\' is not something Azure costs can be broken down by."',
+      '$"\'{dimension}\' is not something these figures can be broken down by."',
+      'ex.Message',
+    ]);
     return pairs;
   }
 

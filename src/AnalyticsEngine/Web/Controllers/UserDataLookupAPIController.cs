@@ -41,7 +41,7 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<IHttpActionResult> Summary(string upn = "")
         {
             // AppConfig is read lazily so a bad request costs nothing, exactly as before the extraction.
-            return ToActionResult(await _service.GetSummaryAsync(upn, () => new AppConfig().ImportJobSettings));
+            return ToActionResult(await _service.GetSummaryAsync(upn, () => new AppConfig().ImportJobSettings), upn);
         }
 
         /// <summary>
@@ -52,17 +52,20 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("detail")]
         public async Task<IHttpActionResult> Detail(string upn = "", string category = "", int take = UserDataLookupRules.DefaultTake)
         {
-            return ToActionResult(await _service.GetDetailAsync(upn, category, take));
+            return ToActionResult(await _service.GetDetailAsync(upn, category, take), upn);
         }
 
-        private IHttpActionResult ToActionResult<T>(UserDataLookupResult<T> result) where T : class
+        private IHttpActionResult ToActionResult<T>(UserDataLookupResult<T> result, string upn) where T : class
         {
             switch (result.Status)
             {
                 case UserDataLookupStatus.BadRequest:
                     return Content(HttpStatusCode.BadRequest, BadRequestError(result.ErrorMessage));
                 case UserDataLookupStatus.UserNotFound:
-                    return Content(HttpStatusCode.NotFound, new ApiErrorModel(result.ErrorMessage, "userNotFound"));
+                    return Content(HttpStatusCode.NotFound, new ApiErrorModel(result.ErrorMessage, "userNotFound")
+                    {
+                        Upn = UserDataLookupRules.Normalise(upn),
+                    });
                 default:
                     return Ok(result.Value);
             }

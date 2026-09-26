@@ -203,6 +203,14 @@ namespace Web.AnalyticsWeb.Models
         [JsonProperty("category")]
         public string Category { get; set; }
 
+        /// <summary>
+        /// The UPN a not-found lookup searched for, as the service normalised it: a fact beside the
+        /// <c>userNotFound</c> code, so the portal can say "no user found" in the reader's language and
+        /// still name who was looked up.
+        /// </summary>
+        [JsonProperty("upn")]
+        public string Upn { get; set; }
+
         public ApiErrorModel(string message, string code = null, string category = null)
         {
             Message = message;

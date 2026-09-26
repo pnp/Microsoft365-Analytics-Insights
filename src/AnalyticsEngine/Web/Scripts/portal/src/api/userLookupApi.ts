@@ -21,9 +21,15 @@ async function getJson<T>(url: string): Promise<T> {
   if (!response.ok) {
     let message = translateActive('errors.userLookup.requestFailed', { status: response.status });
     try {
-      const body = await response.json() as { code?: unknown; message?: unknown; category?: unknown } | null;
+      const body = await response.json() as { code?: unknown; message?: unknown; category?: unknown; upn?: unknown } | null;
       if (response.status === 404 && body?.code === 'userNotFound') {
-        message = translateActive('errors.userLookup.notFound');
+        // The catalog's English is the server's sentence, rebuilt from the UPN fact; without the fact the
+        // server's own sentence is still better than one that has lost who was looked up.
+        if (typeof body.upn === 'string') {
+          message = translateActive('errors.userLookup.notFound', { upn: body.upn });
+        } else if (typeof body.message === 'string') {
+          message = body.message;
+        }
       } else if (response.status === 400 && typeof body?.code === 'string' && ERROR_CODE_KEYS[body.code]) {
         message = translateActive(ERROR_CODE_KEYS[body.code], {
           category: typeof body.category === 'string' ? body.category : '',

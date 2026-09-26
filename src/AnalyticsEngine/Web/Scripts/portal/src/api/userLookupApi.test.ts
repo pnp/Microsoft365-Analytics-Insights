@@ -18,16 +18,32 @@ beforeEach(() => {
 });
 
 describe('userLookupApi errors', () => {
-  it('uses the portal language for a known not-found response instead of the server English UPN message', async () => {
+  it('uses the portal language for a known not-found response, keeping the UPN that was looked up', async () => {
     await loadCatalog('es');
     setActiveLanguage('es');
     mockedFetch.mockResolvedValue(jsonResponse({
       code: 'userNotFound',
       message: "No user found with UPN 'missing@contoso.com'.",
+      upn: 'missing@contoso.com',
     }, 404));
 
-    await expect(fetchUserSummary('missing@contoso.com')).rejects.toThrow('No se encontró ningún usuario coincidente.');
+    await expect(fetchUserSummary('missing@contoso.com')).rejects.toThrow("No se encontró ningún usuario con el UPN 'missing@contoso.com'.");
     await expect(fetchUserSummary('missing@contoso.com')).rejects.not.toThrow('No user found');
+  });
+
+  it('shows English readers exactly the not-found sentence the server wrote', async () => {
+    const serverMessage = "No user found with UPN 'missing@contoso.com'.";
+    mockedFetch.mockResolvedValue(jsonResponse({ code: 'userNotFound', message: serverMessage, upn: 'missing@contoso.com' }, 404));
+
+    await expect(fetchUserSummary('  missing@contoso.com ')).rejects.toThrow(new Error(serverMessage));
+  });
+
+  it('keeps the server sentence when a not-found reply carries no UPN fact', async () => {
+    await loadCatalog('es');
+    setActiveLanguage('es');
+    mockedFetch.mockResolvedValue(jsonResponse({ code: 'userNotFound', message: "No user found with UPN 'x@contoso.com'." }, 404));
+
+    await expect(fetchUserSummary('x@contoso.com')).rejects.toThrow("No user found with UPN 'x@contoso.com'.");
   });
 
   it('keeps the server message for an unrecognised failure', async () => {
