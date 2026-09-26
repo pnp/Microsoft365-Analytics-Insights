@@ -141,11 +141,23 @@ namespace App.ControlPanel.Engine.InstallerTasks
         }
 
         /// <summary>
+        /// Test hook: receives the connection string and the grant script instead of running them, so a test
+        /// can see exactly what would be executed. Null - the default - runs the script against the database.
+        /// </summary>
+        internal Func<string, string, Task> ScriptRunner { get; set; }
+
+        /// <summary>
         /// Creates (or repairs) the contained user for <paramref name="principalName"/> and grants it the
         /// database roles the runtime needs.
         /// </summary>
         /// <param name="owner">The resource the identity belongs to, so the messages name the right one.</param>
+        /// <param name="principalName">The identity's display name in Microsoft Entra ID, which is the resource name.</param>
         /// <param name="resourceId">The ARM ID of that resource, which is where the application ID is read from.</param>
+        /// <param name="databaseUserName">
+        /// The contained user to create, when it must differ from <paramref name="principalName"/> - see
+        /// <see cref="ChooseDatabaseUserName"/>. Null uses <paramref name="principalName"/>. A user named apart
+        /// from the identity can only be declared by application ID, so without one it is skipped.
+        /// </param>
         /// <remarks>
         /// <para>
         /// Best-effort by design: it returns false rather than throwing, because a failure here does not
@@ -164,7 +176,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// </para>
         /// </remarks>
         public async Task<bool> GrantDatabaseAccessAsync(string connectionString, ManagedIdentityOwner owner, string principalName,
-            Guid principalObjectId, string resourceId, IEnumerable<string> roles)
+            Guid principalObjectId, string resourceId, IEnumerable<string> roles, string databaseUserName = null)
         {
             if (string.IsNullOrWhiteSpace(connectionString))
             {
@@ -181,10 +193,26 @@ namespace App.ControlPanel.Engine.InstallerTasks
             }
 
             var roleList = roles == null ? new List<string>() : roles.ToList();
+            var userName = string.IsNullOrWhiteSpace(databaseUserName) ? principalName : databaseUserName;
+            var namedApart = !string.Equals(userName, principalName, StringComparison.Ordinal);
 
             var applicationId = await ResolveApplicationIdAsync(principalName, principalObjectId, resourceId);
 
-            string sql = BuildGrantScript(principalName, applicationId, roleList);
+            if (applicationId == null && namedApart)
+            {
+                // FROM EXTERNAL PROVIDER takes the user name AS the Entra display name to resolve, so a user named
+                // apart cannot use it - and falling back to the shared display name would find the other identity's
+                // user already there, skip the CREATE, and add THAT user to this identity's roles. The action comes
+                // first because the end-of-run summary keeps only the first 240 characters of a warning.
+                _logger.LogWarning(
+                    $"Skipped the database grant for the {ownerName} managed identity '{principalName}': let the installer read the " +
+                    $"{ownerName} in Azure Resource Manager (or grant it 'Application.Read.All') and re-run. {DescribeImpact(owner)} " +
+                    "It shares its name with the App Service, so SQL Server cannot resolve it by name, and its application (client) " +
+                    "ID could not be read from Azure Resource Manager or Microsoft Graph (the reason is logged above).");
+                return false;
+            }
+
+            string sql = BuildGrantScript(userName, applicationId, roleList);
             if (applicationId == null)
             {
                 _logger.LogInformation(
@@ -196,33 +224,27 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     "'Application.Read.All', and re-run.");
             }
 
+            var asUser = namedApart ? $" as database user '{userName}'" : string.Empty;
             _logger.LogInformation(
-                $"Granting the {ownerName} managed identity '{principalName}' access to the database " +
+                $"Granting the {ownerName} managed identity '{principalName}' access to the database{asUser} " +
                 $"({string.Join(", ", roleList)})...");
 
             try
             {
-                using (var connection = AzureSqlTokenAuth.CreateConnection(connectionString))
-                {
-                    await connection.OpenAsync();
-                    using (var cmd = connection.CreateCommand())
-                    {
-                        cmd.CommandText = sql;
-                        cmd.CommandTimeout = 120;
-                        await cmd.ExecuteNonQueryAsync();
-                    }
-                }
+                await (ScriptRunner ?? RunGrantScriptAsync)(connectionString, sql);
             }
             catch (SqlException ex)
             {
                 // A known application ID gives the operator a statement that needs no directory lookup and
-                // cannot pick the wrong principal when two share a display name.
+                // cannot pick the wrong principal when two share a display name. Quoted exactly as the executed
+                // script quotes it.
+                var quotedUser = SqlContainedUserScript.QuoteIdentifier(userName);
                 var createUser = applicationId == null
-                    ? $"CREATE USER [{principalName}] FROM EXTERNAL PROVIDER;"
-                    : $"CREATE USER [{principalName}] WITH SID = {SqlContainedUserScript.ToSqlSid(applicationId.Value)}, TYPE = E;";
+                    ? $"CREATE USER {quotedUser} FROM EXTERNAL PROVIDER;"
+                    : $"CREATE USER {quotedUser} WITH SID = {SqlContainedUserScript.ToSqlSid(applicationId.Value)}, TYPE = E;";
 
                 _logger.LogError(
-                    $"Could not grant the {ownerName} managed identity '{principalName}' access to the database: {ex.Message}. " +
+                    $"Could not grant the {ownerName} managed identity '{principalName}' access to the database{asUser}: {ex.Message}. " +
                     $"{DescribeImpact(owner)} Sign in to the database as its Microsoft Entra administrator and run: " +
                     $"{createUser} then add it to {string.Join(", ", roleList)}.");
                 return false;
@@ -233,8 +255,22 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 return false;
             }
 
-            _logger.LogInformation($"The {ownerName} managed identity '{principalName}' now has database access.");
+            _logger.LogInformation($"The {ownerName} managed identity '{principalName}' now has database access{asUser}.");
             return true;
+        }
+
+        static async Task RunGrantScriptAsync(string connectionString, string sql)
+        {
+            using (var connection = AzureSqlTokenAuth.CreateConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = sql;
+                    cmd.CommandTimeout = 120;
+                    await cmd.ExecuteNonQueryAsync();
+                }
+            }
         }
 
         /// <summary>
@@ -245,7 +281,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// ARM goes first because it needs only read access to the resource, which the installer already
         /// has, where Graph needs a tenant-wide <c>Application.Read.All</c> grant it often lacks. An ARM
         /// answer for a different principal than the one being granted is ignored rather than used, because
-        /// writing the wrong SID produces a user that can never sign in.
+        /// writing the wrong SID produces a user that can never sign in - and Graph is then not asked either,
+        /// because the only thing it could be asked about is the principal ARM has just said the resource no
+        /// longer has. A wrong answer is worse than none: the <c>WITH SID</c> script drops a same-named user
+        /// whose SID differs, where the name-based fallback resolves whichever identity is current.
         /// </remarks>
         public async Task<Guid?> ResolveApplicationIdAsync(string principalName, Guid principalObjectId, string resourceId)
         {
@@ -263,7 +302,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
                         _logger.LogWarning(
                             $"Ignoring the application ID Azure Resource Manager returned for '{principalName}': it belongs to " +
                             $"principal '{identity.PrincipalId}', not '{principalObjectId}'. The identity may have been re-created " +
-                            "while the installer was running.");
+                            "while the installer was running, so Microsoft Graph is not asked about the old principal either.");
+                        return null;
                     }
                     else if (identity.ClientId != Guid.Empty)
                     {
@@ -305,6 +345,36 @@ namespace App.ControlPanel.Engine.InstallerTasks
             return owner == ManagedIdentityOwner.AutomationAccount
                 ? "The Automation account's database maintenance runbooks will not be able to connect until this is fixed."
                 : "The web application and web-jobs will not be able to connect with their managed identity until this is fixed.";
+        }
+
+        /// <summary>
+        /// The contained-user name for a managed identity: normally the resource name, which is also the
+        /// identity's display name in Microsoft Entra ID.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Nothing stops an Automation account being given the App Service's name, and SQL Server compares user
+        /// names without regard to case. Sharing one user name, the two identities would take turns owning it:
+        /// the <c>WITH SID</c> script repairs a same-named user whose SID differs by dropping it, so on every run
+        /// the Automation account's grant dropped the App Service's user, both grants reported success, and the
+        /// web-jobs were refused at sign-in.
+        /// </para>
+        /// <para>
+        /// A <c>WITH SID</c> user is matched to its identity by SID, not by name, so the Automation account's user
+        /// is simply named apart. The App Service keeps the plain name existing installs already have, and an
+        /// install whose names differ is unaffected.
+        /// </para>
+        /// </remarks>
+        public static string ChooseDatabaseUserName(ManagedIdentityOwner owner, string resourceName, string appServiceName)
+        {
+            if (owner == ManagedIdentityOwner.AutomationAccount
+                && !string.IsNullOrWhiteSpace(resourceName)
+                && string.Equals(resourceName, appServiceName, StringComparison.OrdinalIgnoreCase))
+            {
+                return $"{resourceName} (Automation account)";
+            }
+
+            return resourceName;
         }
 
         /// <summary>

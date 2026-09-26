@@ -526,7 +526,8 @@ namespace App.ControlPanel.Engine.Entities
             return hex.ToString();
         }
 
-        static string QuoteIdentifier(string name)
+        /// <summary>Brackets a name as a T-SQL identifier, doubling any <c>]</c> it contains.</summary>
+        internal static string QuoteIdentifier(string name)
         {
             return "[" + name.Replace("]", "]]") + "]";
         }
