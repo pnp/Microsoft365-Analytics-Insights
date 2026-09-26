@@ -1,5 +1,6 @@
 using App.ControlPanel.Engine;
 using App.ControlPanel.Engine.Entities;
+using App.ControlPanel.Engine.InstallerTasks;
 using Azure.Core;
 using Azure.Core.Pipeline;
 using Azure.Identity;
@@ -98,6 +99,30 @@ namespace Tests.UnitTests.InstallTests
 
                 Assert.AreEqual(0, proxy.Requests.Count,
                     "Negative direction: with no installer proxy, the local fake proxy saw no CONNECT requests.");
+            }
+        }
+
+        /// <summary>
+        /// The SQL grant's managed-identity reader (#656) sends its Azure Resource Manager GET through a plain
+        /// <c>new HttpClient()</c>. On .NET 10 that reaches the installer proxy only through the switch installed as
+        /// <see cref="HttpClient.DefaultProxy"/>, so this pins it to the reader itself: a later change there - its
+        /// own handler, <c>UseProxy = false</c> - would otherwise send that call around the proxy (#613) unnoticed.
+        /// </summary>
+        [TestMethod]
+        public async Task ManagedIdentityArmReader_SendsThroughTheInstallerProxy()
+        {
+            using (var proxy = new FakeProxy())
+            using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+            {
+                InstallerNetworkProxy.ApplyProcessWide(BasicProxyConfig(proxy.Port), new CapturingLogger());
+
+                var reader = new ArmManagedIdentityApplicationIdSource(new StaticTokenCredential());
+                await IgnoreNetworkFailure(reader.GetSystemAssignedIdentityAsync(
+                    "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso/providers/Microsoft.Web/sites/app-contoso",
+                    timeout.Token));
+
+                Assert.IsTrue(await proxy.WaitForRequestAsync(r => r.RequestLine == "CONNECT management.azure.com:443 HTTP/1.1"),
+                    "The managed-identity reader's ARM request must go through the installer's process-wide proxy.");
             }
         }
 
@@ -337,6 +362,16 @@ namespace Tests.UnitTests.InstallTests
             {
                 Messages.Add(formatter?.Invoke(state, exception) ?? state?.ToString() ?? string.Empty);
             }
+        }
+
+        /// <summary>A token that never touches the network, so the only connection the ARM reader makes is its GET.</summary>
+        private sealed class StaticTokenCredential : TokenCredential
+        {
+            public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken)
+                => new AccessToken("synthetic-token", DateTimeOffset.UtcNow.AddHours(1));
+
+            public override ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken)
+                => new ValueTask<AccessToken>(GetToken(requestContext, cancellationToken));
         }
 
         private sealed class ProxyRequest
