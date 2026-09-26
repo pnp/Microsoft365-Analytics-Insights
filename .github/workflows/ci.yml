@@ -12,6 +12,7 @@ on:
       - src/AnalyticsEngine/**
       - reports/**
       - .github/workflows/ci.yml
+      - .github/scripts/Build-ReleasePackage.ps1
   workflow_dispatch:
 
 env:
@@ -24,10 +25,6 @@ env:
   TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
   CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
   CognitiveKey: ${{ secrets.APP_COGNITIVEKEY}}
-  CosmosDbTestContainerCurrent: stats
-  CosmosDbTestContainerHistory: history
-  CosmosDbTestDatabaseName: UnitTestDevOps
-  CosmosDb: ${{ secrets.APP_COSMOSDB }}
   redis: ${{ secrets.CONNECTIONSTRINGS_REDIS }}
   ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
   Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
@@ -204,8 +201,12 @@ jobs:
           Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\AppInsightsImporter\_PublishedWebsites"
           Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Office365ActivityImporter\_PublishedWebsites"
           Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Website\_PublishedWebsites\Web\bin\Scripts"
-          Compress-Archive -Force -Path "${{ runner.temp }}\${{ matrix.project.compressFolder }}" `
-          -DestinationPath "${{ steps.prep.outputs.ZIPS_FOLDER }}\${{ matrix.project.outDir }}.zip"
+          # Prunes files the package doesn't need, fails if it carries a dependency it must never
+          # ship, then zips it. See the script's help and .github/workflows/README.md.
+          ./.github/scripts/Build-ReleasePackage.ps1 `
+            -Path "${{ runner.temp }}\${{ matrix.project.compressFolder }}" `
+            -Package "${{ matrix.project.outDir }}" `
+            -DestinationPath "${{ steps.prep.outputs.ZIPS_FOLDER }}\${{ matrix.project.outDir }}.zip"
 
       # Wrap up
       - name: Upload artifacts

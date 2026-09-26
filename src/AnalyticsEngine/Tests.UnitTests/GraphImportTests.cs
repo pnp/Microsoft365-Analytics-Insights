@@ -1,5 +1,9 @@
+extern alias AnalyticsWeb;
+
+using AnalyticsWeb::Web.AnalyticsWeb.Models.Calls;
 using Azure.Messaging.ServiceBus;
 using Common.Entities;
+using Common.Entities.Calls;
 using Common.Entities.Config;
 using Common.Entities.Entities.Teams;
 using Common.Entities.Models;
@@ -211,7 +215,7 @@ namespace Tests.UnitTests
                         {
                             var newCallId = Guid.NewGuid();
                             var change = new GraphChangeNotification { ResourceData = new Common.Entities.Models.ResourceData { Id = newCallId.ToString() } };
-                            await CallQueueProcessor.AddChangeMsgToQueue(new List<GraphChangeNotification> { change }, logger, sbSender);
+                            await CallNotificationDispatcher.AddChangeMsgToQueue(new List<GraphChangeNotification> { change }, logger, new ServiceBusCallNotificationQueueSender(sbSender));
                             testIds.Add(newCallId.ToString());
                         }
 

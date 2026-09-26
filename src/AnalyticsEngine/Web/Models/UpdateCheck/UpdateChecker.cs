@@ -1,4 +1,3 @@
-using App.ControlPanel.Engine.Models;
 using Common.Entities;
 using Newtonsoft.Json.Linq;
 using System;
@@ -25,7 +24,7 @@ namespace Web.AnalyticsWeb.Models.UpdateCheck
         /// compares against a published stable release - which is exactly what we want to offer an admin.
         /// </summary>
         private static readonly string _apiUrl =
-            $"https://api.github.com/repos/{SoftwareReleaseConfig.GITHUB_REPO_OWNER}/{SoftwareReleaseConfig.GITHUB_REPO_NAME}/releases/latest";
+            $"https://api.github.com/repos/{BuildConstants.GitHubRepoOwner}/{BuildConstants.GitHubRepoName}/releases/latest";
 
         private const string CacheKey = "UpdateCheck::LatestRelease";
 

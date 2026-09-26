@@ -1,11 +1,11 @@
 ﻿using System;
 
-namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
+namespace Common.Entities.Calls
 {
     /// <summary>
     /// Read-only snapshot of the Teams call-records webhook subscription in Microsoft Graph,
     /// used to display webhook health (e.g. on the web homepage). Returned by
-    /// <see cref="CallWebhook.GetCallRecordsSubscriptionInfo(System.Uri)"/>.
+    /// <see cref="CallRecordSubscriptionStatus.ReadAsync"/>.
     /// </summary>
     public class CallRecordSubscriptionInfo
     {

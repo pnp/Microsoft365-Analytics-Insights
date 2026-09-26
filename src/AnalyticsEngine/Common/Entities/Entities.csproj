@@ -91,6 +91,13 @@
     <Compile Include="LicenceActivity\LicenceActivityReadModel.cs" />
     <Compile Include="LicenceActivity\LicenceActivityReadModelCache.cs" />
     <Compile Include="LicenceActivity\CachedLicenceActivityStore.cs" />
+    <Compile Include="Calls\CallNotificationDispatcher.cs" />
+    <Compile Include="Calls\CallNotificationRules.cs" />
+    <Compile Include="Calls\CallRecordSubscriptionInfo.cs" />
+    <Compile Include="Calls\CallRecordSubscriptionStatus.cs" />
+    <Compile Include="Calls\CallSubscriptionRules.cs" />
+    <Compile Include="Calls\ICallNotificationQueueSender.cs" />
+    <Compile Include="Calls\ICallRecordSubscriptionReader.cs" />
     <Compile Include="Config\AppConfig.cs" />
     <Compile Include="Config\AppConnectionStrings.cs" />
     <Compile Include="CopilotAdoption\AdoptionBand.cs" />

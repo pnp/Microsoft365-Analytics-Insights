@@ -1,14 +1,14 @@
 using Azure.Messaging.ServiceBus;
+using Common.Entities.Calls;
 using Common.Entities.Config;
 using Common.Entities.Models;
 using DataUtils;
-using Microsoft.Graph;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
 using System.Web.Http;
-using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
+using Web.AnalyticsWeb.Models.Calls;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -57,7 +57,7 @@ namespace Web.AnalyticsWeb.Controllers
                 // Create new SB client. Wrap in try/finally so client + sender are disposed
                 // even if AddChangeMsgToQueue throws - otherwise sockets leak per webhook call.
                 // Authenticate with Entra ID RBAC (runtime service principal), never a SAS key. See issue #138.
-                var sbClient = CallQueueProcessor.CreateRbacServiceBusClient(config);
+                var sbClient = CallNotificationServiceBus.CreateRbacClient(config);
                 var sbConnectionProps = ServiceBusConnectionStringProperties.Parse(config.ConnectionStrings.ServiceBusConnectionString);
                 var sbSender = sbClient.CreateSender(sbConnectionProps.EntityPath);
 
@@ -65,7 +65,7 @@ namespace Web.AnalyticsWeb.Controllers
                 {
                     try
                     {
-                        await CallQueueProcessor.AddChangeMsgToQueue(changes, logger, sbSender);
+                        await CallNotificationDispatcher.AddChangeMsgToQueue(changes, logger, new ServiceBusCallNotificationQueueSender(sbSender));
                     }
                     catch (ServiceBusException ex)
                     {

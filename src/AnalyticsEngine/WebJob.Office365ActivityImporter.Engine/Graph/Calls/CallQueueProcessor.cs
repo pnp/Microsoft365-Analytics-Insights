@@ -74,6 +74,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// qualified namespace is read from the configured Service Bus connection string's Endpoint; the
         /// shared access key in that string is ignored. The runtime service principal needs the
         /// "Azure Service Bus Data Owner" role on the namespace (assigned by the installer). See issue #138.
+        /// The web app, which sends to the same queue, builds its client the same way in
+        /// <c>CallNotificationServiceBus.CreateRbacClient</c>; keep the two in step.
         /// </summary>
         public static ServiceBusClient CreateRbacServiceBusClient(AppConfig config)
         {
@@ -136,35 +138,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             else
             {
                 _logger.LogWarning("ServiceBus client: Not listening for service-bus messages?");
-            }
-        }
-
-        public static async Task AddChangeMsgToQueue(List<GraphChangeNotification> changes, ILogger logger, ServiceBusSender sbSender)
-        {
-            await AddChangeMsgToQueue(changes, logger, new ServiceBusCallNotificationQueueSender(sbSender));
-        }
-
-        /// <summary>
-        /// Queue each notification for processing. Takes the queue as a port so the dispatch can be
-        /// tested without Service Bus. See issue #378.
-        /// </summary>
-        public static async Task AddChangeMsgToQueue(List<GraphChangeNotification> changes, ILogger logger, ICallNotificationQueueSender queue)
-        {
-            foreach (var change in changes)
-            {
-                string callId = change.ResourceData.Id;
-
-                if (!string.IsNullOrEmpty(callId))
-                {
-                    logger.LogInformation($"New call POSTed from Graph with ID '{callId}'");
-                }
-                else
-                {
-                    logger.LogInformation($"New call POSTed from Graph with unknown ID. Adding to service-bus queue anyway.");
-                }
-
-                var json = JsonConvert.SerializeObject(change);
-                await queue.SendAsync(json);
             }
         }
 

@@ -1,13 +1,10 @@
-using Azure.Identity;
 using Common.Entities;
 using Common.Entities.Installer;
 using DataUtils;
-using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
 using System;
-using System.Configuration;
 using System.Data.Entity;
 using System.Linq;
 using System.Net;
@@ -42,69 +39,6 @@ namespace Tests.UnitTests
             await r.ProcessAndFailSilently();            // Crash SaveUsageStatsModelToDatabase
             result = await r.ProcessAndFailSilently();   // Work
             Assert.IsTrue(result);
-        }
-
-        /// <summary>
-        /// Test the service adaptor here, just to make sure it works in the API as this project is part of DevOps pipeline.
-        /// </summary>
-        public async Task UsageStatsCosmosTelemetrySaveAdaptorTests()
-        {
-            var cosmosTestConfig = new TestConfig();
-            if (!cosmosTestConfig.IsValid)
-            {
-                Assert.Fail("Invalid config for Cosmos DB");
-            }
-
-            var config = new Common.Entities.Config.AppConfig();
-            var cosmosClient = new CosmosClient(cosmosTestConfig.CosmosConnectionString, new ClientSecretCredential(config.TenantGUID.ToString(), config.ClientID, config.ClientSecret));
-            var a = new CosmosTelemetrySaveAdaptor(cosmosClient, cosmosTestConfig);
-
-            var tenantId = Guid.NewGuid();
-
-            var model = AnonUsageStatsModelLoader.Load(tenantId, new BaseSolutionInstallConfig());
-
-            // Not saved yet, so should be null
-            var result = await a.LoadCurrentRecordByClientId(model);
-            Assert.IsNull(result);
-
-            await a.Init();
-            await a.Init();     // Should be idempotent
-            await a.SaveOrUpdate(model);
-
-            try
-            {
-                await a.SaveOrUpdate(model);
-            }
-            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Conflict)
-            {
-                // Expected. We're uploading the same stats twice
-            }
-
-            // We've saved now so should be something
-            result = await a.LoadCurrentRecordByClientId(model);
-            Assert.IsNotNull(result);
-            Assert.AreEqual(result.AnonClientId, model.AnonClientId);
-
-            // Clean up
-            var db = cosmosClient.GetDatabase(cosmosTestConfig.DatabaseName);
-            await db.DeleteAsync();
-        }
-
-        class TestConfig : IStatsServiceCosmosConfig
-        {
-            public TestConfig()
-            {
-                this.CosmosConnectionString = ConfigurationManager.AppSettings.Get("CosmosDb");
-                this.ContainerNameCurrent = ConfigurationManager.AppSettings.Get("CosmosDbTestContainerCurrent");
-                this.ContainerNameHistory = ConfigurationManager.AppSettings.Get("CosmosDbTestContainerHistory");
-                this.DatabaseName = ConfigurationManager.AppSettings.Get("CosmosDbTestDatabaseName");
-            }
-            public bool IsValid => !string.IsNullOrEmpty(CosmosConnectionString) && !string.IsNullOrEmpty(DatabaseName) &&
-                !string.IsNullOrEmpty(ContainerNameHistory) && !string.IsNullOrEmpty(ContainerNameCurrent);
-            public string CosmosConnectionString { get; set; }
-            public string DatabaseName { get; set; }
-            public string ContainerNameHistory { get; set; }
-            public string ContainerNameCurrent { get; set; }
         }
 
         /// <summary>

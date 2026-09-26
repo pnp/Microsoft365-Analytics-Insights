@@ -111,6 +111,7 @@
     <Compile Include="Models\InstallLogEventArgs.cs" />
     <Compile Include="Models\InstallStatus.cs" />
     <Compile Include="Models\Config\SolutionInstallConfig.cs" />
+    <Compile Include="Models\Config\StringCipher.cs" />
     <Compile Include="InstallerConstants.cs" />
     <Compile Include="Models\PublishDataLoader.cs" />
     <Compile Include="Models\SoftwareReleaseConfig.cs" />
@@ -216,6 +217,14 @@
     </PackageReference>
     <PackageReference Include="Azure.Storage.Blobs">
       <Version>12.29.2</Version>
+    </PackageReference>
+    <PackageReference Include="BouncyCastle.Cryptography">
+      <Version>2.7.0</Version>
+      <!-- Only StringCipher needs it. BouncyCastle's root namespace is "Org", which collides with the
+           solution's own Org entity type in consuming projects (CS0118: 'Org' is a namespace but is
+           used like a type), so keep the compile-time asset private while still flowing the runtime
+           assembly to the installer's output folder. -->
+      <PrivateAssets>compile</PrivateAssets>
     </PackageReference>
     <PackageReference Include="EntityFramework">
       <Version>6.5.2</Version>
