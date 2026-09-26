@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { beforeAll, describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { loadCatalog, translateStatic, type TFunction } from '..';
@@ -1919,7 +1919,6 @@ function licenceDisplayKeySwitch(name: 'MeasureKeyFor' | 'MessageKeyFor'): Map<s
 /** Every coverage measure and message sentence the server can write, from the three places it writes them. */
 function licenceCoverageSentences(): string[] {
   const sql = readFileSync(join(LICENCE_ACTIVITY_DIR, 'LicenceActivitySql.cs'), 'utf8');
-  const store = readFileSync(join(LICENCE_ACTIVITY_DIR, 'SqlLicenceActivityStore.cs'), 'utf8');
   // SQL literals, apart from diagnostics (PRINT) and dynamic SQL (sp_executesql). Two or more words, or
   // anything ending like a sentence, is text someone reads; codes ('available') and bucket names
   // (N'Unknown') are single bare words.
@@ -1937,13 +1936,31 @@ function licenceCoverageSentences(): string[] {
   expect(formatItems.length, "a new N'{n}' SQL literal is written from C#: extract its text in licenceCoverageSentences").toBe(3);
   const initialMessage = /var initialMessage\s*=([^;]*);/.exec(sql)?.[1];
   expect(initialMessage, 'LicenceActivitySql initialMessage not found').toBeTruthy();
-  const copilotFallback = [...initialMessage!.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => csharpStringLiteralValue(m[1]));
+  // One sentence per branch of the ternary, joining any literals a long line was wrapped into.
+  const copilotFallback: string[] = [];
+  let branch: string[] | null = null;
+  for (const token of initialMessage!.matchAll(/"((?:[^"\\]|\\.)*)"|([?:])/g)) {
+    if (token[2]) {
+      if (branch) copilotFallback.push(branch.join(''));
+      branch = [];
+    } else {
+      branch?.push(csharpStringLiteralValue(token[1]));
+    }
+  }
+  if (branch) copilotFallback.push(branch.join(''));
   expect(copilotFallback.length, 'initialMessage sentences').toBe(2);
-  // Store: a literal Measure/Message is a sentence; anything else may only read or copy one, so an
-  // interpolated or computed sentence fails here rather than going unkeyed.
-  const assignments = [...store.matchAll(/\b(?:Measure|Message)\s*=\s*("(?:[^"\\]|\\.)*"|\w+\([^)]*\)|[^,\n]+)/g)].map((m) => m[1].trim());
-  expect(sortedUnique(assignments.filter((value) => !value.startsWith('"'))), 'a non-literal coverage Measure/Message in SqlLicenceActivityStore')
-    .toEqual(sortedUnique(['ReadNullableString(reader, "Message")', 'ReadString(reader, "Measure")', 'coverage.Measure', 'string.Empty']));
+  // Every coverage builder: a literal Measure/Message is a sentence; anything else may only read or copy
+  // one, so an interpolated, computed or defaulted (`?? "..."`) sentence fails here rather than going unkeyed.
+  const builders = ['SqlLicenceActivityStore.cs', 'SqlLicenceActivityReadModelLoader.cs', 'LicenceActivityReadModel.cs']
+    .map((file) => readFileSync(join(LICENCE_ACTIVITY_DIR, file), 'utf8'));
+  const assignments = builders.flatMap((source) => [...source.matchAll(
+    /\b(?:Measure|Message)\s*=(?![=>])\s*("(?:[^"\\]|\\.)*"|\w+\([^)]*\)(?=\s*[,}\r\n])|[^,\n]+)/g,
+  )].map((m) => m[1].trim()));
+  expect(sortedUnique(assignments.filter((value) => !value.startsWith('"'))), 'a non-literal coverage Measure/Message in a coverage builder')
+    .toEqual(sortedUnique([
+      'ReadNullableString(reader, "Message")', 'ReadString(reader, "Measure")', 'string.Empty',
+      'coverage.Measure', 'source.Measure', 'source.Message', '_coverage[workload].Measure',
+    ]));
   const storeText = assignments.filter((value) => value.startsWith('"')).map((value) => csharpStringLiteralValue(value.slice(1, -1)));
   return sortedUnique([...sqlSentences, ...m365Measures, ...copilotFallback, ...storeText]);
 }
@@ -2120,9 +2137,10 @@ describe('Copilot Adoption server warning text', () => {
     // forwards reasons recorded by literal calls above. Anything else could name a dataset this list misses.
     expect(sortedUnique(calls.filter((arg) => !arg.startsWith('"'))), 'non-literal dataset name').toEqual(['reason', 'string dataset']);
     expect(literals.length, 'figures-incomplete datasets not found in the service').toBeGreaterThanOrEqual(17);
-    // Only the service names datasets: a call anywhere else would escape the list below.
-    for (const file of ['CopilotAdoptionScope.cs', 'CopilotAdoptionCoworkModels.cs', 'CopilotAdoptionSummaryModels.cs']) {
-      const other = readFileSync(join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'CopilotAdoption', file), 'utf8');
+    // Only the service names datasets: a call in any other CopilotAdoption file would escape the list below.
+    const adoptionDir = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'CopilotAdoption');
+    for (const file of readdirSync(adoptionDir).filter((name) => name.endsWith('.cs') && name !== 'CopilotAdoptionService.cs')) {
+      const other = readFileSync(join(adoptionDir, file), 'utf8');
       const foreign = [...other.matchAll(/\bMark(?:FiguresIncomplete|Incomplete)\s*\(([^)]*)\)/g)].map((m) => m[1].trim())
         .filter((arg) => arg !== 'string dataset');
       expect(foreign, `${file} names a figures-incomplete dataset`).toEqual([]);
@@ -2239,7 +2257,7 @@ describe('API error-code drift checks', () => {
     // Replies WITHOUT a code are shown to the reader as the server wrote them. Only these three are allowed:
     // bad-request replies to malformed requests the portal never makes. A new one would be English on a
     // Spanish page, so it must get a code and a catalog entry instead.
-    const replies = [...source.matchAll(/Content\(HttpStatusCode\.\w+,\s*new\b[^;]*;/g)].map((m) => m[0]);
+    const replies = [...source.matchAll(/\bContent\s*\(\s*HttpStatusCode\.\w+,\s*new\b[^;]*;/g)].map((m) => m[0]);
     // Every Content(...) reply must be one this gate can read: a body built elsewhere and passed in as a
     // variable would otherwise be invisible to both checks below.
     expect(replies.length, 'an Agent Costs Content(...) reply whose body is not written inline').toBe([...source.matchAll(/\bContent\s*\(/g)].length);
