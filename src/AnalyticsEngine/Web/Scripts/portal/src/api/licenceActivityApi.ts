@@ -112,20 +112,53 @@ function fallbackMessage(kind: LicenceActivityErrorKind, status: number, keys: L
   }
 }
 
-/** Reads the server's `{ message }` error body without consuming the original response. */
-async function readServerMessage(response: Response): Promise<string | null> {
+export const ERROR_CODE_KEYS: Record<string, TranslationKey> = {
+  licenceNotOnScreen: 'errors.licenceActivity.licenceNotOnScreen',
+  summaryUsersMismatch: 'errors.licenceActivity.summaryUsersMismatch',
+  figuresExpiredForAction: 'errors.licenceActivity.figuresExpiredForAction',
+  figuresExpired: 'errors.licenceActivity.figuresExpired',
+  anotherReportPreparing: 'errors.licenceActivity.anotherReportPreparing',
+  licenceReportingBusy: 'errors.licenceActivity.licenceReportingBusy',
+  userDetailsImportOff: 'errors.licenceActivity.userDetailsImportOffSpecific',
+  invalidRequest: 'errors.licenceActivity.invalidRequest',
+  supplyBothDates: 'errors.licenceActivity.validation.supplyBothDates',
+  dateRange: 'errors.licenceActivity.validation.dateRange',
+  earliestDate: 'errors.licenceActivity.validation.earliestDate',
+  invalidIds: 'errors.licenceActivity.validation.invalidIds',
+  invalidWorkload: 'errors.licenceActivity.validation.invalidWorkload',
+  invalidSort: 'errors.licenceActivity.validation.invalidSort',
+  invalidPaging: 'errors.licenceActivity.validation.invalidPaging',
+  invalidSearch: 'errors.licenceActivity.validation.invalidSearch',
+  dateFormat: 'errors.licenceActivity.validation.dateFormat',
+  loadFailed: 'errors.licenceActivity.loadFailed',
+};
+
+/** Reads the server's error body without consuming the original response. */
+async function readServerError(response: Response): Promise<{ code?: string; message?: string; reference?: string } | null> {
   try {
-    const body = (await response.clone().json()) as { message?: unknown } | null;
-    return body && typeof body.message === 'string' ? body.message : null;
+    const body = (await response.clone().json()) as { code?: unknown; message?: unknown; reference?: unknown } | null;
+    if (!body) return null;
+    return {
+      code: typeof body.code === 'string' ? body.code : undefined,
+      message: typeof body.message === 'string' ? body.message : undefined,
+      reference: typeof body.reference === 'string' ? body.reference : undefined,
+    };
   } catch {
     return null;
   }
 }
 
-/** Turns a non-OK response into a typed error, preferring the server's message. */
+/** Turns a non-OK response into a typed error, preferring catalogued text for known states. */
 async function errorFor(response: Response, keys: LicenceActivityFailureKeys): Promise<LicenceActivityApiError> {
   const kind = kindForStatus(response.status);
-  const message = (await readServerMessage(response)) ?? fallbackMessage(kind, response.status, keys);
+  const serverError = await readServerError(response);
+  const codeKey = serverError?.code ? ERROR_CODE_KEYS[serverError.code] : undefined;
+  const message = codeKey
+    // `reference` is the failed run's id (loadFailed): a fact the admin quotes when reporting the failure.
+    ? translateActive(codeKey, { reference: serverError?.reference ?? '' })
+    : kind === 'http'
+      ? serverError?.message ?? fallbackMessage(kind, response.status, keys)
+      : fallbackMessage(kind, response.status, keys);
   return new LicenceActivityApiError(kind, response.status, message);
 }
 

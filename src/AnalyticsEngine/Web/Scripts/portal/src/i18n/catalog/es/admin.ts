@@ -43,6 +43,7 @@ const admin: Record<keyof typeof en, string> = {
   'admin.teams.teamList.columnTeamName': 'Nombre del equipo',
   'admin.teams.teamList.saveSuccess':
     'Los Teams seleccionados se han habilitado correctamente para análisis detallados. Los metadatos adicionales pueden tardar varias horas en aparecer en los informes.',
+  'admin.teams.teamList.redisNotConfigured': 'No se pueden habilitar los análisis detallados de Teams porque Redis no está configurado en esta implementación. Añada una cadena de conexión de Redis para poder almacenar los tokens de autorización de Teams.',
   'admin.teams.teamList.unexpectedApiResponse':
     'Respuesta inesperada de la API. Compruebe el registro de JS para obtener más detalles.',
   'admin.teams.teamListItem.authorised': 'Autorizado',
@@ -205,6 +206,7 @@ const admin: Record<keyof typeof en, string> = {
   'admin.serviceConfiguration.webhook.active': 'Activo',
   'admin.serviceConfiguration.webhook.callRecordsPermission': 'CallRecords.Read.All',
   'admin.serviceConfiguration.webhook.couldNotCheck': 'No se pudo comprobar',
+  'admin.serviceConfiguration.webhook.detail.webAppUrlMissing': 'WebAppURL no está configurado, por lo que no se puede determinar la dirección URL de suscripción del webhook.',
   'admin.serviceConfiguration.webhook.missingHelp':
     'El trabajo web de importación registra y renueva esta suscripción en cada ciclo de importación. Si sigue faltando, compruebe que el trabajo web de importación se está ejecutando y que su registro de aplicación tiene el permiso de aplicación {permission} de Microsoft Graph.',
   'admin.serviceConfiguration.webhook.noActiveSubscription': 'No se encontró ninguna suscripción activa',
@@ -226,6 +228,16 @@ const admin: Record<keyof typeof en, string> = {
   'admin.serviceConfiguration.updates.currentBuildLabel': 'Este sitio ejecuta',
   'admin.serviceConfiguration.updates.description':
     'Compara la compilación que ejecuta este sitio con la versión publicada más reciente en GitHub. No se envía nada a GitHub hasta que pulse el botón.',
+  'admin.serviceConfiguration.updates.error.timeout': 'Se agotó el tiempo de espera tras {seconds} s al contactar con github.com. Si esta aplicación web no tiene acceso saliente a Internet (por ejemplo, una implementación con punto de conexión privado y salida restringida), la comprobación de actualizaciones no puede funcionar desde aquí: consulte manualmente la página de versiones.',
+  'admin.serviceConfiguration.updates.error.unreachable': 'No se pudo contactar con github.com para buscar actualizaciones: {error}. Es lo esperable si la aplicación web no tiene acceso saliente a Internet; consulte manualmente la página de versiones.',
+  'admin.serviceConfiguration.updates.error.failed': 'Error al comprobar actualizaciones: {error}',
+  'admin.serviceConfiguration.updates.error.devBuild': 'Esta es una compilación local (DEV_BUILD), por lo que no tiene número de compilación con el que comparar. Se muestra la última versión publicada como referencia.',
+  'admin.serviceConfiguration.updates.error.currentBuildUnreadable': "No se pudo leer un número de compilación en la etiqueta de esta compilación ('{label}'), por lo que no se puede comparar. Se muestra la última versión publicada como referencia.",
+  'admin.serviceConfiguration.updates.error.latestBuildUnreadable': 'No se pudo leer un número de compilación en la última versión de GitHub, por lo que no se pueden comparar. Abra la página de versiones para comprobarlo manualmente.',
+  'admin.serviceConfiguration.updates.error.rateLimited': 'GitHub rechazó la solicitud porque se alcanzó el límite de solicitudes de su API, no por un problema de permisos. El límite se restablece el {resetAt}. Las solicitudes anónimas están limitadas a 60 por hora por dirección IP pública, que comparte todo lo que hay detrás de su dirección de salida. Vuelva a intentarlo después del restablecimiento.',
+  'admin.serviceConfiguration.updates.error.rateLimitedSoon': 'GitHub rechazó la solicitud porque se alcanzó el límite de solicitudes de su API, no por un problema de permisos. El límite se restablecerá en breve. Las solicitudes anónimas están limitadas a 60 por hora por dirección IP pública, que comparte todo lo que hay detrás de su dirección de salida. Vuelva a intentarlo después del restablecimiento.',
+  'admin.serviceConfiguration.updates.error.releasesNotFound': 'GitHub devolvió 404 para el punto de conexión de versiones. Si esta implementación está detrás de un proxy que intercepta HTTPS, es posible que el proxy devuelva su propia respuesta en lugar de la de GitHub.',
+  'admin.serviceConfiguration.updates.error.httpStatus': 'GitHub devolvió {status} ({statusName}) al solicitar la última versión.',
   'admin.serviceConfiguration.updates.latestReleaseLabel': 'Versión publicada más reciente',
   'admin.serviceConfiguration.updates.openLatestRelease': 'Abrir la versión más reciente',
   'admin.serviceConfiguration.updates.openReleaseNotes': 'Abrir las notas de la versión y las descargas',

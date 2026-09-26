@@ -4,7 +4,7 @@ import { WORKLOADS } from '../../types/licenceActivity';
 import { useT } from '../../i18n';
 import { DASH, formatAge, formatCount, formatDate, formatDateTime, formatMaybeCount } from './format';
 import { statusMeta } from './statuses';
-import { granularityLabel, sourceLabel } from './sources';
+import { coverageMessage, granularityLabel, measureLabel, sourceLabel } from './sources';
 
 const useStyles = makeStyles({
   card: {
@@ -125,7 +125,7 @@ export default function CoveragePanel({ generatedUtc, expiresUtc, coverage, now 
 
               <Text size={200} className={styles.line}>
                 {t('licenceActivity.common.source')} {sourceLabel(entry.source, t) || DASH}
-                {entry.measure ? ` \u00b7 ${entry.measure}` : ''}
+                {measureLabel(entry.measureKey, entry.measure, t) ? ` \u00b7 ${measureLabel(entry.measureKey, entry.measure, t)}` : ''}
                 {entry.granularity ? ` \u00b7 ${granularityLabel(entry.granularity, t)}` : ''}
               </Text>
 
@@ -158,9 +158,9 @@ export default function CoveragePanel({ generatedUtc, expiresUtc, coverage, now 
                   : ''}
               </Text>
 
-              {entry.message && (
+              {coverageMessage(entry.messageKey, entry.message, t) && (
                 <Text size={100} className={styles.message}>
-                  {entry.message}
+                  {coverageMessage(entry.messageKey, entry.message, t)}
                 </Text>
               )}
             </div>

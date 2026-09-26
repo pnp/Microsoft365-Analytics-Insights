@@ -167,6 +167,18 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.bucket.meetingPeriod.afternoon.label': 'Tarde (12:00-17:00)',
   'teamsExplorer.bucket.meetingPeriod.evening.label': 'Noche (17:00-21:00)',
   'teamsExplorer.bucket.meetingPeriod.night.label': 'Madrugada (después de las 21:00)',
+  'teamsExplorer.code.modality.audio': 'Audio',
+  'teamsExplorer.code.modality.video': 'Vídeo',
+  'teamsExplorer.code.modality.screenSharing': 'Uso compartido de pantalla',
+  'teamsExplorer.code.modality.videoBasedScreenSharing': 'Uso compartido de pantalla basado en vídeo',
+  'teamsExplorer.code.modality.data': 'Datos',
+  'teamsExplorer.code.quality.excellent': 'Excelente',
+  'teamsExplorer.code.quality.good': 'Buena',
+  'teamsExplorer.code.quality.fair': 'Aceptable',
+  'teamsExplorer.code.quality.poor': 'Deficiente',
+  'teamsExplorer.code.quality.bad': 'Mala',
+  'teamsExplorer.code.quality.notRated': 'Sin valorar',
+  'teamsExplorer.code.quality.none': 'Sin valoración',
 
 
   // Juicios redactados por el servidor para Teams Explorer.

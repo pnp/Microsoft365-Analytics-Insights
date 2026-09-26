@@ -271,6 +271,48 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// The usage drill-down's "last activity" date is sent as a fact (<c>detailDateUtc</c>) for the portal to
+        /// format in the reader's language. It is a SQL <c>date</c>, which EF returns as
+        /// <see cref="DateTimeKind.Unspecified"/>; serialised like that it carries no zone, the browser reads it
+        /// as local midnight, and the portal (which formats it in UTC) then shows the previous day to every
+        /// reader east of UTC - Spain and the UK included. So the adapter must mark it UTC, exactly as the
+        /// profile's dates are marked in <see cref="Profile_AndUserIdLookup_ResolveTheSameUser"/>.
+        /// </summary>
+        [TestMethod]
+        public async Task UsageDrillDown_LastActivityDate_IsSentAsUtcWithItsKey()
+        {
+            var upn = $"lastactivity.{Guid.NewGuid():N}@contoso.com";
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                try
+                {
+                    var lastActivity = new DateTime(2030, 3, 4, 0, 0, 0, DateTimeKind.Unspecified);
+                    var user = new User { UserPrincipalName = upn, AzureAdId = Guid.NewGuid().ToString() };
+                    db.users.Add(user);
+                    db.OutlookUsageActivityLogs.Add(new OutlookUsageActivityLog { User = user, Date = new DateTime(2030, 3, 5), LastActivityDate = lastActivity });
+                    await db.SaveChangesAsync();
+
+                    var rows = await new SqlUserDataLookupQuery().GetRowsForCategoryAsync(user.ID, UserDataLookupRules.CatUsageOutlook, 10);
+
+                    var row = rows.Single();
+                    Assert.AreEqual("usage.lastActivity", row.DetailKey, "the portal translates the detail by this key");
+                    Assert.IsTrue(row.DetailDateUtc.HasValue, "the date is the fact the portal formats; without it the row falls back to server English");
+                    Assert.AreEqual(DateTimeKind.Utc, row.DetailDateUtc.Value.Kind,
+                        "EF returns date columns as unspecified; unmarked, the browser shifts the date back a day east of UTC.");
+                    Assert.AreEqual(DateTime.SpecifyKind(lastActivity, DateTimeKind.Utc), row.DetailDateUtc.Value);
+                }
+                finally
+                {
+                    // Raw SQL, child first: this database is shared with the rest of the suite.
+                    await db.Database.ExecuteSqlCommandAsync(
+                        @"DELETE l FROM dbo.outlook_user_activity_log l INNER JOIN dbo.users u ON u.id = l.user_id WHERE u.user_name = @p0;
+                          DELETE FROM dbo.users WHERE user_name = @p0;",
+                        upn);
+                }
+            }
+        }
+
         #region Seeding
 
         private sealed class SeededUser

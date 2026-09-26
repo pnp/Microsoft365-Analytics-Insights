@@ -265,6 +265,24 @@ describe('CopilotAdoptionPage view split', () => {
     expect(screen.queryByText('SERVER: sources off')).toBeNull();
   });
 
+  it('names the datasets that could not be loaded in Spanish, and exactly as the server wrote them in English', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      figuresIncomplete: true,
+      incompleteReasons: ['licence types', 'Cowork readiness', 'a dataset this build does not know'],
+    }));
+    await loadCatalog('es');
+    const spanish = renderWithProvider(<CopilotAdoptionPage />, { language: 'es' });
+
+    await waitFor(() => expect(document.body.textContent)
+      .toContain('tipos de licencia, preparación para Cowork, a dataset this build does not know. '));
+    expect(document.body.textContent).not.toContain('licence types, Cowork readiness');
+    spanish.unmount();
+
+    renderWithProvider(<CopilotAdoptionPage />);
+    await waitFor(() => expect(document.body.textContent)
+      .toContain('licence types, Cowork readiness, a dataset this build does not know. '));
+  });
+
   it('opens on an executive view with the three acts and no SQL popovers', async () => {
     await renderPage();
 

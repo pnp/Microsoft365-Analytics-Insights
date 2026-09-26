@@ -30,15 +30,23 @@ export class AgentCostsApiError extends Error {
   }
 }
 
-/** Reads the server's `{ message }` error body without consuming the original response. */
-async function readServerMessage(response: Response): Promise<string | null> {
+/** Reads the server's error body without consuming the original response. */
+async function readServerError(response: Response): Promise<{ code?: string; message?: string } | null> {
   try {
-    const body = (await response.clone().json()) as { message?: unknown } | null;
-    return body && typeof body.message === 'string' ? body.message : null;
+    const body = (await response.clone().json()) as { code?: unknown; message?: unknown } | null;
+    if (!body) return null;
+    return {
+      code: typeof body.code === 'string' ? body.code : undefined,
+      message: typeof body.message === 'string' ? body.message : undefined,
+    };
   } catch {
     return null;
   }
 }
+
+export const AGENT_COST_ERROR_CODE_KEYS: Record<string, TranslationKey> = {
+  agentCostsLoadFailed: 'errors.agentCosts.loadFailed',
+};
 
 async function getJson<T>(path: string, failureKey: TranslationKey, signal?: AbortSignal): Promise<T> {
   const response = await apiFetch(`${baseUrl()}${path}`, {
@@ -48,7 +56,13 @@ async function getJson<T>(path: string, failureKey: TranslationKey, signal?: Abo
   });
 
   if (!response.ok) {
-    const message = (await readServerMessage(response)) ?? translateActive(failureKey, { status: response.status });
+    const serverError = await readServerError(response);
+    const codeKey = serverError?.code ? AGENT_COST_ERROR_CODE_KEYS[serverError.code] : undefined;
+    // Any known code is translated, whatever the status: the gate in serverAuthoredText.test.ts tells a
+    // new reply to carry a code and a catalog entry, and that must be enough to reach the reader.
+    const message = codeKey
+      ? translateActive(codeKey)
+      : serverError?.message ?? translateActive(failureKey, { status: response.status });
     throw new AgentCostsApiError(response.status, message);
   }
 

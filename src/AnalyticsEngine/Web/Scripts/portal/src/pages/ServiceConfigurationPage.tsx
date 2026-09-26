@@ -28,7 +28,7 @@ import type { UpdateCheck } from '../types/updateCheck';
 import { formatUtc } from '../components/health/healthShared';
 import { serverPlaceholderText } from '../components/shared/serverPlaceholder';
 import Spinner from '../components/Spinner';
-import { useT, useTNode } from '../i18n';
+import { EN_CATALOG, useT, useTNode, type TFunction } from '../i18n';
 import { buildLabelText } from '../product';
 import { enabledImportLabelText } from './InsightsOverviewPage';
 
@@ -66,6 +66,63 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
   },
 });
+
+export const WEBHOOK_STATUS_DETAIL_TEXT: Record<string, Parameters<TFunction>[0]> = Object.freeze({
+  [EN_CATALOG['admin.serviceConfiguration.webhook.detail.webAppUrlMissing']]:
+    'admin.serviceConfiguration.webhook.detail.webAppUrlMissing',
+});
+
+export function webhookStatusDetail(t: TFunction, detail: string | null): string | null {
+  if (!detail) return detail;
+  const key = WEBHOOK_STATUS_DETAIL_TEXT[detail];
+  return key ? t(key) : detail;
+}
+
+function matchTemplate(template: string, text: string): Record<string, string> | null {
+  const names: string[] = [];
+  const pattern = template
+    .split(/(\{\w+\})/)
+    .map((part) => {
+      const placeholder = /^\{(\w+)\}$/.exec(part);
+      if (!placeholder) return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      names.push(placeholder[1]);
+      return '(.+?)';
+    })
+    .join('');
+  const match = new RegExp(`^${pattern}$`).exec(text);
+  return match ? Object.fromEntries(names.map((name, index) => [name, match[index + 1]])) : null;
+}
+
+/**
+ * UpdateChecker's fixed error sentences, most specific first. Each English catalog entry is the server's
+ * sentence verbatim with its variable parts as placeholders, so a match yields the facts and the sentence
+ * is shown from the catalog in the reader's language. `rateLimitedSoon` is the rate-limit sentence when
+ * GitHub sends no reset time and the server writes the English word "shortly" in its place.
+ *
+ * serverAuthoredText.test.ts reads UpdateChecker.cs and fails when these and the server's sentences
+ * disagree in either direction. Anything unrecognised is shown as the server sent it.
+ */
+export const UPDATE_CHECK_ERROR_KEYS = [
+  'admin.serviceConfiguration.updates.error.rateLimitedSoon',
+  'admin.serviceConfiguration.updates.error.rateLimited',
+  'admin.serviceConfiguration.updates.error.releasesNotFound',
+  'admin.serviceConfiguration.updates.error.httpStatus',
+  'admin.serviceConfiguration.updates.error.timeout',
+  'admin.serviceConfiguration.updates.error.unreachable',
+  'admin.serviceConfiguration.updates.error.failed',
+  'admin.serviceConfiguration.updates.error.devBuild',
+  'admin.serviceConfiguration.updates.error.currentBuildUnreadable',
+  'admin.serviceConfiguration.updates.error.latestBuildUnreadable',
+] as const satisfies readonly Parameters<TFunction>[0][];
+
+export function updateCheckErrorText(t: TFunction, error: string | null): string | null {
+  if (!error) return error;
+  for (const key of UPDATE_CHECK_ERROR_KEYS) {
+    const facts = matchTemplate(EN_CATALOG[key], error);
+    if (facts) return t(key, facts);
+  }
+  return error;
+}
 
 function WebhookSubscriptionBadge({ status }: { status: SystemStatus }) {
   const t = useT();
@@ -108,7 +165,7 @@ function WebhookSubscriptionBadge({ status }: { status: SystemStatus }) {
             {t('admin.serviceConfiguration.webhook.couldNotCheck')}
           </Badge>
           <Text size={200} block style={{ marginTop: 4 }}>
-            {status.callWebhookStatusDetail}
+            {webhookStatusDetail(t, status.callWebhookStatusDetail)}
           </Text>
         </div>
       );
@@ -217,7 +274,7 @@ function UpdateCheckCard({ styles }: { styles: ReturnType<typeof useStyles> }) {
           ) : result.checkError ? (
             <MessageBar intent="info">
               <MessageBarBody>
-                {result.checkError}{' '}
+                {updateCheckErrorText(t, result.checkError)}{' '}
                 {result.latestReleaseUrl && (
                   <Link href={result.latestReleaseUrl} target="_blank" rel="noreferrer">
                     {t('admin.serviceConfiguration.updates.openLatestRelease')}

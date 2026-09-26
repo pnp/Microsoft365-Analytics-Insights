@@ -3,6 +3,7 @@ using Common.Entities.AgentCosts;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 
 namespace Common.Entities.CopilotAdoption
@@ -535,6 +536,9 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("reclaimCaveat")]
         public string ReclaimCaveat { get; set; }
 
+        [JsonProperty("reclaimCaveatKey")]
+        public string ReclaimCaveatKey { get; set; }
+
         /// <summary>Mean engagement score across all licensed users, including the ones scoring zero.</summary>
         [JsonProperty("averageAdoptionScore")]
         public double AverageAdoptionScore { get; set; }
@@ -953,6 +957,9 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("warnings")]
         public List<string> Warnings { get; set; } = new List<string>();
 
+        [JsonProperty("warningDetails")]
+        public List<CopilotAdoptionWarningDetail> WarningDetails { get; set; } = new List<CopilotAdoptionWarningDetail>();
+
         /// <summary>
         /// The warnings that were already present when scoring began - i.e. the ones about data
         /// sources, failed queries and capped result sets rather than about the population.
@@ -965,10 +972,14 @@ namespace Common.Entities.CopilotAdoption
         /// tenant-wide N next to the scoped one.
         ///
         /// Not serialised: it is a build-time detail of how a scoped summary is assembled, and the UI
-        /// only ever renders <see cref="Warnings"/>.
+        /// only ever renders <see cref="Warnings"/> and their <see cref="WarningDetails"/>.
         /// </remarks>
         [JsonIgnore]
         public List<string> SourceWarnings { get; set; } = new List<string>();
+
+        /// <summary>The structured twin of <see cref="SourceWarnings"/>, kept index-aligned with it.</summary>
+        [JsonIgnore]
+        public List<CopilotAdoptionWarningDetail> SourceWarningDetails { get; set; } = new List<CopilotAdoptionWarningDetail>();
 
         /// <summary>
         /// True when a query the headline figures are DERIVED FROM failed, so the adoption numbers below
@@ -1061,6 +1072,9 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("warnings")]
         public List<string> Warnings { get; set; } = new List<string>();
+
+        [JsonProperty("warningDetails")]
+        public List<CopilotAdoptionWarningDetail> WarningDetails { get; set; } = new List<CopilotAdoptionWarningDetail>();
     }
 
     /// <summary>A page of ranked licence-opportunity candidates.</summary>
@@ -1080,5 +1094,134 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("warnings")]
         public List<string> Warnings { get; set; } = new List<string>();
+
+        [JsonProperty("warningDetails")]
+        public List<CopilotAdoptionWarningDetail> WarningDetails { get; set; } = new List<CopilotAdoptionWarningDetail>();
+    }
+
+    public class CopilotAdoptionWarningDetail
+    {
+        [JsonProperty("key")]
+        public string Key { get; set; }
+
+        [JsonProperty("values")]
+        public Dictionary<string, object> Values { get; set; } = new Dictionary<string, object>(StringComparer.Ordinal);
+
+        public CopilotAdoptionWarningDetail Clone()
+        {
+            return new CopilotAdoptionWarningDetail
+            {
+                Key = Key,
+                Values = new Dictionary<string, object>(Values ?? new Dictionary<string, object>(), StringComparer.Ordinal),
+            };
+        }
+    }
+
+    public static class CopilotAdoptionWarningKeys
+    {
+        public const string NoLicenceInformation = "noLicenceInformation";
+        public const string NoCopilotLicences = "noCopilotLicences";
+        public const string CopilotBackfillPending = "copilotBackfillPending";
+        public const string CopilotUsageReportConcealed = "copilotUsageReportConcealed";
+        public const string NoCopilotData = "noCopilotData";
+        public const string AuditMissingUsingUsageReport = "auditMissingUsingUsageReport";
+        public const string AgentInventoryCapped = "agentInventoryCapped";
+        public const string UnlicensedUsageCapped = "unlicensedUsageCapped";
+        public const string LicensedUserDetailCapped = "licensedUserDetailCapped";
+        public const string LicensedUsersSubset = "licensedUsersSubset";
+        public const string LicenceOpportunitiesNoSources = "licenceOpportunitiesNoSources";
+        public const string LicenceCandidatesAuditOnly = "licenceCandidatesAuditOnly";
+        public const string CoworkReadinessNoSources = "coworkReadinessNoSources";
+        public const string CoworkM365UsageMissing = "coworkM365UsageMissing";
+        public const string CoworkUsageReportMissing = "coworkUsageReportMissing";
+        public const string CoworkAuditMissing = "coworkAuditMissing";
+        public const string UsageReportSourcedUsers = "usageReportSourcedUsers";
+        public const string UsageReportWindowMismatch = "usageReportWindowMismatch";
+        public const string CoworkEligibilityUnknown = "coworkEligibilityUnknown";
+        public const string PurchasedSeatsUnknown = "purchasedSeatsUnknown";
+        public const string SkuSeatMismatch = "skuSeatMismatch";
+        public const string CoworkFluencyMissingAll = "coworkFluencyMissingAll";
+        public const string CoworkFluencyPartial = "coworkFluencyPartial";
+        public const string CouldNotLoad = "couldNotLoad";
+        public const string ReclaimCaveat = "copilotAdoption.server.reclaimCaveat";
+    }
+
+    public static class CopilotAdoptionWarnings
+    {
+        private static readonly Dictionary<string, string> Templates = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            { CopilotAdoptionWarningKeys.NoLicenceInformation, "No licence information has been imported, so Copilot licences cannot be identified. Enable the user metadata import to use this tool." },
+            { CopilotAdoptionWarningKeys.NoCopilotLicences, "No Microsoft 365 Copilot licences were found in this tenant. Adoption cannot be reported until at least one Copilot licence is assigned and the user import has run." },
+            { CopilotAdoptionWarningKeys.CopilotBackfillPending, "Some Copilot interactions have not finished being upgraded to the new reporting format, so every Copilot figure below is currently too low. This repairs itself automatically on the next few import cycles - re-run this report once the importer has caught up. If it persists, check that the Office 365 activity importer web job is running." },
+            { CopilotAdoptionWarningKeys.CopilotUsageReportConcealed, "This tenant has 'concealed user information' enabled, so Microsoft's per-user Copilot report returns hashed identities and cannot be used. Per-user figures below come from the Copilot audit log, which is unaffected by that setting." },
+            { CopilotAdoptionWarningKeys.NoCopilotData, "Neither the Copilot audit import nor Microsoft's Copilot usage report has any data for this period, so every licensed user will appear as unused. Check the Health page before acting on these numbers." },
+            { CopilotAdoptionWarningKeys.AuditMissingUsingUsageReport, "The Copilot audit import has no data for this period, so per-user engagement is derived from Microsoft's own usage report. That report covers Microsoft's aggregation window rather than the period selected here, and excludes unlicensed Copilot Chat use entirely." },
+            { CopilotAdoptionWarningKeys.AgentInventoryCapped, "The agent inventory was capped at {maxAgents} agents, so the agent figures are a floor rather than a total." },
+            { CopilotAdoptionWarningKeys.UnlicensedUsageCapped, "Unlicensed Copilot usage was capped at {maxUsers} users, so those figures are a floor rather than a total." },
+            { CopilotAdoptionWarningKeys.LicensedUserDetailCapped, "Only the first {maxUsers} licensed users were analysed. The figures below therefore describe that subset, not the whole tenant. The subset is ordered by internal user id for reproducibility, so the oldest user records are over-represented and the newest user records are excluded first." },
+            { CopilotAdoptionWarningKeys.LicensedUsersSubset, "This tenant holds {licensedUsers} Copilot licences, but only {scoredUsers} users could be analysed in one pass. Every rate and breakdown below describes those {scoredUsers} users, not the whole tenant - they are not tenant-wide figures and must not be quoted as such. Because the drill-down query is ordered by internal user id, the oldest user records are over-represented and the newest joiners or newly onboarded subsidiaries are excluded first; the subset is reproducible, but not representative." },
+            { CopilotAdoptionWarningKeys.LicenceOpportunitiesNoSources, "Licence opportunities need either the Copilot audit import or the Microsoft 365 usage reports. Neither has data, so no candidates can be identified." },
+            { CopilotAdoptionWarningKeys.LicenceCandidatesAuditOnly, "The Microsoft 365 usage reports are not available, so licence candidates are ranked only on unlicensed Copilot Chat use. Heavy Microsoft 365 users who have never tried Copilot will not appear." },
+            { CopilotAdoptionWarningKeys.CoworkReadinessNoSources, "Cowork readiness needs the Cowork usage report, the Copilot audit import or the Microsoft 365 usage reports. None has data for this period, so no readiness assessment is possible." },
+            { CopilotAdoptionWarningKeys.CoworkM365UsageMissing, "The Microsoft 365 usage reports are not available, so coordination load cannot be measured. Everyone will score zero on that axis and no one will be identified as a Cowork candidate. Enable the Microsoft 365 usage report import to use this tab." },
+            { CopilotAdoptionWarningKeys.CoworkUsageReportMissing, "The first-party Cowork usage report is not available, so Cowork task counts, automation ratio and retention cannot be measured. Audit-derived Cowork interactions are retained only as a reconciliation signal." },
+            { CopilotAdoptionWarningKeys.CoworkAuditMissing, "The Copilot audit import has no data for this period, so Cowork audit interactions cannot be reconciled against Microsoft's Cowork task report." },
+            { CopilotAdoptionWarningKeys.UsageReportSourcedUsers, "{count} licensed user{userPlural} ({percentage}%) were scored from Microsoft's Copilot usage report because the audit import had no per-user signal for them. Their Microsoft prompt counts are not added to audit interaction totals, concentration, intensity or licensed/unlicensed interaction comparisons." },
+            { CopilotAdoptionWarningKeys.UsageReportWindowMismatch, "Microsoft's pinned Copilot usage-report period is D{reportDays}, but this analysis window is D{analysisDays}. Report-sourced rows are kept in the adoption population so active people are not marked as never used, but a report-sourced row that would otherwise be a PROBABLE reclaim is excluded from reclaimable-seat totals rather than normalising prompt counts across unlike windows. Certain (disabled-account) seats are never held back this way, because a disabled account is not an inference from an absence of use. The band breakdown therefore counts more idle seats than the reclaim figure does; the difference is reported as \"held back for window mismatch\"." },
+            { CopilotAdoptionWarningKeys.CoworkEligibilityUnknown, "Cowork adoption percentage is suppressed because Cowork eligibility is controlled by spending-policy scope and this import does not know that denominator. The deprecated Cowork agent entry is not used as an eligibility source." },
+            { CopilotAdoptionWarningKeys.PurchasedSeatsUnknown, "Purchased and unassigned Copilot seats are unknown because Graph subscribedSkus/prepaidUnits has not been imported. Grant Organization.Read.All and rerun the user metadata import; the report deliberately does not show zero for unassigned seats when the purchase inventory is missing." },
+            { CopilotAdoptionWarningKeys.SkuSeatMismatch, "Purchased and assigned Copilot seats disagree for {skuName}: Graph reports {purchased} purchased but {assigned} assigned, so unassigned seats are shown as Unknown rather than zero." },
+            { CopilotAdoptionWarningKeys.CoworkFluencyMissingAll, "Cowork readiness was measured, but the licensed-user analysis it takes Copilot fluency from did not complete, so the tab could not be scored. This is NOT a missing usage report import - the Cowork signals imported fine. Check the Health page and re-run." },
+            { CopilotAdoptionWarningKeys.CoworkFluencyPartial, "Cowork readiness: {withoutFluency} of {total} seat holders were scored without a Copilot fluency figure, because they fall outside the {maxLicensed}-row licensed-user analysis this tab joins against. Their fluency reads as 0 rather than as unknown, so they band lower than they should - most will show as \"build fluency first\". Treat the tier of those rows as unreliable; the rest of the tab is unaffected." },
+            { CopilotAdoptionWarningKeys.CouldNotLoad, "Could not load {description}: {message}" },
+        };
+
+        public static IReadOnlyDictionary<string, string> EnglishTemplates => Templates;
+
+        public static string RenderEnglish(string key, IDictionary<string, object> values = null)
+        {
+            string template;
+            if (!Templates.TryGetValue(key, out template)) return key;
+            var rendered = template;
+            if (values == null) return rendered;
+            foreach (var value in values)
+            {
+                rendered = rendered.Replace("{" + value.Key + "}", FormatEnglish(value.Value));
+            }
+            return rendered;
+        }
+
+        public static CopilotAdoptionWarningDetail Detail(string key, IDictionary<string, object> values = null)
+        {
+            return new CopilotAdoptionWarningDetail
+            {
+                Key = key,
+                Values = values == null
+                    ? new Dictionary<string, object>(StringComparer.Ordinal)
+                    : new Dictionary<string, object>(values, StringComparer.Ordinal),
+            };
+        }
+
+        public static void Add(List<string> warnings, List<CopilotAdoptionWarningDetail> details, string key, IDictionary<string, object> values = null)
+        {
+            warnings.Add(RenderEnglish(key, values));
+            details.Add(Detail(key, values));
+        }
+
+        public static void Add(CopilotAdoptionSummary summary, string key, IDictionary<string, object> values = null)
+        {
+            Add(summary.Warnings, summary.WarningDetails, key, values);
+        }
+
+        private static string FormatEnglish(object value)
+        {
+            if (value == null) return string.Empty;
+            if (value is double) return ((double)value).ToString("N1", CultureInfo.GetCultureInfo("en-GB"));
+            if (value is float) return ((float)value).ToString("N1", CultureInfo.GetCultureInfo("en-GB"));
+            if (value is decimal) return ((decimal)value).ToString("N1", CultureInfo.GetCultureInfo("en-GB"));
+            if (value is int) return ((int)value).ToString("N0", CultureInfo.GetCultureInfo("en-GB"));
+            if (value is long) return ((long)value).ToString("N0", CultureInfo.GetCultureInfo("en-GB"));
+            return Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
+        }
     }
 }

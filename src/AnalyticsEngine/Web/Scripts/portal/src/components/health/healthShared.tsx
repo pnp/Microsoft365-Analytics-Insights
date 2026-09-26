@@ -10,7 +10,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import Spinner from '../Spinner';
-import { formatDateParts, formatNumber, translateActive, useT, type TFunction } from '../../i18n';
+import { formatDateParts, formatList, formatNumber, translateActive, useT, type TFunction } from '../../i18n';
 import { health as enHealth } from '../../i18n/catalog/en/health';
 import type { TranslationKey } from '../../i18n';
 import type { ComponentHealthRow, DataOverviewSection, HealthSectionBase, HealthStatusName, HourCount } from '../../types/health';
@@ -30,6 +30,12 @@ export const BLOB_CHECKPOINT_REASON_KEYS: Record<string, TranslationKey> = {
   'blobCheckpoint.authenticationFailed': 'health.reason.blobCheckpointAuthenticationFailed',
   'blobCheckpoint.keyAuthDisabled': 'health.reason.blobCheckpointKeyAuthDisabled',
   'blobCheckpoint.storageRejected': 'health.reason.blobCheckpointStorageRejected',
+};
+
+export const HEALTH_COMPONENT_LABEL_KEYS: Record<string, TranslationKey> = {
+  Credential: 'health.component.Credential',
+  ServiceBus: 'health.component.ServiceBus',
+  BlobCheckpoint: 'health.component.BlobCheckpoint',
 };
 
 /**
@@ -80,6 +86,36 @@ function matchServerTemplate(template: string, text: string): Record<string, str
 /** A whole number the server printed invariantly ("1234"), re-printed in the portal language. */
 function serverNumber(value: string): string {
   return /^\d+$/.test(value) ? formatNumber(Number(value)) : value;
+}
+
+function durationPart(value: number, singularKey: TranslationKey, pluralKey: TranslationKey, t: TFunction): string {
+  return t(value === 1 ? singularKey : pluralKey, { count: formatNumber(value) });
+}
+
+export function formatHealthDuration(totalSeconds: number | null | undefined, fallback: string | null | undefined, t: TFunction): string {
+  if (totalSeconds === null || totalSeconds === undefined || !Number.isFinite(totalSeconds) || totalSeconds < 0) {
+    return fallback ?? '';
+  }
+
+  const wholeSeconds = Math.round(totalSeconds);
+  const days = Math.floor(wholeSeconds / 86400);
+  const hours = Math.floor((wholeSeconds % 86400) / 3600);
+  const minutes = Math.floor((wholeSeconds % 3600) / 60);
+  const seconds = wholeSeconds % 60;
+  const parts = [
+    ...(days > 0 ? [durationPart(days, 'health.duration.day', 'health.duration.days', t)] : []),
+    durationPart(hours, 'health.duration.hour', 'health.duration.hours', t),
+    durationPart(minutes, 'health.duration.minute', 'health.duration.minutes', t),
+    durationPart(seconds, 'health.duration.second', 'health.duration.seconds', t),
+  ];
+
+  return t('health.duration.parts', { parts: formatList(parts) });
+}
+
+export function translateHealthComponentName(component: string | null | undefined, t: TFunction): string {
+  if (!component) return '';
+  const key = HEALTH_COMPONENT_LABEL_KEYS[component];
+  return key ? t(key) : component;
 }
 
 // --- Time / format helpers ---
@@ -319,7 +355,7 @@ export function translateHealthReasonText(reason: string, t: TFunction): string 
         ? 'health.reason.componentUnhealthy'
         : 'health.reason.componentDegraded',
       {
-        component: componentMatch[1],
+        component: translateHealthComponentName(componentMatch[1], t),
         detail: translateHealthComponentDetailText(componentMatch[3], t),
       },
     );

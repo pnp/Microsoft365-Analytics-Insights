@@ -745,12 +745,14 @@ namespace Web.AnalyticsWeb.Controllers
 
             var rowsBySeries = new List<KeyValuePair<string, List<WeekValueRow>>>();
             var warnings = new List<string>();
+            var warningFacts = new List<ReportSeriesWarning>();
 
             // Sequentially per series keeps a bounded number of concurrent contexts (the area itself
             // already runs in parallel with other areas' charts); each performs indexed seeks into
             // one snapshot per week.
-            foreach (var sq in series)
+            for (var i = 0; i < series.Count; i++)
             {
+                var sq = series[i];
                 try
                 {
                     var rows = await QueryWeeksAsync(sq.Body, from, lastWeek, settled);
@@ -758,7 +760,14 @@ namespace Web.AnalyticsWeb.Controllers
                 }
                 catch (Exception ex)
                 {
-                    warnings.Add($"{sq.Name}: {InnermostMessage(ex)}");
+                    var message = InnermostMessage(ex);
+                    warnings.Add($"{sq.Name}: {message}");
+                    warningFacts.Add(new ReportSeriesWarning
+                    {
+                        Series = sq.Name,
+                        Reason = "loadFailed",
+                        Error = message,
+                    });
 
                     // Give up on the rest only once we already have something to draw. Bailing out on
                     // the very first timeout would blank the whole chart - the exact failure this
@@ -769,12 +778,19 @@ namespace Web.AnalyticsWeb.Controllers
                     if (ShouldStopAfterSeriesFailure(ex, rowsBySeries))
                     {
                         warnings.Add("Remaining workloads were not attempted after the database timeout");
+                        warningFacts.AddRange(series
+                            .Skip(i + 1)
+                            .Select(remaining => new ReportSeriesWarning
+                            {
+                                Series = remaining.Name,
+                                Reason = "notAttempted",
+                            }));
                         break;
                     }
                 }
             }
 
-            return CompleteMultiTimeSeries(chart, rowsBySeries, warnings, weekSpine);
+            return CompleteMultiTimeSeries(chart, rowsBySeries, warnings, weekSpine, warningFacts);
         }
 
         /// <summary>
@@ -798,21 +814,33 @@ namespace Web.AnalyticsWeb.Controllers
         internal static ReportChart CompleteMultiTimeSeries(            ReportChart chart,
             List<KeyValuePair<string, List<WeekValueRow>>> rowsBySeries,
             List<string> warnings,
-            List<DateTime> weekSpine)
+            List<DateTime> weekSpine,
+            List<ReportSeriesWarning> warningFacts = null)
         {
+            warningFacts = warningFacts ?? new List<ReportSeriesWarning>();
             var populatedSeries = rowsBySeries
                 .Where(seriesRows => seriesRows.Value.Count > 0)
                 .ToList();
 
-            warnings.AddRange(rowsBySeries
-                .Where(seriesRows => seriesRows.Value.Count == 0)
-                .Select(seriesRows => $"{seriesRows.Key}: no settled usage data"));
+            foreach (var emptySeries in rowsBySeries.Where(seriesRows => seriesRows.Value.Count == 0))
+            {
+                warnings.Add($"{emptySeries.Key}: no settled usage data");
+                warningFacts.Add(new ReportSeriesWarning
+                {
+                    Series = emptySeries.Key,
+                    Reason = "noSettledData",
+                });
+            }
 
             if (populatedSeries.Count == 0)
             {
                 chart.Error = warnings.Count == 0
                     ? "No completed usage-report weeks are available."
                     : "No workload series could be loaded. " + string.Join("; ", warnings);
+                chart.ErrorKey = warnings.Count == 0
+                    ? "noCompletedUsageWeeks"
+                    : "noWorkloadSeriesLoaded";
+                chart.SeriesWarnings = warningFacts.Count == 0 ? null : warningFacts;
                 return chart;
             }
 
@@ -837,6 +865,8 @@ namespace Web.AnalyticsWeb.Controllers
             if (lastCompleteWeekIndex < 0)
             {
                 chart.Error = "No completed usage-report weeks are available for workloads with data.";
+                chart.ErrorKey = "noCompletedUsageWeeksWithData";
+                chart.SeriesWarnings = warningFacts.Count == 0 ? null : warningFacts;
                 return chart;
             }
 
@@ -845,9 +875,16 @@ namespace Web.AnalyticsWeb.Controllers
             // A workload that has stopped producing rows still draws its history, but say so: a line
             // that simply stops part-way is otherwise indistinguishable from real inactivity.
             var lastChartedWeek = completeWeekSpine[completeWeekSpine.Count - 1];
-            warnings.AddRange(populatedSeries
-                .Where(s => !s.Value.Any(r => r.WeekStart.Date == lastChartedWeek))
-                .Select(s => $"{s.Key}: no settled usage data for the week of {lastChartedWeek:yyyy-MM-dd}"));
+            foreach (var staleSeries in populatedSeries.Where(s => !s.Value.Any(r => r.WeekStart.Date == lastChartedWeek)))
+            {
+                warnings.Add($"{staleSeries.Key}: no settled usage data for the week of {lastChartedWeek:yyyy-MM-dd}");
+                warningFacts.Add(new ReportSeriesWarning
+                {
+                    Series = staleSeries.Key,
+                    Reason = "noSettledDataForWeek",
+                    Week = lastChartedWeek,
+                });
+            }
 
             chart.Series = populatedSeries
                 .Select(s => new ReportSeries
@@ -860,6 +897,7 @@ namespace Web.AnalyticsWeb.Controllers
             if (warnings.Count > 0)
             {
                 chart.Warning = "Some workload series are unavailable: " + string.Join("; ", warnings) + ".";
+                chart.SeriesWarnings = warningFacts.Count == 0 ? null : warningFacts;
             }
 
             return chart;

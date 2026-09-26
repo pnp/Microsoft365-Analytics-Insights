@@ -1,13 +1,14 @@
 // @vitest-environment node
 import { beforeAll, describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { loadCatalog, translateStatic, type TFunction } from '..';
 import { EN_CATALOG } from '../catalog';
-import { COWORK_TIER_LABEL_KEYS, TENURE_BASIS_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
+import { COPILOT_ADOPTION_WARNING_KEYS, COWORK_TIER_LABEL_KEYS, TENURE_BASIS_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
 import {
   BLOB_CHECKPOINT_REASON_KEYS,
+  HEALTH_COMPONENT_LABEL_KEYS,
   translateHealthComponentDetailText,
   translateHealthReasonText,
 } from '../../components/health/healthShared';
@@ -17,6 +18,8 @@ import { WEB_ACTIVITY_AVAILABILITY_REASON_KEYS } from '../../components/webActiv
 import { USER_DATA_WORKLOADS_BY_FLAG } from '../../components/userlookup/CategoryRow';
 import { ACCOUNTABILITY_DIMENSION_TEXT, ACCOUNTABILITY_EMPTY_SEGMENT_KEYS } from '../../pages/CopilotAdoptionPage';
 import { ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY } from '../../pages/InsightsOverviewPage';
+import { OFFICE_PLATFORM_LABEL_KEYS } from '../../pages/ReportsPage';
+import { WORKLOADS } from '../../types/licenceActivity';
 
 function sortedUnique(values: string[]): string[] {
   return [...new Set(values)].sort((a, b) => a.localeCompare(b));
@@ -170,7 +173,7 @@ const REPORTS_CONTROLLERS = [
 /** `RunTimeSeriesAsync("copilot-interactions", "Copilot interactions per week", ...` */
 const CHART_CALL = /Run(?:TimeSeries|MultiTimeSeries|GroupedTimeSeries|GroupedCategory|Category|Matrix)Async\(\s*"([^"]+)"/g;
 /** Object-initialiser charts which do not flow through a Run* helper. */
-const CHART_KEY_PROPERTY = /Key\s*=\s*"([^"]+)"/g;
+const CHART_KEY_PROPERTY = /(?:^|[{\s,])Key\s*=\s*"([^"]+)"/g;
 /** `CopilotAttachChart` uses one local constant for several branches. */
 const CHART_KEY_CONST = /const\s+string\s+key\s*=\s*"([^"]+)"/g;
 
@@ -196,6 +199,12 @@ function reportChartKeys(): string[] {
     ...source.matchAll(CHART_KEY_PROPERTY),
     ...source.matchAll(CHART_KEY_CONST),
   ].map((m) => m[1]);
+}
+
+function officePlatformLabels(): string[] {
+  const source = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'ReportsAPIController.OfficeApps.cs'), 'utf8');
+  const block = source.match(/OfficePlatformCatalogue\s*=\s*\{([\s\S]*?)\};/)?.[1] ?? '';
+  return sortedUnique([...block.matchAll(/new\s+KeyValuePair<string,\s*string>\("([^"]+)"/g)].map((m) => m[1]));
 }
 
 function expectedReportCatalogKeys(): string[] {
@@ -233,6 +242,8 @@ describe('Reports chart metadata', () => {
     const orphans = Object.keys(EN_CATALOG)
       .filter((key) => key.startsWith('reports.chart.'))
       .filter((key) => !['reports.chart.sqlTitle', 'reports.chart.loadError', 'reports.chart.noData'].includes(key))
+      .filter((key) => !key.startsWith('reports.chart.error.'))
+      .filter((key) => !key.startsWith('reports.chart.warning.series.'))
       .filter((key) => !expected.has(key));
 
     expect(
@@ -240,6 +251,18 @@ describe('Reports chart metadata', () => {
       'These report chart catalog entries are not defined in ReportsAPIController - either the\n' +
         'chart was removed, or its key/field was renamed and the page is now falling back to English.',
     ).toEqual([]);
+  });
+});
+
+describe('Reports Office platform labels', () => {
+  it('keeps the translated platform-category map aligned with the server catalogue', () => {
+    const serverLabels = officePlatformLabels();
+    expect(serverLabels).toEqual(['Mac', 'Mobile', 'Web', 'Windows']);
+
+    const translatableProductCategories = ['Mobile', 'Web'];
+    expect(Object.keys(OFFICE_PLATFORM_LABEL_KEYS).sort()).toEqual(translatableProductCategories);
+    expect(translatableProductCategories.every((label) => serverLabels.includes(label))).toBe(true);
+    expect(Object.values(OFFICE_PLATFORM_LABEL_KEYS).filter((key) => !(key in EN_CATALOG))).toEqual([]);
   });
 });
 
@@ -413,6 +436,40 @@ describe('Health section labels', () => {
       'These have catalog entries but are not defined in the health summary - either the section\n' +
         'was removed, or its key was renamed and the page is now falling back to English.',
     ).toEqual([]);
+  });
+});
+
+const HEALTH_SERVICE_COMPONENT = /Component\s*=\s*"([^"]+)"/g;
+const HEALTH_TELEMETRY_COMPONENT = /TrackHealthCheck\(\s*HealthComponent\.([A-Za-z0-9_]+)/g;
+const HEALTH_COMPONENT_BLOB_CHECKPOINT_FACTORY = join(process.cwd(), '..', '..', '..', 'WebJob.Office365ActivityImporter.Engine', 'ActivityAPI', 'BlobCheckpoint', 'ProcessedBlobStoreFactory.cs');
+
+function healthComponentKeys(): string[] {
+  const source = readFileSync(join(process.cwd(), '..', '..', 'Models', 'Health', 'HealthService.cs'), 'utf8');
+  const blobCheckpointSource = readFileSync(HEALTH_COMPONENT_BLOB_CHECKPOINT_FACTORY, 'utf8');
+  return sortedUnique([
+    ...[...source.matchAll(HEALTH_SERVICE_COMPONENT)].map((m) => m[1]),
+    ...[...blobCheckpointSource.matchAll(HEALTH_TELEMETRY_COMPONENT)].map((m) => m[1]),
+  ]);
+}
+
+describe('Health component display names', () => {
+  it('translates every concrete component name the server can send today', () => {
+    const serverKeys = healthComponentKeys();
+    expect(serverKeys).toEqual(['BlobCheckpoint', 'Credential', 'ServiceBus']);
+
+    const missingMapEntries = serverKeys.filter((key) => !(key in HEALTH_COMPONENT_LABEL_KEYS));
+    const missingCatalogEntries = serverKeys
+      .map((key) => HEALTH_COMPONENT_LABEL_KEYS[key])
+      .filter((catalogKey) => !catalogKey || !(catalogKey in EN_CATALOG));
+
+    expect({ missingMapEntries, missingCatalogEntries }).toEqual({ missingMapEntries: [], missingCatalogEntries: [] });
+  });
+
+  it('does not carry stale component-name translations', () => {
+    const known = new Set(healthComponentKeys());
+    const orphans = Object.keys(HEALTH_COMPONENT_LABEL_KEYS).filter((key) => !known.has(key));
+
+    expect(orphans).toEqual([]);
   });
 });
 
@@ -776,6 +833,115 @@ describe('DLP availability reasons', () => {
       'DlpAPIController added or removed a Reasons.Add(...) branch. Mirror the same boolean\n' +
         'condition in DlpPage.tsx and add/remove the matching dlp.availability.reason.* catalog entry.',
     ).toEqual({ renderedReasons: cataloguedReasons, cataloguedReasons, serverCount: renderedReasons.length });
+  });
+});
+
+const LICENCE_RULES = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'LicenceActivity', 'ILicenceActivityStore.cs');
+const LICENCE_CONTROLLER = join(process.cwd(), '..', '..', 'Controllers', 'LicenceActivityAPIController.cs');
+
+function csharpStringLiteralValue(value: string): string {
+  return value.replace(/\\"/g, '"').replace(/\\r/g, '\r').replace(/\\n/g, '\n');
+}
+
+function csharpConstString(source: string, name: string): string {
+  const body = new RegExp(`public const string ${name}\\s*=([\\s\\S]*?);\\s*(?:public|static|private|protected|internal)`).exec(source)?.[1] ?? '';
+  return [...body.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => csharpStringLiteralValue(m[1])).join('');
+}
+
+function licenceServerNotes(): string[] {
+  const rules = readFileSync(LICENCE_RULES, 'utf8');
+  const controller = readFileSync(LICENCE_CONTROLLER, 'utf8');
+  return [
+    /result\.Messages\.Add\("((?:[^"\\]|\\.)*)"\)/.exec(controller)?.[1] ?? '',
+    ...[...controller.matchAll(/result\.Messages\.Add\("((?:[^"\\]|\\.)*)"\)/g)].slice(1).map((m) => m[1]),
+    csharpConstString(rules, 'AssignmentCaveat'),
+    csharpConstString(rules, 'InterpretationCaveat'),
+    csharpConstString(rules, 'Method'),
+  ].map(csharpStringLiteralValue);
+}
+
+/**
+ * A `public const string` whose initialiser is ONLY string literals joined by `+`. Anything else - an
+ * interpolation, a call, a verbatim string - fails the match, so the gate fails loudly rather than
+ * extracting half a sentence.
+ */
+function csharpConcatenatedConst(source: string, name: string): string {
+  const match = new RegExp(`public const string ${name}\\s*=\\s*((?:"(?:[^"\\\\]|\\\\.)*"\\s*\\+?\\s*)+);`).exec(source);
+  expect(match, `public const string ${name} = "..." + "..."; not found`).toBeTruthy();
+  return [...match![1].matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => csharpStringLiteralValue(m[1])).join('');
+}
+
+/** LicenceActivityRules.Notes: the overview and users drill-down notes, in declaration order. */
+const LICENCE_RULE_NOTES: Record<string, string> = {
+  NoLicences: 'licenceActivity.note.noLicences',
+  NobodyHoldsALicence: 'licenceActivity.note.nobodyHoldsALicence',
+  NoDisplayNames: 'licenceActivity.note.noDisplayNames',
+  DemographicsCapped: 'licenceActivity.note.demographicsCapped',
+  UsageReportsGroupFiltered: 'licenceActivity.note.usageReportsGroupFiltered',
+  RankingMethod: 'licenceActivity.note.rankingMethod',
+  NobodyRankable: 'licenceActivity.note.nobodyRankable',
+};
+
+function licenceRulesNotesClass(): string {
+  const rules = readFileSync(LICENCE_RULES, 'utf8');
+  const start = rules.indexOf('public static class Notes');
+  const end = rules.indexOf('public static string ForService', start);
+  expect(start, 'LicenceActivityRules.Notes not found').toBeGreaterThanOrEqual(0);
+  expect(end, 'LicenceActivityRules.Notes.ForService not found').toBeGreaterThan(start);
+  return rules.slice(start, rules.indexOf('\n        }', end));
+}
+
+describe('Licence Activity server-authored notes', () => {
+  it('maps each server note the page recognises to the exact English catalog text', async () => {
+    const { LICENCE_ACTIVITY_NOTE_KEYS } = await import('../../components/licenceActivity/serverNotes');
+    const expectedKeys = [
+      'licenceActivity.note.userMetadataRequired',
+      'licenceActivity.note.privacy',
+      'licenceActivity.note.assignmentCaveat',
+      'licenceActivity.note.interpretationCaveat',
+      'licenceActivity.note.activityMethod',
+    ];
+    const serverNotes = licenceServerNotes();
+    const catalogValuesForNotes = expectedKeys.map((key) => EN_CATALOG[key]);
+
+    expect(serverNotes).toEqual(catalogValuesForNotes);
+    expect(LICENCE_ACTIVITY_NOTE_KEYS.slice(0, expectedKeys.length)).toEqual(expectedKeys);
+  });
+
+  it('recognises every LicenceActivityRules.Notes sentence by its exact English catalog text', async () => {
+    const { LICENCE_ACTIVITY_NOTE_KEYS } = await import('../../components/licenceActivity/serverNotes');
+    const notesClass = licenceRulesNotesClass();
+    const declared = [...notesClass.matchAll(/public const string (\w+)\s*=/g)].map((m) => m[1]);
+
+    expect(declared, 'A note was added to or removed from LicenceActivityRules.Notes: map it in LICENCE_RULE_NOTES,\n'
+      + 'serverNotes.ts and both catalogs, or the Spanish page shows it in English.').toEqual(Object.keys(LICENCE_RULE_NOTES));
+
+    for (const [name, key] of Object.entries(LICENCE_RULE_NOTES)) {
+      expect(EN_CATALOG[key], `${key} must be LicenceActivityRules.Notes.${name} verbatim`).toBe(csharpConcatenatedConst(notesClass, name));
+      expect(LICENCE_ACTIVITY_NOTE_KEYS, `serverNotes.ts must recognise ${key}`).toContain(key);
+    }
+  });
+
+  it('rebuilds the per-service coverage note from the same shape the server writes', () => {
+    const notesClass = licenceRulesNotesClass();
+    expect(notesClass.replace(/\s+/g, ' ')).toContain('return WorkloadLabel(workload) + ": " + message;');
+    expect(EN_CATALOG['licenceActivity.note.forService']).toBe('{service}: {message}');
+
+    const rules = readFileSync(LICENCE_RULES, 'utf8');
+    const labelStart = rules.indexOf('public static string WorkloadLabel');
+    expect(labelStart, 'LicenceActivityRules.WorkloadLabel not found').toBeGreaterThanOrEqual(0);
+    const labelSwitch = rules.slice(labelStart, rules.indexOf('default: return workload;', labelStart));
+    const serverLabels = Object.fromEntries([...labelSwitch.matchAll(/case "(\w+)": return "([^"]+)";/g)].map((m) => [m[1], m[2]]));
+    expect(Object.keys(serverLabels).length, 'WorkloadLabel cases not found').toBe(5);
+    expect(Object.fromEntries(WORKLOADS.map((w) => [w.key, w.label])), 'WORKLOADS labels must equal LicenceActivityRules.WorkloadLabel')
+      .toEqual(serverLabels);
+  });
+
+  it('names the id 0 demographic bucket in English exactly as the server (and the Excel export) does', () => {
+    const readModel = readFileSync(join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'LicenceActivity', 'LicenceActivityReadModel.cs'), 'utf8');
+    const serverName = /if \(id == 0\) name = "([^"]+)";/.exec(readModel)?.[1];
+    expect(serverName, 'LicenceActivityReadModel no longer names the id 0 bucket where this gate looks').toBeTruthy();
+    expect(EN_CATALOG['licenceActivity.demographics.unknownBucket']).toBe(serverName);
   });
 });
 
@@ -1432,7 +1598,7 @@ describe('Health sentences the SPA recognises', () => {
       const expected = es(BLOB_CHECKPOINT_REASON_KEYS[reasonKey], { status: '403', errorCode: 'SampleErrorCode' });
       expect(translateHealthComponentDetailText(detail, es), reasonKey).toBe(expected);
       expect(translateHealthReasonText(`BlobCheckpoint is degraded: ${detail}`, es), `${reasonKey} in a roll-up`)
-        .toBe(es('health.reason.componentDegraded', { component: 'BlobCheckpoint', detail: expected }));
+        .toBe(es('health.reason.componentDegraded', { component: es('health.component.BlobCheckpoint'), detail: expected }));
     }
   });
 });
@@ -1582,5 +1748,548 @@ describe('Copilot Adoption Cowork row tier labels', () => {
 
   it('has a SPA label map entry for every server Cowork tier code', () => {
     expect(Object.keys(COWORK_TIER_LABEL_KEYS).sort()).toEqual(coworkTierKeys().sort());
+  });
+});
+
+describe('Service Configuration webhook status details', () => {
+  it('translates every fixed webhook detail SystemStatus writes, and nothing else is a sentence', async () => {
+    const { WEBHOOK_STATUS_DETAIL_TEXT } = await import('../../pages/ServiceConfigurationPage');
+    const source = readFileSync(join(process.cwd(), '..', '..', 'Models', 'SystemStatus.cs'), 'utf8');
+    const opened = [...source.matchAll(/\bCallWebhookStatusDetail\s*\+?=(?!=)/g)].length;
+    const assigned = [...source.matchAll(/\bCallWebhookStatusDetail\s*=\s*("(?:[^"\\]|\\.)*"|[\w.]+)\s*;/g)].map((m) => m[1]);
+    expect(assigned.length, 'a CallWebhookStatusDetail assignment the gate cannot read').toBe(opened);
+
+    // The non-literal assignments carry data, not sentences: the cached detail and an exception message.
+    expect(assigned.filter((value) => !value.startsWith('"')).sort()).toEqual(['cached.Detail', 'ex.Message']);
+    const sentences = assigned.filter((value) => value.startsWith('"')).map((value) => csharpStringLiteralValue(value.slice(1, -1)));
+    expect(sentences).toEqual(["WebAppURL is not configured, so the webhook subscription URL can't be determined."]);
+    expect(sortedUnique(Object.keys(WEBHOOK_STATUS_DETAIL_TEXT)), 'WEBHOOK_STATUS_DETAIL_TEXT must translate exactly these').toEqual(sortedUnique(sentences));
+    expect(EN_CATALOG['admin.serviceConfiguration.webhook.detail.webAppUrlMissing']).toBe(sentences[0]);
+  });
+});
+
+describe('Service Configuration update-check errors', () => {
+  // UpdateChecker's interpolations, named as the SPA catalog's placeholders. An interpolation not listed
+  // here survives as `{...C#...}` and fails the comparison below - as does a new, removed or reworded
+  // sentence.
+  const HOLES: Record<string, string> = {
+    '{_timeout.TotalSeconds:0}': '{seconds}',
+    '{InnerMostMessage(ex)}': '{error}',
+    '{currentLabel}': '{label}',
+    '{resetText}': '{resetAt}',
+    '{(int)response.StatusCode}': '{status}',
+    '{response.StatusCode}': '{statusName}',
+  };
+
+  function updateCheckerSource(): string {
+    return readFileSync(join(process.cwd(), '..', '..', 'Models', 'UpdateCheck', 'UpdateChecker.cs'), 'utf8');
+  }
+
+  /** Every `result.Error = "..."`, `result.CheckError = "..."` and `return "..."` sentence, literals joined. */
+  function serverSentences(): string[] {
+    return [...updateCheckerSource().matchAll(/(?:result\.(?:Check)?Error\s*=|return)\s*((?:\$?"(?:[^"\\]|\\.)*"\s*\+?\s*)+);/g)]
+      .map((m) => [...m[1].matchAll(/\$?"((?:[^"\\]|\\.)*)"/g)].map((part) => csharpStringLiteralValue(part[1])).join(''))
+      .map((sentence) => sentence.replace(/\{[^}]+\}/g, (hole) => HOLES[hole] ?? hole));
+  }
+
+  it('recognises every fixed sentence UpdateChecker can report, with exact English', async () => {
+    const { UPDATE_CHECK_ERROR_KEYS } = await import('../../pages/ServiceConfigurationPage');
+    const server = serverSentences();
+    expect(server.length, 'UpdateChecker error sentences not found').toBe(9);
+
+    const templated = UPDATE_CHECK_ERROR_KEYS
+      .filter((key) => key !== 'admin.serviceConfiguration.updates.error.rateLimitedSoon')
+      .map((key) => EN_CATALOG[key]);
+    expect(sortedUnique(templated), 'UPDATE_CHECK_ERROR_KEYS must match UpdateChecker sentence for sentence').toEqual(sortedUnique(server));
+  });
+
+  it('keeps the no-reset-time rate-limit sentence equal to what the server writes', () => {
+    expect(updateCheckerSource()).toContain('var resetText = "shortly";');
+    expect(EN_CATALOG['admin.serviceConfiguration.updates.error.rateLimitedSoon'])
+      .toBe(EN_CATALOG['admin.serviceConfiguration.updates.error.rateLimited'].replace('{resetAt}', 'shortly'));
+  });
+});
+
+describe('Teams authorisation server errors', () => {
+  it('keeps the Redis prerequisite error aligned with the SPA catalog entry', () => {
+    const source = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'TeamsAuthAPIController.cs'), 'utf8');
+    // Every ApiErrorModel the controller builds, literals joined: teamAuthErrorText matches the sentence
+    // exactly, so text appended on the server, or a second sentence, would reach a Spanish reader in English.
+    const opened = [...source.matchAll(/new ApiErrorModel\(/g)].length;
+    const sentences = [...source.matchAll(/new ApiErrorModel\(\s*((?:"(?:[^"\\]|\\.)*"\s*\+?\s*)+)\)/g)]
+      .map((m) => [...m[1].matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((part) => csharpStringLiteralValue(part[1])).join(''));
+    expect(sentences.length, 'an ApiErrorModel whose message is not literal text').toBe(opened);
+    expect(sentences).toEqual([EN_CATALOG['admin.teams.teamList.redisNotConfigured']]);
+    // A reply carrying text some other way (an anonymous { message }) would skip the check above.
+    expect([...source.matchAll(/\bContent\s*\(/g)].length, 'a Teams authorisation Content(...) reply that is not an ApiErrorModel')
+      .toBe([...source.matchAll(/\bContent\s*\(\s*HttpStatusCode\.\w+,\s*new ApiErrorModel\(/g)].length);
+  });
+});
+
+describe('User lookup server errors', () => {
+  const service = () => readFileSync(join(process.cwd(), '..', '..', 'Models', 'UserDataLookup', 'UserDataLookupService.cs'), 'utf8');
+  const controller = () => readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'UserDataLookupAPIController.cs'), 'utf8');
+
+  it('catalogues every sentence UserDataLookupService writes, with its interpolations as placeholders', () => {
+    const source = service();
+    const opened = [...source.matchAll(/\.(?:BadRequest|UserNotFound)\(/g)].length;
+    const sentences = [...source.matchAll(/\.(?:BadRequest|UserNotFound)\(\s*\$?"((?:[^"\\]|\\.)*)"\s*\)/g)].map((m) => csharpStringLiteralValue(m[1]));
+    expect(sentences.length, 'a BadRequest/UserNotFound whose message is not one literal').toBe(opened);
+    expect(sortedUnique(sentences)).toEqual(sortedUnique([
+      EN_CATALOG['errors.userLookup.missingUpn'],
+      EN_CATALOG['errors.userLookup.unknownCategory'],
+      EN_CATALOG['errors.userLookup.categoryNoDrilldown'],
+      EN_CATALOG['errors.userLookup.notFound'],
+    ]));
+  });
+
+  it('keeps the controller deriving each code from those same sentences, and sending the UPN fact', () => {
+    // BadRequestError reads the service's English to pick a code (a known soft spot): pin its prefixes to
+    // the catalog, which the spec above pins to the service, so a reword fails here, not in production.
+    const source = controller().replace(/\s+/g, ' ');
+    const [unknownPrefix, unknownSuffix] = EN_CATALOG['errors.userLookup.unknownCategory'].split('{category}');
+    const [noDrilldownPrefix, noDrilldownSuffix] = EN_CATALOG['errors.userLookup.categoryNoDrilldown'].split('{category}');
+    expect(source).toContain(`if (message == "${EN_CATALOG['errors.userLookup.missingUpn']}")`);
+    expect(source).toContain(`const string unknownPrefix = "${unknownPrefix}";`);
+    expect(source).toContain(`message.EndsWith("${unknownSuffix}")`);
+    expect(source).toContain(`const string noDrilldownPrefix = "${noDrilldownPrefix}";`);
+    expect(source).toContain(`const string noDrilldownSuffix = "${noDrilldownSuffix}";`);
+    expect(source).toContain('new ApiErrorModel(result.ErrorMessage, "userNotFound") { Upn = UserDataLookupRules.Normalise(upn), }');
+  });
+
+  it('writes no sentence of its own in the controller: every error carries the service message', () => {
+    const source = controller();
+    // The controller only relays UserDataLookupService's sentences (pinned above). A literal here, or a
+    // reply that is not an ApiErrorModel, would reach Spanish readers in English.
+    const firstArgs = [...source.matchAll(/new ApiErrorModel\(\s*([^,)]+)/g)].map((m) => m[1].trim());
+    expect(sortedUnique(firstArgs), 'ApiErrorModel message arguments').toEqual(['message', 'result.ErrorMessage']);
+    const contents = [...source.matchAll(/\bContent\s*\(\s*HttpStatusCode\.(\w+),\s*([A-Za-z]+)/g)].map((m) => `${m[1]}:${m[2]}`);
+    expect(contents.length, 'a Content(...) reply the gate cannot read').toBe([...source.matchAll(/\bContent\s*\(/g)].length);
+    expect(contents.sort()).toEqual(['BadRequest:BadRequestError', 'NotFound:new']);
+  });
+
+  it('recognises every fixed row title and detail prefix SqlUserDataLookupQuery writes', async () => {
+    const { detailText, detailTitle } = await import('../../components/userlookup/CategoryRow');
+    const query = readFileSync(join(process.cwd(), '..', '..', 'Models', 'UserDataLookup', 'SqlUserDataLookupQuery.cs'), 'utf8');
+    const titles = [...query.matchAll(/\bTitle\s*=\s*([^,\n]+)/g)]
+      .flatMap((m) => [...m[1].matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((s) => csharpStringLiteralValue(s[1])));
+    const prefixes = [...query.matchAll(/\bDetail\s*=\s*([^\n]+)/g)]
+      .flatMap((m) => [...m[1].matchAll(/"((?:[^"\\]|\\.)*)"\s*\+/g)].map((s) => csharpStringLiteralValue(s[1])));
+
+    // Each title with the category it appears under; a new or reworded literal fails the equality.
+    const titleCategories: Record<string, string> = {
+      'Call / meeting': 'calls-organised',
+      'Call session attended': 'call-sessions',
+      'Activity report day': 'usage-teams',
+      '(audit event)': 'audit-events',
+    };
+    expect(sortedUnique(titles)).toEqual(sortedUnique(Object.keys(titleCategories)));
+    expect(sortedUnique(prefixes)).toEqual(['Ended ', 'Last activity ']);
+
+    await loadCatalog('es');
+    const es: TFunction = (key, values) => translateStatic('es', key, values);
+    for (const [title, category] of Object.entries(titleCategories)) {
+      expect(detailTitle(es, category, title), `detailTitle does not recognise "${title}"`).not.toBe(title);
+    }
+    expect(detailText(es, 'calls-organised', { detail: 'Ended 2026-09-01 10:00:00Z' } as never)).not.toMatch(/^Ended /);
+    expect(detailText(es, 'usage-teams', { detail: 'Last activity 9/1/2026' } as never)).not.toMatch(/^Last activity /);
+  });
+});
+
+// --- Licence Activity coverage measures and messages -------------------------------------------------
+//
+// The licence activity SQL writes each workload's coverage `measure` and `message` as English sentences.
+// LicenceActivityDisplayKeys (C#) turns each sentence into a stable key, and sources.ts maps that key to a
+// catalog entry. Three kinds of drift each put English back on the Spanish page without failing anything
+// else: a sentence the C# switch does not know, a switch case whose sentence no longer exists (reworded),
+// and a key that one side has and the other lacks.
+
+const LICENCE_ACTIVITY_DIR = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'LicenceActivity');
+
+function licenceDisplayKeySwitch(name: 'MeasureKeyFor' | 'MessageKeyFor'): Map<string, string> {
+  const source = readFileSync(join(LICENCE_ACTIVITY_DIR, 'LicenceActivityModels.cs'), 'utf8');
+  const start = source.indexOf(`static string ${name}(`);
+  expect(start, `LicenceActivityDisplayKeys.${name} not found`).toBeGreaterThanOrEqual(0);
+  const body = source.slice(start, source.indexOf('default:', start));
+  return new Map(
+    [...body.matchAll(/case "((?:[^"\\]|\\.)*)": return "([^"]+)";/g)].map((m) => [csharpStringLiteralValue(m[1]), m[2]]),
+  );
+}
+
+/** Every coverage measure and message sentence the server can write, from the three places it writes them. */
+function licenceCoverageSentences(): string[] {
+  const sql = readFileSync(join(LICENCE_ACTIVITY_DIR, 'LicenceActivitySql.cs'), 'utf8');
+  // SQL literals, apart from diagnostics (PRINT) and dynamic SQL (sp_executesql). Two or more words, or
+  // anything ending like a sentence, is text someone reads; codes ('available') and bucket names
+  // (N'Unknown') are single bare words.
+  const sqlSentences = [...sql.matchAll(/(PRINT\s+|sp_executesql\s+)?N'((?:[^']|'')*)'/g)]
+    .filter((m) => !m[1])
+    .map((m) => m[2].replace(/''/g, "'"))
+    .filter((literal) => literal.trim().split(/\s+/).length >= 2 || /[.!?]$/.test(literal.trim()));
+  // The Microsoft 365 measures are passed from C# into the SQL template; the store also builds coverage in C#.
+  const m365Measures = [...sql.matchAll(/AppendM365Overview\([^;]*?"((?:[^"\\]|\\.)*)",\s*sources\.UsageReports\)/g)]
+    .map((m) => csharpStringLiteralValue(m[1]));
+  // C# text interpolated into the SQL as N'{n}': the two M365 overview measures above, and the Copilot
+  // fallback row's initialMessage. Every such format item is counted, so a new C#-written sentence cannot
+  // hide behind one the way initialMessage once did.
+  const formatItems = sql.split('\n').filter((line) => !line.trim().startsWith('//')).join('\n').match(/N'\{\d\}'/g) ?? [];
+  expect(formatItems.length, "a new N'{n}' SQL literal is written from C#: extract its text in licenceCoverageSentences").toBe(3);
+  const initialMessage = /var initialMessage\s*=([^;]*);/.exec(sql)?.[1];
+  expect(initialMessage, 'LicenceActivitySql initialMessage not found').toBeTruthy();
+  // One sentence per branch of the ternary, joining any literals a long line was wrapped into.
+  const copilotFallback: string[] = [];
+  let branch: string[] | null = null;
+  for (const token of initialMessage!.matchAll(/"((?:[^"\\]|\\.)*)"|([?:])/g)) {
+    if (token[2]) {
+      if (branch) copilotFallback.push(branch.join(''));
+      branch = [];
+    } else {
+      branch?.push(csharpStringLiteralValue(token[1]));
+    }
+  }
+  if (branch) copilotFallback.push(branch.join(''));
+  expect(copilotFallback.length, 'initialMessage sentences').toBe(2);
+  // Every coverage builder: a literal Measure/Message is a sentence; anything else may only read or copy
+  // one, so an interpolated, computed or defaulted (`?? "..."`) sentence fails here rather than going unkeyed.
+  const builders = ['SqlLicenceActivityStore.cs', 'SqlLicenceActivityReadModelLoader.cs', 'LicenceActivityReadModel.cs']
+    .map((file) => readFileSync(join(LICENCE_ACTIVITY_DIR, file), 'utf8'));
+  // Each value must be followed (across line breaks) by the ',', '}' or ';' that ends the assignment, and
+  // every assignment must parse: a default on the next line (`?? "..."`) or any other unreadable shape
+  // fails the count instead of being skipped.
+  const opened = builders.reduce((count, source) => count + [...source.matchAll(/\b(?:Measure|Message)\s*=(?![=>])/g)].length, 0);
+  const assignments = builders.flatMap((source) => [...source.matchAll(
+    /\b(?:Measure|Message)\s*=(?![=>])\s*("(?:[^"\\]|\\.)*"|\w+\([^)]*\)|[^,\n]+?)(?=\s*[,};])/g,
+  )].map((m) => m[1].trim()));
+  expect(assignments.length, 'a coverage Measure/Message assignment the gate cannot read').toBe(opened);
+  expect(sortedUnique(assignments.filter((value) => !value.startsWith('"'))), 'a non-literal coverage Measure/Message in a coverage builder')
+    .toEqual(sortedUnique([
+      'ReadNullableString(reader, "Message")', 'ReadString(reader, "Measure")', 'string.Empty',
+      'coverage.Measure', 'source.Measure', 'source.Message', '_coverage[workload].Measure',
+    ]));
+  const storeText = assignments.filter((value) => value.startsWith('"')).map((value) => csharpStringLiteralValue(value.slice(1, -1)));
+  return sortedUnique([...sqlSentences, ...m365Measures, ...copilotFallback, ...storeText]);
+}
+
+describe('Licence Activity coverage measures and messages', () => {
+  it('finds the sentences it is guarding', () => {
+    // A parser that silently matched nothing would make every test below vacuous.
+    expect(licenceCoverageSentences().length).toBeGreaterThanOrEqual(25);
+    expect(licenceDisplayKeySwitch('MeasureKeyFor').size).toBeGreaterThanOrEqual(8);
+    expect(licenceDisplayKeySwitch('MessageKeyFor').size).toBeGreaterThanOrEqual(15);
+  });
+
+  it('gives every sentence the server writes a stable key', () => {
+    const known = new Set([...licenceDisplayKeySwitch('MeasureKeyFor').keys(), ...licenceDisplayKeySwitch('MessageKeyFor').keys()]);
+    const unkeyed = licenceCoverageSentences().filter((sentence) => !known.has(sentence));
+
+    expect(unkeyed, 'add each sentence to LicenceActivityDisplayKeys, then map its key in sources.ts').toEqual([]);
+  });
+
+  it('has no key for a sentence the server no longer writes', () => {
+    const written = new Set(licenceCoverageSentences());
+    const stale = [...licenceDisplayKeySwitch('MeasureKeyFor').keys(), ...licenceDisplayKeySwitch('MessageKeyFor').keys()]
+      .filter((sentence) => !written.has(sentence));
+
+    expect(stale, 'a reworded sentence: update the switch, the English catalog text, and re-read its Spanish').toEqual([]);
+  });
+
+  it('maps exactly the keys the server sends, to catalog text that reads as the server does', async () => {
+    const { MEASURE_LABELS, MESSAGE_LABELS } = await import('../../components/licenceActivity/sources');
+
+    for (const [name, spaMap] of [['MeasureKeyFor', MEASURE_LABELS], ['MessageKeyFor', MESSAGE_LABELS]] as const) {
+      const server = licenceDisplayKeySwitch(name);
+      expect(Object.keys(spaMap).sort(), `${name}: SPA keys vs server keys`).toEqual(sortedUnique([...server.values()]));
+
+      // The English page must read exactly as it did when the server's sentence was shown directly.
+      for (const [sentence, key] of server) {
+        expect(EN_CATALOG[spaMap[key]], `${name}: English catalog text for '${key}'`).toBe(sentence);
+      }
+    }
+  });
+});
+
+
+// --- Copilot Adoption structured warnings -----------------------------------------------------------
+
+const COPILOT_ADOPTION_SERVICE = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'CopilotAdoption', 'CopilotAdoptionService.cs');
+const COPILOT_ADOPTION_SUMMARY_MODELS = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'CopilotAdoption', 'CopilotAdoptionSummaryModels.cs');
+const COPILOT_ADOPTION_SERVER_TEXT = join(process.cwd(), 'components', 'copilotAdoption', 'serverText.ts');
+
+function copilotWarningConstants(): Record<string, string> {
+  const source = readFileSync(COPILOT_ADOPTION_SUMMARY_MODELS, 'utf8');
+  const body = /public static class CopilotAdoptionWarningKeys\s*\{([\s\S]*?)\n\s*\}/.exec(source)?.[1] ?? '';
+  return Object.fromEntries([...body.matchAll(/public const string (\w+)\s*=\s*"([^"]+)";/g)].map((m) => [m[1], m[2]]));
+}
+
+function copilotWarningTemplates(): Record<string, string> {
+  const source = readFileSync(COPILOT_ADOPTION_SUMMARY_MODELS, 'utf8');
+  const constants = copilotWarningConstants();
+  const body = /private static readonly Dictionary<string, string> Templates[\s\S]*?\{([\s\S]*?)\n\s*\};/.exec(source)?.[1] ?? '';
+  return Object.fromEntries([...body.matchAll(/\{\s*CopilotAdoptionWarningKeys\.(\w+),\s*"((?:[^"\\]|\\.)*)"\s*\}/g)]
+    .map((m) => [constants[m[1]], csharpStringLiteralValue(m[2])]));
+}
+
+function placeholders(text: string): string[] {
+  return sortedUnique([...text.matchAll(/\{([^}]+)\}/g)].map((m) => m[1]));
+}
+
+function copilotQueryDescriptions(): Record<string, string> {
+  const source = readFileSync(COPILOT_ADOPTION_SERVICE, 'utf8');
+  return Object.fromEntries([...source.matchAll(
+    /CopilotAdoptionQueries\.(\w+),\s*(?:summary\.Warnings,\s*summary\.WarningDetails,\s*)?(?:output,\s*)?\r?\n\s*"([^"]+)"/g,
+  )].map((m) => [m[1], m[2]]));
+}
+
+describe('Copilot Adoption server warning text', () => {
+  it('has a SPA mapping and exact English catalog template for every server warning key', () => {
+    const server = copilotWarningTemplates();
+    const mapped = Object.values(COPILOT_ADOPTION_WARNING_KEYS);
+    expect({
+      missing: Object.keys(server).filter((key) => !mapped.includes(key as never)),
+      orphaned: mapped.filter((key) => !(key in server)),
+    }, 'Keep COPILOT_ADOPTION_WARNING_KEYS in serverText.ts in exact sync with CopilotAdoptionWarningKeys/WarningTemplates in C#.').toEqual({ missing: [], orphaned: [] });
+
+    for (const [key, english] of Object.entries(server)) {
+      if (key === COPILOT_ADOPTION_WARNING_KEYS.UsageReportSourcedUsers) {
+        const one = 'copilotAdoption.server.warning.usageReportSourcedUsers.one';
+        const other = 'copilotAdoption.server.warning.usageReportSourcedUsers.other';
+        expect(EN_CATALOG[one], `${one} must reproduce the singular server English.`)
+          .toBe(english.replace('{userPlural}', ''));
+        expect(EN_CATALOG[other], `${other} must reproduce the plural server English.`)
+          .toBe(english.replace('{userPlural}', 's'));
+        expect(placeholders(EN_CATALOG[one]), `${one} placeholders`).toEqual(['count', 'percentage']);
+        expect(placeholders(EN_CATALOG[other]), `${other} placeholders`).toEqual(['count', 'percentage']);
+        continue;
+      }
+      const catalogKey = `copilotAdoption.server.warning.${key}`;
+      expect(EN_CATALOG[catalogKey], `${catalogKey} must reproduce the server English exactly.`).toBe(english);
+      expect(placeholders(EN_CATALOG[catalogKey]), `${catalogKey} placeholders`).toEqual(placeholders(english));
+    }
+  });
+
+  it('catalogues every could-not-load query description by stable query name', () => {
+    const descriptions = copilotQueryDescriptions();
+    expect(Object.keys(descriptions).length).toBeGreaterThanOrEqual(20);
+    for (const [query, description] of Object.entries(descriptions)) {
+      expect(EN_CATALOG[`copilotAdoption.server.query.${query}`], `copilotAdoption.server.query.${query}`)
+        .toBe(description);
+    }
+  });
+
+  it('adds every warning through the structured helpers, so warningDetails stays aligned', () => {
+    const service = readFileSync(COPILOT_ADOPTION_SERVICE, 'utf8');
+    const directAdds = [...service.matchAll(/\bWarnings\s*\.\s*(?:Add|AddRange|Insert|InsertRange)\s*\(([^;]*);/g)]
+      .map((m) => m[0].replace(/\s+/g, ''));
+
+    // The one direct add is the step merge, which copies a step's already-paired warnings and details.
+    expect(directAdds, 'Use CopilotAdoptionWarnings.Add(...) or StepOutput.AddWarning(...) so warningDetails stays aligned.')
+      .toEqual(['Warnings.Add(warning);']);
+    const flat = service.replace(/\s+/g, '');
+    expect(flat).toContain('analysis.Summary.Warnings.Add(warning);');
+    expect(flat).toContain('analysis.Summary.WarningDetails.Add(detail.Clone());');
+
+    // A floor, so a moved or renamed service fails here instead of passing on an empty match.
+    const structured = [...service.matchAll(/\bCopilotAdoptionWarnings\.Add\s*\(|\bAddWarning\s*\(/g)].length;
+    expect(structured, 'structured warning calls not found').toBeGreaterThanOrEqual(20);
+
+    for (const file of ['CopilotAdoptionScope.cs', 'CopilotAdoptionCoworkModels.cs']) {
+      const source = readFileSync(join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'CopilotAdoption', file), 'utf8');
+      expect([...source.matchAll(/\bWarnings\s*\.\s*(?:Add|AddRange|Insert|InsertRange)\s*\(/g)], `${file} adds unstructured warnings`).toEqual([]);
+    }
+  });
+
+  it('keeps the reclaim caveat key catalogued beside the server fallback', () => {
+    const source = readFileSync(COPILOT_ADOPTION_SERVICE, 'utf8');
+    const fallback = /summary\.ReclaimCaveat\s*=\s*"((?:[^"\\]|\\.)*)";/.exec(source)?.[1] ?? '';
+    expect(source).toContain('summary.ReclaimCaveatKey = CopilotAdoptionWarningKeys.ReclaimCaveat;');
+    expect(EN_CATALOG['copilotAdoption.server.reclaimCaveat']).toBe(csharpStringLiteralValue(fallback));
+  });
+
+  it('does not filter Copilot Adoption warning panels by English substrings', () => {
+    const sources = [
+      join(process.cwd(), 'src', 'components', 'copilotAdoption', 'CoworkPanel.tsx'),
+      join(process.cwd(), 'src', 'components', 'copilotAdoption', 'OpportunitiesPanel.tsx'),
+    ].map((file) => readFileSync(file, 'utf8')).join('\n');
+
+    expect(sources).not.toMatch(/includes\(['"](cowork|licence opportunit|usage report)/i);
+    expect(sources).toContain('isCoworkWarning');
+    expect(sources).toContain('isLicenceOpportunityWarning');
+  });
+
+  it('shows every Cowork query failure on the Cowork tab', async () => {
+    const { isCoworkWarning } = await import('../../components/copilotAdoption/serverText');
+    const service = readFileSync(COPILOT_ADOPTION_SERVICE, 'utf8');
+    const coworkQueries = sortedUnique([...service.matchAll(/CopilotAdoptionQueries\.(Cowork\w+)/g)].map((m) => m[1]));
+
+    expect(coworkQueries.length, 'Cowork queries not found in the service').toBeGreaterThanOrEqual(7);
+    expect(
+      coworkQueries.filter((query) => !isCoworkWarning({ key: 'couldNotLoad', values: { query, description: '', message: '' } })),
+      'Add each Cowork query to COWORK_WARNING_QUERIES in serverText.ts, or its failure disappears from the Cowork tab.',
+    ).toEqual([]);
+  });
+
+  it('names every figures-incomplete dataset from the catalog, with the service English verbatim', async () => {
+    const { INCOMPLETE_DATASET_KEYS } = await import('../../components/copilotAdoption/serverText');
+    const service = readFileSync(COPILOT_ADOPTION_SERVICE, 'utf8');
+    // A literal is parsed whole (a name may itself contain parentheses), and every call must parse: an
+    // argument the pattern cannot read - an interpolation, a concatenation - fails the count below.
+    const opened = [...service.matchAll(/\bMark(?:FiguresIncomplete|Incomplete)\s*\(/g)].length;
+    const calls = [...service.matchAll(/\bMark(?:FiguresIncomplete|Incomplete)\s*\(\s*("(?:[^"\\]|\\.)*"|[^)"]*?)\s*\)/g)].map((m) => m[1].trim());
+    expect(calls.length, 'a MarkFiguresIncomplete/MarkIncomplete argument the gate cannot read').toBe(opened);
+    const literals = calls.filter((arg) => /^"(?:[^"\\]|\\.)*"$/.test(arg)).map((arg) => csharpStringLiteralValue(arg.slice(1, -1)));
+
+    // The only non-literal uses are StepOutput.MarkIncomplete's own parameter and the step merge, which
+    // forwards reasons recorded by literal calls above. Anything else could name a dataset this list misses.
+    expect(sortedUnique(calls.filter((arg) => !arg.startsWith('"'))), 'non-literal dataset name').toEqual(['reason', 'string dataset']);
+    expect(literals.length, 'figures-incomplete datasets not found in the service').toBeGreaterThanOrEqual(17);
+    // Only the service names datasets: a call in any other CopilotAdoption file would escape the list below.
+    const adoptionDir = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'CopilotAdoption');
+    for (const file of readdirSync(adoptionDir).filter((name) => name.endsWith('.cs') && name !== 'CopilotAdoptionService.cs')) {
+      const other = readFileSync(join(adoptionDir, file), 'utf8');
+      const foreign = [...other.matchAll(/\bMark(?:FiguresIncomplete|Incomplete)\s*\(([^)]*)\)/g)].map((m) => m[1].trim())
+        .filter((arg) => arg !== 'string dataset');
+      expect(foreign, `${file} names a figures-incomplete dataset`).toEqual([]);
+    }
+    const controllerSource = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'CopilotAdoptionAPIController.cs'), 'utf8');
+    expect([...controllerSource.matchAll(/\bMark(?:FiguresIncomplete|Incomplete)\s*\(/g)], 'the controller names a dataset').toEqual([]);
+    expect(sortedUnique(INCOMPLETE_DATASET_KEYS.map((key) => EN_CATALOG[key])), 'INCOMPLETE_DATASET_KEYS must name exactly the service datasets, verbatim')
+      .toEqual(sortedUnique(literals));
+    expect(INCOMPLETE_DATASET_KEYS.length, 'two dataset keys share one English name').toBe(sortedUnique(literals).length);
+  });
+});
+
+describe('Reports partial-data warning facts', () => {
+  it('catalogues every structured usage-series warning reason the server can send', () => {
+    const source = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'ReportsAPIController.cs'), 'utf8');
+    const reasons = [...source.matchAll(/Reason\s*=\s*"([^"]+)"/g)].map((m) => m[1]).sort();
+
+    expect(reasons).toEqual(['loadFailed', 'noSettledData', 'noSettledDataForWeek', 'notAttempted']);
+
+    const missing = reasons
+      .map((reason) => `reports.chart.warning.series.${reason}`)
+      .filter((key) => !(key in EN_CATALOG));
+
+    expect(
+      missing,
+      'ReportsAPIController added a structured partial-data warning reason without a matching\n' +
+        'catalog entry, so the SPA would fall back to server-authored English. Add the key to\n' +
+        'src/i18n/catalog/{en,es}/reports.ts.',
+    ).toEqual([]);
+  });
+
+  it('catalogues every structured usage-series chart error the server can send', () => {
+    const source = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'ReportsAPIController.cs'), 'utf8');
+    const errorStatements = [...source.matchAll(/ErrorKey\s*=[^;]+;/g)].map((m) => m[0]).join('\n');
+    const errorKeys = [...errorStatements.matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+
+    expect(errorKeys).toEqual(['noCompletedUsageWeeks', 'noCompletedUsageWeeksWithData', 'noWorkloadSeriesLoaded']);
+
+    const missing = errorKeys
+      .map((errorKey) => `reports.chart.error.${errorKey}`)
+      .filter((key) => !(key in EN_CATALOG));
+
+    expect(
+      missing,
+      'ReportsAPIController added a structured chart error key without a matching catalog entry.',
+    ).toEqual([]);
+  });
+});
+
+describe('API error-code drift checks', () => {
+  function quotedArguments(call: string): string[] {
+    return [...call.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => csharpStringLiteralValue(m[1]));
+  }
+
+  function licenceActivityServerErrors(): Map<string, string> {
+    const controller = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'LicenceActivityAPIController.cs'), 'utf8');
+    const pairs = new Map<string, string>();
+
+    for (const match of controller.matchAll(/Error\(\s*"((?:[^"\\]|\\.)*)"\s*,\s*((?:.|\n)*?)\)/g)) {
+      const code = csharpStringLiteralValue(match[1]);
+      const message = quotedArguments(match[2]).join('');
+      if (message) pairs.set(code, message);
+    }
+
+    const switchStart = controller.indexOf('static string ValidationErrorCode');
+    expect(switchStart, 'ValidationErrorCode switch not found').toBeGreaterThanOrEqual(0);
+    const switchBody = controller.slice(switchStart, controller.indexOf('default:', switchStart));
+    for (const match of switchBody.matchAll(/case\s+"((?:[^"\\]|\\.)*)"\s*:\s*return\s+"((?:[^"\\]|\\.)*)"/g)) {
+      pairs.set(csharpStringLiteralValue(match[2]), csharpStringLiteralValue(match[1]));
+    }
+
+    // The failed-run 503 sends the exception's own sentence, with the run id beside it as `reference`.
+    const failed = /new \{ code = "(\w+)", message = ex\.Message, reference = ex\.RunId \}/.exec(controller);
+    expect(failed, 'LicenceActivityFailedException reply not found').toBeTruthy();
+    const cache = readFileSync(join(process.cwd(), '..', '..', 'Models', 'LicenceActivity', 'LicenceActivitySnapshotCache.cs'), 'utf8');
+    const prefix = /LicenceActivityFailedException\(string runId\)\s*:\s*base\("((?:[^"\\]|\\.)*)" \+ runId\)/.exec(cache)?.[1];
+    expect(prefix, 'LicenceActivityFailedException message not found').toBeTruthy();
+    pairs.set(failed![1], `${csharpStringLiteralValue(prefix!)}{reference}`);
+
+    // Any other anonymous-object code would be invisible to the extraction above: fail rather than miss it.
+    const anonymousCodes = [...controller.matchAll(/\bcode = "(\w+)"/g)].map((m) => m[1]);
+    expect(anonymousCodes.filter((code) => !pairs.has(code)), 'Unextracted LicenceActivityAPIController error code').toEqual([]);
+
+    return pairs;
+  }
+
+  it('keeps Licence Activity server error codes aligned with SPA mappings and English text', async () => {
+    const { ERROR_CODE_KEYS } = await import('../../api/licenceActivityApi');
+    const server = licenceActivityServerErrors();
+    const serverCodes = [...server.keys()].sort();
+    const spaCodes = Object.keys(ERROR_CODE_KEYS).sort();
+
+    expect(spaCodes, 'SPA maps exactly the LicenceActivityAPIController codes it can send').toEqual(serverCodes);
+
+    for (const [code, message] of server) {
+      const catalogKey = ERROR_CODE_KEYS[code];
+      expect(catalogKey, `Missing SPA map entry for Licence Activity error code '${code}'`).toBeTruthy();
+      expect(EN_CATALOG[catalogKey], `English catalog for Licence Activity error code '${code}' must match the server`).toBe(message);
+    }
+  });
+
+  function agentCostServerErrors(): Map<string, string> {
+    const source = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'AgentCostsAPIController.cs'), 'utf8');
+    const pairs = new Map<string, string>();
+    for (const match of source.matchAll(/\bcode\s*=\s*"(\w+)",\s*message\s*=\s*((?:\$?"(?:[^"\\]|\\.)*"\s*\+?\s*)+),/g)) {
+      pairs.set(match[1], quotedArguments(match[2]).join(''));
+    }
+
+    // Every coded response, however it is written: one whose message is not a plain literal fails here.
+    const codes = [...source.matchAll(/\bcode\s*=\s*"(\w+)"/g)].map((m) => m[1]);
+    expect(codes.length, 'Agent Costs coded responses not found').toBeGreaterThan(0);
+    expect(codes.filter((code) => !pairs.has(code)), 'Agent Costs error code whose message could not be extracted').toEqual([]);
+
+    // Replies WITHOUT a code are shown to the reader as the server wrote them. Only these three are allowed:
+    // bad-request replies to malformed requests the portal never makes. A new one would be English on a
+    // Spanish page, so it must get a code and a catalog entry instead.
+    const replies = [...source.matchAll(/\bContent\s*\(\s*HttpStatusCode\.\w+,\s*new\b[^;]*;/g)].map((m) => m[0]);
+    // Every Content(...) reply must be one this gate can read: a body built elsewhere and passed in as a
+    // variable would otherwise be invisible to both checks below.
+    expect(replies.length, 'an Agent Costs Content(...) reply whose body is not written inline').toBe([...source.matchAll(/\bContent\s*\(/g)].length);
+    const uncoded = replies
+      .filter((reply) => !/\bcode\s*=/.test(reply))
+      .map((reply) => /\bmessage\s*=\s*(\$?"(?:[^"\\]|\\.)*"|[\w.]+)/.exec(reply)?.[1] ?? reply);
+    expect(replies.length, 'Agent Costs replies not found').toBeGreaterThanOrEqual(4);
+    expect(uncoded.sort(), 'a new uncoded Agent Costs reply').toEqual([
+      '$"\'{dimension}\' is not something Azure costs can be broken down by."',
+      '$"\'{dimension}\' is not something these figures can be broken down by."',
+      'ex.Message',
+    ]);
+    return pairs;
+  }
+
+  it('keeps Agent Costs server error codes aligned with SPA mappings and English text', async () => {
+    const { AGENT_COST_ERROR_CODE_KEYS } = await import('../../api/agentCostsApi');
+    const server = agentCostServerErrors();
+    const serverCodes = [...server.keys()].sort();
+    const spaCodes = Object.keys(AGENT_COST_ERROR_CODE_KEYS).sort();
+
+    expect(spaCodes, 'SPA maps exactly the AgentCostsAPIController codes it can send').toEqual(serverCodes);
+
+    for (const [code, message] of server) {
+      const catalogKey = AGENT_COST_ERROR_CODE_KEYS[code];
+      expect(catalogKey, `Missing SPA map entry for Agent Costs error code '${code}'`).toBeTruthy();
+      expect(EN_CATALOG[catalogKey], `English catalog for Agent Costs error code '${code}' must match the server`).toBe(message);
+    }
   });
 });

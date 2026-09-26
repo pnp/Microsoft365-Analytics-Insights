@@ -32,8 +32,10 @@ import SkuAssignments from '../components/licenceActivity/SkuAssignments';
 import SelectedLicenceBar from '../components/licenceActivity/SelectedLicenceBar';
 import WorkloadDistributions from '../components/licenceActivity/WorkloadDistributions';
 import DemographicBreakdown from '../components/licenceActivity/DemographicBreakdown';
+import { demographicName } from '../components/licenceActivity/DemographicBreakdown';
 import UsersDrillDown from '../components/licenceActivity/UsersDrillDown';
 import ApiErrorBar, { describeError } from '../components/licenceActivity/ApiErrorBar';
+import { serverMessageText } from '../components/licenceActivity/serverNotes';
 import { presetRange } from '../components/licenceActivity/dateRange';
 import { formatCount } from '../components/licenceActivity/format';
 import {
@@ -361,7 +363,7 @@ export default function LicenceActivityPage() {
             {availability.messages.length > 0 && (
               <ul style={{ margin: '6px 0 0 0', paddingInlineStart: '20px' }}>
                 {availability.messages.map((m) => (
-                  <li key={m}>{m}</li>
+                  <li key={m}>{serverMessageText(t, m)}</li>
                 ))}
               </ul>
             )}
@@ -376,7 +378,7 @@ export default function LicenceActivityPage() {
               <MessageBarBody>
                 <ul style={{ margin: 0, paddingInlineStart: '20px' }}>
                   {availability.messages.map((m) => (
-                    <li key={m}>{m}</li>
+                    <li key={m}>{serverMessageText(t, m)}</li>
                   ))}
                 </ul>
               </MessageBarBody>
@@ -410,7 +412,7 @@ export default function LicenceActivityPage() {
                   <option value="">{t('licenceActivity.page.allDepartments')}</option>
                   {departmentOptions.options.map((dept) => (
                     <option key={dept.id} value={dept.id}>
-                      {dept.name}
+                      {demographicName(t, dept)}
                     </option>
                   ))}
                 </Select>
@@ -434,7 +436,7 @@ export default function LicenceActivityPage() {
                   <option value="">{t('licenceActivity.page.allCountries')}</option>
                   {countryOptions.options.map((country) => (
                     <option key={country.id} value={country.id}>
-                      {country.name}
+                      {demographicName(t, country)}
                     </option>
                   ))}
                 </Select>
@@ -509,7 +511,7 @@ export default function LicenceActivityPage() {
                   <MessageBarBody>
                     <ul style={{ margin: 0, paddingInlineStart: '20px' }}>
                       {overview.messages.map((m) => (
-                        <li key={m}>{m}</li>
+                        <li key={m}>{serverMessageText(t, m, overview.coverage)}</li>
                       ))}
                     </ul>
                   </MessageBarBody>

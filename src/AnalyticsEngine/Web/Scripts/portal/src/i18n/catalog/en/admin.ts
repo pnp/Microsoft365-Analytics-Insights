@@ -41,6 +41,7 @@ export const admin = {
   'admin.teams.teamList.columnTeamName': 'Team Name',
   'admin.teams.teamList.saveSuccess':
     'Selected Teams enabled for deep analytics successfully. It may take several hours before the extra metadata appears in any reports.',
+  'admin.teams.teamList.redisNotConfigured': "Teams deep analytics can't be enabled because Redis is not configured for this deployment. Add a Redis connection string so Teams authorisation tokens can be stored.",
   'admin.teams.teamList.unexpectedApiResponse': 'Unexpected response from API. Check JS log for more details.',
   'admin.teams.teamListItem.authorised': 'Authorised',
   'admin.teams.teamListItem.notAuthorised': 'Not authorised',
@@ -202,6 +203,7 @@ export const admin = {
   'admin.serviceConfiguration.webhook.active': 'Active',
   'admin.serviceConfiguration.webhook.callRecordsPermission': 'CallRecords.Read.All',
   'admin.serviceConfiguration.webhook.couldNotCheck': "Couldn't check",
+  'admin.serviceConfiguration.webhook.detail.webAppUrlMissing': "WebAppURL is not configured, so the webhook subscription URL can't be determined.",
   'admin.serviceConfiguration.webhook.missingHelp':
     'The importer web-job registers and renews this on every import cycle. If it stays missing, check the importer web-job is running and that its app registration has the {permission} Microsoft Graph application permission.',
   'admin.serviceConfiguration.webhook.noActiveSubscription': 'No active subscription found',
@@ -222,6 +224,17 @@ export const admin = {
   'admin.serviceConfiguration.updates.currentBuildLabel': 'This site is running',
   'admin.serviceConfiguration.updates.description':
     'Compares the build this site is running against the latest published release on GitHub. Nothing is sent to GitHub until you press the button.',
+  'admin.serviceConfiguration.updates.error.timeout': "Timed out after {seconds}s contacting github.com. If this web app has no outbound internet access (for example a private-endpoint deployment with restricted egress), update checks can't work from here - check the release page manually instead.",
+  'admin.serviceConfiguration.updates.error.unreachable': "Couldn't reach github.com to check for updates: {error}. This is expected if the web app has no outbound internet access; check the release page manually.",
+  'admin.serviceConfiguration.updates.error.failed': 'Update check failed: {error}',
+  // The rest of UpdateChecker's fixed sentences, verbatim; see UPDATE_CHECK_ERROR_KEYS.
+  'admin.serviceConfiguration.updates.error.devBuild': 'This is a locally-compiled build (DEV_BUILD), so it has no build number to compare. The latest published release is shown for reference.',
+  'admin.serviceConfiguration.updates.error.currentBuildUnreadable': "Couldn't read a build number out of this build's label ('{label}'), so it can't be compared. The latest published release is shown for reference.",
+  'admin.serviceConfiguration.updates.error.latestBuildUnreadable': "Couldn't read a build number from the latest GitHub release, so the two can't be compared. Open the release page to check manually.",
+  'admin.serviceConfiguration.updates.error.rateLimited': 'GitHub rejected the request because its API rate limit has been reached, not because of a permissions problem. The limit resets at {resetAt}. Anonymous requests are limited to 60 per hour per public IP address, which is shared by everything behind your outbound address. Try again after the reset.',
+  'admin.serviceConfiguration.updates.error.rateLimitedSoon': 'GitHub rejected the request because its API rate limit has been reached, not because of a permissions problem. The limit resets at shortly. Anonymous requests are limited to 60 per hour per public IP address, which is shared by everything behind your outbound address. Try again after the reset.',
+  'admin.serviceConfiguration.updates.error.releasesNotFound': "GitHub returned 404 for the releases endpoint. If this deployment sits behind a proxy that intercepts HTTPS, it may be returning its own response rather than GitHub's.",
+  'admin.serviceConfiguration.updates.error.httpStatus': 'GitHub returned {status} ({statusName}) when asked for the latest release.',
   'admin.serviceConfiguration.updates.latestReleaseLabel': 'Latest published release',
   'admin.serviceConfiguration.updates.openLatestRelease': 'Open the latest release',
   'admin.serviceConfiguration.updates.openReleaseNotes': 'Open the release notes and downloads',

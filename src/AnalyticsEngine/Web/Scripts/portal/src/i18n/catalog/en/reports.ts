@@ -56,8 +56,17 @@ export const reports = {
   'reports.chart.sqlTitle': 'SQL behind this chart',
   'reports.chart.loadError': "Couldn't load this chart: {error}",
   'reports.chart.noData': 'No data for this period.',
+  'reports.chart.error.noCompletedUsageWeeks': 'No completed usage-report weeks are available.',
+  'reports.chart.error.noWorkloadSeriesLoaded': 'No workload series could be loaded. {details}',
+  'reports.chart.error.noCompletedUsageWeeksWithData': 'No completed usage-report weeks are available for workloads with data.',
+  'reports.chart.warning.series.loadFailed': '{series}: {error}',
+  'reports.chart.warning.series.notAttempted': '{series}: not attempted after the database timeout',
+  'reports.chart.warning.series.noSettledData': '{series}: no settled usage data',
+  'reports.chart.warning.series.noSettledDataForWeek': '{series}: no settled usage data for the week of {week}',
   'reports.category.appBreadth.one': '{count} app',
   'reports.category.appBreadth.other': '{count} apps',
+  'reports.platform.mobile': 'Mobile',
+  'reports.platform.web': 'Web',
 
 
   // Server-authored report chart metadata.

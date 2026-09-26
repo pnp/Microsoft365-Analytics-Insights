@@ -85,7 +85,7 @@ namespace Web.AnalyticsWeb.Controllers
                 if (!context.Sources.UserMetadata) return MissingMetadata();
                 var overview = _overviews.Find(context.Scope, overviewId);
                 if (!overview.Licences.Any(sku => sku.LicenceTypeId == licenceTypeId))
-                    return Reply(HttpStatusCode.NotFound, new { message = "That licence is not part of the figures currently on screen. Refresh the report and try again." });
+                    return Reply(HttpStatusCode.NotFound, Error("licenceNotOnScreen", "That licence is not part of the figures currently on screen. Refresh the report and try again."));
                 var query = overview.Query.ForUsers(licenceTypeId, workload, search, sort, direction, top, page, pageSize, context.Sources.NowUtc);
                 var task = _users.GetAsync(context.Scope, overviewId + "\n" + query.CacheKey(), async (diagnostics, lifetime) =>
                 {
@@ -107,7 +107,7 @@ namespace Web.AnalyticsWeb.Controllers
                 var overview = _overviews.Find(context.Scope, overviewId);
                 var users = usersId == null ? null : _users.Find(context.Scope, usersId);
                 if (users != null && users.OverviewId != overviewId)
-                    return Task.FromResult(Reply(HttpStatusCode.Conflict, new { message = "The summary and the user list are no longer from the same set of figures. Refresh the report before exporting." }));
+                    return Task.FromResult(Reply(HttpStatusCode.Conflict, Error("summaryUsersMismatch", "The summary and the user list are no longer from the same set of figures. Refresh the report before exporting.")));
                 var response = Request.CreateResponse(HttpStatusCode.OK);
                 response.Content = new ByteArrayContent(LicenceActivityWorkbook.Build(overview, users));
                 response.Content.Headers.ContentType = new MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -121,33 +121,52 @@ namespace Web.AnalyticsWeb.Controllers
 
         private async Task<IHttpActionResult> ExecuteAsync(Func<Task<IHttpActionResult>> action)
         {
-            if (!ModelState.IsValid) return Reply(HttpStatusCode.BadRequest, new { message = "That request wasn't valid. Check the selected dates and filters." });
+            if (!ModelState.IsValid) return Reply(HttpStatusCode.BadRequest, Error("invalidRequest", "That request wasn't valid. Check the selected dates and filters."));
             try { return await action(); }
-            catch (ArgumentException ex) { return Reply(HttpStatusCode.BadRequest, new { message = ex.Message }); }
+            catch (ArgumentException ex) { return Reply(HttpStatusCode.BadRequest, Error(ValidationErrorCode(ex.Message), ex.Message)); }
             catch (LicenceActivityExpiredException)
             {
-                return Reply(HttpStatusCode.Gone, new { message = "These figures are no longer being held. Refresh the report to bring back an up-to-date set before continuing or exporting." });
+                return Reply(HttpStatusCode.Gone, Error("figuresExpiredForAction", "These figures are no longer being held. Refresh the report to bring back an up-to-date set before continuing or exporting."));
             }
             catch (LicenceActivityReadModelExpiredException)
             {
-                return Reply(HttpStatusCode.Gone, new { message = "These figures are no longer being held. Refresh the report to bring back an up-to-date set." });
+                return Reply(HttpStatusCode.Gone, Error("figuresExpired", "These figures are no longer being held. Refresh the report to bring back an up-to-date set."));
             }
             catch (LicenceActivityReadModelBusyException)
             {
-                return Reply(HttpStatusCode.ServiceUnavailable, new { message = "Another licence report is being prepared right now. Try again in a few seconds." }, true);
+                return Reply(HttpStatusCode.ServiceUnavailable, Error("anotherReportPreparing", "Another licence report is being prepared right now. Try again in a few seconds."), true);
             }
             catch (LicenceActivityBusyException)
             {
-                return Reply(HttpStatusCode.ServiceUnavailable, new { message = "Licence reporting is busy. Try again in a few seconds." }, true);
+                return Reply(HttpStatusCode.ServiceUnavailable, Error("licenceReportingBusy", "Licence reporting is busy. Try again in a few seconds."), true);
             }
             catch (LicenceActivityFailedException ex)
             {
-                return Reply(HttpStatusCode.ServiceUnavailable, new { message = ex.Message }, true);
+                return Reply(HttpStatusCode.ServiceUnavailable, new { code = "loadFailed", message = ex.Message, reference = ex.RunId }, true);
             }
         }
 
         private IHttpActionResult MissingMetadata() =>
-            Reply(HttpStatusCode.PreconditionFailed, new { message = "This report needs the user details import turned on, so that licences can be matched to the people who hold them." });
+            Reply(HttpStatusCode.PreconditionFailed, Error("userDetailsImportOff", "This report needs the user details import turned on, so that licences can be matched to the people who hold them."));
+
+        private static object Error(string code, string message) => new { code, message };
+
+        private static string ValidationErrorCode(string message)
+        {
+            switch (message)
+            {
+                case "Supply both from and to dates in YYYY-MM-DD format.": return "supplyBothDates";
+                case "Choose 7 to 180 inclusive UTC dates, ending before today. Custom ranges are never rounded.": return "dateRange";
+                case "The earliest supported date is 1753-01-01.": return "earliestDate";
+                case "Licence IDs must be positive; demographic IDs must be zero (unknown) or positive.": return "invalidIds";
+                case "Choose teams, outlook, onedrive, sharepoint or copilot.": return "invalidWorkload";
+                case "Choose a supported sort and asc or desc direction.": return "invalidSort";
+                case "Top and pageSize must be 1 to 100; page must be 1 to 10000.": return "invalidPaging";
+                case "Search must contain at most 100 characters and no control characters.": return "invalidSearch";
+                case "Dates must use YYYY-MM-DD format.": return "dateFormat";
+                default: return null;
+            }
+        }
 
         private IHttpActionResult Reply(HttpStatusCode status, object body, bool retry = false)
         {

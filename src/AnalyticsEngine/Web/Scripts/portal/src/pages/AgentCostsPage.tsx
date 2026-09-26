@@ -40,6 +40,7 @@ import type {
   AgentCostUserRow,
   AzureCostBreakdownRow,
   AzureDimension,
+  CopilotCapacitySnapshot,
   CreditDimension,
 } from '../types/agentCosts';
 import Spinner from '../components/Spinner';
@@ -56,6 +57,8 @@ import {
   formatDay,
   formatMoney,
   formatQuantity,
+  capacityConsumptionTypeLabel,
+  capacityStatusLabel,
   harnessLabel,
   saveCsv,
   windowOfDays,
@@ -142,6 +145,46 @@ const useStyles = makeStyles({
   empty: { color: tokens.colorNeutralForeground3, padding: '24px 0', textAlign: 'center' },
 });
 
+
+export function importFailureWarning(t: TFunction, kind: 'copilotStudio' | 'azure'): string {
+  return t(kind === 'copilotStudio'
+    ? 'agentCosts.warning.copilotStudioImportFailing'
+    : 'agentCosts.warning.azureCostImportFailing');
+}
+
+/**
+ * A failing import's warning bar. The label is the portal's own wording, so it is translated. The detail is
+ * the importer's last error: diagnostic text, shown exactly as the importer wrote it, as `availabilityMessages`
+ * already does with `{error}`. It must stay, because once some figures exist this bar is the only place the page
+ * says WHY the import is failing - `availabilityMessages` quotes the error only while there is no data at all.
+ */
+export function ImportFailureBar({ kind, error }: { kind: 'copilotStudio' | 'azure'; error: string }) {
+  const t = useT();
+  return (
+    <MessageBar intent="warning">
+      <MessageBarBody>
+        <strong>{importFailureWarning(t, kind)}</strong> {error}
+      </MessageBarBody>
+    </MessageBar>
+  );
+}
+
+/**
+ * "X of Y used (Month to date)" under the capacity tile. The consumption type is Power Platform's stable
+ * identifier ("MonthToDate"), so it is labelled rather than shown raw.
+ */
+export function CapacityUsedHint({ capacity }: { capacity: CopilotCapacitySnapshot }) {
+  const t = useT();
+  return (
+    <>
+      {t('agentCosts.capacity.usedOfEntitled', {
+        consumed: formatCredits(capacity.consumed),
+        entitled: formatCredits(capacity.entitled),
+      })}
+      {capacity.consumptionType ? ` (${capacityConsumptionTypeLabel(capacity.consumptionType, t)})` : ''}
+    </>
+  );
+}
 
 function availabilityMessages(availability: AgentCostAvailability, t: TFunction): string[] {
   const messages: string[] = [];
@@ -535,18 +578,10 @@ export default function AgentCostsPage() {
       {availability && (
         <div className={styles.messages}>
           {availability.copilotStudioCreditsEnabled && availability.copilotStudioCreditsLastError && (
-            <MessageBar intent="warning">
-              <MessageBarBody>
-                <strong>{t('agentCosts.warning.copilotStudioImportFailing')}</strong> {availability.copilotStudioCreditsLastError}
-              </MessageBarBody>
-            </MessageBar>
+            <ImportFailureBar kind="copilotStudio" error={availability.copilotStudioCreditsLastError} />
           )}
           {availability.azureCostsEnabled && availability.azureCostsLastError && (
-            <MessageBar intent="warning">
-              <MessageBarBody>
-                <strong>{t('agentCosts.warning.azureCostImportFailing')}</strong> {availability.azureCostsLastError}
-              </MessageBarBody>
-            </MessageBar>
+            <ImportFailureBar kind="azure" error={availability.azureCostsLastError} />
           )}
           {availabilityMessages(availability, t).map((m) => (
             <MessageBar key={m} intent="info">
@@ -610,15 +645,11 @@ export default function AgentCostsPage() {
                   <span className={styles.kpiValue}>{formatCredits(summary.capacity.available)}</span>
                   <span className={styles.kpiLabel}>{t('agentCosts.capacity.availableNow')}</span>
                   <span className={styles.kpiHint}>
-                    {t('agentCosts.capacity.usedOfEntitled', {
-                      consumed: formatCredits(summary.capacity.consumed),
-                      entitled: formatCredits(summary.capacity.entitled),
-                    })}
-                    {summary.capacity.consumptionType ? ` (${summary.capacity.consumptionType})` : ''}
+                    <CapacityUsedHint capacity={summary.capacity} />
                   </span>
                 </div>
                 <div className={styles.kpi}>
-                  <span className={styles.kpiValue}>{summary.capacity.status ?? DASH}</span>
+                  <span className={styles.kpiValue}>{capacityStatusLabel(summary.capacity.status, t)}</span>
                   <span className={styles.kpiLabel}>{t('agentCosts.capacity.status')}</span>
                   <span className={styles.kpiHint}>
                     {t('agentCosts.capacity.asAt', { day: formatDay(summary.capacity.consumptionAsOf ?? summary.capacity.snapshotUtc) })}

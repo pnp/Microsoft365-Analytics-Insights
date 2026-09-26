@@ -53,7 +53,7 @@ import {
 import { usePrintAllRows } from '../shared/printPreparation';
 import { formatCount, formatDate } from '../shared/KpiGrid';
 import { useT, useTNode } from '../../i18n';
-import { opportunityRationale, opportunityTierLabel } from './serverText';
+import { copilotAdoptionWarningText, isLicenceOpportunityWarning, opportunityRationale, opportunityTierLabel } from './serverText';
 import LicenceTimeSavedHero from './LicenceTimeSavedHero';
 import LicenceTimeSavedModel from './LicenceTimeSavedModel';
 import { useTimeSavedAssumptions } from './coworkTimeSaved';
@@ -348,9 +348,9 @@ export default function OpportunitiesPanel({
 
   // Only the warnings that explain an empty or thin candidate list. The page header already carries
   // the full set, and repeating all of them here would bury the one that answers "why is this empty?".
-  const relevantWarnings = (data?.warnings ?? []).filter(
-    (w) => w.toLowerCase().includes('licence opportunit') || w.toLowerCase().includes('usage report'),
-  );
+  const relevantWarnings = (data?.warnings ?? [])
+    .map((warning, index) => ({ warning, detail: data?.warningDetails?.[index] }))
+    .filter(({ detail }) => isLicenceOpportunityWarning(detail));
   const unlicensedGuidance = (guidanceLinks ?? []).filter((l) => l.actionCode === 'unlicensed');
 
   const list = (
@@ -441,9 +441,9 @@ export default function OpportunitiesPanel({
 
       {!loading && relevantWarnings.length > 0 && (
         <div className={styles.warnings}>
-          {relevantWarnings.map((warning) => (
-            <MessageBar key={warning} intent="warning">
-              <MessageBarBody>{warning}</MessageBarBody>
+          {relevantWarnings.map(({ warning, detail }) => (
+            <MessageBar key={`${detail?.key ?? warning}:${warning}`} intent="warning">
+              <MessageBarBody>{copilotAdoptionWarningText(t, detail, warning)}</MessageBarBody>
             </MessageBar>
           ))}
         </div>

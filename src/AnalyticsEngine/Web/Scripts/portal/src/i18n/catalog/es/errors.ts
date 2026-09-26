@@ -10,6 +10,10 @@ const errors: Record<keyof typeof en, string> = {
   // Shared API/session errors
   'errors.http.sessionExpired': 'La sesión ha caducado. Vuelva a cargar la página para iniciar sesión de nuevo.',
   'errors.userLookup.requestFailed': 'La solicitud ha fallado ({status})',
+  'errors.userLookup.notFound': "No se encontró ningún usuario con el UPN '{upn}'.",
+  'errors.userLookup.missingUpn': "Se requiere el parámetro de consulta 'upn'.",
+  'errors.userLookup.unknownCategory': "Categoría desconocida '{category}'.",
+  'errors.userLookup.categoryNoDrilldown': "La categoría '{category}' no admite el desglose.",
 
   // Agent costs API
   'errors.agentCosts.availabilityFailed': 'No se ha podido cargar la disponibilidad de costes de agentes ({status}).',
@@ -20,6 +24,7 @@ const errors: Record<keyof typeof en, string> = {
   'errors.agentCosts.azureBreakdownFailed': 'No se ha podido cargar el desglose de costes de Azure ({status}).',
   'errors.agentCosts.topUsersFailed': 'No se ha podido cargar el consumo de créditos por usuario ({status}).',
   'errors.agentCosts.filtersFailed': 'No se han podido cargar los filtros disponibles ({status}).',
+  'errors.agentCosts.loadFailed': 'No se han podido cargar las cifras de costes de agentes. Si sigue ocurriendo, compruebe que la base de datos sea accesible y que las importaciones de costes de agentes se hayan ejecutado al menos una vez.',
 
   // Copilot adoption API
   'errors.copilotAdoption.analysisStillRunning': 'El análisis de adopción de Copilot está tardando más de lo esperado y aún no ha finalizado. Sigue ejecutándose en el servidor; vuelva a cargar la página dentro de unos minutos.',
@@ -53,8 +58,25 @@ const errors: Record<keyof typeof en, string> = {
 
   // Licence activity API
   'errors.licenceActivity.figuresExpired': 'Estas cifras ya no se conservan. Actualice el informe para recuperar un conjunto actualizado.',
+  'errors.licenceActivity.figuresExpiredForAction': 'Estas cifras ya no se conservan. Actualice el informe para recuperar un conjunto actualizado antes de continuar o exportar.',
+  'errors.licenceActivity.licenceNotOnScreen': 'Esa licencia no forma parte de las cifras que se muestran ahora en pantalla. Actualice el informe e inténtelo de nuevo.',
+  'errors.licenceActivity.summaryUsersMismatch': 'El resumen y la lista de usuarios ya no proceden del mismo conjunto de cifras. Actualice el informe antes de exportar.',
   'errors.licenceActivity.userDetailsImportOff': 'La actividad de licencias no está disponible: la importación de detalles de usuario está desactivada en esta implementación.',
+  'errors.licenceActivity.userDetailsImportOffSpecific': 'Este informe necesita que la importación de detalles de usuario esté activada para que las licencias puedan emparejarse con las personas que las tienen.',
   'errors.licenceActivity.badRequest': 'Se ha rechazado esa solicitud. Compruebe las fechas y los filtros seleccionados.',
+  'errors.licenceActivity.invalidRequest': 'Esa solicitud no es válida. Compruebe las fechas y los filtros seleccionados.',
+  'errors.licenceActivity.anotherReportPreparing': 'Se está preparando otro informe de licencias ahora mismo. Inténtelo de nuevo en unos segundos.',
+  'errors.licenceActivity.licenceReportingBusy': 'Los informes de licencias están ocupados. Inténtelo de nuevo en unos segundos.',
+  'errors.licenceActivity.loadFailed': 'No se pudo cargar la actividad de licencias. Vuelva a intentar la solicitud. Referencia: {reference}',
+  'errors.licenceActivity.validation.supplyBothDates': 'Indique las fechas desde y hasta en formato YYYY-MM-DD.',
+  'errors.licenceActivity.validation.dateRange': 'Elija fechas UTC inclusivas de 7 a 180 días, que terminen antes de hoy. Los intervalos personalizados nunca se redondean.',
+  'errors.licenceActivity.validation.earliestDate': 'La fecha más antigua admitida es 1753-01-01.',
+  'errors.licenceActivity.validation.invalidIds': 'Los identificadores de licencia deben ser positivos; los identificadores demográficos deben ser cero (desconocido) o positivos.',
+  'errors.licenceActivity.validation.invalidWorkload': 'Elija teams, outlook, onedrive, sharepoint o copilot.',
+  'errors.licenceActivity.validation.invalidSort': 'Elija una ordenación admitida y asc o desc.',
+  'errors.licenceActivity.validation.invalidPaging': 'Top y pageSize deben ser de 1 a 100; page debe ser de 1 a 10000.',
+  'errors.licenceActivity.validation.invalidSearch': 'La búsqueda debe contener como máximo 100 caracteres y ningún carácter de control.',
+  'errors.licenceActivity.validation.dateFormat': 'Las fechas deben usar el formato YYYY-MM-DD.',
   'errors.licenceActivity.availabilityBusy': 'El servidor está ocupado o no ha podido preparar la disponibilidad de actividad de licencias. Inténtelo de nuevo en unos instantes.',
   'errors.licenceActivity.availabilityForbidden': 'No tiene permiso para ver la disponibilidad de actividad de licencias.',
   'errors.licenceActivity.availabilityFailed': 'No se ha podido cargar la disponibilidad de actividad de licencias ({status}).',
