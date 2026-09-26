@@ -162,6 +162,7 @@
     <Compile Include="EfProviderRegistrationTests.cs" />
     <Compile Include="StringCipherCompatibilityTests.cs" />
     <Compile Include="InstallTests\SqlAuthenticationDetectionTests.cs" />
+    <Compile Include="InstallTests\ManagedIdentityDatabaseGrantTests.cs" />
     <Compile Include="InstallTests\DatabaseUpgradeRequestTests.cs" />
     <Compile Include="ActivityReportLoaderTimeoutTests.cs" />
     <Compile Include="ActivityReportSetMinMaxTests.cs" />

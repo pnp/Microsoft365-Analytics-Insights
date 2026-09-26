@@ -453,11 +453,12 @@ namespace App.ControlPanel.Engine.Entities
         /// </summary>
         /// <remarks>
         /// <para>
-        /// The fallback for a managed identity whose application (client) ID could not be read from
-        /// Microsoft Graph. SQL Server resolves the name itself, so the right identifier is guaranteed -
-        /// but only if the server's own identity holds the tenant-wide <b>Directory Readers</b> role,
-        /// which needs a Global Administrator to grant. Without it this fails with
-        /// <c>Principal '...' could not be found</c>.
+        /// The fallback for a managed identity whose application (client) ID could not be read from Azure
+        /// Resource Manager or Microsoft Graph. SQL Server resolves the name itself, so the right identifier
+        /// is guaranteed - but only if the server's own identity holds the tenant-wide <b>Directory Readers</b>
+        /// role, which needs a Global Administrator to grant. Without it this fails with
+        /// <c>Principal '...' could not be resolved</c>, and a server with no identity at all adds
+        /// "Server identity is not configured".
         /// </para>
         /// <para>
         /// Deliberately does NOT repair an existing user the way the SID form does: with no known-correct

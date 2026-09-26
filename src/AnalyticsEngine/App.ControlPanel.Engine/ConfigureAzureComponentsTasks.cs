@@ -207,11 +207,13 @@ namespace App.ControlPanel.Engine
                 return;
             }
 
-            var task = new SqlIdentityAccessTask(_logger, BuildPrincipalResolver());
+            var task = new SqlIdentityAccessTask(_logger, BuildPrincipalResolver(), BuildManagedIdentitySource());
             await task.GrantDatabaseAccessAsync(
                 dbInfo.ConnectionString,
+                ManagedIdentityOwner.AppService,
                 current.Data.Name,
                 principalId.Value,
+                current.Id?.ToString(),
                 SqlContainedUserScript.AppServiceRoles);
         }
 
@@ -249,11 +251,13 @@ namespace App.ControlPanel.Engine
                 return;
             }
 
-            var task = new SqlIdentityAccessTask(_logger, BuildPrincipalResolver());
+            var task = new SqlIdentityAccessTask(_logger, BuildPrincipalResolver(), BuildManagedIdentitySource());
             await task.GrantDatabaseAccessAsync(
                 dbInfo.ConnectionString,
+                ManagedIdentityOwner.AutomationAccount,
                 current.Data.Name,
                 principalId.Value,
+                current.Id?.ToString(),
                 new[] { "db_owner" });
         }
 
@@ -269,6 +273,27 @@ namespace App.ControlPanel.Engine
         private GraphEntraPrincipalResolver BuildPrincipalResolver()
         {
             return new GraphEntraPrincipalResolver(_logger, Config.InstallerAccount, Config.RuntimeAccountOffice365);
+        }
+
+        /// <summary>
+        /// Builds the Azure Resource Manager reader that supplies a managed identity's application ID, or
+        /// null when the installer account has no client secret to sign in with.
+        /// </summary>
+        /// <remarks>
+        /// Tried before Microsoft Graph: it needs only read access to the resource, which the installer
+        /// account already has, while Graph needs a directory permission it often lacks.
+        /// </remarks>
+        private IManagedIdentityApplicationIdSource BuildManagedIdentitySource()
+        {
+            var account = Config.InstallerAccount;
+            if (account == null || string.IsNullOrWhiteSpace(account.DirectoryId) || string.IsNullOrWhiteSpace(account.ClientId)
+                || string.IsNullOrWhiteSpace(account.Secret))
+            {
+                return null;
+            }
+
+            return new ArmManagedIdentityApplicationIdSource(
+                new Azure.Identity.ClientSecretCredential(account.DirectoryId, account.ClientId, account.Secret));
         }
 
         /// <summary>

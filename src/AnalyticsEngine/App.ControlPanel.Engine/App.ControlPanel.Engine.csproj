@@ -85,6 +85,7 @@
     <Compile Include="InstallerTasks\SqlIdentityAccessTask.cs" />
     <Compile Include="InstallerTasks\SqlEntraAccessBootstrap.cs" />
     <Compile Include="InstallerTasks\SqlDatabaseUserGrantTask.cs" />
+    <Compile Include="InstallerTasks\ManagedIdentityApplicationIdSource.cs" />
     <Compile Include="InstallerTasks\RunbooksInstallJob.cs" />
     <Compile Include="Models\AzStorageConnectionInfo.cs" />
     <Compile Include="SolutionUninstaller.cs" />
