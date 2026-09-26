@@ -11,7 +11,7 @@ import type {
 import { AdoptionBand, AgentHealth } from '../../types/copilotAdoption';
 import { formatCount } from '../shared/KpiGrid';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
-import { activeLocale, formatNumber, type TFunction, type TranslationKey, type TranslationValues } from '../../i18n';
+import { activeLocale, formatNumber, plural, type TFunction, type TranslationKey, type TranslationValues } from '../../i18n';
 
 function catalogText(t: TFunction, key: TranslationKey, fallback: string, values?: TranslationValues): string {
   if (activeLocale().startsWith('en')) return fallback;
@@ -28,6 +28,7 @@ export const COPILOT_ADOPTION_WARNING_KEYS = {
   AuditMissingUsingUsageReport: 'auditMissingUsingUsageReport',
   AgentInventoryCapped: 'agentInventoryCapped',
   UnlicensedUsageCapped: 'unlicensedUsageCapped',
+  LicensedUserDetailCapped: 'licensedUserDetailCapped',
   LicensedUsersSubset: 'licensedUsersSubset',
   LicenceOpportunitiesNoSources: 'licenceOpportunitiesNoSources',
   LicenceCandidatesAuditOnly: 'licenceCandidatesAuditOnly',
@@ -58,16 +59,35 @@ const COWORK_WARNING_KEYS = new Set<string>([
 const OPPORTUNITY_WARNING_KEYS = new Set<string>([
   COPILOT_ADOPTION_WARNING_KEYS.LicenceOpportunitiesNoSources,
   COPILOT_ADOPTION_WARNING_KEYS.LicenceCandidatesAuditOnly,
+  COPILOT_ADOPTION_WARNING_KEYS.NoCopilotData,
+  COPILOT_ADOPTION_WARNING_KEYS.AuditMissingUsingUsageReport,
 ]);
+
+const COWORK_WARNING_QUERIES = new Set<string>([
+  'CoworkAgentLookup',
+  'CoworkReadiness',
+  'CoworkCreditProbe',
+  'CoworkUserCredits',
+  'CoworkCreditCapacity',
+]);
+
+const OPPORTUNITY_WARNING_QUERIES = new Set<string>(['LicenceOpportunities']);
 
 function warningValues(values?: CopilotAdoptionWarningDetail['values']): TranslationValues {
   const mapped: TranslationValues = {};
   Object.entries(values ?? {}).forEach(([key, value]) => {
     mapped[key] = typeof value === 'number'
-      ? formatNumber(value, { maximumFractionDigits: key === 'percentage' ? 1 : 0, useGrouping: true })
+      ? formatNumber(value, key === 'percentage'
+        ? { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: true }
+        : { maximumFractionDigits: 0, useGrouping: true })
       : String(value ?? '');
   });
   return mapped;
+}
+
+function queryDescriptionText(t: TFunction, query: string, fallback: string): string {
+  const key = `copilotAdoption.server.query.${query}` as TranslationKey;
+  return catalogText(t, key, fallback);
 }
 
 export function copilotAdoptionWarningText(
@@ -76,8 +96,22 @@ export function copilotAdoptionWarningText(
   english: string,
 ): string {
   if (!detail?.key) return english;
-  const key = `copilotAdoption.server.warning.${detail.key}` as TranslationKey;
-  return catalogText(t, key, english, warningValues(detail.values));
+  const values = warningValues(detail.values);
+  if (detail.key === COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad) {
+    values.description = queryDescriptionText(
+      t,
+      String(detail.values?.query ?? ''),
+      String(detail.values?.description ?? ''),
+    );
+  }
+  const key = detail.key === COPILOT_ADOPTION_WARNING_KEYS.UsageReportSourcedUsers
+    ? plural(
+      Number(detail.values?.count ?? 0),
+      'copilotAdoption.server.warning.usageReportSourcedUsers.one',
+      'copilotAdoption.server.warning.usageReportSourcedUsers.other',
+    )
+    : `copilotAdoption.server.warning.${detail.key}` as TranslationKey;
+  return catalogText(t, key, english, values);
 }
 
 export function copilotAdoptionWarningIdentity(detail: CopilotAdoptionWarningDetail | undefined, english: string): string {
@@ -85,11 +119,17 @@ export function copilotAdoptionWarningIdentity(detail: CopilotAdoptionWarningDet
 }
 
 export function isCoworkWarning(detail: CopilotAdoptionWarningDetail | undefined): boolean {
-  return !!detail?.key && COWORK_WARNING_KEYS.has(detail.key);
+  return !!detail?.key
+    && (COWORK_WARNING_KEYS.has(detail.key)
+      || (detail.key === COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad
+        && COWORK_WARNING_QUERIES.has(String(detail.values?.query ?? ''))));
 }
 
 export function isLicenceOpportunityWarning(detail: CopilotAdoptionWarningDetail | undefined): boolean {
-  return !!detail?.key && OPPORTUNITY_WARNING_KEYS.has(detail.key);
+  return !!detail?.key
+    && (OPPORTUNITY_WARNING_KEYS.has(detail.key)
+      || (detail.key === COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad
+        && OPPORTUNITY_WARNING_QUERIES.has(String(detail.values?.query ?? ''))));
 }
 
 export function reclaimCaveatText(t: TFunction, key: string | null | undefined, fallback: string | null | undefined): string {

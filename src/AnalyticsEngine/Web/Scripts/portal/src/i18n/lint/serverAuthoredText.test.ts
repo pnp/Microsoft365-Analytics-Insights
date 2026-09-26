@@ -1812,6 +1812,13 @@ function placeholders(text: string): string[] {
   return sortedUnique([...text.matchAll(/\{([^}]+)\}/g)].map((m) => m[1]));
 }
 
+function copilotQueryDescriptions(): Record<string, string> {
+  const source = readFileSync(COPILOT_ADOPTION_SERVICE, 'utf8');
+  return Object.fromEntries([...source.matchAll(
+    /CopilotAdoptionQueries\.(\w+),\s*(?:summary\.Warnings,\s*summary\.WarningDetails,\s*)?(?:output,\s*)?\r?\n\s*"([^"]+)"/g,
+  )].map((m) => [m[1], m[2]]));
+}
+
 describe('Copilot Adoption server warning text', () => {
   it('has a SPA mapping and exact English catalog template for every server warning key', () => {
     const server = copilotWarningTemplates();
@@ -1822,9 +1829,29 @@ describe('Copilot Adoption server warning text', () => {
     }, 'Keep COPILOT_ADOPTION_WARNING_KEYS in serverText.ts in exact sync with CopilotAdoptionWarningKeys/WarningTemplates in C#.').toEqual({ missing: [], orphaned: [] });
 
     for (const [key, english] of Object.entries(server)) {
+      if (key === COPILOT_ADOPTION_WARNING_KEYS.UsageReportSourcedUsers) {
+        const one = 'copilotAdoption.server.warning.usageReportSourcedUsers.one';
+        const other = 'copilotAdoption.server.warning.usageReportSourcedUsers.other';
+        expect(EN_CATALOG[one], `${one} must reproduce the singular server English.`)
+          .toBe(english.replace('{userPlural}', ''));
+        expect(EN_CATALOG[other], `${other} must reproduce the plural server English.`)
+          .toBe(english.replace('{userPlural}', 's'));
+        expect(placeholders(EN_CATALOG[one]), `${one} placeholders`).toEqual(['count', 'percentage']);
+        expect(placeholders(EN_CATALOG[other]), `${other} placeholders`).toEqual(['count', 'percentage']);
+        continue;
+      }
       const catalogKey = `copilotAdoption.server.warning.${key}`;
       expect(EN_CATALOG[catalogKey], `${catalogKey} must reproduce the server English exactly.`).toBe(english);
       expect(placeholders(EN_CATALOG[catalogKey]), `${catalogKey} placeholders`).toEqual(placeholders(english));
+    }
+  });
+
+  it('catalogues every could-not-load query description by stable query name', () => {
+    const descriptions = copilotQueryDescriptions();
+    expect(Object.keys(descriptions).length).toBeGreaterThanOrEqual(20);
+    for (const [query, description] of Object.entries(descriptions)) {
+      expect(EN_CATALOG[`copilotAdoption.server.query.${query}`], `copilotAdoption.server.query.${query}`)
+        .toBe(description);
     }
   });
 

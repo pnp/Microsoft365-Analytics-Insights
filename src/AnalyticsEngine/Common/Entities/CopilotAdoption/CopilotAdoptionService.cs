@@ -941,11 +941,10 @@ namespace Common.Entities.CopilotAdoption
             if (rows.Count >= _options.MaxLicensedUsersScored)
             {
                 output.AddWarning(
-                    CopilotAdoptionWarningKeys.LicensedUsersSubset,
+                    CopilotAdoptionWarningKeys.LicensedUserDetailCapped,
                     new Dictionary<string, object>
                     {
-                        { "licensedUsers", summary.LicensedUsers },
-                        { "scoredUsers", _options.MaxLicensedUsersScored },
+                        { "maxUsers", _options.MaxLicensedUsersScored },
                     });
             }
 
@@ -2763,6 +2762,7 @@ namespace Common.Entities.CopilotAdoption
                     new Dictionary<string, object>
                     {
                         { "description", description },
+                        { "query", queryName },
                         { "message", InnermostMessage(ex) },
                     });
                 if (step != null && failure != null) _firstStepFailures.TryAdd(step, failure);

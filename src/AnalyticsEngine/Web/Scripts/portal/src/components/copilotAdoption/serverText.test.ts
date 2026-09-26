@@ -150,6 +150,23 @@ describe('Copilot Adoption server-authored text reproduction', () => {
       },
       'server fallback',
     )).toContain('1.234 licencias de Copilot');
+    expect(copilotAdoptionWarningText(
+      tEs,
+      {
+        key: COPILOT_ADOPTION_WARNING_KEYS.UsageReportSourcedUsers,
+        values: { count: 2, userPlural: 's', percentage: 50 },
+      },
+      'server fallback',
+    )).toContain('(50,0 %)');
+    setActiveLanguage('en');
+    expect(copilotAdoptionWarningText(
+      tEn,
+      {
+        key: COPILOT_ADOPTION_WARNING_KEYS.UsageReportSourcedUsers,
+        values: { count: 2, userPlural: 's', percentage: 50 },
+      },
+      '2 licensed users (50.0%) were scored from Microsoft\'s Copilot usage report because the audit import had no per-user signal for them. Their Microsoft prompt counts are not added to audit interaction totals, concentration, intensity or licensed/unlicensed interaction comparisons.',
+    )).toContain('(50.0%)');
   });
 
   it('keeps SKU names verbatim while translating the SKU mismatch warning', () => {
@@ -176,14 +193,94 @@ describe('Copilot Adoption server-authored text reproduction', () => {
     )).toBe('Server fallback warning.');
   });
 
+  it('translates could-not-load query descriptions by query key and keeps exception text verbatim', () => {
+    setActiveLanguage('es');
+    expect(copilotAdoptionWarningText(
+      tEs,
+      {
+        key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad,
+        values: {
+          query: 'LicensedUserDetail',
+          description: 'licensed user detail',
+          message: 'Timeout from Contoso SQL',
+        },
+      },
+      'Could not load licensed user detail: Timeout from Contoso SQL',
+    )).toBe('No se pudo cargar detalle de usuarios con licencia: Timeout from Contoso SQL');
+  });
+
+  it('uses Spanish singular grammar for the usage-report source warning', () => {
+    setActiveLanguage('es');
+    expect(copilotAdoptionWarningText(
+      tEs,
+      {
+        key: COPILOT_ADOPTION_WARNING_KEYS.UsageReportSourcedUsers,
+        values: { count: 1, userPlural: '', percentage: 50 },
+      },
+      '1 licensed user (50.0%) were scored from Microsoft\'s Copilot usage report because the audit import had no per-user signal for them. Their Microsoft prompt counts are not added to audit interaction totals, concentration, intensity or licensed/unlicensed interaction comparisons.',
+    )).toContain('1 usuario con licencia (50,0 %) se puntuó');
+  });
+
   it('classifies panel warnings by stable key instead of English text', () => {
     const cowork: CopilotAdoptionWarningDetail = { key: COPILOT_ADOPTION_WARNING_KEYS.CoworkM365UsageMissing };
     const opportunity: CopilotAdoptionWarningDetail = { key: COPILOT_ADOPTION_WARNING_KEYS.LicenceCandidatesAuditOnly };
+    const coworkLoad: CopilotAdoptionWarningDetail = { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'CoworkReadiness' } };
+    const opportunityLoad: CopilotAdoptionWarningDetail = { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'LicenceOpportunities' } };
+    const droppedCoworkFromOpportunities: CopilotAdoptionWarningDetail = { key: COPILOT_ADOPTION_WARNING_KEYS.CoworkReadinessNoSources };
+    const usageReportSource: CopilotAdoptionWarningDetail = { key: COPILOT_ADOPTION_WARNING_KEYS.UsageReportSourcedUsers };
 
     expect(isCoworkWarning(cowork)).toBe(true);
+    expect(isCoworkWarning(coworkLoad)).toBe(true);
     expect(isCoworkWarning(opportunity)).toBe(false);
     expect(isLicenceOpportunityWarning(opportunity)).toBe(true);
+    expect(isLicenceOpportunityWarning(opportunityLoad)).toBe(true);
+    expect(isLicenceOpportunityWarning({ key: COPILOT_ADOPTION_WARNING_KEYS.NoCopilotData })).toBe(true);
+    expect(isLicenceOpportunityWarning({ key: COPILOT_ADOPTION_WARNING_KEYS.AuditMissingUsingUsageReport })).toBe(true);
     expect(isLicenceOpportunityWarning(cowork)).toBe(false);
+    expect(isLicenceOpportunityWarning(droppedCoworkFromOpportunities)).toBe(false);
+    expect(isLicenceOpportunityWarning(usageReportSource)).toBe(false);
+  });
+
+  it('pins exactly which structured warnings the Cowork panel shows', () => {
+    const details: CopilotAdoptionWarningDetail[] = [
+      { key: COPILOT_ADOPTION_WARNING_KEYS.CoworkM365UsageMissing },
+      { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'CoworkReadiness' } },
+      { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'CoworkAgentLookup' } },
+      { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'CoworkUserCredits' } },
+      { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'LicenceOpportunities' } },
+      { key: COPILOT_ADOPTION_WARNING_KEYS.LicenceCandidatesAuditOnly },
+    ];
+
+    expect(details.filter(isCoworkWarning).map((d) => `${d.key}:${d.values?.query ?? ''}`)).toEqual([
+      'coworkM365UsageMissing:',
+      'couldNotLoad:CoworkReadiness',
+      'couldNotLoad:CoworkAgentLookup',
+      'couldNotLoad:CoworkUserCredits',
+    ]);
+  });
+
+  it('pins exactly which structured warnings the licence-opportunities panel shows', () => {
+    const details: CopilotAdoptionWarningDetail[] = [
+      { key: COPILOT_ADOPTION_WARNING_KEYS.LicenceOpportunitiesNoSources },
+      { key: COPILOT_ADOPTION_WARNING_KEYS.LicenceCandidatesAuditOnly },
+      { key: COPILOT_ADOPTION_WARNING_KEYS.NoCopilotData },
+      { key: COPILOT_ADOPTION_WARNING_KEYS.AuditMissingUsingUsageReport },
+      { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'LicenceOpportunities' } },
+      { key: COPILOT_ADOPTION_WARNING_KEYS.CoworkReadinessNoSources },
+      { key: COPILOT_ADOPTION_WARNING_KEYS.CoworkM365UsageMissing },
+      { key: COPILOT_ADOPTION_WARNING_KEYS.CoworkUsageReportMissing },
+      { key: COPILOT_ADOPTION_WARNING_KEYS.UsageReportSourcedUsers },
+      { key: COPILOT_ADOPTION_WARNING_KEYS.CoworkFluencyMissingAll },
+      { key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad, values: { query: 'CoworkReadiness' } },
+    ];
+
+    expect(details.filter(isLicenceOpportunityWarning).map((d) => `${d.key}:${d.values?.query ?? ''}`)).toEqual([
+      'licenceOpportunitiesNoSources:',
+      'licenceCandidatesAuditOnly:',
+      'noCopilotData:',
+      'auditMissingUsingUsageReport:',
+      'couldNotLoad:LicenceOpportunities',
+    ]);
   });
 
   it('translates the reclaim caveat from its stable key', () => {

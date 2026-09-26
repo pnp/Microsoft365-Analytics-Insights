@@ -1126,6 +1126,7 @@ namespace Common.Entities.CopilotAdoption
         public const string AuditMissingUsingUsageReport = "auditMissingUsingUsageReport";
         public const string AgentInventoryCapped = "agentInventoryCapped";
         public const string UnlicensedUsageCapped = "unlicensedUsageCapped";
+        public const string LicensedUserDetailCapped = "licensedUserDetailCapped";
         public const string LicensedUsersSubset = "licensedUsersSubset";
         public const string LicenceOpportunitiesNoSources = "licenceOpportunitiesNoSources";
         public const string LicenceCandidatesAuditOnly = "licenceCandidatesAuditOnly";
@@ -1156,6 +1157,7 @@ namespace Common.Entities.CopilotAdoption
             { CopilotAdoptionWarningKeys.AuditMissingUsingUsageReport, "The Copilot audit import has no data for this period, so per-user engagement is derived from Microsoft's own usage report. That report covers Microsoft's aggregation window rather than the period selected here, and excludes unlicensed Copilot Chat use entirely." },
             { CopilotAdoptionWarningKeys.AgentInventoryCapped, "The agent inventory was capped at {maxAgents} agents, so the agent figures are a floor rather than a total." },
             { CopilotAdoptionWarningKeys.UnlicensedUsageCapped, "Unlicensed Copilot usage was capped at {maxUsers} users, so those figures are a floor rather than a total." },
+            { CopilotAdoptionWarningKeys.LicensedUserDetailCapped, "Only the first {maxUsers} licensed users were analysed. The figures below therefore describe that subset, not the whole tenant. The subset is ordered by internal user id for reproducibility, so the oldest user records are over-represented and the newest user records are excluded first." },
             { CopilotAdoptionWarningKeys.LicensedUsersSubset, "This tenant holds {licensedUsers} Copilot licences, but only {scoredUsers} users could be analysed in one pass. Every rate and breakdown below describes those {scoredUsers} users, not the whole tenant - they are not tenant-wide figures and must not be quoted as such. Because the drill-down query is ordered by internal user id, the oldest user records are over-represented and the newest joiners or newly onboarded subsidiaries are excluded first; the subset is reproducible, but not representative." },
             { CopilotAdoptionWarningKeys.LicenceOpportunitiesNoSources, "Licence opportunities need either the Copilot audit import or the Microsoft 365 usage reports. Neither has data, so no candidates can be identified." },
             { CopilotAdoptionWarningKeys.LicenceCandidatesAuditOnly, "The Microsoft 365 usage reports are not available, so licence candidates are ranked only on unlicensed Copilot Chat use. Heavy Microsoft 365 users who have never tried Copilot will not appear." },
