@@ -85,7 +85,7 @@ namespace App.ControlPanel.Engine
             if (sqlReachable && dbInfo.AuthMethod == SqlConnectionAuthMethod.EntraId)
             {
                 await GrantAppServiceDatabaseAccess(webApp, dbInfo);
-                await GrantAutomationAccountDatabaseAccess(automationAccount, dbInfo);
+                await GrantAutomationAccountDatabaseAccess(automationAccount, dbInfo, webApp?.Id?.Name);
                 await GrantConfiguredDatabaseUsers(dbInfo);
             }
 
@@ -207,11 +207,13 @@ namespace App.ControlPanel.Engine
                 return;
             }
 
-            var task = new SqlIdentityAccessTask(_logger, BuildPrincipalResolver());
+            var task = new SqlIdentityAccessTask(_logger, BuildPrincipalResolver(), BuildManagedIdentitySource());
             await task.GrantDatabaseAccessAsync(
                 dbInfo.ConnectionString,
+                ManagedIdentityOwner.AppService,
                 current.Data.Name,
                 principalId.Value,
+                current.Id?.ToString(),
                 SqlContainedUserScript.AppServiceRoles);
         }
 
@@ -225,7 +227,12 @@ namespace App.ControlPanel.Engine
         /// They run Ola Hallengren's IndexOptimize and create/drop objects in the profiling schema, so
         /// db_owner is the role that actually covers what they do. See issue #117.
         /// </remarks>
-        private async Task GrantAutomationAccountDatabaseAccess(AutomationAccountResource automationAccount, DatabasePaaSInfo dbInfo)
+        /// <param name="appServiceName">
+        /// The App Service's name, so an Automation account with the same name gets a user of its own rather
+        /// than dropping the App Service's (see <see cref="SqlIdentityAccessTask.ChooseDatabaseUserName"/>).
+        /// </param>
+        private async Task GrantAutomationAccountDatabaseAccess(AutomationAccountResource automationAccount, DatabasePaaSInfo dbInfo,
+            string appServiceName)
         {
             if (automationAccount == null) return;
 
@@ -249,12 +256,24 @@ namespace App.ControlPanel.Engine
                 return;
             }
 
-            var task = new SqlIdentityAccessTask(_logger, BuildPrincipalResolver());
+            var userName = SqlIdentityAccessTask.ChooseDatabaseUserName(
+                ManagedIdentityOwner.AutomationAccount, current.Data.Name, appServiceName);
+            if (!string.Equals(userName, current.Data.Name, StringComparison.Ordinal))
+            {
+                _logger.LogInformation(
+                    $"The Automation account '{current.Data.Name}' has the same name as the App Service, so its database user is " +
+                    $"named '{userName}' to keep the two managed identities apart.");
+            }
+
+            var task = new SqlIdentityAccessTask(_logger, BuildPrincipalResolver(), BuildManagedIdentitySource());
             await task.GrantDatabaseAccessAsync(
                 dbInfo.ConnectionString,
+                ManagedIdentityOwner.AutomationAccount,
                 current.Data.Name,
                 principalId.Value,
-                new[] { "db_owner" });
+                current.Id?.ToString(),
+                new[] { "db_owner" },
+                userName);
         }
 
         /// <summary>
@@ -269,6 +288,27 @@ namespace App.ControlPanel.Engine
         private GraphEntraPrincipalResolver BuildPrincipalResolver()
         {
             return new GraphEntraPrincipalResolver(_logger, Config.InstallerAccount, Config.RuntimeAccountOffice365);
+        }
+
+        /// <summary>
+        /// Builds the Azure Resource Manager reader that supplies a managed identity's application ID, or
+        /// null when the installer account has no client secret to sign in with.
+        /// </summary>
+        /// <remarks>
+        /// Tried before Microsoft Graph: it needs only read access to the resource, which the installer
+        /// account already has, while Graph needs a directory permission it often lacks.
+        /// </remarks>
+        private IManagedIdentityApplicationIdSource BuildManagedIdentitySource()
+        {
+            var account = Config.InstallerAccount;
+            if (account == null || string.IsNullOrWhiteSpace(account.DirectoryId) || string.IsNullOrWhiteSpace(account.ClientId)
+                || string.IsNullOrWhiteSpace(account.Secret))
+            {
+                return null;
+            }
+
+            return new ArmManagedIdentityApplicationIdSource(
+                new Azure.Identity.ClientSecretCredential(account.DirectoryId, account.ClientId, account.Secret));
         }
 
         /// <summary>
