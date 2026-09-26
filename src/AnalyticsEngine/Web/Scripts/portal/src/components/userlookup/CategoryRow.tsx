@@ -151,7 +151,7 @@ function serverText(t: TFunction, key: string, field: 'label' | 'description', f
   return translated === catalogKey ? fallback : translated;
 }
 
-function detailTitle(t: TFunction, categoryKey: string, title: string | null): string | null {
+export function detailTitle(t: TFunction, categoryKey: string, title: string | null): string | null {
   if (categoryKey === 'calls-organised' && title === 'Call' + ' / ' + 'meeting') return t('admin.userLookup.detail.callsOrganised.title');
   if (categoryKey === 'call-sessions' && title === 'Call session' + ' attended') return t('admin.userLookup.detail.callSessions.title');
   if (categoryKey.startsWith('usage-') && title === 'Activity report' + ' day') return t('admin.userLookup.detail.usage.title');

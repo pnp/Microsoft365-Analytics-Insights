@@ -149,6 +149,9 @@ namespace Common.Entities.LicenceActivity
                 case "Copilot chat history exists, but none of it falls inside the dates you selected. That is not the same as nobody using Copilot.": return "copilotInteractions.missingCoverage";
                 case "The dates you selected match one of Microsoft's rolling Copilot reports exactly. People Microsoft did not list, and reports that do not record days used, stay Unknown. Microsoft only reports on people who hold a Copilot licence.": return "copilotReport.singleWindowAvailable";
                 case "Microsoft only published a longer rolling report inside the dates you selected. It is shown here with the dates it really covers, but activity levels stay Unknown for your custom range.": return "copilotReport.singleWindowLonger";
+                // LicenceActivitySql's Copilot fallback row, written from C# (initialMessage) into N'{2}'.
+                case "Collection is switched on for Copilot, but no Copilot activity has arrived for these dates yet.": return "copilot.notImported";
+                case "Copilot collection is switched off on this deployment, so nothing can be measured. That is not the same as nobody using Copilot.": return "copilot.disabled";
                 default: return null;
             }
         }

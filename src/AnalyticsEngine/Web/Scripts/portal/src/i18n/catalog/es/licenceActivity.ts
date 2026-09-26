@@ -117,6 +117,8 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.coverageMessage.copilotInteractions.unmatchableIdentity': 'El informe de Copilot de Microsoft ocultó la identidad de todas las personas, así que se usa en su lugar el historial de chats de Copilot. Demuestra quién SÍ usó Copilot, pero no puede demostrar que los demás no lo usaran.',
   'licenceActivity.coverageMessage.copilotInteractions.partial': 'El historial de chats de Copilot demuestra quién SÍ usó Copilot, pero nada confirma que el historial esté completo para todo el mundo, por lo que quien no aparece permanece como «Desconocida» en lugar de inactivo.',
   'licenceActivity.coverageMessage.copilotInteractions.missingCoverage': 'Hay historial de chats de Copilot, pero ninguna conversación queda dentro de las fechas seleccionadas. Eso no significa que nadie use Copilot.',
+  'licenceActivity.coverageMessage.copilot.notImported': 'La recopilación está activada para Copilot, pero aún no ha llegado ninguna actividad de Copilot para estas fechas.',
+  'licenceActivity.coverageMessage.copilot.disabled': 'La recopilación de Copilot está desactivada en esta implementación, por lo que no se puede medir nada. Eso no significa que nadie use Copilot.',
 
   // ActivityCoverageHelp
   'licenceActivity.activityCoverage.summary':

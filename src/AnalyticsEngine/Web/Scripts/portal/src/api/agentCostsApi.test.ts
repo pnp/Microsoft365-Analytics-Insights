@@ -49,4 +49,12 @@ describe('agentCostsApi errors', () => {
       'The agent cost figures could not be loaded. A different server error.',
     );
   });
+
+  it('translates a known code whatever the status, so a coded reply is enough to reach the reader', async () => {
+    await loadCatalog('es');
+    setActiveLanguage('es');
+    mockedFetch.mockResolvedValue(jsonResponse({ code: 'agentCostsLoadFailed', message: 'Server English.' }, 503));
+
+    await expect(fetchSummary({ from: '2026-09-01', to: '2026-09-25' })).rejects.toThrow('No se han podido cargar las cifras de costes de agentes.');
+  });
 });

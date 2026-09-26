@@ -58,7 +58,9 @@ async function getJson<T>(path: string, failureKey: TranslationKey, signal?: Abo
   if (!response.ok) {
     const serverError = await readServerError(response);
     const codeKey = serverError?.code ? AGENT_COST_ERROR_CODE_KEYS[serverError.code] : undefined;
-    const message = response.status === 500 && codeKey
+    // Any known code is translated, whatever the status: the gate in serverAuthoredText.test.ts tells a
+    // new reply to carry a code and a catalog entry, and that must be enough to reach the reader.
+    const message = codeKey
       ? translateActive(codeKey)
       : serverError?.message ?? translateActive(failureKey, { status: response.status });
     throw new AgentCostsApiError(response.status, message);

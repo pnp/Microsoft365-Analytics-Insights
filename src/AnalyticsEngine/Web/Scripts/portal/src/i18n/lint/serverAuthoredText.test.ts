@@ -1755,7 +1755,7 @@ describe('Service Configuration webhook status details', () => {
   it('translates every fixed webhook detail SystemStatus writes, and nothing else is a sentence', async () => {
     const { WEBHOOK_STATUS_DETAIL_TEXT } = await import('../../pages/ServiceConfigurationPage');
     const source = readFileSync(join(process.cwd(), '..', '..', 'Models', 'SystemStatus.cs'), 'utf8');
-    const opened = [...source.matchAll(/\bCallWebhookStatusDetail\s*=(?!=)/g)].length;
+    const opened = [...source.matchAll(/\bCallWebhookStatusDetail\s*\+?=(?!=)/g)].length;
     const assigned = [...source.matchAll(/\bCallWebhookStatusDetail\s*=\s*("(?:[^"\\]|\\.)*"|[\w.]+)\s*;/g)].map((m) => m[1]);
     expect(assigned.length, 'a CallWebhookStatusDetail assignment the gate cannot read').toBe(opened);
 
@@ -1820,6 +1820,9 @@ describe('Teams authorisation server errors', () => {
       .map((m) => [...m[1].matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((part) => csharpStringLiteralValue(part[1])).join(''));
     expect(sentences.length, 'an ApiErrorModel whose message is not literal text').toBe(opened);
     expect(sentences).toEqual([EN_CATALOG['admin.teams.teamList.redisNotConfigured']]);
+    // A reply carrying text some other way (an anonymous { message }) would skip the check above.
+    expect([...source.matchAll(/\bContent\s*\(/g)].length, 'a Teams authorisation Content(...) reply that is not an ApiErrorModel')
+      .toBe([...source.matchAll(/\bContent\s*\(\s*HttpStatusCode\.\w+,\s*new ApiErrorModel\(/g)].length);
   });
 });
 
@@ -1853,6 +1856,44 @@ describe('User lookup server errors', () => {
     expect(source).toContain(`const string noDrilldownSuffix = "${noDrilldownSuffix}";`);
     expect(source).toContain('new ApiErrorModel(result.ErrorMessage, "userNotFound") { Upn = UserDataLookupRules.Normalise(upn), }');
   });
+
+  it('writes no sentence of its own in the controller: every error carries the service message', () => {
+    const source = controller();
+    // The controller only relays UserDataLookupService's sentences (pinned above). A literal here, or a
+    // reply that is not an ApiErrorModel, would reach Spanish readers in English.
+    const firstArgs = [...source.matchAll(/new ApiErrorModel\(\s*([^,)]+)/g)].map((m) => m[1].trim());
+    expect(sortedUnique(firstArgs), 'ApiErrorModel message arguments').toEqual(['message', 'result.ErrorMessage']);
+    const contents = [...source.matchAll(/\bContent\s*\(\s*HttpStatusCode\.(\w+),\s*([A-Za-z]+)/g)].map((m) => `${m[1]}:${m[2]}`);
+    expect(contents.length, 'a Content(...) reply the gate cannot read').toBe([...source.matchAll(/\bContent\s*\(/g)].length);
+    expect(contents.sort()).toEqual(['BadRequest:BadRequestError', 'NotFound:new']);
+  });
+
+  it('recognises every fixed row title and detail prefix SqlUserDataLookupQuery writes', async () => {
+    const { detailText, detailTitle } = await import('../../components/userlookup/CategoryRow');
+    const query = readFileSync(join(process.cwd(), '..', '..', 'Models', 'UserDataLookup', 'SqlUserDataLookupQuery.cs'), 'utf8');
+    const titles = [...query.matchAll(/\bTitle\s*=\s*([^,\n]+)/g)]
+      .flatMap((m) => [...m[1].matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((s) => csharpStringLiteralValue(s[1])));
+    const prefixes = [...query.matchAll(/\bDetail\s*=\s*([^\n]+)/g)]
+      .flatMap((m) => [...m[1].matchAll(/"((?:[^"\\]|\\.)*)"\s*\+/g)].map((s) => csharpStringLiteralValue(s[1])));
+
+    // Each title with the category it appears under; a new or reworded literal fails the equality.
+    const titleCategories: Record<string, string> = {
+      'Call / meeting': 'calls-organised',
+      'Call session attended': 'call-sessions',
+      'Activity report day': 'usage-teams',
+      '(audit event)': 'audit-events',
+    };
+    expect(sortedUnique(titles)).toEqual(sortedUnique(Object.keys(titleCategories)));
+    expect(sortedUnique(prefixes)).toEqual(['Ended ', 'Last activity ']);
+
+    await loadCatalog('es');
+    const es: TFunction = (key, values) => translateStatic('es', key, values);
+    for (const [title, category] of Object.entries(titleCategories)) {
+      expect(detailTitle(es, category, title), `detailTitle does not recognise "${title}"`).not.toBe(title);
+    }
+    expect(detailText(es, 'calls-organised', { detail: 'Ended 2026-09-01 10:00:00Z' } as never)).not.toMatch(/^Ended /);
+    expect(detailText(es, 'usage-teams', { detail: 'Last activity 9/1/2026' } as never)).not.toMatch(/^Last activity /);
+  });
 });
 
 // --- Licence Activity coverage measures and messages -------------------------------------------------
@@ -1879,18 +1920,32 @@ function licenceDisplayKeySwitch(name: 'MeasureKeyFor' | 'MessageKeyFor'): Map<s
 function licenceCoverageSentences(): string[] {
   const sql = readFileSync(join(LICENCE_ACTIVITY_DIR, 'LicenceActivitySql.cs'), 'utf8');
   const store = readFileSync(join(LICENCE_ACTIVITY_DIR, 'SqlLicenceActivityStore.cs'), 'utf8');
-  // SQL literals, apart from diagnostics (PRINT) and dynamic SQL (sp_executesql). Three or more words, or
+  // SQL literals, apart from diagnostics (PRINT) and dynamic SQL (sp_executesql). Two or more words, or
   // anything ending like a sentence, is text someone reads; codes ('available') and bucket names
   // (N'Unknown') are single bare words.
   const sqlSentences = [...sql.matchAll(/(PRINT\s+|sp_executesql\s+)?N'((?:[^']|'')*)'/g)]
     .filter((m) => !m[1])
     .map((m) => m[2].replace(/''/g, "'"))
-    .filter((literal) => literal.trim().split(/\s+/).length >= 3 || /[.!?]$/.test(literal.trim()));
+    .filter((literal) => literal.trim().split(/\s+/).length >= 2 || /[.!?]$/.test(literal.trim()));
   // The Microsoft 365 measures are passed from C# into the SQL template; the store also builds coverage in C#.
   const m365Measures = [...sql.matchAll(/AppendM365Overview\([^;]*?"((?:[^"\\]|\\.)*)",\s*sources\.UsageReports\)/g)]
     .map((m) => csharpStringLiteralValue(m[1]));
-  const storeText = [...store.matchAll(/\b(?:Measure|Message)\s*=\s*"((?:[^"\\]|\\.)*)"/g)].map((m) => csharpStringLiteralValue(m[1]));
-  return sortedUnique([...sqlSentences, ...m365Measures, ...storeText]);
+  // C# text interpolated into the SQL as N'{n}': the two M365 overview measures above, and the Copilot
+  // fallback row's initialMessage. Every such format item is counted, so a new C#-written sentence cannot
+  // hide behind one the way initialMessage once did.
+  const formatItems = sql.split('\n').filter((line) => !line.trim().startsWith('//')).join('\n').match(/N'\{\d\}'/g) ?? [];
+  expect(formatItems.length, "a new N'{n}' SQL literal is written from C#: extract its text in licenceCoverageSentences").toBe(3);
+  const initialMessage = /var initialMessage\s*=([^;]*);/.exec(sql)?.[1];
+  expect(initialMessage, 'LicenceActivitySql initialMessage not found').toBeTruthy();
+  const copilotFallback = [...initialMessage!.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => csharpStringLiteralValue(m[1]));
+  expect(copilotFallback.length, 'initialMessage sentences').toBe(2);
+  // Store: a literal Measure/Message is a sentence; anything else may only read or copy one, so an
+  // interpolated or computed sentence fails here rather than going unkeyed.
+  const assignments = [...store.matchAll(/\b(?:Measure|Message)\s*=\s*("(?:[^"\\]|\\.)*"|\w+\([^)]*\)|[^,\n]+)/g)].map((m) => m[1].trim());
+  expect(sortedUnique(assignments.filter((value) => !value.startsWith('"'))), 'a non-literal coverage Measure/Message in SqlLicenceActivityStore')
+    .toEqual(sortedUnique(['ReadNullableString(reader, "Message")', 'ReadString(reader, "Measure")', 'coverage.Measure', 'string.Empty']));
+  const storeText = assignments.filter((value) => value.startsWith('"')).map((value) => csharpStringLiteralValue(value.slice(1, -1)));
+  return sortedUnique([...sqlSentences, ...m365Measures, ...copilotFallback, ...storeText]);
 }
 
 describe('Licence Activity coverage measures and messages', () => {
@@ -2065,6 +2120,15 @@ describe('Copilot Adoption server warning text', () => {
     // forwards reasons recorded by literal calls above. Anything else could name a dataset this list misses.
     expect(sortedUnique(calls.filter((arg) => !arg.startsWith('"'))), 'non-literal dataset name').toEqual(['reason', 'string dataset']);
     expect(literals.length, 'figures-incomplete datasets not found in the service').toBeGreaterThanOrEqual(17);
+    // Only the service names datasets: a call anywhere else would escape the list below.
+    for (const file of ['CopilotAdoptionScope.cs', 'CopilotAdoptionCoworkModels.cs', 'CopilotAdoptionSummaryModels.cs']) {
+      const other = readFileSync(join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'CopilotAdoption', file), 'utf8');
+      const foreign = [...other.matchAll(/\bMark(?:FiguresIncomplete|Incomplete)\s*\(([^)]*)\)/g)].map((m) => m[1].trim())
+        .filter((arg) => arg !== 'string dataset');
+      expect(foreign, `${file} names a figures-incomplete dataset`).toEqual([]);
+    }
+    const controllerSource = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'CopilotAdoptionAPIController.cs'), 'utf8');
+    expect([...controllerSource.matchAll(/\bMark(?:FiguresIncomplete|Incomplete)\s*\(/g)], 'the controller names a dataset').toEqual([]);
     expect(sortedUnique(INCOMPLETE_DATASET_KEYS.map((key) => EN_CATALOG[key])), 'INCOMPLETE_DATASET_KEYS must name exactly the service datasets, verbatim')
       .toEqual(sortedUnique(literals));
     expect(INCOMPLETE_DATASET_KEYS.length, 'two dataset keys share one English name').toBe(sortedUnique(literals).length);
@@ -2176,6 +2240,9 @@ describe('API error-code drift checks', () => {
     // bad-request replies to malformed requests the portal never makes. A new one would be English on a
     // Spanish page, so it must get a code and a catalog entry instead.
     const replies = [...source.matchAll(/Content\(HttpStatusCode\.\w+,\s*new\b[^;]*;/g)].map((m) => m[0]);
+    // Every Content(...) reply must be one this gate can read: a body built elsewhere and passed in as a
+    // variable would otherwise be invisible to both checks below.
+    expect(replies.length, 'an Agent Costs Content(...) reply whose body is not written inline').toBe([...source.matchAll(/\bContent\s*\(/g)].length);
     const uncoded = replies
       .filter((reply) => !/\bcode\s*=/.test(reply))
       .map((reply) => /\bmessage\s*=\s*(\$?"(?:[^"\\]|\\.)*"|[\w.]+)/.exec(reply)?.[1] ?? reply);

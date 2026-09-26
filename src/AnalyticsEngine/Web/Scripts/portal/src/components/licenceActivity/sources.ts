@@ -63,6 +63,8 @@ export const MESSAGE_LABELS: Record<string, TranslationKey> = {
   'copilotInteractions.unmatchableIdentity': 'licenceActivity.coverageMessage.copilotInteractions.unmatchableIdentity',
   'copilotInteractions.partial': 'licenceActivity.coverageMessage.copilotInteractions.partial',
   'copilotInteractions.missingCoverage': 'licenceActivity.coverageMessage.copilotInteractions.missingCoverage',
+  'copilot.notImported': 'licenceActivity.coverageMessage.copilot.notImported',
+  'copilot.disabled': 'licenceActivity.coverageMessage.copilot.disabled',
 };
 
 /** Where a workload's figures came from, named the way Microsoft 365 admins would recognise it. */

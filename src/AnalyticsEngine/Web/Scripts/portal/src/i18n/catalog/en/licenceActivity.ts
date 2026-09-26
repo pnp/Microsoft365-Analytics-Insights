@@ -117,6 +117,8 @@ export const licenceActivity = {
   'licenceActivity.coverageMessage.copilotInteractions.unmatchableIdentity': "Microsoft's Copilot report hid every person's identity, so Copilot chat history is used instead. It proves who DID use Copilot, but cannot prove that anybody else did not.",
   'licenceActivity.coverageMessage.copilotInteractions.partial': 'Copilot chat history proves who DID use Copilot, but nothing confirms the history is complete for everybody, so anyone absent stays Unknown rather than inactive.',
   'licenceActivity.coverageMessage.copilotInteractions.missingCoverage': 'Copilot chat history exists, but none of it falls inside the dates you selected. That is not the same as nobody using Copilot.',
+  'licenceActivity.coverageMessage.copilot.notImported': 'Collection is switched on for Copilot, but no Copilot activity has arrived for these dates yet.',
+  'licenceActivity.coverageMessage.copilot.disabled': 'Copilot collection is switched off on this deployment, so nothing can be measured. That is not the same as nobody using Copilot.',
 
   // ActivityCoverageHelp
   'licenceActivity.activityCoverage.summary':
