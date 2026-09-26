@@ -1,16 +1,17 @@
-using App.ControlPanel.Engine;
+using Azure.Identity;
 using Azure.Messaging.ServiceBus;
 using Common.Entities;
+using Common.Entities.Calls;
 using Common.Entities.Config;
+using Common.Entities.Installer;
 using Common.Entities.Redis;
-using DataUtils;
 using Newtonsoft.Json;
 using System;
 using System.Data.Entity;
 using System.Linq;
 using System.Runtime.Caching;
 using System.Threading.Tasks;
-using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
+using Web.AnalyticsWeb.Models.Calls;
 
 namespace Web.AnalyticsWeb.Models
 {
@@ -24,7 +25,9 @@ namespace Web.AnalyticsWeb.Models
             {
                 try
                 {
-                    this.Config = JsonConvert.DeserializeObject<SolutionInstallConfig>(json);
+                    // The base type the web-jobs read the same JSON with: the installer's
+                    // SolutionInstallConfig would drag the whole installer engine into the web app.
+                    this.Config = JsonConvert.DeserializeObject<BaseSolutionInstallConfig>(json);
                 }
                 catch (JsonReaderException)
                 {
@@ -40,7 +43,7 @@ namespace Web.AnalyticsWeb.Models
 
         #region Props
 
-        public SolutionInstallConfig Config { get; set; }
+        public BaseSolutionInstallConfig Config { get; set; }
 
         public string ConfigJson { get; set; }
 
@@ -119,10 +122,10 @@ namespace Web.AnalyticsWeb.Models
         /// <summary>
         /// Works out the state of the Teams call-records webhook subscription for display on the
         /// homepage. If calls import is off there is nothing to check; otherwise it asks Microsoft
-        /// Graph (via the same <see cref="CallWebhook"/> the importer uses) whether a matching
-        /// subscription is currently registered, and when it expires. The Graph result is cached
-        /// briefly so we don't call Graph on every page load, and any failure is caught so a Graph
-        /// error never breaks the homepage.
+        /// Graph whether a matching subscription is currently registered, and when it expires - using
+        /// the same matching rules as the importer's <c>CallWebhook</c>, over Graph's REST API rather
+        /// than the Graph SDK. The Graph result is cached briefly so we don't call Graph on every page
+        /// load, and any failure is caught so a Graph error never breaks the homepage.
         /// </summary>
         private async Task LoadCallWebhookStatus(AppConfig config)
         {
@@ -159,9 +162,9 @@ namespace Web.AnalyticsWeb.Models
 
             try
             {
-                var logger = new AnalyticsLogger(config.AppInsightsConnectionString, nameof(SystemStatus));
-                var callWebhook = new CallWebhook(config, logger);
-                var info = await callWebhook.GetCallRecordsSubscriptionInfo(new Uri(webhookUrlString));
+                var subscriptions = new GraphRestCallRecordSubscriptionReader(
+                    new ClientSecretCredential(config.TenantGUID.ToString(), config.ClientID, config.ClientSecret));
+                var info = await CallRecordSubscriptionStatus.ReadAsync(subscriptions, new Uri(webhookUrlString));
 
                 if (info.Exists)
                 {
@@ -218,7 +221,7 @@ namespace Web.AnalyticsWeb.Models
         }
         public UnknownConfigSystemStatus(string json) : base(json)
         {
-            base.Config = SolutionInstallConfig.NewConfig();
+            base.Config = new BaseSolutionInstallConfig();
         }
     }
 }

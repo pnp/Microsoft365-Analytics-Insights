@@ -1,5 +1,5 @@
 ﻿using System;
-using UsageReporting;
+using Web.Storage;
 
 namespace Web.Config
 {

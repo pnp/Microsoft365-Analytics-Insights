@@ -25,6 +25,27 @@ Note that `build_dotnet` / `test_dotnet` need Node even though nothing in them m
 * Build when PRs a ready for review.
 * Does not sign the executable.
 
+## Release packages
+
+`ci` and `pr` both zip each .NET package with
+[`.github/scripts/Build-ReleasePackage.ps1`](../scripts/Build-ReleasePackage.ps1) rather than a bare
+`Compress-Archive`, so a pull request build is packaged exactly like the release it would become. The
+script:
+
+* **prunes** what a package never uses: satellite resource assemblies for languages the product
+  doesn't ship (it keeps `es`), third-party `.pdb` files (our own stay, for stack-trace line numbers),
+  and `Microsoft.Data.SqlClient`'s ARM64 native library from the three packages that run on App
+  Service, which has no ARM64 Windows workers;
+* **fails the job** if a package carries a dependency it must never ship - the Cosmos DB SDK anywhere,
+  installer-only assemblies (`Azure.ResourceManager.*`, `BouncyCastle`, the installer engine) outside
+  `ControlPanelApp.zip`, or the Graph SDK and importer engines in `Website.zip` - or is missing its
+  entry point;
+* writes each package's size to the job summary.
+
+The dependency rules exist because every package references `Common/DataUtils` and
+`Common/Entities`: a package reference added there ships in all four zips. If the check fails, move
+the reference to the project that actually needs it rather than relaxing the rule.
+
 ## tests
 
 * Run tests on pushes to `main`, `dev` and PRs ready for review.

@@ -2,12 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
+namespace Common.Entities.Calls
 {
     /// <summary>
     /// Pure decision logic for the Teams calls webhook subscription: which Graph subscriptions are
     /// ours, whether to create or renew, and how long the subscription should live. Extracted from
-    /// <see cref="CallWebhook"/> so it can be tested without Graph. See issue #378.
+    /// the importer's <c>CallWebhook</c> so it can be tested without Graph. See issue #378. Lives in
+    /// <c>Common.Entities</c> because the web app reads the same subscription for its status page.
     ///
     /// A <c>static</c> class rather than an interface, per issue #381's conventions - it is a rule,
     /// not a dependency, and takes the current time as a parameter rather than depending on a clock.
@@ -81,7 +82,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// This distinction matters because the message is actively misleading: the common variant reads
         /// "HTTP status code is 'Forbidden'", where the <c>Forbidden</c> is what our endpoint returned to
         /// Graph - it is NOT the tenant refusing a Graph permission. An admin who reads the raw message
-        /// goes and re-checks <see cref="CallWebhook.REQUIRED_GRAPH_PERMISSION"/>, which is the wrong
+        /// goes and re-checks the importer's <c>CallWebhook.REQUIRED_GRAPH_PERMISSION</c>, which is the wrong
         /// place: a genuine permission problem surfaces as a 403 from Graph itself, not as a 400 wrapping
         /// our own status code.
         /// </remarks>

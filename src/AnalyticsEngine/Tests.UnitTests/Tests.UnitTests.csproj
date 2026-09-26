@@ -386,6 +386,7 @@
     <Compile Include="AutoThrottleHttpClientTests.cs" />
     <Compile Include="CallsImportTests.cs" />
     <Compile Include="GraphImportTests.cs" />
+    <Compile Include="GraphRestCallRecordSubscriptionReaderTests.cs" />
     <Compile Include="ReportCompletionStoreTests.cs" />
     <Compile Include="TeamsCrawlTests.cs" />
     <Compile Include="InstallTests\FakeInstallClasses.cs" />
@@ -551,9 +552,6 @@
     <PackageReference Include="Microsoft.AspNet.WebApi">
       <Version>5.3.0</Version>
     </PackageReference>
-    <PackageReference Include="Microsoft.Azure.Cosmos">
-      <Version>3.62.1</Version>
-    </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Configuration">
       <Version>10.0.11</Version>
     </PackageReference>
@@ -574,6 +572,11 @@
     </PackageReference>
     <PackageReference Include="Newtonsoft.Json">
       <Version>13.0.4</Version>
+    </PackageReference>
+    <!-- Used to arrive through the Cosmos DB SDK. Pinned so it matches the binding redirect in
+         App.Template.config, which the test platform's own assemblies rely on. -->
+    <PackageReference Include="System.Collections.Immutable">
+      <Version>1.7.0</Version>
     </PackageReference>
     <PackageReference Include="System.IdentityModel.Tokens.Jwt">
       <Version>8.22.0</Version>

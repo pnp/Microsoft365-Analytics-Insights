@@ -1,5 +1,5 @@
+using Common.Entities.Calls;
 using System;
-using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
@@ -15,32 +15,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
     /// renewal") had to fix once already. Implementations MUST let Graph failures propagate so
     /// <see cref="CallWebhook"/> can report them.
     /// </summary>
-    public interface ICallRecordSubscriptionManager
+    /// <remarks>
+    /// The read half, <see cref="ICallRecordSubscriptionReader"/>, lives in <c>Common.Entities</c> so the
+    /// web app can show the subscription's status without referencing this engine.
+    /// </remarks>
+    public interface ICallRecordSubscriptionManager : ICallRecordSubscriptionReader
     {
-        /// <summary>
-        /// Every call-records subscription pointing at this deployment's notification URL, in the order
-        /// Graph returned them. Implementations must walk all pages: the tenant may have many
-        /// subscriptions and the one we care about is not necessarily on the first page.
-        /// </summary>
-        Task<IReadOnlyList<CallRecordSubscription>> FindCallRecordSubscriptions(Uri notificationUrl);
-
         Task<CallRecordSubscription> CreateSubscription(Uri notificationUrl, string clientState, DateTime expiryUtc);
 
         Task<CallRecordSubscription> RenewSubscription(string subscriptionId, DateTime expiryUtc);
-    }
-
-    /// <summary>
-    /// A Graph change-notification subscription, reduced to the fields the calls import reasons about.
-    /// </summary>
-    public class CallRecordSubscription
-    {
-        public string Id { get; set; }
-
-        /// <summary>Graph resource path, e.g. <c>/communications/callRecords</c>.</summary>
-        public string Resource { get; set; }
-
-        public string NotificationUrl { get; set; }
-
-        public DateTimeOffset? ExpirationDateTime { get; set; }
     }
 }

@@ -1,4 +1,4 @@
-using UsageReporting;
+using Web.Storage;
 
 namespace Web.Startup
 {

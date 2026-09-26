@@ -1,3 +1,4 @@
+using Common.Entities.Calls;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using System;
