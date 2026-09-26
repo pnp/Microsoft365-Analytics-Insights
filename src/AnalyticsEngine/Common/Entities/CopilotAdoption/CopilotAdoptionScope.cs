@@ -189,6 +189,12 @@ namespace Common.Entities.CopilotAdoption
                 // pass, with this domain's own numbers in it.
                 Warnings = new List<string>(tenant.SourceWarnings ?? new List<string>()),
                 SourceWarnings = new List<string>(tenant.SourceWarnings ?? new List<string>()),
+                WarningDetails = (tenant.SourceWarningDetails ?? new List<CopilotAdoptionWarningDetail>())
+                    .Select(d => d.Clone())
+                    .ToList(),
+                SourceWarningDetails = (tenant.SourceWarningDetails ?? new List<CopilotAdoptionWarningDetail>())
+                    .Select(d => d.Clone())
+                    .ToList(),
             };
         }
 

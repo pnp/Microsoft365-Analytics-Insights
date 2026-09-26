@@ -64,7 +64,14 @@ import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/ad
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
 import type { KpiDefinition } from '../components/shared/KpiGrid';
 import { activeLocale, formatNumber, plural, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
-import { adoptionBandLabel, availabilityMessages, scoreProfileLabel } from '../components/copilotAdoption/serverText';
+import {
+  adoptionBandLabel,
+  availabilityMessages,
+  copilotAdoptionWarningIdentity,
+  copilotAdoptionWarningText,
+  reclaimCaveatText,
+  scoreProfileLabel,
+} from '../components/copilotAdoption/serverText';
 import {
   compactHoursRange,
   projectCoworkTimeSaved,
@@ -600,7 +607,14 @@ export default function CopilotAdoptionPage() {
                 </MessageBar>
               )}
 
-              {summary.warnings.length > 0 && <DismissibleWarnings messages={summary.warnings} />}
+              {summary.warnings.length > 0 && (
+                <DismissibleWarnings
+                  messages={summary.warnings.map((warning, index) =>
+                    copilotAdoptionWarningText(t, summary.warningDetails?.[index], warning))}
+                  identities={summary.warnings.map((warning, index) =>
+                    copilotAdoptionWarningIdentity(summary.warningDetails?.[index], warning))}
+                />
+              )}
 
               {/* Stated on screen, every time. A dashboard silently showing one subsidiary is the
                   fastest way to get a licence decision wrong, and the domain drop-down is easy to
@@ -2446,7 +2460,10 @@ function buildKpis(
       tone: summary.reclaimableSeats > 0 ? 'critical' : 'good',
       info: {
         what: t('copilotAdoption.page.licencesSafeEnoughIncludeActionableReclaimTotalDisabledAccounts'),
-        how: t('copilotAdoption.page.newUserProtectedDaysUsingGraphUserCreateddatetimeAccount', { v0: o.reclaimGraceDays, v1: summary.reclaimCaveat ?? '' }),
+        how: t('copilotAdoption.page.newUserProtectedDaysUsingGraphUserCreateddatetimeAccount', {
+          v0: o.reclaimGraceDays,
+          v1: reclaimCaveatText(t, summary.reclaimCaveatKey, summary.reclaimCaveat),
+        }),
         // Two independent mechanisms hold seats back - confidence tiering and a Microsoft
         // report-period mismatch - so the formula has to state both, or a reader adding up the band
         // breakdown finds a gap nothing on the page accounts for.

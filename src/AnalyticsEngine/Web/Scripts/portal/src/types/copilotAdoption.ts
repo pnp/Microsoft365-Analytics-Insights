@@ -395,6 +395,7 @@ export interface CopilotAdoptionSummary {
   expiredReclaimExclusions: number;
   tooNewToJudgeUsers: number;
   reclaimCaveat: string | null;
+  reclaimCaveatKey: string | null;
   reclaimSeatsHeldBackForWindowMismatch: number;
   reclaimSeatsHeldBackForReview: number;
   reclaimSeatsFromActiveBands: number;
@@ -503,6 +504,7 @@ export interface CopilotAdoptionSummary {
 
   options: CopilotAdoptionOptions;
   warnings: string[];
+  warningDetails?: CopilotAdoptionWarningDetail[];
 
   /**
    * True when a query the headline figures are DERIVED FROM failed, so everything below describes an
@@ -630,6 +632,7 @@ export interface LicensedUserPage {
   take: number;
   rows: LicensedUserAdoptionRow[];
   warnings: string[];
+  warningDetails?: CopilotAdoptionWarningDetail[];
 }
 
 export interface LicenceOpportunityPage {
@@ -638,6 +641,12 @@ export interface LicenceOpportunityPage {
   take: number;
   rows: LicenceOpportunityRow[];
   warnings: string[];
+  warningDetails?: CopilotAdoptionWarningDetail[];
+}
+
+export interface CopilotAdoptionWarningDetail {
+  key: string;
+  values?: Record<string, string | number | boolean | null>;
 }
 
 /** Distinct values for the filter drop-downs, derived from the loaded analysis. */
@@ -918,6 +927,7 @@ export interface CoworkReadinessPage {
   take: number;
   rows: CoworkReadinessRow[];
   warnings: string[];
+  warningDetails?: CopilotAdoptionWarningDetail[];
 }
 
 /** Filter/sort state for the Cowork readiness list. */

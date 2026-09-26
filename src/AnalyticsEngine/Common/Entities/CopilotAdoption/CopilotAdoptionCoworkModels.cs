@@ -710,5 +710,8 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("warnings")]
         public List<string> Warnings { get; set; } = new List<string>();
+
+        [JsonProperty("warningDetails")]
+        public List<CopilotAdoptionWarningDetail> WarningDetails { get; set; } = new List<CopilotAdoptionWarningDetail>();
     }
 }

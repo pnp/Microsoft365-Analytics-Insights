@@ -67,7 +67,7 @@ import CoworkQuadrant from './CoworkQuadrant';
 import CoworkTimeSavedHero from './CoworkTimeSavedHero';
 import CoworkTimeSavedModel from './CoworkTimeSavedModel';
 import { useTimeSavedAssumptions } from './coworkTimeSaved';
-import { coworkRationaleText, coworkTierLabel } from './serverText';
+import { copilotAdoptionWarningText, coworkRationaleText, coworkTierLabel, isCoworkWarning } from './serverText';
 
 const PAGE_SIZE = 50;
 
@@ -495,9 +495,9 @@ export default function CoworkPanel({
     // Read from the SUMMARY, not from `data`: the effect above deliberately does not fetch when the
     // analysis is unavailable, so `data` is always null on this branch. The summary is a prop and is
     // always present, which is what makes the diagnosis below reachable at all.
-    const coworkWarnings = (summary.warnings ?? []).filter((w) =>
-      w.toLowerCase().includes('cowork'),
-    );
+    const coworkWarnings = (summary.warnings ?? [])
+      .map((warning, index) => ({ warning, detail: summary.warningDetails?.[index] }))
+      .filter(({ detail }) => isCoworkWarning(detail));
 
     return (
       <Card>
@@ -507,9 +507,9 @@ export default function CoworkPanel({
           </Text>
           {coworkWarnings.length > 0 ? (
             <div className={styles.warnings}>
-              {coworkWarnings.map((warning) => (
-                <MessageBar key={warning} intent="warning">
-                  <MessageBarBody>{warning}</MessageBarBody>
+              {coworkWarnings.map(({ warning, detail }) => (
+                <MessageBar key={`${detail?.key ?? warning}:${warning}`} intent="warning">
+                  <MessageBarBody>{copilotAdoptionWarningText(t, detail, warning)}</MessageBarBody>
                 </MessageBar>
               ))}
             </div>
@@ -929,13 +929,16 @@ export default function CoworkPanel({
           </MessageBar>
         )}
 
-        {!loading && (data?.warnings ?? []).filter((w) => w.toLowerCase().includes('cowork')).length > 0 && (
+        {!loading && (data?.warnings ?? [])
+          .map((warning, index) => ({ warning, detail: data?.warningDetails?.[index] }))
+          .filter(({ detail }) => isCoworkWarning(detail)).length > 0 && (
           <div className={styles.warnings}>
             {(data?.warnings ?? [])
-              .filter((w) => w.toLowerCase().includes('cowork'))
-              .map((warning) => (
-                <MessageBar key={warning} intent="warning">
-                  <MessageBarBody>{warning}</MessageBarBody>
+              .map((warning, index) => ({ warning, detail: data?.warningDetails?.[index] }))
+              .filter(({ detail }) => isCoworkWarning(detail))
+              .map(({ warning, detail }) => (
+                <MessageBar key={`${detail?.key ?? warning}:${warning}`} intent="warning">
+                  <MessageBarBody>{copilotAdoptionWarningText(t, detail, warning)}</MessageBarBody>
                 </MessageBar>
               ))}
           </div>

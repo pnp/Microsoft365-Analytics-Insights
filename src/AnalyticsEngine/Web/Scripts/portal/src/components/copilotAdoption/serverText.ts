@@ -2,6 +2,7 @@ import type {
   AgentUsageRow,
   CopilotAdoptionAvailability,
   CopilotAdoptionOptions,
+  CopilotAdoptionWarningDetail,
   CoworkReadinessRow,
   CoworkTier,
   LicenceOpportunityRow,
@@ -16,6 +17,84 @@ function catalogText(t: TFunction, key: TranslationKey, fallback: string, values
   if (activeLocale().startsWith('en')) return fallback;
   const translated = t(key, values);
   return translated === key ? fallback : translated;
+}
+
+export const COPILOT_ADOPTION_WARNING_KEYS = {
+  NoLicenceInformation: 'noLicenceInformation',
+  NoCopilotLicences: 'noCopilotLicences',
+  CopilotBackfillPending: 'copilotBackfillPending',
+  CopilotUsageReportConcealed: 'copilotUsageReportConcealed',
+  NoCopilotData: 'noCopilotData',
+  AuditMissingUsingUsageReport: 'auditMissingUsingUsageReport',
+  AgentInventoryCapped: 'agentInventoryCapped',
+  UnlicensedUsageCapped: 'unlicensedUsageCapped',
+  LicensedUsersSubset: 'licensedUsersSubset',
+  LicenceOpportunitiesNoSources: 'licenceOpportunitiesNoSources',
+  LicenceCandidatesAuditOnly: 'licenceCandidatesAuditOnly',
+  CoworkReadinessNoSources: 'coworkReadinessNoSources',
+  CoworkM365UsageMissing: 'coworkM365UsageMissing',
+  CoworkUsageReportMissing: 'coworkUsageReportMissing',
+  CoworkAuditMissing: 'coworkAuditMissing',
+  UsageReportSourcedUsers: 'usageReportSourcedUsers',
+  UsageReportWindowMismatch: 'usageReportWindowMismatch',
+  CoworkEligibilityUnknown: 'coworkEligibilityUnknown',
+  PurchasedSeatsUnknown: 'purchasedSeatsUnknown',
+  SkuSeatMismatch: 'skuSeatMismatch',
+  CoworkFluencyMissingAll: 'coworkFluencyMissingAll',
+  CoworkFluencyPartial: 'coworkFluencyPartial',
+  CouldNotLoad: 'couldNotLoad',
+} as const;
+
+const COWORK_WARNING_KEYS = new Set<string>([
+  COPILOT_ADOPTION_WARNING_KEYS.CoworkReadinessNoSources,
+  COPILOT_ADOPTION_WARNING_KEYS.CoworkM365UsageMissing,
+  COPILOT_ADOPTION_WARNING_KEYS.CoworkUsageReportMissing,
+  COPILOT_ADOPTION_WARNING_KEYS.CoworkAuditMissing,
+  COPILOT_ADOPTION_WARNING_KEYS.CoworkEligibilityUnknown,
+  COPILOT_ADOPTION_WARNING_KEYS.CoworkFluencyMissingAll,
+  COPILOT_ADOPTION_WARNING_KEYS.CoworkFluencyPartial,
+]);
+
+const OPPORTUNITY_WARNING_KEYS = new Set<string>([
+  COPILOT_ADOPTION_WARNING_KEYS.LicenceOpportunitiesNoSources,
+  COPILOT_ADOPTION_WARNING_KEYS.LicenceCandidatesAuditOnly,
+]);
+
+function warningValues(values?: CopilotAdoptionWarningDetail['values']): TranslationValues {
+  const mapped: TranslationValues = {};
+  Object.entries(values ?? {}).forEach(([key, value]) => {
+    mapped[key] = typeof value === 'number'
+      ? formatNumber(value, { maximumFractionDigits: key === 'percentage' ? 1 : 0 })
+      : String(value ?? '');
+  });
+  return mapped;
+}
+
+export function copilotAdoptionWarningText(
+  t: TFunction,
+  detail: CopilotAdoptionWarningDetail | undefined,
+  english: string,
+): string {
+  if (!detail?.key) return english;
+  const key = `copilotAdoption.server.warning.${detail.key}` as TranslationKey;
+  return catalogText(t, key, english, warningValues(detail.values));
+}
+
+export function copilotAdoptionWarningIdentity(detail: CopilotAdoptionWarningDetail | undefined, english: string): string {
+  return detail?.key ? `${detail.key}:${JSON.stringify(detail.values ?? {})}` : english;
+}
+
+export function isCoworkWarning(detail: CopilotAdoptionWarningDetail | undefined): boolean {
+  return !!detail?.key && COWORK_WARNING_KEYS.has(detail.key);
+}
+
+export function isLicenceOpportunityWarning(detail: CopilotAdoptionWarningDetail | undefined): boolean {
+  return !!detail?.key && OPPORTUNITY_WARNING_KEYS.has(detail.key);
+}
+
+export function reclaimCaveatText(t: TFunction, key: string | null | undefined, fallback: string | null | undefined): string {
+  if (!key) return fallback ?? '';
+  return catalogText(t, key as TranslationKey, fallback ?? '');
 }
 
 export function adoptionBandLabel(t: TFunction, band: AdoptionBand | string, fallback: string): string {
