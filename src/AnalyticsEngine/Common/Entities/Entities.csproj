@@ -563,6 +563,7 @@
     <Compile Include="UserOrgs\IUserOrgStore.cs" />
     <Compile Include="UserOrgs\SqlUserOrgAssignmentStore.cs" />
     <Compile Include="UserOrgs\SqlUserOrgImportJobStore.cs" />
+    <Compile Include="UserOrgs\SqlUserOrgMembershipReader.cs" />
     <Compile Include="UserOrgs\SqlUserOrgTypeStore.cs" />
     <Compile Include="UserOrgs\UserOrgCsvParser.cs" />
     <Compile Include="UserOrgs\UserOrgImportRunner.cs" />

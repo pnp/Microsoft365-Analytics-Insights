@@ -45,6 +45,13 @@ export interface UserOrgType {
   distinctValueCount: number;
   createdUtc: string;
   modifiedUtc: string | null;
+  /**
+   * When the values were last brought up to date from their source, or null if never. For an Entra
+   * type, the start of the last user import that read the attribute and applied its values; for a CSV
+   * type, when the last import was applied. Cleared when the values are discarded because the source
+   * changed.
+   */
+  lastRefreshedUtc: string | null;
   lastImport: UserOrgImportJob | null;
 }
 
@@ -109,12 +116,61 @@ export interface UserOrgCsvPreview {
   matchedUserCount: number;
   /** Rows whose organisation name is too long for the column and will be stored shortened. */
   truncatedValueCount: number;
+  /** The longest organisation name that is stored in full. */
+  maxValueLength: number;
 }
 
 export interface UserOrgImportQueued {
   jobId: number;
   rowsQueued: number;
   rowsInvalid: number;
+}
+
+/** One organisation and how many users are in it. The name is tenant data, shown as stored. */
+export interface UserOrgValueRow {
+  id: number;
+  name: string;
+  memberCount: number;
+}
+
+/** One page of an org type's organisations, largest first. */
+export interface UserOrgValuePage {
+  orgTypeId: number;
+  /** The page actually returned, after the server clamped it. 1-based. */
+  page: number;
+  pageSize: number;
+  /** Organisations matching the search, across every page. */
+  total: number;
+  items: UserOrgValueRow[];
+}
+
+/** One user in an organisation. Every field is tenant data, shown as stored. */
+export interface UserOrgMember {
+  userId: number;
+  userPrincipalName: string;
+  department: string | null;
+  jobTitle: string | null;
+  /** `false` for a disabled account; `null` when the import has not recorded it. */
+  accountEnabled: boolean | null;
+}
+
+/** One page of the users in an organisation, by user principal name. */
+export interface UserOrgMemberPage {
+  orgTypeId: number;
+  valueId: number;
+  valueName: string;
+  page: number;
+  pageSize: number;
+  /** Users matching the search, across every page. */
+  total: number;
+  items: UserOrgMember[];
+}
+
+/** What a browse list asks for. Omitted fields take the server's defaults. */
+export interface UserOrgBrowseQuery {
+  search?: string;
+  page?: number;
+  pageSize?: number;
 }
 
 export interface UserOrgDiscoveredAttribute {

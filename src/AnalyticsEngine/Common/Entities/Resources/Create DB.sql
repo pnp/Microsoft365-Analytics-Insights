@@ -256,6 +256,7 @@ CREATE TABLE [dbo].[user_org_types] (
     [source_generation] int NOT NULL CONSTRAINT [DF_user_org_types_source_generation] DEFAULT (1),
     [created_utc] datetime2(7) NOT NULL CONSTRAINT [DF_user_org_types_created_utc] DEFAULT SYSUTCDATETIME(),
     [modified_utc] datetime2(7) NULL,
+    [last_refreshed_utc] datetime2(7) NULL,
     CONSTRAINT [PK_user_org_types] PRIMARY KEY CLUSTERED ([id] ASC),
     CONSTRAINT [CK_user_org_types_source_kind] CHECK ([source_kind] IN (1, 2))
 );
@@ -264,10 +265,12 @@ CREATE UNIQUE NONCLUSTERED INDEX [UX_user_org_types_name] ON [dbo].[user_org_typ
 
 
 -- Creating table 'user_org_values'
+-- name is nvarchar(848): the widest that fits the 1700-byte index key limit next to the 4-byte
+-- org_type_id in UX_user_org_values_type_name.
 CREATE TABLE [dbo].[user_org_values] (
     [id] int IDENTITY(1,1) NOT NULL,
     [org_type_id] int NOT NULL,
-    [name] nvarchar(200) NOT NULL,
+    [name] nvarchar(848) NOT NULL,
     CONSTRAINT [PK_user_org_values] PRIMARY KEY CLUSTERED ([id] ASC),
     CONSTRAINT [FK_user_org_values_type] FOREIGN KEY ([org_type_id])
         REFERENCES [dbo].[user_org_types] ([id])
@@ -338,7 +341,7 @@ CREATE TABLE [dbo].[user_org_import_staging] (
     [job_id] int NOT NULL,
     [line_number] int NOT NULL,
     [upn] nvarchar(250) NOT NULL,
-    [org_value] nvarchar(200) NULL,
+    [org_value] nvarchar(848) NULL,
     CONSTRAINT [PK_user_org_import_staging] PRIMARY KEY CLUSTERED ([job_id] ASC, [line_number] ASC),
     CONSTRAINT [FK_user_org_import_staging_job] FOREIGN KEY ([job_id])
         REFERENCES [dbo].[user_org_import_jobs] ([id]) ON DELETE CASCADE

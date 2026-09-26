@@ -103,6 +103,44 @@ namespace Tests.UnitTests
             Assert.AreEqual(normalised, normalised.TrimEnd());
         }
 
+        [TestMethod]
+        public void NormaliseOrgValue_NeverSplitsASurrogatePair()
+        {
+            // An emoji outside the Basic Multilingual Plane is two UTF-16 code units, and the column
+            // limit counts code units. Cutting between them would store a lone high surrogate, which
+            // is not a character at all and renders as a replacement glyph wherever the value is shown.
+            const string emoji = "\U0001F600";
+            var value = new string('x', UserOrgRules.MaxOrgValueLength - 1) + emoji + " tail";
+
+            var normalised = UserOrgRules.NormaliseOrgValue(value);
+
+            Assert.AreEqual(UserOrgRules.MaxOrgValueLength - 1, normalised.Length);
+            Assert.IsFalse(char.IsHighSurrogate(normalised[normalised.Length - 1]));
+            Assert.IsTrue(UserOrgRules.WouldTruncate(value));
+        }
+
+        [TestMethod]
+        public void NormaliseOrgValue_KeepsASurrogatePairThatFitsExactly()
+        {
+            const string emoji = "\U0001F600";
+            var value = new string('x', UserOrgRules.MaxOrgValueLength - 2) + emoji + " tail";
+
+            var normalised = UserOrgRules.NormaliseOrgValue(value);
+
+            Assert.AreEqual(UserOrgRules.MaxOrgValueLength, normalised.Length);
+            StringAssert.EndsWith(normalised, emoji);
+        }
+
+        [TestMethod]
+        public void NormaliseOrgValue_KeepsAGreekValueOfTheFullWidth()
+        {
+            // Greek is one code unit per character, so the whole limit is available to it.
+            var value = string.Concat(Enumerable.Repeat("Ω", UserOrgRules.MaxOrgValueLength));
+
+            Assert.AreEqual(value, UserOrgRules.NormaliseOrgValue(value));
+            Assert.IsFalse(UserOrgRules.WouldTruncate(value));
+        }
+
         #endregion
 
         #region NormaliseUpn / org type name

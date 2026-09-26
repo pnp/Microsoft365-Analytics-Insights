@@ -19,6 +19,7 @@ export const userOrgs: Record<keyof typeof en, string> = {
   'userOrgs.types.empty': 'A\u00fan no hay ninguno definido. Cree uno para empezar a agrupar usuarios.',
   'userOrgs.column.name': 'Nombre',
   'userOrgs.column.source': 'Origen',
+  'userOrgs.column.lastRefreshed': '\u00daltima actualizaci\u00f3n',
   'userOrgs.column.usersAssigned': 'Usuarios asignados',
   'userOrgs.column.distinctValues': 'Valores distintos',
   'userOrgs.column.state': 'Estado',
@@ -31,6 +32,14 @@ export const userOrgs: Record<keyof typeof en, string> = {
   'userOrgs.state.disabled': 'Deshabilitado',
   'userOrgs.action.edit': 'Editar',
   'userOrgs.action.delete': 'Eliminar',
+  'userOrgs.types.viewUsers.one': 'Ver el {count} usuario de {name}',
+  'userOrgs.types.viewUsers.other': 'Ver los {count} usuarios de {name}',
+
+  // "Last refreshed" for a type that never has been, by what it is waiting for
+  'userOrgs.lastRefreshed.waitingForImport': 'Pendiente de la pr\u00f3xima importaci\u00f3n de usuarios',
+  'userOrgs.lastRefreshed.noImportYet': 'A\u00fan no hay ninguna importaci\u00f3n correcta',
+  'userOrgs.lastRefreshed.clearedBySourceChange': 'Se borr\u00f3 al cambiar el origen',
+  'userOrgs.lastRefreshed.never': 'Nunca',
 
   // Job status, as shown beside a CSV type
   'userOrgs.status.pending': 'pendiente',
@@ -51,6 +60,8 @@ export const userOrgs: Record<keyof typeof en, string> = {
   'userOrgs.entraCard.title': 'C\u00f3mo se mantienen actualizados los tipos basados en Entra',
   'userOrgs.entraCard.body':
     'Estos se leen durante la importaci\u00f3n normal de usuarios, por lo que los valores aparecen tras el siguiente ciclo de importaci\u00f3n. Cualquier cambio en los atributos de Entra en uso (a\u00f1adir o eliminar un tipo, habilitarlo o deshabilitarlo, apuntarlo a otro atributo o cambiarlo a CSV) hace que el siguiente ciclo vuelva a leer a todos los usuarios una vez, de modo que el nuevo conjunto se rellene tambi\u00e9n para quienes no hayan cambiado por otro motivo. Ese ciclo tarda m\u00e1s de lo habitual y, en un inquilino grande, de forma notable.',
+  'userOrgs.entraCard.lastRefreshed':
+    'La columna \u00daltima actualizaci\u00f3n indica cu\u00e1ndo una importaci\u00f3n de usuarios ley\u00f3 por \u00faltima vez el atributo y aplic\u00f3 sus valores. De forma predeterminada ocurre en cada ciclo del importador, y aproximadamente una vez al d\u00eda si ImportAggressiveness tiene el valor Balanced o Gentle; un tipo guardado mientras ya se est\u00e1 ejecutando una importaci\u00f3n espera a la siguiente. Si todos los tipos de Entra dejan de avanzar a la vez, lo m\u00e1s probable es que Microsoft Graph est\u00e9 rechazando uno de los atributos: en ese caso, la importaci\u00f3n de usuarios contin\u00faa sin ninguno de ellos. Pruebe cada tipo para localizar el que falla o revise el registro del importador.',
 
   // CSV import card
   'userOrgs.import.cardTitle': 'Importar {name} desde un archivo',
@@ -133,9 +144,9 @@ export const userOrgs: Record<keyof typeof en, string> = {
   'userOrgs.csv.showingFirst':
     'Se muestran las primeras {count} filas. Se importa el archivo completo.',
   'userOrgs.csv.truncated.one':
-    '1 nombre de organizaci\u00f3n supera los 200 caracteres y se almacenar\u00e1 abreviado. Los nombres id\u00e9nticos en sus primeros 200 caracteres se convierten en una sola organizaci\u00f3n.',
+    '1 nombre de organizaci\u00f3n supera los {max} caracteres y se almacenar\u00e1 abreviado. Los nombres id\u00e9nticos en sus primeros {max} caracteres se convierten en una sola organizaci\u00f3n.',
   'userOrgs.csv.truncated.other':
-    '{count} nombres de organizaci\u00f3n superan los 200 caracteres y se almacenar\u00e1n abreviados. Los nombres id\u00e9nticos en sus primeros 200 caracteres se convierten en una sola organizaci\u00f3n.',
+    '{count} nombres de organizaci\u00f3n superan los {max} caracteres y se almacenar\u00e1n abreviados. Los nombres id\u00e9nticos en sus primeros {max} caracteres se convierten en una sola organizaci\u00f3n.',
   'userOrgs.csv.problems':
     'Algunas filas no se pueden usar: {problems}. Se omiten y se contabilizan; el resto del archivo se importa igualmente.',
   'userOrgs.csv.problemLine': 'l\u00ednea {line} ({reason})',
@@ -151,6 +162,34 @@ export const userOrgs: Record<keyof typeof en, string> = {
   'userOrgs.job.cleared': '{count} borrados',
   'userOrgs.job.unknownUsers': '{count} usuario(s) desconocido(s)',
   'userOrgs.job.unusableRows': '{count} fila(s) inutilizable(s)',
+
+  // Who is in each organisation
+  'userOrgs.browse.title': 'Qui\u00e9n pertenece a cada organizaci\u00f3n',
+  'userOrgs.browse.intro':
+    'Elija un tipo de organizaci\u00f3n y, despu\u00e9s, una organizaci\u00f3n para ver sus usuarios. Las organizaciones se muestran de mayor a menor; las que ya no tienen a nadie aparecen con 0.',
+  'userOrgs.browse.typeLabel': 'Tipo de organizaci\u00f3n',
+  'userOrgs.browse.searchOrgsPlaceholder': 'Buscar organizaciones',
+  'userOrgs.browse.searchMembersPlaceholder': 'Buscar por nombre principal de usuario',
+  'userOrgs.browse.orgsTableLabel': 'Organizaciones',
+  'userOrgs.browse.column.organisation': 'Organizaci\u00f3n',
+  'userOrgs.browse.column.users': 'Usuarios',
+  'userOrgs.browse.column.user': 'Usuario',
+  'userOrgs.browse.column.department': 'Departamento',
+  'userOrgs.browse.column.jobTitle': 'Cargo',
+  'userOrgs.browse.membersOf': 'Usuarios de {name}',
+  'userOrgs.browse.pickOrg': 'Elija una organizaci\u00f3n para ver qui\u00e9n pertenece a ella.',
+  'userOrgs.browse.noOrgs': 'Este tipo a\u00fan no tiene organizaciones.',
+  'userOrgs.browse.noOrgMatches': 'Ninguna organizaci\u00f3n coincide con esa b\u00fasqueda.',
+  'userOrgs.browse.noMembers': 'Ahora mismo no hay nadie en esta organizaci\u00f3n.',
+  'userOrgs.browse.noMemberMatches': 'Nadie de esta organizaci\u00f3n coincide con esa b\u00fasqueda.',
+  'userOrgs.browse.accountDisabled': 'Cuenta deshabilitada',
+  'userOrgs.browse.loading': 'Cargando...',
+  'userOrgs.browse.loadFailed':
+    'No se ha podido cargar esta lista. Vuelva a intentarlo o actualice la p\u00e1gina: es posible que la organizaci\u00f3n se haya modificado o eliminado en otra sesi\u00f3n.',
+  'userOrgs.browse.retry': 'Reintentar',
+  'userOrgs.browse.showing': 'Mostrando {from}\u2013{to} de {total}',
+  'userOrgs.browse.previous': 'Anterior',
+  'userOrgs.browse.next': 'Siguiente',
 };
 
 export default userOrgs;

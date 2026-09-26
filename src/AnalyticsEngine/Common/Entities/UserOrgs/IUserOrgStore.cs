@@ -67,6 +67,25 @@ namespace Common.Entities.UserOrgs
         /// <c>dbo.users</c>, and SQL Server refuses a second cascade path into the same table.
         /// </remarks>
         Task DeleteAsync(int id, CancellationToken cancellationToken = default(CancellationToken));
+
+        /// <summary>
+        /// Records that a user import which began at <paramref name="refreshedUtc"/> brought these
+        /// Entra-sourced types up to date, and returns how many were stamped.
+        /// </summary>
+        /// <param name="expectedGenerations">
+        /// Org type id to the source generation the cycle read before loading users. A type is only
+        /// stamped if it is still Entra-sourced, enabled and on that generation - the same fence the
+        /// merge applies - so a type reconfigured mid-cycle is never reported as refreshed by it.
+        /// </param>
+        /// <param name="refreshedUtc">When the cycle began. A type's time never moves backwards.</param>
+        /// <remarks>
+        /// Called even when the cycle changed nobody's value: a delta query that returns no changes
+        /// is still a confirmation that the stored values are current, and it is the usual case.
+        /// </remarks>
+        Task<int> RecordEntraRefreshAsync(
+            IReadOnlyDictionary<int, int> expectedGenerations,
+            System.DateTime refreshedUtc,
+            CancellationToken cancellationToken = default(CancellationToken));
     }
 
     /// <summary>
@@ -101,6 +120,46 @@ namespace Common.Entities.UserOrgs
         /// </summary>
         Task<int> ClearAllForTypeAsync(
             int orgTypeId,
+            CancellationToken cancellationToken = default(CancellationToken));
+    }
+
+    /// <summary>
+    /// Answers "who is in each organisation?" for the admin page.
+    /// </summary>
+    /// <remarks>
+    /// Read-only, and paged throughout: one organisation on a 200,000-user tenant can hold tens of
+    /// thousands of people, so nothing here returns a whole membership in one call.
+    /// </remarks>
+    public interface IUserOrgMembershipReader
+    {
+        /// <summary>
+        /// One page of an org type's organisations, largest first, each with how many users are in it.
+        /// </summary>
+        /// <param name="search">
+        /// Matched anywhere in the organisation name, literally and case-insensitively; <c>null</c> or
+        /// blank for every organisation. Normalised with <see cref="UserOrgRules.NormaliseSearch"/>.
+        /// </param>
+        Task<UserOrgValuePage> GetValuesAsync(
+            int orgTypeId,
+            string search,
+            int skip,
+            int take,
+            CancellationToken cancellationToken = default(CancellationToken));
+
+        /// <summary>
+        /// One page of the users in one organisation, ordered by user principal name, or <c>null</c> when
+        /// the organisation does not exist or belongs to a different org type.
+        /// </summary>
+        /// <param name="search">
+        /// Matched anywhere in the user principal name, literally and case-insensitively; <c>null</c> or
+        /// blank for every member. Normalised with <see cref="UserOrgRules.NormaliseSearch"/>.
+        /// </param>
+        Task<UserOrgMemberPage> GetMembersAsync(
+            int orgTypeId,
+            int orgValueId,
+            string search,
+            int skip,
+            int take,
             CancellationToken cancellationToken = default(CancellationToken));
     }
 

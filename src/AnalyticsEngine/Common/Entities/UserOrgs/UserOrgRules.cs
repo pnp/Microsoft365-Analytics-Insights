@@ -15,15 +15,25 @@ namespace Common.Entities.UserOrgs
     public static class UserOrgRules
     {
         /// <summary>
-        /// Maximum length of an org value. Matches <c>user_org_values.name nvarchar(200)</c>.
+        /// Maximum length of an org value, in UTF-16 code units. Matches
+        /// <c>user_org_values.name nvarchar(848)</c>.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// <c>nvarchar</c>, not <c>varchar</c>: org names come from a customer tenant and routinely
-        /// contain non-Latin scripts. 200 also keeps the column comfortably inside SQL Server's
-        /// 1700-byte non-clustered index key limit (850 characters at 2 bytes each), which matters
-        /// because the value is indexed for "who is in this org?" lookups.
+        /// contain non-Latin scripts. 848 is the widest the column can be and still be indexed: its
+        /// unique index is <c>(org_type_id, name)</c>, and SQL Server's 1700-byte non-clustered key
+        /// limit less the 4-byte <c>int</c> leaves 1696 bytes, or 848 two-byte code units. One more
+        /// and the index is created with a warning, then rejects the first value that fills it.
+        /// </para>
+        /// <para>
+        /// That covers every attribute Microsoft Graph documents a limit for except
+        /// <c>extensionAttribute1-15</c>, which can hold 1,024 characters. Greek, Cyrillic, Arabic and
+        /// CJK take one code unit per character; characters outside the Basic Multilingual Plane, such
+        /// as emoji, take two.
+        /// </para>
         /// </remarks>
-        public const int MaxOrgValueLength = 200;
+        public const int MaxOrgValueLength = 848;
 
         /// <summary>Maximum length of an org type name. Matches <c>user_org_types.name nvarchar(100)</c>.</summary>
         public const int MaxOrgTypeNameLength = 100;
@@ -32,16 +42,48 @@ namespace Common.Entities.UserOrgs
         public const int MaxUpnLength = 250;
 
         /// <summary>
+        /// Longest search term the "who is in each organisation" lists honour: a user principal name's
+        /// maximum, which is also far longer than any organisation name anyone types into a search box.
+        /// </summary>
+        public const int MaxSearchLength = MaxUpnLength;
+
+        /// <summary>
+        /// Trims a search term and caps its length, or returns <c>null</c> when there is nothing to search
+        /// for - which the lists treat as "show everything".
+        /// </summary>
+        /// <remarks>
+        /// Case is left alone: matching happens in SQL Server under the database's case-insensitive
+        /// collation. The cap never cuts a surrogate pair in half, for the same reason
+        /// <see cref="NormaliseOrgValue"/> does not.
+        /// </remarks>
+        public static string NormaliseSearch(string search)
+        {
+            if (string.IsNullOrWhiteSpace(search))
+            {
+                return null;
+            }
+
+            var term = search.Trim();
+            if (term.Length > MaxSearchLength)
+            {
+                var cut = char.IsHighSurrogate(term[MaxSearchLength - 1]) ? MaxSearchLength - 1 : MaxSearchLength;
+                term = term.Substring(0, cut).TrimEnd();
+            }
+
+            return term.Length == 0 ? null : term;
+        }
+
+        /// <summary>
         /// Turns a raw org value into the value that gets stored, or <c>null</c> to mean "this user has
         /// no value for this org type" - which the callers treat as an instruction to clear any
         /// existing assignment.
         /// </summary>
         /// <remarks>
         /// Trimming happens first, so a value that is only whitespace clears the assignment rather than
-        /// creating a blank org. Over-length values are truncated rather than rejected: an org name
-        /// longer than 200 characters is vanishingly unlikely, and silently dropping the user from the
-        /// org would be a worse outcome than storing a shortened name. Truncation is reported by
-        /// <see cref="WouldTruncate"/> so the admin UI and the import summary can say it happened.
+        /// creating a blank org. Over-length values are truncated rather than rejected: silently
+        /// dropping the user from the org would be a worse outcome than storing a shortened name.
+        /// Truncation is reported by <see cref="WouldTruncate"/> so the admin UI and the import summary
+        /// can say it happened.
         /// </remarks>
         public static string NormaliseOrgValue(string rawValue)
         {
@@ -53,7 +95,13 @@ namespace Common.Entities.UserOrgs
             var trimmed = rawValue.Trim();
             if (trimmed.Length > MaxOrgValueLength)
             {
-                trimmed = trimmed.Substring(0, MaxOrgValueLength);
+                // Never cut between the two halves of a surrogate pair. The lone high surrogate that
+                // would be left behind is not a character at all; it is stored as-is and then renders
+                // as a replacement glyph on every page that shows the value.
+                var cut = char.IsHighSurrogate(trimmed[MaxOrgValueLength - 1])
+                    ? MaxOrgValueLength - 1
+                    : MaxOrgValueLength;
+                trimmed = trimmed.Substring(0, cut);
 
                 // Truncation can leave trailing whitespace that SQL Server would ignore on comparison
                 // but that would still be stored; trim again so the stored value is exactly what a

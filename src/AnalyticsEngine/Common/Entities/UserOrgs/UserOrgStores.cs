@@ -39,6 +39,12 @@ namespace Common.Entities.UserOrgs
             return new SqlUserOrgImportJobStore(Require(connectionString));
         }
 
+        /// <summary>The read-only "who is in each organisation" queries behind the admin page.</summary>
+        public static IUserOrgMembershipReader CreateMembershipReader(string connectionString)
+        {
+            return new SqlUserOrgMembershipReader(Require(connectionString));
+        }
+
         private static string Require(string connectionString)
         {
             if (string.IsNullOrWhiteSpace(connectionString))

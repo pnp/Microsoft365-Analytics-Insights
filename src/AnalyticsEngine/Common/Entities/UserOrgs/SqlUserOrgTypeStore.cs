@@ -3,6 +3,8 @@ using Microsoft.Data.SqlClient;
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -99,7 +101,7 @@ namespace Common.Entities.UserOrgs
     internal sealed class SqlUserOrgTypeStore : SqlUserOrgStoreBase, IUserOrgTypeStore
     {
         private const string SelectColumns =
-            "id, name, source_kind, entra_attribute_name, is_enabled, source_generation, created_utc, modified_utc";
+            "id, name, source_kind, entra_attribute_name, is_enabled, source_generation, created_utc, modified_utc, last_refreshed_utc";
 
         public SqlUserOrgTypeStore(string connectionString) : base(connectionString)
         {
@@ -263,7 +265,10 @@ SET name = @name,
     -- has its updates dropped by the merge, but the cycle still commits its delta token - so if the
     -- generation did not move, re-enabling would rebuild the SAME cache key and resume from a token
     -- that has already advanced past those users. They would never be re-read.
-    source_generation = source_generation + CASE WHEN @bumpGeneration = 1 THEN 1 ELSE 0 END
+    source_generation = source_generation + CASE WHEN @bumpGeneration = 1 THEN 1 ELSE 0 END,
+    -- Values discarded below mean there is nothing left that the last refresh vouched for. Disabling
+    -- or renaming keeps the values, and so keeps the time they were last brought up to date.
+    last_refreshed_utc = CASE WHEN @clearAssignments = 1 THEN NULL ELSE last_refreshed_utc END
 WHERE id = @id;
 
 SET @affected = @@ROWCOUNT;
@@ -377,6 +382,65 @@ DELETE FROM dbo.user_org_types WHERE id = @id;";
             }
         }
 
+        public async Task<int> RecordEntraRefreshAsync(
+            IReadOnlyDictionary<int, int> expectedGenerations,
+            DateTime refreshedUtc,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            if (expectedGenerations == null || expectedGenerations.Count == 0)
+            {
+                return 0;
+            }
+
+            // Chunked so a (very) large number of org types cannot exceed SQL Server's 2,100-parameter
+            // limit. Two parameters per type, so 500 per statement.
+            const int TypesPerStatement = 500;
+            var pairs = expectedGenerations.ToList();
+            var stamped = 0;
+
+            using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
+            {
+                for (var start = 0; start < pairs.Count; start += TypesPerStatement)
+                {
+                    var chunk = pairs.GetRange(start, Math.Min(TypesPerStatement, pairs.Count - start));
+                    var rows = new StringBuilder();
+                    for (var i = 0; i < chunk.Count; i++)
+                    {
+                        rows.Append(i == 0 ? string.Empty : ", ").Append("(@id").Append(i).Append(", @gen").Append(i).Append(')');
+                    }
+
+                    // The same fence as the Entra merge: a type that was switched to CSV, disabled or
+                    // repointed while this cycle was loading users was not refreshed by it, whatever
+                    // happened to its values. Never moves a time backwards, so an older cycle that
+                    // finishes late cannot make a type look staler than it is.
+                    var sql = @"
+UPDATE t
+SET t.last_refreshed_utc = @refreshedUtc
+FROM dbo.user_org_types t
+JOIN (VALUES " + rows + @") AS refreshed (id, generation) ON refreshed.id = t.id
+WHERE t.source_kind = @entra
+  AND t.is_enabled = 1
+  AND t.source_generation = refreshed.generation
+  AND (t.last_refreshed_utc IS NULL OR t.last_refreshed_utc < @refreshedUtc);";
+
+                    using (var cmd = Command(connection, sql))
+                    {
+                        cmd.Parameters.Add("@refreshedUtc", SqlDbType.DateTime2).Value = refreshedUtc;
+                        cmd.Parameters.Add("@entra", SqlDbType.TinyInt).Value = (byte)UserOrgSourceKind.EntraAttribute;
+                        for (var i = 0; i < chunk.Count; i++)
+                        {
+                            cmd.Parameters.Add("@id" + i, SqlDbType.Int).Value = chunk[i].Key;
+                            cmd.Parameters.Add("@gen" + i, SqlDbType.Int).Value = chunk[i].Value;
+                        }
+
+                        stamped += await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                }
+            }
+
+            return stamped;
+        }
+
         private static void Validate(UserOrgType type)
         {
             if (type == null)
@@ -461,6 +525,7 @@ DELETE FROM dbo.user_org_types WHERE id = @id;";
                 SourceGeneration = reader.GetInt32(5),
                 CreatedUtc = reader.GetDateTime(6),
                 ModifiedUtc = ReadNullableDate(reader, 7),
+                LastRefreshedUtc = ReadNullableDate(reader, 8),
             };
         }
     }

@@ -13,6 +13,7 @@ using System.Runtime.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
+using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 
 namespace Tests.UnitTests
@@ -349,6 +350,96 @@ namespace Tests.UnitTests
             await RunImport(loader, orgTypes, assignments);
 
             Assert.AreEqual(0, assignments.MergeCalls, "No org write may happen when Graph rejected the selection.");
+            Assert.AreEqual(
+                0,
+                orgTypes.RefreshCalls.Count,
+                "Nothing was refreshed. The time going stale is the only visible sign that Graph is rejecting the attribute.");
+        }
+
+        [TestMethod]
+        public async Task ASuccessfulCycleRecordsTheRefreshAsOfWhenTheCycleStarted()
+        {
+            // The start, not the end: on a large tenant the Graph read takes minutes, and the values
+            // are only guaranteed to include changes made before it began.
+            var cycleStart = new DateTime(2026, 3, 4, 5, 6, 0, DateTimeKind.Utc);
+            var orgTypes = new FakeUserOrgTypeStore("extensionAttribute1");
+            var assignments = new FakeUserOrgAssignmentStore();
+            var loader = new FakeUserMetadataLoader(new List<GraphUser> { NewGraphUser() });
+
+            await RunImport(loader, orgTypes, assignments, new FixedClock(cycleStart));
+
+            Assert.AreEqual(1, assignments.MergeCalls);
+            var call = orgTypes.RefreshCalls.Single();
+            Assert.AreEqual(cycleStart, call.RefreshedUtc);
+            CollectionAssert.AreEquivalent(new[] { 1 }, call.ExpectedGenerations.Keys.ToArray());
+            Assert.AreEqual(
+                1,
+                call.ExpectedGenerations[1],
+                "The generation the cycle read is passed, so the store can refuse a type reconfigured mid-cycle.");
+        }
+
+        [TestMethod]
+        public async Task ACycleThatChangesNobodyStillRecordsTheRefresh()
+        {
+            // The usual delta outcome: nobody's attributes changed, so Graph returns nobody. That is a
+            // confirmation that the stored values are current, not an absence of news - treating it as
+            // "not refreshed" would make every healthy type look stale between the cycles that change
+            // someone.
+            var orgTypes = new FakeUserOrgTypeStore("extensionAttribute1");
+            var assignments = new FakeUserOrgAssignmentStore();
+            var loader = new FakeUserMetadataLoader(new List<GraphUser>());
+
+            await RunImport(loader, orgTypes, assignments);
+
+            Assert.AreEqual(0, assignments.MergeCalls, "There was nothing to write.");
+            Assert.AreEqual(1, orgTypes.RefreshCalls.Count);
+        }
+
+        [TestMethod]
+        public async Task AFailedMergeRecordsNoRefresh()
+        {
+            var orgTypes = new FakeUserOrgTypeStore("extensionAttribute1");
+            var assignments = new FakeUserOrgAssignmentStore { ThrowOnMerge = true };
+            var loader = new FakeUserMetadataLoader(new List<GraphUser> { NewGraphUser() });
+
+            await RunImport(loader, orgTypes, assignments);
+
+            Assert.AreEqual(1, assignments.MergeCalls);
+            Assert.AreEqual(
+                0,
+                orgTypes.RefreshCalls.Count,
+                "A time that keeps moving while the values do not would hide exactly the failure it exists to show.");
+        }
+
+        [TestMethod]
+        public async Task ATypeSkippedAsUnparseableIsNotRecordedAsRefreshed()
+        {
+            var orgTypes = new FakeUserOrgTypeStore("extensionAttribute1", "not a real attribute!");
+            var assignments = new FakeUserOrgAssignmentStore();
+            var loader = new FakeUserMetadataLoader(new List<GraphUser> { NewGraphUser() });
+
+            await RunImport(loader, orgTypes, assignments);
+
+            CollectionAssert.AreEquivalent(
+                new[] { 1 },
+                orgTypes.RefreshCalls.Single().ExpectedGenerations.Keys.ToArray(),
+                "Only the types this cycle actually read were refreshed by it.");
+        }
+
+        [TestMethod]
+        public async Task FailingToRecordTheRefreshDoesNotFailTheImportOrWithholdTheToken()
+        {
+            // The values are already applied. A label that failed to update is not worth failing the
+            // user import over, nor re-reading the whole tenant next cycle.
+            var orgTypes = new FakeUserOrgTypeStore("extensionAttribute1") { ThrowOnRecordRefresh = true };
+            var assignments = new FakeUserOrgAssignmentStore();
+            var loader = new FakeUserMetadataLoader(new List<GraphUser> { NewGraphUser() });
+
+            await RunImport(loader, orgTypes, assignments);
+
+            Assert.AreEqual(1, assignments.MergeCalls, "The values themselves were applied.");
+            Assert.AreEqual(1, orgTypes.RefreshCalls.Count);
+            Assert.AreEqual("fake-new-delta", await loader.DeltaValueProvider.GetDeltaToken());
         }
 
         [TestMethod]
@@ -370,17 +461,23 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, assignments.MergeCalls);
         }
 
+        private static GraphUser NewGraphUser()
+        {
+            return new GraphUser { UserPrincipalName = "a@contoso.com", AccountEnabled = true, Id = Guid.NewGuid().ToString() };
+        }
+
         private static async Task RunImport(
             FakeUserMetadataLoader loader,
             IUserOrgTypeStore orgTypes,
-            IUserOrgAssignmentStore assignments)
+            IUserOrgAssignmentStore assignments,
+            IClock clock = null)
         {
             var updater = new UserMetadataUpdater(
                 AnalyticsLogger.ConsoleOnlyTracer(),
                 BuildConfig(),
                 loader,
                 DefaultAnalyticsDbContextFactory.Instance,
-                null,
+                clock,
                 orgTypes,
                 assignments);
 
@@ -474,11 +571,26 @@ namespace Tests.UnitTests
 
             public Task DeleteAsync(int id, CancellationToken cancellationToken = default(CancellationToken))
                 => Task.CompletedTask;
+
+            /// <summary>Every refresh the updater recorded, in order.</summary>
+            public List<(IReadOnlyDictionary<int, int> ExpectedGenerations, DateTime RefreshedUtc)> RefreshCalls { get; }
+                = new List<(IReadOnlyDictionary<int, int> ExpectedGenerations, DateTime RefreshedUtc)>();
+
+            public bool ThrowOnRecordRefresh { get; set; }
+
+            public Task<int> RecordEntraRefreshAsync(IReadOnlyDictionary<int, int> expectedGenerations, DateTime refreshedUtc, CancellationToken cancellationToken = default(CancellationToken))
+            {
+                RefreshCalls.Add((expectedGenerations, refreshedUtc));
+                if (ThrowOnRecordRefresh) throw new InvalidOperationException("Invalid column name 'last_refreshed_utc'.");
+                return Task.FromResult(expectedGenerations.Count);
+            }
         }
 
         private sealed class FakeUserOrgAssignmentStore : IUserOrgAssignmentStore
         {
             public int MergeCalls { get; private set; }
+
+            public bool ThrowOnMerge { get; set; }
 
             public List<UserOrgAssignmentUpdate> LastUpdates { get; private set; } = new List<UserOrgAssignmentUpdate>();
 
@@ -486,6 +598,7 @@ namespace Tests.UnitTests
             {
                 MergeCalls++;
                 LastUpdates = updates.ToList();
+                if (ThrowOnMerge) throw new InvalidOperationException("simulated merge failure");
                 return Task.FromResult(new UserOrgMergeResult { Applied = updates.Count });
             }
 

@@ -40,7 +40,7 @@ namespace Common.Entities.UserOrgs
 CREATE TABLE " + TempTableName + @" (
     user_id     INT            NOT NULL,
     org_type_id INT            NOT NULL,
-    org_value   NVARCHAR(200)  NULL,
+    org_value   NVARCHAR(848)  NULL,
     expected_generation INT    NULL,
     PRIMARY KEY CLUSTERED (user_id, org_type_id)
 );";
@@ -377,7 +377,7 @@ ORDER BY t.name;";
             foreach (var update in updates)
             {
                 // Normalised again here rather than trusted. This is the last point before the value
-                // reaches an nvarchar(200) column, and a caller that skipped normalisation would
+                // reaches an nvarchar(848) column, and a caller that skipped normalisation would
                 // otherwise get a truncation error from SQL Server instead of a stored value.
                 var value = UserOrgRules.NormaliseOrgValue(update.OrgValue);
 

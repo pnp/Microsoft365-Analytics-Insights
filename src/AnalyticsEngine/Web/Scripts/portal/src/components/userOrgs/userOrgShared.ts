@@ -1,5 +1,5 @@
 import type { TranslationKey } from '../../i18n';
-import type { UserOrgImportStatus } from '../../types/userOrgs';
+import type { UserOrgImportStatus, UserOrgType } from '../../types/userOrgs';
 
 /**
  * A CSV import's status as a catalogue key.
@@ -17,3 +17,28 @@ export const STATUS_KEYS: Record<UserOrgImportStatus, TranslationKey> = {
   cancelled: 'userOrgs.status.cancelled',
   interrupted: 'userOrgs.status.interrupted',
 };
+
+/**
+ * What to show in the "Last refreshed" column for a type that has never been refreshed, as a
+ * catalogue key.
+ *
+ * Says what the admin is waiting for rather than just "never", because the next step differs by
+ * source - and for a disabled type there is nothing to wait for, since it is never imported. The CSV
+ * wording is about a successful import, not an upload: the Source column beside it can already say a
+ * file was imported and failed, and the two must not contradict each other.
+ *
+ * The same goes for a CSV type whose last import succeeded. A successful apply records its time in the
+ * same transaction, and only a change of source clears it again - so a succeeded import with no time
+ * means a later switch to Entra and back discarded what it applied.
+ */
+export function neverRefreshedKey(
+  type: Pick<UserOrgType, 'source' | 'isEnabled' | 'lastImport'>,
+): TranslationKey {
+  if (type.source === 'csv' && type.lastImport?.status === 'succeeded') {
+    return 'userOrgs.lastRefreshed.clearedBySourceChange';
+  }
+  if (!type.isEnabled) return 'userOrgs.lastRefreshed.never';
+  return type.source === 'entra'
+    ? 'userOrgs.lastRefreshed.waitingForImport'
+    : 'userOrgs.lastRefreshed.noImportYet';
+}

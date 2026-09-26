@@ -97,6 +97,10 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             await _types.UpdateAsync(type, sourceChanged, sourceChanged || enabledChanged, cancellationToken)
                 .ConfigureAwait(false);
 
+            // Mirrors what the store just did, so the response does not claim a refresh for values the
+            // update has discarded.
+            type.LastRefreshedUtc = sourceChanged ? null : existing.LastRefreshedUtc;
+
             return ToModel(new UserOrgTypeSummary { Type = type });
         }
 
@@ -321,6 +325,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 OrgColumnName = parsed.OrgColumnName,
                 MoreRowsExist = parsed.Rows.Count > PreviewRowCount,
                 TotalRows = parsed.Rows.Count,
+                MaxValueLength = UserOrgRules.MaxOrgValueLength,
             };
 
             if (parsed.UnterminatedQuote)
@@ -600,6 +605,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 DistinctValueCount = summary.DistinctValueCount,
                 CreatedUtc = Iso(type.CreatedUtc),
                 ModifiedUtc = type.ModifiedUtc.HasValue ? Iso(type.ModifiedUtc.Value) : null,
+                LastRefreshedUtc = type.LastRefreshedUtc.HasValue ? Iso(type.LastRefreshedUtc.Value) : null,
                 LastImport = summary.LastImport == null ? null : ToModel(summary.LastImport, DateTime.UtcNow),
             };
         }

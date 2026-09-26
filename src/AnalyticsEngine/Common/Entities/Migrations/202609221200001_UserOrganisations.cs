@@ -61,6 +61,11 @@ BEGIN
         [source_generation] int NOT NULL CONSTRAINT [DF_user_org_types_source_generation] DEFAULT (1),
         [created_utc] datetime2(7) NOT NULL CONSTRAINT [DF_user_org_types_created_utc] DEFAULT SYSUTCDATETIME(),
         [modified_utc] datetime2(7) NULL,
+        -- When the type's values were last brought up to date from its source: the start of the last
+        -- user import that read its Entra attribute successfully, or the moment the last CSV import
+        -- was applied. NULL until the first refresh, and reset to NULL whenever the values are
+        -- discarded because the source changed.
+        [last_refreshed_utc] datetime2(7) NULL,
         CONSTRAINT [PK_user_org_types] PRIMARY KEY CLUSTERED ([id] ASC),
         CONSTRAINT [CK_user_org_types_source_kind] CHECK ([source_kind] IN (1, 2))
     );
@@ -82,8 +87,9 @@ END
 -- ---------------------------------------------------------------------------
 -- user_org_values - the distinct values seen for each org type.
 -- nvarchar, never varchar: org names come from a customer tenant and routinely
--- contain non-Latin scripts. 200 chars keeps the indexed column well inside
--- SQL Server's 1700-byte index key limit.
+-- contain non-Latin scripts. 848 is the widest an nvarchar can be and still fit
+-- SQL Server's 1700-byte non-clustered index key limit alongside the 4-byte
+-- org_type_id in UX_user_org_values_type_name: (1700 - 4) / 2 = 848.
 -- ---------------------------------------------------------------------------
 IF OBJECT_ID(N'dbo.user_org_values', N'U') IS NULL
    AND OBJECT_ID(N'dbo.user_org_types', N'U') IS NOT NULL
@@ -92,7 +98,7 @@ BEGIN
     (
         [id] int IDENTITY(1,1) NOT NULL,
         [org_type_id] int NOT NULL,
-        [name] nvarchar(200) NOT NULL,
+        [name] nvarchar(848) NOT NULL,
         CONSTRAINT [PK_user_org_values] PRIMARY KEY CLUSTERED ([id] ASC),
         CONSTRAINT [FK_user_org_values_type] FOREIGN KEY ([org_type_id])
             REFERENCES [dbo].[user_org_types] ([id])
@@ -254,7 +260,7 @@ BEGIN
         [job_id] int NOT NULL,
         [line_number] int NOT NULL,
         [upn] nvarchar(250) NOT NULL,
-        [org_value] nvarchar(200) NULL,
+        [org_value] nvarchar(848) NULL,
         CONSTRAINT [PK_user_org_import_staging] PRIMARY KEY CLUSTERED ([job_id] ASC, [line_number] ASC),
         CONSTRAINT [FK_user_org_import_staging_job] FOREIGN KEY ([job_id])
             REFERENCES [dbo].[user_org_import_jobs] ([id]) ON DELETE CASCADE

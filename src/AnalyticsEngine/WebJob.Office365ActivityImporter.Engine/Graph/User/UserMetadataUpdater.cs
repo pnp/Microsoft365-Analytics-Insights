@@ -444,7 +444,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Apply the org values last, once every Graph user is guaranteed to have a dbo.users row
                 // (the insert phase above creates the missing ones) so their ids can be resolved.
-                await ApplyUserOrgValues(allActiveGraphUsers, entraOrgTypes, dbUsersByUpn, phaseResults);
+                await ApplyUserOrgValues(allActiveGraphUsers, entraOrgTypes, dbUsersByUpn, phaseResults, importCycleLastUpdatedUtc);
 
                 _logger.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - complete. Inserted {insertedDbUsers.Count.ToString("N0")} new users, updated metadata for {existingUsersUpdated.ToString("N0")} existing users (from {allActiveGraphUsers.Count.ToString("N0")} Graph users)");
 
@@ -527,12 +527,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// proper has already succeeded by this point, and failing here would roll the whole cycle back
         /// and stop the delta token being committed.
         /// </para>
+        /// <para>
+        /// Records each type's refresh time once its values are applied - or once the cycle found
+        /// nothing to change, which is the usual delta outcome and just as much a confirmation. Not when
+        /// Graph rejected the attributes or the merge failed: the time going stale is exactly what tells
+        /// an administrator the values have stopped being refreshed.
+        /// </para>
         /// </remarks>
         private async Task ApplyUserOrgValues(
             List<GraphUser> graphUsers,
             IReadOnlyList<Common.Entities.UserOrgs.UserOrgType> orgTypes,
             Dictionary<string, Common.Entities.User> dbUsersByUpn,
-            UserImportPhaseResults phaseResults)
+            UserImportPhaseResults phaseResults,
+            DateTime cycleStartedUtc)
         {
             if (orgTypes == null || orgTypes.Count == 0 || _orgAssignmentStore == null)
             {
@@ -568,23 +575,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     return;
                 }
 
-                // Reuse the dictionary the import already built rather than re-querying dbo.users: at
-                // 200k users that would be a second full table read for no new information.
-                var userIdsByUpn = new Dictionary<string, int>(dbUsersByUpn.Count, StringComparer.OrdinalIgnoreCase);
-                foreach (var pair in dbUsersByUpn)
-                {
-                    if (pair.Value != null && pair.Value.ID > 0)
-                    {
-                        userIdsByUpn[pair.Key] = pair.Value.ID;
-                    }
-                }
-
-                var updates = UserOrgMappingRules.BuildUpdates(graphUsers, parsed, userIdsByUpn);
-                if (updates.Count == 0)
-                {
-                    return;
-                }
-
                 // The expected source kind and per-type generation are passed so the merge can drop
                 // anything whose org type has been switched away from Entra, disabled, or repointed
                 // at a different attribute since this cycle read its configuration. That read happened
@@ -597,27 +587,52 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     .GroupBy(t => t.Id)
                     .ToDictionary(g => g.Key, g => g.First().SourceGeneration);
 
-                var result = await _orgAssignmentStore.MergeAsync(
-                    updates, UserOrgSourceKind.EntraAttribute, expectedGenerations);
-
-                _logger.LogInformation(
-                    $"User import - user organisations: {result.Applied.ToString("N0")} assignment(s) set, "
-                    + $"{result.Cleared.ToString("N0")} cleared, {result.ValuesCreated.ToString("N0")} new organisation value(s) "
-                    + $"across {parsed.Count} organisation type(s).");
-
-                if (result.FencedOut > 0)
+                // Reuse the dictionary the import already built rather than re-querying dbo.users: at
+                // 200k users that would be a second full table read for no new information.
+                var userIdsByUpn = new Dictionary<string, int>(dbUsersByUpn.Count, StringComparer.OrdinalIgnoreCase);
+                foreach (var pair in dbUsersByUpn)
                 {
-                    // An org type was reconfigured while this cycle was loading users from Graph, so
-                    // its updates were dropped rather than applied over the top of the change. The
-                    // token is withheld because those users will not appear in a delta again unless
-                    // they change: committing it would strand them with stale values indefinitely.
-                    _logger.LogWarning(
-                        $"User import - {result.FencedOut.ToString("N0")} organisation update(s) were skipped because "
-                        + "their organisation type was reconfigured while this cycle was running. The delta token "
-                        + "will not be committed, so the next cycle re-reads them.");
-
-                    phaseResults.UserOrgsSucceeded = false;
+                    if (pair.Value != null && pair.Value.ID > 0)
+                    {
+                        userIdsByUpn[pair.Key] = pair.Value.ID;
+                    }
                 }
+
+                var updates = UserOrgMappingRules.BuildUpdates(graphUsers, parsed, userIdsByUpn);
+                if (updates.Count > 0)
+                {
+                    var result = await _orgAssignmentStore.MergeAsync(
+                        updates, UserOrgSourceKind.EntraAttribute, expectedGenerations);
+
+                    _logger.LogInformation(
+                        $"User import - user organisations: {result.Applied.ToString("N0")} assignment(s) set, "
+                        + $"{result.Cleared.ToString("N0")} cleared, {result.ValuesCreated.ToString("N0")} new organisation value(s) "
+                        + $"across {parsed.Count} organisation type(s).");
+
+                    if (result.FencedOut > 0)
+                    {
+                        // An org type was reconfigured while this cycle was loading users from Graph, so
+                        // its updates were dropped rather than applied over the top of the change. The
+                        // token is withheld because those users will not appear in a delta again unless
+                        // they change: committing it would strand them with stale values indefinitely.
+                        _logger.LogWarning(
+                            $"User import - {result.FencedOut.ToString("N0")} organisation update(s) were skipped because "
+                            + "their organisation type was reconfigured while this cycle was running. The delta token "
+                            + "will not be committed, so the next cycle re-reads them.");
+
+                        phaseResults.UserOrgsSucceeded = false;
+                    }
+                }
+
+                // Only the types this cycle actually read. One skipped as unparseable was not refreshed,
+                // and a reconfigured one is filtered out by the store's own fence.
+                var refreshed = parsed
+                    .Select(p => p.OrgTypeId)
+                    .Distinct()
+                    .Where(expectedGenerations.ContainsKey)
+                    .ToDictionary(id => id, id => expectedGenerations[id]);
+
+                await RecordOrgTypesRefreshed(refreshed, cycleStartedUtc);
             }
             catch (Exception ex)
             {
@@ -630,6 +645,34 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     $"User import - failed to apply user organisation values ({ex.Message}). The rest of the user "
                     + "import completed, but the Graph delta token will NOT be committed, so the next cycle re-reads "
                     + "the users needed to populate them.");
+            }
+        }
+
+        /// <summary>
+        /// Records when these org types were refreshed, for the "Last refreshed" column on the admin page.
+        /// </summary>
+        /// <remarks>
+        /// Never throws, and never withholds the delta token. The values themselves are already applied;
+        /// failing to record when is a stale label, not stale data, and re-reading the tenant to fix a
+        /// label would cost far more than it is worth.
+        /// </remarks>
+        private async Task RecordOrgTypesRefreshed(IReadOnlyDictionary<int, int> expectedGenerations, DateTime cycleStartedUtc)
+        {
+            if (_orgTypeStore == null || expectedGenerations.Count == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                await _orgTypeStore.RecordEntraRefreshAsync(expectedGenerations, cycleStartedUtc);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    $"User import - organisation values were applied, but recording when they were refreshed failed "
+                    + $"({ex.Message}). The User organisations page will show an older 'Last refreshed' time until "
+                    + "the next cycle records it.");
             }
         }
 

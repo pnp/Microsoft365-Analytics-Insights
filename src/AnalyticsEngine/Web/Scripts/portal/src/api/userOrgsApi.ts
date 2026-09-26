@@ -2,13 +2,16 @@ import { apiFetch } from './http';
 import { translateActive } from '../i18n/runtime';
 import type {
   UserOrgAttributeCatalogue,
+  UserOrgBrowseQuery,
   UserOrgCsvPreview,
   UserOrgImportJob,
   UserOrgImportMode,
   UserOrgImportQueued,
+  UserOrgMemberPage,
   UserOrgTestResult,
   UserOrgType,
   UserOrgTypeSave,
+  UserOrgValuePage,
 } from '../types/userOrgs';
 
 const baseUrl = (): string => `${window.location.origin}/api/UserOrg`;
@@ -117,4 +120,38 @@ export function importCsv(
 /** Import progress. */
 export function fetchImportJob(jobId: number, signal?: AbortSignal): Promise<UserOrgImportJob> {
   return send<UserOrgImportJob>(`${baseUrl()}/jobs/${jobId}`, { ...json('GET'), signal });
+}
+
+function browseQueryString(query: UserOrgBrowseQuery): string {
+  const params = new URLSearchParams();
+  if (query.search && query.search.trim()) params.set('search', query.search.trim());
+  if (query.page) params.set('page', String(query.page));
+  if (query.pageSize) params.set('pageSize', String(query.pageSize));
+  const text = params.toString();
+  return text ? `?${text}` : '';
+}
+
+/** One page of an org type's organisations, largest first, each with how many users are in it. */
+export function fetchOrgValues(
+  orgTypeId: number,
+  query: UserOrgBrowseQuery = {},
+  signal?: AbortSignal,
+): Promise<UserOrgValuePage> {
+  return send<UserOrgValuePage>(`${baseUrl()}/types/${orgTypeId}/values${browseQueryString(query)}`, {
+    ...json('GET'),
+    signal,
+  });
+}
+
+/** One page of the users in one organisation, by user principal name. */
+export function fetchOrgMembers(
+  orgTypeId: number,
+  valueId: number,
+  query: UserOrgBrowseQuery = {},
+  signal?: AbortSignal,
+): Promise<UserOrgMemberPage> {
+  return send<UserOrgMemberPage>(
+    `${baseUrl()}/types/${orgTypeId}/values/${valueId}/members${browseQueryString(query)}`,
+    { ...json('GET'), signal },
+  );
 }

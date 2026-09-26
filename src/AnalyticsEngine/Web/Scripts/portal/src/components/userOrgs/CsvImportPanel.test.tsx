@@ -26,6 +26,7 @@ function orgType(over: Partial<UserOrgType> = {}): UserOrgType {
     distinctValueCount: 40,
     createdUtc: '2026-01-01T00:00:00.000Z',
     modifiedUtc: null,
+    lastRefreshedUtc: null,
     lastImport: null,
     ...over,
   };
@@ -51,6 +52,7 @@ function preview(over: Partial<UserOrgCsvPreview> = {}): UserOrgCsvPreview {
     currentlyAssignedCount: 1200,
     matchedUserCount: 1,
     truncatedValueCount: 0,
+    maxValueLength: 848,
     ...over,
   };
 }
@@ -133,15 +135,17 @@ describe('CsvImportPanel', () => {
     expect(screen.getByText(/39,000 rows in the file match no user/i)).toBeInTheDocument();
   });
 
-  it('says when organisation names will be stored shortened', async () => {
-    // Two names identical for their first 200 characters silently become ONE organisation, and
-    // nothing else in the preview or the import summary would reveal it.
-    previewCsv.mockResolvedValue(preview({ truncatedValueCount: 3 }));
+  it('says when organisation names will be stored shortened, and at what length', async () => {
+    // Two names identical up to the column's limit silently become ONE organisation, and nothing
+    // else in the preview or the import summary would reveal it. The limit comes from the server, so
+    // the sentence cannot drift from the real column width.
+    previewCsv.mockResolvedValue(preview({ truncatedValueCount: 3, maxValueLength: 848 }));
     renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
 
     await chooseFile();
 
     await waitFor(() => expect(screen.getByText(/stored shortened/i)).toBeInTheDocument());
+    expect(screen.getByText(/longer than 848 characters/i)).toBeInTheDocument();
   });
 
   it('shows an import left running by a recycle, even in a session that did not start it', async () => {

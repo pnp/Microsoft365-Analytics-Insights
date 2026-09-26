@@ -74,6 +74,19 @@ namespace Common.Entities.UserOrgs
         public DateTime CreatedUtc { get; set; }
 
         public DateTime? ModifiedUtc { get; set; }
+
+        /// <summary>
+        /// When this type's values were last brought up to date from its source, or <c>null</c> if they
+        /// never have been.
+        /// </summary>
+        /// <remarks>
+        /// For an Entra type, the start of the last user import that read the attribute and applied its
+        /// values - including one in which nobody's value changed, because the delta query confirms that
+        /// too. The start, not the end, so it never claims more freshness than the data has. For a CSV
+        /// type, the moment the last import was applied. Reset whenever the values are discarded because
+        /// the source changed, so it cannot vouch for values from a source the type no longer uses.
+        /// </remarks>
+        public DateTime? LastRefreshedUtc { get; set; }
     }
 
     /// <summary>An org type plus the counts the admin page shows next to it.</summary>
@@ -158,6 +171,58 @@ namespace Common.Entities.UserOrgs
         public string Value { get; set; }
 
         public DateTime LastUpdatedUtc { get; set; }
+    }
+
+    /// <summary>One organisation and how many users are in it, for browsing an org type.</summary>
+    public sealed class UserOrgValueCount
+    {
+        public int Id { get; set; }
+
+        public string Name { get; set; }
+
+        /// <summary>
+        /// Users in this organisation now. Zero is possible: an organisation stays listed after its last
+        /// member moves out, until the type's values are discarded - which is also why the admin page's
+        /// "Distinct values" figure counts it.
+        /// </summary>
+        public int MemberCount { get; set; }
+    }
+
+    /// <summary>One page of an org type's organisations.</summary>
+    public sealed class UserOrgValuePage
+    {
+        public IReadOnlyList<UserOrgValueCount> Values { get; set; } = new UserOrgValueCount[0];
+
+        /// <summary>How many organisations match, across every page.</summary>
+        public int TotalCount { get; set; }
+    }
+
+    /// <summary>One user in an organisation, with the directory details that identify them.</summary>
+    public sealed class UserOrgMember
+    {
+        public int UserId { get; set; }
+
+        public string UserPrincipalName { get; set; }
+
+        public string Department { get; set; }
+
+        public string JobTitle { get; set; }
+
+        /// <summary><c>false</c> for a disabled account, <c>null</c> when the import has not recorded it.</summary>
+        public bool? AccountEnabled { get; set; }
+    }
+
+    /// <summary>One page of the users in an organisation.</summary>
+    public sealed class UserOrgMemberPage
+    {
+        public int OrgValueId { get; set; }
+
+        public string OrgValueName { get; set; }
+
+        public IReadOnlyList<UserOrgMember> Members { get; set; } = new UserOrgMember[0];
+
+        /// <summary>How many users match, across every page.</summary>
+        public int TotalCount { get; set; }
     }
 
     /// <summary>One CSV upload.</summary>

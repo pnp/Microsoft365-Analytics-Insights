@@ -388,7 +388,7 @@ function PreviewTable({
                 'userOrgs.csv.truncated.one',
                 'userOrgs.csv.truncated.other',
               ),
-              { count: formatNumber(preview.truncatedValueCount) },
+              { count: formatNumber(preview.truncatedValueCount), max: formatNumber(preview.maxValueLength) },
             )}
           </MessageBarBody>
         </MessageBar>

@@ -21,6 +21,7 @@ export const userOrgs = {
   'userOrgs.types.empty': 'None defined yet. Create one to start grouping users.',
   'userOrgs.column.name': 'Name',
   'userOrgs.column.source': 'Source',
+  'userOrgs.column.lastRefreshed': 'Last refreshed',
   'userOrgs.column.usersAssigned': 'Users assigned',
   'userOrgs.column.distinctValues': 'Distinct values',
   'userOrgs.column.state': 'State',
@@ -33,6 +34,14 @@ export const userOrgs = {
   'userOrgs.state.disabled': 'Disabled',
   'userOrgs.action.edit': 'Edit',
   'userOrgs.action.delete': 'Delete',
+  'userOrgs.types.viewUsers.one': 'View the {count} user in {name}',
+  'userOrgs.types.viewUsers.other': 'View the {count} users in {name}',
+
+  // "Last refreshed" for a type that never has been, by what it is waiting for
+  'userOrgs.lastRefreshed.waitingForImport': 'Waiting for the next user import',
+  'userOrgs.lastRefreshed.noImportYet': 'No successful import yet',
+  'userOrgs.lastRefreshed.clearedBySourceChange': 'Cleared when the source changed',
+  'userOrgs.lastRefreshed.never': 'Never',
 
   // Job status, as shown beside a CSV type
   'userOrgs.status.pending': 'pending',
@@ -53,6 +62,8 @@ export const userOrgs = {
   'userOrgs.entraCard.title': 'How Entra-sourced types are kept up to date',
   'userOrgs.entraCard.body':
     'These are read during the normal user import, so values appear after the next import cycle. Any change to which Entra attributes are in use - adding or deleting a type, enabling or disabling one, pointing one at a different attribute, or switching one to CSV - makes the next cycle re-read every user once so the new set is populated for people who have not otherwise changed. That one cycle takes longer than usual, and on a large tenant noticeably so.',
+  'userOrgs.entraCard.lastRefreshed':
+    'Last refreshed shows when a user import last read the attribute and applied its values. That happens every importer cycle by default, and about once a day when ImportAggressiveness is set to Balanced or Gentle; a type saved while an import is already running waits for the next one. If every Entra type stops moving at once, Microsoft Graph is probably rejecting one of the attributes - the user import then carries on without any of them. Test each type to find the one at fault, or check the importer log.',
 
   // CSV import card
   'userOrgs.import.cardTitle': 'Import {name} from a file',
@@ -131,9 +142,9 @@ export const userOrgs = {
   'userOrgs.csv.clearsValue': 'clears the value',
   'userOrgs.csv.showingFirst': 'Showing the first {count} rows. The whole file is imported.',
   'userOrgs.csv.truncated.one':
-    '1 organisation name is longer than 200 characters and will be stored shortened. Names that are identical for their first 200 characters become one organisation.',
+    '1 organisation name is longer than {max} characters and will be stored shortened. Names that are identical for their first {max} characters become one organisation.',
   'userOrgs.csv.truncated.other':
-    '{count} organisation names are longer than 200 characters and will be stored shortened. Names that are identical for their first 200 characters become one organisation.',
+    '{count} organisation names are longer than {max} characters and will be stored shortened. Names that are identical for their first {max} characters become one organisation.',
   'userOrgs.csv.problems':
     'Some rows cannot be used: {problems}. They are skipped and counted; the rest of the file still imports.',
   'userOrgs.csv.problemLine': 'line {line} ({reason})',
@@ -148,6 +159,34 @@ export const userOrgs = {
   'userOrgs.job.cleared': '{count} cleared',
   'userOrgs.job.unknownUsers': '{count} unknown user(s)',
   'userOrgs.job.unusableRows': '{count} unusable row(s)',
+
+  // Who is in each organisation
+  'userOrgs.browse.title': 'Who is in each organisation',
+  'userOrgs.browse.intro':
+    'Choose an organisation type, then an organisation, to see the users in it. Organisations are listed largest first; one that nobody is in any more is listed with 0.',
+  'userOrgs.browse.typeLabel': 'Organisation type',
+  'userOrgs.browse.searchOrgsPlaceholder': 'Search organisations',
+  'userOrgs.browse.searchMembersPlaceholder': 'Search by user principal name',
+  'userOrgs.browse.orgsTableLabel': 'Organisations',
+  'userOrgs.browse.column.organisation': 'Organisation',
+  'userOrgs.browse.column.users': 'Users',
+  'userOrgs.browse.column.user': 'User',
+  'userOrgs.browse.column.department': 'Department',
+  'userOrgs.browse.column.jobTitle': 'Job title',
+  'userOrgs.browse.membersOf': 'Users in {name}',
+  'userOrgs.browse.pickOrg': 'Choose an organisation to see who is in it.',
+  'userOrgs.browse.noOrgs': 'This type has no organisations yet.',
+  'userOrgs.browse.noOrgMatches': 'No organisation matches that search.',
+  'userOrgs.browse.noMembers': 'Nobody is in this organisation at the moment.',
+  'userOrgs.browse.noMemberMatches': 'Nobody in this organisation matches that search.',
+  'userOrgs.browse.accountDisabled': 'Account disabled',
+  'userOrgs.browse.loading': 'Loading...',
+  'userOrgs.browse.loadFailed':
+    'This list could not be loaded. Try again, or refresh the page - the organisation may have been changed or deleted in another session.',
+  'userOrgs.browse.retry': 'Try again',
+  'userOrgs.browse.showing': 'Showing {from}\u2013{to} of {total}',
+  'userOrgs.browse.previous': 'Previous',
+  'userOrgs.browse.next': 'Next',
 } as const;
 
 export default userOrgs;

@@ -435,7 +435,13 @@ END
 -- and back is CSV-sourced again, with its values deliberately discarded in between, so the
 -- generation is what actually says the mapping is unchanged. Reported separately from the fence
 -- above because nothing has retired this job - the caller has to record the outcome itself.
-IF NOT EXISTS (SELECT 1 FROM dbo.user_org_types
+--
+-- UPDLOCK, HOLDLOCK because this apply writes the type row at the end (its refresh time), and every
+-- writer in this feature takes the TYPE row before that type's values and assignments. Writing it
+-- last without holding it from here would invert that order against the Entra merge, which holds
+-- type rows while it writes - and the merge is the one writer the application lock does not cover.
+-- An update lock still lets readers through; only the final write blocks them, briefly.
+IF NOT EXISTS (SELECT 1 FROM dbo.user_org_types WITH (UPDLOCK, HOLDLOCK)
                WHERE id = @orgTypeId AND source_kind = 2 AND is_enabled = 1
                  AND (@expectedGeneration IS NULL OR source_generation = @expectedGeneration))
 BEGIN
@@ -449,7 +455,7 @@ DECLARE @distinctUpns INT = (SELECT COUNT(DISTINCT upn) FROM dbo.user_org_import
 -- Resolve each UPN to a user, keeping the LAST line for a UPN the file lists more than once: a
 -- repeated person is treated as a correction, which is what an admin editing a spreadsheet expects.
 -- Partitioning uses the database collation, so two spellings differing only in case are one person.
-CREATE TABLE #user_org_matched (user_id INT NOT NULL PRIMARY KEY, org_value NVARCHAR(200) NULL);
+CREATE TABLE #user_org_matched (user_id INT NOT NULL PRIMARY KEY, org_value NVARCHAR(848) NULL);
 
 INSERT INTO #user_org_matched (user_id, org_value)
 SELECT u.id, latest.org_value
@@ -542,6 +548,10 @@ SET rows_total = @rowsTotal,
     rows_unknown_upn = @unknown,
     heartbeat_utc = SYSUTCDATETIME()
 WHERE id = @jobId;
+
+-- In the same transaction as the writes, so the refresh time and the values cannot disagree - even
+-- when the file changed nobody, which is still a confirmation that the values are current.
+UPDATE dbo.user_org_types SET last_refreshed_utc = SYSUTCDATETIME() WHERE id = @orgTypeId;
 
 DROP TABLE #user_org_matched;";
 

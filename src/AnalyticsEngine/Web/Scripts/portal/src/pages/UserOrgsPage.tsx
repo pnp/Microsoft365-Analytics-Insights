@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Badge,
   Button,
   Card,
   CardHeader,
+  Link,
   MessageBar,
   MessageBarBody,
   Subtitle2,
@@ -22,10 +23,11 @@ import { Add20Regular, Delete16Regular, Edit16Regular } from '@fluentui/react-ic
 import Spinner from '../components/Spinner';
 import toast from '../components/toast';
 import CsvImportPanel from '../components/userOrgs/CsvImportPanel';
+import OrgMembersBrowser from '../components/userOrgs/OrgMembersBrowser';
 import OrgTypeDialog from '../components/userOrgs/OrgTypeDialog';
 import { createOrgType, deleteOrgType, fetchOrgTypes, updateOrgType } from '../api/userOrgsApi';
-import { formatDateParts, formatNumber, useT } from '../i18n';
-import { STATUS_KEYS } from '../components/userOrgs/userOrgShared';
+import { formatDateParts, formatNumber, plural, useT } from '../i18n';
+import { neverRefreshedKey, STATUS_KEYS } from '../components/userOrgs/userOrgShared';
 import type { UserOrgType, UserOrgTypeSave } from '../types/userOrgs';
 
 const useStyles = makeStyles({
@@ -51,6 +53,27 @@ export default function UserOrgsPage() {
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<UserOrgType | null>(null);
+  const [browseTypeId, setBrowseTypeId] = useState<number | null>(null);
+  const browseRef = useRef<HTMLDivElement>(null);
+
+  // Browse the first type until the admin picks another, and move on if the one being browsed is
+  // deleted - otherwise the panel would keep asking for a type that no longer exists.
+  useEffect(() => {
+    if (!types || types.length === 0) {
+      setBrowseTypeId(null);
+    } else if (browseTypeId === null || !types.some((type) => type.id === browseTypeId)) {
+      setBrowseTypeId(types[0].id);
+    }
+  }, [types, browseTypeId]);
+
+  const viewUsers = (type: UserOrgType) => {
+    setBrowseTypeId(type.id);
+    const card = browseRef.current;
+    card?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+    // Move focus with the view, so keyboard and screen-reader users land on the list they asked for
+    // rather than on a link that has just scrolled out of sight. preventScroll keeps the smooth scroll.
+    card?.querySelector('select')?.focus({ preventScroll: true });
+  };
 
   const load = useCallback(async () => {
     try {
@@ -145,6 +168,7 @@ export default function UserOrgsPage() {
                 <TableRow>
                   <TableHeaderCell>{t('userOrgs.column.name')}</TableHeaderCell>
                   <TableHeaderCell>{t('userOrgs.column.source')}</TableHeaderCell>
+                  <TableHeaderCell>{t('userOrgs.column.lastRefreshed')}</TableHeaderCell>
                   <TableHeaderCell>{t('userOrgs.column.usersAssigned')}</TableHeaderCell>
                   <TableHeaderCell>{t('userOrgs.column.distinctValues')}</TableHeaderCell>
                   <TableHeaderCell>{t('userOrgs.column.state')}</TableHeaderCell>
@@ -179,7 +203,34 @@ export default function UserOrgsPage() {
                         </span>
                       )}
                     </TableCell>
-                    <TableCell>{formatNumber(type.assignedUserCount)}</TableCell>
+                    <TableCell>
+                      {type.lastRefreshedUtc ? (
+                        formatDateParts(new Date(type.lastRefreshedUtc), {
+                          dateStyle: 'short',
+                          timeStyle: 'short',
+                        })
+                      ) : (
+                        <Text className={styles.muted}>{t(neverRefreshedKey(type))}</Text>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {type.assignedUserCount > 0 ? (
+                        // The count opens "who is in each organisation" for this type. A link rather
+                        // than another action button, which the Actions column has no room for.
+                        <Link
+                          as="button"
+                          onClick={() => viewUsers(type)}
+                          aria-label={t(
+                            plural(type.assignedUserCount, 'userOrgs.types.viewUsers.one', 'userOrgs.types.viewUsers.other'),
+                            { count: formatNumber(type.assignedUserCount), name: type.name },
+                          )}
+                        >
+                          {formatNumber(type.assignedUserCount)}
+                        </Link>
+                      ) : (
+                        formatNumber(type.assignedUserCount)
+                      )}
+                    </TableCell>
                     <TableCell>{formatNumber(type.distinctValueCount)}</TableCell>
                     <TableCell>
                       {type.isEnabled ? (
@@ -222,6 +273,23 @@ export default function UserOrgsPage() {
           )}
         </Card>
 
+        {types && types.length > 0 && browseTypeId !== null && (
+          <div ref={browseRef}>
+            <Card>
+              <CardHeader header={<Subtitle2>{t('userOrgs.browse.title')}</Subtitle2>} />
+              <Text block className={styles.muted}>
+                {t('userOrgs.browse.intro')}
+              </Text>
+              <OrgMembersBrowser
+                types={types}
+                selectedTypeId={browseTypeId}
+                onSelectType={setBrowseTypeId}
+                refreshToken={types}
+              />
+            </Card>
+          </div>
+        )}
+
         {csvTypes.map((type) => (
           <Card key={type.id}>
             <CardHeader
@@ -238,6 +306,7 @@ export default function UserOrgsPage() {
           <Card>
             <CardHeader header={<Subtitle2>{t('userOrgs.entraCard.title')}</Subtitle2>} />
             <Text block>{t('userOrgs.entraCard.body')}</Text>
+            <Text block>{t('userOrgs.entraCard.lastRefreshed')}</Text>
           </Card>
         )}
       </div>

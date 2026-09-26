@@ -38,6 +38,13 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         [JsonProperty("modifiedUtc")]
         public string ModifiedUtc { get; set; }
 
+        /// <summary>
+        /// When the type's values were last brought up to date from its source, or null if never. See
+        /// <c>UserOrgType.LastRefreshedUtc</c> for what that means for each source.
+        /// </summary>
+        [JsonProperty("lastRefreshedUtc")]
+        public string LastRefreshedUtc { get; set; }
+
         [JsonProperty("lastImport")]
         public UserOrgImportJobModel LastImport { get; set; }
     }
@@ -219,6 +226,13 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         /// </summary>
         [JsonProperty("truncatedValueCount")]
         public int TruncatedValueCount { get; set; }
+
+        /// <summary>
+        /// The longest organisation name that is stored in full. Sent rather than written into the
+        /// portal's text, so the warning about shortened names cannot drift from the real limit.
+        /// </summary>
+        [JsonProperty("maxValueLength")]
+        public int MaxValueLength { get; set; }
     }
 
     public class UserOrgCsvPreviewRowModel
@@ -303,5 +317,90 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         /// </summary>
         [JsonProperty("discoveryWarning")]
         public string DiscoveryWarning { get; set; }
+    }
+
+    /// <summary>One page of an org type's organisations, largest first, for "who is in each organisation".</summary>
+    public class UserOrgValuePageModel
+    {
+        [JsonProperty("orgTypeId")]
+        public int OrgTypeId { get; set; }
+
+        /// <summary>The page actually returned, after clamping, 1-based.</summary>
+        [JsonProperty("page")]
+        public int Page { get; set; }
+
+        /// <summary>The page size actually used, after clamping.</summary>
+        [JsonProperty("pageSize")]
+        public int PageSize { get; set; }
+
+        /// <summary>Organisations matching the search, across every page.</summary>
+        [JsonProperty("total")]
+        public int Total { get; set; }
+
+        [JsonProperty("items")]
+        public List<UserOrgValueRowModel> Items { get; set; } = new List<UserOrgValueRowModel>();
+    }
+
+    /// <summary>One organisation and how many users are in it.</summary>
+    public class UserOrgValueRowModel
+    {
+        [JsonProperty("id")]
+        public int Id { get; set; }
+
+        /// <summary>The organisation exactly as stored - tenant data, never translated.</summary>
+        [JsonProperty("name")]
+        public string Name { get; set; }
+
+        [JsonProperty("memberCount")]
+        public int MemberCount { get; set; }
+    }
+
+    /// <summary>One page of the users in an organisation, by user principal name.</summary>
+    public class UserOrgMemberPageModel
+    {
+        [JsonProperty("orgTypeId")]
+        public int OrgTypeId { get; set; }
+
+        [JsonProperty("valueId")]
+        public int ValueId { get; set; }
+
+        /// <summary>The organisation's name exactly as stored - tenant data, never translated.</summary>
+        [JsonProperty("valueName")]
+        public string ValueName { get; set; }
+
+        /// <summary>The page actually returned, after clamping, 1-based.</summary>
+        [JsonProperty("page")]
+        public int Page { get; set; }
+
+        /// <summary>The page size actually used, after clamping.</summary>
+        [JsonProperty("pageSize")]
+        public int PageSize { get; set; }
+
+        /// <summary>Users matching the search, across every page.</summary>
+        [JsonProperty("total")]
+        public int Total { get; set; }
+
+        [JsonProperty("items")]
+        public List<UserOrgMemberModel> Items { get; set; } = new List<UserOrgMemberModel>();
+    }
+
+    /// <summary>One user in an organisation. Every field is tenant data, shown as stored.</summary>
+    public class UserOrgMemberModel
+    {
+        [JsonProperty("userId")]
+        public int UserId { get; set; }
+
+        [JsonProperty("userPrincipalName")]
+        public string UserPrincipalName { get; set; }
+
+        [JsonProperty("department")]
+        public string Department { get; set; }
+
+        [JsonProperty("jobTitle")]
+        public string JobTitle { get; set; }
+
+        /// <summary><c>false</c> for a disabled account, <c>null</c> when the import has not recorded it.</summary>
+        [JsonProperty("accountEnabled")]
+        public bool? AccountEnabled { get; set; }
     }
 }

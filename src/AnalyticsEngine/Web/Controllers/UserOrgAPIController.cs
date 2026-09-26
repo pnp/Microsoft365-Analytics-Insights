@@ -45,14 +45,24 @@ namespace Web.AnalyticsWeb.Controllers
         private const string RequestedWithHeader = "X-Requested-With";
 
         private readonly Func<UserOrgAdminService> _serviceFactory;
+        private readonly Func<UserOrgMembershipService> _membershipFactory;
 
-        public UserOrgAPIController() : this(BuildService)
+        public UserOrgAPIController() : this(BuildService, BuildMembershipService)
         {
         }
 
-        public UserOrgAPIController(Func<UserOrgAdminService> serviceFactory)
+        public UserOrgAPIController(Func<UserOrgAdminService> serviceFactory, Func<UserOrgMembershipService> membershipFactory)
         {
             _serviceFactory = serviceFactory ?? throw new ArgumentNullException(nameof(serviceFactory));
+            _membershipFactory = membershipFactory ?? throw new ArgumentNullException(nameof(membershipFactory));
+        }
+
+        private static UserOrgMembershipService BuildMembershipService()
+        {
+            var connectionString = new AppConfig().ConnectionStrings.SQL;
+            return new UserOrgMembershipService(
+                UserOrgStores.CreateTypeStore(connectionString),
+                UserOrgStores.CreateMembershipReader(connectionString));
         }
 
         private static UserOrgAdminService BuildService()
@@ -226,6 +236,63 @@ namespace Web.AnalyticsWeb.Controllers
 
         #endregion
 
+        #region Browse
+
+        /// <summary>
+        /// GET api/UserOrg/types/{id}/values - one page of an org type's organisations, largest first,
+        /// each with how many users are in it.
+        /// </summary>
+        [HttpGet]
+        [Route("types/{id:int}/values")]
+        public async Task<IHttpActionResult> GetValues(
+            int id,
+            CancellationToken cancellationToken,
+            string search = null,
+            int page = 1,
+            int pageSize = 0)
+        {
+            return await GuardAsync<object>(async () =>
+            {
+                var result = await _membershipFactory()
+                    .ListValuesAsync(id, search, page, pageSize, cancellationToken)
+                    .ConfigureAwait(false);
+                if (result == null)
+                {
+                    throw new UserOrgNotFoundException("That organisation type no longer exists.");
+                }
+                return result;
+            }, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// GET api/UserOrg/types/{id}/values/{valueId}/members - one page of the users in an
+        /// organisation, by user principal name.
+        /// </summary>
+        [HttpGet]
+        [Route("types/{id:int}/values/{valueId:int}/members")]
+        public async Task<IHttpActionResult> GetMembers(
+            int id,
+            int valueId,
+            CancellationToken cancellationToken,
+            string search = null,
+            int page = 1,
+            int pageSize = 0)
+        {
+            return await GuardAsync<object>(async () =>
+            {
+                var result = await _membershipFactory()
+                    .ListMembersAsync(id, valueId, search, page, pageSize, cancellationToken)
+                    .ConfigureAwait(false);
+                if (result == null)
+                {
+                    throw new UserOrgNotFoundException("That organisation no longer exists.");
+                }
+                return result;
+            }, cancellationToken).ConfigureAwait(false);
+        }
+
+        #endregion
+
         #region Plumbing
 
         private sealed class UploadedFile : IDisposable
@@ -347,11 +414,31 @@ namespace Web.AnalyticsWeb.Controllers
                 new ApiErrorModel("This request did not come from the portal. Reload the page and try again."));
         }
 
-        private async Task<IHttpActionResult> RunAsync<T>(Func<UserOrgAdminService, Task<T>> work)
+        private Task<IHttpActionResult> RunAsync<T>(Func<UserOrgAdminService, Task<T>> work)
+        {
+            // The factory runs inside the guard, so a missing connection string is a sanitised 500
+            // rather than an unhandled exception.
+            return GuardAsync(() => work(_serviceFactory()));
+        }
+
+        /// <summary>
+        /// Turns the outcome of <paramref name="work"/> into a response, reporting only genuine faults.
+        /// </summary>
+        /// <param name="cancellationToken">
+        /// The request's token. When it has fired, the browser has gone: the "who is in each
+        /// organisation" panel aborts its request every time the admin picks another organisation, page
+        /// or search. Whatever that surfaces as is not a fault, and reporting it would bury the real
+        /// errors - the same call <see cref="AnalyticsWebApiExceptionLogger"/> makes for the rest of the
+        /// API. The token is checked rather than the exception type, because SqlClient can report a
+        /// cancelled command as a <c>SqlException</c>.
+        /// </param>
+        private async Task<IHttpActionResult> GuardAsync<T>(
+            Func<Task<T>> work,
+            CancellationToken cancellationToken = default(CancellationToken))
         {
             try
             {
-                return Ok(await work(_serviceFactory()).ConfigureAwait(false));
+                return Ok(await work().ConfigureAwait(false));
             }
             catch (UserOrgValidationException ex)
             {
@@ -362,6 +449,12 @@ namespace Web.AnalyticsWeb.Controllers
             catch (UserOrgNotFoundException ex)
             {
                 return Content(HttpStatusCode.NotFound, new ApiErrorModel(ex.Message));
+            }
+            catch (Exception) when (cancellationToken.IsCancellationRequested)
+            {
+                // 499 "client closed request": nobody is left to read it, and it keeps the request log
+                // honest about what happened.
+                return StatusCode((HttpStatusCode)499);
             }
             catch (Exception ex)
             {

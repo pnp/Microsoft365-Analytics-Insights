@@ -213,6 +213,31 @@ INSERT INTO dbo.user_org_assignments (user_id, org_type_id, org_value_id) VALUES
             }
         }
 
+        [TestMethod]
+        public void TheSchemaItCreatesRecordsRefreshesAndHoldsFullWidthValues()
+        {
+            // The width is set by the unique index on (org_type_id, name): 1700 bytes less the 4-byte
+            // int leaves 848 two-byte code units. A Greek name of exactly that length must be accepted.
+            using (var db = NewDatabase())
+            {
+                StampPredecessor(db);
+                db.ExecuteScript(Script(), quotedIdentifierOn: false);
+
+                Assert.IsNotNull(
+                    db.Scalar("SELECT COL_LENGTH(N'dbo.user_org_types', N'last_refreshed_utc')") as short?,
+                    "The admin page's Last refreshed column reads user_org_types.last_refreshed_utc.");
+
+                db.Execute(@"
+INSERT INTO dbo.user_org_types (name, source_kind) VALUES (N'Cost Centre', 2);
+INSERT INTO dbo.user_org_values (org_type_id, name) VALUES (1, REPLICATE(CAST(N'Ω' AS nvarchar(max)), 848));");
+
+                Assert.AreEqual(
+                    848,
+                    Convert.ToInt32(db.Scalar("SELECT LEN(name) FROM dbo.user_org_values")),
+                    "An org value at the full column width must survive the unique index.");
+            }
+        }
+
         private static void AssertRejected(ScratchDatabase db, string sql, string what)
         {
             try

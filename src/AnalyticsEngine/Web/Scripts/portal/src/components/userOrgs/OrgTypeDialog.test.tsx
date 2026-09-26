@@ -49,6 +49,7 @@ const saved: UserOrgType = {
   distinctValueCount: 4,
   createdUtc: '2026-01-01T00:00:00.000Z',
   modifiedUtc: null,
+  lastRefreshedUtc: null,
   lastImport: null,
 };
 
@@ -104,9 +105,9 @@ describe('OrgTypeDialog', () => {
 
   it('shows the raw and stored values so trimming and truncation are visible', async () => {
     // Deliberately a value long enough to be shortened, so the raw and stored columns differ and the
-    // test proves both are rendered rather than one value appearing twice.
-    const raw = 'x'.repeat(210);
-    const stored = 'x'.repeat(200);
+    // test proves both are rendered rather than one value appearing twice. Stored at the real limit.
+    const raw = 'x'.repeat(860);
+    const stored = 'x'.repeat(848);
 
     renderWithProvider(<OrgTypeDialog open editing={null} onDismiss={vi.fn()} onSave={vi.fn()} />);
 
