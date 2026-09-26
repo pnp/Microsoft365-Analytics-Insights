@@ -54,7 +54,7 @@ async function getJson<T>(path: string, failureKey: TranslationKey, signal?: Abo
   if (!response.ok) {
     const serverError = await readServerError(response);
     const message = response.status === 500 && serverError?.code === 'agentCostsLoadFailed'
-      ? translateActive('errors.agentCosts.serverFailed')
+      ? translateActive('errors.agentCosts.loadFailed')
       : serverError?.message ?? translateActive(failureKey, { status: response.status });
     throw new AgentCostsApiError(response.status, message);
   }

@@ -28,6 +28,7 @@ export const errors = {
   'errors.agentCosts.topUsersFailed': "Couldn't load the per-user credit consumption ({status}).",
   'errors.agentCosts.filtersFailed': "Couldn't load the available filters ({status}).",
   'errors.agentCosts.serverFailed': 'The agent cost figures could not be loaded. Check the Agent Costs imports and try again.',
+  'errors.agentCosts.loadFailed': 'The agent cost figures could not be loaded. If this keeps happening, check the database is reachable and that the agent cost imports have run at least once.',
 
   // Copilot adoption API
   'errors.copilotAdoption.analysisStillRunning': "The Copilot adoption analysis is taking longer than expected and hasn't finished yet. It is still running on the server - reload the page in a few minutes.",

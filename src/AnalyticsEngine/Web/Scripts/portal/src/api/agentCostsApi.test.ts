@@ -27,7 +27,7 @@ describe('agentCostsApi errors', () => {
     }, 500));
 
     await expect(fetchSummary({ from: '2026-09-01', to: '2026-09-25' })).rejects.toThrow(
-      'No se han podido cargar las cifras de costes de agentes.',
+      'Si sigue ocurriendo, compruebe que la base de datos sea accesible',
     );
     await expect(fetchSummary({ from: '2026-09-01', to: '2026-09-25' })).rejects.not.toThrow(
       'The agent cost figures could not be loaded',
