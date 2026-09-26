@@ -64,7 +64,7 @@ function warningValues(values?: CopilotAdoptionWarningDetail['values']): Transla
   const mapped: TranslationValues = {};
   Object.entries(values ?? {}).forEach(([key, value]) => {
     mapped[key] = typeof value === 'number'
-      ? formatNumber(value, { maximumFractionDigits: key === 'percentage' ? 1 : 0 })
+      ? formatNumber(value, { maximumFractionDigits: key === 'percentage' ? 1 : 0, useGrouping: true })
       : String(value ?? '');
   });
   return mapped;

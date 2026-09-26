@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { loadCatalog, translateStatic, type TFunction } from '..';
 import { EN_CATALOG } from '../catalog';
-import { COWORK_TIER_LABEL_KEYS, TENURE_BASIS_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
+import { COPILOT_ADOPTION_WARNING_KEYS, COWORK_TIER_LABEL_KEYS, TENURE_BASIS_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
 import {
   BLOB_CHECKPOINT_REASON_KEYS,
   HEALTH_COMPONENT_LABEL_KEYS,
@@ -1784,5 +1784,60 @@ describe('Licence Activity coverage measures and messages', () => {
         expect(EN_CATALOG[spaMap[key]], `${name}: English catalog text for '${key}'`).toBe(sentence);
       }
     }
+  });
+});
+
+
+// --- Copilot Adoption structured warnings -----------------------------------------------------------
+
+const COPILOT_ADOPTION_SERVICE = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'CopilotAdoption', 'CopilotAdoptionService.cs');
+const COPILOT_ADOPTION_SUMMARY_MODELS = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'CopilotAdoption', 'CopilotAdoptionSummaryModels.cs');
+const COPILOT_ADOPTION_SERVER_TEXT = join(process.cwd(), 'components', 'copilotAdoption', 'serverText.ts');
+
+function copilotWarningConstants(): Record<string, string> {
+  const source = readFileSync(COPILOT_ADOPTION_SUMMARY_MODELS, 'utf8');
+  const body = /public static class CopilotAdoptionWarningKeys\s*\{([\s\S]*?)\n\s*\}/.exec(source)?.[1] ?? '';
+  return Object.fromEntries([...body.matchAll(/public const string (\w+)\s*=\s*"([^"]+)";/g)].map((m) => [m[1], m[2]]));
+}
+
+function copilotWarningTemplates(): Record<string, string> {
+  const source = readFileSync(COPILOT_ADOPTION_SUMMARY_MODELS, 'utf8');
+  const constants = copilotWarningConstants();
+  const body = /private static readonly Dictionary<string, string> Templates[\s\S]*?\{([\s\S]*?)\n\s*\};/.exec(source)?.[1] ?? '';
+  return Object.fromEntries([...body.matchAll(/\{\s*CopilotAdoptionWarningKeys\.(\w+),\s*"((?:[^"\\]|\\.)*)"\s*\}/g)]
+    .map((m) => [constants[m[1]], csharpStringLiteralValue(m[2])]));
+}
+
+function placeholders(text: string): string[] {
+  return sortedUnique([...text.matchAll(/\{([^}]+)\}/g)].map((m) => m[1]));
+}
+
+describe('Copilot Adoption server warning text', () => {
+  it('has a SPA mapping and exact English catalog template for every server warning key', () => {
+    const server = copilotWarningTemplates();
+    const mapped = Object.values(COPILOT_ADOPTION_WARNING_KEYS);
+    expect({
+      missing: Object.keys(server).filter((key) => !mapped.includes(key as never)),
+      orphaned: mapped.filter((key) => !(key in server)),
+    }, 'Keep COPILOT_ADOPTION_WARNING_KEYS in serverText.ts in exact sync with CopilotAdoptionWarningKeys/WarningTemplates in C#.').toEqual({ missing: [], orphaned: [] });
+
+    for (const [key, english] of Object.entries(server)) {
+      const catalogKey = `copilotAdoption.server.warning.${key}`;
+      expect(EN_CATALOG[catalogKey], `${catalogKey} must reproduce the server English exactly.`).toBe(english);
+      expect(placeholders(EN_CATALOG[catalogKey]), `${catalogKey} placeholders`).toEqual(placeholders(english));
+    }
+  });
+
+  it('has no raw unstructured Warnings.Add call left in the service', () => {
+    const source = readFileSync(COPILOT_ADOPTION_SERVICE, 'utf8');
+    const rawAdds = [...source.matchAll(/\.Warnings\.Add\s*\(\s*(?:@?"|\$@?"|\$?@?")/g)].map((m) => m[0]);
+    expect(rawAdds, 'Use CopilotAdoptionWarnings.Add(...) or StepOutput.AddWarning(...) so warningDetails stays aligned.').toEqual([]);
+  });
+
+  it('keeps the reclaim caveat key catalogued beside the server fallback', () => {
+    const source = readFileSync(COPILOT_ADOPTION_SERVICE, 'utf8');
+    const fallback = /summary\.ReclaimCaveat\s*=\s*"((?:[^"\\]|\\.)*)";/.exec(source)?.[1] ?? '';
+    expect(source).toContain('summary.ReclaimCaveatKey = CopilotAdoptionWarningKeys.ReclaimCaveat;');
+    expect(EN_CATALOG['copilotAdoption.server.reclaimCaveat']).toBe(csharpStringLiteralValue(fallback));
   });
 });

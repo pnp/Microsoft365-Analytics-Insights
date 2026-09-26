@@ -2,11 +2,16 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { loadCatalog } from '../../i18n/catalog';
 import { setActiveLanguage, translateStatic, type TFunction } from '../../i18n';
-import { AdoptionBand, type CopilotAdoptionOptions, type CoworkReadinessRow, type LicensedUserAdoptionRow } from '../../types/copilotAdoption';
+import { AdoptionBand, type CopilotAdoptionOptions, type CopilotAdoptionWarningDetail, type CoworkReadinessRow, type LicensedUserAdoptionRow } from '../../types/copilotAdoption';
 import {
+  COPILOT_ADOPTION_WARNING_KEYS,
+  copilotAdoptionWarningText,
   coworkRationaleText,
   coworkTierLabel,
+  isCoworkWarning,
+  isLicenceOpportunityWarning,
   recommendedActionText,
+  reclaimCaveatText,
   reclaimEligibilityReason,
 } from './serverText';
 
@@ -124,5 +129,69 @@ describe('Copilot Adoption server-authored text reproduction', () => {
   it('leaves English Cowork rationale byte-for-byte as the server supplied it', () => {
     setActiveLanguage('en');
     expect(coworkRationaleText(tEn, cowork({ rationale: 'Server English exactly.' }), OPTIONS)).toBe('Server English exactly.');
+  });
+
+  it('translates a plain server warning in Spanish', () => {
+    setActiveLanguage('es');
+    expect(copilotAdoptionWarningText(
+      tEs,
+      { key: COPILOT_ADOPTION_WARNING_KEYS.NoCopilotData },
+      'Neither the Copilot audit import nor Microsoft\'s Copilot usage report has any data for this period, so every licensed user will appear as unused. Check the Health page before acting on these numbers.',
+    )).toBe('Ni la importación de auditoría de Copilot ni el informe de uso de Copilot de Microsoft tienen datos para este periodo, por lo que todos los usuarios con licencia aparecerán como sin uso. Compruebe la página Estado antes de actuar sobre estos números.');
+  });
+
+  it('formats warning numbers with the active locale', () => {
+    setActiveLanguage('es');
+    expect(copilotAdoptionWarningText(
+      tEs,
+      {
+        key: COPILOT_ADOPTION_WARNING_KEYS.LicensedUsersSubset,
+        values: { licensedUsers: 1234, scoredUsers: 1000 },
+      },
+      'server fallback',
+    )).toContain('1.234 licencias de Copilot');
+  });
+
+  it('keeps SKU names verbatim while translating the SKU mismatch warning', () => {
+    setActiveLanguage('es');
+    const text = copilotAdoptionWarningText(
+      tEs,
+      {
+        key: COPILOT_ADOPTION_WARNING_KEYS.SkuSeatMismatch,
+        values: { skuName: 'Contoso Copilot SKU', purchased: 1234, assigned: 1200 },
+      },
+      'server fallback',
+    );
+
+    expect(text).toContain('Contoso Copilot SKU');
+    expect(text).toContain('1.234 comprados');
+  });
+
+  it('falls back to server English for an unknown warning key', () => {
+    setActiveLanguage('es');
+    expect(copilotAdoptionWarningText(
+      tEs,
+      { key: 'futureWarning', values: { count: 1 } },
+      'Server fallback warning.',
+    )).toBe('Server fallback warning.');
+  });
+
+  it('classifies panel warnings by stable key instead of English text', () => {
+    const cowork: CopilotAdoptionWarningDetail = { key: COPILOT_ADOPTION_WARNING_KEYS.CoworkM365UsageMissing };
+    const opportunity: CopilotAdoptionWarningDetail = { key: COPILOT_ADOPTION_WARNING_KEYS.LicenceCandidatesAuditOnly };
+
+    expect(isCoworkWarning(cowork)).toBe(true);
+    expect(isCoworkWarning(opportunity)).toBe(false);
+    expect(isLicenceOpportunityWarning(opportunity)).toBe(true);
+    expect(isLicenceOpportunityWarning(cowork)).toBe(false);
+  });
+
+  it('translates the reclaim caveat from its stable key', () => {
+    setActiveLanguage('es');
+    expect(reclaimCaveatText(
+      tEs,
+      'copilotAdoption.server.reclaimCaveat',
+      'Reclaim excludes admin exclusions and separates review-only cases. Leave, part-time patterns, service/shared accounts and role-based mailboxes are not detectable from Microsoft 365 usage data.',
+    )).toBe('La recuperación excluye las exclusiones administrativas y separa los casos que solo requieren revisión. Las bajas, los patrones de jornada parcial, las cuentas de servicio o compartidas y los buzones basados en roles no se pueden detectar a partir de los datos de uso de Microsoft 365.');
   });
 });

@@ -2378,6 +2378,13 @@ namespace Tests.UnitTests
             Assert.IsTrue(
                 analysis.Summary.Warnings.Any(w => w.Contains("Microsoft prompt counts are not added")),
                 "The summary must disclose that a visible share of rows came from a different source.");
+            AssertWarningDetailsMatchEnglish(analysis.Summary);
+            Assert.IsTrue(
+                analysis.Summary.WarningDetails.Any(d =>
+                    d.Key == CopilotAdoptionWarningKeys.UsageReportSourcedUsers
+                    && Convert.ToInt32(d.Values["count"]) == 6
+                    && Convert.ToDouble(d.Values["percentage"]) == 50d),
+                "The translated warning needs the raw count and percentage, not a pre-formatted English string.");
         }
 
         [TestMethod]
@@ -2420,6 +2427,13 @@ namespace Tests.UnitTests
             Assert.IsTrue(
                 analysis.Summary.Warnings.Any(w => w.Contains("held back for window mismatch")),
                 "The warning must name the reconciling figure so the gap is explainable on screen.");
+            AssertWarningDetailsMatchEnglish(analysis.Summary);
+            Assert.IsTrue(
+                analysis.Summary.WarningDetails.Any(d =>
+                    d.Key == CopilotAdoptionWarningKeys.UsageReportWindowMismatch
+                    && Convert.ToInt32(d.Values["reportDays"]) == 90
+                    && Convert.ToInt32(d.Values["analysisDays"]) == 28),
+                "The translated mismatch warning needs both window lengths as numbers.");
         }
 
         [TestMethod]
@@ -2528,6 +2542,20 @@ namespace Tests.UnitTests
                     + summary.ReclaimSeatsHeldBackForReview,
                 "NeverUsed + Dormant + ReclaimSeatsFromActiveBands must equal "
                 + "ReclaimableSeats + ReclaimSeatsHeldBackForWindowMismatch + ReclaimSeatsHeldBackForReview.");
+        }
+
+        private static void AssertWarningDetailsMatchEnglish(CopilotAdoptionSummary summary)
+        {
+            Assert.AreEqual(summary.Warnings.Count, summary.WarningDetails.Count,
+                "Structured warning details must stay index-aligned with the compatibility English warnings.");
+
+            for (var i = 0; i < summary.Warnings.Count; i++)
+            {
+                Assert.AreEqual(
+                    summary.Warnings[i],
+                    CopilotAdoptionWarnings.RenderEnglish(summary.WarningDetails[i].Key, summary.WarningDetails[i].Values),
+                    "The structured warning must render back to the English compatibility string at the same index.");
+            }
         }
 
         [TestMethod]
