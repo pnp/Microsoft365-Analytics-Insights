@@ -17,6 +17,9 @@ export const errors = {
   'errors.http.sessionExpired': 'Your session has expired. Reload the page to sign in again.',
   'errors.userLookup.requestFailed': 'Request failed ({status})',
   'errors.userLookup.notFound': 'No matching user was found.',
+  'errors.userLookup.missingUpn': "A 'upn' query parameter is required.",
+  'errors.userLookup.unknownCategory': "Unknown category '{category}'.",
+  'errors.userLookup.categoryNoDrilldown': "Category '{category}' does not support drill-down.",
 
   // Agent costs API
   'errors.agentCosts.availabilityFailed': "Couldn't load the agent cost availability ({status}).",

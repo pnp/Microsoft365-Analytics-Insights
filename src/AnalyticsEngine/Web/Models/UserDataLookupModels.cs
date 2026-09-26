@@ -200,10 +200,14 @@ namespace Web.AnalyticsWeb.Models
         [JsonProperty("message")]
         public string Message { get; set; }
 
-        public ApiErrorModel(string message, string code = null)
+        [JsonProperty("category")]
+        public string Category { get; set; }
+
+        public ApiErrorModel(string message, string code = null, string category = null)
         {
             Message = message;
             Code = code;
+            Category = category;
         }
     }
 }

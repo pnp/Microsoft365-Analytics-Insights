@@ -41,4 +41,17 @@ describe('userLookupApi errors', () => {
 
     await expect(fetchUserSummary('ada@contoso.com')).rejects.toThrow('Request failed (404)');
   });
+
+  it('uses catalogued text for coded bad requests instead of server English', async () => {
+    await loadCatalog('es');
+    setActiveLanguage('es');
+    mockedFetch.mockResolvedValue(jsonResponse({
+      code: 'unknownCategory',
+      category: 'not-a-category',
+      message: "Unknown category 'not-a-category'.",
+    }, 400));
+
+    await expect(fetchUserSummary('ada@contoso.com')).rejects.toThrow("Categoría desconocida 'not-a-category'.");
+    await expect(fetchUserSummary('ada@contoso.com')).rejects.not.toThrow('Unknown category');
+  });
 });

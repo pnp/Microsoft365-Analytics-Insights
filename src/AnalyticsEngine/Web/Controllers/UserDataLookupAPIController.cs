@@ -60,12 +60,33 @@ namespace Web.AnalyticsWeb.Controllers
             switch (result.Status)
             {
                 case UserDataLookupStatus.BadRequest:
-                    return Content(HttpStatusCode.BadRequest, new ApiErrorModel(result.ErrorMessage));
+                    return Content(HttpStatusCode.BadRequest, BadRequestError(result.ErrorMessage));
                 case UserDataLookupStatus.UserNotFound:
                     return Content(HttpStatusCode.NotFound, new ApiErrorModel(result.ErrorMessage, "userNotFound"));
                 default:
                     return Ok(result.Value);
             }
+        }
+
+        private static ApiErrorModel BadRequestError(string message)
+        {
+            if (message == "A 'upn' query parameter is required.")
+                return new ApiErrorModel(message, "missingUpn");
+
+            const string unknownPrefix = "Unknown category '";
+            if (message.StartsWith(unknownPrefix) && message.EndsWith("'."))
+                return new ApiErrorModel(message, "unknownCategory", message.Substring(
+                    unknownPrefix.Length,
+                    message.Length - unknownPrefix.Length - 2));
+
+            const string noDrilldownPrefix = "Category '";
+            const string noDrilldownSuffix = "' does not support drill-down.";
+            if (message.StartsWith(noDrilldownPrefix) && message.EndsWith(noDrilldownSuffix))
+                return new ApiErrorModel(message, "categoryNoDrilldown", message.Substring(
+                    noDrilldownPrefix.Length,
+                    message.Length - noDrilldownPrefix.Length - noDrilldownSuffix.Length));
+
+            return new ApiErrorModel(message);
         }
     }
 }

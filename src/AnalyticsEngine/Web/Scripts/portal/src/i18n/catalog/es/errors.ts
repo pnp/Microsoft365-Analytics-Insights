@@ -11,6 +11,9 @@ const errors: Record<keyof typeof en, string> = {
   'errors.http.sessionExpired': 'La sesión ha caducado. Vuelva a cargar la página para iniciar sesión de nuevo.',
   'errors.userLookup.requestFailed': 'La solicitud ha fallado ({status})',
   'errors.userLookup.notFound': 'No se encontró ningún usuario coincidente.',
+  'errors.userLookup.missingUpn': "Se requiere el parámetro de consulta 'upn'.",
+  'errors.userLookup.unknownCategory': "Categoría desconocida '{category}'.",
+  'errors.userLookup.categoryNoDrilldown': "La categoría '{category}' no admite el desglose.",
 
   // Agent costs API
   'errors.agentCosts.availabilityFailed': 'No se ha podido cargar la disponibilidad de costes de agentes ({status}).',

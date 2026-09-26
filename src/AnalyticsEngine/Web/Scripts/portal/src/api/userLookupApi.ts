@@ -1,9 +1,16 @@
 import { translateActive } from '../i18n/runtime';
+import type { TranslationKey } from '../i18n/catalog';
 import { apiFetch } from './http';
 import type { UserDataSummary, UserDataDetailResponse } from '../types/userData';
 
 const baseUrl = (): string =>
   window.o365AnalyticsUserLookupAPI ?? `${window.location.origin}/api/UserDataLookup`;
+
+const ERROR_CODE_KEYS: Record<string, TranslationKey> = {
+  missingUpn: 'errors.userLookup.missingUpn',
+  unknownCategory: 'errors.userLookup.unknownCategory',
+  categoryNoDrilldown: 'errors.userLookup.categoryNoDrilldown',
+};
 
 async function getJson<T>(url: string): Promise<T> {
   const response = await apiFetch(url, {
@@ -14,9 +21,13 @@ async function getJson<T>(url: string): Promise<T> {
   if (!response.ok) {
     let message = translateActive('errors.userLookup.requestFailed', { status: response.status });
     try {
-      const body = await response.json() as { code?: unknown; message?: unknown } | null;
+      const body = await response.json() as { code?: unknown; message?: unknown; category?: unknown } | null;
       if (response.status === 404 && body?.code === 'userNotFound') {
         message = translateActive('errors.userLookup.notFound');
+      } else if (response.status === 400 && typeof body?.code === 'string' && ERROR_CODE_KEYS[body.code]) {
+        message = translateActive(ERROR_CODE_KEYS[body.code], {
+          category: typeof body.category === 'string' ? body.category : '',
+        });
       } else if (response.status !== 404 && body && typeof body.message === 'string') {
         message = body.message;
       }
