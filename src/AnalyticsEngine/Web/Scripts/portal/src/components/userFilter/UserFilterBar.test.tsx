@@ -143,6 +143,62 @@ describe('UserFilterBar', () => {
     });
   });
 
+  it('keeps the draft of an open condition when a connector is switched, even though the pills regroup', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    renderWithProvider(
+      <Harness initial={{ clauses: [clause('department', ['Sales']), clause('country', ['Ireland'])] }} onChange={onChange} />,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'Department is Sales' }));
+    await user.click(screen.getByRole('combobox', { name: 'Values' }));
+    await user.click(await screen.findByRole('option', { name: /Marketing/ }));
+
+    // AND -> OR turns one group into two, so every pill moves into a group box.
+    await user.click(screen.getByRole('button', { name: /How this condition combines with the one before it: AND/ }));
+    await user.click(await screen.findByRole('menuitemradio', { name: /OR: people can match either condition/ }));
+    expect(await screen.findByText(/Showing people where \(Department is Sales\) or \(Country or region is Ireland\)/)).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    expect(onChange).toHaveBeenLastCalledWith({
+      clauses: [clause('department', ['Sales', 'Marketing']), clause('country', ['Ireland'], { join: 'or' })],
+    });
+  });
+
+  it('applies an open condition with its connector as it stands now, not as it was when opened', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    renderWithProvider(
+      <Harness initial={{ clauses: [clause('department', ['Sales']), clause('country', ['Ireland'])] }} onChange={onChange} />,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'Country or region is Ireland' }));
+    await user.click(screen.getByRole('button', { name: /How this condition combines with the one before it: AND/ }));
+    await user.click(await screen.findByRole('menuitemradio', { name: /OR: people can match either condition/ }));
+    await user.click(await screen.findByRole('button', { name: 'Apply' }));
+
+    expect(onChange).toHaveBeenLastCalledWith({
+      clauses: [clause('department', ['Sales']), clause('country', ['Ireland'], { join: 'or' })],
+    });
+  });
+
+  it('highlights the condition being edited, and closes it when its pill is chosen again', async () => {
+    const user = userEvent.setup();
+    renderWithProvider(<Harness initial={{ clauses: [clause('department', ['Sales'])] }} onChange={() => {}} />);
+
+    const pill = await screen.findByRole('button', { name: 'Department is Sales' });
+    expect(pill).toHaveAttribute('aria-expanded', 'false');
+
+    await user.click(pill);
+    expect(await screen.findByRole('button', { name: 'Apply' })).toBeVisible();
+    expect(pill).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('combobox', { name: 'Property' })).toHaveFocus();
+
+    await user.click(pill);
+    expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument();
+  });
+
   it('adds a condition from the editor: property, then values, then Apply', async () => {
     const onChange = vi.fn();
     const user = userEvent.setup();

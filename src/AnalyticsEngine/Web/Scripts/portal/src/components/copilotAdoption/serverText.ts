@@ -43,6 +43,7 @@ export const COPILOT_ADOPTION_WARNING_KEYS = {
   SkuSeatMismatch: 'skuSeatMismatch',
   CoworkFluencyMissingAll: 'coworkFluencyMissingAll',
   CoworkFluencyPartial: 'coworkFluencyPartial',
+  CoworkSliceNotAssessed: 'coworkSliceNotAssessed',
   CouldNotLoad: 'couldNotLoad',
 } as const;
 
@@ -54,6 +55,7 @@ const COWORK_WARNING_KEYS = new Set<string>([
   COPILOT_ADOPTION_WARNING_KEYS.CoworkEligibilityUnknown,
   COPILOT_ADOPTION_WARNING_KEYS.CoworkFluencyMissingAll,
   COPILOT_ADOPTION_WARNING_KEYS.CoworkFluencyPartial,
+  COPILOT_ADOPTION_WARNING_KEYS.CoworkSliceNotAssessed,
 ]);
 
 const OPPORTUNITY_WARNING_KEYS = new Set<string>([

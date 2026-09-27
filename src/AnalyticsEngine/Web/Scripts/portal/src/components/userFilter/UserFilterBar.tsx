@@ -74,9 +74,6 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusLarge,
     border: `1px dashed ${tokens.colorNeutralStroke1}`,
   },
-  editorGroup: {
-    flexBasis: '100%',
-  },
   muted: {
     color: tokens.colorNeutralForeground3,
   },
@@ -142,15 +139,27 @@ export default function UserFilterBar({ filter, onChange, echoNames }: UserFilte
   const [editing, setEditing] = useState<number | 'new' | null>(null);
   const [newJoin, setNewJoin] = useState<UserFilterJoin>('and');
 
+  // The key of the last filter this bar produced itself, so the effect below can tell its own changes
+  // from one made elsewhere.
+  const emittedKey = useRef<string | null>(null);
+  const emit = (next: UserFilter) => {
+    emittedKey.current = userFilterKey(next);
+    onChange(next);
+  };
+
   // A change made elsewhere - the domain table's Filter button, a different ?filter= link - while a
   // condition is open would leave the editor holding a draft of a clause that has moved or gone, and
-  // Apply would write that stale draft over whatever now sits at its index. Close it instead.
+  // Apply would write that stale draft over whatever now sits at its index. Close it instead. The
+  // bar's own changes are exempt: switching a connector moves no condition, so the draft is still a
+  // draft of the condition at its index, and discarding it would throw away work for nothing.
   const filterKey = userFilterKey(filter);
   const lastFilterKey = useRef(filterKey);
   useEffect(() => {
     if (lastFilterKey.current === filterKey) return;
     lastFilterKey.current = filterKey;
-    setEditing((current) => (typeof current === 'number' ? null : current));
+    const own = emittedKey.current === filterKey;
+    emittedKey.current = null;
+    if (!own) setEditing((current) => (typeof current === 'number' ? null : current));
   }, [filterKey]);
 
   const dimensions: UserFilterDimension[] = list?.dimensions ?? [];
@@ -164,19 +173,28 @@ export default function UserFilterBar({ filter, onChange, echoNames }: UserFilte
 
   const tooLong = (candidate: UserFilter) => (fitsLimits(candidate) ? null : t('userFilter.editor.tooLong'));
 
+  // The filter an editor's draft would produce. The connector belongs to the bar, not the editor: it
+  // can be switched while the condition is open, and the editor's copy is the one it opened with.
+  const withDraft = (index: number | 'new', draft: UserFilterClause) =>
+    index === 'new'
+      ? addClause(filter, { ...draft, join: newJoin })
+      : replaceClause(filter, index, { ...draft, join: clauses[index]?.join ?? draft.join });
+
   const startAdding = () => {
     setNewJoin('and');
     setEditing('new');
   };
 
   const apply = (index: number | 'new', clause: UserFilterClause) => {
-    onChange(index === 'new' ? addClause(filter, { ...clause, join: newJoin }) : replaceClause(filter, index, clause));
+    emit(withDraft(index, clause));
     setEditing(null);
   };
 
   const remove = (index: number) => {
-    onChange(removeClause(filter, index));
-    setEditing(null);
+    emit(removeClause(filter, index));
+    // Removing a condition renumbers the ones after it, so an open condition's draft would no longer
+    // match its index. A condition still being added has no index yet, and is kept.
+    setEditing((current) => (current === 'new' ? current : null));
   };
 
   const joinMenu = (join: UserFilterJoin, onSelect: (join: UserFilterJoin) => void, key: string) => {
@@ -211,9 +229,10 @@ export default function UserFilterBar({ filter, onChange, echoNames }: UserFilte
 
   const pill = (clause: UserFilterClause, index: number) => {
     const described = condition(clause);
+    const open = editing === index;
     return (
       <Tooltip key={`pill-${index}`} content={described} relationship="description">
-        <InteractionTag shape="rounded" size="small" appearance="outline">
+        <InteractionTag shape="rounded" size="small" appearance={open ? 'brand' : 'outline'}>
           <InteractionTagPrimary
             icon={<DimensionCue kind={isCustomDimension(clause.dimension) ? 'custom' : 'entra'} />}
             hasSecondaryAction
@@ -221,10 +240,11 @@ export default function UserFilterBar({ filter, onChange, echoNames }: UserFilte
             // reads as symbols. Fluent labels the remove button with this plus its own label.
             aria-label={described}
             aria-description={t('userFilter.bar.editHint')}
+            aria-expanded={open}
             // Editing needs the attribute list; without it the editor could only claim, wrongly, that
             // the attribute no longer exists. The condition can still be removed.
             onClick={() => {
-              if (list) setEditing(index);
+              if (list) setEditing(open ? null : index);
             }}
           >
             <span className={styles.pillLabel}>{dimensionLabel(t, clause.dimension, source)}</span>{' '}
@@ -237,24 +257,19 @@ export default function UserFilterBar({ filter, onChange, echoNames }: UserFilte
     );
   };
 
-  const editor = (clause: UserFilterClause, index: number | 'new') => (
+  const editor = (index: number | 'new') => (
     <UserFilterClauseEditor
       key={`editor-${index}`}
-      clause={clause}
+      clause={index === 'new' ? newClause('') : clauses[index]}
       dimensions={dimensions}
       isNew={index === 'new'}
       echoNames={echoNames}
       onApply={(next) => apply(index, next)}
       onCancel={() => setEditing(null)}
       onRemove={index === 'new' ? undefined : () => remove(index)}
-      validate={(draft) =>
-        tooLong(index === 'new' ? addClause(filter, { ...draft, join: newJoin }) : replaceClause(filter, index, draft))
-      }
+      validate={(draft) => tooLong(withDraft(index, draft))}
     />
   );
-
-  const item = (index: number) =>
-    editing === index ? editor(clauses[index], index) : pill(clauses[index], index);
 
   const canAdd = clauses.length < MAX_CLAUSES && !!list;
 
@@ -273,22 +288,19 @@ export default function UserFilterBar({ filter, onChange, echoNames }: UserFilte
         {groups.flatMap((group, g) => {
           const content = group.flatMap((index, position) => [
             ...(position > 0
-              ? [joinMenu(clauses[index].join, (join) => onChange(setJoin(filter, index, join)), `join-${index}`)]
+              ? [joinMenu(clauses[index].join, (join) => emit(setJoin(filter, index, join)), `join-${index}`)]
               : []),
-            item(index),
+            pill(clauses[index], index),
           ]);
 
-          const orJoin = g > 0 ? [joinMenu('or', (join) => onChange(setJoin(filter, group[0], join)), `or-${group[0]}`)] : [];
+          const orJoin = g > 0 ? [joinMenu('or', (join) => emit(setJoin(filter, group[0], join)), `or-${group[0]}`)] : [];
 
           // Drawn as a box only when there is more than one group - the one case where the reader has
           // to know that AND binds tighter than OR to read the filter correctly.
           return grouped
             ? [
                 ...orJoin,
-                <span
-                  key={`group-${group[0]}`}
-                  className={mergeClasses(styles.group, typeof editing === 'number' && group.includes(editing) && styles.editorGroup)}
-                >
+                <span key={`group-${group[0]}`} className={styles.group}>
                   {content}
                 </span>,
               ]
@@ -296,22 +308,28 @@ export default function UserFilterBar({ filter, onChange, echoNames }: UserFilte
         })}
 
         {editing === 'new' && clauses.length > 0 && joinMenu(newJoin, setNewJoin, 'join-new')}
-        {editing === 'new' && editor(newClause(''), 'new')}
+        {editing === 'new' && editor('new')}
 
-        {editing !== 'new' && (
+        {editing === null && (
           <Button size="small" appearance="subtle" icon={<Add16Regular />} onClick={startAdding} disabled={!canAdd}>
             {t('userFilter.bar.addFilter')}
           </Button>
         )}
 
         {clauses.length > 0 && editing === null && (
-          <Button size="small" appearance="subtle" onClick={() => onChange({ clauses: [] })}>
+          <Button size="small" appearance="subtle" onClick={() => emit({ clauses: [] })}>
             {t('userFilter.bar.clearAll')}
           </Button>
         )}
 
         {loading && !list && <Text size={200} className={styles.muted}>{t('userFilter.bar.loadingDimensions')}</Text>}
       </div>
+
+      {/* An existing condition is edited here, under the pills, rather than in place of its pill. The
+          connectors stay usable while it is open, and switching one regroups the pills; an editor
+          inside a group would be remounted by that regrouping and lose the draft it holds. Its pill
+          stays highlighted, so the reader can see which condition this is. */}
+      {typeof editing === 'number' && clauses[editing] && editor(editing)}
 
       {/* Read back only when there are OR groups - the one case where the reader has to know that
           AND binds tighter than OR to read the pills correctly. A plain AND chain reads left to

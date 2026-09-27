@@ -173,9 +173,10 @@ namespace Common.Entities.CopilotAdoption
                 CoworkSignals = Narrow(analysis.CoworkSignals, s => s.UserId, s => s.EmailDomain, scope),
                 // Only a complete assessment can vouch for an empty slice. When the Cowork query hit its
                 // row cap, the people a slice selects may simply have been cut off, and "0 candidates"
-                // would be a claim about people nobody assessed.
-                CoworkAssessedForWholePopulation = tenant.CoworkReadinessAvailable
-                    && (analysis.CoworkSignals?.Count ?? 0) < (tenant.Options?.MaxCoworkUsersScored ?? int.MaxValue),
+                // would be a claim about people nobody assessed - so that case is flagged separately and
+                // explained rather than shown as zero or as a missing import.
+                CoworkAssessedForWholePopulation = tenant.CoworkReadinessAvailable && !CoworkCapped(analysis, tenant),
+                CoworkAssessmentCapped = tenant.CoworkReadinessAvailable && CoworkCapped(analysis, tenant),
                 UnlicensedUsers = Narrow(analysis.UnlicensedUsers, u => u.UserId, u => u.EmailDomain, scope),
             };
         }
@@ -363,6 +364,11 @@ namespace Common.Entities.CopilotAdoption
                 scoped.Unlicensed.UsageByApp = tenant.Unlicensed.UsageByApp;
                 scoped.Unlicensed.Truncated = tenant.Unlicensed.Truncated;
             }
+        }
+
+        private static bool CoworkCapped(CopilotAdoptionAnalysis analysis, CopilotAdoptionSummary tenant)
+        {
+            return (analysis.CoworkSignals?.Count ?? 0) >= (tenant.Options?.MaxCoworkUsersScored ?? int.MaxValue);
         }
 
         private static List<T> Narrow<T>(List<T> rows, Func<T, int> userIdOf, Func<T, string> domainOf, CopilotAdoptionScope scope)

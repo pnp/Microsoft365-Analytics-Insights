@@ -250,6 +250,27 @@ describe('CoworkPanel', () => {
     expect(fetchCowork).not.toHaveBeenCalled();
   });
 
+  it('explains a filtered slice the capped assessment never reached, instead of blaming an import', () => {
+    // A filter on a tenant whose Cowork assessment stopped at its row cap can select only people
+    // who were cut off. Unknown, not zero - and not a missing import either. (In English the page
+    // shows the server's own sentence; the Spanish catalog entry is checked by the i18n gates.)
+    render(
+      summary({
+        coworkReadinessAvailable: false,
+        warnings: [
+          'Cowork readiness scores at most 50,000 seat holders, ranked by coordination load, and this tenant reached that limit. Nobody in this filtered population made the list, so there is nothing to show here. This is NOT a missing import: the Cowork assessment ran. Widen the filter, or read the Cowork tab for the whole tenant.',
+        ],
+        warningDetails: [{ key: 'coworkSliceNotAssessed', values: { maxUsers: 50000 } }],
+      }),
+    );
+
+    expect(screen.getByText(/could not be assessed/)).toBeTruthy();
+    expect(screen.getByText(/scores at most 50,000 seat holders/)).toBeTruthy();
+    expect(screen.getByText(/NOT a missing import/)).toBeTruthy();
+    expect(screen.queryByText(/usage report/i)).toBeNull();
+    expect(fetchCowork).not.toHaveBeenCalled();
+  });
+
   it('says Cowork has no licence of its own, beside the list it produces', async () => {
     const user = userEvent.setup();
     render(summary());

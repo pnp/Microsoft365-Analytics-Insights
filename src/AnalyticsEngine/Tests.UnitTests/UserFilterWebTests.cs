@@ -98,7 +98,9 @@ namespace Tests.UnitTests
             Assert.IsFalse(waiting.IsCompleted, "Past the usable window the request waits for the new read.");
 
             var fresh = Snapshot("new");
-            loader.Complete(fresh);
+            // By index: the new read starts on the thread pool, so "the latest" can still be the old,
+            // already-completed one for a moment - which is how this test failed under a loaded host.
+            loader.Complete(fresh, callIndex: 1);
             Assert.AreSame(fresh, await waiting.TimeoutAfter(Wait));
         }
 

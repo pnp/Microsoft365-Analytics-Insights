@@ -191,7 +191,9 @@ namespace Tests.UnitTests
                 "Reaching the chosen manager again round the cycle does not put them below themselves.");
 
             var sizes = UserFilterCatalogue.ListValues(snapshot, UserFilterDimensions.ManagementChain, null, 10);
-            Assert.IsTrue(sizes.Values.All(v => v.People <= 3), "A cycle must not inflate an organisation's size without bound.");
+            Assert.AreEqual(3, sizes.Values.Count);
+            Assert.IsTrue(sizes.Values.All(v => v.People == 2),
+                "Each person on the cycle has the other two below them - no more, however often a walk goes round.");
         }
 
         [TestMethod]
@@ -408,6 +410,59 @@ namespace Tests.UnitTests
             Assert.AreEqual("ceo@contoso.com", chain.Values[0].Value);
             Assert.AreEqual(4, chain.Values[0].People, "The director, both of the director's reports and the engineer.");
             Assert.AreEqual(2, chain.Values.Single(v => v.Value == "director@contoso.com").People);
+        }
+
+        [TestMethod]
+        public void Catalogue_CountsADeepOrganisationInFull()
+        {
+            // 150 levels. A count that stops at some depth would put fewer people beside the top manager
+            // in the picker than choosing them then selects.
+            var builder = new UserDirectorySnapshotBuilder();
+            builder.AddUser(new UserDirectoryEntry { UserId = 1, UserPrincipalName = "top@contoso.com" });
+            for (var id = 2; id <= 150; id++)
+            {
+                builder.AddUser(new UserDirectoryEntry { UserId = id, UserPrincipalName = "level" + id + "@contoso.com", ManagerUserId = id - 1 });
+            }
+            var snapshot = builder.Build(Loaded);
+
+            var chain = UserFilterCatalogue.ListValues(snapshot, UserFilterDimensions.ManagementChain, null, 200);
+
+            Assert.AreEqual("top@contoso.com", chain.Values[0].Value);
+            Assert.AreEqual(149, chain.Values[0].People);
+            Assert.AreEqual(1, chain.Values.Single(v => v.Value == "level149@contoso.com").People);
+        }
+
+        [TestMethod]
+        public void Catalogue_ChainCounts_AreWhatChoosingThatManagerSelects_CyclesIncluded()
+        {
+            // A two-person cycle with an organisation hanging off it, beside an ordinary tree. Every count
+            // in the picker must be exactly the number of people that choosing the manager then selects.
+            var builder = new UserDirectorySnapshotBuilder();
+            builder.AddUser(new UserDirectoryEntry { UserId = 1, UserPrincipalName = "a@contoso.com", ManagerUserId = 2 });
+            builder.AddUser(new UserDirectoryEntry { UserId = 2, UserPrincipalName = "b@contoso.com", ManagerUserId = 1 });
+            builder.AddUser(new UserDirectoryEntry { UserId = 3, UserPrincipalName = "c@contoso.com", ManagerUserId = 1 });
+            builder.AddUser(new UserDirectoryEntry { UserId = 4, UserPrincipalName = "d@contoso.com", ManagerUserId = 3 });
+            builder.AddUser(new UserDirectoryEntry { UserId = 5, UserPrincipalName = "e@contoso.com", ManagerUserId = 4 });
+            builder.AddUser(new UserDirectoryEntry { UserId = 6, UserPrincipalName = "f@contoso.com", ManagerUserId = 2 });
+            builder.AddUser(new UserDirectoryEntry { UserId = 10, UserPrincipalName = "root@contoso.com" });
+            builder.AddUser(new UserDirectoryEntry { UserId = 11, UserPrincipalName = "x@contoso.com", ManagerUserId = 10 });
+            builder.AddUser(new UserDirectoryEntry { UserId = 12, UserPrincipalName = "y@contoso.com", ManagerUserId = 11 });
+            var snapshot = builder.Build(Loaded);
+
+            var chain = UserFilterCatalogue.ListValues(snapshot, UserFilterDimensions.ManagementChain, null, 50);
+
+            Assert.AreEqual(6, chain.Values.Count, "a, b, c, d, root and x each manage someone.");
+            foreach (var value in chain.Values)
+            {
+                var filter = UserFilterCompiler.Compile(
+                    UserFilterCodec.Parse("[{\"d\":\"managementChain\",\"v\":[\"" + value.Value + "\"]}]"), snapshot);
+                Assert.AreEqual(filter.MatchedPeople, value.People, value.Value);
+            }
+
+            Assert.AreEqual(5, chain.Values.Single(v => v.Value == "a@contoso.com").People, "The whole organisation but a.");
+            Assert.AreEqual(5, chain.Values.Single(v => v.Value == "b@contoso.com").People);
+            Assert.AreEqual(2, chain.Values.Single(v => v.Value == "c@contoso.com").People, "d and e.");
+            Assert.AreEqual(2, chain.Values.Single(v => v.Value == "root@contoso.com").People);
         }
 
         #region Fixture

@@ -143,9 +143,9 @@ export interface UserFilterClauseEditorProps {
  * Edits one condition: property, operator and values - the three boxes Azure Monitor's metric
  * filter uses, because admins already know how to read them.
  *
- * Shown in place, where the condition's pill sits, rather than in a pop-over: it carries two
- * drop-downs of its own, and a pop-over that closes when one of them is clicked is the most common
- * way this kind of editor becomes unusable.
+ * Shown inline in the bar - under the pills for an existing condition, after them for a new one -
+ * rather than in a pop-over: it carries two drop-downs of its own, and a pop-over that closes when
+ * one of them is clicked is the most common way this kind of editor becomes unusable.
  */
 export default function UserFilterClauseEditor({
   clause,
@@ -174,6 +174,13 @@ export default function UserFilterClauseEditor({
   const [attempted, setAttempted] = useState(false);
   const [serverSearch, setServerSearch] = useState('');
   const valuesInput = useRef<HTMLInputElement>(null);
+  const propertyButton = useRef<HTMLButtonElement>(null);
+
+  // An existing condition opens under the pills, not where its pill sits, so take the reader to it.
+  // A new one needs no help: its property list opens by itself.
+  useEffect(() => {
+    if (!isNew) propertyButton.current?.focus();
+  }, [isNew]);
 
   const selected = dimensions.find((d) => d.key === dimension) ?? null;
   const unknownDimension = dimension !== '' && selected === null;
@@ -309,6 +316,7 @@ export default function UserFilterClauseEditor({
       <div className={styles.fields}>
         <Field label={t('userFilter.editor.property')}>
           <Dropdown
+            ref={propertyButton}
             aria-label={t('userFilter.editor.property')}
             placeholder={t('userFilter.editor.selectProperty')}
             value={dimension ? dimensionLabel(t, dimension, source) : ''}

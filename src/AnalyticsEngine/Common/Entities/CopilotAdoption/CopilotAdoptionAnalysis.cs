@@ -70,6 +70,13 @@ namespace Common.Entities.CopilotAdoption
         public bool CoworkAssessedForWholePopulation { get; set; }
 
         /// <summary>
+        /// True when this analysis is a slice of one whose Cowork assessment ran but stopped at
+        /// <see cref="CopilotAdoptionOptions.MaxCoworkUsersScored"/>, so an empty slice means "not
+        /// assessed" - neither a measured zero nor a missing import - and is explained as such.
+        /// </summary>
+        public bool CoworkAssessmentCapped { get; set; }
+
+        /// <summary>
         /// The queries that produced this analysis, keyed by a short name, for the SQL popover the rest
         /// of the admin site uses. Showing the working is part of the point: these numbers get quoted
         /// in licence negotiations, so an admin has to be able to verify them independently.

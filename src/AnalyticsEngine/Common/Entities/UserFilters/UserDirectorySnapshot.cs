@@ -306,9 +306,6 @@ namespace Common.Entities.UserFilters
     /// </remarks>
     public sealed class UserDirectorySnapshotBuilder
     {
-        /// <summary>How far up a management chain the report counts will walk before assuming a cycle.</summary>
-        private const int MaxChainDepth = 64;
-
         private static readonly string[] TextDimensions =
         {
             UserFilterDimensions.Department,
@@ -487,35 +484,85 @@ namespace Common.Entities.UserFilters
         }
 
         /// <summary>
-        /// How many people report to each manager at any level. Walks up from every person, so the cost
-        /// is the population times the depth of the tree - a few million steps at 200,000 people.
+        /// How many people report to each manager at any level - exactly the people
+        /// <see cref="UserDirectorySnapshot.RowsReportingTo"/> selects for that manager, however deep.
         /// </summary>
+        /// <remarks>
+        /// <para>Linear whatever the shape of the tree. Each person's organisation is added to their
+        /// manager's once, leaves first (Kahn's algorithm over the reports-to graph), so a hierarchy 5,000
+        /// levels deep costs what a flat one does. Walking up from every person instead costs the
+        /// population times the depth, and a cap on that depth undercounts a deep hierarchy - the number
+        /// beside a manager in the picker would disagree with the number the filter then selects.</para>
+        /// <para>Entra does not prevent a cycle (A reports to B, B to A), and everyone has at most one
+        /// manager, so a cycle sits at the top of everything that hangs off it: every person in that
+        /// organisation reports up into it, and round it. The leaves-first pass never reaches the people
+        /// on a cycle, because none of them runs out of reports; each is then given the whole of that
+        /// organisation, which is what the chain selects for them.</para>
+        /// </remarks>
         private static int[] CountOrganisationSizes(int[] managerRowByRow, UserDirectoryColumn managerColumn, int[] managerRowByValue)
         {
-            var sizes = new int[managerColumn.Values.Count];
-            var valueByManagerRow = new Dictionary<int, int>(managerRowByValue.Length);
-            for (var i = 0; i < managerRowByValue.Length; i++)
+            var count = managerRowByRow.Length;
+
+            // Each row's organisation, the row itself included, and how many of its direct reports have
+            // yet to be added to it.
+            var organisation = new int[count];
+            var pendingReports = new int[count];
+            for (var row = 0; row < count; row++)
             {
-                if (managerRowByValue[i] >= 0 && !valueByManagerRow.ContainsKey(managerRowByValue[i]))
-                {
-                    valueByManagerRow.Add(managerRowByValue[i], i);
-                }
+                organisation[row] = 1;
+                if (managerRowByRow[row] >= 0) pendingReports[managerRowByRow[row]]++;
             }
 
-            var visited = new HashSet<int>();
-            for (var row = 0; row < managerRowByRow.Length; row++)
+            var ready = new Queue<int>();
+            for (var row = 0; row < count; row++)
             {
-                visited.Clear();
-                var current = managerRowByRow[row];
-                var depth = 0;
+                if (pendingReports[row] == 0) ready.Enqueue(row);
+            }
 
-                // A cycle would otherwise count the same person again and again; the visited set stops
-                // it at the first repeat, and the depth cap bounds a pathological chain regardless.
-                while (current >= 0 && depth++ < MaxChainDepth && visited.Add(current))
+            var settled = new bool[count];
+            while (ready.Count > 0)
+            {
+                var row = ready.Dequeue();
+                settled[row] = true;
+
+                var manager = managerRowByRow[row];
+                if (manager < 0) continue;
+
+                organisation[manager] += organisation[row];
+                if (--pendingReports[manager] == 0) ready.Enqueue(manager);
+            }
+
+            // Whatever is left is on a cycle - with at most one manager each, nothing else can be. Walking
+            // up from any of them goes round their cycle and back, so each cycle is visited twice: once to
+            // total the organisations hanging off it, once to give every person on it that total.
+            for (var row = 0; row < count; row++)
+            {
+                if (settled[row]) continue;
+
+                var total = 0;
+                var current = row;
+                do
                 {
-                    if (current != row && valueByManagerRow.TryGetValue(current, out var valueIndex)) sizes[valueIndex]++;
+                    total += organisation[current];
                     current = managerRowByRow[current];
                 }
+                while (current != row);
+
+                do
+                {
+                    organisation[current] = total;
+                    settled[current] = true;
+                    current = managerRowByRow[current];
+                }
+                while (current != row);
+            }
+
+            // The chain excludes the manager themselves.
+            var sizes = new int[managerColumn.Values.Count];
+            for (var i = 0; i < sizes.Length; i++)
+            {
+                var managerRow = i < managerRowByValue.Length ? managerRowByValue[i] : -1;
+                sizes[i] = managerRow >= 0 ? organisation[managerRow] - 1 : 0;
             }
 
             return sizes;

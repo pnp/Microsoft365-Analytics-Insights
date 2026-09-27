@@ -2070,6 +2070,21 @@ namespace Common.Entities.CopilotAdoption
                 // Left explicitly unavailable rather than published as a set of zeros. "0 prime candidates"
                 // is a finding; "this analysis did not run" is a fault, and the tab has to tell them apart.
                 summary.CoworkReadinessAvailable = false;
+
+                // A slice of an assessment that stopped at its row cap: unknown, and said so - otherwise
+                // the unavailable card would send the reader to check imports that are working. The cap
+                // quoted is the one the tenant assessment ran with, which the seeded summary carries.
+                if (analysis.CoworkAssessmentCapped)
+                {
+                    CopilotAdoptionWarnings.Add(
+                        summary,
+                        CopilotAdoptionWarningKeys.CoworkSliceNotAssessed,
+                        new Dictionary<string, object>
+                        {
+                            { "maxUsers", summary.Options?.MaxCoworkUsersScored ?? _options.MaxCoworkUsersScored },
+                        });
+                }
+
                 return;
             }
 

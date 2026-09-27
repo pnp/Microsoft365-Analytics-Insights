@@ -141,6 +141,14 @@ namespace Tests.UnitTests
 
             Assert.IsTrue(analysis.Summary.CoworkReadinessAvailable);
             Assert.IsFalse(scoped.Summary.CoworkReadinessAvailable);
+
+            // ...and says why, so the Cowork tab explains the cap instead of blaming an import that is
+            // working. The tenant view is not a slice, so it never carries this warning.
+            var detail = scoped.Summary.WarningDetails.SingleOrDefault(d => d.Key == CopilotAdoptionWarningKeys.CoworkSliceNotAssessed);
+            Assert.IsNotNull(detail, "An empty slice of a capped assessment must be explained.");
+            Assert.AreEqual(8, Convert.ToInt32(detail.Values["maxUsers"]), "The cap quoted is the one the tenant assessment ran with.");
+            Assert.AreEqual(scoped.Summary.Warnings.Count, scoped.Summary.WarningDetails.Count, "Warnings and details stay index-aligned.");
+            Assert.IsFalse(analysis.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.CoworkSliceNotAssessed));
         }
 
         [TestMethod]
@@ -177,6 +185,8 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, scoped.Summary.CoworkScoredUsers);
             Assert.AreEqual(CopilotAdoptionScoring.AllCoworkTiers.Count(), scoped.Summary.CoworkTiers.Count);
             Assert.IsTrue(scoped.Summary.CoworkTiers.All(t => t.Users == 0));
+            Assert.IsFalse(scoped.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.CoworkSliceNotAssessed),
+                "A complete assessment vouches for the zero; there is nothing to explain.");
         }
 
         [TestMethod]
