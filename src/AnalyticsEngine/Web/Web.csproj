@@ -56,6 +56,21 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Azure.Messaging.ServiceBus">
+      <Version>7.20.2</Version>
+    </PackageReference>
+    <!-- These three used to arrive transitively through the installer and importer engine references.
+         Pinned here so the web app keeps the versions its binding redirects in Web.Template.config
+         point at; without them NuGet resolves older ones and the redirects fail at runtime. -->
+    <PackageReference Include="Microsoft.Identity.Client">
+      <Version>4.88.0</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect">
+      <Version>8.18.0</Version>
+    </PackageReference>
+    <PackageReference Include="System.IO.Hashing">
+      <Version>10.0.3</Version>
+    </PackageReference>
     <PackageReference Include="Microsoft.Data.SqlClient">
       <Version>6.1.4</Version>
     </PackageReference>
@@ -82,9 +97,6 @@
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions">
       <Version>10.0.11</Version>
-    </PackageReference>
-    <PackageReference Include="Microsoft.Graph.Core">
-      <Version>4.0.1</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.Owin.Host.SystemWeb">
       <Version>4.2.3</Version>
@@ -254,6 +266,8 @@
     <Compile Include="Models\ProfilingStatusModels.cs" />
     <Compile Include="Models\ReportsModels.cs" />
     <Compile Include="Models\SystemStatus.cs" />
+    <Compile Include="Models\Calls\CallNotificationServiceBus.cs" />
+    <Compile Include="Models\Calls\GraphRestCallRecordSubscriptionReader.cs" />
     <Compile Include="Models\Health\HealthDataSectionRules.cs" />
     <Compile Include="Models\Health\HealthModels.cs" />
     <Compile Include="Models\Health\HealthService.cs" />
@@ -299,10 +313,6 @@
     <Folder Include="Scripts\portal\build\" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\App.ControlPanel.Engine\App.ControlPanel.Engine.csproj">
-      <Project>{b9be1134-f5fe-41a9-9498-f411261d9a9c}</Project>
-      <Name>App.ControlPanel.Engine</Name>
-    </ProjectReference>
     <ProjectReference Include="..\Common\DataUtils\DataUtils.csproj">
       <Project>{B8DA83AC-9151-4922-B255-12D105B33DC6}</Project>
       <Name>Common.DataUtils</Name>
@@ -310,10 +320,6 @@
     <ProjectReference Include="..\Common\Entities\Entities.csproj">
       <Project>{637930BD-073B-421E-9F33-FE90BF2103C5}</Project>
       <Name>Common.Entities</Name>
-    </ProjectReference>
-    <ProjectReference Include="..\WebJob.Office365ActivityImporter.Engine\WebJob.Office365ActivityImporter.Engine.csproj">
-      <Project>{1919BDE6-C311-426D-ADB3-A1487133E397}</Project>
-      <Name>WebJob.Office365ActivityImporter.Engine</Name>
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>

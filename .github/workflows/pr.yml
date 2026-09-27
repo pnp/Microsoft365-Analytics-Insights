@@ -17,6 +17,7 @@ on:
       - src/SPO/AITracker/**
       - reports/**
       - .github/workflows/pr.yml
+      - .github/scripts/Build-ReleasePackage.ps1
   workflow_dispatch:
 
 env:
@@ -29,10 +30,6 @@ env:
   TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
   CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
   CognitiveKey: ${{ secrets.APP_COGNITIVEKEY}}
-  CosmosDbTestContainerCurrent: stats
-  CosmosDbTestContainerHistory: history
-  CosmosDbTestDatabaseName: UnitTestDevOps
-  CosmosDb: ${{ secrets.APP_COSMOSDB }}
   redis: ${{ secrets.CONNECTIONSTRINGS_REDIS }}
   ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
   Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
@@ -139,8 +136,12 @@ jobs:
           Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\AppInsightsImporter\_PublishedWebsites"
           Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Office365ActivityImporter\_PublishedWebsites"
           Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Website\_PublishedWebsites\Web\bin\Scripts"
-          Compress-Archive -Force -Path "${{ runner.temp }}\${{ matrix.project.compressFolder }}" `
-          -DestinationPath "${{ env.folder }}\${{ matrix.project.outDir }}.zip"
+          # Same packaging as ci.yml, so a PR build fails here if it would ship a dependency that
+          # doesn't belong in a package.
+          ./.github/scripts/Build-ReleasePackage.ps1 `
+            -Path "${{ runner.temp }}\${{ matrix.project.compressFolder }}" `
+            -Package "${{ matrix.project.outDir }}" `
+            -DestinationPath "${{ env.folder }}\${{ matrix.project.outDir }}.zip"
         env:
           folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
 

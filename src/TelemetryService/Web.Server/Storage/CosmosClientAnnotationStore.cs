@@ -1,10 +1,8 @@
 using Microsoft.Azure.Cosmos;
-using System;
-using System.Collections.Generic;
 using System.Net;
-using System.Threading.Tasks;
+using UsageReporting;
 
-namespace UsageReporting
+namespace Web.Storage
 {
     /// <summary>
     /// Cosmos-backed <see cref="IClientAnnotationStore"/>.
@@ -47,7 +45,7 @@ namespace UsageReporting
             return results;
         }
 
-        public async Task<ClientAnnotation> GetAsync(string anonClientId)
+        public async Task<ClientAnnotation?> GetAsync(string anonClientId)
         {
             if (string.IsNullOrWhiteSpace(anonClientId)) return null;
 
