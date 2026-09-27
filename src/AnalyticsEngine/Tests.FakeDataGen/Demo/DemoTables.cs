@@ -78,6 +78,7 @@ namespace Tests.FakeDataGen.Demo
         private static List<DemoTable> Tables => _tables ?? (_tables = new List<DemoTable>());
         public static IReadOnlyList<DemoTable> All => Tables;
         private static DemoColumn I(string name) => new DemoColumn(name, SqlDbType.Int);
+        private static DemoColumn Y(string name) => new DemoColumn(name, SqlDbType.TinyInt);
         private static DemoColumn L(string name) => new DemoColumn(name, SqlDbType.BigInt);
         private static DemoColumn B(string name) => new DemoColumn(name, SqlDbType.Bit);
         private static DemoColumn D(string name) => new DemoColumn(name, SqlDbType.DateTime);
@@ -106,6 +107,9 @@ namespace Tests.FakeDataGen.Demo
         public static readonly DemoTable Offices = Named("user_office_locations");
         public static readonly DemoTable UsageLocations = Named("user_usage_locations");
         public static readonly DemoTable Licences = T("license_types", true, I("id"), N("name"), N("sku_id", 400));
+        public static readonly DemoTable UserOrgTypes = T("user_org_types", true, I("id"), N("name"), Y("source_kind"),
+            N("entra_attribute_name", 200), B("is_enabled"), I("source_generation"), D("last_refreshed_utc"));
+        public static readonly DemoTable UserOrgValues = T("user_org_values", true, I("id"), I("org_type_id"), N("name", 848));
         public static readonly DemoTable Operations = T("event_operations", true, I("id"), A("operation_name", 250));
         public static readonly DemoTable Agents = T("copilot_agents", true, I("id"), N("name"), N("agent_id", 400), B("is_custom_agent"));
         public static readonly DemoTable Sites = T("sites", true, I("id"), N("url_base", 500), N("site_id"));
@@ -134,6 +138,8 @@ namespace Tests.FakeDataGen.Demo
             I("company_name_id"), I("job_title_id"), I("state_or_province_id"), I("country_or_region_id"),
             I("office_location_id"), I("usage_location_id"), I("manager_id"));
         public static readonly DemoTable Assignments = T("user_license_type_lookups", false, I("user_id"), I("license_type_id"));
+        public static readonly DemoTable UserOrgAssignments = T("user_org_assignments", false,
+            I("user_id"), I("org_type_id"), I("org_value_id"), D("last_updated_utc"));
         public static readonly DemoTable Sessions = T("sessions", true, I("id"), A("ai_session_id", 50), I("user_id"));
         public static readonly DemoTable InteractionSessions = T("copilot_interaction_sessions", true,
             I("id"), N("session_ref", 450), I("user_id"));
