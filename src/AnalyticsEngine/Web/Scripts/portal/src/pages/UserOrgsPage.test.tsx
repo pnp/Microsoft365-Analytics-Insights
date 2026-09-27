@@ -105,6 +105,40 @@ describe('UserOrgsPage', () => {
     expect(within(rowFor('Division')).queryByRole('button', { name: /View the/ })).not.toBeInTheDocument();
   });
 
+  it('shows what the file should look like when a CSV type is being created', async () => {
+    // "A CSV file uploaded here" is a decision about what file to go and generate, taken before the
+    // upload card exists - so the example has to be in the dialog, headed with the type's own name.
+    fetchOrgTypes.mockResolvedValue([]);
+    const user = userEvent.setup();
+    renderWithProvider(<UserOrgsPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'New organisation type' }));
+    // `hidden: true` because of a jsdom artefact, not the page: with no layout, tabster finds nothing
+    // focusable in the dialog, never activates its modalizer, and marks the dialog itself
+    // aria-hidden. The queries below go by label and text for the same reason.
+    const dialog = await screen.findByRole('dialog', { hidden: true });
+    expect(within(dialog).queryByLabelText('Example file')).not.toBeInTheDocument();
+    // The organisation types ARE a report filter now; the hint must not say otherwise.
+    expect(within(dialog).getByText(/as a property in the Copilot Adoption report's filter/)).toBeInTheDocument();
+
+    await user.type(within(dialog).getByLabelText(/^Name/), 'Programme');
+    await user.click(within(dialog).getByLabelText('A CSV file uploaded here'));
+
+    expect(within(dialog).getByLabelText('Example file').textContent?.split('\n')[0]).toBe('UserPrincipalName,Programme');
+    expect(within(dialog).getByText(/The header row is optional/)).toBeInTheDocument();
+  });
+
+  it('keeps the file format one click away on the upload card', async () => {
+    fetchOrgTypes.mockResolvedValue([
+      orgType({ id: 2, name: 'Business Unit', source: 'csv', entraAttributeName: null }),
+    ]);
+    renderWithProvider(<UserOrgsPage />);
+
+    const summary = await screen.findByText('What the file should look like');
+    expect(summary.tagName).toBe('SUMMARY');
+    expect(screen.getByLabelText('Example file').textContent?.split('\n')[0]).toBe('UserPrincipalName,Business Unit');
+  });
+
   it('shows when each type was last refreshed', async () => {
     fetchOrgTypes.mockResolvedValue([
       orgType({ id: 1, name: 'Cost Centre', lastRefreshedUtc: '2026-03-04T05:06:00.000Z' }),

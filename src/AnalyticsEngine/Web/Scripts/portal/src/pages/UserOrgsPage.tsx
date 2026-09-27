@@ -22,6 +22,7 @@ import {
 import { Add20Regular, Delete16Regular, Edit16Regular } from '@fluentui/react-icons';
 import Spinner from '../components/Spinner';
 import toast from '../components/toast';
+import CsvFileFormat from '../components/userOrgs/CsvFileFormat';
 import CsvImportPanel from '../components/userOrgs/CsvImportPanel';
 import OrgMembersBrowser from '../components/userOrgs/OrgMembersBrowser';
 import OrgTypeDialog from '../components/userOrgs/OrgTypeDialog';
@@ -298,6 +299,7 @@ export default function UserOrgsPage() {
             <Text block className={styles.muted}>
               {t('userOrgs.import.cardIntro')}
             </Text>
+            <CsvFileFormat typeName={type.name} collapsed />
             <CsvImportPanel orgType={type} onImportFinished={load} />
           </Card>
         ))}

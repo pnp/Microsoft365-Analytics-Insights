@@ -70,12 +70,28 @@ export const userOrgs = {
   'userOrgs.import.cardIntro':
     "A CSV with a user column and an organisation column, in either order. A row with a blank organisation clears that user's value.",
 
+  // What an uploaded file looks like - shown when a CSV type is created, and beside its upload
+  'userOrgs.csvFormat.title': 'What the file should look like',
+  'userOrgs.csvFormat.intro':
+    "Two columns: each person's user principal name, and the value they have for this type. For example:",
+  'userOrgs.csvFormat.defaultColumn': 'Organisation',
+  'userOrgs.csvFormat.example':
+    'UserPrincipalName,{column}\nalex.wilber@contoso.com,Finance\nmegan.bowen@contoso.com,Research & Development\nadele.vance@contoso.com,',
+  'userOrgs.csvFormat.exampleAria': 'Example file',
+  'userOrgs.csvFormat.ruleHeader':
+    'The header row is optional, and the two columns can be in either order. The user column is recognised by a header such as UserPrincipalName, UPN, User or Email; with no header row, the first column is taken as the user and the second as the value.',
+  'userOrgs.csvFormat.ruleSeparator':
+    'Separate the columns with commas, semicolons, tabs or pipes - the separator is detected. Save the file as UTF-8 ("CSV UTF-8" in Excel) so accented and non-Latin names arrive intact.',
+  'userOrgs.csvFormat.ruleBlank': "A row with no value, like the last one above, clears that person's value.",
+  'userOrgs.csvFormat.ruleUsers':
+    'Use the user principal names this product imports from Microsoft Entra. Before anything is imported, a preview shows how many rows match a user; rows that match nobody are skipped.',
+
   // Create / edit dialog
   'userOrgs.dialog.editTitle': 'Edit {name}',
   'userOrgs.dialog.newTitle': 'New organisation type',
   'userOrgs.dialog.nameLabel': 'Name',
   'userOrgs.dialog.nameHint':
-    'The label this grouping is shown under on the user lookup page, for example Cost Centre. Organisation types are not yet available as a filter on the reports.',
+    "The label this grouping is shown under - on the user lookup page, and as a property in the Copilot Adoption report's filter. For example, Cost Centre.",
   'userOrgs.dialog.sourceLabel': 'Where the values come from',
   'userOrgs.dialog.sourceEntra': 'A custom Microsoft Entra attribute, read on every user import',
   'userOrgs.dialog.sourceCsv': 'A CSV file uploaded here',

@@ -22,6 +22,7 @@ import {
 } from '@fluentui/react-components';
 import { fetchAttributeCatalogue, testEntraAttribute } from '../../api/userOrgsApi';
 import { formatNumber, plural, useT, type TFunction } from '../../i18n';
+import CsvFileFormat from './CsvFileFormat';
 import type {
   UserOrgAttributeCatalogue,
   UserOrgSource,
@@ -290,6 +291,10 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
                   )}
                 </>
               )}
+
+              {/* What to produce before the upload card appears: the type has to exist first, and an
+                  admin choosing "CSV" is deciding what file to go and generate. */}
+              {source === 'csv' && <CsvFileFormat typeName={name} />}
 
               <Switch
                 checked={isEnabled}

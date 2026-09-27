@@ -68,12 +68,29 @@ export const userOrgs: Record<keyof typeof en, string> = {
   'userOrgs.import.cardIntro':
     'Un CSV con una columna de usuario y una columna de organizaci\u00f3n, en cualquier orden. Una fila con la organizaci\u00f3n en blanco borra el valor de ese usuario.',
 
+  // What an uploaded file looks like - shown when a CSV type is created, and beside its upload
+  'userOrgs.csvFormat.title': 'Qu\u00e9 aspecto debe tener el archivo',
+  'userOrgs.csvFormat.intro':
+    'Dos columnas: el nombre principal de usuario de cada persona y el valor que tiene para este tipo. Por ejemplo:',
+  'userOrgs.csvFormat.defaultColumn': 'Organizaci\u00f3n',
+  'userOrgs.csvFormat.example':
+    'UserPrincipalName,{column}\nalex.wilber@contoso.com,Finanzas\nmegan.bowen@contoso.com,Investigaci\u00f3n y desarrollo\nadele.vance@contoso.com,',
+  'userOrgs.csvFormat.exampleAria': 'Archivo de ejemplo',
+  'userOrgs.csvFormat.ruleHeader':
+    'La fila de encabezado es opcional y las dos columnas pueden ir en cualquier orden. La columna de usuario se reconoce por un encabezado como UserPrincipalName, UPN, User o Email (en ingl\u00e9s); si no hay fila de encabezado, la primera columna se toma como el usuario y la segunda como el valor.',
+  'userOrgs.csvFormat.ruleSeparator':
+    'Separe las columnas con comas, puntos y comas, tabulaciones o barras verticales: el separador se detecta autom\u00e1ticamente. Guarde el archivo como UTF-8 (\u00abCSV UTF-8\u00bb en Excel) para que los nombres con acentos o en alfabetos no latinos lleguen intactos.',
+  'userOrgs.csvFormat.ruleBlank':
+    'Una fila sin valor, como la \u00faltima del ejemplo, borra el valor de esa persona.',
+  'userOrgs.csvFormat.ruleUsers':
+    'Use los nombres principales de usuario que este producto importa de Microsoft Entra. Antes de importar nada, una vista previa muestra cu\u00e1ntas filas coinciden con un usuario; las filas que no coinciden con nadie se omiten.',
+
   // Create / edit dialog
   'userOrgs.dialog.editTitle': 'Editar {name}',
   'userOrgs.dialog.newTitle': 'Nuevo tipo de organizaci\u00f3n',
   'userOrgs.dialog.nameLabel': 'Nombre',
   'userOrgs.dialog.nameHint':
-    'La etiqueta con la que se muestra esta agrupaci\u00f3n en la p\u00e1gina de consulta de usuarios, por ejemplo Centro de coste. Los tipos de organizaci\u00f3n todav\u00eda no est\u00e1n disponibles como filtro en los informes.',
+    'La etiqueta con la que se muestra esta agrupaci\u00f3n: en la p\u00e1gina de consulta de usuarios y como propiedad en el filtro del informe Adopci\u00f3n de Copilot. Por ejemplo, Centro de coste.',
   'userOrgs.dialog.sourceLabel': 'De d\u00f3nde proceden los valores',
   'userOrgs.dialog.sourceEntra':
     'Un atributo personalizado de Microsoft Entra, le\u00eddo en cada importaci\u00f3n de usuarios',
