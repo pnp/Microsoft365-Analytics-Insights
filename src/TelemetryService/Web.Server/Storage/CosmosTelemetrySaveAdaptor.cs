@@ -1,8 +1,7 @@
 ﻿using Microsoft.Azure.Cosmos;
-using System.Collections.Generic;
-using System.Threading.Tasks;
+using UsageReporting;
 
-namespace UsageReporting
+namespace Web.Storage
 {
     public interface IStatsServiceCosmosConfig
     {
@@ -10,6 +9,16 @@ namespace UsageReporting
         string ContainerNameHistory { get; set; }
         string ContainerNameCurrent { get; set; }
     }
+
+    /// <summary>
+    /// Cosmos DB store for the anonymous usage statistics the importers upload.
+    /// </summary>
+    /// <remarks>
+    /// Lives here, with its only consumer, rather than in <c>UsageReporting</c>: that project is
+    /// referenced by the importer engine, so a Cosmos DB SDK dependency there was copied into the
+    /// importer, web site and installer release packages - about 4.6 MB each - none of which ever
+    /// talk to Cosmos.
+    /// </remarks>
     public class CosmosTelemetrySaveAdaptor : ITelemetrySaveAdaptor, ITelemetryQueryAdaptor
     {
         private static string PARTITION_KEY = "/" + nameof(AnonUsageStatsModel.AnonClientId);
@@ -26,9 +35,9 @@ namespace UsageReporting
             _webAppConfig = webAppConfig;
         }
 
-        public async Task<AnonUsageStatsModel> LoadCurrentRecordByClientId(AnonUsageStatsModel model)
+        public async Task<AnonUsageStatsModel?> LoadCurrentRecordByClientId(AnonUsageStatsModel model)
         {
-            AnonUsageStatsModel r = null;
+            AnonUsageStatsModel? r = null;
             try
             {
                 var result = await _currentStatsContainer.ReadItemAsync<AnonUsageStatsModel>(model.AnonClientId, new PartitionKey(model.AnonClientId));

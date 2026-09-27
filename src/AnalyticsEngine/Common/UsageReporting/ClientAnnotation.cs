@@ -19,8 +19,9 @@ namespace UsageReporting
     /// Nothing about this changes what a client uploads. The payload stays anonymous on the wire.
     /// </para>
     /// <para>
-    /// It must live in its OWN Cosmos container. <see cref="CosmosTelemetrySaveAdaptor.SaveOrUpdate"/>
-    /// upserts the whole <see cref="AnonUsageStatsModel"/> into the "current" container on every
+    /// It must live in its OWN Cosmos container. The telemetry service's
+    /// <c>CosmosTelemetrySaveAdaptor.SaveOrUpdate</c> upserts the whole
+    /// <see cref="AnonUsageStatsModel"/> into the "current" container on every
     /// report, so an annotation written onto that document would be silently destroyed by the client's
     /// next upload.
     /// </para>

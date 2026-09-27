@@ -58,9 +58,9 @@ Telemetry Service.
 
 | Component | Type | Technology | Path |
 |-----------|------|------------|------|
-| Telemetry API | API | ASP.NET Core 10 | `src/TelemetryService/Web.Server/` |
+| Telemetry API | API | ASP.NET Core 10, Cosmos DB SDK | `src/TelemetryService/Web.Server/` |
 | Telemetry dashboard | Frontend | React 19, Vite, MSAL Browser | `src/TelemetryService/web.client/` |
-| Telemetry contracts/store adaptor | Library | .NET Standard 2.0, Cosmos DB SDK | `src/AnalyticsEngine/Common/UsageReporting/` |
+| Telemetry contracts | Library | .NET Standard 2.0 | `src/AnalyticsEngine/Common/UsageReporting/` |
 | Existing deployment | None | No TelemetryService deployment workflow or IaC | N/A |
 
 The service already:

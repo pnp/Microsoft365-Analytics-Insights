@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
+namespace Common.Entities.Calls
 {
     /// <summary>
     /// Pure decision logic for the Graph change notifications POSTed to the calls webhook: which of

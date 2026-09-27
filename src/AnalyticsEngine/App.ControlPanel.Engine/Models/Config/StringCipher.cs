@@ -11,13 +11,18 @@ using Org.BouncyCastle.Crypto.Paddings;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Security;
 
-namespace DataUtils
+namespace App.ControlPanel.Engine
 {
     /// <summary>
     /// Encrypts the secrets persisted in installer configuration files - the SQL admin password and
     /// the app registration client secrets.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// Lives in the installer engine, its only user. It used to be in <c>DataUtils</c>, which every
+    /// release package references, so BouncyCastle (about 2.4 MB compressed) was copied into the
+    /// importer and web site packages that never encrypt anything.
+    /// </para>
     /// <para>
     /// <b>The on-disk format is fixed and must never change.</b> A configuration file has to open with
     /// the same password that saved it, whichever build of the installer is opening it. Every format
