@@ -60,7 +60,7 @@ const userFilter = {
   'userFilter.editor.chooseValue': 'Choose at least one value.',
   'userFilter.editor.tooLong': 'This filter is too long to apply. Use fewer values, a “contains” condition or a custom organisation.',
   'userFilter.editor.managementChainHint': 'Everyone who reports to the chosen managers, directly or through other managers. The managers themselves are not included.',
-  'userFilter.editor.unknownDimension': 'This attribute is no longer available, so nobody matches it.',
+  'userFilter.editor.unknownDimension': 'This attribute is no longer available, so a condition on it matches nobody.',
 
   'userFilter.operator.is': 'is (=)',
   'userFilter.operator.isNot': 'is not (≠)',
@@ -116,7 +116,7 @@ const userFilter = {
   'userFilter.print.any': 'People who match any one of these groups:',
   'userFilter.print.groupItem': 'Group {number}: {conditions}',
   'userFilter.print.matched': '{matched} of the {total} people in the directory match this filter.',
-  'userFilter.print.unknown': 'Some conditions refer to attributes that are no longer available, so nobody matches them.',
+  'userFilter.print.unknown': 'Some conditions refer to attributes that are no longer available, so those conditions match nobody.',
 } as const;
 
 export default userFilter;

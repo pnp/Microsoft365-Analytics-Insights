@@ -86,7 +86,21 @@ namespace Common.Entities.UserFilters
             // Supplied for the management chain, where one person is counted under every manager above
             // them, so the per-value counts overlap and their sum would count people several times.
             PeopleWithValue = peopleWithValue ?? peoplePerValue.Sum();
+
+            _orderByPeople = new Lazy<int[]>(() => Enumerable.Range(0, Values.Count)
+                .OrderByDescending(i => PeoplePerValue[i])
+                .ThenBy(i => Values[i], StringComparer.OrdinalIgnoreCase)
+                .ToArray(), System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
         }
+
+        private readonly Lazy<int[]> _orderByPeople;
+
+        /// <summary>
+        /// The value indexes, largest first then alphabetically - the order the picker lists them in.
+        /// Sorted once per snapshot, so opening a picker on a dimension with a distinct value per person
+        /// pages through a ready-made order instead of sorting 200,000 values on every keystroke.
+        /// </summary>
+        public IReadOnlyList<int> OrderByPeople => _orderByPeople.Value;
 
         public string Key { get; }
 
@@ -199,13 +213,14 @@ namespace Common.Entities.UserFilters
             var marked = new bool[PeopleCount];
             var reports = _reports.Value;
             var queue = new Queue<int>();
+            var roots = new HashSet<int>();
 
             foreach (var valueIndex in managerValueIndexes)
             {
                 if (valueIndex < 0 || valueIndex >= _managerRowByManagerValue.Length) continue;
 
                 var managerRow = _managerRowByManagerValue[valueIndex];
-                if (managerRow >= 0) queue.Enqueue(managerRow);
+                if (managerRow >= 0 && roots.Add(managerRow)) queue.Enqueue(managerRow);
             }
 
             while (queue.Count > 0)
@@ -221,7 +236,27 @@ namespace Common.Entities.UserFilters
                 }
             }
 
+            // A chosen manager reached again only through a cycle (A reports to B, B to A) is not "below"
+            // themselves: the chain excludes the manager, and the picker's organisation size does too.
+            // One reached through ANOTHER chosen manager genuinely is below them, and stays.
+            foreach (var root in roots)
+            {
+                if (marked[root] && !ReportsToAnotherRoot(root, roots)) marked[root] = false;
+            }
+
             return marked;
+        }
+
+        private bool ReportsToAnotherRoot(int row, HashSet<int> roots)
+        {
+            var current = _managerRowByRow[row];
+            for (var depth = 0; current >= 0 && current != row && depth < 64; depth++)
+            {
+                if (roots.Contains(current)) return true;
+                current = _managerRowByRow[current];
+            }
+
+            return false;
         }
 
         /// <summary>Whether a row has a manager at all - the management chain's "not set".</summary>

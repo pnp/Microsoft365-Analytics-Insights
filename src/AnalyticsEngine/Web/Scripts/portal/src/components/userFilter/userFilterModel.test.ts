@@ -3,6 +3,7 @@ import { EMPTY_USER_FILTER, type UserFilter, type UserFilterClause } from '../..
 import {
   addClause,
   encodedFilterLength,
+  fitsLimits,
   groupClauseIndexes,
   isEmptyFilter,
   parseUserFilter,
@@ -90,6 +91,35 @@ describe('user filter structure', () => {
     expect(addClause(EMPTY_USER_FILTER, { ...SALES, join: 'or' }).clauses[0].join).toBe('and');
   });
 
+  it('keeps an OR group an OR group when the condition that opens it is removed', () => {
+    // (Sales) or (UK and London): removing "UK" must leave (Sales) or (London) - not Sales and London,
+    // which is what dropping the clause carrying the "or" would otherwise produce.
+    const london = clause('officeLocation', ['London']);
+    const filter = { clauses: [SALES, { ...UK, join: 'or' as const }, london] };
+
+    const next = removeClause(filter, 1);
+
+    expect(next.clauses).toEqual([SALES, { ...london, join: 'or' }]);
+    expect(groupClauseIndexes(next)).toEqual([[0], [1]]);
+  });
+
+  it('drops a group that loses its only condition, and keeps the rest of the structure', () => {
+    const next = removeClause({ clauses: [SALES, CONTOSO, clause('jobTitle', ['Engineer'], { join: 'or' })] }, 1);
+
+    expect(next.clauses).toEqual([SALES, clause('jobTitle', ['Engineer'], { join: 'or' })]);
+  });
+
+  it('refuses a link longer than the server accepts rather than cutting conditions off it', () => {
+    const many = Array.from({ length: 26 }, (_, i) => ({ d: 'department', v: [`D${i}`] }));
+    expect(parseUserFilter(JSON.stringify(many))).toEqual(EMPTY_USER_FILTER);
+  });
+
+  it('refuses a link carrying an incomplete condition, whose removal would move a group boundary', () => {
+    expect(parseUserFilter('[{"d":"department","v":["Sales"]},{"j":"or","d":"country","v":[]},{"d":"jobTitle","v":["X"]}]')).toEqual(
+      EMPTY_USER_FILTER,
+    );
+  });
+
   it('replaces one condition without disturbing the others', () => {
     const next = replaceClause({ clauses: [SALES, UK] }, 1, clause('country', ['Ireland']));
 
@@ -143,6 +173,37 @@ describe('narrowing the whole filter to one value', () => {
     expect(withDimensionValue({ clauses: [clause('emailDomain', ['contoso.com']), SALES] }, 'emailDomain', null)).toEqual({
       clauses: [SALES],
     });
+  });
+
+  it('keeps every OR group when a domain condition opening one of them is replaced or cleared', () => {
+    // (Sales) or (contoso.com and UK). Choosing fabrikam.com must give
+    // (Sales and fabrikam.com) or (fabrikam.com and UK); clearing it must give (Sales) or (UK).
+    const contoso = clause('emailDomain', ['contoso.com'], { join: 'or' });
+    const filter = { clauses: [SALES, contoso, UK] };
+
+    const narrowed = withDimensionValue(filter, 'emailDomain', 'fabrikam.com');
+    expect(narrowed.clauses).toEqual([
+      SALES,
+      clause('emailDomain', ['fabrikam.com']),
+      clause('emailDomain', ['fabrikam.com'], { join: 'or' }),
+      UK,
+    ]);
+    expect(groupClauseIndexes(narrowed)).toEqual([
+      [0, 1],
+      [2, 3],
+    ]);
+
+    const cleared = withDimensionValue(filter, 'emailDomain', null);
+    expect(cleared.clauses).toEqual([SALES, { ...UK, join: 'or' }]);
+  });
+
+  it('refuses nothing itself, but says when the result is too big to send', () => {
+    const groups = Array.from({ length: 13 }, (_, i) => clause('department', [`D${i}`], { join: i === 0 ? 'and' : 'or' }));
+    const narrowed = withDimensionValue({ clauses: groups }, 'emailDomain', 'fabrikam.com');
+
+    expect(narrowed.clauses).toHaveLength(26);
+    expect(fitsLimits(narrowed)).toBe(false);
+    expect(fitsLimits({ clauses: groups })).toBe(true);
   });
 
   it('reports the single value only when every group requires exactly it', () => {

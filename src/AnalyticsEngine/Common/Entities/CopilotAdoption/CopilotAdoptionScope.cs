@@ -171,6 +171,7 @@ namespace Common.Entities.CopilotAdoption
                 OpportunitiesCapped = analysis.OpportunitiesCapped,
                 CoworkReadiness = Narrow(analysis.CoworkReadiness, c => c.UserId, c => c.EmailDomain, scope),
                 CoworkSignals = Narrow(analysis.CoworkSignals, s => s.UserId, s => s.EmailDomain, scope),
+                CoworkAssessedForWholePopulation = tenant.CoworkReadinessAvailable,
                 UnlicensedUsers = Narrow(analysis.UnlicensedUsers, u => u.UserId, u => u.EmailDomain, scope),
             };
         }

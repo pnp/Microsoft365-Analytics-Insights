@@ -48,7 +48,7 @@ namespace Common.Entities.UserFilters
 
         /// <summary>
         /// Dimensions the filter refers to that do not exist in the directory - a custom organisation type
-        /// deleted or disabled after the filter was built. Everybody reads as having no value for them.
+        /// deleted or disabled after the filter was built. A condition on one matches nobody.
         /// </summary>
         public IReadOnlyList<string> UnknownDimensions { get; }
 
@@ -159,13 +159,17 @@ namespace Common.Entities.UserFilters
 
             if (column == null)
             {
-                // A dimension that no longer exists: nobody has a value for it. Reported rather than
-                // rejected, so a link saved before an org type was deleted still opens - and says why a
-                // condition matched nobody - instead of failing outright.
+                // A dimension that no longer exists - a custom organisation type deleted or disabled
+                // after the filter was built. A condition on it matches NOBODY, whatever its operator:
+                // "Cost centre is not CC-100" on a type that has gone cannot say who was in CC-100, and
+                // answering "everyone" would quietly put back the very people the filter excluded.
+                // An empty result is the failure a reader notices; a widened one is not. Reported, not
+                // rejected, so a link saved before the change still opens and says why.
                 if (!unknown.Contains(clause.Dimension)) unknown.Add(clause.Dimension);
-                for (var row = 0; row < count; row++) positive[row] = clause.IncludeNotSet;
+                return new ClauseResult { Rows = positive, UnknownUser = false };
             }
-            else if (string.Equals(clause.Dimension, UserFilterDimensions.ManagementChain, StringComparison.Ordinal))
+
+            if (string.Equals(clause.Dimension, UserFilterDimensions.ManagementChain, StringComparison.Ordinal))
             {
                 var managers = clause.Values.Select(column.IndexOf).Where(i => i >= 0).Distinct().ToList();
                 var reporting = snapshot.RowsReportingTo(managers);

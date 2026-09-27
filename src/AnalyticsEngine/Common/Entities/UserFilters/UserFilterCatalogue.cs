@@ -145,29 +145,46 @@ namespace Common.Entities.UserFilters
             var size = take <= 0 ? DefaultTake : Math.Min(take, MaxTake);
             var fixedValues = UserFilterDimensions.FixedValues(dimension);
 
-            var matching = Enumerable.Range(0, column.Values.Count)
-                .Where(i => term.Length == 0 || column.Values[i].IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0);
-
-            // A fixed-value dimension keeps its natural order - member before guest, enabled before
-            // disabled - and lists every token even when nobody holds it, so the picker never loses an
-            // option because a small tenant happens to have no guests.
-            var ordered = fixedValues != null
-                ? fixedValues
+            if (fixedValues != null)
+            {
+                // A fixed-value dimension keeps its natural order - member before guest, enabled before
+                // disabled - and lists every token even when nobody holds it, so the picker never loses
+                // an option because a small tenant happens to have no guests.
+                var tokens = fixedValues
                     .Where(t => term.Length == 0 || t.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0)
                     .Select(t => new UserFilterValueModel { Value = t, People = PeopleFor(column, t) })
-                    .ToList()
-                : matching
-                    .Select(i => new UserFilterValueModel { Value = column.Values[i], People = column.PeoplePerValue[i] })
-                    .OrderByDescending(v => v.People)
-                    .ThenBy(v => v.Value, StringComparer.OrdinalIgnoreCase)
                     .ToList();
+
+                return new UserFilterValuePage
+                {
+                    Dimension = dimension,
+                    Values = tokens.Take(size).ToList(),
+                    TotalMatching = tokens.Count,
+                    Truncated = tokens.Count > size,
+                    PeopleWithoutValue = snapshot.PeopleCount - column.PeopleWithValue,
+                };
+            }
+
+            // One pass over the precomputed order, keeping the first page and counting the rest - no
+            // per-request sort, and no model object for a value that is not returned. A CSV organisation
+            // type can legitimately hold a distinct value per person.
+            var page = new List<UserFilterValueModel>(Math.Min(size, column.Values.Count));
+            var total = 0;
+            foreach (var index in column.OrderByPeople)
+            {
+                var value = column.Values[index];
+                if (term.Length > 0 && value.IndexOf(term, StringComparison.OrdinalIgnoreCase) < 0) continue;
+
+                total++;
+                if (page.Count < size) page.Add(new UserFilterValueModel { Value = value, People = column.PeoplePerValue[index] });
+            }
 
             return new UserFilterValuePage
             {
                 Dimension = dimension,
-                Values = ordered.Take(size).ToList(),
-                TotalMatching = ordered.Count,
-                Truncated = ordered.Count > size,
+                Values = page,
+                TotalMatching = total,
+                Truncated = total > size,
                 PeopleWithoutValue = snapshot.PeopleCount - column.PeopleWithValue,
             };
         }

@@ -70,33 +70,48 @@ namespace Web.AnalyticsWeb.Models.UserFilters
 
         public async Task<UserDirectorySnapshot> GetAsync(CancellationToken cancellationToken)
         {
-            Task<UserDirectorySnapshot> loading;
-
-            lock (_sync)
+            // Bounded: an admin invalidating on every attempt is the only way round this more than once.
+            for (var attempt = 0; ; attempt++)
             {
-                var age = _current == null ? TimeSpan.MaxValue : _utcNow() - _currentLoadedUtc;
+                Task<UserDirectorySnapshot> loading;
+                int generation;
 
-                if (_current != null && age < _freshFor) return _current;
+                lock (_sync)
+                {
+                    var age = _current == null ? TimeSpan.MaxValue : _utcNow() - _currentLoadedUtc;
 
-                loading = StartLoadLocked();
+                    if (_current != null && age < _freshFor) return _current;
 
-                // Stale but usable: answer now, let the refresh land for the next request.
-                if (_current != null && age < _usableFor)
+                    loading = StartLoadLocked();
+                    generation = _generation;
+
+                    // Stale but usable: answer now, let the refresh land for the next request.
+                    if (_current != null && age < _usableFor)
+                    {
+                        Observe(loading);
+                        return _current;
+                    }
+                }
+
+                // Only the wait is cancellable - the load carries on for everyone else.
+                var completed = await Task.WhenAny(loading, Task.Delay(Timeout.Infinite, cancellationToken)).ConfigureAwait(false);
+                if (completed != loading)
                 {
                     Observe(loading);
-                    return _current;
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                var snapshot = await loading.ConfigureAwait(false);
+
+                // Invalidated while this request waited: the load it joined read the directory before the
+                // change that prompted the invalidation - an org type just disabled, a CSV just imported -
+                // so answering with it would contradict what the admin has just been told. Wait for a
+                // load that started after the change instead.
+                lock (_sync)
+                {
+                    if (generation == _generation || attempt >= 2) return snapshot;
                 }
             }
-
-            // Only the wait is cancellable - the load carries on for everyone else.
-            var completed = await Task.WhenAny(loading, Task.Delay(Timeout.Infinite, cancellationToken)).ConfigureAwait(false);
-            if (completed != loading)
-            {
-                Observe(loading);
-                cancellationToken.ThrowIfCancellationRequested();
-            }
-
-            return await loading.ConfigureAwait(false);
         }
 
         public void Prefetch()

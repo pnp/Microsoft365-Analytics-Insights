@@ -26,9 +26,8 @@ import UserFilterClauseEditor, { DimensionCue } from './UserFilterClauseEditor';
 import { describeClause, describeUserFilter, dimensionLabel, operatorShortLabel, valueLabel } from './describeUserFilter';
 import {
   MAX_CLAUSES,
-  MAX_ENCODED_FILTER_LENGTH,
   addClause,
-  encodedFilterLength,
+  fitsLimits,
   groupClauseIndexes,
   isCustomDimension,
   isTextOperator,
@@ -151,8 +150,7 @@ export default function UserFilterBar({ filter, onChange, echoNames }: UserFilte
   const condition = (clause: UserFilterClause) =>
     describeClause(t, clause, dimensionLabel(t, clause.dimension, source));
 
-  const tooLong = (candidate: UserFilter) =>
-    encodedFilterLength(candidate) > MAX_ENCODED_FILTER_LENGTH ? t('userFilter.editor.tooLong') : null;
+  const tooLong = (candidate: UserFilter) => (fitsLimits(candidate) ? null : t('userFilter.editor.tooLong'));
 
   const startAdding = () => {
     setNewJoin('and');
@@ -211,7 +209,11 @@ export default function UserFilterBar({ filter, onChange, echoNames }: UserFilte
             // reads as symbols. Fluent labels the remove button with this plus its own label.
             aria-label={described}
             aria-description={t('userFilter.bar.editHint')}
-            onClick={() => setEditing(index)}
+            // Editing needs the attribute list; without it the editor could only claim, wrongly, that
+            // the attribute no longer exists. The condition can still be removed.
+            onClick={() => {
+              if (list) setEditing(index);
+            }}
           >
             <span className={styles.pillLabel}>{dimensionLabel(t, clause.dimension, source)}</span>{' '}
             {operatorShortLabel(t, clause.dimension, clause.operator)}{' '}

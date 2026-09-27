@@ -111,8 +111,11 @@ END";
                     var states = await NextLookupAsync(reader, cancellationToken).ConfigureAwait(false);
                     var usageLocations = await NextLookupAsync(reader, cancellationToken).ConfigureAwait(false);
 
+                    // Read synchronously row by row: SqlClient's per-row ReadAsync costs more than the row
+                    // itself for a result this narrow, and this whole load already runs on a thread-pool
+                    // thread of its own (see CachedUserDirectorySource), never on a request's.
                     await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
-                    while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    while (reader.Read())
                     {
                         builder.AddUser(new UserDirectoryEntry
                         {
@@ -142,7 +145,7 @@ END";
                         var values = await NextLookupAsync(reader, cancellationToken).ConfigureAwait(false);
 
                         await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
-                        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                        while (reader.Read())
                         {
                             if (values.TryGetValue(reader.GetInt32(2), out var value))
                             {

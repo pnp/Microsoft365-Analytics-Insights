@@ -198,8 +198,11 @@ export default function UserFilterClauseEditor({
   // a search is typed into a list too long to hold in the page.
   useEffect(() => {
     if (!dimension || unknownDimension || textMatch) {
+      // Also stops the spinner: switching to "contains" mid-fetch aborts the request, and an aborted
+      // request deliberately leaves the loading flag alone for the fetch that replaces it.
       setOptions([]);
       setTruncated(false);
+      setLoadingValues(false);
       return;
     }
 
@@ -299,7 +302,7 @@ export default function UserFilterClauseEditor({
       : t(plural(people, 'userFilter.editor.people.one', 'userFilter.editor.people.other'), { count: formatNumber(people) });
 
   const operators: UserFilterOperator[] =
-    selected?.supportsTextMatch ?? true ? ['is', 'isNot', 'contains', 'notContains'] : ['is', 'isNot'];
+    selected?.supportsTextMatch ? ['is', 'isNot', 'contains', 'notContains'] : ['is', 'isNot'];
 
   return (
     <div className={styles.card} role="group" aria-label={t('userFilter.editor.title')}>

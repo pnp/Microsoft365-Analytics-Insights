@@ -259,12 +259,34 @@ namespace Web.AnalyticsWeb.Controllers
         /// Combines the email domain and the user filter into one scope, evaluating the filter against
         /// the shared directory snapshot.
         /// </summary>
+        /// <remarks>
+        /// A directory that cannot be read is answered with a plain 503 rather than left to the Web API
+        /// pipeline: this site ships with customErrors off, so an unhandled SQL exception would reach
+        /// the browser carrying object names. The fault still goes to Application Insights.
+        /// </remarks>
         private async Task<CopilotAdoptionScope> ResolveScopeAsync(
             string emailDomain, UserFilterExpression userFilter, CancellationToken cancellationToken)
         {
             if (userFilter == null || userFilter.IsEmpty) return CopilotAdoptionScope.ForEmailDomain(emailDomain);
 
-            var snapshot = await Directory.GetAsync(cancellationToken);
+            UserDirectorySnapshot snapshot;
+            try
+            {
+                snapshot = await Directory.GetAsync(cancellationToken);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                WebExceptionTelemetry.Report(ex, "CopilotAdoptionAPI.UserFilter");
+                throw new HttpResponseException(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                {
+                    Content = new StringContent(
+                        "The directory the filter is applied to could not be read, so the filtered report is "
+                        + "not available right now. The failure has been logged. Try again shortly, or clear the filter.",
+                        Encoding.UTF8,
+                        "text/plain"),
+                });
+            }
+
             return CopilotAdoptionScope.Create(emailDomain, UserFilterCompiler.Compile(userFilter, snapshot));
         }
 

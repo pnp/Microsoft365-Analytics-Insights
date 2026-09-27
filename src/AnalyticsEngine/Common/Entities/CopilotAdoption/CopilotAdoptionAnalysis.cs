@@ -59,6 +59,17 @@ namespace Common.Entities.CopilotAdoption
         public List<CoworkReadinessSignalRow> CoworkSignals { get; set; } = new List<CoworkReadinessSignalRow>();
 
         /// <summary>
+        /// True when this analysis is a slice of one whose Cowork assessment ran, so an empty
+        /// <see cref="CoworkSignals"/> means "nobody in this slice", not "the assessment did not run".
+        /// </summary>
+        /// <remarks>
+        /// Without it a filter such as "User type is Guest" - Cowork is assessed for members only - would
+        /// empty the signals and the Cowork tab would tell an admin to check their imports, when the truth
+        /// is that the people they selected have no Cowork readiness to show.
+        /// </remarks>
+        public bool CoworkAssessedForWholePopulation { get; set; }
+
+        /// <summary>
         /// The queries that produced this analysis, keyed by a short name, for the SQL popover the rest
         /// of the admin site uses. Showing the working is part of the point: these numbers get quoted
         /// in licence negotiations, so an admin has to be able to verify them independently.

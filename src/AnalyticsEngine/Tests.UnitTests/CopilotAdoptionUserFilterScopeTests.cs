@@ -136,6 +136,14 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, scoped.Summary.LicensedUsers);
             Assert.AreEqual(0, scoped.LicensedUsers.Count);
             Assert.AreEqual(0, scoped.Summary.UserFilter.MatchedPeople);
+
+            // Cowork ran for the tenant; nobody in this slice is a finding, not a missing import.
+            Assert.IsTrue(analysis.Summary.CoworkReadinessAvailable, "The fixture must exercise the Cowork path.");
+            Assert.IsTrue(scoped.Summary.CoworkReadinessAvailable,
+                "An empty slice must not tell the reader to check an import that is working.");
+            Assert.AreEqual(0, scoped.Summary.CoworkScoredUsers);
+            Assert.AreEqual(CopilotAdoptionScoring.AllCoworkTiers.Count(), scoped.Summary.CoworkTiers.Count);
+            Assert.IsTrue(scoped.Summary.CoworkTiers.All(t => t.Users == 0));
         }
 
         [TestMethod]

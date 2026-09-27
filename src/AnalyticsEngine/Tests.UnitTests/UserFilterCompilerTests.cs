@@ -125,15 +125,23 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void AnOrganisationTypeThatNoLongerExists_MatchesNobody_AndIsReported()
+        public void AnOrganisationTypeThatNoLongerExists_MatchesNobody_WhateverTheOperator_AndIsReported()
         {
             // The type was disabled (so the loader never added it) after the filter was saved in a link.
+            // "is not" must not flip to "everyone": that would put back the people the filter excluded.
             var positive = Compile("[{\"d\":\"org:" + RetiredType + "\",\"v\":[\"Anything\"]}]");
             var negative = Compile("[{\"d\":\"org:" + RetiredType + "\",\"op\":\"isNot\",\"v\":[\"Anything\"]}]");
+            var notSet = Compile("[{\"d\":\"org:" + RetiredType + "\",\"v\":[],\"n\":true}]");
 
-            Assert.AreEqual(0, positive.MatchedPeople, "Nobody has a value for a type that does not exist.");
-            Assert.AreEqual(AllUsers.Length, negative.MatchedPeople, "So everybody is 'not' any value of it.");
+            Assert.AreEqual(0, positive.MatchedPeople);
+            Assert.AreEqual(0, negative.MatchedPeople);
+            Assert.AreEqual(0, notSet.MatchedPeople);
+            Assert.IsFalse(negative.Matches(999), "Nor does a person the snapshot does not hold.");
             CollectionAssert.AreEqual(new[] { "org:" + RetiredType }, positive.UnknownDimensions.ToArray());
+
+            // In an OR the other groups still stand.
+            var either = Compile("[{\"d\":\"org:" + RetiredType + "\",\"op\":\"isNot\",\"v\":[\"x\"]},{\"j\":\"or\",\"d\":\"department\",\"v\":[\"Engineering\"]}]");
+            AssertMatches(either, Engineer);
         }
 
         [TestMethod]
@@ -179,9 +187,30 @@ namespace Tests.UnitTests
             Assert.IsTrue(filter.Matches(3));
             Assert.IsTrue(filter.Matches(2));
             Assert.IsFalse(filter.Matches(4));
+            Assert.IsFalse(filter.Matches(1),
+                "Reaching the chosen manager again round the cycle does not put them below themselves.");
 
             var sizes = UserFilterCatalogue.ListValues(snapshot, UserFilterDimensions.ManagementChain, null, 10);
             Assert.IsTrue(sizes.Values.All(v => v.People <= 3), "A cycle must not inflate an organisation's size without bound.");
+        }
+
+        [TestMethod]
+        public void ManagementChain_KeepsAChosenManagerWhoReportsToAnotherChosenManager()
+        {
+            // Two chosen managers where one reports to the other: the junior one IS below the senior one,
+            // cycle or no cycle, and must stay in.
+            var builder = new UserDirectorySnapshotBuilder();
+            builder.AddUser(new UserDirectoryEntry { UserId = 1, UserPrincipalName = "senior@contoso.com", ManagerUserId = 2 });
+            builder.AddUser(new UserDirectoryEntry { UserId = 2, UserPrincipalName = "junior@contoso.com", ManagerUserId = 1 });
+            builder.AddUser(new UserDirectoryEntry { UserId = 3, UserPrincipalName = "report@contoso.com", ManagerUserId = 2 });
+            var snapshot = builder.Build(Loaded);
+
+            var filter = UserFilterCompiler.Compile(
+                UserFilterCodec.Parse("[{\"d\":\"managementChain\",\"v\":[\"senior@contoso.com\",\"junior@contoso.com\"]}]"), snapshot);
+
+            Assert.IsTrue(filter.Matches(3));
+            Assert.IsTrue(filter.Matches(2), "junior reports to senior.");
+            Assert.IsTrue(filter.Matches(1), "senior reports to junior - the data says so, and both were chosen.");
         }
 
         [TestMethod]

@@ -756,7 +756,7 @@ namespace Common.Entities.CopilotAdoption
             {
                 foreach (var row in rows)
                 {
-                    row.EmailDomain = CopilotAdoptionEmailDomain.From(row.UserPrincipalName);
+                    row.EmailDomain = CopilotAdoptionEmailDomain.From(row.UserPrincipalName, row.Mail);
                 }
 
                 analysis.UnlicensedUsers = rows;
@@ -2057,6 +2057,16 @@ namespace Common.Entities.CopilotAdoption
 
             if (signals.Count == 0)
             {
+                if (analysis.CoworkAssessedForWholePopulation)
+                {
+                    // A slice of an analysis whose Cowork assessment ran, with nobody in it to assess - a
+                    // guest-only filter, or a department with no seat holders. That is a finding (zero),
+                    // not a fault, so it is published as zeros rather than as "unavailable", which would
+                    // send the reader off to check imports that are working.
+                    PublishEmptyCowork(summary);
+                    return;
+                }
+
                 // Left explicitly unavailable rather than published as a set of zeros. "0 prime candidates"
                 // is a finding; "this analysis did not run" is a fault, and the tab has to tell them apart.
                 summary.CoworkReadinessAvailable = false;
@@ -2192,6 +2202,31 @@ namespace Common.Entities.CopilotAdoption
             summary.CoworkFullRolloutEstimate = activityObserved
                 ? CopilotAdoptionScoring.EstimateCoworkValue(rows, _options, coworkReportPeriodDays, coworkTaskRate)
                 : new CoworkValueEstimate();
+        }
+
+        /// <summary>
+        /// The Cowork figures for a slice with nobody to assess: available, every count zero, every tier
+        /// listed at zero, and empty estimates - the same shapes a populated slice publishes, so the tab
+        /// renders "nobody here" rather than a missing section.
+        /// </summary>
+        private void PublishEmptyCowork(CopilotAdoptionSummary summary)
+        {
+            var none = new List<CoworkReadinessRow>();
+
+            summary.CoworkReadinessAvailable = true;
+            summary.CoworkScoredUsers = 0;
+            summary.CoworkEstablishedUsers = 0;
+            summary.CoworkTriallingUsers = 0;
+            summary.CoworkPrimeCandidates = 0;
+            summary.CoworkBuildFluencyFirst = 0;
+            summary.CoworkRecommendedForPolicy = 0;
+            summary.CoworkAverageCoordinationLoad = 0;
+            summary.CoworkAverageFluency = 0;
+            summary.CoworkTiers = BuildCoworkTiers(none);
+            summary.CoworkByDepartment = new List<CoworkSegmentRow>();
+            summary.CoworkQuadrant = new List<CoworkQuadrantPoint>();
+            summary.CoworkValueEstimate = new CoworkValueEstimate();
+            summary.CoworkFullRolloutEstimate = new CoworkValueEstimate();
         }
 
         /// <summary>

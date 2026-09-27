@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useInRouterContext, useSearchParams } from 'react-router-dom';
 import {
   makeStyles,
@@ -93,12 +93,14 @@ import {
 import { useUserFilterDimensions } from '../components/userFilter/useUserFilterDimensions';
 import {
   EMAIL_DOMAIN_DIMENSION,
+  fitsLimits,
   isEmptyFilter,
   parseUserFilter,
   serializeUserFilter,
   singleValueFor,
   withDimensionValue,
 } from '../components/userFilter/userFilterModel';
+import { notify } from '../components/toast';
 import { EMPTY_USER_FILTER, type UserFilter, type UserFilterDimension } from '../types/userFilter';
 
 const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
@@ -359,8 +361,10 @@ export const USER_FILTER_URL_PARAM = 'filter';
 
 function RoutedCopilotAdoptionPage() {
   const [params, setParams] = useSearchParams();
-  // Read once: the page owns the filter from then on, and writes it back as it changes.
-  const [initial] = useState(() => parseUserFilter(params.get(USER_FILTER_URL_PARAM)));
+  // The address is the source of truth: opening a different ?filter= link while already on the page
+  // changes the location without remounting it, and the page must follow.
+  const raw = params.get(USER_FILTER_URL_PARAM);
+  const userFilter = useMemo(() => parseUserFilter(raw), [raw]);
 
   const onUserFilterChange = useCallback(
     (filter: UserFilter) => {
@@ -379,14 +383,15 @@ function RoutedCopilotAdoptionPage() {
     [setParams],
   );
 
-  return <CopilotAdoptionView initialUserFilter={initial} onUserFilterChange={onUserFilterChange} />;
+  return <CopilotAdoptionView userFilter={userFilter} onUserFilterChange={onUserFilterChange} />;
 }
 
 function CopilotAdoptionView({
-  initialUserFilter,
+  userFilter: controlledFilter,
   onUserFilterChange,
 }: {
-  initialUserFilter?: UserFilter;
+  /** The filter, when something outside owns it - the address. Held in state here otherwise. */
+  userFilter?: UserFilter;
   onUserFilterChange?: (filter: UserFilter) => void;
 }) {
   const styles = useStyles();
@@ -403,19 +408,28 @@ function CopilotAdoptionView({
   // is the EMEA sales organisation doing" is a question about the whole report, not about one table.
   // The server re-scores the cached analysis for the people the filter matches, so the figures are
   // recomputed rather than merely hidden.
-  const [userFilter, setUserFilterState] = useState<UserFilter>(initialUserFilter ?? EMPTY_USER_FILTER);
+  const [ownFilter, setOwnFilter] = useState<UserFilter>(EMPTY_USER_FILTER);
+  const userFilter = controlledFilter ?? ownFilter;
   const setUserFilter = useCallback(
     (next: UserFilter) => {
-      setUserFilterState(next);
+      if (controlledFilter === undefined) setOwnFilter(next);
       onUserFilterChange?.(next);
     },
-    [onUserFilterChange],
+    [controlledFilter, onUserFilterChange],
   );
   const userFilterParam = serializeUserFilter(userFilter);
   const userFilterScope = userFilterParam ?? '';
   const selectedEmailDomain = singleValueFor(userFilter, EMAIL_DOMAIN_DIMENSION);
-  const selectEmailDomain = (domain: string | null) =>
-    setUserFilter(withDimensionValue(userFilter, EMAIL_DOMAIN_DIMENSION, domain));
+  const selectEmailDomain = (domain: string | null) => {
+    const next = withDimensionValue(userFilter, EMAIL_DOMAIN_DIMENSION, domain);
+    // Adding the domain to every OR group can take a long filter past what the server accepts.
+    // Refused here with the reason, rather than sent and answered with an error page.
+    if (!fitsLimits(next)) {
+      notify(t('userFilter.editor.tooLong'), 'warning');
+      return;
+    }
+    setUserFilter(next);
+  };
   const { list: filterDimensions } = useUserFilterDimensions();
   const [tab, setTab] = useState<AdoptionTab>('executive');
   // Set when the user drills through from the enablement plan, so the licensed-user list they land

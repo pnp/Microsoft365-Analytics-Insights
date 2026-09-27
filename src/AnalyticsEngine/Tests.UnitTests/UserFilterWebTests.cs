@@ -133,6 +133,29 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task Cache_ARequestWaitingWhenTheCacheIsInvalidated_GetsARead_ThatStartedAfterIt()
+        {
+            // An admin disables an org type while a filtered report is waiting for the directory. The
+            // read that request joined started before the change; answering with it would contradict the
+            // admin's own edit.
+            var loader = new ControlledLoader();
+            var source = new CachedUserDirectorySource(() => loader, Fresh, Usable, new Clock().Now);
+
+            var waiting = source.GetAsync(CancellationToken.None);
+            loader.WaitForCalls(1);
+
+            source.Invalidate();
+            loader.Complete(Snapshot("read before the change"), callIndex: 0);
+
+            // The waiter notices, and joins a new read rather than returning the old one.
+            loader.WaitForCalls(2);
+            var after = Snapshot("read after the change");
+            loader.Complete(after, callIndex: 1);
+
+            Assert.AreSame(after, await waiting.TimeoutAfter(Wait));
+        }
+
+        [TestMethod]
         public async Task Cache_AFailedLoad_SurfacesToTheCaller_AndTheNextRequestRetries()
         {
             var loader = new ControlledLoader();

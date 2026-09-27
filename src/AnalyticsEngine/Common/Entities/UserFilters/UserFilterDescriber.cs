@@ -53,7 +53,7 @@ namespace Common.Entities.UserFilters
 
         /// <summary>
         /// Dimensions the filter names that no longer exist - an organisation type deleted or disabled
-        /// since the filter was built. Everybody reads as having no value for them.
+        /// since the filter was built. A condition on one matches nobody, whatever its operator.
         /// </summary>
         [JsonProperty("unknownDimensions")]
         public List<string> UnknownDimensions { get; set; } = new List<string>();

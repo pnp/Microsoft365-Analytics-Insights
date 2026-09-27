@@ -51,7 +51,7 @@ const userFilter: Record<keyof typeof en, string> = {
   'userFilter.editor.chooseValue': 'Elija al menos un valor.',
   'userFilter.editor.tooLong': 'Este filtro es demasiado largo para aplicarlo. Use menos valores, una condición «contiene» o una organización personalizada.',
   'userFilter.editor.managementChainHint': 'Todas las personas que dependen de los responsables elegidos, directamente o a través de otros responsables. Los propios responsables no se incluyen.',
-  'userFilter.editor.unknownDimension': 'Este atributo ya no está disponible, así que nadie lo cumple.',
+  'userFilter.editor.unknownDimension': 'Este atributo ya no está disponible, así que nadie cumple una condición sobre él.',
 
   'userFilter.operator.is': 'es (=)',
   'userFilter.operator.isNot': 'no es (≠)',
@@ -107,7 +107,7 @@ const userFilter: Record<keyof typeof en, string> = {
   'userFilter.print.any': 'Las personas que cumplen cualquiera de estos grupos:',
   'userFilter.print.groupItem': 'Grupo {number}: {conditions}',
   'userFilter.print.matched': '{matched} de las {total} personas del directorio cumplen este filtro.',
-  'userFilter.print.unknown': 'Algunas condiciones hacen referencia a atributos que ya no están disponibles, así que nadie las cumple.',
+  'userFilter.print.unknown': 'Algunas condiciones hacen referencia a atributos que ya no están disponibles, así que nadie cumple esas condiciones.',
 };
 
 export default userFilter;

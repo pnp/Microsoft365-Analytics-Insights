@@ -108,8 +108,33 @@ export function replaceClause(filter: UserFilter, index: number, clause: UserFil
   return normalise(filter.clauses.map((c, i) => (i === index ? clause : c)));
 }
 
+/** The clauses of each AND-group, in order. */
+function toGroups(filter: UserFilter): UserFilterClause[][] {
+  return groupClauseIndexes(filter).map((group) => group.map((index) => filter.clauses[index]));
+}
+
+/**
+ * Flattens AND-groups back into clauses: each group after the first opens with OR, every other clause
+ * joins with AND, and a group left empty disappears.
+ *
+ * Every edit that removes a clause goes through here. The join lives on each clause, so dropping the
+ * clause that OPENS an OR group without this would leave the rest of that group joined by AND to the
+ * group before it - silently turning "(Sales) or (UK and London)" into "Sales and London".
+ */
+function fromGroups(groups: UserFilterClause[][]): UserFilter {
+  const clauses: UserFilterClause[] = [];
+  groups
+    .filter((group) => group.length > 0)
+    .forEach((group, g) =>
+      group.forEach((clause, i) => clauses.push({ ...clause, join: g > 0 && i === 0 ? 'or' : 'and' })),
+    );
+  return { clauses };
+}
+
 export function removeClause(filter: UserFilter, index: number): UserFilter {
-  return normalise(filter.clauses.filter((_, i) => i !== index));
+  return fromGroups(
+    groupClauseIndexes(filter).map((group) => group.filter((i) => i !== index).map((i) => filter.clauses[i])),
+  );
 }
 
 export function setJoin(filter: UserFilter, index: number, join: UserFilterJoin): UserFilter {
@@ -133,24 +158,40 @@ export function groupClauseIndexes(filter: UserFilter): number[][] {
  * Narrows the whole filter to one value of a dimension - what "show only this domain" on a breakdown
  * table means once other conditions are in play.
  *
- * Any existing condition on the dimension is replaced, and the new one is ANDed into every OR-group:
- * `(A) or (B)` narrowed to domain X becomes `(A and X) or (B and X)`, which is "the same people, only on
- * X". Appending one clause to the end would only have narrowed the last group, because AND binds
- * tighter than OR. Passing `null` removes the dimension's conditions altogether.
+ * Within each OR-group an existing condition on the dimension is replaced where it stands, and a group
+ * without one gets the new condition added: `(A) or (B)` narrowed to domain X becomes
+ * `(A and X) or (B and X)`, which is "the same people, only on X". Appending one clause to the end would
+ * only have narrowed the last group, because AND binds tighter than OR. Passing `null` removes the
+ * dimension's conditions altogether, dropping any group that held nothing else.
  */
 export function withDimensionValue(filter: UserFilter, dimension: string, value: string | null): UserFilter {
-  const remainder = normalise(filter.clauses.filter((c) => c.dimension !== dimension));
-  if (value === null) return remainder;
+  const groups = toGroups(filter);
+
+  if (value === null) return fromGroups(groups.map((group) => group.filter((c) => c.dimension !== dimension)));
 
   const condition: UserFilterClause = { join: 'and', dimension, operator: 'is', values: [value], includeNotSet: false };
-  if (remainder.clauses.length === 0) return { clauses: [condition] };
+  if (groups.length === 0) return { clauses: [condition] };
 
-  const narrowed: UserFilterClause[] = [];
-  for (const group of groupClauseIndexes(remainder)) {
-    group.forEach((index) => narrowed.push(remainder.clauses[index]));
-    narrowed.push(condition);
-  }
-  return normalise(narrowed);
+  return fromGroups(
+    groups.map((group) => {
+      // Everything before the first condition on the dimension is something else, so its position in
+      // the group is also its position among the survivors.
+      const at = group.findIndex((c) => c.dimension === dimension);
+      const others = group.filter((c) => c.dimension !== dimension);
+      if (at < 0) return [...others, condition];
+
+      others.splice(at, 0, condition);
+      return others;
+    }),
+  );
+}
+
+/**
+ * Whether a filter can be sent at all: within the server's clause limit and short enough for a query
+ * string. An edit that would break either is refused where it is made, never sent to be rejected.
+ */
+export function fitsLimits(filter: UserFilter): boolean {
+  return filter.clauses.length <= MAX_CLAUSES && encodedFilterLength(filter) <= MAX_ENCODED_FILTER_LENGTH;
 }
 
 /**
@@ -213,8 +254,12 @@ export function parseUserFilter(text: string | null | undefined): UserFilter {
 
   if (!Array.isArray(parsed)) return EMPTY_USER_FILTER;
 
+  // Refused rather than truncated: dropping the last clauses of a filter changes who it matches -
+  // cutting a group's domain condition off would widen that group to every domain.
+  if (parsed.length > MAX_CLAUSES) return EMPTY_USER_FILTER;
+
   const clauses: UserFilterClause[] = [];
-  for (const raw of parsed.slice(0, MAX_CLAUSES)) {
+  for (const raw of parsed) {
     if (!raw || typeof raw !== 'object') return EMPTY_USER_FILTER;
     const item = raw as Record<string, unknown>;
 
@@ -230,7 +275,11 @@ export function parseUserFilter(text: string | null | undefined): UserFilter {
       values,
       includeNotSet: item.n === true,
     };
-    if (clauseIsComplete(clause)) clauses.push(clause);
+
+    // The page never writes an incomplete condition, and dropping one would move the group
+    // boundary it carried - so a link holding one was not made here, and opens unfiltered.
+    if (!clauseIsComplete(clause)) return EMPTY_USER_FILTER;
+    clauses.push(clause);
   }
 
   return normalise(clauses);
