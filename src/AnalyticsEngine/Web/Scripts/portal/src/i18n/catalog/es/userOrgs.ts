@@ -77,13 +77,15 @@ export const userOrgs: Record<keyof typeof en, string> = {
     'UserPrincipalName,{column}\nalex.wilber@contoso.com,Finanzas\nmegan.bowen@contoso.com,Investigaci\u00f3n y desarrollo\nadele.vance@contoso.com,',
   'userOrgs.csvFormat.exampleAria': 'Archivo de ejemplo',
   'userOrgs.csvFormat.ruleHeader':
-    'La fila de encabezado es opcional y las dos columnas pueden ir en cualquier orden. La columna de usuario se reconoce por un encabezado como UserPrincipalName, UPN, User o Email (en ingl\u00e9s); si no hay fila de encabezado, la primera columna se toma como el usuario y la segunda como el valor.',
+    'La fila de encabezado es opcional y las dos columnas pueden ir en cualquier orden. La columna de usuario se reconoce por un encabezado como UserPrincipalName, UPN, User o Email (en ingl\u00e9s); si el archivo tiene una columna de correo electr\u00f3nico y otra UserPrincipalName o UPN, use la de UPN. Si no hay fila de encabezado, la primera columna se toma como el usuario y la segunda como el valor.',
   'userOrgs.csvFormat.ruleSeparator':
-    'Separe las columnas con comas, puntos y comas, tabulaciones o barras verticales: el separador se detecta autom\u00e1ticamente. Guarde el archivo como UTF-8 (\u00abCSV UTF-8\u00bb en Excel) para que los nombres con acentos o en alfabetos no latinos lleguen intactos.',
+    'Separe las columnas con comas, puntos y comas, tabulaciones o barras verticales: el separador se detecta autom\u00e1ticamente. Guarde el archivo como UTF-8 (\u00abCSV UTF-8\u00bb en Excel). Se rechazan otras codificaciones porque los nombres con acentos o en alfabetos no latinos se corromper\u00edan.',
   'userOrgs.csvFormat.ruleBlank':
     'Una fila sin valor, como la \u00faltima del ejemplo, borra el valor de esa persona.',
   'userOrgs.csvFormat.ruleUsers':
     'Use los nombres principales de usuario que este producto importa de Microsoft Entra. Antes de importar nada, una vista previa muestra cu\u00e1ntas filas coinciden con un usuario; las filas que no coinciden con nadie se omiten.',
+  'userOrgs.csvFormat.ruleColumns':
+    'Asigne a la columna de valor el nombre de este tipo de organizaci\u00f3n, como en el ejemplo. Si el archivo tiene m\u00e1s columnas, se le pedir\u00e1 que indique cu\u00e1l contiene el nombre principal de usuario y cu\u00e1l contiene el valor.',
 
   // Create / edit dialog
   'userOrgs.dialog.editTitle': 'Editar {name}',
@@ -122,13 +124,19 @@ export const userOrgs: Record<keyof typeof en, string> = {
   'userOrgs.test.storedAs': 'Se almacena como',
 
   // CSV import panel - controls
+  'userOrgs.csv.fileLabel': 'Elegir un archivo CSV',
   'userOrgs.csv.clear': 'Quitar',
+  'userOrgs.csv.previewing': 'Leyendo el archivo y comprobando todos los usuarios...',
   'userOrgs.csv.modeLabel': '\u00bfQu\u00e9 debe ocurrir con los usuarios que no est\u00e1n en el archivo?',
   'userOrgs.csv.modeMerge': 'Combinar: dejarlos exactamente como est\u00e1n',
   'userOrgs.csv.modeReplace':
     'Reemplazar: borrar su valor de {name} (el archivo es la lista completa)',
   'userOrgs.csv.import.one': 'Importar {count} fila',
   'userOrgs.csv.import.other': 'Importar {count} filas',
+  'userOrgs.csv.columnChooser.hint': 'Este archivo tiene {count} columnas. Elija qu\u00e9 columnas importar.',
+  'userOrgs.csv.columnChooser.user': 'Columna del nombre principal de usuario',
+  'userOrgs.csv.columnChooser.value': 'Columna de valor',
+  'userOrgs.csv.columnChooser.fallback': 'Columna {number}',
 
   // Replace warning
   'userOrgs.csv.clearWarning.one': 'Esto borrar\u00e1 el valor de {name} de 1 usuario.',
@@ -140,6 +148,11 @@ export const userOrgs: Record<keyof typeof en, string> = {
   'userOrgs.csv.clearWarning.unknown.other':
     '{count} filas del archivo no coinciden con ning\u00fan usuario: si no lo esperaba, revise el archivo antes de continuar.',
   'userOrgs.csv.confirmClear': 'Lo entiendo: borrar los usuarios que este archivo no incluye',
+  'userOrgs.csv.mergeClearWarning.one':
+    'Esto borrar\u00e1 el valor de {name} de 1 usuario: el archivo lo incluye con un valor vac\u00edo.',
+  'userOrgs.csv.mergeClearWarning.other':
+    'Esto borrar\u00e1 el valor de {name} de {count} usuarios: el archivo los incluye con un valor vac\u00edo.',
+  'userOrgs.csv.confirmMergeClear': 'Lo entiendo: borrar los valores que el archivo deja vac\u00edos',
 
   // Preview
   'userOrgs.csv.headerFound':
@@ -152,6 +165,8 @@ export const userOrgs: Record<keyof typeof en, string> = {
     '1 fila del archivo no coincide con ning\u00fan usuario de esta base de datos y se omitir\u00e1. Compruebe que el archivo usa los mismos nombres principales de usuario que importa el producto y que no es una exportaci\u00f3n parcial.',
   'userOrgs.csv.unknownRows.other':
     '{count} filas del archivo no coinciden con ning\u00fan usuario de esta base de datos y se omitir\u00e1n. Compruebe que el archivo usa los mismos nombres principales de usuario que importa el producto y que no es una exportaci\u00f3n parcial.',
+  'userOrgs.csv.noMatches':
+    'Ninguna fila coincide con un usuario de esta base de datos. Compruebe que la columna de usuario contiene los nombres principales de usuario que importa este producto (por ejemplo, megan.bowen@contoso.com), no direcciones de correo ni nombres para mostrar.',
   'userOrgs.csv.previewAriaLabel': 'Vista previa del archivo',
   'userOrgs.csv.column.line': 'L\u00ednea',
   'userOrgs.csv.column.user': 'Usuario',
@@ -167,18 +182,101 @@ export const userOrgs: Record<keyof typeof en, string> = {
   'userOrgs.csv.problems':
     'Algunas filas no se pueden usar: {problems}. Se omiten y se contabilizan; el resto del archivo se importa igualmente.',
   'userOrgs.csv.problemLine': 'l\u00ednea {line} ({reason})',
+  'userOrgs.csv.problem.missingUserColumn': 'falta la columna de usuario',
+  'userOrgs.csv.problem.userEmptyOrTooLong': 'el nombre principal de usuario est\u00e1 vac\u00edo o es demasiado largo',
+  'userOrgs.csv.problem.notAValidUpn': 'el valor de usuario no es un nombre principal de usuario v\u00e1lido',
+  'userOrgs.csv.problem.unknownUser': 'el nombre principal de usuario no coincide con ning\u00fan usuario de esta base de datos',
+  'userOrgs.csv.unusable.download.one': 'Descargar la 1 fila que no se puede importar (CSV)',
+  'userOrgs.csv.unusable.download.other': 'Descargar las {count} filas que no se pueden importar (CSV)',
+  'userOrgs.csv.unusable.truncated': 'La descarga enumera las primeras {shown} de {count} filas.',
+  'userOrgs.csv.unusable.defaultFileName': 'organizaciones-de-usuario',
+  'userOrgs.csv.unusable.column.line': 'L\u00ednea',
+  'userOrgs.csv.unusable.column.user': 'Usuario',
+  'userOrgs.csv.unusable.column.value': '{name}',
+  'userOrgs.csv.unusable.column.reason': 'Motivo',
+  'userOrgs.csv.blocking.notUtf8':
+    'Este archivo no est\u00e1 guardado como UTF-8, por lo que los nombres con acentos o en alfabetos no latinos se corromper\u00edan (el primer problema est\u00e1 en la l\u00ednea {line}). En Excel, use Guardar como y elija \u00abCSV UTF-8 (delimitado por comas)\u00bb; despu\u00e9s, vuelva a elegir el archivo.',
+  'userOrgs.csv.blocking.excelWorkbook':
+    'Es un libro de Excel, no un archivo CSV. En Excel, use Guardar como y elija \u00abCSV UTF-8 (delimitado por comas)\u00bb; despu\u00e9s, elija ese archivo.',
+  'userOrgs.csv.blocking.notText':
+    'Esto no parece un archivo CSV de texto. Gu\u00e1rdelo como \u00abCSV UTF-8 (delimitado por comas)\u00bb y vuelva a elegirlo.',
+  'userOrgs.csv.blocking.unterminatedQuote':
+    'Una comilla de la l\u00ednea {line} no se cierra nunca, por lo que el resto del archivo no se puede leer como filas. Corrija las comillas y vuelva a elegir el archivo.',
+  'userOrgs.csv.blocking.rowSpansLines':
+    'Las l\u00edneas {line}-{lastLine} se han le\u00eddo como una sola fila porque una comilla de la l\u00ednea {line} no se cierra en esa l\u00ednea. Los nombres de organizaci\u00f3n no pueden contener saltos de l\u00ednea: quite la comilla sobrante, o ponga todo el valor entre comillas, y vuelva a elegir el archivo.',
+  'userOrgs.csv.blocking.chooseColumns':
+    'Este archivo tiene varias columnas. Elija cu\u00e1l contiene el nombre principal de usuario de cada persona y cu\u00e1l contiene el valor.',
+  'userOrgs.csv.blocking.tooManyRows':
+    'Este archivo tiene m\u00e1s de {max} filas. Div\u00eddalo en archivos m\u00e1s peque\u00f1os e imp\u00f3rtelos de uno en uno.',
+  'userOrgs.csv.blocking.noRows': 'Este archivo no tiene filas que importar.',
+  'userOrgs.csv.blocking.noUsableRows': 'No se puede usar ninguna fila de este archivo.',
+  'userOrgs.csv.apiError.importInProgress':
+    'Ya hay otra importaci\u00f3n en curso para este tipo de organizaci\u00f3n. Espere a que termine y vuelva a elegir el archivo.',
+  'userOrgs.csv.apiError.draftNotFound': 'Esta vista previa ha expirado o ya se import\u00f3. Vuelva a elegir el archivo.',
+  'userOrgs.csv.apiError.typeChanged':
+    'El tipo de organizaci\u00f3n cambi\u00f3 despu\u00e9s de la vista previa. Revise su configuraci\u00f3n y vuelva a elegir el archivo.',
+  'userOrgs.csv.apiError.typeNotFound': 'Este tipo de organizaci\u00f3n ya no existe.',
+  'userOrgs.csv.apiError.typeNotCsv': '{name} no es un tipo de organizaci\u00f3n basado en CSV.',
+  'userOrgs.csv.apiError.typeDisabled': '{name} est\u00e1 deshabilitado. Habil\u00edtelo antes de importar un archivo.',
+  'userOrgs.csv.apiError.noMatchingUsers':
+    'Ninguna fila coincide con un usuario de esta base de datos. Compruebe la columna de usuario y vuelva a elegir el archivo.',
+  'userOrgs.csv.apiError.clearExceedsConfirmed':
+    'Esta importaci\u00f3n borrar\u00eda ahora los valores de {count} usuarios, no los {confirmed} que confirm\u00f3. Los datos han cambiado desde la vista previa; vuelva a elegir el archivo para ver las nuevas cifras.',
+  'userOrgs.csv.apiError.noFile': 'Elija un archivo CSV antes de obtener la vista previa.',
+  'userOrgs.csv.apiError.uploadUnreadable': 'No se pudo leer el archivo. Vuelva a elegirlo o guarde una copia nueva desde Excel.',
+  'userOrgs.csv.apiError.uploadTooLarge':
+    'Este archivo supera el l\u00edmite de carga de {maxMb} MB. Div\u00eddalo en archivos m\u00e1s peque\u00f1os e imp\u00f3rtelos de uno en uno.',
+  'userOrgs.csv.apiError.invalidMode': 'Elija Combinar o Reemplazar antes de importar.',
+  'userOrgs.csv.apiError.invalidColumns': 'Elija dos columnas distintas: una para el nombre principal de usuario y otra para el valor.',
 
   // Job progress
-  'userOrgs.job.importing':
-    'Importando {count} fila(s)... esta p\u00e1gina se actualizar\u00e1 cuando termine.',
+  'userOrgs.job.waiting': 'Esperando para empezar...',
+  'userOrgs.job.importing': 'Importando {count} filas... iniciada a las {time}.',
+  'userOrgs.job.resumed': 'Reanudada despu\u00e9s de que la aplicaci\u00f3n web se reiniciara.',
+  'userOrgs.job.poll.warning':
+    'No se puede contactar con el servidor para comprobar esta importaci\u00f3n. La importaci\u00f3n contin\u00faa de todos modos; se sigue intentando...',
+  'userOrgs.job.poll.notFound':
+    'Esta importaci\u00f3n ya no se puede encontrar. Es posible que se haya eliminado el tipo de organizaci\u00f3n.',
+  'userOrgs.job.poll.sessionExpired':
+    'La sesi\u00f3n ha caducado. Vuelva a cargar la p\u00e1gina para ver c\u00f3mo termin\u00f3 la importaci\u00f3n.',
   'userOrgs.job.interrupted':
-    'Esta importaci\u00f3n dej\u00f3 de informar de su progreso, lo que suele significar que la aplicaci\u00f3n web se reinici\u00f3 mientras se ejecutaba. Se aplic\u00f3 por completo o no se aplic\u00f3 en absoluto (el archivo se aplica en una \u00fanica transacci\u00f3n, as\u00ed que no puede quedar a medias), pero no se ha registrado cu\u00e1l de las dos. Vuelva a cargar el archivo para asegurarse; importar el mismo archivo dos veces es inocuo.',
+    'Esta importaci\u00f3n dej\u00f3 de informar de su progreso, normalmente porque la aplicaci\u00f3n web se reinici\u00f3. No se cambi\u00f3 nada: una importaci\u00f3n se guarda en un solo paso junto con su estado correcto, as\u00ed que no puede quedar a medias. El servidor la reanudar\u00e1 autom\u00e1ticamente. Si no se ha reiniciado en unos minutos, vuelva a cargar el archivo.',
   'userOrgs.job.failed': 'La importaci\u00f3n ha {status}. {message}',
   'userOrgs.job.finished': 'Importaci\u00f3n finalizada.',
+  'userOrgs.job.nothingChanged.detail': 'No ha cambiado nada. {reason}',
+  'userOrgs.job.nothingChanged.unknown.one': '1 fila no coincidi\u00f3 con ning\u00fan usuario.',
+  'userOrgs.job.nothingChanged.unknown.other': '{count} filas no coincidieron con ning\u00fan usuario.',
+  'userOrgs.job.nothingChanged.sameValues': 'Todos ten\u00edan ya estos valores.',
   'userOrgs.job.changed': '{count} modificados',
   'userOrgs.job.cleared': '{count} borrados',
   'userOrgs.job.unknownUsers': '{count} usuario(s) desconocido(s)',
   'userOrgs.job.unusableRows': '{count} fila(s) inutilizable(s)',
+  'userOrgs.job.error.failed':
+    'No se pudo completar la importaci\u00f3n. No se cambi\u00f3 nada. Int\u00e9ntelo de nuevo; si sigue fallando, revise los registros del servicio.',
+  'userOrgs.job.error.superseded':
+    'Esta importaci\u00f3n se sustituy\u00f3 por otra posterior para el mismo tipo de organizaci\u00f3n despu\u00e9s de dejar de informar de su progreso. La importaci\u00f3n posterior es la que cuenta.',
+  'userOrgs.job.error.typeChanged':
+    'El tipo de organizaci\u00f3n se cambi\u00f3 despu\u00e9s de obtener la vista previa del archivo, por lo que no se import\u00f3 nada. Revise su configuraci\u00f3n y vuelva a elegir el archivo.',
+  'userOrgs.job.error.clearExceedsConfirmed':
+    'No se import\u00f3 nada: cuando se ejecut\u00f3, habr\u00eda borrado los valores de m\u00e1s usuarios de los que confirm\u00f3. Vuelva a elegir el archivo para ver las nuevas cifras.',
+  'userOrgs.job.error.interruptedRepeatedly':
+    'La aplicaci\u00f3n web se reinici\u00f3 varias veces durante esta importaci\u00f3n, as\u00ed que se detuvo. No se cambi\u00f3 nada. Vuelva a cargar el archivo.',
+  'userOrgs.lastImport.line': '\u00daltima importaci\u00f3n: {date} por {who}. {outcome} {counts}',
+  'userOrgs.history.title': 'Historial de importaciones',
+  'userOrgs.history.loading': 'Cargando historial de importaciones...',
+  'userOrgs.history.empty': 'A\u00fan no hay importaciones.',
+  'userOrgs.history.column.date': 'Fecha',
+  'userOrgs.history.column.who': 'Por',
+  'userOrgs.history.column.mode': 'Modo',
+  'userOrgs.history.column.status': 'Estado',
+  'userOrgs.history.column.counts': 'Recuentos',
+  'userOrgs.history.column.reason': 'Motivo',
+  'userOrgs.history.mode.merge': 'Combinar',
+  'userOrgs.history.mode.replace': 'Reemplazar',
+  'userOrgs.history.reason.none': 'Ninguno',
+  'userOrgs.history.outcome.succeeded': 'Correcta.',
+  'userOrgs.history.counts':
+    '{changed} modificados, {cleared} borrados, {unknown} desconocidos, {unusable} inutilizables',
 
   // Who is in each organisation
   'userOrgs.browse.title': 'Qui\u00e9n pertenece a cada organizaci\u00f3n',

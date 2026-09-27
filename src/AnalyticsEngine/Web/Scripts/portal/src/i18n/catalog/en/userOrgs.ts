@@ -79,12 +79,14 @@ export const userOrgs = {
     'UserPrincipalName,{column}\nalex.wilber@contoso.com,Finance\nmegan.bowen@contoso.com,Research & Development\nadele.vance@contoso.com,',
   'userOrgs.csvFormat.exampleAria': 'Example file',
   'userOrgs.csvFormat.ruleHeader':
-    'The header row is optional, and the two columns can be in either order. The user column is recognised by a header such as UserPrincipalName, UPN, User or Email; with no header row, the first column is taken as the user and the second as the value.',
+    'The header row is optional, and the two columns can be in either order. The user column is recognised by a header such as UserPrincipalName, UPN, User or Email; when the file has both an email column and a UserPrincipalName or UPN column, use the UPN one. With no header row, the first column is taken as the user and the second as the value.',
   'userOrgs.csvFormat.ruleSeparator':
-    'Separate the columns with commas, semicolons, tabs or pipes - the separator is detected. Save the file as UTF-8 ("CSV UTF-8" in Excel) so accented and non-Latin names arrive intact.',
+    'Separate the columns with commas, semicolons, tabs or pipes - the separator is detected. Save the file as UTF-8 ("CSV UTF-8" in Excel). Other encodings are refused because accented and non-Latin names would be corrupted.',
   'userOrgs.csvFormat.ruleBlank': "A row with no value, like the last one above, clears that person's value.",
   'userOrgs.csvFormat.ruleUsers':
     'Use the user principal names this product imports from Microsoft Entra. Before anything is imported, a preview shows how many rows match a user; rows that match nobody are skipped.',
+  'userOrgs.csvFormat.ruleColumns':
+    'Name the value column after this organisation type, as in the example. If the file has more columns, you will be asked which one holds the user principal name and which one holds the value.',
 
   // Create / edit dialog
   'userOrgs.dialog.editTitle': 'Edit {name}',
@@ -122,12 +124,18 @@ export const userOrgs = {
   'userOrgs.test.storedAs': 'Stored as',
 
   // CSV import panel - controls
+  'userOrgs.csv.fileLabel': 'Choose a CSV file',
   'userOrgs.csv.clear': 'Clear',
+  'userOrgs.csv.previewing': 'Reading the file and checking every user...',
   'userOrgs.csv.modeLabel': 'What should happen to users who are not in the file?',
   'userOrgs.csv.modeMerge': 'Merge - leave them exactly as they are',
   'userOrgs.csv.modeReplace': 'Replace - clear their {name} value (the file is the complete list)',
   'userOrgs.csv.import.one': 'Import {count} row',
   'userOrgs.csv.import.other': 'Import {count} rows',
+  'userOrgs.csv.columnChooser.hint': 'This file has {count} columns. Choose which columns to import.',
+  'userOrgs.csv.columnChooser.user': 'User principal name column',
+  'userOrgs.csv.columnChooser.value': 'Value column',
+  'userOrgs.csv.columnChooser.fallback': 'Column {number}',
 
   // Replace warning
   'userOrgs.csv.clearWarning.one': 'This will clear 1 user\u2019s {name} value.',
@@ -139,6 +147,11 @@ export const userOrgs = {
   'userOrgs.csv.clearWarning.unknown.other':
     '{count} rows in the file match no user at all - if that is unexpected, check the file before continuing.',
   'userOrgs.csv.confirmClear': 'I understand, clear the users this file does not cover',
+  'userOrgs.csv.mergeClearWarning.one':
+    "This will clear 1 user's {name} value: the file lists them with an empty value.",
+  'userOrgs.csv.mergeClearWarning.other':
+    "This will clear {count} users' {name} value: the file lists them with an empty value.",
+  'userOrgs.csv.confirmMergeClear': 'I understand, clear the values the file leaves empty',
 
   // Preview
   'userOrgs.csv.headerFound':
@@ -150,6 +163,8 @@ export const userOrgs = {
     '1 row in the file matches no user in this database and will be skipped. Check the file uses the same user principal names the product imports, and that it is not a partial export.',
   'userOrgs.csv.unknownRows.other':
     '{count} rows in the file match no user in this database and will be skipped. Check the file uses the same user principal names the product imports, and that it is not a partial export.',
+  'userOrgs.csv.noMatches':
+    'None of the rows match a user in this database. Check that the user column holds the user principal names this product imports (for example megan.bowen@contoso.com), not email addresses or display names.',
   'userOrgs.csv.previewAriaLabel': 'File preview',
   'userOrgs.csv.column.line': 'Line',
   'userOrgs.csv.column.user': 'User',
@@ -164,17 +179,101 @@ export const userOrgs = {
   'userOrgs.csv.problems':
     'Some rows cannot be used: {problems}. They are skipped and counted; the rest of the file still imports.',
   'userOrgs.csv.problemLine': 'line {line} ({reason})',
+  'userOrgs.csv.problem.missingUserColumn': 'the user column is missing',
+  'userOrgs.csv.problem.userEmptyOrTooLong': 'the user principal name is empty or too long',
+  'userOrgs.csv.problem.notAValidUpn': 'the user value is not a valid user principal name',
+  'userOrgs.csv.problem.unknownUser': 'the user principal name does not match a user in this database',
+  'userOrgs.csv.unusable.download.one': "Download the 1 row that can't be imported (CSV)",
+  'userOrgs.csv.unusable.download.other': "Download the {count} rows that can't be imported (CSV)",
+  'userOrgs.csv.unusable.truncated': 'The download lists the first {shown} of {count} rows.',
+  'userOrgs.csv.unusable.defaultFileName': 'user-organisations',
+  'userOrgs.csv.unusable.column.line': 'Line',
+  'userOrgs.csv.unusable.column.user': 'User',
+  'userOrgs.csv.unusable.column.value': '{name}',
+  'userOrgs.csv.unusable.column.reason': 'Reason',
+  'userOrgs.csv.blocking.notUtf8':
+    "This file isn't saved as UTF-8, so accented and non-Latin names would be corrupted (the first problem is on line {line}). In Excel, use Save As and choose 'CSV UTF-8 (Comma delimited)', then choose the file again.",
+  'userOrgs.csv.blocking.excelWorkbook':
+    "This is an Excel workbook, not a CSV file. In Excel, use Save As and choose 'CSV UTF-8 (Comma delimited)', then choose that file.",
+  'userOrgs.csv.blocking.notText':
+    "This doesn't look like a text CSV file. Save it as 'CSV UTF-8 (Comma delimited)' and choose it again.",
+  'userOrgs.csv.blocking.unterminatedQuote':
+    "A quotation mark on line {line} is never closed, so the rest of the file can't be read as rows. Fix the quoting and choose the file again.",
+  'userOrgs.csv.blocking.rowSpansLines':
+    "Lines {line}-{lastLine} were read as one row, because a quotation mark on line {line} isn't closed on that line. Organisation names can't contain line breaks: remove the stray quotation mark, or put the whole value in quotation marks, and choose the file again.",
+  'userOrgs.csv.blocking.chooseColumns':
+    "This file has several columns. Choose which one holds each person's user principal name and which holds the value.",
+  'userOrgs.csv.blocking.tooManyRows':
+    'This file has more than {max} rows. Split it into smaller files and import them one at a time.',
+  'userOrgs.csv.blocking.noRows': 'This file has no rows to import.',
+  'userOrgs.csv.blocking.noUsableRows': 'None of the rows in this file can be used.',
+  'userOrgs.csv.apiError.importInProgress':
+    'Another import is already running for this organisation type. Wait for it to finish, then choose the file again.',
+  'userOrgs.csv.apiError.draftNotFound': 'This preview has expired or was already imported. Choose the file again.',
+  'userOrgs.csv.apiError.typeChanged':
+    'The organisation type was changed after the preview. Check its settings and choose the file again.',
+  'userOrgs.csv.apiError.typeNotFound': 'This organisation type no longer exists.',
+  'userOrgs.csv.apiError.typeNotCsv': '{name} is not a CSV-sourced organisation type.',
+  'userOrgs.csv.apiError.typeDisabled': '{name} is disabled. Enable it before importing a file.',
+  'userOrgs.csv.apiError.noMatchingUsers':
+    'None of the rows match a user in this database. Check the user column and choose the file again.',
+  'userOrgs.csv.apiError.clearExceedsConfirmed':
+    "This import would now clear {count} users' values, not the {confirmed} you confirmed. The data changed since the preview; choose the file again to see the new numbers.",
+  'userOrgs.csv.apiError.noFile': 'Choose a CSV file before previewing it.',
+  'userOrgs.csv.apiError.uploadUnreadable': 'The file could not be read. Choose it again, or save a new copy from Excel.',
+  'userOrgs.csv.apiError.uploadTooLarge':
+    'This file is larger than the {maxMb} MB upload limit. Split it into smaller files and import them one at a time.',
+  'userOrgs.csv.apiError.invalidMode': 'Choose Merge or Replace before importing.',
+  'userOrgs.csv.apiError.invalidColumns': 'Choose two different columns: one for the user principal name and one for the value.',
 
   // Job progress
-  'userOrgs.job.importing': 'Importing {count} row(s)... this page will update when it finishes.',
+  'userOrgs.job.waiting': 'Waiting to start...',
+  'userOrgs.job.importing': 'Importing {count} rows... started at {time}.',
+  'userOrgs.job.resumed': 'Resumed after the web app restarted.',
+  'userOrgs.job.poll.warning':
+    "Can't reach the server to check on this import. The import carries on regardless; still trying...",
+  'userOrgs.job.poll.notFound':
+    'This import can no longer be found. The organisation type may have been deleted.',
+  'userOrgs.job.poll.sessionExpired':
+    'Your session has expired. Reload the page to see how the import finished.',
   'userOrgs.job.interrupted':
-    'This import stopped reporting progress, which usually means the web app restarted while it was running. It was either applied in full or not at all - the file is applied in a single transaction, so it cannot have been left half done - but which of those happened is not recorded. Upload the file again to be sure; importing the same file twice is harmless.',
+    "This import stopped reporting progress, usually because the web app restarted. Nothing was changed: an import is saved in one step with its success status, so it cannot be left half done. The server will resume it automatically. If it has not restarted within a few minutes, upload the file again.",
   'userOrgs.job.failed': 'The import {status}. {message}',
   'userOrgs.job.finished': 'Import finished.',
+  'userOrgs.job.nothingChanged.detail': 'Nothing changed. {reason}',
+  'userOrgs.job.nothingChanged.unknown.one': '1 row matched no user.',
+  'userOrgs.job.nothingChanged.unknown.other': '{count} rows matched no user.',
+  'userOrgs.job.nothingChanged.sameValues': 'Everyone already had these values.',
   'userOrgs.job.changed': '{count} changed',
   'userOrgs.job.cleared': '{count} cleared',
   'userOrgs.job.unknownUsers': '{count} unknown user(s)',
   'userOrgs.job.unusableRows': '{count} unusable row(s)',
+  'userOrgs.job.error.failed':
+    'The import could not be completed. Nothing was changed. Try again; if it keeps failing, check the service logs.',
+  'userOrgs.job.error.superseded':
+    'This import was replaced by a later one for the same organisation type after it stopped reporting progress. The later import is the one that counts.',
+  'userOrgs.job.error.typeChanged':
+    'The organisation type was changed after the file was previewed, so nothing was imported. Check its settings and choose the file again.',
+  'userOrgs.job.error.clearExceedsConfirmed':
+    "Nothing was imported: by the time it ran, it would have cleared more users' values than you confirmed. Choose the file again to see the new numbers.",
+  'userOrgs.job.error.interruptedRepeatedly':
+    'The web app restarted during this import several times, so it was stopped. Nothing was changed. Upload the file again.',
+  'userOrgs.lastImport.line': 'Last import: {date} by {who}. {outcome} {counts}',
+  'userOrgs.history.title': 'Import history',
+  'userOrgs.history.loading': 'Loading import history...',
+  'userOrgs.history.empty': 'No imports yet.',
+  'userOrgs.history.column.date': 'Date',
+  'userOrgs.history.column.who': 'By',
+  'userOrgs.history.column.mode': 'Mode',
+  'userOrgs.history.column.status': 'Status',
+  'userOrgs.history.column.counts': 'Counts',
+  'userOrgs.history.column.reason': 'Reason',
+  'userOrgs.history.mode.merge': 'Merge',
+  'userOrgs.history.mode.replace': 'Replace',
+  'userOrgs.history.reason.none': 'None',
+  'userOrgs.history.outcome.succeeded': 'Succeeded.',
+  'userOrgs.history.counts':
+    '{changed} changed, {cleared} cleared, {unknown} unknown, {unusable} unusable',
 
   // Who is in each organisation
   'userOrgs.browse.title': 'Who is in each organisation',

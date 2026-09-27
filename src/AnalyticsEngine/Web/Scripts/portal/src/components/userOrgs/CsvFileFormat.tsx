@@ -87,6 +87,9 @@ export default function CsvFileFormat({ typeName, collapsed = false }: CsvFileFo
         <li>
           <Text size={200}>{t('userOrgs.csvFormat.ruleUsers')}</Text>
         </li>
+        <li>
+          <Text size={200}>{t('userOrgs.csvFormat.ruleColumns')}</Text>
+        </li>
       </ul>
     </div>
   );
