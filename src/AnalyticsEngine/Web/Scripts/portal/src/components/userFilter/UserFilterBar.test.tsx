@@ -222,6 +222,32 @@ describe('UserFilterBar', () => {
     expect(screen.getByRole('button', { name: 'Add filter' })).toBeDisabled();
   });
 
+  it('closes an open condition when the filter is changed from outside the bar', async () => {
+    // The domain table's Filter button, or a different ?filter= link, can replace the clause being
+    // edited. Applying the editor's old draft afterwards would write it over whatever sits there now.
+    const user = userEvent.setup();
+    function External() {
+      const [filter, setFilter] = useState<UserFilter>({ clauses: [clause('emailDomain', ['contoso.com'])] });
+      return (
+        <>
+          <button type="button" onClick={() => setFilter({ clauses: [clause('emailDomain', ['fabrikam.com'])] })}>
+            external change
+          </button>
+          <UserFilterBar filter={filter} onChange={setFilter} />
+        </>
+      );
+    }
+    renderWithProvider(<External />);
+
+    await user.click(await screen.findByRole('button', { name: 'Email domain is contoso.com' }));
+    expect(await screen.findByRole('button', { name: 'Apply' })).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'external change' }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Email domain is fabrikam.com' })).toBeVisible();
+  });
+
   it('is chrome: the whole bar is left off paper', async () => {
     renderWithProvider(<Harness initial={{ clauses: [clause('department', ['Sales'])] }} onChange={() => {}} />);
 

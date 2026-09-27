@@ -171,7 +171,11 @@ namespace Common.Entities.CopilotAdoption
                 OpportunitiesCapped = analysis.OpportunitiesCapped,
                 CoworkReadiness = Narrow(analysis.CoworkReadiness, c => c.UserId, c => c.EmailDomain, scope),
                 CoworkSignals = Narrow(analysis.CoworkSignals, s => s.UserId, s => s.EmailDomain, scope),
-                CoworkAssessedForWholePopulation = tenant.CoworkReadinessAvailable,
+                // Only a complete assessment can vouch for an empty slice. When the Cowork query hit its
+                // row cap, the people a slice selects may simply have been cut off, and "0 candidates"
+                // would be a claim about people nobody assessed.
+                CoworkAssessedForWholePopulation = tenant.CoworkReadinessAvailable
+                    && (analysis.CoworkSignals?.Count ?? 0) < (tenant.Options?.MaxCoworkUsersScored ?? int.MaxValue),
                 UnlicensedUsers = Narrow(analysis.UnlicensedUsers, u => u.UserId, u => u.EmailDomain, scope),
             };
         }

@@ -70,7 +70,9 @@ namespace Web.AnalyticsWeb.Models.UserFilters
 
         public async Task<UserDirectorySnapshot> GetAsync(CancellationToken cancellationToken)
         {
-            // Bounded: an admin invalidating on every attempt is the only way round this more than once.
+            // Bounded: only an admin invalidating again and again during one read can get round this
+            // more than once, and past the budget the request fails rather than answering from a read
+            // that predates the latest change.
             for (var attempt = 0; ; attempt++)
             {
                 Task<UserDirectorySnapshot> loading;
@@ -109,10 +111,19 @@ namespace Web.AnalyticsWeb.Models.UserFilters
                 // load that started after the change instead.
                 lock (_sync)
                 {
-                    if (generation == _generation || attempt >= 2) return snapshot;
+                    if (generation == _generation) return snapshot;
+                }
+
+                if (attempt >= MaxInvalidationRetries)
+                {
+                    throw new InvalidOperationException(
+                        "The directory changed repeatedly while it was being read; the request was not answered from a stale read.");
                 }
             }
         }
+
+        /// <summary>How many times one request will wait out an invalidation before giving up.</summary>
+        private const int MaxInvalidationRetries = 4;
 
         public void Prefetch()
         {

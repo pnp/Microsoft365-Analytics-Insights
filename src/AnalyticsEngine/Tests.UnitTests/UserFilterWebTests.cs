@@ -156,6 +156,25 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task Cache_InvalidatedOverAndOver_FailsRatherThanAnswerFromAStaleRead()
+        {
+            var loader = new ControlledLoader();
+            var source = new CachedUserDirectorySource(() => loader, Fresh, Usable, new Clock().Now);
+
+            var waiting = source.GetAsync(CancellationToken.None);
+
+            // Every read the request joins is invalidated before it lands.
+            for (var read = 0; read < 5; read++)
+            {
+                loader.WaitForCalls(read + 1);
+                source.Invalidate();
+                loader.Complete(Snapshot("stale " + read), callIndex: read);
+            }
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => waiting.TimeoutAfter(Wait));
+        }
+
+        [TestMethod]
         public async Task Cache_AFailedLoad_SurfacesToTheCaller_AndTheNextRequestRetries()
         {
             var loader = new ControlledLoader();

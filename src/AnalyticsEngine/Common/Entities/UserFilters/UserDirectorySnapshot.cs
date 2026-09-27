@@ -249,8 +249,11 @@ namespace Common.Entities.UserFilters
 
         private bool ReportsToAnotherRoot(int row, HashSet<int> roots)
         {
+            // A visited set rather than a depth cap: the walk down found this row at whatever depth it
+            // sits, so the walk up must be able to reach the same distance before it gives up.
+            var visited = new HashSet<int> { row };
             var current = _managerRowByRow[row];
-            for (var depth = 0; current >= 0 && current != row && depth < 64; depth++)
+            while (current >= 0 && visited.Add(current))
             {
                 if (roots.Contains(current)) return true;
                 current = _managerRowByRow[current];

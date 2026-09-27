@@ -125,6 +125,39 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Filtering_ToAnEmptyCoworkSlice_StaysUnavailable_WhenTheAssessmentWasCapped()
+        {
+            // The Cowork query stops at MaxCoworkUsersScored. If it did, the people a filter selects may
+            // just have been cut off - so an empty slice is unknown, not zero.
+            var analysis = Analysis();
+            analysis.Summary.Options = new CopilotAdoptionOptions { WindowDays = 28, MaxCoworkUsersScored = 8 };
+            var service = new CopilotAdoptionService(analysis.Summary.Options);
+            service.FinaliseSummary(analysis);
+
+            var scoped = CopilotAdoptionScopeFilter.Apply(
+                analysis,
+                CopilotAdoptionScope.Create(null, UserFilterCompiler.Compile(UserFilterCodec.Parse("[{\"d\":\"department\",\"v\":[\"Legal\"]}]"), Directory())),
+                service.FinaliseSummary);
+
+            Assert.IsTrue(analysis.Summary.CoworkReadinessAvailable);
+            Assert.IsFalse(scoped.Summary.CoworkReadinessAvailable);
+        }
+
+        [TestMethod]
+        public void Workbook_SaysWhenTheFilterNamesAnAttributeThatNoLongerExists()
+        {
+            var analysis = Analysis();
+            var service = Service();
+            service.FinaliseSummary(analysis);
+
+            var scoped = Narrow(analysis, "[{\"d\":\"org:99\",\"op\":\"isNot\",\"v\":[\"CC-100\"]}]", service);
+            var text = CopilotAdoptionWorkbookText.Of(CopilotAdoptionWorkbook.Build(scoped));
+
+            StringAssert.Contains(text, "THE FILTER NAMES ATTRIBUTES THAT NO LONGER EXIST: org:99");
+            Assert.AreEqual(0, scoped.Summary.LicensedUsers, "A condition on a type that has gone matches nobody.");
+        }
+
+        [TestMethod]
         public void Filtering_ThatMatchesNobody_ReportsAnEmptyPopulationRatherThanTheTenant()
         {
             var analysis = Analysis();

@@ -156,6 +156,20 @@ namespace Common.Entities.CopilotAdoption
                           + "come from totals that carry no per-person detail: "
                           + DescribeUnscopedSections(summary.UnscopedSections) + "."
                         : string.Empty)));
+
+                // A condition on an organisation type deleted or disabled since the filter was built
+                // matches nobody. Said here, because otherwise a file showing zero people reads as a
+                // measured empty population rather than as a filter that could not be applied.
+                var unknown = summary.UserFilter?.UnknownDimensions ?? new List<string>();
+                if (unknown.Count > 0)
+                {
+                    sheet.AddRow(XlsxCell.Wrapped(
+                        "THE FILTER NAMES ATTRIBUTES THAT NO LONGER EXIST: " + string.Join(", ", unknown)
+                        + ". An organisation type deleted or disabled after the filter was built matches nobody, "
+                        + "so any figure that depends on those conditions describes nobody rather than a measured "
+                        + "population. Remove the conditions, or re-create the organisation type, and export again."));
+                }
+
                 sheet.AddBlankRow();
             }
 

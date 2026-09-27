@@ -214,6 +214,28 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void ManagementChain_KeepsAChosenManager_FarBelowAnotherChosenManager()
+        {
+            // 80 levels deep: the walk up from the junior manager must reach the senior one however far
+            // down the tree they are, or choosing both would drop the junior one.
+            var builder = new UserDirectorySnapshotBuilder();
+            builder.AddUser(new UserDirectoryEntry { UserId = 1, UserPrincipalName = "top@contoso.com" });
+            for (var id = 2; id <= 81; id++)
+            {
+                builder.AddUser(new UserDirectoryEntry { UserId = id, UserPrincipalName = "level" + id + "@contoso.com", ManagerUserId = id - 1 });
+            }
+            builder.AddUser(new UserDirectoryEntry { UserId = 100, UserPrincipalName = "leaf@contoso.com", ManagerUserId = 81 });
+            var snapshot = builder.Build(Loaded);
+
+            var filter = UserFilterCompiler.Compile(
+                UserFilterCodec.Parse("[{\"d\":\"managementChain\",\"v\":[\"top@contoso.com\",\"level81@contoso.com\"]}]"), snapshot);
+
+            Assert.IsTrue(filter.Matches(81), "level81 reports to top, 80 levels up.");
+            Assert.IsTrue(filter.Matches(100));
+            Assert.IsFalse(filter.Matches(1));
+        }
+
+        [TestMethod]
         public void ManagementChain_NotSet_MeansNoManager()
         {
             var filter = Compile("[{\"d\":\"managementChain\",\"v\":[],\"n\":true}]");

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Button,
   InteractionTag,
@@ -35,6 +35,7 @@ import {
   removeClause,
   replaceClause,
   setJoin,
+  userFilterKey,
 } from './userFilterModel';
 import { useUserFilterDimensions } from './useUserFilterDimensions';
 
@@ -140,6 +141,17 @@ export default function UserFilterBar({ filter, onChange, echoNames }: UserFilte
   const { list, loading, error, reload } = useUserFilterDimensions();
   const [editing, setEditing] = useState<number | 'new' | null>(null);
   const [newJoin, setNewJoin] = useState<UserFilterJoin>('and');
+
+  // A change made elsewhere - the domain table's Filter button, a different ?filter= link - while a
+  // condition is open would leave the editor holding a draft of a clause that has moved or gone, and
+  // Apply would write that stale draft over whatever now sits at its index. Close it instead.
+  const filterKey = userFilterKey(filter);
+  const lastFilterKey = useRef(filterKey);
+  useEffect(() => {
+    if (lastFilterKey.current === filterKey) return;
+    lastFilterKey.current = filterKey;
+    setEditing((current) => (typeof current === 'number' ? null : current));
+  }, [filterKey]);
 
   const dimensions: UserFilterDimension[] = list?.dimensions ?? [];
   const source = { dimensions, names: echoNames };
