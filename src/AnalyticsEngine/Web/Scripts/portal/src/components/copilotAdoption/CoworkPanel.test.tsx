@@ -258,7 +258,7 @@ describe('CoworkPanel', () => {
       summary({
         coworkReadinessAvailable: false,
         warnings: [
-          'Cowork readiness scores at most 50,000 seat holders - anyone the Copilot audit log shows already using Cowork first, then the heaviest coordination loads - and this tenant reached that limit. Nobody in this filtered population made the list, so there is nothing to show here. This is NOT a missing import: the Cowork assessment ran. Widen the filter, or read the Cowork tab for the whole tenant.',
+          'Cowork readiness scores at most 50,000 seat holders, ranked by coordination load (when the Copilot audit log is imported, anyone it shows already using Cowork is taken first), and this tenant reached that limit. Nobody in this filtered population made the list, so there is nothing to show here. This is NOT a missing import: the Cowork assessment ran. Widen the filter, or read the Cowork tab for the whole tenant.',
         ],
         warningDetails: [{ key: 'coworkSliceNotAssessed', values: { maxUsers: 50000 } }],
       }),
