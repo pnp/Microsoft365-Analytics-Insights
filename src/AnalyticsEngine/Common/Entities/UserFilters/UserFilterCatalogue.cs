@@ -167,7 +167,7 @@ namespace Common.Entities.UserFilters
 
             // One pass over the precomputed order, keeping the first page and counting the rest - no
             // per-request sort, and no model object for a value that is not returned. A CSV organisation
-            // type can legitimately hold a distinct value per person.
+            // type can legitimately hold a distinct value per person, and the user name always does.
             var page = new List<UserFilterValueModel>(Math.Min(size, column.Values.Count));
             var total = 0;
             foreach (var index in column.OrderByPeople)

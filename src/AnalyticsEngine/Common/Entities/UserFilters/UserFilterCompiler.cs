@@ -203,8 +203,15 @@ namespace Common.Entities.UserFilters
 
         /// <summary>
         /// Which of a column's distinct values the clause names. Worked out once per clause over the
-        /// distinct values - a few hundred strings - rather than once per person.
+        /// distinct values - a few hundred strings for most attributes, one per person for the user
+        /// name - rather than once per person.
         /// </summary>
+        /// <remarks>
+        /// A "User name contains" condition therefore searches 200,000 strings per term on a tenant that
+        /// size - measured at roughly 200 ms for two terms on a development machine, the dominant cost of
+        /// compiling such a filter. A hand-written case-folding search was tried and measured no faster
+        /// than <c>IndexOf(OrdinalIgnoreCase)</c>, so the framework's is kept.
+        /// </remarks>
         private static bool[] SelectedValues(UserFilterClause clause, UserDirectoryColumn column)
         {
             var selected = new bool[column.Values.Count];
