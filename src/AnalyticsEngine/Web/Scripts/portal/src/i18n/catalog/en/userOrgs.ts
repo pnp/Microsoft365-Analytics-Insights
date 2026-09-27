@@ -203,10 +203,13 @@ export const userOrgs = {
     "Lines {line}-{lastLine} were read as one row, because a quotation mark on line {line} isn't closed on that line. Organisation names can't contain line breaks: remove the stray quotation mark, or put the whole value in quotation marks, and choose the file again.",
   'userOrgs.csv.blocking.chooseColumns':
     "This file has several columns. Choose which one holds each person's user principal name and which holds the value.",
+  'userOrgs.csv.blocking.oneColumn':
+    "This file has only one column. It needs two: each person's user principal name, and their value.",
   'userOrgs.csv.blocking.tooManyRows':
     'This file has more than {max} rows. Split it into smaller files and import them one at a time.',
   'userOrgs.csv.blocking.noRows': 'This file has no rows to import.',
   'userOrgs.csv.blocking.noUsableRows': 'None of the rows in this file can be used.',
+  'userOrgs.csv.blocking.generic': "This file can't be imported.",
   'userOrgs.csv.apiError.importInProgress':
     'Another import is already running for this organisation type. Wait for it to finish, then choose the file again.',
   'userOrgs.csv.apiError.draftNotFound': 'This preview has expired or was already imported. Choose the file again.',

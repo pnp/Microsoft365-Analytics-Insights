@@ -76,6 +76,7 @@ const BLOCKING_KEYS: Record<UserOrgCsvBlockingCode, TranslationKey> = {
   unterminatedQuote: 'userOrgs.csv.blocking.unterminatedQuote',
   rowSpansLines: 'userOrgs.csv.blocking.rowSpansLines',
   chooseColumns: 'userOrgs.csv.blocking.chooseColumns',
+  oneColumn: 'userOrgs.csv.blocking.oneColumn',
   tooManyRows: 'userOrgs.csv.blocking.tooManyRows',
   noRows: 'userOrgs.csv.blocking.noRows',
   noUsableRows: 'userOrgs.csv.blocking.noUsableRows',
@@ -943,7 +944,7 @@ function blockingMessage(preview: UserOrgCsvPreview, t: TFunction): string {
   const blocking = preview.blocking;
   if (!blocking) return '';
   const key = isBlockingCode(blocking.code) ? BLOCKING_KEYS[blocking.code] : null;
-  if (!key) return blocking.code;
+  if (!key) return t('userOrgs.csv.blocking.generic');
   return t(key, {
     line: formatNumber(blocking.line ?? 0),
     lastLine: formatNumber(blocking.lastLine ?? 0),

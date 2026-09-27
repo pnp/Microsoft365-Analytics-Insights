@@ -151,6 +151,7 @@ describe('CsvImportPanel', () => {
     ['notText', /doesn't look like a text CSV/i],
     ['unterminatedQuote', /line 7 is never closed/i],
     ['rowSpansLines', /Lines 7-9 were read as one row/i],
+    ['oneColumn', /only one column/i],
     ['tooManyRows', /more than 10,000 rows/i],
     ['noRows', /no rows to import/i],
     ['noUsableRows', /None of the rows in this file can be used/i],
@@ -169,6 +170,22 @@ describe('CsvImportPanel', () => {
 
     expect(await screen.findByText(message)).toBeInTheDocument();
     expect(screen.queryByText('What should happen to users who are not in the file?')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Import/ })).not.toBeInTheDocument();
+  });
+
+  it('shows a generic translated message for an unknown blocking code', async () => {
+    previewCsv.mockResolvedValue(
+      preview({
+        draftId: null,
+        blocking: { code: 'futureBlockingCode', line: null, lastLine: null, max: null },
+        rows: [],
+      }),
+    );
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+
+    await chooseFile();
+
+    expect(await screen.findByText("This file can't be imported.")).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Import/ })).not.toBeInTheDocument();
   });
 

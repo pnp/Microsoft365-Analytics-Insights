@@ -130,6 +130,7 @@ export type UserOrgCsvBlockingCode =
   | 'unterminatedQuote'
   | 'rowSpansLines'
   | 'chooseColumns'
+  | 'oneColumn'
   | 'tooManyRows'
   | 'noRows'
   | 'noUsableRows';

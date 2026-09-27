@@ -206,10 +206,13 @@ export const userOrgs: Record<keyof typeof en, string> = {
     'Las l\u00edneas {line}-{lastLine} se han le\u00eddo como una sola fila porque una comilla de la l\u00ednea {line} no se cierra en esa l\u00ednea. Los nombres de organizaci\u00f3n no pueden contener saltos de l\u00ednea: quite la comilla sobrante, o ponga todo el valor entre comillas, y vuelva a elegir el archivo.',
   'userOrgs.csv.blocking.chooseColumns':
     'Este archivo tiene varias columnas. Elija cu\u00e1l contiene el nombre principal de usuario de cada persona y cu\u00e1l contiene el valor.',
+  'userOrgs.csv.blocking.oneColumn':
+    'Este archivo tiene una sola columna. Necesita dos: el nombre principal de usuario de cada persona y su valor.',
   'userOrgs.csv.blocking.tooManyRows':
     'Este archivo tiene m\u00e1s de {max} filas. Div\u00eddalo en archivos m\u00e1s peque\u00f1os e imp\u00f3rtelos de uno en uno.',
   'userOrgs.csv.blocking.noRows': 'Este archivo no tiene filas que importar.',
   'userOrgs.csv.blocking.noUsableRows': 'No se puede usar ninguna fila de este archivo.',
+  'userOrgs.csv.blocking.generic': 'Este archivo no se puede importar.',
   'userOrgs.csv.apiError.importInProgress':
     'Ya hay otra importaci\u00f3n en curso para este tipo de organizaci\u00f3n. Espere a que termine y vuelva a elegir el archivo.',
   'userOrgs.csv.apiError.draftNotFound': 'Esta vista previa ha expirado o ya se import\u00f3. Vuelva a elegir el archivo.',
