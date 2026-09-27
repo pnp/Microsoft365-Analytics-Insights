@@ -153,6 +153,7 @@ export default function LicensedUsersPanel({
   initialBands,
   initialAction,
   emailDomain,
+  userFilter,
 }: {
   windowDays: number;
   filterOptions: AdoptionFilterOptions | null;
@@ -175,6 +176,8 @@ export default function LicensedUsersPanel({
    * different population from the summary above it.
    */
   emailDomain?: string | null;
+  /** The page-wide user filter in its wire form, applied to this list and its export for the same reason. */
+  userFilter?: string | null;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -186,6 +189,7 @@ export default function LicensedUsersPanel({
     bands: initialBands ?? [],
     actions: initialAction ? [initialAction] : [],
     emailDomain: emailDomain ?? '',
+    userFilter: userFilter ?? '',
   });
   const [searchDraft, setSearchDraft] = useState('');
   const [page, setPage] = useState(0);

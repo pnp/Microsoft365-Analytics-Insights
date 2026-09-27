@@ -193,6 +193,7 @@ export default function OpportunitiesPanel({
   guidanceLinks,
   seatLicenceTypeIds,
   emailDomain,
+  userFilter,
 }: {
   windowDays: number;
   /** The analysis the licence estimate is published on, and whose assumptions the reader can change. */
@@ -207,6 +208,8 @@ export default function OpportunitiesPanel({
    * different population from the rest of the report.
    */
   emailDomain?: string | null;
+  /** The page-wide user filter in its wire form - kept, like the domain, by every reset below. */
+  userFilter?: string | null;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -231,6 +234,7 @@ export default function OpportunitiesPanel({
   const [filters, setFilters] = useState<OpportunityFilters>({
     ...DEFAULT_FILTERS,
     emailDomain: emailDomain ?? '',
+    userFilter: userFilter ?? '',
   });
 
   /**
@@ -239,11 +243,12 @@ export default function OpportunitiesPanel({
    * The domain is not one of this panel's filters - it is the population the whole report is
    * describing, and the banner at the top of the page says so. Clearing it here would silently
    * widen the list back to the whole tenant while the page still claimed to be showing one
-   * organisation, and the CSV export built from the same state would follow it.
+   * organisation, and the CSV export built from the same state would follow it. The page-wide user
+   * filter is kept for the same reason.
    */
   const clearPanelFilters = () => {
     setSearchDraft('');
-    setFilters({ ...DEFAULT_FILTERS, emailDomain: emailDomain ?? '' });
+    setFilters({ ...DEFAULT_FILTERS, emailDomain: emailDomain ?? '', userFilter: userFilter ?? '' });
   };
   const [searchDraft, setSearchDraft] = useState('');
   const [page, setPage] = useState(0);

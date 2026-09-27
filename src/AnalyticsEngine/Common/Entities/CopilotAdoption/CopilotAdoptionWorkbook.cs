@@ -91,17 +91,23 @@ namespace Common.Entities.CopilotAdoption
             }
         }
 
-        /// <summary>File name carrying the period and the run date, so two snapshots never collide.</summary>
+        /// <summary>
+        /// File name carrying the period and the run date, so two snapshots never collide - and saying
+        /// when the file holds a filtered population, because a file name survives forwarding where the
+        /// cover sheet's warning may never be opened.
+        /// </summary>
         public static string FileName(CopilotAdoptionSummary summary)
         {
             var generated = summary?.GeneratedUtc ?? DateTime.UtcNow;
             var windowDays = summary?.WindowDays ?? 0;
+            var narrowed = !string.IsNullOrWhiteSpace(summary?.UserFilterDescription) ? "-filtered" : string.Empty;
 
             return string.Format(
                 CultureInfo.InvariantCulture,
-                "copilot-adoption-{0}d-{1:yyyy-MM-dd}.xlsx",
+                "copilot-adoption-{0}d{2}-{1:yyyy-MM-dd}.xlsx",
                 windowDays,
-                generated);
+                generated,
+                narrowed);
         }
 
         #region Report metadata
@@ -117,21 +123,34 @@ namespace Common.Entities.CopilotAdoption
             var sheet = workbook.AddSheet("Report");
             sheet.SetColumnWidths(42, 34, 60);
 
-            sheet.AddTitle(string.IsNullOrWhiteSpace(summary.ScopedEmailDomain)
-                ? "Microsoft 365 Copilot - adoption report"
-                : "Microsoft 365 Copilot - adoption report for " + summary.ScopedEmailDomain);
+            var hasDomain = !string.IsNullOrWhiteSpace(summary.ScopedEmailDomain);
+            var hasFilter = !string.IsNullOrWhiteSpace(summary.UserFilterDescription);
+
+            sheet.AddTitle(hasDomain
+                ? "Microsoft 365 Copilot - adoption report for " + summary.ScopedEmailDomain
+                : hasFilter
+                    ? "Microsoft 365 Copilot - adoption report (filtered)"
+                    : "Microsoft 365 Copilot - adoption report");
             sheet.AddBlankRow();
 
             // A spreadsheet outlives the screen it was exported from and gets forwarded without that
             // context. A file narrowed to one of several organisations in a tenant has to say so on its
             // own first sheet, or it will be read - and quoted in a licence negotiation - as the whole
             // tenant's position.
-            if (!string.IsNullOrWhiteSpace(summary.ScopedEmailDomain))
+            if (hasDomain || hasFilter)
             {
+                var narrowedTo = hasDomain && hasFilter
+                    ? "NARROWED TO ONE EMAIL DOMAIN: " + summary.ScopedEmailDomain + ", AND FILTERED TO PEOPLE WHERE: "
+                      + summary.UserFilterDescription + ". Every figure in this workbook describes those people only"
+                    : hasDomain
+                        ? "NARROWED TO ONE EMAIL DOMAIN: " + summary.ScopedEmailDomain + ". Every figure in this "
+                          + "workbook describes the people on that domain only"
+                        : "FILTERED TO PEOPLE WHERE: " + summary.UserFilterDescription + ". Every figure in this "
+                          + "workbook describes those people only";
+
                 sheet.AddRow(XlsxCell.Wrapped(
-                    "NARROWED TO ONE EMAIL DOMAIN: " + summary.ScopedEmailDomain + ". Every figure in this "
-                    + "workbook describes the people on that domain only, and must not be quoted as a "
-                    + "tenant-wide figure."
+                    narrowedTo
+                    + ", and must not be quoted as a tenant-wide figure."
                     + (summary.UnscopedSections.Count > 0
                         ? " The following sections could not be narrowed and remain TENANT-WIDE, because they "
                           + "come from totals that carry no per-person detail: "
@@ -142,12 +161,7 @@ namespace Common.Entities.CopilotAdoption
 
             sheet.AddHeaderRow("Property", "Value", "Notes");
             AddMeta(sheet, "Product build", BuildConstants.BuildLabel, BuildLabelNote);
-            AddMeta(sheet, "Population", string.IsNullOrWhiteSpace(summary.ScopedEmailDomain)
-                    ? "Whole tenant"
-                    : "Email domain " + summary.ScopedEmailDomain,
-                string.IsNullOrWhiteSpace(summary.ScopedEmailDomain)
-                    ? "Every Copilot seat holder the analysis could see."
-                    : "Only the people whose sign-in name is on this domain. Sections listed as tenant-wide above are the exception.");
+            AddMeta(sheet, "Population", PopulationLabel(summary), PopulationNote(summary));
             AddMeta(sheet, "Generated (UTC)", summary.GeneratedUtc,
                 "Take a snapshot before an enablement programme and another afterwards; the two files are directly comparable.");
             AddMeta(sheet, "Period covered", $"{summary.WindowDays} days",
@@ -285,10 +299,13 @@ namespace Common.Entities.CopilotAdoption
                 summary.ScoredUsers < summary.LicensedUsers
                     ? "FEWER THAN THE SEAT COUNT. Every rate below is of these users, not of the whole tenant, "
                       + "and must not be quoted as a tenant-wide figure."
-                    : string.IsNullOrWhiteSpace(summary.ScopedEmailDomain)
-                        ? "Every licensed user was analysed, so the rates below are tenant-wide."
-                        : "Every licensed user on " + summary.ScopedEmailDomain + " was analysed. The rates below "
-                          + "describe that domain, NOT the whole tenant.");
+                    : !string.IsNullOrWhiteSpace(summary.UserFilterDescription)
+                        ? "Every licensed user matching the filter was analysed. The rates below describe those "
+                          + "people, NOT the whole tenant."
+                        : string.IsNullOrWhiteSpace(summary.ScopedEmailDomain)
+                            ? "Every licensed user was analysed, so the rates below are tenant-wide."
+                            : "Every licensed user on " + summary.ScopedEmailDomain + " was analysed. The rates below "
+                              + "describe that domain, NOT the whole tenant.");
             AddMeta(sheet, "Active this period", summary.ActiveUsers,
                 "Used Copilot at least once. A deliberately low bar - one interaction counts the same as fifty.");
             AddMeta(sheet, "Habitual users", summary.HabitualUsers,
@@ -680,6 +697,44 @@ namespace Common.Entities.CopilotAdoption
                 case CopilotAdoptionUnscopedSections.CoworkCredits: return "the Cowork credit balance";
                 default: return section;
             }
+        }
+
+        /// <summary>The cover sheet's "Population" value: whose figures this file holds.</summary>
+        private static string PopulationLabel(CopilotAdoptionSummary summary)
+        {
+            var hasDomain = !string.IsNullOrWhiteSpace(summary.ScopedEmailDomain);
+            var hasFilter = !string.IsNullOrWhiteSpace(summary.UserFilterDescription);
+
+            if (hasDomain && hasFilter)
+            {
+                return "Email domain " + summary.ScopedEmailDomain + ", people where " + summary.UserFilterDescription;
+            }
+
+            if (hasDomain) return "Email domain " + summary.ScopedEmailDomain;
+            if (hasFilter) return "People where " + summary.UserFilterDescription;
+            return "Whole tenant";
+        }
+
+        private static string PopulationNote(CopilotAdoptionSummary summary)
+        {
+            var hasDomain = !string.IsNullOrWhiteSpace(summary.ScopedEmailDomain);
+            var hasFilter = !string.IsNullOrWhiteSpace(summary.UserFilterDescription);
+
+            if (!hasDomain && !hasFilter) return "Every Copilot seat holder the analysis could see.";
+
+            var of = summary.UnscopedLicensedUsers.HasValue
+                ? string.Format(
+                    CultureInfo.InvariantCulture,
+                    " {0:N0} of the tenant's {1:N0} Copilot licence holders are in it.",
+                    summary.LicensedUsers,
+                    summary.UnscopedLicensedUsers.Value)
+                : string.Empty;
+
+            return (hasFilter
+                    ? "Only the people matching the filter, judged on their Entra ID attributes and custom organisations as last imported."
+                    : "Only the people whose sign-in name is on this domain.")
+                + of
+                + " Sections listed as tenant-wide above are the exception.";
         }
 
         /// <summary>

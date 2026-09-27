@@ -570,6 +570,14 @@
     <Compile Include="UserOrgs\UserOrgModels.cs" />
     <Compile Include="UserOrgs\UserOrgRules.cs" />
     <Compile Include="UserOrgs\UserOrgStores.cs" />
+    <Compile Include="UserFilters\SqlUserDirectoryLoader.cs" />
+    <Compile Include="UserFilters\UserDirectorySnapshot.cs" />
+    <Compile Include="UserFilters\UserFilterCatalogue.cs" />
+    <Compile Include="UserFilters\UserFilterCodec.cs" />
+    <Compile Include="UserFilters\UserFilterCompiler.cs" />
+    <Compile Include="UserFilters\UserFilterDescriber.cs" />
+    <Compile Include="UserFilters\UserFilterDimensions.cs" />
+    <Compile Include="UserFilters\UserFilterModels.cs" />
     <Compile Include="ResourceProxy.cs" />
     <Compile Include="Xlsx\XlsxChart.cs" />
     <Compile Include="Xlsx\XlsxSheet.cs" />

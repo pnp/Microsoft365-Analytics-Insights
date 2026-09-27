@@ -118,6 +118,7 @@ function applyLicensedUserFilters(params: URLSearchParams, filters: LicensedUser
   if (filters.department) params.set('department', filters.department);
   if (filters.country) params.set('country', filters.country);
   if (filters.emailDomain) params.set('emailDomain', filters.emailDomain);
+  if (filters.userFilter) params.set('userFilter', filters.userFilter);
   if (filters.reclaimEligibility) params.set('reclaimEligibility', filters.reclaimEligibility);
   if (filters.coworkOnly) params.set('coworkOnly', 'true');
   if (filters.disabledOnly) params.set('disabledOnly', 'true');
@@ -132,6 +133,7 @@ function applyOpportunityFilters(params: URLSearchParams, filters: OpportunityFi
   if (filters.department) params.set('department', filters.department);
   if (filters.country) params.set('country', filters.country);
   if (filters.emailDomain) params.set('emailDomain', filters.emailDomain);
+  if (filters.userFilter) params.set('userFilter', filters.userFilter);
   if (filters.recommendedOnly) params.set('recommendedOnly', 'true');
   if (filters.existingCopilotUsersOnly) params.set('existingCopilotUsersOnly', 'true');
   params.set('sortBy', filters.sortBy);
@@ -146,6 +148,7 @@ function applyCoworkFilters(params: URLSearchParams, filters: CoworkFilters): UR
   if (filters.department) params.set('department', filters.department);
   if (filters.country) params.set('country', filters.country);
   if (filters.emailDomain) params.set('emailDomain', filters.emailDomain);
+  if (filters.userFilter) params.set('userFilter', filters.userFilter);
   if (filters.recommendedOnly) params.set('recommendedOnly', 'true');
   if (filters.coworkUsersOnly) params.set('coworkUsersOnly', 'true');
   params.set('sortBy', filters.sortBy);
@@ -157,14 +160,23 @@ export function fetchAdoptionAvailability(): Promise<CopilotAdoptionAvailability
   return getJson<CopilotAdoptionAvailability>('/availability', 'errors.copilotAdoption.availabilityFailed');
 }
 
+/**
+ * The summary, narrowed by the page-wide scope.
+ *
+ * `userFilter` is the serialised user filter (`serializeUserFilter`) - Entra ID attributes and custom
+ * organisations. The server re-scores the cached analysis for the people it matches, so the figures
+ * are recomputed rather than merely hidden, and echoes back the filter it applied.
+ */
 export function fetchAdoptionSummary(
   windowDays: number,
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
   emailDomain?: string | null,
+  userFilter?: string | null,
 ): Promise<CopilotAdoptionSummary> {
   const params = scopeParams(windowDays, seatLicenceTypeIds);
   if (emailDomain) params.set('emailDomain', emailDomain);
+  if (userFilter) params.set('userFilter', userFilter);
   return getJson<CopilotAdoptionSummary>(
     `/summary?${params}`,
     'errors.copilotAdoption.summaryFailed',
@@ -310,9 +322,11 @@ export function workbookExportUrl(
   seatLicenceTypeIds?: number[],
   emailDomain?: string | null,
   timeSaved?: Record<string, string>,
+  userFilter?: string | null,
 ): string {
   const params = scopeParams(windowDays, seatLicenceTypeIds);
   if (emailDomain) params.set('emailDomain', emailDomain);
+  if (userFilter) params.set('userFilter', userFilter);
   for (const [name, value] of Object.entries(timeSaved ?? {})) params.set(name, value);
   return `${baseUrl()}/export/workbook?${params}`;
 }

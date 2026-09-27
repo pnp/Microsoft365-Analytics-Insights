@@ -20,6 +20,7 @@ import enErrors from './en/errors';
 import enHealth from './en/health';
 import enAdmin from './en/admin';
 import enUserOrgs from './en/userOrgs';
+import enUserFilter from './en/userFilter';
 
 /**
  * The translation catalog, split by feature area.
@@ -66,6 +67,7 @@ export const EN_MODULES = {
   health: enHealth,
   admin: enAdmin,
   userOrgs: enUserOrgs,
+  userFilter: enUserFilter,
 } as const;
 
 /** The module names, so tests can report which area a duplicate key came from. */

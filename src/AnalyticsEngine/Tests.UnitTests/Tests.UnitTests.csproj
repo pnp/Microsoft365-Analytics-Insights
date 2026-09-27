@@ -56,6 +56,11 @@
     <Compile Include="UserOrgMigrationScriptTests.cs" />
     <Compile Include="UserOrgMembershipServiceTests.cs" />
     <Compile Include="UserOrgStoreSqlTests.cs" />
+    <Compile Include="UserFilterCodecTests.cs" />
+    <Compile Include="UserFilterCompilerTests.cs" />
+    <Compile Include="UserFilterWebTests.cs" />
+    <Compile Include="SqlUserDirectoryLoaderTests.cs" />
+    <Compile Include="CopilotAdoptionUserFilterScopeTests.cs" />
     <Compile Include="CopilotEventManagerAccessedResourcesTests.cs" />
     <Compile Include="CopilotEventManagerEdgeCaseTests.cs" />
     <Compile Include="CopilotMetadataPrewarmerTests.cs" />

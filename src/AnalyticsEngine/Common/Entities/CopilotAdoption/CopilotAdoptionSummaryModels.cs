@@ -1,5 +1,6 @@
 ﻿using Common.Entities.Copilot;
 using Common.Entities.AgentCosts;
+using Common.Entities.UserFilters;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -859,6 +860,32 @@ namespace Common.Entities.CopilotAdoption
         /// </remarks>
         [JsonProperty("scopedEmailDomain")]
         public string ScopedEmailDomain { get; set; }
+
+        /// <summary>
+        /// The user filter this whole summary was narrowed by - Entra ID attributes and custom
+        /// organisations - or <c>null</c> when none was applied.
+        /// </summary>
+        /// <remarks>
+        /// Echoed back for the same reason as <see cref="ScopedEmailDomain"/>. Carries the normalised
+        /// clauses and how many people in the directory match, never a sentence: the page writes the
+        /// description in the reader's language.
+        /// </remarks>
+        [JsonProperty("userFilter")]
+        public UserFilterEcho UserFilter { get; set; }
+
+        /// <summary>
+        /// The applied user filter in plain English, for the Excel workbook's cover sheet. Not sent to
+        /// the browser, which writes its own description in the reader's language.
+        /// </summary>
+        [JsonIgnore]
+        public string UserFilterDescription { get; set; }
+
+        /// <summary>
+        /// The tenant-wide Copilot seat count, set only when this summary is narrowed, so a page can say
+        /// how much of the tenant the narrowed figures cover.
+        /// </summary>
+        [JsonProperty("unscopedLicensedUsers")]
+        public int? UnscopedLicensedUsers { get; set; }
 
         /// <summary>
         /// Sections that stayed tenant-wide when <see cref="ScopedEmailDomain"/> is set, because they

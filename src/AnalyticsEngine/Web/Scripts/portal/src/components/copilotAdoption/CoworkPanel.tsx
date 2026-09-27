@@ -346,6 +346,7 @@ export default function CoworkPanel({
   options,
   seatLicenceTypeIds,
   emailDomain,
+  userFilter,
 }: {
   windowDays: number;
   summary: CopilotAdoptionSummary;
@@ -357,13 +358,19 @@ export default function CoworkPanel({
    * different population from the rest of the report.
    */
   emailDomain?: string | null;
+  /** The page-wide user filter in its wire form - kept, like the domain, by every reset below. */
+  userFilter?: string | null;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
   const t = useT();
   const tNode = useTNode();
 
-  const [filters, setFilters] = useState<CoworkFilters>({ ...DEFAULT_FILTERS, emailDomain: emailDomain ?? '' });
+  const [filters, setFilters] = useState<CoworkFilters>({
+    ...DEFAULT_FILTERS,
+    emailDomain: emailDomain ?? '',
+    userFilter: userFilter ?? '',
+  });
 
   /**
    * Resets the panel's own filters while KEEPING the page-wide email-domain scope.
@@ -373,11 +380,11 @@ export default function CoworkPanel({
    * widen the list back to the whole tenant while the page still claimed to be showing one
    * organisation, and the spending-policy CSV built from the same state would follow it - which on
    * this tab means handing an admin a list of people to grant Cowork to who are not in the
-   * organisation they were looking at.
+   * organisation they were looking at. The page-wide user filter is kept for exactly the same reason.
    */
   const clearPanelFilters = () => {
     setSearchDraft('');
-    setFilters({ ...DEFAULT_FILTERS, emailDomain: emailDomain ?? '' });
+    setFilters({ ...DEFAULT_FILTERS, emailDomain: emailDomain ?? '', userFilter: userFilter ?? '' });
   };
   const [searchDraft, setSearchDraft] = useState('');
   const [page, setPage] = useState(0);

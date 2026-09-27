@@ -33,7 +33,7 @@ namespace Tests.FakeDataGen.Demo
         private static readonly string[] Regions =
         {
             "North America West", "North America East", "United Kingdom & Ireland", "EMEA North",
-            "EMEA South", "Αθήνα Operations", "Latin America", "Asia Pacific", "Middle East & Africa"
+            "EMEA South", "Ελλάδα & Κύπρος", "Latin America", "Asia Pacific", "Middle East & Africa"
         };
 
         public static readonly DemoUserOrganisationType[] Types =
@@ -156,7 +156,7 @@ namespace Tests.FakeDataGen.Demo
                 case "Italy":
                     return "EMEA South";
                 case "Greece":
-                    return "Αθήνα Operations";
+                    return "Ελλάδα & Κύπρος";
                 case "Brazil":
                     return "Latin America";
                 case "India":

@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models;
+using Web.AnalyticsWeb.Models.UserFilters;
 using Web.AnalyticsWeb.Models.UserOrgs;
 
 namespace Web.AnalyticsWeb.Controllers
@@ -101,7 +102,9 @@ namespace Web.AnalyticsWeb.Controllers
             var forged = RejectIfNotXhr();
             if (forged != null) return forged;
 
-            return await RunAsync(svc => svc.CreateAsync(model, cancellationToken)).ConfigureAwait(false);
+            var result = await RunAsync(svc => svc.CreateAsync(model, cancellationToken)).ConfigureAwait(false);
+            InvalidateUserFilterDirectory();
+            return result;
         }
 
         /// <summary>PUT api/UserOrg/types/{id}</summary>
@@ -112,7 +115,9 @@ namespace Web.AnalyticsWeb.Controllers
             var forged = RejectIfNotXhr();
             if (forged != null) return forged;
 
-            return await RunAsync(svc => svc.UpdateAsync(id, model, cancellationToken)).ConfigureAwait(false);
+            var result = await RunAsync(svc => svc.UpdateAsync(id, model, cancellationToken)).ConfigureAwait(false);
+            InvalidateUserFilterDirectory();
+            return result;
         }
 
         /// <summary>DELETE api/UserOrg/types/{id}</summary>
@@ -123,11 +128,24 @@ namespace Web.AnalyticsWeb.Controllers
             var forged = RejectIfNotXhr();
             if (forged != null) return forged;
 
-            return await RunAsync(async svc =>
+            var result = await RunAsync(async svc =>
             {
                 await svc.DeleteAsync(id, cancellationToken).ConfigureAwait(false);
                 return (object)new { deleted = true };
             }).ConfigureAwait(false);
+            InvalidateUserFilterDirectory();
+            return result;
+        }
+
+        /// <summary>
+        /// Makes the reports' user filter read the directory again, so an org type an admin has just
+        /// created, renamed, disabled or re-imported is offered - and filtered on - straight away rather
+        /// than when the cached snapshot next expires. Only this web process's cache is cleared; another
+        /// scaled-out instance catches up when its own snapshot expires.
+        /// </summary>
+        private static void InvalidateUserFilterDirectory()
+        {
+            CachedUserDirectorySource.Default.Invalidate();
         }
 
         #endregion
@@ -230,6 +248,14 @@ namespace Web.AnalyticsWeb.Controllers
                 {
                     throw new UserOrgNotFoundException("That import job was not found.");
                 }
+
+                // The admin page polls until the import finishes, so this is the first moment the
+                // web app learns a CSV import has changed who is in which organisation.
+                if (string.Equals(job.Status, "succeeded", StringComparison.OrdinalIgnoreCase))
+                {
+                    InvalidateUserFilterDirectory();
+                }
+
                 return job;
             }).ConfigureAwait(false);
         }

@@ -17,6 +17,8 @@ const errors: Record<keyof typeof en, string> = {
 
   // User organisations API
   'errors.userOrgs.requestFailed': 'La solicitud ha fallado ({status})',
+  'errors.userFilter.dimensionsFailed': 'No se han podido cargar los atributos para filtrar ({status}).',
+  'errors.userFilter.valuesFailed': 'No se han podido cargar los valores de este atributo ({status}).',
   'errors.userOrgs.fileUnreadable': 'No se ha podido leer el archivo.',
   'errors.userOrgs.importNotStarted': 'No se ha podido iniciar la importaci\u00f3n.',
   'errors.userOrgs.saveFailed': 'No se ha podido guardar el tipo de organizaci\u00f3n.',

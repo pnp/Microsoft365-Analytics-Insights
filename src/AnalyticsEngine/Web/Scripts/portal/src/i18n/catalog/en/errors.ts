@@ -23,6 +23,8 @@ export const errors = {
 
   // User organisations API
   'errors.userOrgs.requestFailed': 'Request failed ({status})',
+  'errors.userFilter.dimensionsFailed': "Couldn't load the attributes to filter on ({status}).",
+  'errors.userFilter.valuesFailed': "Couldn't load the values for this attribute ({status}).",
   'errors.userOrgs.fileUnreadable': 'The file could not be read.',
   'errors.userOrgs.importNotStarted': 'The import could not be started.',
   'errors.userOrgs.saveFailed': 'The organisation type could not be saved.',

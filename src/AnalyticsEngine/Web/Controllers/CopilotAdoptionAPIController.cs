@@ -1,6 +1,7 @@
 ﻿using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.CopilotAdoption;
+using Common.Entities.UserFilters;
 using DataUtils;
 using System;
 using System.Collections.Generic;
@@ -14,7 +15,9 @@ using System.Threading;
 using Newtonsoft.Json;
 using System.Threading.Tasks;
 using System.Web.Http;
+using Web.AnalyticsWeb.Models;
 using Web.AnalyticsWeb.Models.CopilotAdoption;
+using Web.AnalyticsWeb.Models.UserFilters;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -61,16 +64,25 @@ namespace Web.AnalyticsWeb.Controllers
         private const int MaxCsvRows = 100000;
 
         public CopilotAdoptionAPIController()
-            : this(CopilotAdoptionAnalysisCoordinator.Default)
+            : this(CopilotAdoptionAnalysisCoordinator.Default, CachedUserDirectorySource.Default)
         {
         }
 
         internal CopilotAdoptionAPIController(CopilotAdoptionAnalysisCoordinator coordinator)
+            : this(coordinator, CachedUserDirectorySource.Default)
+        {
+        }
+
+        internal CopilotAdoptionAPIController(CopilotAdoptionAnalysisCoordinator coordinator, IUserDirectorySource directory)
         {
             Coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
+            Directory = directory ?? throw new ArgumentNullException(nameof(directory));
         }
 
         internal CopilotAdoptionAnalysisCoordinator Coordinator { get; }
+
+        /// <summary>The directory snapshot a <c>userFilter</c> is evaluated against.</summary>
+        internal IUserDirectorySource Directory { get; }
 
         #region Availability
 
@@ -186,8 +198,8 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         /// <summary>
-        /// The analysis with its row collections narrowed to one email domain, for the list, paging and
-        /// export endpoints.
+        /// The analysis with its row collections narrowed to the scope - an email domain, a user filter,
+        /// or both - for the list, paging and export endpoints.
         /// </summary>
         /// <remarks>
         /// Deliberately the cheap half of the scope filter: these endpoints read rows and data-source
@@ -196,43 +208,99 @@ namespace Web.AnalyticsWeb.Controllers
         /// which does.
         /// </remarks>
         private async Task<CopilotAdoptionAnalysis> TryGetScopedRowsAsync(
-            int windowDays, string seatLicenceTypeIds, string emailDomain, TimeSpan budget, CancellationToken cancellationToken)
+            int windowDays, string seatLicenceTypeIds, string emailDomain, UserFilterExpression userFilter,
+            TimeSpan budget, CancellationToken cancellationToken)
         {
+            // Read the directory while the analysis is being waited for, not after it: on a cold
+            // process both are slow, and neither depends on the other.
+            if (!userFilter.IsEmpty) Directory.Prefetch();
+
             var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, budget, cancellationToken);
             if (analysis == null) return null;
 
-            return CopilotAdoptionScopeFilter.FilterRows(
-                analysis, CopilotAdoptionScope.ForEmailDomain(emailDomain));
+            var scope = await ResolveScopeAsync(emailDomain, userFilter, cancellationToken);
+            return CopilotAdoptionScopeFilter.FilterRows(analysis, scope);
         }
 
         private async Task<CopilotAdoptionAnalysis> TryGetScopedRowsAsync(
-            int windowDays, string seatLicenceTypeIds, string emailDomain, CancellationToken cancellationToken)
+            int windowDays, string seatLicenceTypeIds, string emailDomain, UserFilterExpression userFilter,
+            CancellationToken cancellationToken)
         {
             return await TryGetScopedRowsAsync(
-                windowDays, seatLicenceTypeIds, emailDomain, FirstResponseBudget, cancellationToken);
+                windowDays, seatLicenceTypeIds, emailDomain, userFilter, FirstResponseBudget, cancellationToken);
         }
 
         /// <summary>
-        /// The analysis with every aggregate recomputed for one email domain.
+        /// The analysis with every aggregate recomputed for the scope.
         /// </summary>
         /// <remarks>
         /// The heavy SQL stays cached tenant-wide and shared - narrowing re-scores the loaded rows in
-        /// memory instead of re-querying per domain, which would multiply the load on a database the
-        /// importer is already sharing. Sections that cannot be narrowed are carried across and named
-        /// in <see cref="CopilotAdoptionSummary.UnscopedSections"/> so the page can label them.
+        /// memory instead of re-querying per domain or per filter, which would multiply the load on a
+        /// database the importer is already sharing. Sections that cannot be narrowed are carried across
+        /// and named in <see cref="CopilotAdoptionSummary.UnscopedSections"/> so the page can label them.
         /// </remarks>
         private async Task<CopilotAdoptionAnalysis> TryGetScopedSummaryAsync(
-            int windowDays, string seatLicenceTypeIds, string emailDomain,
+            int windowDays, string seatLicenceTypeIds, string emailDomain, UserFilterExpression userFilter,
             TimeSpan budget, CancellationToken cancellationToken)
         {
+            if (!userFilter.IsEmpty) Directory.Prefetch();
+
             var analysis = await TryGetAnalysisAsync(windowDays, seatLicenceTypeIds, budget, cancellationToken);
             if (analysis == null) return null;
 
-            var scope = CopilotAdoptionScope.ForEmailDomain(emailDomain);
+            var scope = await ResolveScopeAsync(emailDomain, userFilter, cancellationToken);
             if (!scope.IsNarrowed) return analysis;
 
             var service = new CopilotAdoptionService(analysis.Summary.Options);
             return CopilotAdoptionScopeFilter.Apply(analysis, scope, service.FinaliseSummary);
+        }
+
+        /// <summary>
+        /// Combines the email domain and the user filter into one scope, evaluating the filter against
+        /// the shared directory snapshot.
+        /// </summary>
+        private async Task<CopilotAdoptionScope> ResolveScopeAsync(
+            string emailDomain, UserFilterExpression userFilter, CancellationToken cancellationToken)
+        {
+            if (userFilter == null || userFilter.IsEmpty) return CopilotAdoptionScope.ForEmailDomain(emailDomain);
+
+            var snapshot = await Directory.GetAsync(cancellationToken);
+            return CopilotAdoptionScope.Create(emailDomain, UserFilterCompiler.Compile(userFilter, snapshot));
+        }
+
+        /// <summary>
+        /// Reads the <c>userFilter</c> query parameter. A filter that cannot be read is refused with a 400
+        /// rather than ignored: ignoring it would show the whole tenant under a page that believes it is
+        /// filtered, which is exactly the silent-scope mistake the echo exists to prevent.
+        /// </summary>
+        internal static bool TryParseUserFilter(string userFilter, out UserFilterExpression expression, out string error)
+        {
+            try
+            {
+                expression = UserFilterCodec.Parse(userFilter);
+                error = null;
+                return true;
+            }
+            catch (UserFilterFormatException ex)
+            {
+                expression = UserFilterExpression.Empty;
+                error = "The filter could not be applied: " + ex.Message;
+                return false;
+            }
+        }
+
+        private IHttpActionResult InvalidFilter(string error)
+        {
+            return Content(HttpStatusCode.BadRequest, new ApiErrorModel(error));
+        }
+
+        /// <summary>The same refusal for the exports, in plain text because it lands in a browser tab.</summary>
+        private HttpResponseMessage InvalidFilterResponse(string error)
+        {
+            return new HttpResponseMessage(HttpStatusCode.BadRequest)
+            {
+                Content = new StringContent(error, Encoding.UTF8, "text/plain"),
+            };
         }
 
         /// <summary>
@@ -339,17 +407,20 @@ namespace Web.AnalyticsWeb.Controllers
         #region Summary and licence types
 
         /// <summary>The executive view: headline figures, the adoption funnel and the breakdown charts.</summary>
-        // GET: api/CopilotAdoption/summary?windowDays=28&emailDomain=contoso.com
+        // GET: api/CopilotAdoption/summary?windowDays=28&emailDomain=contoso.com&userFilter=[...]
         [HttpGet]
         [Route("summary")]
         public async Task<IHttpActionResult> Summary(
             int windowDays = 28,
             string seatLicenceTypeIds = null,
             string emailDomain = null,
+            string userFilter = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
+            if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilter(filterError);
+
             var analysis = await TryGetScopedSummaryAsync(
-                windowDays, seatLicenceTypeIds, emailDomain, FirstResponseBudget, cancellationToken);
+                windowDays, seatLicenceTypeIds, emailDomain, filter, FirstResponseBudget, cancellationToken);
             if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
             return Ok(analysis.Summary);
         }
@@ -471,9 +542,12 @@ namespace Web.AnalyticsWeb.Controllers
             bool sortDesc = false,
             int skip = 0,
             int take = DefaultTake,
+            string userFilter = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetScopedRowsAsync(windowDays, seatLicenceTypeIds, emailDomain, cancellationToken);
+            if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilter(filterError);
+
+            var analysis = await TryGetScopedRowsAsync(windowDays, seatLicenceTypeIds, emailDomain, filter, cancellationToken);
             if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
 
             var query = BuildLicensedUserQuery(
@@ -515,14 +589,17 @@ namespace Web.AnalyticsWeb.Controllers
             double? maxScore = null,
             string sortBy = LicensedUserSortFields.Score,
             bool sortDesc = false,
+            string userFilter = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
+            if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilterResponse(filterError);
+
             // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
             // would just render the JSON body as the "file". So an export WAITS - but only up to
             // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
             // download instead of an answer.
             var analysis = await TryGetScopedRowsAsync(
-                windowDays, seatLicenceTypeIds, emailDomain, ExportWaitBudget, cancellationToken);
+                windowDays, seatLicenceTypeIds, emailDomain, filter, ExportWaitBudget, cancellationToken);
             if (analysis == null) return ExportNotReadyResponse(windowDays, seatLicenceTypeIds);
 
             var query = BuildLicensedUserQuery(
@@ -536,7 +613,7 @@ namespace Web.AnalyticsWeb.Controllers
                     CopilotAdoptionExports.LicensedUserColumns(
                         analysis.Summary.FiguresIncomplete,
                         WarningSummary(analysis.Summary))),
-                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-licensed-users", emailDomain), analysis.Summary.GeneratedUtc),
+                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-licensed-users", emailDomain, filter), analysis.Summary.GeneratedUtc),
                 analysis.Summary.Diagnostics?.RunId);
         }
 
@@ -586,9 +663,12 @@ namespace Web.AnalyticsWeb.Controllers
             bool sortDesc = true,
             int skip = 0,
             int take = DefaultTake,
+            string userFilter = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetScopedRowsAsync(windowDays, seatLicenceTypeIds, emailDomain, cancellationToken);
+            if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilter(filterError);
+
+            var analysis = await TryGetScopedRowsAsync(windowDays, seatLicenceTypeIds, emailDomain, filter, cancellationToken);
             if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
 
             var query = BuildOpportunityQuery(
@@ -622,14 +702,17 @@ namespace Web.AnalyticsWeb.Controllers
             double? minScore = null,
             string sortBy = LicenceOpportunitySortFields.Score,
             bool sortDesc = true,
+            string userFilter = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
+            if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilterResponse(filterError);
+
             // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
             // would just render the JSON body as the "file". So an export WAITS - but only up to
             // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
             // download instead of an answer.
             var analysis = await TryGetScopedRowsAsync(
-                windowDays, seatLicenceTypeIds, emailDomain, ExportWaitBudget, cancellationToken);
+                windowDays, seatLicenceTypeIds, emailDomain, filter, ExportWaitBudget, cancellationToken);
             if (analysis == null) return ExportNotReadyResponse(windowDays, seatLicenceTypeIds);
 
             var query = BuildOpportunityQuery(
@@ -643,7 +726,7 @@ namespace Web.AnalyticsWeb.Controllers
                     CopilotAdoptionExports.LicenceOpportunityColumns(
                         analysis.Summary.FiguresIncomplete,
                         WarningSummary(analysis.Summary))),
-                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-licence-opportunities", emailDomain), analysis.Summary.GeneratedUtc),
+                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-licence-opportunities", emailDomain, filter), analysis.Summary.GeneratedUtc),
                 analysis.Summary.Diagnostics?.RunId);
         }
 
@@ -674,9 +757,12 @@ namespace Web.AnalyticsWeb.Controllers
             bool sortDesc = true,
             int skip = 0,
             int take = DefaultTake,
+            string userFilter = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            var analysis = await TryGetScopedRowsAsync(windowDays, seatLicenceTypeIds, emailDomain, cancellationToken);
+            if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilter(filterError);
+
+            var analysis = await TryGetScopedRowsAsync(windowDays, seatLicenceTypeIds, emailDomain, filter, cancellationToken);
             if (analysis == null) return StillBuilding(windowDays, seatLicenceTypeIds);
 
             var query = BuildCoworkQuery(
@@ -718,11 +804,14 @@ namespace Web.AnalyticsWeb.Controllers
             double? minFluency = null,
             string sortBy = CoworkSortFields.CoordinationLoad,
             bool sortDesc = true,
+            string userFilter = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
+            if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilterResponse(filterError);
+
             // Exports are <a href> downloads, not fetch() calls - see ExportOpportunities.
             var analysis = await TryGetScopedRowsAsync(
-                windowDays, seatLicenceTypeIds, emailDomain, ExportWaitBudget, cancellationToken);
+                windowDays, seatLicenceTypeIds, emailDomain, filter, ExportWaitBudget, cancellationToken);
             if (analysis == null) return ExportNotReadyResponse(windowDays, seatLicenceTypeIds);
 
             var query = BuildCoworkQuery(
@@ -733,7 +822,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             return CsvResponse(
                 CsvSerialiser.ToBytes(rows, CopilotAdoptionExports.CoworkReadinessColumns()),
-                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-cowork-readiness", emailDomain), analysis.Summary.GeneratedUtc),
+                CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-cowork-readiness", emailDomain, filter), analysis.Summary.GeneratedUtc),
                 analysis.Summary.Diagnostics?.RunId);
         }
 
@@ -783,14 +872,17 @@ namespace Web.AnalyticsWeb.Controllers
             string copilotMinutesSavedPerDocument = null,
             string coworkEstimateLowerBoundRatio = null,
             string coworkMinutesSavedPerTask = null,
+            string userFilter = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
+            if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilterResponse(filterError);
+
             // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it
             // would just render the JSON body as the "file". So an export WAITS - but only up to
             // ExportWaitBudget, because waiting past the platform limit produced a 500 and a corrupt
             // download instead of an answer.
             var analysis = await TryGetScopedSummaryAsync(
-                windowDays, seatLicenceTypeIds, emailDomain, ExportWaitBudget, cancellationToken);
+                windowDays, seatLicenceTypeIds, emailDomain, filter, ExportWaitBudget, cancellationToken);
             if (analysis == null) return ExportNotReadyResponse(windowDays, seatLicenceTypeIds);
 
             var timeSaved = ParseTimeSavedOverrides(
@@ -1113,19 +1205,23 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         /// <summary>
-        /// Folds the email-domain scope into a CSV file name.
+        /// Folds the scope into a CSV file name: the email domain, and "filtered" when a user filter
+        /// narrowed the rows.
         /// </summary>
         /// <remarks>
         /// A spreadsheet outlives the screen it was exported from and gets forwarded without that
         /// context, so a file describing one of several organisations in a tenant has to say which one
         /// somewhere durable. The rows carry an "Email domain" column, but columns get reordered and
-        /// trimmed downstream; the file name survives. Same reasoning as the workbook's scope banner.
+        /// trimmed downstream; the file name survives. Same reasoning as the workbook's scope banner. A
+        /// user filter is too long to spell out in a file name, but saying that there was one keeps the
+        /// file from being mistaken for the whole list.
         /// </remarks>
-        private static string ScopedFileNamePrefix(string prefix, string emailDomain)
+        private static string ScopedFileNamePrefix(string prefix, string emailDomain, UserFilterExpression userFilter = null)
         {
             var scope = CopilotAdoptionEmailDomain.Normalise(emailDomain);
+            var name = string.IsNullOrWhiteSpace(scope) ? prefix : prefix + "-" + scope;
 
-            return string.IsNullOrWhiteSpace(scope) ? prefix : prefix + "-" + scope;
+            return userFilter != null && !userFilter.IsEmpty ? name + "-filtered" : name;
         }
 
         private static List<string> Distinct(IEnumerable<string> values)        {
