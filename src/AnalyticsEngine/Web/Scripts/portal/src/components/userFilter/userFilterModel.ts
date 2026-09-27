@@ -57,6 +57,16 @@ export function isCustomDimension(key: string): boolean {
   return key.startsWith(CUSTOM_DIMENSION_PREFIX);
 }
 
+/**
+ * A key the server will accept: a standard Entra attribute, or `org:` and a positive id with no
+ * leading zero - the same rule as `UserFilterDimensions.TryParseOrgTypeId`. Checked when reading a
+ * filter out of a link, so a hand-edited key opens the unfiltered report rather than a page the
+ * server refuses to answer.
+ */
+export function isKnownDimensionKey(key: string): boolean {
+  return isEntraDimension(key) || /^org:[1-9]\d{0,9}$/.test(key);
+}
+
 export function isTextOperator(operator: UserFilterOperator): boolean {
   return operator === 'contains' || operator === 'notContains';
 }
@@ -208,7 +218,7 @@ export function parseUserFilter(text: string | null | undefined): UserFilter {
     if (!raw || typeof raw !== 'object') return EMPTY_USER_FILTER;
     const item = raw as Record<string, unknown>;
 
-    if (typeof item.d !== 'string' || item.d.length === 0) return EMPTY_USER_FILTER;
+    if (typeof item.d !== 'string' || !isKnownDimensionKey(item.d)) return EMPTY_USER_FILTER;
     const operator = (item.op ?? 'is') as UserFilterOperator;
     if (!OPERATORS.includes(operator)) return EMPTY_USER_FILTER;
     const values = Array.isArray(item.v) ? item.v.filter((v): v is string => typeof v === 'string') : [];

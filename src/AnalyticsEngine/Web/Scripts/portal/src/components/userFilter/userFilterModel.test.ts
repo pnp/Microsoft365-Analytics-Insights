@@ -61,6 +61,12 @@ describe('user filter wire format', () => {
     expect(parseUserFilter(null)).toEqual(EMPTY_USER_FILTER);
   });
 
+  it('refuses a link naming an attribute the server would reject, instead of sending it', () => {
+    expect(parseUserFilter('[{"d":"favouriteColour","v":["Blue"]}]')).toEqual(EMPTY_USER_FILTER);
+    expect(parseUserFilter('[{"d":"org:012","v":["x"]}]')).toEqual(EMPTY_USER_FILTER);
+    expect(parseUserFilter('[{"d":"org:12","v":["x"]}]').clauses).toHaveLength(1);
+  });
+
   it('measures the filter the way the query string will carry it', () => {
     const greek = { clauses: [clause('department', ['Καλημέρα'])] };
     // Every Greek letter is two UTF-8 bytes, six characters once percent-encoded.
