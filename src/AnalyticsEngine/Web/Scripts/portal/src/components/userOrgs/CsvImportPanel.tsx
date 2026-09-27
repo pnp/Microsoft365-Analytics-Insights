@@ -264,11 +264,19 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
 
   const chooseColumn = async (kind: keyof UserOrgCsvColumnChoice, value: number) => {
     if (!file || !preview) return;
-    // Both columns are always sent. The one the admin did not touch is whatever the chooser is showing
-    // for it; sending only the changed one is half a choice, which the server refuses.
-    const shown = displayedColumns(preview, columns);
-    const next: UserOrgCsvColumnChoice = { ...shown, [kind]: value };
+    // Both columns are always sent together: the one the admin did not touch is the one already
+    // chosen, or the one the server read. When neither has been settled yet, wait for it - half a
+    // choice is refused by the server, and guessing the other column is exactly what this avoids.
+    const next: UserOrgCsvColumnChoice = {
+      userColumn: columns.userColumn ?? preview.userColumnIndex ?? undefined,
+      valueColumn: columns.valueColumn ?? preview.valueColumnIndex ?? undefined,
+      [kind]: value,
+    };
     setColumns(next);
+    if (next.userColumn === undefined || next.valueColumn === undefined) {
+      setError(null);
+      return;
+    }
     if (next.userColumn === next.valueColumn) {
       setError(t('userOrgs.csv.apiError.invalidColumns'));
       return;
@@ -467,8 +475,8 @@ function ColumnChooser({
   styles: ReturnType<typeof useStyles>;
   t: TFunction;
 }) {
-  const selectedUser = displayedColumns(preview, choice).userColumn;
-  const selectedValue = displayedColumns(preview, choice).valueColumn;
+  const selectedUser = choice.userColumn ?? preview.userColumnIndex ?? null;
+  const selectedValue = choice.valueColumn ?? preview.valueColumnIndex ?? null;
 
   return (
     <div>
@@ -478,19 +486,29 @@ function ColumnChooser({
       <div className={styles.columnChooser}>
         <Field label={t('userOrgs.csv.columnChooser.user')}>
           <Select
-            value={String(selectedUser)}
+            value={selectedUser === null ? '' : String(selectedUser)}
             disabled={busy}
             onChange={(e) => onChoose('userColumn', Number(e.currentTarget.value))}
           >
+            {selectedUser === null && (
+              <option value="" disabled>
+                {t('userOrgs.csv.columnChooser.placeholder')}
+              </option>
+            )}
             {columnOptions(preview, t)}
           </Select>
         </Field>
         <Field label={t('userOrgs.csv.columnChooser.value')}>
           <Select
-            value={String(selectedValue)}
+            value={selectedValue === null ? '' : String(selectedValue)}
             disabled={busy}
             onChange={(e) => onChoose('valueColumn', Number(e.currentTarget.value))}
           >
+            {selectedValue === null && (
+              <option value="" disabled>
+                {t('userOrgs.csv.columnChooser.placeholder')}
+              </option>
+            )}
             {columnOptions(preview, t)}
           </Select>
         </Field>
@@ -953,14 +971,6 @@ function ImportHistory({
       )}
     </details>
   );
-}
-
-/** The columns the chooser shows: the admin's choice, else what the server read, else the first two. */
-function displayedColumns(preview: UserOrgCsvPreview, choice: UserOrgCsvColumnChoice): Required<UserOrgCsvColumnChoice> {
-  return {
-    userColumn: choice.userColumn ?? preview.userColumnIndex ?? 0,
-    valueColumn: choice.valueColumn ?? preview.valueColumnIndex ?? Math.min(1, Math.max(0, preview.columnCount - 1)),
-  };
 }
 
 function shouldShowColumnChooser(preview: UserOrgCsvPreview): boolean {

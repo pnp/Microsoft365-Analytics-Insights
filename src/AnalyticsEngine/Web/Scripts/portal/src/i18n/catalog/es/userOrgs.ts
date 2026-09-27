@@ -137,6 +137,7 @@ export const userOrgs: Record<keyof typeof en, string> = {
   'userOrgs.csv.columnChooser.user': 'Columna del nombre principal de usuario',
   'userOrgs.csv.columnChooser.value': 'Columna de valor',
   'userOrgs.csv.columnChooser.fallback': 'Columna {number}',
+  'userOrgs.csv.columnChooser.placeholder': 'Elija una columna',
 
   // Replace warning
   'userOrgs.csv.clearWarning.one': 'Esto borrar\u00e1 el valor de {name} de 1 usuario.',

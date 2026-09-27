@@ -136,6 +136,7 @@ export const userOrgs = {
   'userOrgs.csv.columnChooser.user': 'User principal name column',
   'userOrgs.csv.columnChooser.value': 'Value column',
   'userOrgs.csv.columnChooser.fallback': 'Column {number}',
+  'userOrgs.csv.columnChooser.placeholder': 'Choose a column',
 
   // Replace warning
   'userOrgs.csv.clearWarning.one': 'This will clear 1 user\u2019s {name} value.',

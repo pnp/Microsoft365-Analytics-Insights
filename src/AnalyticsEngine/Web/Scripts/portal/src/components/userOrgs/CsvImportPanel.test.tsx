@@ -214,8 +214,9 @@ describe('CsvImportPanel', () => {
     expect(previewCsv).toHaveBeenLastCalledWith(1, expect.any(File), { userColumn: 2, valueColumn: 0 });
   });
 
-  it('sends both columns when only one is changed, using the one the chooser shows for the other', async () => {
-    // The server refuses half a choice, and a chooseColumns preview settles only the user column.
+  it('waits for both columns when the server settled only one, then sends both', async () => {
+    // A chooseColumns preview settles only the user column. Guessing the value column is exactly
+    // what the chooser exists to avoid, and the server refuses half a choice.
     previewCsv
       .mockResolvedValueOnce(
         preview({
@@ -227,16 +228,38 @@ describe('CsvImportPanel', () => {
           valueColumnIndex: null,
         }),
       )
-      .mockResolvedValueOnce(preview({ columnCount: 4, userColumnIndex: 0, valueColumnIndex: 1 }));
+      .mockResolvedValueOnce(preview({ columnCount: 4, userColumnIndex: 0, valueColumnIndex: 3 }));
 
     renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
     await chooseFile();
     await screen.findByText(/This file has several columns/i);
+    expect((screen.getByLabelText('Value column') as HTMLSelectElement).value).toBe('');
+    expect(screen.getAllByRole('option', { name: 'Choose a column' }).length).toBe(1);
 
     await userEvent.selectOptions(screen.getByLabelText('User principal name column'), '0');
+    expect(previewCsv).toHaveBeenCalledTimes(1);
+
+    await userEvent.selectOptions(screen.getByLabelText('Value column'), '3');
 
     await waitFor(() => expect(previewCsv).toHaveBeenCalledTimes(2));
-    expect(previewCsv).toHaveBeenLastCalledWith(1, expect.any(File), { userColumn: 0, valueColumn: 1 });
+    expect(previewCsv).toHaveBeenLastCalledWith(1, expect.any(File), { userColumn: 0, valueColumn: 3 });
+  });
+
+  it('sends both columns when only one is changed and the other was already read', async () => {
+    previewCsv
+      .mockResolvedValueOnce(
+        preview({ columns: ['UserPrincipalName', 'Centre', 'Region'], columnCount: 3, userColumnIndex: 0, valueColumnIndex: 1 }),
+      )
+      .mockResolvedValueOnce(preview({ columnCount: 3, userColumnIndex: 0, valueColumnIndex: 2 }));
+
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+    await chooseFile();
+    await screen.findByText('alex.wilber@contoso.com');
+
+    await userEvent.selectOptions(screen.getByLabelText('Value column'), '2');
+
+    await waitFor(() => expect(previewCsv).toHaveBeenCalledTimes(2));
+    expect(previewCsv).toHaveBeenLastCalledWith(1, expect.any(File), { userColumn: 0, valueColumn: 2 });
   });
 
   it('asks for two different columns without re-reading the file', async () => {
