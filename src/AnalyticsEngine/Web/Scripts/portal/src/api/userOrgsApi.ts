@@ -3,6 +3,7 @@ import { translateActive } from '../i18n/runtime';
 import type {
   UserOrgAttributeCatalogue,
   UserOrgBrowseQuery,
+  UserOrgCsvColumnChoice,
   UserOrgCsvPreview,
   UserOrgImportJob,
   UserOrgImportMode,
@@ -17,6 +18,25 @@ import type {
 const baseUrl = (): string => `${window.location.origin}/api/UserOrg`;
 
 /**
+ * An error the API answered with. `code` is a stable key the portal words itself - see
+ * `UserOrgApiErrorCode` - with `values` holding the facts behind it; `message` is the server's
+ * English, a fallback for a code the portal does not know.
+ */
+export class UserOrgApiError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+  readonly values: Record<string, string | number | null>;
+
+  constructor(message: string, status: number, code: string | null, values: Record<string, string | number | null> | null) {
+    super(message);
+    this.name = 'UserOrgApiError';
+    this.status = status;
+    this.code = code;
+    this.values = values ?? {};
+  }
+}
+
+/**
  * Pulls the server's message out of an error response.
  *
  * The API answers a rejected configuration with a 400 and a message written for an IT admin - which
@@ -25,19 +45,39 @@ const baseUrl = (): string => `${window.location.origin}/api/UserOrg`;
  */
 async function toError(response: Response): Promise<Error> {
   let message = translateActive('errors.userOrgs.requestFailed', { status: response.status });
+  let code: string | null = null;
+  let values: Record<string, string | number | null> | null = null;
   try {
     const body = await response.json();
     if (body && typeof body.message === 'string' && body.message.length > 0) {
       message = body.message;
     }
+    if (body && typeof body.code === 'string' && body.code.length > 0) {
+      code = body.code;
+    }
+    if (body && body.values && typeof body.values === 'object') {
+      values = body.values;
+    }
   } catch {
     /* no JSON body */
   }
-  return new Error(message);
+  return new UserOrgApiError(message, response.status, code, values);
 }
 
 async function send<T>(url: string, init: RequestInit): Promise<T> {
-  const response = await apiFetch(url, init);
+  let response: Response;
+  try {
+    response = await apiFetch(url, init);
+  } catch (e) {
+    // fetch rejects with a TypeError when the request never got an answer - the network dropped, or
+    // the browser could not re-read a file that changed on disk after it was chosen. Its message is
+    // the browser's own English ("Failed to fetch"), so it is replaced. Aborts and an expired session
+    // are the caller's business and pass through untouched.
+    if (e instanceof TypeError) {
+      throw new Error(translateActive('errors.userOrgs.network'));
+    }
+    throw e;
+  }
   if (!response.ok) {
     throw await toError(response);
   }
@@ -99,27 +139,51 @@ function fileBody(file: File): RequestInit {
   return { method: 'POST', headers: { Accept: 'application/json' }, body: form };
 }
 
-/** Parses the whole file and reports the blast radius of importing it. Persists nothing. */
-export function previewCsv(orgTypeId: number, file: File): Promise<UserOrgCsvPreview> {
-  return send<UserOrgCsvPreview>(`${baseUrl()}/preview-csv?orgTypeId=${orgTypeId}`, fileBody(file));
+/**
+ * Parses the whole file, stages it as a draft and reports the blast radius of importing it. Nothing
+ * is imported until `importCsv` commits the draft. `columns` overrides which columns are read, for a
+ * file whose layout the server could not settle on its own.
+ */
+export function previewCsv(
+  orgTypeId: number,
+  file: File,
+  columns: UserOrgCsvColumnChoice = {},
+): Promise<UserOrgCsvPreview> {
+  const params = new URLSearchParams({ orgTypeId: String(orgTypeId) });
+  if (columns.userColumn !== undefined) params.set('userColumn', String(columns.userColumn));
+  if (columns.valueColumn !== undefined) params.set('valueColumn', String(columns.valueColumn));
+  return send<UserOrgCsvPreview>(`${baseUrl()}/preview-csv?${params.toString()}`, fileBody(file));
 }
 
-/** Stages a file and queues the background import. */
+/**
+ * Imports a previewed draft. `confirmedClearCount` is how many users the admin agreed may lose their
+ * value - the number the preview showed for this mode, or 0. The server refuses if the import would
+ * now clear more than that, so a confirmation can never cover a bigger wipe than the one it was
+ * given for.
+ */
 export function importCsv(
   orgTypeId: number,
+  draftId: number,
   mode: UserOrgImportMode,
-  file: File,
-  confirmClear = false,
+  confirmedClearCount: number,
 ): Promise<UserOrgImportQueued> {
-  const url =
-    `${baseUrl()}/import-csv?orgTypeId=${orgTypeId}&mode=${encodeURIComponent(mode)}` +
-    `&confirmClear=${confirmClear ? 'true' : 'false'}`;
-  return send<UserOrgImportQueued>(url, fileBody(file));
+  const params = new URLSearchParams({
+    orgTypeId: String(orgTypeId),
+    draftId: String(draftId),
+    mode,
+    confirmedClearCount: String(Math.max(0, Math.floor(confirmedClearCount))),
+  });
+  return send<UserOrgImportQueued>(`${baseUrl()}/import-csv?${params.toString()}`, json('POST'));
 }
 
 /** Import progress. */
 export function fetchImportJob(jobId: number, signal?: AbortSignal): Promise<UserOrgImportJob> {
   return send<UserOrgImportJob>(`${baseUrl()}/jobs/${jobId}`, { ...json('GET'), signal });
+}
+
+/** An org type's most recent imports, newest first. Previews that were never imported are not listed. */
+export function fetchImportHistory(orgTypeId: number, take = 10, signal?: AbortSignal): Promise<UserOrgImportJob[]> {
+  return send<UserOrgImportJob[]>(`${baseUrl()}/types/${orgTypeId}/imports?take=${take}`, { ...json('GET'), signal });
 }
 
 function browseQueryString(query: UserOrgBrowseQuery): string {

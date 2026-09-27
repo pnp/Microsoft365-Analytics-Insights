@@ -94,6 +94,26 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         [JsonProperty("rowsInvalid")]
         public int RowsInvalid { get; set; }
 
+        /// <summary>When a worker last claimed the job, or null while it waits to start.</summary>
+        [JsonProperty("startedUtc")]
+        public string StartedUtc { get; set; }
+
+        /// <summary>
+        /// How many times a worker has picked the job up. More than one means it was resumed after the
+        /// web app restarted underneath it.
+        /// </summary>
+        [JsonProperty("attempts")]
+        public int Attempts { get; set; }
+
+        /// <summary>
+        /// A stable key for why the job failed or was cancelled, for the portal to word in the reader's
+        /// language: <c>failed</c>, <c>superseded</c>, <c>typeChanged</c>, <c>clearExceedsConfirmed</c> or
+        /// <c>interruptedRepeatedly</c>. <see cref="ErrorMessage"/> is the English fallback for a key the
+        /// portal does not know.
+        /// </summary>
+        [JsonProperty("errorCode")]
+        public string ErrorCode { get; set; }
+
         [JsonProperty("errorMessage")]
         public string ErrorMessage { get; set; }
     }
@@ -164,17 +184,49 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         public string Message { get; set; }
     }
 
-    /// <summary>The first few parsed rows of an upload, so an admin can sanity-check it.</summary>
+    /// <summary>
+    /// A parsed and staged upload, and the blast radius of importing it.
+    /// </summary>
+    /// <remarks>
+    /// The preview is also the upload: the parsed rows are staged as a draft, and importing commits
+    /// that draft by <see cref="DraftId"/>. So the file is read once, and what is imported is exactly
+    /// what was previewed - a file edited on disk afterwards cannot slip in under the old preview's
+    /// confirmation.
+    /// </remarks>
     public class UserOrgCsvPreviewModel
     {
         [JsonProperty("fileName")]
         public string FileName { get; set; }
+
+        /// <summary>The staged draft to import, or null when the file cannot be imported (see <see cref="Blocking"/>).</summary>
+        [JsonProperty("draftId")]
+        public int? DraftId { get; set; }
+
+        /// <summary>Why the file cannot be imported at all, or null when it can.</summary>
+        [JsonProperty("blocking")]
+        public UserOrgCsvBlockingModel Blocking { get; set; }
 
         [JsonProperty("delimiter")]
         public string Delimiter { get; set; }
 
         [JsonProperty("headerDetected")]
         public bool HeaderDetected { get; set; }
+
+        /// <summary>The header row's column names, or null when the file has no recognisable header.</summary>
+        [JsonProperty("columns")]
+        public List<string> Columns { get; set; }
+
+        /// <summary>How many columns the file has, header or not.</summary>
+        [JsonProperty("columnCount")]
+        public int ColumnCount { get; set; }
+
+        /// <summary>The 0-based column read as the user, or null when it could not be decided.</summary>
+        [JsonProperty("userColumnIndex")]
+        public int? UserColumnIndex { get; set; }
+
+        /// <summary>The 0-based column read as the value, or null when it could not be decided.</summary>
+        [JsonProperty("valueColumnIndex")]
+        public int? ValueColumnIndex { get; set; }
 
         [JsonProperty("upnColumnName")]
         public string UpnColumnName { get; set; }
@@ -212,6 +264,13 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         [JsonProperty("wouldClearCount")]
         public int WouldClearCount { get; set; }
 
+        /// <summary>
+        /// How many users would lose their value if this file were imported with Merge: people the file
+        /// lists with an empty value who have one today.
+        /// </summary>
+        [JsonProperty("mergeWouldClearCount")]
+        public int MergeWouldClearCount { get; set; }
+
         /// <summary>How many users hold a value for this org type today.</summary>
         [JsonProperty("currentlyAssignedCount")]
         public int CurrentlyAssignedCount { get; set; }
@@ -233,6 +292,60 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         /// </summary>
         [JsonProperty("maxValueLength")]
         public int MaxValueLength { get; set; }
+
+        /// <summary>
+        /// Every row that will not be imported - unreadable, or naming nobody - in file order, so the
+        /// admin can download the list and fix the file. Capped at <see cref="UnusableRowCount"/>'s
+        /// first 10,000.
+        /// </summary>
+        [JsonProperty("unusableRows")]
+        public List<UserOrgCsvUnusableRowModel> UnusableRows { get; set; } = new List<UserOrgCsvUnusableRowModel>();
+
+        /// <summary>How many rows will not be imported, however many <see cref="UnusableRows"/> lists.</summary>
+        [JsonProperty("unusableRowCount")]
+        public int UnusableRowCount { get; set; }
+    }
+
+    /// <summary>Why a file cannot be imported at all. The portal words it from the code.</summary>
+    public class UserOrgCsvBlockingModel
+    {
+        /// <summary>
+        /// <c>notUtf8</c>, <c>excelWorkbook</c>, <c>notText</c>, <c>unterminatedQuote</c>,
+        /// <c>rowSpansLines</c>, <c>chooseColumns</c>, <c>tooManyRows</c>, <c>noRows</c> or
+        /// <c>noUsableRows</c>.
+        /// </summary>
+        [JsonProperty("code")]
+        public string Code { get; set; }
+
+        /// <summary>The line the problem starts on, where there is one.</summary>
+        [JsonProperty("line")]
+        public int? Line { get; set; }
+
+        /// <summary>For <c>rowSpansLines</c>, the line the run-on row ends on.</summary>
+        [JsonProperty("lastLine")]
+        public int? LastLine { get; set; }
+
+        /// <summary>For <c>tooManyRows</c>, the most rows one file may hold.</summary>
+        [JsonProperty("max")]
+        public int? Max { get; set; }
+    }
+
+    /// <summary>One row that will not be imported, and why.</summary>
+    public class UserOrgCsvUnusableRowModel
+    {
+        [JsonProperty("lineNumber")]
+        public int LineNumber { get; set; }
+
+        /// <summary>The user column as it reads in the file, or null when the row has none.</summary>
+        [JsonProperty("upn")]
+        public string Upn { get; set; }
+
+        [JsonProperty("orgValue")]
+        public string OrgValue { get; set; }
+
+        /// <summary><c>missingUserColumn</c>, <c>userEmptyOrTooLong</c>, <c>notAValidUpn</c> or <c>unknownUser</c>.</summary>
+        [JsonProperty("code")]
+        public string Code { get; set; }
     }
 
     public class UserOrgCsvPreviewRowModel
@@ -260,6 +373,11 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         [JsonProperty("lineNumber")]
         public int LineNumber { get; set; }
 
+        /// <summary><c>missingUserColumn</c>, <c>userEmptyOrTooLong</c> or <c>notAValidUpn</c>, for the portal to word.</summary>
+        [JsonProperty("code")]
+        public string Code { get; set; }
+
+        /// <summary>The English reason, a fallback for a code the portal does not know.</summary>
         [JsonProperty("reason")]
         public string Reason { get; set; }
     }

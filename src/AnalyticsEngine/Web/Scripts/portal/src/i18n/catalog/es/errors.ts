@@ -25,6 +25,8 @@ const errors: Record<keyof typeof en, string> = {
   'errors.userOrgs.loadFailed': 'No se han podido cargar los tipos de organizaci\u00f3n.',
   'errors.userOrgs.deleteFailed': 'No se ha podido eliminar el tipo de organizaci\u00f3n.',
   'errors.userOrgs.testFailed': 'No se ha podido probar el atributo.',
+  'errors.userOrgs.network':
+    'No se ha podido contactar con el servidor. Compruebe la conexi\u00f3n y vuelva a intentarlo. Si eligi\u00f3 un archivo, vuelva a elegirlo por si ha cambiado en el disco.',
 
   // Agent costs API
   'errors.agentCosts.availabilityFailed': 'No se ha podido cargar la disponibilidad de costes de agentes ({status}).',

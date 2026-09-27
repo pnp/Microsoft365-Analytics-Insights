@@ -143,11 +143,12 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
   };
 
   const startImport = async () => {
-    if (!file) return;
+    if (!file || !preview?.draftId) return;
     setBusy(true);
     setError(null);
     try {
-      const queued = await importCsv(orgType.id, mode, file, confirmedClear);
+      const confirmedCount = mode === 'replace' && confirmedClear ? preview.wouldClearCount : 0;
+      const queued = await importCsv(orgType.id, preview.draftId, mode, confirmedCount);
       setJob({
         id: queued.jobId,
         orgTypeId: orgType.id,
@@ -156,12 +157,15 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
         fileName: file.name,
         startedBy: null,
         queuedUtc: new Date().toISOString(),
+        startedUtc: null,
         finishedUtc: null,
+        attempts: 0,
         rowsTotal: queued.rowsQueued,
         rowsApplied: 0,
         rowsCleared: 0,
         rowsUnknownUpn: 0,
         rowsInvalid: queued.rowsInvalid,
+        errorCode: null,
         errorMessage: null,
       });
     } catch (e) {

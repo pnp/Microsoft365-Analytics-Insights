@@ -237,6 +237,13 @@ namespace Web.AnalyticsWeb.Models
         [JsonProperty("upn")]
         public string Upn { get; set; }
 
+        /// <summary>
+        /// Facts behind <see cref="Code"/> - counts, a line number, a name - so the portal can word the
+        /// error itself. Omitted when there are none.
+        /// </summary>
+        [JsonProperty("values", NullValueHandling = NullValueHandling.Ignore)]
+        public Dictionary<string, object> Values { get; set; }
+
         public ApiErrorModel(string message, string code = null, string category = null)
         {
             Message = message;

@@ -31,6 +31,8 @@ export const errors = {
   'errors.userOrgs.loadFailed': 'The organisation types could not be loaded.',
   'errors.userOrgs.deleteFailed': 'The organisation type could not be deleted.',
   'errors.userOrgs.testFailed': 'The attribute could not be tested.',
+  'errors.userOrgs.network':
+    'The server could not be reached. Check your connection and try again. If you chose a file, choose it again in case it was changed on disk.',
 
   // Agent costs API
   'errors.agentCosts.availabilityFailed': "Couldn't load the agent cost availability ({status}).",

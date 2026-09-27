@@ -26,14 +26,29 @@ export interface UserOrgImportJob {
   fileName: string | null;
   startedBy: string | null;
   queuedUtc: string;
+  /** When a worker last picked the job up; null while it is still waiting to start. */
+  startedUtc: string | null;
   finishedUtc: string | null;
+  /** How many times a worker has picked it up. More than one means it was resumed after a restart. */
+  attempts: number;
   rowsTotal: number;
   rowsApplied: number;
   rowsCleared: number;
   rowsUnknownUpn: number;
   rowsInvalid: number;
+  /** A stable key for why the job failed or was cancelled; word it from this, not from `errorMessage`. */
+  errorCode: UserOrgImportErrorCode | string | null;
+  /** The server's English wording - only a fallback for an `errorCode` the portal does not know. */
   errorMessage: string | null;
 }
+
+/** Why a finished job did not succeed. Keep in step with `UserOrgImportErrorCodes` on the server. */
+export type UserOrgImportErrorCode =
+  | 'failed'
+  | 'superseded'
+  | 'typeChanged'
+  | 'clearExceedsConfirmed'
+  | 'interruptedRepeatedly';
 
 export interface UserOrgType {
   id: number;
@@ -89,16 +104,75 @@ export interface UserOrgCsvPreviewRow {
 
 export interface UserOrgCsvProblem {
   lineNumber: number;
+  /** What is wrong with the row; word it from this. */
+  code: UserOrgCsvRowProblemCode | string;
+  /** The server's English wording - only a fallback for a code the portal does not know. */
   reason: string;
 }
 
+/** Why a row will not be imported. Keep in step with `UserOrgCsvProblemCodes` on the server. */
+export type UserOrgCsvRowProblemCode = 'missingUserColumn' | 'userEmptyOrTooLong' | 'notAValidUpn' | 'unknownUser';
+
+/** One row that will not be imported, for the downloadable list of rows to fix. */
+export interface UserOrgCsvUnusableRow {
+  lineNumber: number;
+  /** The user column as it reads in the file, or null when the row has none. */
+  upn: string | null;
+  orgValue: string | null;
+  code: UserOrgCsvRowProblemCode | string;
+}
+
+/** Why a whole file cannot be imported. Keep in step with `UserOrgCsvBlockingCodes` on the server. */
+export type UserOrgCsvBlockingCode =
+  | 'notUtf8'
+  | 'excelWorkbook'
+  | 'notText'
+  | 'unterminatedQuote'
+  | 'rowSpansLines'
+  | 'chooseColumns'
+  | 'tooManyRows'
+  | 'noRows'
+  | 'noUsableRows';
+
+export interface UserOrgCsvBlocking {
+  code: UserOrgCsvBlockingCode | string;
+  /** The line the problem starts on, where there is one. */
+  line: number | null;
+  /** For `rowSpansLines`, the line the run-on row ends on. */
+  lastLine: number | null;
+  /** For `tooManyRows`, the most rows one file may hold. */
+  max: number | null;
+}
+
+/** Which columns to read, when the admin overrides what the server detected. 0-based. */
+export interface UserOrgCsvColumnChoice {
+  userColumn?: number;
+  valueColumn?: number;
+}
+
+/**
+ * A parsed and staged upload. The preview IS the upload: importing commits `draftId`, so the file is
+ * read once and exactly what was previewed is what is imported.
+ */
 export interface UserOrgCsvPreview {
   fileName: string | null;
+  /** The staged draft to import, or null when the file cannot be imported (`blocking` says why). */
+  draftId: number | null;
+  blocking: UserOrgCsvBlocking | null;
   delimiter: string;
   headerDetected: boolean;
+  /** The header row's column names, or null when the file has no recognisable header. */
+  columns: string[] | null;
+  /** How many columns the file has, header or not. */
+  columnCount: number;
+  /** The 0-based column read as the user, or null when it could not be decided. */
+  userColumnIndex: number | null;
+  /** The 0-based column read as the value, or null when it could not be decided. */
+  valueColumnIndex: number | null;
   upnColumnName: string | null;
   orgColumnName: string | null;
   rows: UserOrgCsvPreviewRow[];
+  /** The first few unreadable rows. `unusableRows` has all of them, plus the rows naming nobody. */
   problems: UserOrgCsvProblem[];
   moreRowsExist: boolean;
   /** Usable rows in the whole file, not just the sample. */
@@ -110,6 +184,8 @@ export interface UserOrgCsvPreview {
    * actually matters before a destructive import, and one a ten-row sample cannot reveal.
    */
   wouldClearCount: number;
+  /** How many users would lose their value with Merge: people listed with an empty value who have one. */
+  mergeWouldClearCount: number;
   /** How many users hold a value for this org type today. */
   currentlyAssignedCount: number;
   /** How many existing users the file gives a value to. */
@@ -118,6 +194,10 @@ export interface UserOrgCsvPreview {
   truncatedValueCount: number;
   /** The longest organisation name that is stored in full. */
   maxValueLength: number;
+  /** Every row that will not be imported, in file order - capped at the first 10,000. */
+  unusableRows: UserOrgCsvUnusableRow[];
+  /** How many rows will not be imported, however many `unusableRows` lists. */
+  unusableRowCount: number;
 }
 
 export interface UserOrgImportQueued {
