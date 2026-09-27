@@ -164,9 +164,6 @@ const useStyles = makeStyles({
 
 const DEFAULT_FILTERS: OpportunityFilters = {
   search: '',
-  department: '',
-  country: '',
-  emailDomain: '',
   recommendedOnly: false,
   existingCopilotUsersOnly: false,
   sortBy: DEFAULT_SORT_BY,
@@ -188,27 +185,23 @@ const DEFAULT_FILTERS: OpportunityFilters = {
 export default function OpportunitiesPanel({
   windowDays,
   summary,
-  filterOptions,
   options,
   guidanceLinks,
   seatLicenceTypeIds,
-  emailDomain,
   userFilter,
 }: {
   windowDays: number;
   /** The analysis the licence estimate is published on, and whose assumptions the reader can change. */
   summary: CopilotAdoptionSummary;
-  filterOptions: AdoptionFilterOptions | null;
   /** The weights and targets actually used, so the score explanation quotes them rather than guessing. */
   options: CopilotAdoptionOptions;
   guidanceLinks?: AdoptionGuidanceLink[];
   seatLicenceTypeIds?: number[];
   /**
-   * The page-wide email-domain filter, applied to this list too so it can never describe a
-   * different population from the rest of the report.
+   * The page-wide user filter in its wire form - Entra ID attributes, email domain and custom
+   * organisations - applied to this list too so it can never describe a different population from
+   * the rest of the report, and kept by every reset below.
    */
-  emailDomain?: string | null;
-  /** The page-wide user filter in its wire form - kept, like the domain, by every reset below. */
   userFilter?: string | null;
 }) {
   const styles = useStyles();
@@ -233,22 +226,20 @@ export default function OpportunitiesPanel({
 
   const [filters, setFilters] = useState<OpportunityFilters>({
     ...DEFAULT_FILTERS,
-    emailDomain: emailDomain ?? '',
     userFilter: userFilter ?? '',
   });
 
   /**
-   * Resets the panel's own filters while KEEPING the page-wide email-domain scope.
+   * Resets the panel's own filters while KEEPING the page-wide user filter.
    *
-   * The domain is not one of this panel's filters - it is the population the whole report is
-   * describing, and the banner at the top of the page says so. Clearing it here would silently
-   * widen the list back to the whole tenant while the page still claimed to be showing one
-   * organisation, and the CSV export built from the same state would follow it. The page-wide user
-   * filter is kept for the same reason.
+   * That filter is not one of this panel's - it is the population the whole report is describing,
+   * and the banner at the top of the page says so. Clearing it here would silently widen the list
+   * back to the whole tenant while the page still claimed to be showing one organisation, and the
+   * CSV export built from the same state would follow it.
    */
   const clearPanelFilters = () => {
     setSearchDraft('');
-    setFilters({ ...DEFAULT_FILTERS, emailDomain: emailDomain ?? '', userFilter: userFilter ?? '' });
+    setFilters({ ...DEFAULT_FILTERS, userFilter: userFilter ?? '' });
   };
   const [searchDraft, setSearchDraft] = useState('');
   const [page, setPage] = useState(0);
@@ -346,8 +337,6 @@ export default function OpportunitiesPanel({
 
   const filtersActive =
     filters.search !== '' ||
-    filters.department !== '' ||
-    filters.country !== '' ||
     filters.recommendedOnly ||
     filters.existingCopilotUsersOnly;
 
@@ -375,19 +364,6 @@ export default function OpportunitiesPanel({
         <Button size="small" onClick={() => setFilters((f) => ({ ...f, search: searchDraft }))}>
           {t('copilotAdoptionUsers.common.search')}
         </Button>
-
-        <Select
-          value={filters.department}
-          aria-label={t('copilotAdoptionUsers.opportunities.filterDepartmentAria')}
-          onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, department: d.value }))}
-        >
-          <option value="">{t('copilotAdoptionUsers.common.allDepartments')}</option>
-          {(filterOptions?.departments ?? []).map((dept) => (
-            <option key={dept} value={dept}>
-              {dept}
-            </option>
-          ))}
-        </Select>
 
         <Checkbox
           label={t('copilotAdoptionUsers.opportunities.recommendedOnly')}
@@ -429,10 +405,6 @@ export default function OpportunitiesPanel({
       <PrintedFilters
         filters={[
           printedSearch(t, filters.search),
-          {
-            label: t('copilotAdoptionUsers.common.department'),
-            value: filters.department || t('copilotAdoptionUsers.common.allDepartments'),
-          },
           filters.recommendedOnly && { value: t('copilotAdoptionUsers.opportunities.recommendedOnly') },
           filters.existingCopilotUsersOnly && { value: t('copilotAdoptionUsers.opportunities.alreadyUsingFilter') },
         ]}

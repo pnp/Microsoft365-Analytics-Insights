@@ -20,6 +20,7 @@ import {
 
 /** The label key for each standard Entra ID attribute. The server sends the key, never the words. */
 export const ENTRA_DIMENSION_LABEL_KEYS: Record<EntraDimensionKey, TranslationKey> = {
+  userName: 'userFilter.dimension.userName',
   department: 'userFilter.dimension.department',
   jobTitle: 'userFilter.dimension.jobTitle',
   companyName: 'userFilter.dimension.companyName',

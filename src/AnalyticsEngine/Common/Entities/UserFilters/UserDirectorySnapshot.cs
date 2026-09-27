@@ -308,6 +308,7 @@ namespace Common.Entities.UserFilters
     {
         private static readonly string[] TextDimensions =
         {
+            UserFilterDimensions.UserName,
             UserFilterDimensions.Department,
             UserFilterDimensions.JobTitle,
             UserFilterDimensions.CompanyName,
@@ -345,6 +346,11 @@ namespace Common.Entities.UserFilters
             _upnByRow.Add(entry.UserPrincipalName);
             _managerIdByRow.Add(entry.ManagerUserId);
 
+            // The sign-in name is also a column of its own, so the same machinery that matches
+            // "Department contains Sales" matches "User name contains smith", and "User name is ..."
+            // picks named people. It is the snapshot's largest column - a distinct value per person -
+            // and that memory is the price of searching names in memory rather than in SQL per request.
+            _text[UserFilterDimensions.UserName].Append(entry.UserPrincipalName);
             _text[UserFilterDimensions.Department].Append(entry.Department);
             _text[UserFilterDimensions.JobTitle].Append(entry.JobTitle);
             _text[UserFilterDimensions.CompanyName].Append(entry.CompanyName);

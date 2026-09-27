@@ -27,7 +27,13 @@ import type {
   UserFilterValue,
 } from '../../types/userFilter';
 import { dimensionLabel, operatorLabel, valueLabel } from './describeUserFilter';
-import { MANAGEMENT_CHAIN_DIMENSION, clauseIsComplete, isCustomDimension, isTextOperator } from './userFilterModel';
+import {
+  MANAGEMENT_CHAIN_DIMENSION,
+  USER_NAME_DIMENSION,
+  clauseIsComplete,
+  isCustomDimension,
+  isTextOperator,
+} from './userFilterModel';
 
 /** How many values the picker asks for at a time. The server returns the largest first. */
 const VALUE_PAGE = 200;
@@ -186,15 +192,24 @@ export default function UserFilterClauseEditor({
   const unknownDimension = dimension !== '' && selected === null;
   const textMatch = isTextOperator(operator);
   const isChain = dimension === MANAGEMENT_CHAIN_DIMENSION;
+  // One value per person: a count beside each name would say "1 person" 200,000 times, and nobody
+  // is without one, so "(not set)" would only ever offer nobody.
+  const isUserName = dimension === USER_NAME_DIMENSION;
   const entra = dimensions.filter((d) => d.kind === 'entra');
   const custom = dimensions.filter((d) => d.kind === 'custom');
   const source = { dimensions, names: echoNames };
+
+  // A term typed but not yet added with Enter still counts: "contains", type "smith", Apply is the
+  // obvious way to search for smith, and refusing it with "choose a value" would be a trap.
+  const pendingTerm = textMatch ? query.trim() : '';
+  const draftValues =
+    pendingTerm && !values.some((v) => v.toLowerCase() === pendingTerm.toLowerCase()) ? [...values, pendingTerm] : values;
 
   const draft: UserFilterClause = {
     join: clause.join,
     dimension,
     operator,
-    values,
+    values: draftValues,
     // The management chain has no "(not set)" option: "has no manager" is the Manager attribute's.
     includeNotSet: isChain ? false : includeNotSet,
   };
@@ -250,6 +265,11 @@ export default function UserFilterClauseEditor({
       .filter((o) => term === '' || valueLabel(t, dimension, o.value).toLowerCase().includes(term));
   }, [options, values, query, dimension, t]);
 
+  // "User name" opens on free text - nobody finds "smith" by scrolling 200,000 names. Remembered as
+  // the editor's choice rather than the reader's, so moving on to another property puts that
+  // property's value list back instead of leaving it on "contains".
+  const operatorChosenByEditor = useRef(false);
+
   const selectDimension = (key: string) => {
     if (key === dimension) return;
     const next = dimensions.find((d) => d.key === key);
@@ -259,13 +279,20 @@ export default function UserFilterClauseEditor({
     setQuery('');
     setServerSearch('');
     setAttempted(false);
-    if (next && !next.supportsTextMatch && isTextOperator(operator)) setOperator('is');
+    if (key === USER_NAME_DIMENSION && next?.supportsTextMatch && !isTextOperator(operator)) {
+      setOperator('contains');
+      operatorChosenByEditor.current = true;
+    } else if (operatorChosenByEditor.current || (next && !next.supportsTextMatch && isTextOperator(operator))) {
+      setOperator('is');
+      operatorChosenByEditor.current = false;
+    }
     // Straight on to the values: picking a property is only ever the first half of the job.
     setTimeout(() => valuesInput.current?.focus(), 0);
   };
 
   const selectOperator = (next: UserFilterOperator) => {
     if (next === operator) return;
+    operatorChosenByEditor.current = false;
     // Values picked from a list and terms typed for "contains" are different things; carrying one
     // over as the other would silently change what the condition means.
     if (isTextOperator(next) !== isTextOperator(operator)) {
@@ -290,10 +317,12 @@ export default function UserFilterClauseEditor({
   };
 
   const onInputKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && textMatch && query.trim()) {
-      e.preventDefault();
-      addTerm(query);
-    }
+    if (e.key !== 'Enter' || !textMatch) return;
+    e.preventDefault();
+    // Enter adds the term typed; Enter again, on an empty box, applies - so a name search is
+    // "smith", Enter, Enter, without reaching for the mouse.
+    if (query.trim()) addTerm(query);
+    else apply();
   };
 
   const apply = () => {
@@ -419,7 +448,7 @@ export default function UserFilterClauseEditor({
                 )
               ) : (
                 [
-                  !includeNotSet && !isChain && query.trim() === '' && (
+                  !includeNotSet && !isChain && !isUserName && query.trim() === '' && (
                     <TagPickerOption
                       key={NOT_SET_OPTION}
                       value={NOT_SET_OPTION}
@@ -436,7 +465,7 @@ export default function UserFilterClauseEditor({
                     <TagPickerOption key={o.value} value={o.value} text={valueLabel(t, dimension, o.value)}>
                       <span className={styles.valueRow}>
                         <span>{valueLabel(t, dimension, o.value)}</span>
-                        <span className={styles.valueCount}>{countLabel(o.people)}</span>
+                        {!isUserName && <span className={styles.valueCount}>{countLabel(o.people)}</span>}
                       </span>
                     </TagPickerOption>
                   )),
@@ -456,10 +485,13 @@ export default function UserFilterClauseEditor({
       {valuesError && <Text size={200} className={styles.error}>{valuesError}</Text>}
       {truncated && !loadingValues && (
         <Text size={200} className={styles.hint}>
-          {t('userFilter.editor.truncated', { shown: formatNumber(options.length), total: formatNumber(totalMatching) })}
+          {isUserName
+            ? t('userFilter.editor.truncatedNames', { shown: formatNumber(options.length), total: formatNumber(totalMatching) })
+            : t('userFilter.editor.truncated', { shown: formatNumber(options.length), total: formatNumber(totalMatching) })}
         </Text>
       )}
       {isChain && <Text size={200} className={styles.hint}>{t('userFilter.editor.managementChainHint')}</Text>}
+      {isUserName && <Text size={200} className={styles.hint}>{t('userFilter.editor.userNameHint')}</Text>}
       {unknownDimension && <Text size={200} className={styles.error}>{t('userFilter.editor.unknownDimension')}</Text>}
       {problem && <Text size={200} className={styles.error}>{problem}</Text>}
 

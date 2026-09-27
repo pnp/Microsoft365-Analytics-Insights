@@ -14,8 +14,14 @@ import {
  * shares one definition of what it means.
  */
 
-/** The standard Entra ID attributes, in the order the property picker offers them. */
+/**
+ * The standard Entra ID attributes, in the order the property picker offers them - the server's
+ * `UserFilterDimensions.EntraKeys` order: who someone is (their name, and the organisation their
+ * address belongs to) first, then where they sit in the business, then account and hierarchy.
+ */
 export const ENTRA_DIMENSION_KEYS = [
+  'userName',
+  'emailDomain',
   'department',
   'jobTitle',
   'companyName',
@@ -23,7 +29,6 @@ export const ENTRA_DIMENSION_KEYS = [
   'country',
   'stateOrProvince',
   'usageLocation',
-  'emailDomain',
   'userType',
   'accountStatus',
   'manager',
@@ -32,6 +37,7 @@ export const ENTRA_DIMENSION_KEYS = [
 
 export type EntraDimensionKey = (typeof ENTRA_DIMENSION_KEYS)[number];
 
+export const USER_NAME_DIMENSION: EntraDimensionKey = 'userName';
 export const EMAIL_DOMAIN_DIMENSION: EntraDimensionKey = 'emailDomain';
 export const MANAGEMENT_CHAIN_DIMENSION: EntraDimensionKey = 'managementChain';
 

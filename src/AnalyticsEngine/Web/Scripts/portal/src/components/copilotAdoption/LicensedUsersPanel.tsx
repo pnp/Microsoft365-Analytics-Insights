@@ -126,9 +126,6 @@ const DEFAULT_FILTERS: LicensedUserFilters = {
   search: '',
   bands: [],
   actions: [],
-  department: '',
-  country: '',
-  emailDomain: '',
   reclaimEligibility: '',
   coworkOnly: false,
   disabledOnly: false,
@@ -152,7 +149,6 @@ export default function LicensedUsersPanel({
   seatLicenceTypeIds,
   initialBands,
   initialAction,
-  emailDomain,
   userFilter,
 }: {
   windowDays: number;
@@ -172,11 +168,10 @@ export default function LicensedUsersPanel({
    */
   initialAction?: string;
   /**
-   * The page-wide email-domain filter. Applied to this list too, so the table can never describe a
+   * The page-wide user filter in its wire form - Entra ID attributes, email domain and custom
+   * organisations - applied to this list and its export too, so the table can never describe a
    * different population from the summary above it.
    */
-  emailDomain?: string | null;
-  /** The page-wide user filter in its wire form, applied to this list and its export for the same reason. */
   userFilter?: string | null;
 }) {
   const styles = useStyles();
@@ -188,7 +183,6 @@ export default function LicensedUsersPanel({
     ...DEFAULT_FILTERS,
     bands: initialBands ?? [],
     actions: initialAction ? [initialAction] : [],
-    emailDomain: emailDomain ?? '',
     userFilter: userFilter ?? '',
   });
   const [searchDraft, setSearchDraft] = useState('');
@@ -330,19 +324,6 @@ export default function LicensedUsersPanel({
           ))}
         </Select>
 
-        <Select
-          value={filters.department}
-          aria-label={t('copilotAdoptionUsers.licensed.filterDepartmentAria')}
-          onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, department: d.value }))}
-        >
-          <option value="">{t('copilotAdoptionUsers.common.allDepartments')}</option>
-          {(filterOptions?.departments ?? []).map((dept) => (
-            <option key={dept} value={dept}>
-              {dept}
-            </option>
-          ))}
-        </Select>
-
         <Checkbox
           label={t('copilotAdoptionUsers.licensed.coworkUsersOnly')}
           checked={filters.coworkOnly}
@@ -398,10 +379,6 @@ export default function LicensedUsersPanel({
           {
             label: t('copilotAdoptionUsers.licensed.reclaimTierHeader'),
             value: t(reclaimOption?.labelKey ?? 'copilotAdoptionUsers.licensed.allReclaimTiers'),
-          },
-          {
-            label: t('copilotAdoptionUsers.common.department'),
-            value: filters.department || t('copilotAdoptionUsers.common.allDepartments'),
           },
           filters.coworkOnly && { value: t('copilotAdoptionUsers.licensed.coworkUsersOnly') },
           filters.disabledOnly && { value: t('copilotAdoptionUsers.licensed.disabledAccountsOnly') },

@@ -94,7 +94,7 @@ const EMPTY_PAGE: LicenceOpportunityPage = { total: 0, skip: 0, take: 50, rows: 
  */
 async function renderPanel(s: CopilotAdoptionSummary, language?: 'en' | 'es') {
   const result = renderWithProvider(
-    <OpportunitiesPanel windowDays={28} summary={s} filterOptions={null} options={s.options} />,
+    <OpportunitiesPanel windowDays={28} summary={s} options={s.options} />,
     language ? { language } : undefined,
   );
   await waitFor(() => expect(fetchOpportunities).toHaveBeenCalled());
@@ -543,19 +543,18 @@ describe('OpportunitiesPanel printing', { timeout: 30000 }, () => {
     const list = candidates();
 
     for (const control of [
-      within(list).getByRole('combobox', { name: 'Filter candidates by department' }),
       within(list).getByRole('checkbox', { name: 'Recommended only' }),
       within(list).getByRole('button', { name: 'Expand all' }),
       within(list).getByRole('button', { name: 'Next' }),
     ]) {
       expect(control.closest('[data-print="hide"]')).not.toBeNull();
     }
+    // Who the list is about is the page-wide filter's job; the list has no department filter of its own.
+    expect(within(list).queryByRole('combobox', { name: /department/i })).not.toBeInTheDocument();
 
     await user.click(within(list).getByRole('checkbox', { name: 'Recommended only' }));
     await waitFor(() =>
-      expect(list.querySelector('[data-print="only"]')?.textContent).toBe(
-        'Filters: Department: All departments \u00b7 Recommended only',
-      ),
+      expect(list.querySelector('[data-print="only"]')?.textContent).toBe('Filters: Recommended only'),
     );
   });
 });

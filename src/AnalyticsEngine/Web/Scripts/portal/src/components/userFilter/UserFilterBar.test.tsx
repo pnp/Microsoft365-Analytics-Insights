@@ -14,6 +14,7 @@ vi.mock('../../api/userFilterApi', () => ({
 }));
 
 const DIMENSIONS: UserFilterDimension[] = [
+  { key: 'userName', kind: 'entra', name: null, orgTypeId: null, distinctValues: 100, peopleWithValue: 100, supportsTextMatch: true, fixedValues: false },
   { key: 'department', kind: 'entra', name: null, orgTypeId: null, distinctValues: 3, peopleWithValue: 90, supportsTextMatch: true, fixedValues: false },
   { key: 'country', kind: 'entra', name: null, orgTypeId: null, distinctValues: 2, peopleWithValue: 95, supportsTextMatch: true, fixedValues: false },
   { key: 'accountStatus', kind: 'entra', name: null, orgTypeId: null, distinctValues: 2, peopleWithValue: 100, supportsTextMatch: false, fixedValues: true },
@@ -243,6 +244,60 @@ describe('UserFilterBar', () => {
 
     expect(await screen.findByText('Choose at least one value.')).toBeVisible();
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('searches user names as free text: pick "User name", type, Apply', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    renderWithProvider(<Harness initial={{ clauses: [] }} onChange={onChange} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Add filter' }));
+    await user.click(await screen.findByRole('option', { name: /User name/ }));
+
+    // Straight to "contains": nobody finds "smith" by scrolling a list of every name in the tenant.
+    expect(screen.getByRole('combobox', { name: 'Operator' })).toHaveTextContent('contains');
+    expect(screen.getByText(/Matches the sign-in name/)).toBeVisible();
+
+    // Typed but never added with Enter - Apply still searches for it.
+    await user.type(screen.getByRole('combobox', { name: 'Text to look for' }), 'smith');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    expect(onChange).toHaveBeenLastCalledWith({
+      clauses: [clause('userName', ['smith'], { operator: 'contains' })],
+    });
+    expect(await screen.findByRole('button', { name: 'User name contains “smith”' })).toBeVisible();
+  });
+
+  it('applies a name search from the keyboard: Enter adds the text, Enter again applies', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    renderWithProvider(<Harness initial={{ clauses: [clause('department', ['Sales'])] }} onChange={onChange} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Add filter' }));
+    await user.click(await screen.findByRole('option', { name: /User name/ }));
+    await user.type(screen.getByRole('combobox', { name: 'Text to look for' }), 'svc-{Enter}');
+    expect(onChange).not.toHaveBeenCalled();
+
+    await user.type(screen.getByRole('combobox', { name: 'Text to look for' }), '{Enter}');
+
+    expect(onChange).toHaveBeenLastCalledWith({
+      clauses: [clause('department', ['Sales']), clause('userName', ['svc-'], { operator: 'contains' })],
+    });
+  });
+
+  it('puts a property\'s value list back when moving on from "User name"', async () => {
+    const user = userEvent.setup();
+    renderWithProvider(<Harness initial={{ clauses: [] }} onChange={() => {}} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Add filter' }));
+    await user.click(await screen.findByRole('option', { name: /User name/ }));
+    expect(screen.getByRole('combobox', { name: 'Operator' })).toHaveTextContent('contains');
+
+    await user.click(screen.getByRole('combobox', { name: 'Property' }));
+    await user.click(await screen.findByRole('option', { name: /Department/ }));
+
+    expect(screen.getByRole('combobox', { name: 'Operator' })).toHaveTextContent('is (=)');
+    expect(screen.getByRole('combobox', { name: 'Values' })).toBeInTheDocument();
   });
 
   it('leaves the filter untouched when an edit is cancelled', async () => {

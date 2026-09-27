@@ -780,7 +780,6 @@ function CopilotAdoptionView({
                   key={userFilterScope || 'all'}
                   windowDays={windowDays}
                   summary={summary}
-                  filterOptions={filterOptions}
                   options={summary.options}
                   userFilter={userFilterParam}
                 />
@@ -791,7 +790,6 @@ function CopilotAdoptionView({
                   key={userFilterScope || 'all'}
                   windowDays={windowDays}
                   summary={summary}
-                  filterOptions={filterOptions}
                   options={summary.options}
                   guidanceLinks={summary.guidanceLinks}
                   userFilter={userFilterParam}

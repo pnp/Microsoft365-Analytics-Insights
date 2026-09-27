@@ -298,8 +298,17 @@ describe('LicensedUsersPanel printing', { timeout: 30000 }, () => {
     }
 
     expect(document.querySelector('[data-print="only"]')?.textContent).toBe(
-      'Filters: Band: Dormant \u00b7 Action: All recommended actions \u00b7 Reclaim tier: All reclaim tiers'
-        + ' \u00b7 Department: All departments',
+      'Filters: Band: Dormant \u00b7 Action: All recommended actions \u00b7 Reclaim tier: All reclaim tiers',
     );
+  });
+
+  it('leaves who the list is about to the page-wide filter: no department drop-down of its own', async () => {
+    // A second, list-only department filter would combine with the page-wide one by AND and could
+    // contradict it - "Department is Sales" above, "Finance" here, and an empty list nobody can explain.
+    serve(5);
+    renderPanel();
+    await waitFor(() => expect(listed()).toBe(5));
+
+    expect(screen.queryByRole('combobox', { name: /department/i })).not.toBeInTheDocument();
   });
 });

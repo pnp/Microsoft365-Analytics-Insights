@@ -10,7 +10,6 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
   // Shared table and filter controls
   'copilotAdoptionUsers.common.searchPlaceholder': 'Buscar por nombre, correo electrónico, departamento, puesto o responsable',
   'copilotAdoptionUsers.common.search': 'Buscar',
-  'copilotAdoptionUsers.common.allDepartments': 'Todos los departamentos',
   'copilotAdoptionUsers.common.refresh': 'Actualizar',
   'copilotAdoptionUsers.common.exportCsv': 'Exportar CSV',
   'copilotAdoptionUsers.common.user': 'Usuario',
@@ -33,7 +32,6 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
   'copilotAdoptionUsers.licensed.probableReclaim': 'Recuperación probable',
   'copilotAdoptionUsers.licensed.reviewBeforeReclaim': 'Revisar antes de recuperar',
   'copilotAdoptionUsers.licensed.excludedFromReclaim': 'Excluido de la recuperación',
-  'copilotAdoptionUsers.licensed.filterDepartmentAria': 'Filtrar por departamento',
   'copilotAdoptionUsers.licensed.coworkUsersOnly': 'Solo usuarios de Cowork',
   'copilotAdoptionUsers.licensed.disabledOnlyTooltip': 'Cuentas deshabilitadas que siguen ocupando una licencia de Copilot: las licencias más claras para recuperar.',
   'copilotAdoptionUsers.licensed.disabledAccountsOnly': 'Solo cuentas deshabilitadas',
@@ -116,7 +114,6 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
 
   // Opportunities panel
   'copilotAdoptionUsers.opportunities.searchAria': 'Buscar candidatos a licencia',
-  'copilotAdoptionUsers.opportunities.filterDepartmentAria': 'Filtrar candidatos por departamento',
   'copilotAdoptionUsers.opportunities.recommendedOnly': 'Solo recomendados',
   'copilotAdoptionUsers.opportunities.sections.ariaLabel': 'Secciones de oportunidades de licencia',
   'copilotAdoptionUsers.opportunities.sections.candidates': 'Candidatos',

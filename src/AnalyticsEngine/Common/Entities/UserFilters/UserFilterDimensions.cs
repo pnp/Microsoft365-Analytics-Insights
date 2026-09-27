@@ -28,6 +28,13 @@ namespace Common.Entities.UserFilters
     /// </remarks>
     public static class UserFilterDimensions
     {
+        /// <summary>
+        /// The person's sign-in name (<c>userPrincipalName</c>). Matched as free text as well as by
+        /// value, so "User name contains smith" - or "does not contain svc-", to leave service accounts
+        /// out - works without anyone having to pick 200,000 names from a list.
+        /// </summary>
+        public const string UserName = "userName";
+
         public const string Department = "department";
         public const string JobTitle = "jobTitle";
         public const string CompanyName = "companyName";
@@ -60,9 +67,15 @@ namespace Common.Entities.UserFilters
         /// <summary>Prefix of a custom organisation type's key; the rest is the org type id.</summary>
         public const string CustomPrefix = "org:";
 
-        /// <summary>The Entra dimensions, in the order the portal offers them.</summary>
+        /// <summary>
+        /// The Entra dimensions, in the order the portal offers them: who someone is - their name and
+        /// the organisation their address belongs to - first, then where they sit in the business, then
+        /// their account and their place in the hierarchy.
+        /// </summary>
         public static readonly IReadOnlyList<string> EntraKeys = new[]
         {
+            UserName,
+            EmailDomain,
             Department,
             JobTitle,
             CompanyName,
@@ -70,7 +83,6 @@ namespace Common.Entities.UserFilters
             Country,
             StateOrProvince,
             UsageLocation,
-            EmailDomain,
             UserType,
             AccountStatus,
             Manager,
@@ -156,6 +168,7 @@ namespace Common.Entities.UserFilters
         {
             switch (key)
             {
+                case UserName: return "User name";
                 case Department: return "Department";
                 case JobTitle: return "Job title";
                 case CompanyName: return "Company";

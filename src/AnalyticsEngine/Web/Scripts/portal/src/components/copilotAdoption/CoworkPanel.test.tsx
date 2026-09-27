@@ -161,7 +161,7 @@ function page(rows: CoworkReadinessRow[]): CoworkReadinessPage {
 
 function render(s: CopilotAdoptionSummary) {
   return renderWithProvider(
-    <CoworkPanel windowDays={28} summary={s} filterOptions={null} options={s.options} />,
+    <CoworkPanel windowDays={28} summary={s} options={s.options} />,
   );
 }
 
@@ -911,20 +911,23 @@ describe('CoworkPanel headline actions', () => {
   });
 });
 
-describe('CoworkPanel email-domain scope', () => {
+describe('CoworkPanel page-wide scope', () => {
+  // The page-wide user filter - here an email domain, the condition the old domain drop-down used
+  // to set - in the wire form the page hands every panel.
+  const FABRIKAM = '[{"d":"emailDomain","v":["fabrikam.com"]}]';
+
   beforeEach(() => {
     fetchCowork.mockReset();
     fetchCowork.mockResolvedValue(page([]));
   });
 
-  it('asks the server for the domain the page is narrowed to', async () => {
+  it('asks the server for the people the page is narrowed to', async () => {
     renderWithProvider(
       <CoworkPanel
         windowDays={28}
         summary={summary({})}
-        filterOptions={null}
         options={summary({}).options}
-        emailDomain="fabrikam.com"
+        userFilter={FABRIKAM}
       />,
     );
 
@@ -932,22 +935,22 @@ describe('CoworkPanel email-domain scope', () => {
 
     const call = fetchCowork.mock.calls[0];
     expect(call[0]).toBe(28);
-    expect((call[1] as { emailDomain: string }).emailDomain).toBe('fabrikam.com');
+    expect((call[1] as { userFilter: string }).userFilter).toBe(FABRIKAM);
   });
 
-  it('keeps the page-wide domain when the panel filters are cleared', async () => {
-    // The domain is not one of this panel's filters - it is the population the whole report is
-    // describing. Clearing it here would silently widen the list (and the spending-policy CSV built
-    // from the same state) back to the whole tenant while the page still named one organisation.
+  it('keeps the page-wide filter when the panel filters are cleared', async () => {
+    // The page-wide filter is not one of this panel's filters - it is the population the whole
+    // report is describing. Clearing it here would silently widen the list (and the spending-policy
+    // CSV built from the same state) back to the whole tenant while the page still named one
+    // organisation.
     const user = userEvent.setup();
 
     renderWithProvider(
       <CoworkPanel
         windowDays={28}
         summary={summary({})}
-        filterOptions={null}
         options={summary({}).options}
-        emailDomain="fabrikam.com"
+        userFilter={FABRIKAM}
       />,
     );
 
@@ -959,7 +962,7 @@ describe('CoworkPanel email-domain scope', () => {
 
     await waitFor(() => expect(fetchCowork).toHaveBeenCalled());
     for (const call of fetchCowork.mock.calls) {
-      expect((call[1] as { emailDomain: string }).emailDomain).toBe('fabrikam.com');
+      expect((call[1] as { userFilter: string }).userFilter).toBe(FABRIKAM);
     }
   });
 });
@@ -1123,7 +1126,7 @@ describe('CoworkPanel printing', { timeout: 30000 }, () => {
     const printedFilters = () => people.querySelector('[data-print="only"]')?.textContent;
 
     expect(printedFilters()).toBe(
-      'Filters: Verdict: All verdicts \u00b7 Department: All departments \u00b7 Sorted by: Most coordination load',
+      'Filters: Verdict: All verdicts \u00b7 Sorted by: Most coordination load',
     );
 
     await user.selectOptions(
@@ -1135,7 +1138,7 @@ describe('CoworkPanel printing', { timeout: 30000 }, () => {
 
     await waitFor(() =>
       expect(printedFilters()).toBe(
-        'Filters: Search: \u201cfinance\u201d \u00b7 Verdict: Prime candidate \u00b7 Department: All departments'
+        'Filters: Search: \u201cfinance\u201d \u00b7 Verdict: Prime candidate'
           + ' \u00b7 Sorted by: Most coordination load \u00b7 Already using Cowork',
       ),
     );

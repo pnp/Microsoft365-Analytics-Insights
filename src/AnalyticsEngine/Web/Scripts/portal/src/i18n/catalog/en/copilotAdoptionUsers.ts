@@ -8,7 +8,6 @@ export const copilotAdoptionUsers = {
   // Shared table and filter controls
   'copilotAdoptionUsers.common.searchPlaceholder': 'Search name, email, department, job title or manager',
   'copilotAdoptionUsers.common.search': 'Search',
-  'copilotAdoptionUsers.common.allDepartments': 'All departments',
   'copilotAdoptionUsers.common.refresh': 'Refresh',
   'copilotAdoptionUsers.common.exportCsv': 'Export CSV',
   'copilotAdoptionUsers.common.user': 'User',
@@ -31,7 +30,6 @@ export const copilotAdoptionUsers = {
   'copilotAdoptionUsers.licensed.probableReclaim': 'Probable reclaim',
   'copilotAdoptionUsers.licensed.reviewBeforeReclaim': 'Review before reclaim',
   'copilotAdoptionUsers.licensed.excludedFromReclaim': 'Excluded from reclaim',
-  'copilotAdoptionUsers.licensed.filterDepartmentAria': 'Filter by department',
   'copilotAdoptionUsers.licensed.coworkUsersOnly': 'Cowork users only',
   'copilotAdoptionUsers.licensed.disabledOnlyTooltip': 'Disabled accounts still holding a Copilot licence - the clearest licences to reclaim.',
   'copilotAdoptionUsers.licensed.disabledAccountsOnly': 'Disabled accounts only',
@@ -114,7 +112,6 @@ export const copilotAdoptionUsers = {
 
   // Opportunities panel
   'copilotAdoptionUsers.opportunities.searchAria': 'Search licence candidates',
-  'copilotAdoptionUsers.opportunities.filterDepartmentAria': 'Filter candidates by department',
   'copilotAdoptionUsers.opportunities.recommendedOnly': 'Recommended only',
   'copilotAdoptionUsers.opportunities.sections.ariaLabel': 'Licence opportunity sections',
   'copilotAdoptionUsers.opportunities.sections.candidates': 'Candidates',

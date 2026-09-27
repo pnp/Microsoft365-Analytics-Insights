@@ -692,19 +692,11 @@ export interface LicensedUserFilters {
   bands: AdoptionBand[];
   /** Recommended-action codes to restrict to. Drives the drill-through from the enablement plan. */
   actions: string[];
-  department: string;
-  country: string;
   /**
-   * The email domain the list is narrowed to. Empty means the whole tenant.
-   *
-   * Held on the filter object rather than passed separately so the list, its CSV export and the
-   * summary above it can never drift apart about which population they describe.
-   */
-  emailDomain: string;
-  /**
-   * The page-wide user filter in its wire form (`serializeUserFilter`), or empty for none. Held here
-   * for the same reason as `emailDomain`: the list, its CSV export and the summary must describe the
-   * same people.
+   * The page-wide user filter in its wire form (`serializeUserFilter`), or empty for none - who the
+   * list is about, from Entra ID attributes, email domain and custom organisations alike. Held on the
+   * filter object rather than passed separately so the list, its CSV export and the summary above it
+   * can never drift apart about which population they describe.
    */
   userFilter?: string;
   reclaimEligibility: string;
@@ -717,10 +709,6 @@ export interface LicensedUserFilters {
 /** Filter/sort state for the licence-opportunity list. */
 export interface OpportunityFilters {
   search: string;
-  department: string;
-  country: string;
-  /** The email domain the list is narrowed to. Empty means the whole tenant. */
-  emailDomain: string;
   /** The page-wide user filter in its wire form, or empty for none. */
   userFilter?: string;
   recommendedOnly: boolean;
@@ -951,10 +939,6 @@ export interface CoworkReadinessPage {
 export interface CoworkFilters {
   search: string;
   tiers: CoworkTier[];
-  department: string;
-  country: string;
-  /** The email domain the list is narrowed to. Empty means the whole tenant. */
-  emailDomain: string;
   /** The page-wide user filter in its wire form, or empty for none. */
   userFilter?: string;
   recommendedOnly: boolean;

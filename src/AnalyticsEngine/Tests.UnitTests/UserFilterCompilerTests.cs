@@ -88,6 +88,42 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void UserName_Contains_SearchesSignInNamesAsFreeText()
+        {
+            // The free-text name search: part of a name, any case, anywhere in it - a guest's included,
+            // whose UPN carries their home address with the "@" turned into "_".
+            AssertMatches(Compile("[{\"d\":\"userName\",\"op\":\"contains\",\"v\":[\"REP@\"]}]"), SalesRep);
+            AssertMatches(Compile("[{\"d\":\"userName\",\"op\":\"contains\",\"v\":[\"partner.example\"]}]"), Guest);
+            AssertMatches(Compile("[{\"d\":\"userName\",\"op\":\"contains\",\"v\":[\"director\",\"intern\"]}]"), SalesDirector, SalesIntern);
+        }
+
+        [TestMethod]
+        public void UserName_NotContains_LeavesAccountsOutByPattern()
+        {
+            // "Everyone but the guests", by the marker Entra writes into a guest's sign-in name.
+            var filter = Compile("[{\"d\":\"userName\",\"op\":\"notContains\",\"v\":[\"#EXT#\"]}]");
+
+            Assert.IsFalse(filter.Matches(Guest));
+            Assert.AreEqual(AllUsers.Length - 1, filter.MatchedPeople);
+        }
+
+        [TestMethod]
+        public void UserName_Is_PicksNamedPeople_WhateverTheCase()
+        {
+            AssertMatches(Compile("[{\"d\":\"userName\",\"v\":[\"CEO@contoso.com\",\"left@contoso.com\"]}]"), Ceo, Disabled);
+        }
+
+        [TestMethod]
+        public void UserName_CombinesWithTheOtherAttributes()
+        {
+            // Sales people whose names contain "re": the director and the rep, not the intern.
+            var filter = Compile(
+                "[{\"d\":\"department\",\"v\":[\"Sales\"]},{\"d\":\"userName\",\"op\":\"contains\",\"v\":[\"re\"]}]");
+
+            AssertMatches(filter, SalesDirector, SalesRep);
+        }
+
+        [TestMethod]
         public void And_BindsTighterThanOr()
         {
             // department = Sales AND country = UK  OR  company = Fabrikam
@@ -359,13 +395,34 @@ namespace Tests.UnitTests
             Assert.AreEqual(4, custom.PeopleWithValue);
             Assert.IsTrue(custom.SupportsTextMatch);
 
-            var department = list.Dimensions.First();
-            Assert.AreEqual("entra", department.Kind);
-            Assert.IsNull(department.Name, "Entra attributes are named by the portal, never by the server.");
+            var first = list.Dimensions.First();
+            Assert.AreEqual(UserFilterDimensions.UserName, first.Key, "The free-text name search leads the list.");
+            Assert.AreEqual("entra", first.Kind);
+            Assert.IsNull(first.Name, "Entra attributes are named by the portal, never by the server.");
+            Assert.IsTrue(first.SupportsTextMatch);
+            Assert.AreEqual(AllUsers.Length, first.PeopleWithValue, "Everyone has a sign-in name.");
+            Assert.AreEqual(AllUsers.Length, first.DistinctValues, "One per person.");
 
             Assert.IsFalse(list.Dimensions.Single(d => d.Key == UserFilterDimensions.AccountStatus).SupportsTextMatch);
             Assert.IsTrue(list.Dimensions.Single(d => d.Key == UserFilterDimensions.AccountStatus).FixedValues);
             Assert.IsFalse(list.Dimensions.Single(d => d.Key == UserFilterDimensions.ManagementChain).SupportsTextMatch);
+        }
+
+        [TestMethod]
+        public void Catalogue_ListsUserNamesAlphabetically_AndSearchesThem()
+        {
+            var snapshot = Snapshot();
+
+            var names = UserFilterCatalogue.ListValues(snapshot, UserFilterDimensions.UserName, null, 3);
+            CollectionAssert.AreEqual(
+                new[] { "alice_partner.example#EXT#@contoso.onmicrosoft.com", "analyst@contoso.com", "ceo@contoso.com" },
+                names.Values.Select(v => v.Value).ToArray(),
+                "One person each, so the order falls through to the alphabet.");
+            Assert.IsTrue(names.Truncated);
+            Assert.AreEqual(0, names.PeopleWithoutValue);
+
+            var searched = UserFilterCatalogue.ListValues(snapshot, UserFilterDimensions.UserName, "INTERN", 50);
+            CollectionAssert.AreEqual(new[] { "intern@contoso.com" }, searched.Values.Select(v => v.Value).ToArray());
         }
 
         [TestMethod]

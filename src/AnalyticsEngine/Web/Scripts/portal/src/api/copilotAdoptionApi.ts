@@ -115,9 +115,6 @@ function applyLicensedUserFilters(params: URLSearchParams, filters: LicensedUser
   if (filters.search.trim()) params.set('search', filters.search.trim());
   if (filters.bands.length > 0) params.set('bands', filters.bands.join(','));
   if (filters.actions.length > 0) params.set('actions', filters.actions.join(','));
-  if (filters.department) params.set('department', filters.department);
-  if (filters.country) params.set('country', filters.country);
-  if (filters.emailDomain) params.set('emailDomain', filters.emailDomain);
   if (filters.userFilter) params.set('userFilter', filters.userFilter);
   if (filters.reclaimEligibility) params.set('reclaimEligibility', filters.reclaimEligibility);
   if (filters.coworkOnly) params.set('coworkOnly', 'true');
@@ -130,9 +127,6 @@ function applyLicensedUserFilters(params: URLSearchParams, filters: LicensedUser
 /** Adds the licence-opportunity filter state to a parameter set. */
 function applyOpportunityFilters(params: URLSearchParams, filters: OpportunityFilters): URLSearchParams {
   if (filters.search.trim()) params.set('search', filters.search.trim());
-  if (filters.department) params.set('department', filters.department);
-  if (filters.country) params.set('country', filters.country);
-  if (filters.emailDomain) params.set('emailDomain', filters.emailDomain);
   if (filters.userFilter) params.set('userFilter', filters.userFilter);
   if (filters.recommendedOnly) params.set('recommendedOnly', 'true');
   if (filters.existingCopilotUsersOnly) params.set('existingCopilotUsersOnly', 'true');
@@ -145,9 +139,6 @@ function applyOpportunityFilters(params: URLSearchParams, filters: OpportunityFi
 function applyCoworkFilters(params: URLSearchParams, filters: CoworkFilters): URLSearchParams {
   if (filters.search.trim()) params.set('search', filters.search.trim());
   if (filters.tiers.length > 0) params.set('tiers', filters.tiers.join(','));
-  if (filters.department) params.set('department', filters.department);
-  if (filters.country) params.set('country', filters.country);
-  if (filters.emailDomain) params.set('emailDomain', filters.emailDomain);
   if (filters.userFilter) params.set('userFilter', filters.userFilter);
   if (filters.recommendedOnly) params.set('recommendedOnly', 'true');
   if (filters.coworkUsersOnly) params.set('coworkUsersOnly', 'true');

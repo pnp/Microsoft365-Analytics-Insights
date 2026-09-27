@@ -241,8 +241,6 @@ export const copilotAdoptionCowork = {
   'copilotAdoptionCowork.filters.searchPlaceholder': 'Search name, email, department, job title or manager',
   'copilotAdoptionCowork.filters.searchAria': 'Search Cowork candidates',
   'copilotAdoptionCowork.filters.searchButton': 'Search',
-  'copilotAdoptionCowork.filters.departmentAria': 'Filter Cowork candidates by department',
-  'copilotAdoptionCowork.filters.allDepartments': 'All departments',
   'copilotAdoptionCowork.filters.tierAria': 'Filter Cowork candidates by verdict',
   'copilotAdoptionCowork.filters.allVerdicts': 'All verdicts',
   'copilotAdoptionCowork.filters.sortAria': 'Sort Cowork candidates',

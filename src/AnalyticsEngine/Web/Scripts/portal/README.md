@@ -182,18 +182,28 @@ any `data-print` value the stylesheet has never heard of.
 ## The user filter
 
 One filter control narrows a whole report to the people it matches: their standard **Entra ID
-attributes** (department, job title, company, office location, country or region, state or province,
-usage location, email domain, user type, account status, manager, management chain) and every enabled
-**custom organisation type** an administrator has defined on the *User organisations* page. It is
-shown as pills, the way Azure Monitor shows metric filters: `Department = Sales, Marketing`,
-`Cost centre ≠ CC-100`.
+attributes** (user name, email domain, department, job title, company, office location, country or
+region, state or province, usage location, user type, account status, manager, management chain) and
+every enabled **custom organisation type** an administrator has defined on the *User organisations*
+page. It is shown as pills, the way Azure Monitor shows metric filters: `Department = Sales, Marketing`,
+`Cost centre ≠ CC-100`, `User name contains “smith”`.
 
 - **Operators:** *is* (=), *is not* (≠), and - on text attributes - *contains* / *does not contain*.
-  Every attribute also offers **(not set)**. *Is not* includes people with no value, so *is* and
-  *is not* always divide the directory between them.
+  Every attribute except the user name and the management chain also offers **(not set)**. *Is not*
+  includes people with no value, so *is* and *is not* always divide the directory between them.
+- **User name** is the free-text search: it opens on *contains*, a term typed and never added with
+  Enter still counts when Apply is pressed, and Enter on an empty box applies - so a name search is
+  "smith", Enter, Enter. *Does not contain* leaves accounts out by pattern (`svc-`, `#EXT#`), and *is*
+  picks named people from a searchable list.
+- **Email domain** is the page's domain filter: the domain breakdown's **Filter** buttons add or
+  replace an email-domain condition, so it combines with everything else by AND / OR like any other.
+  The lists on the tabs have no department or domain drop-downs of their own - two department filters
+  combining by AND could contradict each other and leave an empty list nobody can explain.
 - **AND / OR:** the first condition needs neither; from the second on, a connector sits between the
   pills. AND binds tighter than OR, exactly as in SQL, and the bar draws each OR-group in its own box
-  and reads the whole filter back in words, so nobody has to know the rule to read it.
+  and reads the whole filter back in words, so nobody has to know the rule to read it. An existing
+  condition is edited under the pills, with its pill highlighted, so switching a connector while it is
+  open keeps the draft.
 - **Management chain** matches everyone who reports to a manager at any level (the manager
   excluded). Custom organisations carry the organisation icon of the *User organisations* page;
   Entra attributes carry a person icon.
