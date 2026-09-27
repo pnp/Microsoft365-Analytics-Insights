@@ -214,6 +214,93 @@ describe('CsvImportPanel', () => {
     expect(previewCsv).toHaveBeenLastCalledWith(1, expect.any(File), { userColumn: 2, valueColumn: 0 });
   });
 
+  it('sends both columns when only one is changed, using the one the chooser shows for the other', async () => {
+    // The server refuses half a choice, and a chooseColumns preview settles only the user column.
+    previewCsv
+      .mockResolvedValueOnce(
+        preview({
+          draftId: null,
+          blocking: { code: 'chooseColumns', line: null, lastLine: null, max: null },
+          columns: ['EmployeeId', 'Display name', 'UserPrincipalName', 'Centre'],
+          columnCount: 4,
+          userColumnIndex: 2,
+          valueColumnIndex: null,
+        }),
+      )
+      .mockResolvedValueOnce(preview({ columnCount: 4, userColumnIndex: 0, valueColumnIndex: 1 }));
+
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+    await chooseFile();
+    await screen.findByText(/This file has several columns/i);
+
+    await userEvent.selectOptions(screen.getByLabelText('User principal name column'), '0');
+
+    await waitFor(() => expect(previewCsv).toHaveBeenCalledTimes(2));
+    expect(previewCsv).toHaveBeenLastCalledWith(1, expect.any(File), { userColumn: 0, valueColumn: 1 });
+  });
+
+  it('asks for two different columns without re-reading the file', async () => {
+    previewCsv.mockResolvedValueOnce(
+      preview({
+        draftId: null,
+        blocking: { code: 'chooseColumns', line: null, lastLine: null, max: null },
+        columns: ['EmployeeId', 'Display name', 'UserPrincipalName'],
+        columnCount: 3,
+        userColumnIndex: 2,
+        valueColumnIndex: null,
+      }),
+    );
+
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+    await chooseFile();
+    await screen.findByText(/This file has several columns/i);
+
+    await userEvent.selectOptions(screen.getByLabelText('Value column'), '2');
+
+    expect(await screen.findByText(/Choose two different columns/i)).toBeInTheDocument();
+    expect(previewCsv).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText('Value column')).toBeInTheDocument();
+  });
+
+  it('keeps the preview, and the columns it used, when re-reading with other columns fails', async () => {
+    previewCsv
+      .mockResolvedValueOnce(
+        preview({ columns: ['UserPrincipalName', 'Centre', 'Region'], columnCount: 3, userColumnIndex: 0, valueColumnIndex: 1 }),
+      )
+      .mockRejectedValueOnce(new Error('Failed to reach the server.'));
+
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+    await chooseFile();
+    await screen.findByText('alex.wilber@contoso.com');
+
+    await userEvent.selectOptions(screen.getByLabelText('Value column'), '2');
+
+    expect(await screen.findByText('Failed to reach the server.')).toBeInTheDocument();
+    expect(screen.getByText('alex.wilber@contoso.com')).toBeInTheDocument();
+    expect((screen.getByLabelText('Value column') as HTMLSelectElement).value).toBe('1');
+  });
+
+  it('offers the column chooser for a two-column file in which no row could be read', async () => {
+    // Usually the columns the other way round, with no header to say so.
+    previewCsv.mockResolvedValueOnce(
+      preview({
+        draftId: null,
+        blocking: { code: 'noUsableRows', line: null, lastLine: null, max: null },
+        headerDetected: false,
+        columns: null,
+        columnCount: 2,
+        rows: [],
+        totalRows: 0,
+      }),
+    );
+
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+    await chooseFile();
+
+    expect(await screen.findByLabelText('User principal name column')).toBeInTheDocument();
+    expect(screen.getAllByRole('option', { name: 'Column 2' }).length).toBeGreaterThan(0);
+  });
+
   it('translates row problem reasons and downloads unusable rows as UTF-8 CSV with formula neutralisation', async () => {
     let capturedBlob: Blob | undefined;
     Object.defineProperty(URL, 'createObjectURL', {

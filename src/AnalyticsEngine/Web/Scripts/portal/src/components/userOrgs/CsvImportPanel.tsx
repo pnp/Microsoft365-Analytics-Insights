@@ -204,7 +204,8 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
   }, [running, job?.id, onImportFinished, t]);
 
   const refreshHistory = async () => {
-    if (!historyOpen && historyLoaded) return;
+    // Always fetched, even while the list is closed: the import that just finished must be in it the
+    // next time it is opened, and it is ten rows.
     setHistoryLoading(true);
     setHistoryError(null);
     const controller = new AbortController();
@@ -218,7 +219,7 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
     }
   };
 
-  const runPreview = async (chosen: File, chosenColumns: UserOrgCsvColumnChoice) => {
+  const runPreview = async (chosen: File, chosenColumns: UserOrgCsvColumnChoice, previous: UserOrgCsvPreview | null = null) => {
     setBusy(true);
     setError(null);
     setConfirmedClear(false);
@@ -230,7 +231,18 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
         valueColumn: nextPreview.valueColumnIndex ?? chosenColumns.valueColumn,
       });
     } catch (e) {
-      setPreview(null);
+      if (previous) {
+        // A failed re-read with other columns keeps the preview the admin already has, and puts the
+        // column choice back to what that preview actually used - so what is shown, and what an
+        // import would commit, still agree.
+        setPreview(previous);
+        setColumns({
+          userColumn: previous.userColumnIndex ?? undefined,
+          valueColumn: previous.valueColumnIndex ?? undefined,
+        });
+      } else {
+        setPreview(null);
+      }
       setError(apiErrorMessage(e, t));
     } finally {
       setBusy(false);
@@ -251,10 +263,17 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
   };
 
   const chooseColumn = async (kind: keyof UserOrgCsvColumnChoice, value: number) => {
-    if (!file) return;
-    const next = { ...columns, [kind]: value };
+    if (!file || !preview) return;
+    // Both columns are always sent. The one the admin did not touch is whatever the chooser is showing
+    // for it; sending only the changed one is half a choice, which the server refuses.
+    const shown = displayedColumns(preview, columns);
+    const next: UserOrgCsvColumnChoice = { ...shown, [kind]: value };
     setColumns(next);
-    await runPreview(file, next);
+    if (next.userColumn === next.valueColumn) {
+      setError(t('userOrgs.csv.apiError.invalidColumns'));
+      return;
+    }
+    await runPreview(file, next, preview);
   };
 
   const startImport = async () => {
@@ -448,8 +467,8 @@ function ColumnChooser({
   styles: ReturnType<typeof useStyles>;
   t: TFunction;
 }) {
-  const selectedUser = choice.userColumn ?? preview.userColumnIndex ?? 0;
-  const selectedValue = choice.valueColumn ?? preview.valueColumnIndex ?? Math.min(1, Math.max(0, preview.columnCount - 1));
+  const selectedUser = displayedColumns(preview, choice).userColumn;
+  const selectedValue = displayedColumns(preview, choice).valueColumn;
 
   return (
     <div>
@@ -936,8 +955,22 @@ function ImportHistory({
   );
 }
 
+/** The columns the chooser shows: the admin's choice, else what the server read, else the first two. */
+function displayedColumns(preview: UserOrgCsvPreview, choice: UserOrgCsvColumnChoice): Required<UserOrgCsvColumnChoice> {
+  return {
+    userColumn: choice.userColumn ?? preview.userColumnIndex ?? 0,
+    valueColumn: choice.valueColumn ?? preview.valueColumnIndex ?? Math.min(1, Math.max(0, preview.columnCount - 1)),
+  };
+}
+
 function shouldShowColumnChooser(preview: UserOrgCsvPreview): boolean {
-  return preview.columnCount > 2 || preview.blocking?.code === 'chooseColumns';
+  // Also for a two-column file in which no row could be read: the usual cause is the columns the
+  // other way round, with no header to say so.
+  return (
+    preview.columnCount > 2 ||
+    preview.blocking?.code === 'chooseColumns' ||
+    (preview.blocking?.code === 'noUsableRows' && preview.columnCount >= 2)
+  );
 }
 
 function blockingMessage(preview: UserOrgCsvPreview, t: TFunction): string {
@@ -957,7 +990,7 @@ function rowProblemMessage(code: string, fallback: string, t: TFunction): string
 }
 
 function apiErrorMessage(error: unknown, t: TFunction): string {
-  if (error instanceof UserOrgApiError && error.code && API_ERROR_KEYS[error.code]) {
+  if (error instanceof UserOrgApiError && error.code && Object.prototype.hasOwnProperty.call(API_ERROR_KEYS, error.code)) {
     return t(API_ERROR_KEYS[error.code], {
       name: String(error.values.name ?? ''),
       maxMb: formatNumber(Number(error.values.maxMb ?? 0)),

@@ -60,12 +60,15 @@ function failedImport(): UserOrgImportJob {
     fileName: 'orgs.csv',
     startedBy: 'admin@contoso.com',
     queuedUtc: '2026-03-05T09:30:00.000Z',
+    startedUtc: '2026-03-05T09:30:01.000Z',
     finishedUtc: '2026-03-05T09:31:00.000Z',
+    attempts: 1,
     rowsTotal: 3,
     rowsApplied: 0,
     rowsCleared: 0,
     rowsUnknownUpn: 0,
     rowsInvalid: 0,
+    errorCode: null,
     errorMessage: 'The import failed.',
   };
 }
