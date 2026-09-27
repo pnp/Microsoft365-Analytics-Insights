@@ -53,6 +53,7 @@
     <Compile Include="UserOrgImportTests.cs" />
     <Compile Include="UserOrgCsvTests.cs" />
     <Compile Include="UserOrgImportFailureTests.cs" />
+    <Compile Include="UserOrgImportLifecycleSqlTests.cs" />
     <Compile Include="UserOrgMigrationScriptTests.cs" />
     <Compile Include="UserOrgMembershipServiceTests.cs" />
     <Compile Include="UserOrgStoreSqlTests.cs" />

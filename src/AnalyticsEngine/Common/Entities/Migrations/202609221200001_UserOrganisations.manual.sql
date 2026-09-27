@@ -194,9 +194,10 @@ END
 -- ---------------------------------------------------------------------------
 -- user_org_import_jobs - one row per CSV upload.
 --   mode:   1 = Replace, 2 = Merge
---   status: 1 = Pending, 2 = Running, 3 = Succeeded, 4 = Failed, 5 = Cancelled
+--   status: 1 = Pending, 2 = Running, 3 = Succeeded, 4 = Failed, 5 = Cancelled,
+--           6 = Draft (a previewed file, staged but not yet imported)
 -- Persisted in SQL rather than held in memory so a job survives an App Service
--- recycle: an interrupted import stays visible (stale heartbeat) instead of
+-- recycle: an interrupted import is resumed from its staged rows instead of
 -- vanishing silently, and the row doubles as the audit trail.
 -- ---------------------------------------------------------------------------
 IF OBJECT_ID(N'dbo.user_org_import_jobs', N'U') IS NULL
@@ -219,22 +220,29 @@ BEGIN
         [rows_cleared] int NOT NULL CONSTRAINT [DF_user_org_import_jobs_rows_cleared] DEFAULT (0),
         [rows_unknown_upn] int NOT NULL CONSTRAINT [DF_user_org_import_jobs_rows_unknown_upn] DEFAULT (0),
         [rows_invalid] int NOT NULL CONSTRAINT [DF_user_org_import_jobs_rows_invalid] DEFAULT (0),
-        -- Whether the administrator acknowledged, at upload time, how many users a Replace would
-        -- clear. Persisted rather than checked only in the web request because the destructive
-        -- DELETE happens later, in the background worker's transaction - and that is the only place
-        -- the answer can be authoritative. A second admin's import can finish in between.
-        [confirm_clear] bit NOT NULL CONSTRAINT [DF_user_org_import_jobs_confirm_clear] DEFAULT (0),
+        -- How many users the administrator agreed, at import time, may lose their value - the count
+        -- the preview showed for the chosen mode. NULL or 0 means none. A number rather than a yes/no,
+        -- because the destructive DELETE happens later, in the background worker's transaction, and a
+        -- second admin's import can change the assignments in between: a confirmation given for
+        -- 'clears 12' must not cover a wipe of 20,000. The apply refuses when it would clear more.
+        [confirmed_clear_count] int NULL,
         -- The org type's source generation when this file was staged. The apply refuses unless it
         -- still matches, because a type being CSV-sourced is not the same question: one switched to
         -- Entra and back is CSV-sourced again, with its values deliberately discarded in between,
         -- and letting a file queued before that land afterwards silently restores them.
         [expected_generation] int NULL,
+        -- How many times a worker has claimed the job. A job whose worker died with the web app is
+        -- resumed from its staged rows, up to a limit, rather than left for the admin to re-upload.
+        [attempts] tinyint NOT NULL CONSTRAINT [DF_user_org_import_jobs_attempts] DEFAULT (0),
+        -- A stable key for why the job failed or was cancelled, which the portal words in the reader's
+        -- language. error_message is the English, kept for a key the portal does not know.
+        [error_code] nvarchar(64) NULL,
         [error_message] nvarchar(2000) NULL,
         CONSTRAINT [PK_user_org_import_jobs] PRIMARY KEY CLUSTERED ([id] ASC),
         CONSTRAINT [FK_user_org_import_jobs_type] FOREIGN KEY ([org_type_id])
             REFERENCES [dbo].[user_org_types] ([id]),
         CONSTRAINT [CK_user_org_import_jobs_mode] CHECK ([mode] IN (1, 2)),
-        CONSTRAINT [CK_user_org_import_jobs_status] CHECK ([status] IN (1, 2, 3, 4, 5))
+        CONSTRAINT [CK_user_org_import_jobs_status] CHECK ([status] IN (1, 2, 3, 4, 5, 6))
     );
 
     RAISERROR('UserOrganisations: created dbo.user_org_import_jobs.', 0, 1) WITH NOWAIT;

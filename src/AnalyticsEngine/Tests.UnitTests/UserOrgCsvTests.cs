@@ -20,10 +20,24 @@ namespace Tests.UnitTests
 
         private static UserOrgCsvParseResult Parse(string content, Encoding encoding = null, int maxRows = UserOrgCsvParser.MaxDataLines)
         {
-            var bytes = (encoding ?? new UTF8Encoding(false)).GetBytes(content);
+            return Parse(content, encoding, new UserOrgCsvParseOptions { MaxDataLines = maxRows });
+        }
+
+        /// <summary>
+        /// Encodes the text as a file on disk would hold it - byte order mark included, which
+        /// <see cref="Encoding.GetBytes(string)"/> never writes by itself.
+        /// </summary>
+        private static UserOrgCsvParseResult Parse(string content, Encoding encoding, UserOrgCsvParseOptions options)
+        {
+            var enc = encoding ?? new UTF8Encoding(false);
+            return ParseBytes(enc.GetPreamble().Concat(enc.GetBytes(content)).ToArray(), options);
+        }
+
+        private static UserOrgCsvParseResult ParseBytes(byte[] bytes, UserOrgCsvParseOptions options = null)
+        {
             using (var stream = new MemoryStream(bytes))
             {
-                return UserOrgCsvParser.Parse(stream, maxRows);
+                return UserOrgCsvParser.Parse(stream, options ?? new UserOrgCsvParseOptions());
             }
         }
 
@@ -119,14 +133,37 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void HandlesAQuotedFieldSpanningLines()
+        public void ARowRunningOnAcrossLinesIsRefusedWithTheLinesNamed()
         {
+            // A two-column file of names never legitimately spans lines, so a record that does is a
+            // stray quotation mark that swallowed the lines after it. Those people would look absent -
+            // which a Replace treats as "clear their value" - so the file is refused, and the admin is
+            // told exactly which lines to look at.
             var result = Parse("UPN,OrgName\r\na@contoso.com,\"Retail\nNorth\"\r\nb@contoso.com,Ops\r\n");
 
-            Assert.AreEqual(2, result.Rows.Count);
-            StringAssert.Contains(result.Rows[0].OrgValue, "Retail");
-            StringAssert.Contains(result.Rows[0].OrgValue, "North");
-            Assert.AreEqual("b@contoso.com", result.Rows[1].Upn);
+            Assert.IsNotNull(result.Blocking);
+            Assert.AreEqual(UserOrgCsvBlockingCodes.RowSpansLines, result.Blocking.Code);
+            Assert.AreEqual(2, result.Blocking.Line);
+            Assert.AreEqual(3, result.Blocking.LastLine);
+        }
+
+        [TestMethod]
+        public void TwoStrayQuotesNoLongerTurnFiveRowsIntoThree()
+        {
+            // The quote opening "Retail North on line 2 is closed by the one before Finance on line 4,
+            // so lines 2-4 used to read as ONE row - b@contoso.com silently vanished, and a@contoso.com's
+            // value became the text of two other people's rows.
+            var result = Parse(
+                "UPN,Site\r\n"
+                + "a@contoso.com,\"Retail North\r\n"
+                + "b@contoso.com,Ops\r\n"
+                + "c@contoso.com,\"Finance\r\n"
+                + "d@contoso.com,Legal\r\n"
+                + "e@contoso.com,HR\r\n");
+
+            Assert.AreEqual(UserOrgCsvBlockingCodes.RowSpansLines, result.Blocking?.Code);
+            Assert.AreEqual(2, result.Blocking.Line);
+            Assert.AreEqual(4, result.Blocking.LastLine);
         }
 
         [TestMethod]
@@ -240,6 +277,242 @@ namespace Tests.UnitTests
             var result = Parse("UPN,OrgName\r\na@contoso.com,\"Retail\r\nb@contoso.com,Ops\r\nc@contoso.com,Finance\r\n");
 
             Assert.IsTrue(result.UnterminatedQuote, "The caller refuses the import on this flag.");
+            Assert.AreEqual(UserOrgCsvBlockingCodes.UnterminatedQuote, result.Blocking?.Code);
+            Assert.AreEqual(2, result.Blocking.Line, "The admin is told where the quote opens.");
+        }
+
+        [TestMethod]
+        public void AFileSavedInAWindowsCodePageIsRefusedRatherThanCorrupted()
+        {
+            // Excel's plain "CSV (Comma delimited)" is saved in the Windows code page. Read as UTF-8,
+            // every Greek name became a run of U+FFFD - so two different organisations of the same
+            // length silently collapsed into one, while the ASCII UPNs still matched.
+            var result = Parse("UPN,City\r\na@contoso.com,Paris\r\nb@contoso.com,Αθήνα\r\nc@contoso.com,Πάτρα\r\n", Encoding.GetEncoding(1253));
+
+            Assert.AreEqual(UserOrgCsvBlockingCodes.NotUtf8, result.Blocking?.Code);
+            Assert.AreEqual(3, result.Blocking.Line, "The first line with a character that is not UTF-8.");
+            Assert.AreEqual(0, result.Rows.Count, "Nothing is read from a file that cannot be decoded faithfully.");
+        }
+
+        [TestMethod]
+        public void AnAccentInWestern1252IsRefusedToo()
+        {
+            var result = Parse("UPN,Office\r\na@contoso.com,Café\r\n", Encoding.GetEncoding(1252));
+
+            Assert.AreEqual(UserOrgCsvBlockingCodes.NotUtf8, result.Blocking?.Code);
+            Assert.AreEqual(2, result.Blocking.Line);
+        }
+
+        [TestMethod]
+        public void ReadsUtf16WithAByteOrderMarkInEitherByteOrder()
+        {
+            // Excel's "Unicode Text" is UTF-16 with a byte order mark - tab-separated, and faithful to
+            // every script.
+            foreach (var encoding in new Encoding[] { Encoding.Unicode, Encoding.BigEndianUnicode })
+            {
+                var result = Parse("UPN\tCity\r\na@contoso.com\t" + GreekOrgName + "\r\n", encoding);
+
+                Assert.IsNull(result.Blocking, encoding.WebName);
+                Assert.AreEqual('\t', result.Delimiter, encoding.WebName);
+                Assert.AreEqual(GreekOrgName, result.Rows.Single().OrgValue, encoding.WebName);
+            }
+        }
+
+        [TestMethod]
+        public void RefusesUtf16WithoutAByteOrderMark()
+        {
+            var result = Parse("UPN,City\r\na@contoso.com,Paris\r\n", new UnicodeEncoding(bigEndian: false, byteOrderMark: false));
+
+            Assert.AreEqual(UserOrgCsvBlockingCodes.NotText, result.Blocking?.Code);
+        }
+
+        [TestMethod]
+        public void RecognisesAnExcelWorkbookUploadedByMistake()
+        {
+            // The commonest wrong upload. Read as text it produced a wall of "not a valid user
+            // principal name" problems that said nothing about the actual mistake.
+            var xlsx = new byte[] { 0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x06, 0x00, 0x08, 0x00 };
+            var xls = new byte[] { 0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0x00, 0x00 };
+
+            Assert.AreEqual(UserOrgCsvBlockingCodes.ExcelWorkbook, ParseBytes(xlsx).Blocking?.Code);
+            Assert.AreEqual(UserOrgCsvBlockingCodes.ExcelWorkbook, ParseBytes(xls).Blocking?.Code);
+        }
+
+        [TestMethod]
+        public void RefusesABinaryFile()
+        {
+            var result = ParseBytes(new byte[] { 0x55, 0x50, 0x4E, 0x00, 0x01, 0x02, 0x03, 0x2C, 0x00, 0x0A });
+
+            Assert.AreEqual(UserOrgCsvBlockingCodes.NotText, result.Blocking?.Code);
+        }
+
+        [TestMethod]
+        public void TheUserPrincipalNameColumnBeatsAnEmailColumnBeforeIt()
+        {
+            // An HR export commonly carries email beside UPN, and in a hybrid tenant the two differ.
+            // Taking whichever came first matched nobody.
+            var result = Parse(
+                "Email,UserPrincipalName,Department\r\nadele@contoso.co.uk,adele@contoso.com,Retail\r\n",
+                null,
+                new UserOrgCsvParseOptions { OrgTypeName = "Department" });
+
+            Assert.IsNull(result.Blocking);
+            Assert.AreEqual(1, result.UserColumnIndex);
+            Assert.AreEqual(2, result.ValueColumnIndex);
+            Assert.AreEqual("adele@contoso.com", result.Rows.Single().Upn);
+        }
+
+        [TestMethod]
+        public void AWideExportAsksWhichColumnRatherThanGuessing()
+        {
+            // Taking "the first other column" imported everyone's employee number as their cost centre
+            // from an ordinary HR export, with no problem reported.
+            const string wide = "EmployeeId,DisplayName,UserPrincipalName,Cost Centre Code\r\n"
+                + "10001,Adele Vance,adele@contoso.com,CC-100\r\n";
+
+            var result = Parse(wide, null, new UserOrgCsvParseOptions { OrgTypeName = "Cost Centre" });
+
+            Assert.AreEqual(UserOrgCsvBlockingCodes.ChooseColumns, result.Blocking?.Code);
+            Assert.AreEqual(2, result.UserColumnIndex, "The user column is still found, so the portal can preselect it.");
+            Assert.IsNull(result.ValueColumnIndex);
+            CollectionAssert.AreEqual(
+                new[] { "EmployeeId", "DisplayName", "UserPrincipalName", "Cost Centre Code" },
+                result.Columns.ToArray(),
+                "The admin chooses from the header's own names.");
+            Assert.AreEqual(0, result.Rows.Count, "Nothing is read until the columns are settled.");
+        }
+
+        [TestMethod]
+        public void AHeaderNamedAfterTheOrgTypePicksTheValueColumn()
+        {
+            const string wide = "EmployeeId,DisplayName,UserPrincipalName,Cost Centre Code\r\n"
+                + "10001,Adele Vance,adele@contoso.com,CC-100\r\n";
+
+            var result = Parse(wide, null, new UserOrgCsvParseOptions { OrgTypeName = " cost centre code " });
+
+            Assert.IsNull(result.Blocking);
+            Assert.AreEqual(3, result.ValueColumnIndex);
+            Assert.AreEqual("CC-100", result.Rows.Single().OrgValue);
+        }
+
+        [TestMethod]
+        public void AnExplicitColumnChoiceIsHonoured()
+        {
+            const string wide = "EmployeeId,DisplayName,UserPrincipalName,Cost Centre Code\r\n"
+                + "10001,Adele Vance,adele@contoso.com,CC-100\r\n";
+
+            var result = Parse(wide, null, new UserOrgCsvParseOptions { UserColumn = 2, ValueColumn = 1 });
+
+            Assert.IsNull(result.Blocking);
+            Assert.AreEqual("adele@contoso.com", result.Rows.Single().Upn);
+            Assert.AreEqual("Adele Vance", result.Rows.Single().OrgValue);
+            Assert.AreEqual("DisplayName", result.OrgColumnName);
+        }
+
+        [TestMethod]
+        public void AColumnChoiceOutsideTheFileAsksAgain()
+        {
+            var result = Parse("UPN,Department\r\na@contoso.com,Retail\r\n", null, new UserOrgCsvParseOptions { UserColumn = 0, ValueColumn = 5 });
+
+            Assert.AreEqual(UserOrgCsvBlockingCodes.ChooseColumns, result.Blocking?.Code);
+        }
+
+        [TestMethod]
+        public void AOneColumnFileIsRefused()
+        {
+            var result = Parse("UPN\r\na@contoso.com\r\nb@contoso.com\r\n");
+
+            Assert.AreEqual(UserOrgCsvBlockingCodes.OneColumn, result.Blocking?.Code);
+        }
+
+        [TestMethod]
+        public void ATrailingEmptyColumnIsNotAChoiceToMake()
+        {
+            // A spreadsheet with an empty column after the data writes a trailing delimiter on every
+            // line. That is still a two-column file.
+            var result = Parse("UPN,Department,\r\na@contoso.com,Retail,\r\nb@contoso.com,Ops,\r\n");
+
+            Assert.IsNull(result.Blocking);
+            Assert.AreEqual(3, result.ColumnCount);
+            Assert.AreEqual(1, result.ValueColumnIndex);
+            Assert.AreEqual(2, result.Rows.Count);
+        }
+
+        [TestMethod]
+        public void HonoursExcelsSeparatorLine()
+        {
+            var result = Parse("sep=;\r\nUPN;Department\r\na@contoso.com;Retail, North\r\n");
+
+            Assert.IsNull(result.Blocking);
+            Assert.AreEqual(';', result.Delimiter);
+            Assert.AreEqual("Retail, North", result.Rows.Single().OrgValue);
+            Assert.AreEqual(3, result.Rows.Single().LineNumber, "Line numbers still count the separator line.");
+        }
+
+        [TestMethod]
+        public void IgnoresInvisibleCharactersAroundAUserPrincipalName()
+        {
+            // Zero-width characters pasted from a web page or a chat, and a byte order mark left in the
+            // middle of two concatenated files, made a correct UPN "not a valid user principal name"
+            // with nothing visible to explain it.
+            var result = Parse("UPN,Department\r\n\u200Ba@contoso.com\u200B,Retail\r\n\uFEFFb@contoso.com,Ops\r\n");
+
+            Assert.AreEqual(0, result.Problems.Count);
+            CollectionAssert.AreEqual(new[] { "a@contoso.com", "b@contoso.com" }, result.Rows.Select(r => r.Upn).ToArray());
+        }
+
+        [TestMethod]
+        public void SkipsAnEmptySpreadsheetRow()
+        {
+            var result = Parse("UPN,Department\r\n,\r\na@contoso.com,Retail\r\n , \r\n");
+
+            Assert.AreEqual(0, result.Problems.Count, "A row of empty cells is not a row the admin wrote.");
+            Assert.AreEqual(1, result.Rows.Count);
+        }
+
+        [TestMethod]
+        public void ProblemsCarryACodeAndWhatTheRowSaid()
+        {
+            // So the portal can word each problem in the admin's language, and list the rows to fix.
+            var result = Parse("UPN,Department\r\n,Retail\r\nnot-a-upn,Ops\r\na@contoso.com,Finance\r\n");
+
+            Assert.AreEqual(UserOrgCsvProblemCodes.UserEmptyOrTooLong, result.Problems[0].Code);
+            Assert.AreEqual("Retail", result.Problems[0].OrgValue);
+            Assert.AreEqual(UserOrgCsvProblemCodes.NotAValidUpn, result.Problems[1].Code);
+            Assert.AreEqual("not-a-upn", result.Problems[1].Upn);
+            Assert.AreEqual("Ops", result.Problems[1].OrgValue);
+            Assert.AreEqual(3, result.Problems[1].LineNumber);
+        }
+
+        [TestMethod]
+        public void AProblemValueIsShortenedSoAMisreadLineCannotBalloonThePreview()
+        {
+            var result = Parse("UPN,Department\r\n" + new string('x', 5000) + ",Retail\r\na@contoso.com,Ops\r\n");
+
+            Assert.IsTrue(result.Problems.Single().Upn.Length <= 256);
+        }
+
+        [TestMethod]
+        public void AFileWithNoUsableRowsSaysSo()
+        {
+            var result = Parse("UPN,Department\r\nnobody,Retail\r\nsomebody,Ops\r\n");
+
+            Assert.AreEqual(UserOrgCsvBlockingCodes.NoUsableRows, result.Blocking?.Code);
+            Assert.AreEqual(2, result.Problems.Count, "The problems are still reported, so the admin can see why.");
+        }
+
+        [TestMethod]
+        public void TooManyRowsBlocksTheFile()
+        {
+            var builder = new StringBuilder("UPN,OrgName\r\n");
+            for (var i = 0; i < 11; i++)
+            {
+                builder.Append("user").Append(i).Append("@contoso.com,Org").Append(i).Append("\r\n");
+            }
+
+            var result = Parse(builder.ToString(), maxRows: 10);
+
+            Assert.AreEqual(UserOrgCsvBlockingCodes.TooManyRows, result.Blocking?.Code);
         }
 
         [TestMethod]
@@ -406,19 +679,34 @@ namespace Tests.UnitTests
             public int ApplyCalls;
             public int HeartbeatCalls;
             public Exception ApplyThrows;
+
+            /// <summary>The apply commits - the job says Succeeded - and then the answer is lost.</summary>
+            public bool ApplyCommitsThenThrows;
             public TimeSpan ApplyDelay = TimeSpan.Zero;
             public int FailHeartbeatNumber;
-            public int FailCompleteCallsUpTo;
             public Exception CompleteThrows;
             public int CompleteCalls;
             public UserOrgImportStatus? CompletedStatus;
             public string CompletedError;
+            public string CompletedCode;
 
             public Task<int> CreateJobWithRowsAsync(UserOrgImportJob job, IReadOnlyList<UserOrgStagedRow> rows, CancellationToken cancellationToken = default(CancellationToken))
                 => Task.FromResult(Job.Id);
 
+            public Task<int> CreateDraftAsync(UserOrgImportJob draft, IReadOnlyList<UserOrgStagedRow> rows, CancellationToken cancellationToken = default(CancellationToken))
+                => Task.FromResult(Job.Id);
+
+            public Task<UserOrgDraftSummary> SummariseDraftAsync(int draftId, int sampleRows, int unknownRowLimit, CancellationToken cancellationToken = default(CancellationToken))
+                => Task.FromResult<UserOrgDraftSummary>(null);
+
+            public Task CommitDraftAsync(int draftId, int orgTypeId, UserOrgImportMode mode, int confirmedClearCount, string startedBy, CancellationToken cancellationToken = default(CancellationToken))
+                => Task.CompletedTask;
+
             public Task<UserOrgImportJob> GetJobAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
                 => Task.FromResult(Job);
+
+            public Task<IReadOnlyList<UserOrgImportJob>> ListJobsAsync(int orgTypeId, int take, CancellationToken cancellationToken = default(CancellationToken))
+                => Task.FromResult<IReadOnlyList<UserOrgImportJob>>(new[] { Job });
 
             public Task<bool> TryClaimJobAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
             {
@@ -426,6 +714,7 @@ namespace Tests.UnitTests
                 if (ClaimSucceeds)
                 {
                     Job.Status = UserOrgImportStatus.Running;
+                    Job.Attempts++;
                 }
                 return Task.FromResult(ClaimSucceeds);
             }
@@ -451,25 +740,74 @@ namespace Tests.UnitTests
                 {
                     await Task.Delay(ApplyDelay).ConfigureAwait(false);
                 }
+
+                // As the real apply does: the success is recorded with the changes.
                 Job.RowsApplied = 3;
+                Job.Status = UserOrgImportStatus.Succeeded;
+
+                if (ApplyCommitsThenThrows)
+                {
+                    throw new InvalidOperationException("the connection dropped after the commit");
+                }
+
                 return Job;
             }
 
-            public Task CompleteJobAsync(int jobId, UserOrgImportStatus status, string errorMessage, CancellationToken cancellationToken = default(CancellationToken))
+            public Task CompleteJobAsync(
+                int jobId,
+                UserOrgImportStatus status,
+                string errorMessage,
+                CancellationToken cancellationToken = default(CancellationToken),
+                string errorCode = null)
             {
                 CompleteCalls++;
-                if (CompleteThrows != null || CompleteCalls <= FailCompleteCallsUpTo)
+                if (CompleteThrows != null)
                 {
-                    throw CompleteThrows ?? new InvalidOperationException("status write failed");
+                    throw CompleteThrows;
                 }
                 CompletedStatus = status;
                 CompletedError = errorMessage;
-                Job.Status = status;
+                CompletedCode = errorCode;
+
+                // As the real store does: only a job that is still live is rewritten.
+                if (Job.Status == UserOrgImportStatus.Pending || Job.Status == UserOrgImportStatus.Running)
+                {
+                    Job.Status = status;
+                    Job.ErrorCode = errorCode;
+                    Job.ErrorMessage = errorMessage;
+                }
                 return Task.CompletedTask;
             }
 
+            public Task<IReadOnlyList<int>> ResumeStaleJobsAsync(CancellationToken cancellationToken = default(CancellationToken))
+                => Task.FromResult<IReadOnlyList<int>>(new int[0]);
+
             public Task<UserOrgImportJob> GetActiveJobForTypeAsync(int orgTypeId, CancellationToken cancellationToken = default(CancellationToken))
                 => Task.FromResult<UserOrgImportJob>(null);
+        }
+
+        private sealed class RecordingTelemetry : IUserOrgImportTelemetry
+        {
+            public readonly List<UserOrgImportTelemetryEvent> Events = new List<UserOrgImportTelemetryEvent>();
+
+            public List<string> Stages
+            {
+                get
+                {
+                    lock (Events)
+                    {
+                        return Events.Select(e => e.Stage).ToList();
+                    }
+                }
+            }
+
+            public void Record(UserOrgImportTelemetryEvent item)
+            {
+                lock (Events)
+                {
+                    Events.Add(item);
+                }
+            }
         }
 
         [TestMethod]
@@ -481,9 +819,29 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(1, store.ClaimAttempts);
             Assert.AreEqual(1, store.ApplyCalls);
-            Assert.AreEqual(UserOrgImportStatus.Succeeded, store.CompletedStatus);
+            Assert.AreEqual(UserOrgImportStatus.Succeeded, store.CompletedStatus, "The completion only tidies up the staged rows.");
             Assert.IsNull(store.CompletedError);
             Assert.AreEqual(UserOrgImportStatus.Succeeded, job.Status);
+        }
+
+        [TestMethod]
+        public async Task ReportsTheLifecycleToTelemetry()
+        {
+            var store = new FakeJobStore();
+            store.Job.RowsTotal = 5;
+            var telemetry = new RecordingTelemetry();
+
+            await new UserOrgImportRunner(store, telemetry).RunAsync(1);
+
+            CollectionAssert.AreEqual(new[] { UserOrgImportStages.Claimed, UserOrgImportStages.Succeeded }, telemetry.Stages);
+            var succeeded = telemetry.Events.Last();
+            Assert.AreEqual(1, succeeded.JobId);
+            Assert.AreEqual(10, succeeded.OrgTypeId);
+            Assert.AreEqual(UserOrgImportMode.Merge, succeeded.Mode);
+            Assert.AreEqual(5, succeeded.Rows);
+            Assert.AreEqual(3, succeeded.RowsApplied);
+            Assert.AreEqual(1, succeeded.Attempts);
+            Assert.IsNotNull(succeeded.DurationMs);
         }
 
         [TestMethod]
@@ -491,11 +849,13 @@ namespace Tests.UnitTests
         {
             // Two web instances polling the same pending job must not import the file twice.
             var store = new FakeJobStore { ClaimSucceeds = false };
+            var telemetry = new RecordingTelemetry();
 
-            await new UserOrgImportRunner(store).RunAsync(1);
+            await new UserOrgImportRunner(store, telemetry).RunAsync(1);
 
             Assert.AreEqual(0, store.ApplyCalls, "A job that could not be claimed must not be applied.");
             Assert.IsNull(store.CompletedStatus);
+            CollectionAssert.AreEqual(new[] { UserOrgImportStages.NotClaimed }, telemetry.Stages);
         }
 
         [TestMethod]
@@ -504,10 +864,11 @@ namespace Tests.UnitTests
             // The request that queued this has long since returned, so nothing is awaiting the task.
             // Without recording it the admin would see a job stuck on "Running" and never learn why.
             var store = new FakeJobStore { ApplyThrows = new InvalidOperationException("merge exploded") };
+            var telemetry = new RecordingTelemetry();
 
             try
             {
-                await new UserOrgImportRunner(store).RunAsync(1);
+                await new UserOrgImportRunner(store, telemetry).RunAsync(1);
                 Assert.Fail("The original fault must still surface.");
             }
             catch (InvalidOperationException ex)
@@ -516,6 +877,7 @@ namespace Tests.UnitTests
             }
 
             Assert.AreEqual(UserOrgImportStatus.Failed, store.CompletedStatus);
+            Assert.AreEqual(UserOrgImportErrorCodes.Failed, store.CompletedCode);
 
             // A fixed message, not the exception text. This is rendered verbatim in the portal, and a
             // SQL or Graph exception can carry object names, index names, duplicate key values and
@@ -524,6 +886,30 @@ namespace Tests.UnitTests
                 store.CompletedError.Contains("merge exploded"),
                 "The raw exception message must not reach the browser.");
             StringAssert.Contains(store.CompletedError, "could not be completed");
+
+            var failed = telemetry.Events.Last();
+            Assert.AreEqual(UserOrgImportStages.Failed, failed.Stage);
+            Assert.AreEqual(nameof(InvalidOperationException), failed.ExceptionType, "The type, never the message.");
+        }
+
+        [TestMethod]
+        public async Task ARefusalIsRecordedWithItsCodeRatherThanThrown()
+        {
+            // The apply's own re-check refusing the import - the type changed, or it would now clear
+            // more users than were confirmed - is an answer for the admin, not a fault for an engineer.
+            var store = new FakeJobStore
+            {
+                ApplyThrows = new UserOrgValidationException("would clear more than confirmed", UserOrgImportErrorCodes.ClearExceedsConfirmed),
+            };
+            var telemetry = new RecordingTelemetry();
+
+            var job = await new UserOrgImportRunner(store, telemetry).RunAsync(1);
+
+            Assert.AreEqual(UserOrgImportStatus.Failed, job.Status);
+            Assert.AreEqual(UserOrgImportErrorCodes.ClearExceedsConfirmed, store.CompletedCode, "The portal words the outcome from this.");
+            Assert.AreEqual("would clear more than confirmed", store.CompletedError);
+            Assert.AreEqual(UserOrgImportStages.Refused, telemetry.Events.Last().Stage);
+            Assert.AreEqual(UserOrgImportErrorCodes.ClearExceedsConfirmed, telemetry.Events.Last().Code);
         }
 
         [TestMethod]
@@ -537,6 +923,7 @@ namespace Tests.UnitTests
             var job = await new UserOrgImportRunner(store).RunAsync(1);
 
             Assert.AreEqual(UserOrgImportStatus.Failed, store.CompletedStatus);
+            Assert.AreEqual(UserOrgImportErrorCodes.Superseded, store.CompletedCode);
             StringAssert.Contains(store.CompletedError, "overtaken");
             Assert.IsNotNull(job);
         }
@@ -553,12 +940,25 @@ namespace Tests.UnitTests
 
             public UserOrgImportStatus? CompletedStatus;
             public string CompletedError;
+            public string CompletedCode;
 
             public Task<int> CreateJobWithRowsAsync(UserOrgImportJob job, IReadOnlyList<UserOrgStagedRow> rows, CancellationToken cancellationToken = default(CancellationToken))
                 => Task.FromResult(_job.Id);
 
+            public Task<int> CreateDraftAsync(UserOrgImportJob draft, IReadOnlyList<UserOrgStagedRow> rows, CancellationToken cancellationToken = default(CancellationToken))
+                => Task.FromResult(_job.Id);
+
+            public Task<UserOrgDraftSummary> SummariseDraftAsync(int draftId, int sampleRows, int unknownRowLimit, CancellationToken cancellationToken = default(CancellationToken))
+                => Task.FromResult<UserOrgDraftSummary>(null);
+
+            public Task CommitDraftAsync(int draftId, int orgTypeId, UserOrgImportMode mode, int confirmedClearCount, string startedBy, CancellationToken cancellationToken = default(CancellationToken))
+                => Task.CompletedTask;
+
             public Task<UserOrgImportJob> GetJobAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
                 => Task.FromResult(_job);
+
+            public Task<IReadOnlyList<UserOrgImportJob>> ListJobsAsync(int orgTypeId, int take, CancellationToken cancellationToken = default(CancellationToken))
+                => Task.FromResult<IReadOnlyList<UserOrgImportJob>>(new[] { _job });
 
             public Task<bool> TryClaimJobAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
             {
@@ -572,59 +972,63 @@ namespace Tests.UnitTests
             public Task<UserOrgImportJob> ApplyAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
                 => throw new UserOrgJobSupersededException("declined", new InvalidOperationException());
 
-            public Task CompleteJobAsync(int jobId, UserOrgImportStatus status, string errorMessage, CancellationToken cancellationToken = default(CancellationToken))
+            public Task CompleteJobAsync(
+                int jobId,
+                UserOrgImportStatus status,
+                string errorMessage,
+                CancellationToken cancellationToken = default(CancellationToken),
+                string errorCode = null)
             {
                 CompletedStatus = status;
                 CompletedError = errorMessage;
+                CompletedCode = errorCode;
                 _job.Status = status;
                 return Task.CompletedTask;
             }
+
+            public Task<IReadOnlyList<int>> ResumeStaleJobsAsync(CancellationToken cancellationToken = default(CancellationToken))
+                => Task.FromResult<IReadOnlyList<int>>(new int[0]);
 
             public Task<UserOrgImportJob> GetActiveJobForTypeAsync(int orgTypeId, CancellationToken cancellationToken = default(CancellationToken))
                 => Task.FromResult<UserOrgImportJob>(null);
         }
 
         [TestMethod]
-        public async Task AnImportThatAppliedIsNeverReportedAsFailed()
+        public async Task AFailedCleanUpDoesNotTurnASuccessIntoAFailure()
         {
-            // The file is applied in its own committed transaction and the job is marked finished
-            // afterwards. If that second step fails, the import really did happen - so reporting
-            // "Failed. No partial changes were kept." would be a flat lie that invites the admin to
-            // upload again, which for a Replace is another full clear-and-repopulate.
+            // The apply records its success in the transaction that makes the changes, so what is left
+            // afterwards is only removing the staged rows. That failing must not be reported as a failed
+            // import - "No partial changes were kept" would be a flat lie inviting the admin to upload
+            // again, which for a Replace is another full clear-and-repopulate. The next resume sweep
+            // removes the rows instead.
             var store = new FakeJobStore { CompleteThrows = new InvalidOperationException("status write failed") };
+            var telemetry = new RecordingTelemetry();
 
-            try
-            {
-                await new UserOrgImportRunner(store).RunAsync(1);
-                Assert.Fail("The fault must still reach the service logs.");
-            }
-            catch (InvalidOperationException)
-            {
-            }
+            var job = await new UserOrgImportRunner(store, telemetry).RunAsync(1);
 
             Assert.AreEqual(1, store.ApplyCalls, "The file was applied.");
-            Assert.AreNotEqual(
-                UserOrgImportStatus.Failed,
-                store.CompletedStatus,
-                "Applied work must never be recorded as a failure.");
+            Assert.AreEqual(UserOrgImportStatus.Succeeded, job.Status);
+            CollectionAssert.AreEqual(
+                new[] { UserOrgImportStages.Claimed, UserOrgImportStages.CleanupFailed, UserOrgImportStages.Succeeded },
+                telemetry.Stages);
         }
 
         [TestMethod]
-        public async Task ARecoveredStatusWriteSaysTheDataIsFineRatherThanClaimingFailure()
+        public async Task AnErrorAfterTheCommitIsReportedAsTheSuccessItWas()
         {
-            var store = new FakeJobStore { FailCompleteCallsUpTo = 1 };
+            // The connection can drop after the apply has committed, so the answer never arrives. The
+            // job row is the authority: the apply wrote Succeeded with the changes, and recording a
+            // failure only rewrites a job that is still live.
+            var store = new FakeJobStore { ApplyCommitsThenThrows = true };
+            var telemetry = new RecordingTelemetry();
 
-            try
-            {
-                await new UserOrgImportRunner(store).RunAsync(1);
-                Assert.Fail("The fault must still reach the service logs.");
-            }
-            catch (InvalidOperationException)
-            {
-            }
+            var job = await new UserOrgImportRunner(store, telemetry).RunAsync(1);
 
-            Assert.AreEqual(UserOrgImportStatus.Succeeded, store.CompletedStatus);
-            StringAssert.Contains(store.CompletedError, "no further action is needed");
+            Assert.AreEqual(UserOrgImportStatus.Succeeded, job.Status);
+            Assert.AreEqual(UserOrgImportStatus.Succeeded, store.Job.Status, "Nothing may overwrite the success.");
+            var succeeded = telemetry.Events.Last();
+            Assert.AreEqual(UserOrgImportStages.Succeeded, succeeded.Stage);
+            Assert.AreEqual(nameof(InvalidOperationException), succeeded.ExceptionType, "Still visible to an engineer.");
         }
 
         [TestMethod]
@@ -640,13 +1044,41 @@ namespace Tests.UnitTests
                     UserOrgImportRunner.HeartbeatInterval.TotalMilliseconds * 2.5),
                 FailHeartbeatNumber = 1,
             };
+            var telemetry = new RecordingTelemetry();
 
-            await new UserOrgImportRunner(store).RunAsync(1);
+            await new UserOrgImportRunner(store, telemetry).RunAsync(1);
 
             Assert.IsTrue(
                 store.HeartbeatCalls >= 2,
                 $"The loop must keep beating after a failed beat, but it stopped at {store.HeartbeatCalls}.");
             Assert.AreEqual(UserOrgImportStatus.Succeeded, store.CompletedStatus);
+            Assert.AreEqual(1, telemetry.Stages.Count(s => s == UserOrgImportStages.HeartbeatFailed), "A lost beat is visible, once.");
+        }
+
+        [TestMethod]
+        public void NeedsResume_AJobWhoseWorkerIsGone()
+        {
+            var now = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+
+            Assert.IsFalse(
+                UserOrgImportRunner.NeedsResume(new UserOrgImportJob { Status = UserOrgImportStatus.Pending, QueuedUtc = now.AddSeconds(-5) }, now),
+                "A job queued moments ago is being dispatched.");
+            Assert.IsTrue(
+                UserOrgImportRunner.NeedsResume(
+                    new UserOrgImportJob { Status = UserOrgImportStatus.Pending, QueuedUtc = now - UserOrgImportJobLimits.LostDispatchGrace - TimeSpan.FromSeconds(1) },
+                    now),
+                "Its dispatch died with the web process that queued it.");
+            Assert.IsTrue(
+                UserOrgImportRunner.NeedsResume(
+                    new UserOrgImportJob { Status = UserOrgImportStatus.Running, HeartbeatUtc = now - UserOrgImportRunner.StaleHeartbeatThreshold - TimeSpan.FromSeconds(1) },
+                    now));
+            Assert.IsFalse(
+                UserOrgImportRunner.NeedsResume(new UserOrgImportJob { Status = UserOrgImportStatus.Running, HeartbeatUtc = now.AddSeconds(-5) }, now),
+                "A running import that is still reporting progress is left alone.");
+            Assert.IsFalse(
+                UserOrgImportRunner.NeedsResume(new UserOrgImportJob { Status = UserOrgImportStatus.Draft, QueuedUtc = now.AddHours(-1) }, now),
+                "A draft is not an import.");
+            Assert.IsFalse(UserOrgImportRunner.NeedsResume(null, now));
         }
 
         [TestMethod]

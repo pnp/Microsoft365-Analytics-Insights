@@ -304,7 +304,8 @@ CREATE NONCLUSTERED INDEX [IX_user_org_assignments_value]
 
 
 -- Creating table 'user_org_import_jobs'
--- mode: 1 = Replace, 2 = Merge.  status: 1 = Pending, 2 = Running, 3 = Succeeded, 4 = Failed, 5 = Cancelled.
+-- mode: 1 = Replace, 2 = Merge.  status: 1 = Pending, 2 = Running, 3 = Succeeded, 4 = Failed, 5 = Cancelled,
+-- 6 = Draft (a previewed file, staged but not yet imported).
 CREATE TABLE [dbo].[user_org_import_jobs] (
     [id] int IDENTITY(1,1) NOT NULL,
     [org_type_id] int NOT NULL,
@@ -321,14 +322,16 @@ CREATE TABLE [dbo].[user_org_import_jobs] (
     [rows_cleared] int NOT NULL CONSTRAINT [DF_user_org_import_jobs_rows_cleared] DEFAULT (0),
     [rows_unknown_upn] int NOT NULL CONSTRAINT [DF_user_org_import_jobs_rows_unknown_upn] DEFAULT (0),
     [rows_invalid] int NOT NULL CONSTRAINT [DF_user_org_import_jobs_rows_invalid] DEFAULT (0),
-    [confirm_clear] bit NOT NULL CONSTRAINT [DF_user_org_import_jobs_confirm_clear] DEFAULT (0),
+    [confirmed_clear_count] int NULL,
     [expected_generation] int NULL,
+    [attempts] tinyint NOT NULL CONSTRAINT [DF_user_org_import_jobs_attempts] DEFAULT (0),
+    [error_code] nvarchar(64) NULL,
     [error_message] nvarchar(2000) NULL,
     CONSTRAINT [PK_user_org_import_jobs] PRIMARY KEY CLUSTERED ([id] ASC),
     CONSTRAINT [FK_user_org_import_jobs_type] FOREIGN KEY ([org_type_id])
         REFERENCES [dbo].[user_org_types] ([id]),
     CONSTRAINT [CK_user_org_import_jobs_mode] CHECK ([mode] IN (1, 2)),
-    CONSTRAINT [CK_user_org_import_jobs_status] CHECK ([status] IN (1, 2, 3, 4, 5))
+    CONSTRAINT [CK_user_org_import_jobs_status] CHECK ([status] IN (1, 2, 3, 4, 5, 6))
 );
 
 CREATE NONCLUSTERED INDEX [IX_user_org_import_jobs_type_queued]

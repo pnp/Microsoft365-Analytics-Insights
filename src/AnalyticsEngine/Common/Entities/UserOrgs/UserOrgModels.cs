@@ -34,6 +34,57 @@ namespace Common.Entities.UserOrgs
         Succeeded = 3,
         Failed = 4,
         Cancelled = 5,
+
+        /// <summary>
+        /// A previewed file: parsed and staged, but not imported. Committing it makes it
+        /// <see cref="Pending"/>. Never counts as an import - not active, never claimed, never shown as
+        /// the last import - and expires after <see cref="UserOrgImportJobLimits.DraftLifetime"/>.
+        /// </summary>
+        Draft = 6,
+    }
+
+    /// <summary>
+    /// Stable keys for why a job did not succeed, stored in <c>user_org_import_jobs.error_code</c> and
+    /// worded by the portal in the reader's language.
+    /// </summary>
+    public static class UserOrgImportErrorCodes
+    {
+        /// <summary>A fault; the details are in Application Insights, never on the job.</summary>
+        public const string Failed = "failed";
+
+        /// <summary>A later upload for the same type replaced this one after it stopped reporting progress.</summary>
+        public const string Superseded = "superseded";
+
+        /// <summary>The type was reconfigured after the file was previewed.</summary>
+        public const string TypeChanged = "typeChanged";
+
+        /// <summary>By the time it ran, the import would have cleared more users than were confirmed.</summary>
+        public const string ClearExceedsConfirmed = "clearExceedsConfirmed";
+
+        /// <summary>The web app went down under the job too many times, so it was stopped.</summary>
+        public const string InterruptedRepeatedly = "interruptedRepeatedly";
+    }
+
+    /// <summary>The time and attempt limits the import lifecycle runs to.</summary>
+    public static class UserOrgImportJobLimits
+    {
+        /// <summary>How long a previewed file can wait to be imported before it is thrown away.</summary>
+        public static readonly TimeSpan DraftLifetime = TimeSpan.FromHours(2);
+
+        /// <summary>How many times a job is claimed before an interrupted one is given up on.</summary>
+        public const int MaxAttempts = 3;
+
+        /// <summary>
+        /// How long a job may wait for a worker before it is presumed lost - its dispatch died with the
+        /// web process that queued it - and is re-dispatched. A healthy dispatch takes milliseconds.
+        /// </summary>
+        public static readonly TimeSpan LostDispatchGrace = TimeSpan.FromSeconds(30);
+
+        /// <summary>
+        /// How old a job may be and still be resumed. Past this, an interrupted job is stopped instead:
+        /// nobody expects a file uploaded hours ago to land now.
+        /// </summary>
+        public static readonly TimeSpan ResumeWindow = TimeSpan.FromHours(2);
     }
 
     /// <summary>One admin-defined org dimension.</summary>
@@ -272,15 +323,16 @@ namespace Common.Entities.UserOrgs
         public int RowsInvalid { get; set; }
 
         /// <summary>
-        /// Whether the administrator acknowledged how many users a Replace would clear.
+        /// How many users the administrator agreed may lose their value - the count the preview showed
+        /// for the chosen mode. <c>null</c> or 0 means none.
         /// </summary>
         /// <remarks>
-        /// Carried on the job because the destructive delete happens later, in the background
-        /// worker's transaction, and that is the only place the question can be answered without the
-        /// answer going stale. Another administrator's import can queue, run and finish between the
-        /// web request's check and this one.
+        /// A number rather than a yes/no, and carried on the job, because the destructive delete
+        /// happens later, in the background worker's transaction, and another administrator's import
+        /// can queue, run and finish in between. A confirmation given for "clears 12" must not cover a
+        /// wipe of 20,000, so the apply refuses when it would clear more than this.
         /// </remarks>
-        public bool ConfirmClear { get; set; }
+        public int? ConfirmedClearCount { get; set; }
 
         /// <summary>
         /// The org type's source generation when this file was staged, or <c>null</c> for a job
@@ -293,6 +345,12 @@ namespace Common.Entities.UserOrgs
         /// silently restore exactly what the admin threw away.
         /// </remarks>
         public int? ExpectedGeneration { get; set; }
+
+        /// <summary>How many times a worker has claimed the job; more than one means it was resumed.</summary>
+        public int Attempts { get; set; }
+
+        /// <summary>A key from <see cref="UserOrgImportErrorCodes"/>, or <c>null</c>.</summary>
+        public string ErrorCode { get; set; }
 
         public string ErrorMessage { get; set; }
     }
@@ -316,6 +374,11 @@ namespace Common.Entities.UserOrgs
     /// Thrown when an admin-supplied org configuration is rejected. Carries a message written for an IT
     /// admin, because the API surfaces it straight into the portal.
     /// </summary>
+    /// <remarks>
+    /// <see cref="Code"/> and <see cref="Values"/> let the portal word the refusal in the reader's
+    /// language; the message is the English fallback. The API reports facts, the UI writes the
+    /// sentences.
+    /// </remarks>
     public sealed class UserOrgValidationException : Exception
     {
         public UserOrgValidationException(string message) : base(message)
@@ -326,6 +389,19 @@ namespace Common.Entities.UserOrgs
             : base(message, innerException)
         {
         }
+
+        public UserOrgValidationException(string message, string code, IDictionary<string, object> values = null, Exception innerException = null)
+            : base(message, innerException)
+        {
+            Code = code;
+            Values = values == null ? null : new Dictionary<string, object>(values);
+        }
+
+        /// <summary>A stable key for the refusal, or <c>null</c> for one the portal shows as written.</summary>
+        public string Code { get; }
+
+        /// <summary>The facts behind <see cref="Code"/>, or <c>null</c>.</summary>
+        public IReadOnlyDictionary<string, object> Values { get; }
     }
 
     /// <summary>One parsed CSV row, ready to be staged.</summary>

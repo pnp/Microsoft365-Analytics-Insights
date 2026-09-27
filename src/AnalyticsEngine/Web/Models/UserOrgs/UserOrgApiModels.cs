@@ -311,8 +311,8 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
     {
         /// <summary>
         /// <c>notUtf8</c>, <c>excelWorkbook</c>, <c>notText</c>, <c>unterminatedQuote</c>,
-        /// <c>rowSpansLines</c>, <c>chooseColumns</c>, <c>tooManyRows</c>, <c>noRows</c> or
-        /// <c>noUsableRows</c>.
+        /// <c>rowSpansLines</c>, <c>chooseColumns</c>, <c>oneColumn</c>, <c>tooManyRows</c>,
+        /// <c>noRows</c> or <c>noUsableRows</c>.
         /// </summary>
         [JsonProperty("code")]
         public string Code { get; set; }

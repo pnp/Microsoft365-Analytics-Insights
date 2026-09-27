@@ -1,6 +1,7 @@
 using Common.Entities.UserOrgs;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -25,6 +26,16 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         /// <summary>How many problem rows the preview reports before it stops listing them.</summary>
         public const int PreviewProblemCount = 10;
 
+        /// <summary>
+        /// How many unusable rows the preview lists in full, for the admin to download and fix. Far more
+        /// than anyone reads on screen, and enough that a file with a genuine handful of bad rows is
+        /// never cut short.
+        /// </summary>
+        public const int MaxUnusableRows = 10000;
+
+        /// <summary>The most past imports one history request returns.</summary>
+        public const int MaxHistory = 50;
+
         private readonly IUserOrgTypeStore _types;
         private readonly IUserOrgAssignmentStore _assignments;
         private readonly IUserOrgImportJobStore _jobs;
@@ -32,6 +43,8 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         private readonly IUserOrgGraphProbe _probe;
         private readonly Action<int> _dispatchImport;
         private readonly Func<DateTime> _utcNow;
+        private readonly IUserOrgImportTelemetry _telemetry;
+        private readonly UserOrgResumeGate _resumeGate;
 
         public UserOrgAdminService(
             IUserOrgTypeStore types,
@@ -40,7 +53,9 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             IUserOrgUserLookup users,
             IUserOrgGraphProbe probe,
             Action<int> dispatchImport,
-            Func<DateTime> utcNow = null)
+            Func<DateTime> utcNow = null,
+            IUserOrgImportTelemetry telemetry = null,
+            UserOrgResumeGate resumeGate = null)
         {
             _types = types ?? throw new ArgumentNullException(nameof(types));
             _assignments = assignments ?? throw new ArgumentNullException(nameof(assignments));
@@ -49,12 +64,18 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             _probe = probe ?? throw new ArgumentNullException(nameof(probe));
             _dispatchImport = dispatchImport ?? throw new ArgumentNullException(nameof(dispatchImport));
             _utcNow = utcNow ?? (() => DateTime.UtcNow);
+            _telemetry = telemetry ?? NullUserOrgImportTelemetry.Instance;
+            _resumeGate = resumeGate ?? UserOrgResumeGate.Shared;
         }
 
         #region Org types
 
         public async Task<List<UserOrgTypeModel>> ListAsync(CancellationToken cancellationToken)
         {
+            // The admin page's landing call, so an import stranded by a restart is picked up again as soon
+            // as anyone looks - before the summaries are read, so they show it resumed.
+            await ResumeInterruptedImportsAsync(cancellationToken).ConfigureAwait(false);
+
             var summaries = await _types.GetSummariesAsync(cancellationToken).ConfigureAwait(false);
             return summaries.Select(ToModel).ToList();
         }
@@ -300,127 +321,363 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         #region CSV
 
         /// <summary>
-        /// Parses an upload and reports both a readable sample and the blast radius of importing it.
+        /// Parses an upload, stages it as a draft, and reports both a readable sample and the blast
+        /// radius of importing it.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// The whole file is parsed and every user principal name in it resolved, not just the ten rows
         /// shown. That is the point: a ten-row sample cannot tell an administrator that a complete,
         /// correctly formatted export happens to cover only half the tenant - and with Replace, the
-        /// half it omits loses its values. Persists nothing.
+        /// half it omits loses its values.
+        /// </para>
+        /// <para>
+        /// The preview is also the upload. The parsed rows are staged as a draft and the counts are
+        /// computed in SQL with exactly the matching the import uses, so what the admin is shown and
+        /// what is imported cannot disagree - and importing commits the draft by id, so the file is sent
+        /// and parsed once, and a file edited on disk after the preview cannot slip in under its
+        /// confirmation. Nothing is imported until <see cref="CommitImportAsync"/>.
+        /// </para>
         /// </remarks>
+        /// <param name="userColumn">The 0-based user column the admin chose, or null to detect it.</param>
+        /// <param name="valueColumn">The 0-based value column the admin chose, or null to detect it.</param>
         public async Task<UserOrgCsvPreviewModel> PreviewAsync(
             Stream content,
             string fileName,
             int orgTypeId,
+            string startedBy,
+            int? userColumn,
+            int? valueColumn,
             CancellationToken cancellationToken)
         {
-            var parsed = UserOrgCsvParser.Parse(content);
+            if (userColumn.HasValue != valueColumn.HasValue
+                || (userColumn.HasValue && (userColumn.Value < 0 || valueColumn.Value < 0 || userColumn.Value == valueColumn.Value)))
+            {
+                throw new UserOrgValidationException(
+                    "Choose two different columns: one holding the user principal names, and one holding the values.",
+                    UserOrgImportRefusalCodes.InvalidColumns);
+            }
+
+            var watch = Stopwatch.StartNew();
+            var type = await RequireImportableTypeAsync(orgTypeId, cancellationToken).ConfigureAwait(false);
+            long? bytes = content != null && content.CanSeek ? content.Length - content.Position : (long?)null;
+
+            var parsed = UserOrgCsvParser.Parse(content, new UserOrgCsvParseOptions
+            {
+                OrgTypeName = type.Name,
+                UserColumn = userColumn,
+                ValueColumn = valueColumn,
+            });
 
             var preview = new UserOrgCsvPreviewModel
             {
                 FileName = fileName,
                 Delimiter = DescribeDelimiter(parsed.Delimiter),
                 HeaderDetected = parsed.HeaderDetected,
+                Columns = parsed.Columns == null ? null : parsed.Columns.ToList(),
+                ColumnCount = parsed.ColumnCount,
+                UserColumnIndex = parsed.UserColumnIndex,
+                ValueColumnIndex = parsed.ValueColumnIndex,
                 UpnColumnName = parsed.UpnColumnName,
                 OrgColumnName = parsed.OrgColumnName,
-                MoreRowsExist = parsed.Rows.Count > PreviewRowCount,
-                TotalRows = parsed.Rows.Count,
+                TruncatedValueCount = parsed.TruncatedValueCount,
                 MaxValueLength = UserOrgRules.MaxOrgValueLength,
+                Problems = ToProblemModels(parsed.Problems),
             };
 
-            if (parsed.UnterminatedQuote)
+            if (parsed.Blocking != null)
             {
-                preview.Problems = new List<UserOrgCsvProblemModel>
+                // Refused outright, and nothing is staged. Every blocking reason means rows would be
+                // misread - and in a Replace, a misread row is a user whose value is cleared.
+                preview.Blocking = new UserOrgCsvBlockingModel
                 {
-                    new UserOrgCsvProblemModel
-                    {
-                        LineNumber = 0,
-                        Reason = "the file has a quotation mark that is never closed, so it cannot be read as rows",
-                    },
+                    Code = parsed.Blocking.Code,
+                    Line = parsed.Blocking.Line,
+                    LastLine = parsed.Blocking.LastLine,
+                    Max = parsed.Blocking.Code == UserOrgCsvBlockingCodes.TooManyRows ? UserOrgCsvParser.MaxDataLines : (int?)null,
                 };
-                preview.Rows = new List<UserOrgCsvPreviewRowModel>();
+                preview.TotalRows = parsed.Rows.Count;
+                preview.UnusableRows = parsed.Problems.Take(MaxUnusableRows).Select(ToUnusableRow).ToList();
+                preview.UnusableRowCount = parsed.Problems.Count;
+
+                Emit(new UserOrgImportTelemetryEvent
+                {
+                    Stage = UserOrgImportStages.PreviewBlocked,
+                    OrgTypeId = orgTypeId,
+                    Code = parsed.Blocking.Code,
+                    Bytes = bytes,
+                    Rows = parsed.Rows.Count,
+                    RowsInvalid = parsed.Problems.Count,
+                    DurationMs = watch.ElapsedMilliseconds,
+                });
+
                 return preview;
             }
 
-            var existing = await _users
-                .FindExistingUpnsAsync(parsed.Rows.Select(r => r.Upn).ToList(), cancellationToken)
+            var draftId = await _jobs.CreateDraftAsync(
+                new UserOrgImportJob
+                {
+                    OrgTypeId = orgTypeId,
+                    FileName = fileName,
+                    StartedBy = startedBy,
+                    RowsInvalid = parsed.Problems.Count,
+                    ExpectedGeneration = type.SourceGeneration,
+                },
+                parsed.Rows,
+                cancellationToken).ConfigureAwait(false);
+
+            var summary = await _jobs.SummariseDraftAsync(draftId, PreviewRowCount, MaxUnusableRows, cancellationToken)
                 .ConfigureAwait(false);
-            var existingSet = new HashSet<string>(existing, StringComparer.OrdinalIgnoreCase);
-
-            var matchedWithValue = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            // Counted per ROW, not per distinct UPN. The portal subtracts this from the file's row
-            // count to say "X of Y rows match a user", so a file repeating the same unmatched UPN
-            // across several rows would otherwise overstate matches - and it would err in the one
-            // direction that matters, making a file with a problem look fine.
-            var unknownRows = 0;
-
-            foreach (var row in parsed.Rows)
+            if (summary == null)
             {
-                if (!existingSet.Contains(row.Upn))
-                {
-                    unknownRows++;
-                }
-                else if (row.OrgValue != null)
-                {
-                    matchedWithValue.Add(row.Upn);
-                }
-                else
-                {
-                    // A later blank line for the same person is a deliberate clear, so they stop
-                    // counting as "kept".
-                    matchedWithValue.Remove(row.Upn);
-                }
+                throw new UserOrgValidationException(
+                    "The file could not be prepared for import. Choose it again.", UserOrgImportRefusalCodes.DraftNotFound);
             }
 
-            preview.UnknownUpnCount = unknownRows;
-
-            var summaries = await _types.GetSummariesAsync(cancellationToken).ConfigureAwait(false);
-            var summary = summaries.FirstOrDefault(s => s.Type != null && s.Type.Id == orgTypeId);
-            preview.CurrentlyAssignedCount = summary == null ? 0 : summary.AssignedUserCount;
-
-            preview.WouldClearCount = await CountWouldClearAsync(orgTypeId, parsed.Rows, cancellationToken)
-                .ConfigureAwait(false);
-            preview.MatchedUserCount = matchedWithValue.Count;
-            preview.TruncatedValueCount = parsed.TruncatedValueCount;
-
-            var shown = parsed.Rows.Take(PreviewRowCount).ToList();
-            preview.Rows = shown.Select(r => new UserOrgCsvPreviewRowModel
+            preview.DraftId = draftId;
+            preview.TotalRows = summary.RowsTotal;
+            preview.MoreRowsExist = summary.RowsTotal > PreviewRowCount;
+            preview.UnknownUpnCount = summary.UnknownRows;
+            preview.MatchedUserCount = summary.MatchedUsersWithValue;
+            preview.CurrentlyAssignedCount = summary.CurrentlyAssigned;
+            preview.WouldClearCount = summary.ReplaceWouldClear;
+            preview.MergeWouldClearCount = summary.MergeWouldClear;
+            preview.Rows = summary.SampleRows.Select(r => new UserOrgCsvPreviewRowModel
             {
                 LineNumber = r.LineNumber,
                 Upn = r.Upn,
                 OrgValue = r.OrgValue,
-                UserExists = existingSet.Contains(r.Upn),
+                UserExists = r.UserExists,
                 ClearsValue = r.OrgValue == null,
             }).ToList();
 
-            preview.Problems = parsed.Problems
-                .Take(PreviewProblemCount)
-                .Select(p => new UserOrgCsvProblemModel { LineNumber = p.LineNumber, Reason = p.Reason })
+            // Everything that will not be imported, in file order: rows that could not be read, and rows
+            // naming nobody. The two cannot overlap - an unreadable row is never staged.
+            preview.UnusableRows = parsed.Problems.Select(ToUnusableRow)
+                .Concat(summary.UnknownRowList.Select(r => new UserOrgCsvUnusableRowModel
+                {
+                    LineNumber = r.LineNumber,
+                    Upn = r.Upn,
+                    OrgValue = r.OrgValue,
+                    Code = UserOrgCsvProblemCodes.UnknownUser,
+                }))
+                .OrderBy(r => r.LineNumber)
+                .Take(MaxUnusableRows)
                 .ToList();
+            preview.UnusableRowCount = parsed.Problems.Count + summary.UnknownRows;
+
+            Emit(new UserOrgImportTelemetryEvent
+            {
+                Stage = UserOrgImportStages.Previewed,
+                JobId = draftId,
+                OrgTypeId = orgTypeId,
+                Bytes = bytes,
+                Rows = summary.RowsTotal,
+                RowsInvalid = parsed.Problems.Count,
+                RowsUnknownUpn = summary.UnknownRows,
+                DurationMs = watch.ElapsedMilliseconds,
+            });
 
             return preview;
         }
 
         /// <summary>
-        /// Parses an upload in full, stages it and queues the background import.
+        /// Imports a previewed draft: admits it as a queued import and starts the background worker.
         /// </summary>
-        /// <param name="confirmClear">
-        /// Whether the administrator has acknowledged how many users a Replace will clear.
+        /// <param name="confirmedClearCount">
+        /// How many users the administrator agreed may lose their value - the number the preview showed
+        /// for this mode. Refused if the import would now clear more, so a confirmation never covers a
+        /// bigger wipe than the one it was given for.
         /// </param>
-        public async Task<UserOrgImportQueuedModel> QueueImportAsync(
+        /// <exception cref="UserOrgValidationException">
+        /// With a code from <see cref="UserOrgImportRefusalCodes"/>, for the portal to word.
+        /// </exception>
+        public async Task<UserOrgImportQueuedModel> CommitImportAsync(
             int orgTypeId,
+            int draftId,
             UserOrgImportMode mode,
-            Stream content,
-            string fileName,
+            int confirmedClearCount,
             string startedBy,
-            bool confirmClear,
             CancellationToken cancellationToken)
+        {
+            await RequireImportableTypeAsync(orgTypeId, cancellationToken).ConfigureAwait(false);
+
+            try
+            {
+                // Every check that matters happens in here, inside the transaction that admits the
+                // import: the draft, the type's configuration, an import already running, whether any
+                // row names a user, and the clear count. Checking any of them first, outside it, only
+                // opens a window for another administrator to change the answer.
+                await _jobs.CommitDraftAsync(draftId, orgTypeId, mode, confirmedClearCount, startedBy, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (UserOrgValidationException ex)
+            {
+                Emit(new UserOrgImportTelemetryEvent
+                {
+                    Stage = UserOrgImportStages.CommitRefused,
+                    JobId = draftId,
+                    OrgTypeId = orgTypeId,
+                    Mode = mode,
+                    Code = ex.Code,
+                    Count = confirmedClearCount,
+                });
+                throw;
+            }
+
+            UserOrgImportJob job = null;
+            try
+            {
+                job = await _jobs.GetJobAsync(draftId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Only the row counts for the response. The import is queued either way, and must still
+                // be dispatched.
+            }
+
+            Emit(new UserOrgImportTelemetryEvent
+            {
+                Stage = UserOrgImportStages.Committed,
+                JobId = draftId,
+                OrgTypeId = orgTypeId,
+                Mode = mode,
+                Rows = job?.RowsTotal,
+                RowsInvalid = job?.RowsInvalid,
+                Count = confirmedClearCount,
+            });
+
+            // Hand off to the background worker. The dispatcher is injected so this whole method can be
+            // tested without starting a thread.
+            _dispatchImport(draftId);
+
+            return new UserOrgImportQueuedModel
+            {
+                JobId = draftId,
+                RowsQueued = job?.RowsTotal ?? 0,
+                RowsInvalid = job?.RowsInvalid ?? 0,
+            };
+        }
+
+        /// <summary>
+        /// One import, for progress polling. Drafts are not imports, so they are not found.
+        /// </summary>
+        /// <remarks>
+        /// Polling is also what notices an import whose worker died, and hands it to a new one. So a
+        /// job interrupted by an App Service recycle carries on by itself while its admin watches,
+        /// rather than sitting on "interrupted" waiting to be uploaded again.
+        /// </remarks>
+        public async Task<UserOrgImportJobModel> GetJobAsync(int jobId, CancellationToken cancellationToken)
+        {
+            var job = await _jobs.GetJobAsync(jobId, cancellationToken).ConfigureAwait(false);
+            if (job == null || job.Status == UserOrgImportStatus.Draft)
+            {
+                return null;
+            }
+
+            var now = _utcNow();
+            if (UserOrgImportRunner.NeedsResume(job, now))
+            {
+                await ResumeInterruptedImportsAsync(cancellationToken).ConfigureAwait(false);
+                job = await _jobs.GetJobAsync(jobId, cancellationToken).ConfigureAwait(false) ?? job;
+            }
+
+            return ToModel(job, now);
+        }
+
+        /// <summary>An org type's most recent imports, newest first - the audit trail the admin page shows.</summary>
+        public async Task<List<UserOrgImportJobModel>> ListImportsAsync(int orgTypeId, int take, CancellationToken cancellationToken)
         {
             var type = await _types.GetAsync(orgTypeId, cancellationToken).ConfigureAwait(false);
             if (type == null)
             {
-                throw new UserOrgValidationException("That organisation type no longer exists.");
+                return null;
+            }
+
+            var jobs = await _jobs
+                .ListJobsAsync(orgTypeId, Math.Max(1, Math.Min(take, MaxHistory)), cancellationToken)
+                .ConfigureAwait(false);
+            var now = _utcNow();
+            return jobs.Select(j => ToModel(j, now)).ToList();
+        }
+
+        /// <summary>
+        /// Hands imports whose worker died back to a new one, and stops those that cannot sensibly be
+        /// resumed. Returns the ids it dispatched.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Safe because an import that did not finish changed nothing: the apply records its success in
+        /// the same transaction as its changes, and the claim, the org type's application lock and the
+        /// apply's status check between them let only one worker apply a file.
+        /// </para>
+        /// <para>
+        /// Called when the web app starts, when the admin page lists the org types, and when an import
+        /// being polled looks stranded. Throttled per web process, because the page can call it every
+        /// few seconds and the answer rarely changes; <paramref name="force"/> is for start-up, which
+        /// must not be skipped.
+        /// </para>
+        /// <para>
+        /// Never throws: a failed sweep is reported and retried next time, and must not fail the page
+        /// that happened to trigger it.
+        /// </para>
+        /// </remarks>
+        public async Task<IReadOnlyList<int>> ResumeInterruptedImportsAsync(CancellationToken cancellationToken, bool force = false)
+        {
+            if (!force && !_resumeGate.TryEnter(_utcNow()))
+            {
+                return new int[0];
+            }
+
+            var watch = Stopwatch.StartNew();
+            IReadOnlyList<int> ids;
+            try
+            {
+                ids = await _jobs.ResumeStaleJobsAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Emit(new UserOrgImportTelemetryEvent
+                {
+                    Stage = UserOrgImportStages.ResumeFailed,
+                    ExceptionType = ex.GetBaseException().GetType().Name,
+                    DurationMs = watch.ElapsedMilliseconds,
+                });
+                return new int[0];
+            }
+
+            foreach (var id in ids)
+            {
+                _dispatchImport(id);
+            }
+
+            if (ids.Count > 0)
+            {
+                Emit(new UserOrgImportTelemetryEvent
+                {
+                    Stage = UserOrgImportStages.ResumeSwept,
+                    Count = ids.Count,
+                    DurationMs = watch.ElapsedMilliseconds,
+                });
+            }
+
+            return ids;
+        }
+
+        /// <summary>
+        /// The org type an import targets, refused unless a file can be imported into it.
+        /// </summary>
+        /// <remarks>
+        /// Checked before the file is parsed so an admin learns of it at once rather than after a large
+        /// upload - and checked again, authoritatively, inside the transaction that admits the import.
+        /// </remarks>
+        private async Task<UserOrgType> RequireImportableTypeAsync(int orgTypeId, CancellationToken cancellationToken)
+        {
+            var type = await _types.GetAsync(orgTypeId, cancellationToken).ConfigureAwait(false);
+            if (type == null)
+            {
+                throw new UserOrgValidationException(
+                    "That organisation type no longer exists.", UserOrgImportRefusalCodes.TypeNotFound);
             }
 
             if (type.SourceKind != UserOrgSourceKind.CsvUpload)
@@ -429,7 +686,9 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 // import anyway, so it is refused rather than silently wasted.
                 throw new UserOrgValidationException(
                     $"'{type.Name}' takes its values from an Entra attribute, so a file cannot be imported into it. "
-                    + "Change its source to CSV upload first.");
+                    + "Change its source to CSV upload first.",
+                    UserOrgImportRefusalCodes.TypeNotCsv,
+                    new Dictionary<string, object> { { "name", type.Name } });
             }
 
             if (!type.IsEnabled)
@@ -438,142 +697,43 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 // anyway would make that label a lie, and the values would appear on user lookup with
                 // nothing ever refreshing them.
                 throw new UserOrgValidationException(
-                    $"'{type.Name}' is disabled, so a file cannot be imported into it. Enable it first.");
+                    $"'{type.Name}' is disabled, so a file cannot be imported into it. Enable it first.",
+                    UserOrgImportRefusalCodes.TypeDisabled,
+                    new Dictionary<string, object> { { "name", type.Name } });
             }
 
-            var active = await _jobs.GetActiveJobForTypeAsync(orgTypeId, cancellationToken).ConfigureAwait(false);
-            if (active != null && !UserOrgImportRunner.LooksInterrupted(active, _utcNow()))
+            return type;
+        }
+
+        private static List<UserOrgCsvProblemModel> ToProblemModels(IReadOnlyList<UserOrgCsvRowProblem> problems)
+        {
+            return problems
+                .Take(PreviewProblemCount)
+                .Select(p => new UserOrgCsvProblemModel { LineNumber = p.LineNumber, Code = p.Code, Reason = p.Reason })
+                .ToList();
+        }
+
+        private static UserOrgCsvUnusableRowModel ToUnusableRow(UserOrgCsvRowProblem problem)
+        {
+            return new UserOrgCsvUnusableRowModel
             {
-                throw new UserOrgValidationException(
-                    $"An import for '{type.Name}' is already in progress. Wait for it to finish before starting another.");
-            }
-
-            var parsed = UserOrgCsvParser.Parse(content);
-
-            if (parsed.UnterminatedQuote)
-            {
-                // Refused outright rather than imported partially. Everything after the stray quote was
-                // swallowed into one value, so those users look absent - and in Replace mode absent
-                // means their value is cleared. Importing a file we cannot read is the one outcome
-                // worse than not importing it.
-                throw new UserOrgValidationException(
-                    "That file has a quotation mark that is never closed, so the rest of it could not be read as "
-                    + "rows. Fix the quoting and upload it again.");
-            }
-
-            if (parsed.Truncated)
-            {
-                throw new UserOrgValidationException(
-                    $"That file has more than {UserOrgCsvParser.MaxDataLines:N0} rows, which is more than this import supports. "
-                    + "Split it and import the parts separately.");
-            }
-
-            if (parsed.Rows.Count == 0)
-            {
-                throw new UserOrgValidationException(
-                    parsed.Problems.Count > 0
-                        ? "No usable rows were found in that file. Check the first reported problem and the column names."
-                        : "That file contains no rows.");
-            }
-
-            if (mode == UserOrgImportMode.Replace)
-            {
-                // Recomputed here from the file actually being imported and the assignments as they
-                // are right now, rather than trusting the preview. The preview is a separate request
-                // that may be minutes old, and the endpoint is reachable directly - so a gate that
-                // lives only in the browser is not a gate at all. This also catches the case where
-                // somebody else changed the assignments between the preview and the import.
-                var wouldClear = await CountWouldClearAsync(orgTypeId, parsed.Rows, cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (wouldClear > 0 && !confirmClear)
-                {
-                    throw new UserOrgValidationException(
-                        $"This import would clear the {type.Name} value of {wouldClear:N0} user(s) that the file does "
-                        + "not give a value to. Review the preview and confirm before continuing, or use Merge to "
-                        + "leave them as they are.");
-                }
-            }
-
-            var jobId = await _jobs.CreateJobWithRowsAsync(
-                new UserOrgImportJob
-                {
-                    OrgTypeId = orgTypeId,
-                    Mode = mode,
-                    FileName = fileName,
-                    StartedBy = startedBy,
-                    RowsInvalid = parsed.Problems.Count,
-                    ConfirmClear = confirmClear,
-                    ExpectedGeneration = type.SourceGeneration,
-                },
-                parsed.Rows,
-                cancellationToken).ConfigureAwait(false);
-
-            // Hand off to the background worker. The dispatcher is injected so this whole method can be
-            // tested without starting a thread.
-            _dispatchImport(jobId);
-
-            return new UserOrgImportQueuedModel
-            {
-                JobId = jobId,
-                RowsQueued = parsed.Rows.Count,
-                RowsInvalid = parsed.Problems.Count,
+                LineNumber = problem.LineNumber,
+                Upn = problem.Upn,
+                OrgValue = problem.OrgValue,
+                Code = problem.Code,
             };
         }
 
-        public async Task<UserOrgImportJobModel> GetJobAsync(int jobId, CancellationToken cancellationToken)
+        private void Emit(UserOrgImportTelemetryEvent item)
         {
-            var job = await _jobs.GetJobAsync(jobId, cancellationToken).ConfigureAwait(false);
-            return job == null ? null : ToModel(job, _utcNow());
-        }
-
-        /// <summary>
-        /// How many users would lose their value for this org type if the parsed file were imported
-        /// with Replace.
-        /// </summary>
-        /// <remarks>
-        /// One implementation, used by both the preview and the import, so what an administrator is
-        /// shown and what the import enforces cannot disagree.
-        ///
-        /// The count is the users currently assigned <b>minus</b> those the file both covers and gives
-        /// a value to. Subtracting "users the file covers" instead would be a different question with
-        /// a dangerously wrong answer: a file covering a large population that barely overlaps the
-        /// assigned one subtracts to zero, suppressing the warning at the exact moment the import is
-        /// about to wipe everybody.
-        /// </remarks>
-        private async Task<int> CountWouldClearAsync(
-            int orgTypeId,
-            IReadOnlyList<UserOrgStagedRow> rows,
-            CancellationToken cancellationToken)
-        {
-            var summaries = await _types.GetSummariesAsync(cancellationToken).ConfigureAwait(false);
-            var summary = summaries.FirstOrDefault(s => s.Type != null && s.Type.Id == orgTypeId);
-            var assigned = summary == null ? 0 : summary.AssignedUserCount;
-
-            if (assigned == 0)
+            try
             {
-                return 0;
+                _telemetry.Record(item);
             }
-
-            // Last line wins, matching the merge: a later blank line for the same person is a clear,
-            // so they stop counting as kept.
-            var keptUpns = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
-            foreach (var row in rows)
+            catch (Exception)
             {
-                keptUpns[row.Upn] = row.OrgValue != null;
+                // A diagnostic must never fail the request it describes.
             }
-
-            var covered = keptUpns.Where(p => p.Value).Select(p => p.Key).ToList();
-            if (covered.Count == 0)
-            {
-                return assigned;
-            }
-
-            var kept = await _users
-                .FindAssignedUpnsAsync(orgTypeId, covered, cancellationToken)
-                .ConfigureAwait(false);
-
-            return Math.Max(0, assigned - kept.Count);
         }
 
         internal static string DescribeDelimiter(char delimiter)
@@ -621,12 +781,15 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 FileName = job.FileName,
                 StartedBy = job.StartedBy,
                 QueuedUtc = Iso(job.QueuedUtc),
+                StartedUtc = job.StartedUtc.HasValue ? Iso(job.StartedUtc.Value) : null,
                 FinishedUtc = job.FinishedUtc.HasValue ? Iso(job.FinishedUtc.Value) : null,
+                Attempts = job.Attempts,
                 RowsTotal = job.RowsTotal,
                 RowsApplied = job.RowsApplied,
                 RowsCleared = job.RowsCleared,
                 RowsUnknownUpn = job.RowsUnknownUpn,
                 RowsInvalid = job.RowsInvalid,
+                ErrorCode = job.ErrorCode,
                 ErrorMessage = job.ErrorMessage,
             };
         }
@@ -636,15 +799,17 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         /// </summary>
         /// <remarks>
         /// A job whose worker died - almost always an App Service recycle - stays "Running" in the
-        /// database forever, which on screen is indistinguishable from a very slow import. Reporting it
-        /// as interrupted is the difference between an admin waiting indefinitely and an admin
-        /// re-uploading.
+        /// database until it is resumed, which on screen is indistinguishable from a very slow import.
+        /// One that will be resumed is shown as waiting, which is what it is - and keeps the page
+        /// polling it until a new worker picks it up. Only one that will not be resumed - interrupted
+        /// too often, or too long ago - is shown as interrupted, until the next resume sweep records
+        /// that it was stopped.
         /// </remarks>
         internal static string DescribeStatus(UserOrgImportJob job, DateTime utcNow)
         {
             if (UserOrgImportRunner.LooksInterrupted(job, utcNow))
             {
-                return "interrupted";
+                return WillBeResumed(job, utcNow) ? "pending" : "interrupted";
             }
 
             switch (job.Status)
@@ -657,11 +822,50 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             }
         }
 
+        /// <summary>Whether a stranded job is still within the limits the resume sweep hands back to a worker.</summary>
+        private static bool WillBeResumed(UserOrgImportJob job, DateTime utcNow)
+        {
+            return job.Attempts < UserOrgImportJobLimits.MaxAttempts
+                && utcNow - job.QueuedUtc < UserOrgImportJobLimits.ResumeWindow;
+        }
+
         private static string Iso(DateTime value)
         {
             return DateTime.SpecifyKind(value, DateTimeKind.Utc).ToString("o", CultureInfo.InvariantCulture);
         }
 
         #endregion
+    }
+
+    /// <summary>
+    /// Lets one resume sweep through per interval, per web process.
+    /// </summary>
+    public sealed class UserOrgResumeGate
+    {
+        /// <summary>The shortest gap between two sweeps from one process.</summary>
+        public static readonly TimeSpan Interval = TimeSpan.FromSeconds(30);
+
+        /// <summary>The gate every request in this process shares.</summary>
+        public static readonly UserOrgResumeGate Shared = new UserOrgResumeGate();
+
+        private long _nextTicks;
+
+        /// <summary>Whether a sweep may run now; if so, the next one is held back for <see cref="Interval"/>.</summary>
+        public bool TryEnter(DateTime utcNow)
+        {
+            while (true)
+            {
+                var next = Interlocked.Read(ref _nextTicks);
+                if (utcNow.Ticks < next)
+                {
+                    return false;
+                }
+
+                if (Interlocked.CompareExchange(ref _nextTicks, utcNow.Add(Interval).Ticks, next) == next)
+                {
+                    return true;
+                }
+            }
+        }
     }
 }

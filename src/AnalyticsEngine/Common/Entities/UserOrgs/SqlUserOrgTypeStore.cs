@@ -157,8 +157,11 @@ FROM dbo.user_org_types t;
 
 SELECT " + SqlUserOrgImportJobStore.JobColumnsFor("j") + @"
 FROM dbo.user_org_import_jobs j
-JOIN (SELECT org_type_id, MAX(id) AS id FROM dbo.user_org_import_jobs GROUP BY org_type_id) latest
-  ON latest.id = j.id;";
+JOIN (SELECT id,
+             ROW_NUMBER() OVER (PARTITION BY org_type_id ORDER BY queued_utc DESC, id DESC) AS rn
+      FROM dbo.user_org_import_jobs
+      WHERE status <> 6) latest
+  ON latest.id = j.id AND latest.rn = 1;";
 
             var summaries = new List<UserOrgTypeSummary>();
             var byId = new Dictionary<int, UserOrgTypeSummary>();

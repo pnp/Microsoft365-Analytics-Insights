@@ -208,13 +208,59 @@ namespace Common.Entities.UserOrgs
             IReadOnlyList<UserOrgStagedRow> rows,
             CancellationToken cancellationToken = default(CancellationToken));
 
+        /// <summary>
+        /// Stages a previewed file as a <see cref="UserOrgImportStatus.Draft"/>, returning its id.
+        /// </summary>
+        /// <remarks>
+        /// Also throws away expired drafts, and this admin's earlier drafts for the same org type, so
+        /// previewing a file repeatedly does not pile up copies of every UPN in it.
+        /// </remarks>
+        Task<int> CreateDraftAsync(
+            UserOrgImportJob draft,
+            IReadOnlyList<UserOrgStagedRow> rows,
+            CancellationToken cancellationToken = default(CancellationToken));
+
+        /// <summary>
+        /// What importing a draft would do, computed in SQL with exactly the matching the apply uses,
+        /// so the preview and the import cannot disagree. <c>null</c> when the draft does not exist.
+        /// </summary>
+        Task<UserOrgDraftSummary> SummariseDraftAsync(
+            int draftId,
+            int sampleRows,
+            int unknownRowLimit,
+            CancellationToken cancellationToken = default(CancellationToken));
+
+        /// <summary>
+        /// Turns a draft into a <see cref="UserOrgImportStatus.Pending"/> job, once every check has
+        /// passed inside the transaction that admits it.
+        /// </summary>
+        /// <exception cref="UserOrgValidationException">
+        /// With a code from <see cref="UserOrgImportRefusalCodes"/>: the draft expired or was already
+        /// imported, the type changed, another import is running, no row matches a user, or the import
+        /// would clear more users than <paramref name="confirmedClearCount"/>.
+        /// </exception>
+        Task CommitDraftAsync(
+            int draftId,
+            int orgTypeId,
+            UserOrgImportMode mode,
+            int confirmedClearCount,
+            string startedBy,
+            CancellationToken cancellationToken = default(CancellationToken));
+
         /// <summary>One job, or <c>null</c> when it does not exist.</summary>
         Task<UserOrgImportJob> GetJobAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken));
 
+        /// <summary>An org type's most recent imports, newest first. Drafts are not imports and are left out.</summary>
+        Task<IReadOnlyList<UserOrgImportJob>> ListJobsAsync(
+            int orgTypeId,
+            int take,
+            CancellationToken cancellationToken = default(CancellationToken));
+
         /// <summary>
         /// Moves a job from <see cref="UserOrgImportStatus.Pending"/> to
-        /// <see cref="UserOrgImportStatus.Running"/>, returning <c>false</c> if somebody else already
-        /// claimed it. Atomic, so two web instances cannot run the same import twice.
+        /// <see cref="UserOrgImportStatus.Running"/> - or takes over a Running job whose heartbeat has
+        /// gone stale - returning <c>false</c> if somebody else already claimed it. Atomic, so two web
+        /// instances cannot run the same import twice.
         /// </summary>
         Task<bool> TryClaimJobAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken));
 
@@ -225,14 +271,28 @@ namespace Common.Entities.UserOrgs
         /// Applies a claimed job's staged rows to the assignments, honouring its
         /// <see cref="UserOrgImportMode"/>, and returns the row counts.
         /// </summary>
+        /// <remarks>
+        /// The job is marked <see cref="UserOrgImportStatus.Succeeded"/> in the same transaction as the
+        /// changes, so a job left anything but succeeded - however its worker died - changed nothing.
+        /// </remarks>
         Task<UserOrgImportJob> ApplyAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>Marks a job finished and discards its staged rows.</summary>
+        /// <param name="errorCode">A key from <see cref="UserOrgImportErrorCodes"/> for a job that did not succeed.</param>
         Task CompleteJobAsync(
             int jobId,
             UserOrgImportStatus status,
             string errorMessage,
-            CancellationToken cancellationToken = default(CancellationToken));
+            CancellationToken cancellationToken = default(CancellationToken),
+            string errorCode = null);
+
+        /// <summary>
+        /// Finds jobs whose worker died - a dispatch lost with the web process, or a stale heartbeat -
+        /// and returns the ids to dispatch again; <see cref="TryClaimJobAsync"/> takes them over. Jobs
+        /// that have been claimed too often, or are too old to resume, are stopped instead. Also tidies
+        /// up staged rows of finished jobs and expired drafts.
+        /// </summary>
+        Task<IReadOnlyList<int>> ResumeStaleJobsAsync(CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>
         /// Whether this org type already has a job waiting or running, so the portal can refuse to queue
@@ -241,5 +301,71 @@ namespace Common.Entities.UserOrgs
         Task<UserOrgImportJob> GetActiveJobForTypeAsync(
             int orgTypeId,
             CancellationToken cancellationToken = default(CancellationToken));
+    }
+
+    /// <summary>What importing a staged draft would do.</summary>
+    public sealed class UserOrgDraftSummary
+    {
+        public int DraftId { get; set; }
+
+        public int OrgTypeId { get; set; }
+
+        /// <summary>Staged rows.</summary>
+        public int RowsTotal { get; set; }
+
+        /// <summary>Staged rows whose UPN matches nobody.</summary>
+        public int UnknownRows { get; set; }
+
+        /// <summary>Distinct users the file gives a value to, after the last line per person wins.</summary>
+        public int MatchedUsersWithValue { get; set; }
+
+        /// <summary>Distinct users the file names at all.</summary>
+        public int MatchedUsers { get; set; }
+
+        public int CurrentlyAssigned { get; set; }
+
+        /// <summary>Users a Replace would clear: everyone assigned today whom the file does not give a value to.</summary>
+        public int ReplaceWouldClear { get; set; }
+
+        /// <summary>Users a Merge would clear: people the file lists with an empty value who have one today.</summary>
+        public int MergeWouldClear { get; set; }
+
+        /// <summary>The first staged rows, with whether each matches a user.</summary>
+        public IReadOnlyList<UserOrgDraftRow> SampleRows { get; set; } = new UserOrgDraftRow[0];
+
+        /// <summary>Staged rows naming nobody, in file order, capped.</summary>
+        public IReadOnlyList<UserOrgStagedRow> UnknownRowList { get; set; } = new UserOrgStagedRow[0];
+    }
+
+    public sealed class UserOrgDraftRow
+    {
+        public int LineNumber { get; set; }
+
+        public string Upn { get; set; }
+
+        public string OrgValue { get; set; }
+
+        public bool UserExists { get; set; }
+    }
+
+    /// <summary>
+    /// Why queueing an import was refused. Carried on <see cref="UserOrgValidationException.Code"/>,
+    /// and an API contract: the portal words each one.
+    /// </summary>
+    public static class UserOrgImportRefusalCodes
+    {
+        public const string ImportInProgress = "importInProgress";
+        public const string DraftNotFound = "draftNotFound";
+        public const string TypeChanged = "typeChanged";
+        public const string TypeNotFound = "typeNotFound";
+        public const string TypeNotCsv = "typeNotCsv";
+        public const string TypeDisabled = "typeDisabled";
+        public const string NoMatchingUsers = "noMatchingUsers";
+        public const string ClearExceedsConfirmed = "clearExceedsConfirmed";
+        public const string NoFile = "noFile";
+        public const string UploadUnreadable = "uploadUnreadable";
+        public const string UploadTooLarge = "uploadTooLarge";
+        public const string InvalidMode = "invalidMode";
+        public const string InvalidColumns = "invalidColumns";
     }
 }

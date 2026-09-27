@@ -574,6 +574,7 @@
     <Compile Include="UserOrgs\SqlUserOrgTypeStore.cs" />
     <Compile Include="UserOrgs\UserOrgCsvParser.cs" />
     <Compile Include="UserOrgs\UserOrgImportRunner.cs" />
+    <Compile Include="UserOrgs\UserOrgImportTelemetry.cs" />
     <Compile Include="UserOrgs\UserOrgModels.cs" />
     <Compile Include="UserOrgs\UserOrgRules.cs" />
     <Compile Include="UserOrgs\UserOrgStores.cs" />

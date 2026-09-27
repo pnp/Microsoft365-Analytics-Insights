@@ -17,6 +17,10 @@ namespace Web.AnalyticsWeb
             FilterConfig.RegisterGlobalFilters(GlobalFilters.Filters);
             RouteConfig.RegisterRoutes(RouteTable.Routes);
             GlobalConfiguration.Configure(WebApiConfig.Register);
+
+            // Picks up any user organisation CSV import the previous process was running when it was
+            // recycled. In the background, and it never throws.
+            Controllers.UserOrgAPIController.ResumeInterruptedImportsAfterStartup();
         }
         protected void Application_PostAuthorizeRequest()
         {
@@ -81,6 +85,7 @@ namespace Web.AnalyticsWeb
         protected void Application_End(object sender, EventArgs e)
         {
             Models.LicenceActivity.LicenceActivityTelemetry.Shutdown();
+            Models.UserOrgs.UserOrgImportAppInsights.Shutdown();
             CopilotAdoptionTelemetryHost.Shutdown(HostingEnvironment.ShutdownReason.ToString());
         }
     }

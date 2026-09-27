@@ -607,6 +607,9 @@ VALUES ('{upn.Replace("'", "''")}', {(accountEnabled.HasValue ? (accountEnabled.
             return await QueueJob(typeId, mode, true, rows);
         }
 
+        /// <param name="confirmClear">
+        /// Whether the job carries a confirmation covering any number of clears, or none at all.
+        /// </param>
         private async Task<int> QueueJob(int typeId, UserOrgImportMode mode, bool confirmClear, params UserOrgStagedRow[] rows)
         {
             var type = await _types.GetAsync(typeId);
@@ -617,7 +620,7 @@ VALUES ('{upn.Replace("'", "''")}', {(accountEnabled.HasValue ? (accountEnabled.
                     Mode = mode,
                     StartedBy = "admin@contoso.com",
                     FileName = "orgs.csv",
-                    ConfirmClear = confirmClear,
+                    ConfirmedClearCount = confirmClear ? int.MaxValue : 0,
                     ExpectedGeneration = type == null ? (int?)null : type.SourceGeneration,
                 },
                 rows);
@@ -793,7 +796,8 @@ VALUES ('{upn.Replace("'", "''")}', {(accountEnabled.HasValue ? (accountEnabled.
             }
             catch (UserOrgValidationException ex)
             {
-                StringAssert.Contains(ex.Message, "not confirmed");
+                Assert.AreEqual(UserOrgImportErrorCodes.ClearExceedsConfirmed, ex.Code, "The portal words the refusal from this.");
+                StringAssert.Contains(ex.Message, "than were confirmed");
             }
 
             Assert.AreEqual(2, Count($"SELECT COUNT(*) FROM dbo.user_org_assignments WHERE org_type_id = {typeId}"),

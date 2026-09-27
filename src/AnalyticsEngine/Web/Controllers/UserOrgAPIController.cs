@@ -1,6 +1,8 @@
 using Common.Entities.Config;
 using Common.Entities.UserOrgs;
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -81,7 +83,41 @@ namespace Web.AnalyticsWeb.Controllers
                 new UserOrgGraphProbe(config),
                 // A store built here rather than captured from the request: the import outlives the
                 // request, so anything scoped to it would already be disposed by the time it ran.
-                jobId => UserOrgImportDispatcher.Start(jobId, UserOrgStores.CreateImportJobStore(connectionString)));
+                jobId => UserOrgImportDispatcher.Start(jobId, UserOrgStores.CreateImportJobStore(connectionString)),
+                telemetry: UserOrgImportAppInsights.Default);
+        }
+
+        /// <summary>
+        /// Resumes imports a restart interrupted, shortly after the web app starts.
+        /// </summary>
+        /// <remarks>
+        /// Without this, an import cut off by a recycle waits until somebody next opens the admin page.
+        /// Twice, because a job queued just before the restart is not presumed lost until
+        /// <see cref="UserOrgImportJobLimits.LostDispatchGrace"/> has passed. Off the start-up thread,
+        /// and never throws: a missing connection string or an unreachable database must not stop the
+        /// site starting.
+        /// </remarks>
+        internal static void ResumeInterruptedImportsAfterStartup()
+        {
+            Task.Run(async () =>
+            {
+                foreach (var delay in new[] { TimeSpan.FromSeconds(15), UserOrgImportJobLimits.LostDispatchGrace + TimeSpan.FromSeconds(30) })
+                {
+                    try
+                    {
+                        await Task.Delay(delay).ConfigureAwait(false);
+                        await BuildService().ResumeInterruptedImportsAsync(CancellationToken.None, force: true).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        UserOrgImportAppInsights.Default.Record(new UserOrgImportTelemetryEvent
+                        {
+                            Stage = UserOrgImportStages.ResumeFailed,
+                            ExceptionType = ex.GetBaseException().GetType().Name,
+                        });
+                    }
+                }
+            });
         }
 
         #region Org types
@@ -183,31 +219,51 @@ namespace Web.AnalyticsWeb.Controllers
         #region CSV
 
         /// <summary>
-        /// POST api/UserOrg/preview-csv - parses the first rows of an upload. Persists nothing.
+        /// POST api/UserOrg/preview-csv?orgTypeId=1 - parses an upload, stages it as a draft and reports
+        /// what importing it would do. Imports nothing; <see cref="ImportCsv"/> commits the draft.
         /// </summary>
+        /// <param name="userColumn">The 0-based user column, when the admin chose one.</param>
+        /// <param name="valueColumn">The 0-based value column, when the admin chose one.</param>
         [HttpPost]
         [Route("preview-csv")]
-        public async Task<IHttpActionResult> PreviewCsv(int orgTypeId, CancellationToken cancellationToken)
+        public async Task<IHttpActionResult> PreviewCsv(
+            int orgTypeId,
+            CancellationToken cancellationToken,
+            int? userColumn = null,
+            int? valueColumn = null)
         {
             var forged = RejectIfNotXhr();
             if (forged != null) return forged;
 
-            var upload = await TryReadUploadAsync().ConfigureAwait(false);
+            var upload = await TryReadUploadAsync(orgTypeId).ConfigureAwait(false);
             if (upload.Failure != null) return upload.Failure;
 
             using (upload.File)
             {
+                var startedBy = User?.Identity?.Name ?? "unknown";
                 return await RunAsync(svc => svc.PreviewAsync(
-                    upload.File.Content, upload.File.FileName, orgTypeId, cancellationToken)).ConfigureAwait(false);
+                    upload.File.Content, upload.File.FileName, orgTypeId, startedBy, userColumn, valueColumn, cancellationToken),
+                    "preview-csv").ConfigureAwait(false);
             }
         }
 
         /// <summary>
-        /// POST api/UserOrg/import-csv?orgTypeId=1&amp;mode=replace - stages an upload and queues the import.
+        /// POST api/UserOrg/import-csv?orgTypeId=1&amp;draftId=2&amp;mode=replace&amp;confirmedClearCount=0 -
+        /// imports a previewed draft in the background.
         /// </summary>
+        /// <remarks>
+        /// No file: the preview already staged it, so what is imported is exactly what was previewed.
+        /// <paramref name="confirmedClearCount"/> is how many users the admin agreed may lose their value;
+        /// the import is refused if it would now clear more.
+        /// </remarks>
         [HttpPost]
         [Route("import-csv")]
-        public async Task<IHttpActionResult> ImportCsv(int orgTypeId, string mode, CancellationToken cancellationToken, bool confirmClear = false)
+        public async Task<IHttpActionResult> ImportCsv(
+            int orgTypeId,
+            string mode,
+            CancellationToken cancellationToken,
+            int? draftId = null,
+            int confirmedClearCount = 0)
         {
             var forged = RejectIfNotXhr();
             if (forged != null) return forged;
@@ -223,19 +279,24 @@ namespace Web.AnalyticsWeb.Controllers
             }
             else
             {
-                return Content(HttpStatusCode.BadRequest, new ApiErrorModel("The import mode must be either 'replace' or 'merge'."));
+                return Content(HttpStatusCode.BadRequest, new ApiErrorModel(
+                    "The import mode must be either 'replace' or 'merge'.", UserOrgImportRefusalCodes.InvalidMode));
             }
 
-            var upload = await TryReadUploadAsync().ConfigureAwait(false);
-            if (upload.Failure != null) return upload.Failure;
-
-            using (upload.File)
+            if (!draftId.HasValue)
             {
-                var startedBy = User?.Identity?.Name ?? "unknown";
-                return await RunAsync(svc => svc.QueueImportAsync(
-                    orgTypeId, importMode, upload.File.Content, upload.File.FileName, startedBy, confirmClear, cancellationToken)).ConfigureAwait(false);
+                // Most likely a portal page loaded before an upgrade, which still posts the file here.
+                return Content(HttpStatusCode.BadRequest, new ApiErrorModel(
+                    "Preview the file before importing it. Reload the page and choose the file again.",
+                    UserOrgImportRefusalCodes.DraftNotFound));
             }
+
+            var startedBy = User?.Identity?.Name ?? "unknown";
+            return await RunAsync(svc => svc.CommitImportAsync(
+                orgTypeId, draftId.Value, importMode, confirmedClearCount, startedBy, cancellationToken),
+                "import-csv").ConfigureAwait(false);
         }
+
         /// <summary>GET api/UserOrg/jobs/{id} - import progress.</summary>
         [HttpGet]
         [Route("jobs/{id:int}")]
@@ -249,16 +310,45 @@ namespace Web.AnalyticsWeb.Controllers
                     throw new UserOrgNotFoundException("That import job was not found.");
                 }
 
-                // The admin page polls until the import finishes, so this is the first moment the
-                // web app learns a CSV import has changed who is in which organisation.
-                if (string.Equals(job.Status, "succeeded", StringComparison.OrdinalIgnoreCase))
+                // The worker clears this process's cached directory itself when an import succeeds.
+                // This covers a scaled-out site, where the admin's polls may land on an instance that
+                // did not run it - once per job, not on every poll: the page keeps the finished job on
+                // screen and a snapshot rebuild on a 200,000-user tenant is not free.
+                if (string.Equals(job.Status, "succeeded", StringComparison.OrdinalIgnoreCase)
+                    && DirectoryRefreshedForJobs.TryAdd(job.Id, 0))
                 {
+                    if (DirectoryRefreshedForJobs.Count > 1000)
+                    {
+                        DirectoryRefreshedForJobs.Clear();
+                        DirectoryRefreshedForJobs.TryAdd(job.Id, 0);
+                    }
+
                     InvalidateUserFilterDirectory();
                 }
 
                 return job;
-            }).ConfigureAwait(false);
+            }, "jobs").ConfigureAwait(false);
         }
+
+        /// <summary>GET api/UserOrg/types/{id}/imports?take=10 - the org type's recent imports, newest first.</summary>
+        [HttpGet]
+        [Route("types/{id:int}/imports")]
+        public async Task<IHttpActionResult> GetImports(int id, CancellationToken cancellationToken, int take = 10)
+        {
+            return await RunAsync<object>(async svc =>
+            {
+                var imports = await svc.ListImportsAsync(id, take, cancellationToken).ConfigureAwait(false);
+                if (imports == null)
+                {
+                    throw new UserOrgNotFoundException("That organisation type no longer exists.");
+                }
+
+                return imports;
+            }, "imports").ConfigureAwait(false);
+        }
+
+        /// <summary>Jobs whose success has already refreshed this process's user directory.</summary>
+        private static readonly ConcurrentDictionary<int, byte> DirectoryRefreshedForJobs = new ConcurrentDictionary<int, byte>();
 
         #endregion
 
@@ -341,25 +431,28 @@ namespace Web.AnalyticsWeb.Controllers
         /// <remarks>
         /// Buffered into memory rather than streamed to disk. A 200,000-row two-column CSV is only a
         /// few megabytes, the cap below bounds it explicitly, and buffering avoids leaving temporary
-        /// files behind on an App Service instance that may be recycled at any moment.
+        /// files behind on an App Service instance that may be recycled at any moment. The buffer is
+        /// handed to the parser as-is - exposed, not copied - so the file sits in memory once.
         /// </remarks>
-        private async Task<UploadResult> TryReadUploadAsync()
+        private async Task<UploadResult> TryReadUploadAsync(int orgTypeId)
         {
             if (Request.Content == null)
             {
-                return Failed(Content(HttpStatusCode.BadRequest, new ApiErrorModel("No file was uploaded.")));
+                return Rejected(orgTypeId, NoFile());
             }
 
             var length = Request.Content.Headers.ContentLength;
             if (length.HasValue && length.Value > MaxUploadBytes)
             {
-                return Failed(TooLarge());
+                return Rejected(orgTypeId, TooLarge(), UserOrgImportRefusalCodes.UploadTooLarge, length.Value);
             }
 
             UploadedFile file;
 
             try
             {
+                string fileName;
+                byte[] bytes;
                 if (Request.Content.IsMimeMultipartContent())
                 {
                     var provider = await Request.Content.ReadAsMultipartAsync().ConfigureAwait(false);
@@ -368,39 +461,56 @@ namespace Web.AnalyticsWeb.Controllers
 
                     if (part == null)
                     {
-                        return Failed(Content(HttpStatusCode.BadRequest, new ApiErrorModel("No file was uploaded.")));
+                        return Rejected(orgTypeId, NoFile());
                     }
 
-                    var bytes = await part.ReadAsByteArrayAsync().ConfigureAwait(false);
-                    file = new UploadedFile
-                    {
-                        Content = new MemoryStream(bytes),
-                        FileName = (part.Headers.ContentDisposition?.FileName ?? "upload.csv").Trim('"'),
-                    };
+                    bytes = await part.ReadAsByteArrayAsync().ConfigureAwait(false);
+                    fileName = (part.Headers.ContentDisposition?.FileName ?? "upload.csv").Trim('"');
                 }
                 else
                 {
-                    var bytes = await Request.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
-                    if (bytes.Length == 0)
-                    {
-                        return Failed(Content(HttpStatusCode.BadRequest, new ApiErrorModel("No file was uploaded.")));
-                    }
-
-                    file = new UploadedFile { Content = new MemoryStream(bytes), FileName = "upload.csv" };
+                    bytes = await Request.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+                    fileName = "upload.csv";
                 }
+
+                if (bytes.Length == 0)
+                {
+                    return Rejected(orgTypeId, NoFile());
+                }
+
+                file = new UploadedFile
+                {
+                    Content = new MemoryStream(bytes, 0, bytes.Length, writable: false, publiclyVisible: true),
+                    FileName = fileName,
+                };
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                // Usually a client problem - a truncated or malformed multipart body - so it is answered
+                // as one. Recorded rather than swallowed, because the same symptom from a proxy or a
+                // request limit would otherwise be invisible.
+                UserOrgImportAppInsights.Default.Record(new UserOrgImportTelemetryEvent
+                {
+                    Stage = UserOrgImportStages.UploadRejected,
+                    OrgTypeId = orgTypeId,
+                    Code = UserOrgImportRefusalCodes.UploadUnreadable,
+                    ExceptionType = ex.GetBaseException().GetType().Name,
+                    Bytes = length,
+                });
+
                 return Failed(Content(
                     HttpStatusCode.BadRequest,
-                    new ApiErrorModel("The upload could not be read. Check the file is a plain CSV and try again.")));
+                    new ApiErrorModel(
+                        "The upload could not be read. Check the file is a plain CSV and try again.",
+                        UserOrgImportRefusalCodes.UploadUnreadable)));
             }
 
             // Re-checked after reading, because Content-Length is absent on a chunked upload.
             if (file.Content.Length > MaxUploadBytes)
             {
+                var size = file.Content.Length;
                 file.Dispose();
-                return Failed(TooLarge());
+                return Rejected(orgTypeId, TooLarge(), UserOrgImportRefusalCodes.UploadTooLarge, size);
             }
 
             return new UploadResult { File = file };
@@ -411,11 +521,38 @@ namespace Web.AnalyticsWeb.Controllers
             return new UploadResult { Failure = failure };
         }
 
+        private static UploadResult Rejected(
+            int orgTypeId,
+            IHttpActionResult failure,
+            string code = UserOrgImportRefusalCodes.NoFile,
+            long? bytes = null)
+        {
+            UserOrgImportAppInsights.Default.Record(new UserOrgImportTelemetryEvent
+            {
+                Stage = UserOrgImportStages.UploadRejected,
+                OrgTypeId = orgTypeId,
+                Code = code,
+                Bytes = bytes,
+            });
+            return Failed(failure);
+        }
+
+        private IHttpActionResult NoFile()
+        {
+            return Content(HttpStatusCode.BadRequest, new ApiErrorModel("No file was uploaded.", UserOrgImportRefusalCodes.NoFile));
+        }
+
         private IHttpActionResult TooLarge()
         {
+            var maxMb = MaxUploadBytes / (1024 * 1024);
             return Content(
                 HttpStatusCode.RequestEntityTooLarge,
-                new ApiErrorModel($"That file is larger than the {MaxUploadBytes / (1024 * 1024)} MB limit for an organisation import."));
+                new ApiErrorModel(
+                    $"That file is larger than the {maxMb} MB limit for an organisation import.",
+                    UserOrgImportRefusalCodes.UploadTooLarge)
+                {
+                    Values = new Dictionary<string, object> { { "maxMb", maxMb } },
+                });
         }
 
         /// <summary>
@@ -440,11 +577,11 @@ namespace Web.AnalyticsWeb.Controllers
                 new ApiErrorModel("This request did not come from the portal. Reload the page and try again."));
         }
 
-        private Task<IHttpActionResult> RunAsync<T>(Func<UserOrgAdminService, Task<T>> work)
+        private Task<IHttpActionResult> RunAsync<T>(Func<UserOrgAdminService, Task<T>> work, string route = null)
         {
             // The factory runs inside the guard, so a missing connection string is a sanitised 500
             // rather than an unhandled exception.
-            return GuardAsync(() => work(_serviceFactory()));
+            return GuardAsync(() => work(_serviceFactory()), route: route);
         }
 
         /// <summary>
@@ -458,9 +595,11 @@ namespace Web.AnalyticsWeb.Controllers
         /// API. The token is checked rather than the exception type, because SqlClient can report a
         /// cancelled command as a <c>SqlException</c>.
         /// </param>
+        /// <param name="route">Which endpoint failed, for the exception report.</param>
         private async Task<IHttpActionResult> GuardAsync<T>(
             Func<Task<T>> work,
-            CancellationToken cancellationToken = default(CancellationToken))
+            CancellationToken cancellationToken = default(CancellationToken),
+            string route = null)
         {
             try
             {
@@ -469,8 +608,12 @@ namespace Web.AnalyticsWeb.Controllers
             catch (UserOrgValidationException ex)
             {
                 // Written for an IT admin and safe to display: these messages never echo a Graph
-                // response body or a SQL error verbatim.
-                return Content(HttpStatusCode.BadRequest, new ApiErrorModel(ex.Message));
+                // response body or a SQL error verbatim. The code lets the portal word it in the
+                // reader's language, with the message as the fallback.
+                return Content(HttpStatusCode.BadRequest, new ApiErrorModel(ex.Message, ex.Code)
+                {
+                    Values = ex.Values == null ? null : ex.Values.ToDictionary(v => v.Key, v => v.Value),
+                });
             }
             catch (UserOrgNotFoundException ex)
             {
@@ -488,7 +631,7 @@ namespace Web.AnalyticsWeb.Controllers
                 // the Web API pipeline, and this site ships with customErrors off - so a SQL exception
                 // would arrive in the browser carrying object names, index names and key values. The
                 // exception still goes to Application Insights, which is where an engineer reads it.
-                WebExceptionTelemetry.Report(ex, "UserOrgAPI");
+                WebExceptionTelemetry.Report(ex, route == null ? "UserOrgAPI" : "UserOrgAPI " + route);
 
                 return Content(
                     HttpStatusCode.InternalServerError,
