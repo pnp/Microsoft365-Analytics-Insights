@@ -96,6 +96,25 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void AFirstRowHoldingAUpnIsDataEvenWhenAValueReadsLikeAHeader()
+        {
+            // "User" is an ordinary value for a Role or Persona type - and it is also a word a header
+            // uses for the user column. A header never holds an email address, so this first row is Alice.
+            var result = Parse("alice@contoso.com,User\r\nbob@contoso.com,Admin\r\n");
+
+            Assert.IsFalse(result.HeaderDetected);
+            CollectionAssert.AreEqual(new[] { "alice@contoso.com", "bob@contoso.com" }, result.Rows.Select(r => r.Upn).ToArray());
+            Assert.AreEqual("User", result.Rows[0].OrgValue);
+
+            var chosen = Parse("alice@contoso.com,User\r\nbob@contoso.com,Admin\r\n", null, new UserOrgCsvParseOptions { UserColumn = 0, ValueColumn = 1 });
+            Assert.AreEqual(2, chosen.Rows.Count, "Choosing the columns does not make the first row a header either.");
+
+            var withHeader = Parse("User,Role\r\nalice@contoso.com,User\r\n");
+            Assert.IsTrue(withHeader.HeaderDetected, "A real header is still recognised.");
+            Assert.AreEqual("alice@contoso.com", withHeader.Rows.Single().Upn);
+        }
+
+        [TestMethod]
         public void DetectsASemicolonDelimitedFile()
         {
             // Excel writes semicolons on any machine whose locale uses a comma as the decimal

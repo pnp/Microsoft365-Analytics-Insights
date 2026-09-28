@@ -743,6 +743,111 @@ WHERE id = {draftId}");
             Assert.AreEqual(UserOrgChangeLogShipOutcome.Written, await Shipper(log).ShipAsync(jobId), "Released with the lease.");
         }
 
+        /// <summary>Ends the SQL session holding an import's change-log lease, as a failover would.</summary>
+        private static void KillLeaseSession(int jobId)
+        {
+            var spid = _db.Scalar($@"
+SELECT TOP (1) request_session_id FROM sys.dm_tran_locks
+WHERE resource_type = 'APPLICATION' AND resource_database_id = DB_ID()
+  AND (resource_description LIKE '%user_org_changelog_{jobId}' OR resource_description LIKE '%user_org_changelog_{jobId}[^0-9]%');");
+            Assert.IsNotNull(spid, "The lease's lock should be visible.");
+            _db.Execute($"KILL {Convert.ToInt32(spid)};");
+        }
+
+        [TestMethod]
+        public async Task ALeaseKnowsWhenItsConnectionHasGone()
+        {
+            AddUser("a@contoso.com");
+            var typeId = await NewType();
+            var jobId = await Applied(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(2, "a@contoso.com", "X"));
+
+            using (var lease = await _outbox.TryLeaseAsync(jobId))
+            {
+                Assert.IsTrue(await lease.IsHeldAsync());
+
+                KillLeaseSession(jobId);
+
+                Assert.IsFalse(await lease.IsHeldAsync(), "The lock went with the connection.");
+                using (var taken = await _outbox.TryLeaseAsync(jobId))
+                {
+                    Assert.IsNotNull(taken, "Another worker can take the log over.");
+                }
+
+                Exception refused = null;
+                try
+                {
+                    await lease.CompleteAsync(UserOrgChangeLogStatus.Memory);
+                }
+                catch (Exception ex)
+                {
+                    refused = ex;
+                }
+
+                Assert.IsNotNull(refused, "A lost lease cannot empty the outbox.");
+            }
+
+            Assert.AreEqual(UserOrgChangeLogStatus.Pending, (await _jobs.GetJobAsync(jobId)).ChangeLogStatus);
+            Assert.AreEqual(1, Count($"SELECT COUNT(*) FROM dbo.user_org_import_changes WHERE job_id = {jobId}"));
+        }
+
+        [TestMethod]
+        public async Task AWorkerThatLosesItsLeaseMidWriteLeavesTheLogToWhoeverTookItOver()
+        {
+            // A failover while a long log is being written: another worker may take it over and finish,
+            // so this one must neither write a summary counted from what it managed to read, nor empty the
+            // outbox the other is reading.
+            AddUser("a@contoso.com");
+            AddUser("b@contoso.com");
+            var typeId = await NewType();
+            var jobId = await Applied(
+                typeId,
+                UserOrgImportMode.Merge,
+                new UserOrgStagedRow(2, "a@contoso.com", "X"),
+                new UserOrgStagedRow(3, "b@contoso.com", "Y"));
+            var log = new InMemoryUserOrgChangeLog();
+
+            var outcome = await Shipper(new FailoverLog(log, () => KillLeaseSession(jobId))).ShipAsync(jobId);
+
+            Assert.AreEqual(UserOrgChangeLogShipOutcome.LeaseLost, outcome);
+            var job = await _jobs.GetJobAsync(jobId);
+            Assert.IsNull(await log.GetImportAsync(UserOrgChangeLogKeys.LogId(job.Id, job.QueuedUtc), CancellationToken.None), "No summary.");
+            Assert.AreEqual(UserOrgChangeLogStatus.Pending, job.ChangeLogStatus);
+            Assert.AreEqual(2, Count($"SELECT COUNT(*) FROM dbo.user_org_import_changes WHERE job_id = {jobId}"), "The outbox is intact.");
+
+            Assert.AreEqual(UserOrgChangeLogShipOutcome.Written, await Shipper(log).ShipAsync(jobId), "The next worker writes it.");
+            Assert.AreEqual(2, (await log.GetImportAsync(UserOrgChangeLogKeys.LogId(job.Id, job.QueuedUtc), CancellationToken.None)).StoredChanges);
+        }
+
+        /// <summary>A change log whose first write coincides with the writer's SQL session being lost.</summary>
+        private sealed class FailoverLog : IUserOrgChangeLog
+        {
+            private readonly IUserOrgChangeLog _inner;
+            private Action _failover;
+
+            public FailoverLog(IUserOrgChangeLog inner, Action failover)
+            {
+                _inner = inner;
+                _failover = failover;
+            }
+
+            public UserOrgChangeLogStatus Destination => _inner.Destination;
+
+            public Task AppendAsync(UserOrgChangeLogImport import, IReadOnlyList<UserOrgChangeRecord> changes, CancellationToken cancellationToken)
+            {
+                Interlocked.Exchange(ref _failover, null)?.Invoke();
+                return _inner.AppendAsync(import, changes, cancellationToken);
+            }
+
+            public Task CompleteAsync(UserOrgChangeLogImport import, CancellationToken cancellationToken)
+                => _inner.CompleteAsync(import, cancellationToken);
+
+            public Task<UserOrgChangeLogImport> GetImportAsync(string logId, CancellationToken cancellationToken)
+                => _inner.GetImportAsync(logId, cancellationToken);
+
+            public Task<UserOrgChangeLogPage> GetChangesAsync(string logId, string search, string continuation, int pageSize, CancellationToken cancellationToken)
+                => _inner.GetChangesAsync(logId, search, continuation, pageSize, cancellationToken);
+        }
+
         [TestMethod]
         public async Task AnImportThatChangedNobodyStillHasALog()
         {
@@ -1331,6 +1436,73 @@ WHERE id = {draftId}");
             Assert.AreEqual(UserOrgSourceKind.CsvUpload, now.SourceKind, "B's change stands.");
             Assert.IsFalse(now.IsEnabled);
             Assert.AreEqual("Kept", (await _assignments.GetForUserAsync(user)).Single().Value, "A's clear did not run.");
+        }
+
+        [TestMethod]
+        public async Task AnImportConfirmedAsTheBrowserLeavesIsStillHandedToAWorker()
+        {
+            // Cancelled after the type was checked: the commit used to take the request's token, so the
+            // import could be committed and then never dispatched - nobody left to poll it, and no sweep
+            // until someone next opened the page.
+            AddUser("a@contoso.com");
+            var typeId = await NewType();
+            var preview = await Preview(typeId, "UPN,Team\r\na@contoso.com,X\r\n");
+            _dispatched.Clear();
+
+            using (var leaving = new CancellationTokenSource())
+            {
+                var service = new UserOrgAdminService(
+                    new CancelsAfterRead(_types, leaving),
+                    _assignments,
+                    _jobs,
+                    UserOrgStores.CreateUserLookup(_db.ConnectionString),
+                    new NoGraph(),
+                    id => _dispatched.Add(id),
+                    resumeGate: new UserOrgResumeGate());
+
+                await service.CommitImportAsync(typeId, preview.DraftId.Value, UserOrgImportMode.Merge, 0, Admin, leaving.Token);
+
+                Assert.IsTrue(leaving.IsCancellationRequested, "The request really had gone.");
+            }
+
+            CollectionAssert.AreEqual(new[] { preview.DraftId.Value }, _dispatched, "Handed to a worker all the same.");
+            Assert.AreEqual(UserOrgImportStatus.Pending, (await _jobs.GetJobAsync(preview.DraftId.Value)).Status);
+        }
+
+        /// <summary>A type store whose read is the last thing the request lives to see.</summary>
+        private sealed class CancelsAfterRead : IUserOrgTypeStore
+        {
+            private readonly IUserOrgTypeStore _inner;
+            private readonly CancellationTokenSource _request;
+
+            public CancelsAfterRead(IUserOrgTypeStore inner, CancellationTokenSource request)
+            {
+                _inner = inner;
+                _request = request;
+            }
+
+            public async Task<UserOrgType> GetAsync(int id, CancellationToken cancellationToken = default(CancellationToken))
+            {
+                var type = await _inner.GetAsync(id, cancellationToken);
+                _request.Cancel();
+                return type;
+            }
+
+            public Task<IReadOnlyList<UserOrgType>> GetAllAsync(CancellationToken cancellationToken = default(CancellationToken)) => _inner.GetAllAsync(cancellationToken);
+
+            public Task<IReadOnlyList<UserOrgTypeSummary>> GetSummariesAsync(CancellationToken cancellationToken = default(CancellationToken)) => _inner.GetSummariesAsync(cancellationToken);
+
+            public Task<IReadOnlyList<UserOrgType>> GetEnabledEntraTypesAsync(CancellationToken cancellationToken = default(CancellationToken)) => _inner.GetEnabledEntraTypesAsync(cancellationToken);
+
+            public Task<int> CreateAsync(UserOrgType type, CancellationToken cancellationToken = default(CancellationToken)) => _inner.CreateAsync(type, cancellationToken);
+
+            public Task UpdateAsync(UserOrgType type, bool clearAssignments, bool bumpGeneration, CancellationToken cancellationToken = default(CancellationToken), int? expectedGeneration = null)
+                => _inner.UpdateAsync(type, clearAssignments, bumpGeneration, cancellationToken, expectedGeneration);
+
+            public Task DeleteAsync(int id, CancellationToken cancellationToken = default(CancellationToken)) => _inner.DeleteAsync(id, cancellationToken);
+
+            public Task<int> RecordEntraRefreshAsync(IReadOnlyDictionary<int, int> expectedGenerations, DateTime refreshedUtc, CancellationToken cancellationToken = default(CancellationToken))
+                => _inner.RecordEntraRefreshAsync(expectedGenerations, refreshedUtc, cancellationToken);
         }
 
         /// <summary>A Graph probe that lets something else happen while it is being waited on.</summary>

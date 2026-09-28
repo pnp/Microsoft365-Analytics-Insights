@@ -1057,13 +1057,15 @@ WHERE status = 6 AND queued_utc < DATEADD(SECOND, -@draftLifetimeSecs, @now);";
 
         #region Change outbox
 
-        public async Task<IDisposable> TryLeaseAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
+        public async Task<IUserOrgChangeLease> TryLeaseAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
         {
             // A transaction-owned application lock on a connection of its own, held for as long as the
             // lease lives. Transaction-owned rather than session-owned because a pooled connection is not
             // reset when it goes back to the pool - a session lock could outlive its lease - whereas
             // rolling the transaction back always releases it. A worker that dies releases it with its
-            // connection. The transaction touches no data, so it blocks nothing else.
+            // connection. The transaction touches no data until the lease completes, so it blocks nothing
+            // else.
+            var name = "user_org_changelog_" + jobId.ToString(CultureInfo.InvariantCulture);
             var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
             SqlTransaction tx = null;
             try
@@ -1074,8 +1076,7 @@ DECLARE @result INT;
 EXEC @result = sp_getapplock @Resource = @name, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 0;
 SELECT @result;", tx))
                 {
-                    cmd.Parameters.Add("@name", SqlDbType.NVarChar, 255).Value =
-                        "user_org_changelog_" + jobId.ToString(CultureInfo.InvariantCulture);
+                    cmd.Parameters.Add("@name", SqlDbType.NVarChar, 255).Value = name;
                     var result = Convert.ToInt32(await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
                     if (result < 0)
                     {
@@ -1086,7 +1087,7 @@ SELECT @result;", tx))
                     }
                 }
 
-                return new TransactionLease(connection, tx);
+                return new TransactionLease(connection, tx, jobId, name);
             }
             catch
             {
@@ -1134,36 +1135,6 @@ ORDER BY user_id;";
             return changes;
         }
 
-        public async Task CompleteAsync(
-            int jobId,
-            UserOrgChangeLogStatus writtenTo,
-            CancellationToken cancellationToken = default(CancellationToken))
-        {
-            if (writtenTo == UserOrgChangeLogStatus.Pending)
-            {
-                throw new ArgumentOutOfRangeException(nameof(writtenTo), "A change log is completed by saying where it was written.");
-            }
-
-            // One transaction, so the job never says the log was written while its outbox still holds the
-            // list - nothing would ever pick those rows up again.
-            const string sql = @"
-UPDATE dbo.user_org_import_jobs SET change_log_status = @status WHERE id = @jobId AND change_log_status = 1;
-DELETE FROM dbo.user_org_import_changes WHERE job_id = @jobId;";
-
-            using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
-            using (var tx = connection.BeginTransaction())
-            {
-                using (var cmd = Command(connection, sql, tx))
-                {
-                    cmd.Parameters.Add("@jobId", SqlDbType.Int).Value = jobId;
-                    cmd.Parameters.Add("@status", SqlDbType.TinyInt).Value = (byte)writtenTo;
-                    await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-                }
-
-                tx.Commit();
-            }
-        }
-
         public async Task<IReadOnlyList<int>> ListPendingAsync(int take, CancellationToken cancellationToken = default(CancellationToken))
         {
             const string sql = @"
@@ -1189,16 +1160,77 @@ ORDER BY id;";
             return ids;
         }
 
-        /// <summary>Holds an application lock for as long as it lives.</summary>
-        private sealed class TransactionLease : IDisposable
+        /// <summary>Holds an application lock for as long as it lives. See <see cref="IUserOrgChangeLease"/>.</summary>
+        private sealed class TransactionLease : IUserOrgChangeLease
         {
+            // The job never says the log was written while its outbox still holds the list - nothing would
+            // ever pick those rows up again - because both are done in one transaction: the lease's own.
+            private const string CompleteSql = @"
+UPDATE dbo.user_org_import_jobs SET change_log_status = @status WHERE id = @jobId AND change_log_status = 1;
+DELETE FROM dbo.user_org_import_changes WHERE job_id = @jobId;";
+
+            private readonly int _jobId;
+            private readonly string _name;
             private SqlConnection _connection;
             private SqlTransaction _tx;
 
-            public TransactionLease(SqlConnection connection, SqlTransaction tx)
+            public TransactionLease(SqlConnection connection, SqlTransaction tx, int jobId, string name)
             {
                 _connection = connection;
                 _tx = tx;
+                _jobId = jobId;
+                _name = name;
+            }
+
+            public async Task<bool> IsHeldAsync(CancellationToken cancellationToken = default(CancellationToken))
+            {
+                var connection = _connection;
+                var tx = _tx;
+                if (connection == null || tx == null || connection.State != ConnectionState.Open)
+                {
+                    return false;
+                }
+
+                try
+                {
+                    using (var cmd = Command(connection, "SELECT APPLOCK_MODE('public', @name, 'Transaction');", tx))
+                    {
+                        cmd.Parameters.Add("@name", SqlDbType.NVarChar, 255).Value = _name;
+                        var mode = await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+                        return string.Equals(mode, "Exclusive", StringComparison.OrdinalIgnoreCase);
+                    }
+                }
+                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // A connection that has gone - which is exactly what this asks - fails the command.
+                    return false;
+                }
+            }
+
+            public async Task CompleteAsync(UserOrgChangeLogStatus writtenTo, CancellationToken cancellationToken = default(CancellationToken))
+            {
+                if (writtenTo == UserOrgChangeLogStatus.Pending)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(writtenTo), "A change log is completed by saying where it was written.");
+                }
+
+                var connection = _connection;
+                var tx = _tx;
+                if (connection == null || tx == null)
+                {
+                    throw new ObjectDisposedException(nameof(TransactionLease));
+                }
+
+                using (var cmd = Command(connection, CompleteSql, tx))
+                {
+                    cmd.Parameters.Add("@jobId", SqlDbType.Int).Value = _jobId;
+                    cmd.Parameters.Add("@status", SqlDbType.TinyInt).Value = (byte)writtenTo;
+                    await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                // Committing gives the lock up with the transaction.
+                tx.Commit();
+                Interlocked.Exchange(ref _tx, null)?.Dispose();
             }
 
             public void Dispose()

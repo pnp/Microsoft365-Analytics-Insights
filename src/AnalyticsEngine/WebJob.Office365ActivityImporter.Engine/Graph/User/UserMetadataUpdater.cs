@@ -170,13 +170,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 _logger.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - start");
 
-                // If we have no active users, assume new install so clear delta key
-                var activeUserCount = await db.users.Where(u => u.AccountEnabled.HasValue && u.AccountEnabled.Value == true).CountAsync();
-                if (activeUserCount == 0)
-                {
-                    await _userLoader.DeltaValueProvider.ClearDeltaToken();
-                }
-
                 // Work out which user-org attributes to ask Graph for, BEFORE the load. The selection
                 // also qualifies the delta-token cache key, so a change to the configured attributes
                 // discards the stored token and the next cycle re-enumerates every user once - which is
@@ -184,6 +177,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // otherwise changed. See GraphUserOrgSelection.
                 var entraOrgTypes = await LoadEnabledEntraOrgTypes();
                 _userLoader.SetOrgSelection(GraphUserOrgSelection.FromTypes(entraOrgTypes));
+
+                // If we have no active users, assume new install so clear delta key - after the selection,
+                // which decides the key, and every key this cycle might read: a cache kept from an earlier
+                // database would otherwise feed this one only what changed since, and nobody else.
+                var activeUserCount = await db.users.Where(u => u.AccountEnabled.HasValue && u.AccountEnabled.Value == true).CountAsync();
+                if (activeUserCount == 0)
+                {
+                    await _userLoader.ClearStoredDeltaTokensAsync();
+                }
 
                 // Load from Graph & update delta code once done
                 var allActiveGraphUsers = await _userLoader.LoadAllActiveUsers();
@@ -602,17 +604,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var updates = UserOrgMappingRules.BuildUpdates(graphUsers, parsed, userIdsByUpn, listValued);
                 if (listValued.Count > 0)
                 {
-                    // Nobody's value was touched: a list is not "no value", and clearing everyone who has
-                    // one would be worse than useless. Nor is the type recorded as refreshed below, so its
+                    // Skipped whole, for everyone: a list is not "no value", so clearing the users who have
+                    // one would be wrong, and clearing only the users without one would half-apply a
+                    // configuration known to be wrong. Nor is the type recorded as refreshed below, so its
                     // "Last refreshed" time goes stale - which is what tells an administrator to look.
                     var names = orgTypes
                         .Where(t => t != null && listValued.Contains(t.Id))
                         .Select(t => $"'{t.Name}' ({t.EntraAttributeName})");
                     _logger.LogError(
                         $"User import - skipping {listValued.Count} organisation type(s) whose Entra attribute holds a "
-                        + $"list of values rather than one: {string.Join(", ", names)}. A user can be in only one "
-                        + "organisation of each type, so these values cannot be imported. Point the type at a "
-                        + "single-valued attribute on the User organisations page.");
+                        + $"list of values rather than one: {string.Join(", ", names)}. Their values were left as they "
+                        + "were. A user can be in only one organisation of each type, so these values cannot be "
+                        + "imported. Point the type at a single-valued attribute on the User organisations page.");
                 }
 
                 if (updates.Count > 0)

@@ -50,6 +50,43 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task ForgettingStoredTokens_ClearsTheCyclesKeyAndTheFallbacks()
+        {
+            // A rebuilt database against a cache that kept its tokens: the updater forgets them so every
+            // user is read again. Clearing only the key in force at the time used to miss the org-qualified
+            // key the load then read from - a token for the OLD database, returning only what changed since.
+            var handler = new RecordingHandler(_ => Ok(DeltaPayload));
+            FakeDeltaValueProvider provider;
+            var loader = BuildLoader(handler, out provider);
+            var selection = OneOrgAttribute();
+            provider.SeedToken(selection.DeltaKeyQualifier, "old-database-qualified");
+            provider.SeedToken(string.Empty, "old-database-unqualified");
+
+            loader.SetOrgSelection(selection);
+            await loader.ClearStoredDeltaTokensAsync();
+
+            Assert.AreEqual(selection.DeltaKeyQualifier, provider.KeyQualifier, "The cycle's own key is back in force.");
+            Assert.IsNull(await provider.GetDeltaToken(), "The key the load reads from.");
+            provider.SetKeyQualifier(string.Empty);
+            Assert.IsNull(await provider.GetDeltaToken(), "The key the fallback reads from.");
+        }
+
+        [TestMethod]
+        public async Task ForgettingStoredTokens_WithNoOrgTypes_ClearsTheOneKey()
+        {
+            var handler = new RecordingHandler(_ => Ok(DeltaPayload));
+            FakeDeltaValueProvider provider;
+            var loader = BuildLoader(handler, out provider);
+            provider.SeedToken(string.Empty, "old-database");
+
+            loader.SetOrgSelection(GraphUserOrgSelection.None);
+            await loader.ClearStoredDeltaTokensAsync();
+
+            Assert.AreEqual(string.Empty, provider.KeyQualifier);
+            Assert.IsNull(await provider.GetDeltaToken());
+        }
+
+        [TestMethod]
         public async Task HappyPath_AsksForTheOrgPropertyAndQualifiesTheDeltaKey()
         {
             var handler = new RecordingHandler(_ => Ok(DeltaPayload));
@@ -434,15 +471,18 @@ namespace Tests.UnitTests
             const string listAttribute = "extension_0123456789abcdef0123456789abcdef_costCentres";
             var orgTypes = new FakeUserOrgTypeStore(listAttribute, "extensionAttribute1");
             var assignments = new FakeUserOrgAssignmentStore();
+            var withoutAValue = new GraphUser { UserPrincipalName = "b@contoso.com", AccountEnabled = true, Id = Guid.NewGuid().ToString() };
             var user = NewGraphUser();
             user.AdditionalProperties = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string, Newtonsoft.Json.Linq.JToken>>(
                 @"{ """ + listAttribute + @""": [ ""CC-1"", ""CC-2"" ], ""onPremisesExtensionAttributes"": { ""extensionAttribute1"": ""Retail"" } }");
-            var loader = new FakeUserMetadataLoader(new List<GraphUser> { user });
+            var loader = new FakeUserMetadataLoader(new List<GraphUser> { withoutAValue, user });
 
             await RunImport(loader, orgTypes, assignments);
 
-            Assert.IsFalse(assignments.LastUpdates.Any(u => u.OrgTypeId == 1), "The list is not read as \"no value\": nobody is cleared.");
-            Assert.AreEqual("Retail", assignments.LastUpdates.Single(u => u.OrgTypeId == 2).OrgValue);
+            Assert.IsFalse(
+                assignments.LastUpdates.Any(u => u.OrgTypeId == 1),
+                "The type is skipped for everyone: the list is not read as \"no value\", and nobody without one is cleared either.");
+            Assert.AreEqual("Retail", assignments.LastUpdates.Single(u => u.OrgTypeId == 2 && u.OrgValue != null).OrgValue);
             CollectionAssert.AreEquivalent(new[] { 2 }, orgTypes.RefreshCalls.Single().ExpectedGenerations.Keys.ToArray());
         }
 

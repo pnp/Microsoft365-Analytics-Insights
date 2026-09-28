@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadCatalog, setActiveLanguage, translateStatic, type Language, type TFunction } from '../../i18n';
 import type { UserFilter, UserFilterClause } from '../../types/userFilter';
-import { describeClause, describeUserFilter, dimensionLabel, joinConditions, operatorShortLabel } from './describeUserFilter';
+import { describeClause, describeUserFilter, dimensionLabel, joinConditions, operatorShortLabel, valueLabel } from './describeUserFilter';
 
 function clause(dimension: string, values: string[], overrides: Partial<UserFilterClause> = {}): UserFilterClause {
   return { join: 'and', dimension, operator: 'is', values, includeNotSet: false, ...overrides };
@@ -135,5 +135,16 @@ describe('describing a filter in Spanish', () => {
     expect(describeClause(t, clause('managementChain', ['ceo@contoso.com']), dimensionLabel(t, 'managementChain'))).toBe(
       'Cadena de responsables incluye a ceo@contoso.com',
     );
+  });
+
+  it('shows the domain table’s "(no domain)" row in the reader’s language, and only that', async () => {
+    // Chosen from the domain breakdown, the row travels as the server's own English placeholder -
+    // which the server reads as "not set" - so the pill would otherwise say "(no domain)" in Spanish.
+    const t = await translator('es');
+
+    expect(valueLabel(t, 'emailDomain', '(no domain)')).toBe('(sin dominio)');
+    expect(valueLabel(t, 'emailDomain', 'contoso.com')).toBe('contoso.com');
+    expect(valueLabel(t, 'department', '(no domain)'), 'A tenant value elsewhere is never looked up.').toBe('(no domain)');
+    expect(describeClause(t, clause('emailDomain', ['(no domain)']), dimensionLabel(t, 'emailDomain'))).toContain('(sin dominio)');
   });
 });

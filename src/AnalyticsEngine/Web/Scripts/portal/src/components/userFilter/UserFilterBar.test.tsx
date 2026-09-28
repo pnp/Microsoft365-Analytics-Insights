@@ -300,6 +300,27 @@ describe('UserFilterBar', () => {
     expect(screen.getByRole('combobox', { name: 'Values' })).toBeInTheDocument();
   });
 
+  it("drops one property's values the moment another is chosen, even if the new ones never arrive", async () => {
+    // Otherwise "Sales" sat under Country until Country's values loaded - or for good when that failed -
+    // one click from "Country is Sales" and an empty report nobody could explain.
+    const user = userEvent.setup();
+    renderWithProvider(<Harness initial={{ clauses: [] }} onChange={() => {}} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Add filter' }));
+    await user.click(await screen.findByRole('option', { name: /Department/ }));
+    await user.click(screen.getByRole('combobox', { name: 'Values' }));
+    expect(await screen.findByRole('option', { name: /Sales/ })).toBeInTheDocument();
+
+    vi.mocked(fetchUserFilterValues).mockRejectedValue(new Error('offline'));
+    await user.click(screen.getByRole('combobox', { name: 'Property' }));
+    await user.click(await screen.findByRole('option', { name: /Country/ }));
+    await waitFor(() => expect(fetchUserFilterValues).toHaveBeenLastCalledWith('country', '', 200, expect.anything()));
+    await user.click(screen.getByRole('combobox', { name: 'Values' }));
+
+    expect(screen.queryByRole('option', { name: /Sales/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Marketing/ })).not.toBeInTheDocument();
+  });
+
   it('leaves the filter untouched when an edit is cancelled', async () => {
     const onChange = vi.fn();
     const user = userEvent.setup();

@@ -27,6 +27,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         void SetOrgSelection(GraphUserOrgSelection orgSelection);
 
         /// <summary>
+        /// Forgets every stored delta token this cycle could resume from, so the next load reads every
+        /// user again: the one under the current selection's key, and the unqualified one the
+        /// without-organisations fallback switches to. Call after <see cref="SetOrgSelection"/>.
+        /// </summary>
+        /// <remarks>
+        /// For a database with no users - a new install or a rebuilt database - against a cache that kept
+        /// its tokens. Clearing only the key in force at the time missed whichever of the two the load
+        /// then used, and a delta from a token minted for the old database returns only what changed
+        /// since, so everyone else would never be imported.
+        /// </remarks>
+        Task ClearStoredDeltaTokensAsync();
+
+        /// <summary>
         /// Whether Graph rejected the configured org attributes during this cycle, so the load fell back
         /// to reading users without them. Org values must not be written when this is <c>true</c>: the
         /// response carries no org properties, so every user would look as though their value had been

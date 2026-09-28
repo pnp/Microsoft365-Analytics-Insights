@@ -59,7 +59,12 @@ namespace Common.Entities.UserOrgs
 
         public int OrgTypeId { get; set; }
 
-        /// <summary>The org type's name when the import ran - tenant data, shown as stored.</summary>
+        /// <summary>
+        /// The org type's name when the log was written - tenant data, shown as stored. That is moments
+        /// after the import in the normal course, later only when the log had to wait for its store; a
+        /// type renamed in between is recorded under its new name. <see cref="OrgTypeId"/> is the type's
+        /// identity either way.
+        /// </summary>
         public string OrgTypeName { get; set; }
 
         public UserOrgImportMode Mode { get; set; }

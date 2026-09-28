@@ -477,36 +477,36 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void BuildUpdates_LeavesAListAloneRatherThanClearingIt()
+        public void BuildUpdates_SkipsAListValuedTypeForEveryone()
         {
             // A multi-valued directory extension. A user holds one value per org type, so there is
-            // nothing to store - but reading the list as "no value" would clear everyone who has one.
+            // nothing to store - and reading the list as "no value" would clear everyone who has one.
+            // Nor are the users WITHOUT a value cleared: that would half-apply a configuration known to
+            // be wrong. The type is left exactly as it was until its attribute is fixed.
             const string listAttribute = "extension_0123456789abcdef0123456789abcdef_costCentres";
             var graphUsers = new[]
             {
+                // Read before the first list, so the null would already be in the updates by then.
+                User("b@contoso.com", @"{ """ + listAttribute + @""": null, ""employeeType"": ""Contractor"" }"),
                 User("a@contoso.com", @"{ """ + listAttribute + @""": [ ""CC-1"", ""CC-2"" ], ""employeeType"": ""Staff"" }"),
-                User("b@contoso.com", @"{ """ + listAttribute + @""": null }"),
+                User("c@contoso.com", @"{ }"),
             };
+            var types = new[] { Type(10, listAttribute), Type(11, "employeeType") };
+            var users = Users(Pair("a@contoso.com", 1), Pair("b@contoso.com", 2), Pair("c@contoso.com", 3));
             var listValued = new HashSet<int>();
 
-            var updates = UserOrgMappingRules.BuildUpdates(
-                graphUsers,
-                new[] { Type(10, listAttribute), Type(11, "employeeType") },
-                Users(Pair("a@contoso.com", 1), Pair("b@contoso.com", 2)),
-                listValued);
+            var updates = UserOrgMappingRules.BuildUpdates(graphUsers, types, users, listValued);
 
             CollectionAssert.AreEquivalent(new[] { 10 }, listValued.ToArray(), "The type is reported, so the import can say why.");
-            Assert.IsFalse(updates.Any(u => u.UserId == 1 && u.OrgTypeId == 10), "The list is left alone, not cleared.");
+            Assert.IsFalse(updates.Any(u => u.OrgTypeId == 10), "No update for anyone: not the list, not the users without a value.");
             Assert.AreEqual("Staff", updates.Single(u => u.UserId == 1 && u.OrgTypeId == 11).OrgValue, "Other types are read as usual.");
-            Assert.IsNull(updates.Single(u => u.UserId == 2 && u.OrgTypeId == 10).OrgValue, "No value at all still clears.");
+            Assert.AreEqual("Contractor", updates.Single(u => u.UserId == 2 && u.OrgTypeId == 11).OrgValue);
+            Assert.IsNull(updates.Single(u => u.UserId == 3 && u.OrgTypeId == 11).OrgValue, "And still clear as usual.");
 
-            Assert.AreEqual(
-                updates.Count,
-                UserOrgMappingRules.BuildUpdates(
-                    graphUsers,
-                    new[] { Type(10, listAttribute), Type(11, "employeeType") },
-                    Users(Pair("a@contoso.com", 1), Pair("b@contoso.com", 2))).Count,
-                "Asking which types held lists is optional.");
+            CollectionAssert.AreEqual(
+                updates.Select(u => (u.UserId, u.OrgTypeId, u.OrgValue)).ToArray(),
+                UserOrgMappingRules.BuildUpdates(graphUsers, types, users).Select(u => (u.UserId, u.OrgTypeId, u.OrgValue)).ToArray(),
+                "Asking which types held lists is optional - the type is skipped either way.");
         }
 
         [TestMethod]

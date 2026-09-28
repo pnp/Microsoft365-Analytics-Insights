@@ -554,7 +554,11 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 // import: the draft, the type's configuration, an import already running, whether any
                 // row names a user, and the clear count. Checking any of them first, outside it, only
                 // opens a window for another administrator to change the answer.
-                await _jobs.CommitDraftAsync(draftId, orgTypeId, mode, confirmedClearCount, startedBy, cancellationToken)
+                //
+                // Not the request's token. Once the admin has confirmed, the import is admitted or refused
+                // on its merits: a browser leaving mid-commit could otherwise cancel it after the commit
+                // but before the dispatch below, leaving a queued import no worker is ever handed.
+                await _jobs.CommitDraftAsync(draftId, orgTypeId, mode, confirmedClearCount, startedBy, CancellationToken.None)
                     .ConfigureAwait(false);
             }
             catch (UserOrgValidationException ex)
@@ -574,12 +578,13 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             UserOrgImportJob job = null;
             try
             {
-                job = await _jobs.GetJobAsync(draftId, cancellationToken).ConfigureAwait(false);
+                // Only the row counts for the response - so neither the request's token nor any failure
+                // may stop the dispatch below: the import is queued, whether or not anyone is left to
+                // read the answer.
+                job = await _jobs.GetJobAsync(draftId, CancellationToken.None).ConfigureAwait(false);
             }
-            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            catch (Exception)
             {
-                // Only the row counts for the response. The import is queued either way, and must still
-                // be dispatched.
             }
 
             Emit(new UserOrgImportTelemetryEvent

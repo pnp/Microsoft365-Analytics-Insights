@@ -58,6 +58,19 @@ namespace Tests.UnitTests.FakeLoaderClasses
             _deltaProvider.SetKeyQualifier(OrgSelection.DeltaKeyQualifier);
         }
 
+        /// <summary>Mirrors <see cref="GraphUserLoader.ClearStoredDeltaTokensAsync"/>: this cycle's key, and the unqualified one.</summary>
+        public async Task ClearStoredDeltaTokensAsync()
+        {
+            await _deltaProvider.ClearDeltaToken();
+            var qualifier = OrgSelection.DeltaKeyQualifier;
+            if (!string.IsNullOrEmpty(qualifier))
+            {
+                _deltaProvider.SetKeyQualifier(GraphUserOrgSelection.None.DeltaKeyQualifier);
+                await _deltaProvider.ClearDeltaToken();
+                _deltaProvider.SetKeyQualifier(qualifier);
+            }
+        }
+
         public FakeUserMetadataLoader(
             List<GraphUser> fakeUsers = null,
             List<SubscribedSku> fakeSkus = null,

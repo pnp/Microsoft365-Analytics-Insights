@@ -142,6 +142,26 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
         }
 
+        public async Task ClearStoredDeltaTokensAsync()
+        {
+            await _deltaValueProvider.ClearDeltaToken().ConfigureAwait(false);
+
+            // The unqualified key too: it is where FallBackWithoutOrgAttributes resumes from.
+            var qualifier = _orgSelection.DeltaKeyQualifier;
+            if (!string.IsNullOrEmpty(qualifier))
+            {
+                _deltaValueProvider.SetKeyQualifier(GraphUserOrgSelection.None.DeltaKeyQualifier);
+                try
+                {
+                    await _deltaValueProvider.ClearDeltaToken().ConfigureAwait(false);
+                }
+                finally
+                {
+                    _deltaValueProvider.SetKeyQualifier(qualifier);
+                }
+            }
+        }
+
         /// <summary>Whether Graph rejected the configured org properties during this cycle.</summary>
         public bool OrgSelectionWasRejected => _orgSelectionRejected;
 

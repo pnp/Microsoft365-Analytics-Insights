@@ -280,6 +280,13 @@ export default function UserFilterClauseEditor({
     setQuery('');
     setServerSearch('');
     setAttempted(false);
+    // The old attribute's values go at once, not when the new ones arrive: until then - or for good,
+    // if the request fails - "Sales" would sit under Country, one click from "Country is Sales".
+    setOptions([]);
+    setTruncated(false);
+    setTotalMatching(0);
+    setPeopleWithoutValue(0);
+    setValuesError(null);
     if (key === USER_NAME_DIMENSION && next?.supportsTextMatch && !isTextOperator(operator)) {
       setOperator('contains');
       operatorChosenByEditor.current = true;

@@ -328,7 +328,7 @@ namespace Common.Entities.UserOrgs
         /// in this process or on another instance - is already writing it. Disposing the lease gives it
         /// up, and a worker that dies gives it up with its connection.
         /// </summary>
-        Task<IDisposable> TryLeaseAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken));
+        Task<IUserOrgChangeLease> TryLeaseAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>One page of an import's changes, in user id order, starting after <paramref name="afterUserId"/>.</summary>
         Task<IReadOnlyList<UserOrgChangeRecord>> ReadAsync(
@@ -337,14 +337,34 @@ namespace Common.Entities.UserOrgs
             int take,
             CancellationToken cancellationToken = default(CancellationToken));
 
-        /// <summary>Records where the import's change log was written, and empties its outbox, in one transaction.</summary>
-        Task CompleteAsync(
-            int jobId,
-            UserOrgChangeLogStatus writtenTo,
-            CancellationToken cancellationToken = default(CancellationToken));
-
         /// <summary>Applied imports whose change log has not been written yet, oldest first.</summary>
         Task<IReadOnlyList<int>> ListPendingAsync(int take, CancellationToken cancellationToken = default(CancellationToken));
+    }
+
+    /// <summary>
+    /// The right to write one import's change log: a transaction-owned application lock on a connection
+    /// of its own.
+    /// </summary>
+    /// <remarks>
+    /// The lock goes with its connection, and a connection can go without the worker noticing - a
+    /// failover, a network break - letting another worker take the log over. Both writes that matter are
+    /// therefore fenced by the lease itself: <see cref="IsHeldAsync"/> before the summary, and
+    /// <see cref="CompleteAsync"/> in the lease's own transaction.
+    /// </remarks>
+    public interface IUserOrgChangeLease : IDisposable
+    {
+        /// <summary>
+        /// Whether the lease is still held. A transaction-owned lock is never given up and taken back, so
+        /// held now means held since it was taken - and nobody else can have emptied the outbox meanwhile.
+        /// </summary>
+        Task<bool> IsHeldAsync(CancellationToken cancellationToken = default(CancellationToken));
+
+        /// <summary>
+        /// Records where the import's change log was written and empties its outbox, in the lease's own
+        /// transaction, then gives the lease up. Throws, changing nothing, once the lease has gone - so a
+        /// worker that lost it can never empty an outbox another worker is still reading.
+        /// </summary>
+        Task CompleteAsync(UserOrgChangeLogStatus writtenTo, CancellationToken cancellationToken = default(CancellationToken));
     }
 
     public sealed class UserOrgDraftSummary

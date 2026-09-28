@@ -27,6 +27,7 @@ import CsvImportPanel from '../components/userOrgs/CsvImportPanel';
 import OrgMembersBrowser from '../components/userOrgs/OrgMembersBrowser';
 import OrgTypeDialog from '../components/userOrgs/OrgTypeDialog';
 import { createOrgType, deleteOrgType, fetchOrgTypes, updateOrgType } from '../api/userOrgsApi';
+import { invalidateUserFilterDimensions } from '../components/userFilter/useUserFilterDimensions';
 import { formatDateParts, formatNumber, plural, useT } from '../i18n';
 import { neverRefreshedKey, STATUS_KEYS, userOrgErrorMessage } from '../components/userOrgs/userOrgShared';
 import type { UserOrgType, UserOrgTypeSave } from '../types/userOrgs';
@@ -85,6 +86,13 @@ export default function UserOrgsPage() {
     }
   }, [t]);
 
+  // After anything that changes the organisation types or their values: the reports' filter must offer
+  // the types as they now are when the admin goes back to one, not as they were a few minutes ago.
+  const changed = useCallback(async () => {
+    invalidateUserFilterDimensions();
+    await load();
+  }, [load]);
+
   useEffect(() => {
     load();
   }, [load]);
@@ -99,7 +107,7 @@ export default function UserOrgsPage() {
     }
     setDialogOpen(false);
     setEditing(null);
-    await load();
+    await changed();
   };
 
   const onDelete = async (type: UserOrgType) => {
@@ -114,7 +122,7 @@ export default function UserOrgsPage() {
     try {
       await deleteOrgType(type.id);
       toast.success(t('userOrgs.toast.deleted', { name: type.name }));
-      await load();
+      await changed();
     } catch (e) {
       toast.error(userOrgErrorMessage(e, t, 'errors.userOrgs.deleteFailed'));
     }
@@ -300,7 +308,7 @@ export default function UserOrgsPage() {
               {t('userOrgs.import.cardIntro')}
             </Text>
             <CsvFileFormat typeName={type.name} collapsed />
-            <CsvImportPanel orgType={type} onImportFinished={load} />
+            <CsvImportPanel orgType={type} onImportFinished={changed} />
           </Card>
         ))}
 

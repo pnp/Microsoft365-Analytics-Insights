@@ -7,32 +7,45 @@ import type { UserFilterDimensionList } from '../../types/userFilter';
  *
  * Module-level rather than per component: the list is the same for every report and changes only when
  * an administrator adds or edits a custom organisation type, so refetching it on every mount - every
- * tab switch - would be waste. Held for a few minutes, then refreshed on the next mount.
+ * tab switch - would be waste. Held for a few minutes, then refreshed on the next mount - and dropped
+ * at once when this session changes the organisation types (`invalidateUserFilterDimensions`), so a
+ * type just created or renamed is on offer the moment the admin goes back to a report.
  */
 const FRESH_FOR_MS = 5 * 60 * 1000;
 
 let cached: { list: UserFilterDimensionList; loadedAt: number } | null = null;
 let inFlight: Promise<UserFilterDimensionList> | null = null;
+let generation = 0;
 
 function load(force: boolean): Promise<UserFilterDimensionList> {
   if (!force && cached && Date.now() - cached.loadedAt < FRESH_FOR_MS) return Promise.resolve(cached.list);
   if (inFlight) return inFlight;
 
-  inFlight = fetchUserFilterDimensions()
+  const started = generation;
+  const request: Promise<UserFilterDimensionList> = fetchUserFilterDimensions()
     .then((list) => {
-      cached = { list, loadedAt: Date.now() };
+      // A list read before an invalidation describes the types as they were: still this caller's
+      // answer, but not one to keep.
+      if (started === generation) cached = { list, loadedAt: Date.now() };
       return list;
     })
     .finally(() => {
-      inFlight = null;
+      if (inFlight === request) inFlight = null;
     });
-  return inFlight;
+  inFlight = request;
+  return request;
+}
+
+/** Drops the shared list, so the next filter bar to mount reads it again. Call after changing the organisation types. */
+export function invalidateUserFilterDimensions(): void {
+  generation++;
+  cached = null;
+  inFlight = null;
 }
 
 /** Test-only: forget the shared list. */
 export function resetUserFilterDimensionsCache(): void {
-  cached = null;
-  inFlight = null;
+  invalidateUserFilterDimensions();
 }
 
 export interface UserFilterDimensionsState {

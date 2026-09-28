@@ -433,7 +433,16 @@ namespace Common.Entities.UserOrgs
             }
 
             var keys = header.Select(Normalise).ToList();
-            var headerDetected = keys.Any(k => UpnHeaderNames.Contains(k));
+
+            // A header names its columns; it does not hold an email address. Without the second test a
+            // file with no header whose first row was "alice@contoso.com,User" read the value "User" as
+            // a column name, and Alice was dropped as the header row - even with the columns chosen.
+            var firstRowHoldsAUpn = sampleFields[0].Any(field =>
+            {
+                var upn = UserOrgRules.NormaliseUpn(field);
+                return upn != null && IsPlausibleUpn(upn);
+            });
+            var headerDetected = keys.Any(k => UpnHeaderNames.Contains(k)) && !firstRowHoldsAUpn;
             result.HeaderDetected = headerDetected;
             if (headerDetected)
             {

@@ -1,6 +1,8 @@
 import { formatList, type TFunction, type TranslationKey } from '../../i18n';
 import type { UserFilter, UserFilterClause, UserFilterDimension, UserFilterOperator } from '../../types/userFilter';
+import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import {
+  EMAIL_DOMAIN_DIMENSION,
   FIXED_VALUE_TOKENS,
   MANAGEMENT_CHAIN_DIMENSION,
   groupClauseIndexes,
@@ -72,6 +74,10 @@ export function valueLabel(t: TFunction, dimension: string, value: string): stri
     const key = USER_FILTER_TOKEN_LABEL_KEYS[value];
     if (key) return t(key);
   }
+  // The domain breakdown's "(no domain)" row is the server's own placeholder, not a domain anyone has
+  // - no real domain can be spelled that way. Chosen from the table it travels as that text, which the
+  // server reads as "not set", and it is shown in the reader's language like the row it came from.
+  if (dimension === EMAIL_DOMAIN_DIMENSION) return serverPlaceholderText(t, value);
   return value;
 }
 

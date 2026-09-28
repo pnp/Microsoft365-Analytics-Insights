@@ -54,10 +54,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// changed users - from wiping the org values of the entire tenant.
         /// </para>
         /// <para>
-        /// A value that comes back as a <b>list</b> - a multi-valued directory extension - produces no
-        /// update either, and its org type is added to <paramref name="listValuedOrgTypeIds"/>. A user
-        /// holds one value per org type, so there is nothing to store; but treating the list as "no
-        /// value" would clear everyone who has one.
+        /// A value that comes back as a <b>list</b> - a multi-valued directory extension - means the org
+        /// type is misconfigured: a user holds one value per org type, so there is nothing to store. The
+        /// whole type is skipped for this batch - no update for anyone, those without a value included -
+        /// and added to <paramref name="listValuedOrgTypeIds"/>. Reading the list as "no value" would clear
+        /// everyone who has one, and applying just the users without a value would be half-applying a
+        /// configuration known to be wrong; left as it was, the type waits for its attribute to be fixed,
+        /// like one Graph rejects.
         /// </para>
         /// </remarks>
         public static IReadOnlyList<UserOrgAssignmentUpdate> BuildUpdates(
@@ -67,6 +70,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             ISet<int> listValuedOrgTypeIds = null)
         {
             var updates = new List<UserOrgAssignmentUpdate>();
+            var listValued = new HashSet<int>();
 
             if (graphUsers == null || orgTypes == null || orgTypes.Count == 0 || userIdsByUpn == null)
             {
@@ -98,7 +102,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     string raw;
                     if (!UserOrgRules.TryExtractSingleValue(graphUser.AdditionalProperties, orgType.Spec, out raw))
                     {
-                        listValuedOrgTypeIds?.Add(orgType.OrgTypeId);
+                        listValued.Add(orgType.OrgTypeId);
                         continue;
                     }
 
@@ -106,6 +110,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         userId,
                         orgType.OrgTypeId,
                         UserOrgRules.NormaliseOrgValue(raw)));
+                }
+            }
+
+            // Which types returned a list for anyone is known only once every user has been read, so every
+            // update for those types goes - for the users read before the first list as well as after.
+            // See the remarks.
+            if (listValued.Count > 0)
+            {
+                updates.RemoveAll(u => listValued.Contains(u.OrgTypeId));
+                if (listValuedOrgTypeIds != null)
+                {
+                    listValuedOrgTypeIds.UnionWith(listValued);
                 }
             }
 

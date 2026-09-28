@@ -22,6 +22,12 @@ namespace Common.Entities.UserOrgs
         /// when the store is back.
         /// </summary>
         StoreUnavailable,
+
+        /// <summary>
+        /// The lease went with its connection while the log was being written, so another worker may be
+        /// writing it. Nothing was completed; the log stays pending.
+        /// </summary>
+        LeaseLost,
     }
 
     /// <summary>
@@ -147,8 +153,22 @@ namespace Common.Entities.UserOrgs
 
                     import.StoredChanges = import.ChangeCount;
                     import.WrittenUtc = DateTime.UtcNow;
+
+                    // Held now means held throughout the reading - a transaction-owned lock is not given up
+                    // and taken back - so nobody else emptied the outbox mid-read, and these counts are the
+                    // whole list. A worker whose lease went with its connection stops here, rather than write
+                    // a summary counted from a list another worker may already have emptied.
+                    if (!await lease.IsHeldAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        Emit(UserOrgImportStages.ChangeLogFailed, job, watch, log.Destination, null, "LeaseLost");
+                        return UserOrgChangeLogShipOutcome.LeaseLost;
+                    }
+
                     await log.CompleteAsync(import, cancellationToken).ConfigureAwait(false);
-                    await _outbox.CompleteAsync(jobId, log.Destination, cancellationToken).ConfigureAwait(false);
+
+                    // In the lease's own transaction, so it fails rather than empty an outbox that another
+                    // worker - one that took over a lease lost since the check above - is reading.
+                    await lease.CompleteAsync(log.Destination, cancellationToken).ConfigureAwait(false);
 
                     Emit(UserOrgImportStages.ChangeLogWritten, job, watch, log.Destination, import.ChangeCount);
                     return UserOrgChangeLogShipOutcome.Written;
