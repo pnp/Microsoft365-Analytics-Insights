@@ -254,6 +254,7 @@ CREATE TABLE [dbo].[user_org_types] (
     [entra_attribute_name] nvarchar(200) NULL,
     [is_enabled] bit NOT NULL CONSTRAINT [DF_user_org_types_is_enabled] DEFAULT (1),
     [source_generation] int NOT NULL CONSTRAINT [DF_user_org_types_source_generation] DEFAULT (1),
+    [revision] int NOT NULL CONSTRAINT [DF_user_org_types_revision] DEFAULT (1),
     [created_utc] datetime2(7) NOT NULL CONSTRAINT [DF_user_org_types_created_utc] DEFAULT SYSUTCDATETIME(),
     [modified_utc] datetime2(7) NULL,
     [last_refreshed_utc] datetime2(7) NULL,

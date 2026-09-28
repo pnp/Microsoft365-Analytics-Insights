@@ -60,13 +60,20 @@ namespace Common.Entities.UserOrgs
         /// with <see cref="UserOrgMessageCodes.TypeChangedElsewhere"/> rather than applied with the wrong
         /// side effects.
         /// </param>
+        /// <param name="expectedRevision">
+        /// The <see cref="UserOrgType.Revision"/> the admin's page showed when they opened the type, or
+        /// <c>null</c> not to check. Every save moves it, so a save from a dialog opened before a
+        /// colleague's change - a rename included - is refused with
+        /// <see cref="UserOrgMessageCodes.TypeChangedElsewhere"/> rather than putting their change back.
+        /// </param>
         /// <exception cref="UserOrgValidationException">The name is already taken, the configuration is invalid, or the type changed since it was read.</exception>
         Task UpdateAsync(
             UserOrgType type,
             bool clearAssignments,
             bool bumpGeneration,
             CancellationToken cancellationToken = default(CancellationToken),
-            int? expectedGeneration = null);
+            int? expectedGeneration = null,
+            int? expectedRevision = null);
 
         /// <summary>
         /// Deletes an org type and everything hanging off it - assignments, values, import jobs and any

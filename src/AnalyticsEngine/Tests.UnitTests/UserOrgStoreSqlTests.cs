@@ -347,8 +347,9 @@ VALUES ('{upn.Replace("'", "''")}', {(accountEnabled.HasValue ? (accountEnabled.
         public async Task Update_ANameOnlyChangeByAnotherAdminDoesNotBlockAnEdit()
         {
             // The generation only moves when the source, attribute or enabled flag does - the changes the
-            // clear and bump are decided from. Two admins renaming the same type is last-writer-wins, as
-            // it always was.
+            // clear and bump are decided from - because it keys the delta token, and a rename must not
+            // cost a full directory re-read. So on its own it lets a rename through; catching a
+            // colleague's rename is the revision's job (the next test), for a caller that supplies one.
             var typeId = await _types.CreateAsync(CsvType("Team"));
             var readByA = await _types.GetAsync(typeId);
 
@@ -360,6 +361,71 @@ VALUES ('{upn.Replace("'", "''")}', {(accountEnabled.HasValue ? (accountEnabled.
             await _types.UpdateAsync(readByA, false, false, CancellationToken.None, readByA.SourceGeneration);
 
             Assert.AreEqual("Team (A)", (await _types.GetAsync(typeId)).Name);
+        }
+
+        [TestMethod]
+        public async Task Update_FromADialogOpenedBeforeAColleaguesRenameIsRefusedAndChangesNothing()
+        {
+            // Admin A opens the type. Admin B renames it. A, whose dialog still shows the old name, turns
+            // the type off and saves: with only the generation to go on, B's rename would be put back
+            // without a word - and a stale dialog could as easily re-enable a type B had just disabled.
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var openedByA = await _types.GetAsync(typeId);
+            Assert.AreEqual(1, openedByA.Revision);
+
+            var renamedByB = await _types.GetAsync(typeId);
+            renamedByB.Name = "Team (B)";
+            await _types.UpdateAsync(renamedByB, false, false, CancellationToken.None, renamedByB.SourceGeneration, renamedByB.Revision);
+            Assert.AreEqual(2, (await _types.GetAsync(typeId)).Revision, "Every save moves the revision, a rename included.");
+
+            openedByA.IsEnabled = false;
+            UserOrgValidationException refusal = null;
+            try
+            {
+                await _types.UpdateAsync(openedByA, false, true, CancellationToken.None, openedByA.SourceGeneration, openedByA.Revision);
+            }
+            catch (UserOrgValidationException ex)
+            {
+                refusal = ex;
+            }
+
+            Assert.IsNotNull(refusal, "A save from a dialog opened before a colleague's save must be refused.");
+            Assert.AreEqual(UserOrgMessageCodes.TypeChangedElsewhere, refusal.Code);
+
+            var now = await _types.GetAsync(typeId);
+            Assert.AreEqual("Team (B)", now.Name, "B's rename was not put back.");
+            Assert.IsTrue(now.IsEnabled, "Nothing of A's save was applied.");
+            Assert.AreEqual(1, now.SourceGeneration);
+            Assert.AreEqual(2, now.Revision);
+
+            await _types.UpdateAsync(now, false, false, CancellationToken.None, now.SourceGeneration, now.Revision);
+            Assert.AreEqual(3, (await _types.GetAsync(typeId)).Revision, "Reopened, the same save goes through.");
+        }
+
+        [TestMethod]
+        public async Task Update_ARefreshDoesNotMakeAnOpenDialogStale()
+        {
+            // Every import stamps last_refreshed_utc on the type's row. Were the revision a row version, an
+            // admin could not save a type while its values were being refreshed.
+            var typeId = await _types.CreateAsync(new UserOrgType
+            {
+                Name = "Cost Centre",
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "extensionAttribute1",
+                IsEnabled = true,
+            });
+            var opened = await _types.GetAsync(typeId);
+
+            Assert.AreEqual(
+                1,
+                await _types.RecordEntraRefreshAsync(new Dictionary<int, int> { { typeId, opened.SourceGeneration } }, DateTime.UtcNow));
+            var refreshed = await _types.GetAsync(typeId);
+            Assert.IsNotNull(refreshed.LastRefreshedUtc);
+            Assert.AreEqual(opened.Revision, refreshed.Revision, "A refresh is not an admin's save.");
+
+            opened.Name = "Cost Center";
+            await _types.UpdateAsync(opened, false, false, CancellationToken.None, opened.SourceGeneration, opened.Revision);
+            Assert.AreEqual("Cost Center", (await _types.GetAsync(typeId)).Name);
         }
 
         [TestMethod]

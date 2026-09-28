@@ -140,13 +140,22 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
             // The generation this was decided from, so an update overtaken by someone else's change -
             // there are seconds of Graph probe between the read above and the write - is refused rather
-            // than applied with side effects decided for a row that no longer exists.
-            await _types.UpdateAsync(type, sourceChanged, sourceChanged || enabledChanged, cancellationToken, existing.SourceGeneration)
+            // than applied with side effects decided for a row that no longer exists. And the revision the
+            // admin's dialog opened at, so a colleague's change since then is not put back: a rename moves
+            // no generation, and this read is newer than what the admin decided from.
+            await _types.UpdateAsync(
+                    type,
+                    sourceChanged,
+                    sourceChanged || enabledChanged,
+                    cancellationToken,
+                    existing.SourceGeneration,
+                    model.ExpectedRevision)
                 .ConfigureAwait(false);
 
             // Mirrors what the store just did, so the response does not claim a refresh for values the
-            // update has discarded.
+            // update has discarded, or carry a revision the next save would be refused for.
             type.LastRefreshedUtc = sourceChanged ? null : existing.LastRefreshedUtc;
+            type.Revision = (model.ExpectedRevision ?? existing.Revision) + 1;
 
             return ToModel(new UserOrgTypeSummary { Type = type });
         }
@@ -919,6 +928,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 Source = type.SourceKind == UserOrgSourceKind.EntraAttribute ? "entra" : "csv",
                 EntraAttributeName = type.EntraAttributeName,
                 IsEnabled = type.IsEnabled,
+                Revision = type.Revision,
                 AssignedUserCount = summary.AssignedUserCount,
                 DistinctValueCount = summary.DistinctValueCount,
                 CreatedUtc = Iso(type.CreatedUtc),

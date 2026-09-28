@@ -76,6 +76,34 @@ describe('user filter wire format', () => {
     expect(parseUserFilter('[{"d":"favouriteColour","v":["Blue"]}]')).toEqual(EMPTY_USER_FILTER);
     expect(parseUserFilter('[{"d":"org:012","v":["x"]}]')).toEqual(EMPTY_USER_FILTER);
     expect(parseUserFilter('[{"d":"org:12","v":["x"]}]').clauses).toHaveLength(1);
+    // The server reads the id into an int, so ten digits can still be one too many.
+    expect(parseUserFilter('[{"d":"org:2147483648","v":["x"]}]')).toEqual(EMPTY_USER_FILTER);
+    expect(parseUserFilter('[{"d":"org:3000000000","v":["x"]}]')).toEqual(EMPTY_USER_FILTER);
+    expect(parseUserFilter('[{"d":"org:2147483647","v":["x"]}]').clauses).toHaveLength(1);
+  });
+
+  it('reads the join and the "no value" flag as strictly as the server does', () => {
+    // Anything else was not written by this page. Read as AND, "xor" would quietly change who the link
+    // selects; read as false, a "true" string would drop the people with no value from the condition.
+    expect(parseUserFilter('[{"d":"department","v":["Sales"]},{"j":"xor","d":"country","v":["UK"]}]')).toEqual(EMPTY_USER_FILTER);
+    expect(parseUserFilter('[{"d":"department","v":["Sales"]},{"j":1,"d":"country","v":["UK"]}]')).toEqual(EMPTY_USER_FILTER);
+    expect(parseUserFilter('[{"d":"department","v":[],"n":"true"}]')).toEqual(EMPTY_USER_FILTER);
+    expect(parseUserFilter('[{"d":"department","v":["Sales"],"n":1}]')).toEqual(EMPTY_USER_FILTER);
+
+    // Absent or null is the default, as it is on the server.
+    const read = parseUserFilter(
+      '[{"d":"department","v":["Sales"],"n":false},{"j":"and","d":"country","v":["UK"]},{"j":"or","d":"companyName","v":["Contoso"],"n":null},{"j":null,"d":"jobTitle","v":["Engineer"],"n":true}]',
+    );
+    expect(read.clauses.map((c) => c.join)).toEqual(['and', 'and', 'or', 'and']);
+    expect(read.clauses.map((c) => c.includeNotSet)).toEqual([false, false, false, true]);
+  });
+
+  it('skips blank values as the server does, and refuses a condition of nothing else', () => {
+    // The server skips blanks too, so a condition holding only blanks is one it answers with an error
+    // on every panel - and a blank beside real values changes nothing, so it is not shown.
+    expect(parseUserFilter('[{"d":"department","v":["  ",""]}]')).toEqual(EMPTY_USER_FILTER);
+    expect(parseUserFilter('[{"d":"department","v":["Sales"," "]}]').clauses[0].values).toEqual(['Sales']);
+    expect(parseUserFilter('[{"d":"department","v":[" "],"n":true}]').clauses[0]).toMatchObject({ values: [], includeNotSet: true });
   });
 
   it('measures the filter the way the query string will carry it', () => {

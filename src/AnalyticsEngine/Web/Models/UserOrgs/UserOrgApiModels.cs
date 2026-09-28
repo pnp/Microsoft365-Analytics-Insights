@@ -26,6 +26,14 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         [JsonProperty("isEnabled")]
         public bool IsEnabled { get; set; }
 
+        /// <summary>
+        /// How many times the type has been saved. The page sends it back with an edit, as
+        /// <see cref="UserOrgTypeSaveModel.ExpectedRevision"/>, so a colleague's change in between is
+        /// refused rather than overwritten.
+        /// </summary>
+        [JsonProperty("revision")]
+        public int Revision { get; set; }
+
         [JsonProperty("assignedUserCount")]
         public int AssignedUserCount { get; set; }
 
@@ -238,6 +246,14 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
         [JsonProperty("isEnabled")]
         public bool IsEnabled { get; set; } = true;
+
+        /// <summary>
+        /// For an edit: the <see cref="UserOrgTypeModel.Revision"/> the type had when the dialog opened.
+        /// The save is refused as <c>typeChangedElsewhere</c> if anyone has saved the type since. Null
+        /// for a create, or from a page too old to send it, and then not checked.
+        /// </summary>
+        [JsonProperty("expectedRevision")]
+        public int? ExpectedRevision { get; set; }
     }
 
     /// <summary>A request to resolve one attribute for one user.</summary>

@@ -44,6 +44,7 @@ function orgType(over: Partial<UserOrgType> = {}): UserOrgType {
     source: 'csv',
     entraAttributeName: null,
     isEnabled: true,
+    revision: 1,
     assignedUserCount: 1200,
     distinctValueCount: 40,
     createdUtc: '2026-01-01T00:00:00.000Z',

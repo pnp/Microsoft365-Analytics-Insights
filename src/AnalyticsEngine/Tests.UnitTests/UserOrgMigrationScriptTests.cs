@@ -211,6 +211,29 @@ CREATE NONCLUSTERED INDEX UX_user_org_values_type_name ON dbo.user_org_values (o
         }
 
         [TestMethod]
+        public void ATableFromAnEarlierDraftOfThisMigrationIsNotStamped()
+        {
+            // A database that ran an earlier draft of this still-unreleased migration has user_org_types
+            // without its revision column. The script skips a table that already exists, so without the
+            // guard it would stamp - and every save from the admin page would then fail on the column.
+            using (var db = NewDatabase())
+            {
+                StampPredecessor(db);
+                db.Execute(UserOrganisations.Up_Sql);
+                db.Execute(@"
+ALTER TABLE dbo.user_org_types DROP CONSTRAINT DF_user_org_types_revision;
+ALTER TABLE dbo.user_org_types DROP COLUMN revision;");
+
+                var refusal = Assert.ThrowsException<SqlException>(() => db.ExecuteScript(Script(), quotedIdentifierOn: false));
+
+                Assert.IsTrue(
+                    refusal.Errors.Cast<SqlError>().Any(e => e.Message.Contains("NOT stamped") && e.Message.Contains("older shape")),
+                    "The guard must say why it did not stamp: " + refusal.Message);
+                Assert.AreEqual(0, StampCount(db));
+            }
+        }
+
+        [TestMethod]
         public void AfterTheChainIsRepairedTheSameScriptStamps()
         {
             using (var db = NewDatabase())

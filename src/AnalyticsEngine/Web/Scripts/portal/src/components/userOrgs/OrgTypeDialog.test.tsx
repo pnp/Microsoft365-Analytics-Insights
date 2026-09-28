@@ -45,6 +45,7 @@ const saved: UserOrgType = {
   source: 'entra',
   entraAttributeName: 'extensionAttribute1',
   isEnabled: true,
+  revision: 1,
   assignedUserCount: 10,
   distinctValueCount: 4,
   createdUtc: '2026-01-01T00:00:00.000Z',

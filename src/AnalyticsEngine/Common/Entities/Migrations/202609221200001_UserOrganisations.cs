@@ -59,6 +59,11 @@ BEGIN
         -- never be reused after the values it produced have been thrown away - which is otherwise
         -- reachable simply by repointing a type at a different attribute and then back again.
         [source_generation] int NOT NULL CONSTRAINT [DF_user_org_types_source_generation] DEFAULT (1),
+        -- Moves on every save from the admin page, and on nothing else. The page sends back the revision
+        -- it opened the type at, so a save from a dialog opened before someone else's change is refused
+        -- rather than quietly putting back what they changed. Imports stamp last_refreshed_utc on this
+        -- row, so a rowversion would make every refresh look like a colleague's edit.
+        [revision] int NOT NULL CONSTRAINT [DF_user_org_types_revision] DEFAULT (1),
         [created_utc] datetime2(7) NOT NULL CONSTRAINT [DF_user_org_types_created_utc] DEFAULT SYSUTCDATETIME(),
         [modified_utc] datetime2(7) NULL,
         -- When the type's values were last brought up to date from its source: the start of the last

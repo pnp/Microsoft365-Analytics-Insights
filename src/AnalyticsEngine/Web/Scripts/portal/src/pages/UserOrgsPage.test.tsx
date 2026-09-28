@@ -7,13 +7,14 @@ import type { UserOrgImportJob, UserOrgType } from '../types/userOrgs';
 
 const fetchOrgTypes = vi.fn();
 const fetchOrgValues = vi.fn();
+const updateOrgTypeMock = vi.fn();
 
 vi.mock('../api/userOrgsApi', () => ({
   fetchOrgTypes: () => fetchOrgTypes(),
   fetchOrgValues: (...args: unknown[]) => fetchOrgValues(...args),
   fetchOrgMembers: vi.fn(),
   createOrgType: vi.fn(),
-  updateOrgType: vi.fn(),
+  updateOrgType: (...args: unknown[]) => updateOrgTypeMock(...args),
   deleteOrgType: vi.fn(),
   previewCsv: vi.fn(),
   importCsv: vi.fn(),
@@ -37,6 +38,7 @@ function orgType(over: Partial<UserOrgType>): UserOrgType {
     source: 'entra',
     entraAttributeName: 'extensionAttribute1',
     isEnabled: true,
+    revision: 1,
     assignedUserCount: 0,
     distinctValueCount: 0,
     createdUtc: '2026-01-01T00:00:00.000Z',
@@ -78,6 +80,7 @@ describe('UserOrgsPage', () => {
   beforeEach(() => {
     fetchOrgTypes.mockReset();
     fetchOrgValues.mockReset();
+    updateOrgTypeMock.mockReset();
     fetchOrgValues.mockResolvedValue({ orgTypeId: 1, page: 1, pageSize: 25, total: 0, items: [] });
   });
 
@@ -130,6 +133,30 @@ describe('UserOrgsPage', () => {
 
     expect(within(dialog).getByLabelText('Example file').textContent?.split('\n')[0]).toBe('UserPrincipalName,Programme');
     expect(within(dialog).getByText(/The header row is optional/)).toBeInTheDocument();
+  });
+
+  it('saves an edit against the revision the type had when the dialog opened', async () => {
+    // A colleague may save the same type while this dialog is open. Sending back the revision it was
+    // opened at is what lets the server refuse this save, rather than silently undo theirs.
+    fetchOrgTypes.mockResolvedValue([
+      orgType({ id: 4, name: 'Programme', source: 'csv', entraAttributeName: null, revision: 7 }),
+    ]);
+    updateOrgTypeMock.mockResolvedValue(orgType({ id: 4, name: 'Programmes', source: 'csv', entraAttributeName: null, revision: 8 }));
+    const user = userEvent.setup();
+    renderWithProvider(<UserOrgsPage />);
+
+    await screen.findByRole('row', { name: /Programme/ });
+    await user.click(within(rowFor('Programme')).getByRole('button', { name: 'Edit' }));
+    // `hidden: true` for the jsdom artefact explained in the create test above.
+    const dialog = await screen.findByRole('dialog', { hidden: true });
+    const name = within(dialog).getByLabelText(/^Name/);
+    await user.clear(name);
+    await user.type(name, 'Programmes');
+    await user.click(within(dialog).getByText('Save'));
+
+    await waitFor(() =>
+      expect(updateOrgTypeMock).toHaveBeenCalledWith(4, expect.objectContaining({ name: 'Programmes', expectedRevision: 7 })),
+    );
   });
 
   it('keeps the file format one click away on the upload card', async () => {

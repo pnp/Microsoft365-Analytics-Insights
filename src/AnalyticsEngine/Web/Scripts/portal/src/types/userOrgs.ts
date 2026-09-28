@@ -113,6 +113,11 @@ export interface UserOrgType {
   source: UserOrgSource;
   entraAttributeName: string | null;
   isEnabled: boolean;
+  /**
+   * How many times the type has been saved. Sent back with an edit as `expectedRevision`, so a
+   * colleague's save while the dialog was open is refused rather than overwritten.
+   */
+  revision: number;
   assignedUserCount: number;
   distinctValueCount: number;
   createdUtc: string;
@@ -132,6 +137,8 @@ export interface UserOrgTypeSave {
   source: UserOrgSource;
   entraAttributeName: string | null;
   isEnabled: boolean;
+  /** For an edit: the `revision` the type had when the dialog opened. */
+  expectedRevision?: number;
 }
 
 export interface UserOrgTestResult {

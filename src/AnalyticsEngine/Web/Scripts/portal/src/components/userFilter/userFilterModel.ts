@@ -99,14 +99,19 @@ export function isCustomDimension(key: string): boolean {
   return key.startsWith(CUSTOM_DIMENSION_PREFIX);
 }
 
+/** The largest id `int.TryParse` reads - ten digits would otherwise pass for `org:9999999999`. */
+const MAX_ORG_TYPE_ID = 2147483647;
+
 /**
  * A key the server will accept: a standard Entra attribute, or `org:` and a positive id with no
- * leading zero - the same rule as `UserFilterDimensions.TryParseOrgTypeId`. Checked when reading a
- * filter out of a link, so a hand-edited key opens the unfiltered report rather than a page the
- * server refuses to answer.
+ * leading zero that fits the server's `int` - the same rule as `UserFilterDimensions.TryParseOrgTypeId`.
+ * Checked when reading a filter out of a link, so a hand-edited key opens the unfiltered report rather
+ * than a page the server refuses to answer.
  */
 export function isKnownDimensionKey(key: string): boolean {
-  return isEntraDimension(key) || /^org:[1-9]\d{0,9}$/.test(key);
+  if (isEntraDimension(key)) return true;
+  const id = /^org:([1-9]\d{0,9})$/.exec(key);
+  return id !== null && Number(id[1]) <= MAX_ORG_TYPE_ID;
 }
 
 export function isTextOperator(operator: UserFilterOperator): boolean {
@@ -335,15 +340,23 @@ export function parseUserFilter(text: string | null | undefined): UserFilter {
     const operator = (item.op ?? 'is') as UserFilterOperator;
     if (!OPERATORS.includes(operator)) return EMPTY_USER_FILTER;
 
+    // Read as the server reads them (`UserFilterCodec.ParseJoin`, `ReadBool`): absent is the default,
+    // and anything the server would refuse - "xor", or "true" as a string - is a link this page did
+    // not write, not one to be read as AND, or as false.
+    if (item.j != null && item.j !== 'and' && item.j !== 'or') return EMPTY_USER_FILTER;
+    if (item.n != null && typeof item.n !== 'boolean') return EMPTY_USER_FILTER;
+
     // Refused rather than tidied, for the same reason as a truncation: the server rejects each of
     // these, and quietly dropping the part it would reject sends a different filter from the link's.
     if (item.v != null && !Array.isArray(item.v)) return EMPTY_USER_FILTER;
     const rawValues: unknown[] = Array.isArray(item.v) ? item.v : [];
     if (rawValues.some((v) => typeof v !== 'string')) return EMPTY_USER_FILTER;
-    const values = rawValues as string[];
+    // Blank values are skipped, as the server skips them - so a condition of nothing but blanks is
+    // the incomplete one refused below, not one the server answers with an error on every panel.
+    const values = (rawValues as string[]).filter((v) => v.trim() !== '');
     if (isTextOperator(operator) && !supportsTextMatch(item.d)) return EMPTY_USER_FILTER;
     const tokens = fixedValueTokens(item.d);
-    if (tokens && values.some((v) => v.trim() !== '' && !tokens.includes(v.trim().toLowerCase()))) return EMPTY_USER_FILTER;
+    if (tokens && values.some((v) => !tokens.includes(v.trim().toLowerCase()))) return EMPTY_USER_FILTER;
 
     const clause: UserFilterClause = {
       join: item.j === 'or' ? 'or' : 'and',

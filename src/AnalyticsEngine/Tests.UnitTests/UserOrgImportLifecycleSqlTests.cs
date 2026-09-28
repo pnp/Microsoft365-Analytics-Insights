@@ -1159,6 +1159,33 @@ WHERE resource_type = 'APPLICATION' AND resource_database_id = DB_ID()
         }
 
         [TestMethod]
+        public async Task ASaveFromADialogOpenedBeforeAColleaguesSaveIsRefused()
+        {
+            // The page sends back the revision each dialog opened at. B's rename goes through and says
+            // what the next save needs; A's dialog, opened before it, cannot then turn the type off and
+            // put B's name back in the same stroke.
+            var typeId = await NewType("Team");
+            var opened = (await _service.ListAsync(CancellationToken.None)).Single(t => t.Id == typeId);
+
+            var savedByB = await _service.UpdateAsync(
+                typeId,
+                new UserOrgTypeSaveModel { Name = "Team (B)", Source = "csv", IsEnabled = true, ExpectedRevision = opened.Revision },
+                CancellationToken.None);
+            Assert.AreEqual(opened.Revision + 1, savedByB.Revision, "The response carries the revision the next save needs.");
+
+            var refusal = await Refused(() => _service.UpdateAsync(
+                typeId,
+                new UserOrgTypeSaveModel { Name = "Team", Source = "csv", IsEnabled = false, ExpectedRevision = opened.Revision },
+                CancellationToken.None));
+            Assert.AreEqual(UserOrgMessageCodes.TypeChangedElsewhere, refusal.Code);
+
+            var now = (await _service.ListAsync(CancellationToken.None)).Single(t => t.Id == typeId);
+            Assert.AreEqual("Team (B)", now.Name, "B's rename survives.");
+            Assert.IsTrue(now.IsEnabled, "Nothing of A's save was applied.");
+            Assert.AreEqual(savedByB.Revision, now.Revision);
+        }
+
+        [TestMethod]
         public async Task ThePreviewStagesADraftAndReportsWhatImportingItWouldDo()
         {
             var a = AddUser("a@contoso.com");
@@ -1528,7 +1555,7 @@ WHERE resource_type = 'APPLICATION' AND resource_database_id = DB_ID()
 
             public Task<int> CreateAsync(UserOrgType type, CancellationToken cancellationToken = default(CancellationToken)) => _inner.CreateAsync(type, cancellationToken);
 
-            public Task UpdateAsync(UserOrgType type, bool clearAssignments, bool bumpGeneration, CancellationToken cancellationToken = default(CancellationToken), int? expectedGeneration = null)
+            public Task UpdateAsync(UserOrgType type, bool clearAssignments, bool bumpGeneration, CancellationToken cancellationToken = default(CancellationToken), int? expectedGeneration = null, int? expectedRevision = null)
                 => _inner.UpdateAsync(type, clearAssignments, bumpGeneration, cancellationToken, expectedGeneration);
 
             public Task DeleteAsync(int id, CancellationToken cancellationToken = default(CancellationToken)) => _inner.DeleteAsync(id, cancellationToken);

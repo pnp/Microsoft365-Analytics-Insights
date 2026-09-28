@@ -69,6 +69,11 @@ BEGIN
         -- never be reused after the values it produced have been thrown away - which is otherwise
         -- reachable simply by repointing a type at a different attribute and then back again.
         [source_generation] int NOT NULL CONSTRAINT [DF_user_org_types_source_generation] DEFAULT (1),
+        -- Moves on every save from the admin page, and on nothing else. The page sends back the revision
+        -- it opened the type at, so a save from a dialog opened before someone else's change is refused
+        -- rather than quietly putting back what they changed. Imports stamp last_refreshed_utc on this
+        -- row, so a rowversion would make every refresh look like a colleague's edit.
+        [revision] int NOT NULL CONSTRAINT [DF_user_org_types_revision] DEFAULT (1),
         [created_utc] datetime2(7) NOT NULL CONSTRAINT [DF_user_org_types_created_utc] DEFAULT SYSUTCDATETIME(),
         [modified_utc] datetime2(7) NULL,
         -- When the type's values were last brought up to date from its source: the start of the last
@@ -343,8 +348,8 @@ RAISERROR('UserOrganisations: finished.', 0, 1) WITH NOWAIT;
    Record the migration as applied.
 
    The guard checks SCHEMA only - that the six tables this script creates actually exist, that the
-   import jobs table has this release's shape, and that every index it builds is there, unique where it
-   must be. It deliberately does NOT check any data state: this migration writes no rows, and a
+   import jobs and org types tables have this release's shape, and that every index it builds is there,
+   unique where it must be. It deliberately does NOT check any data state: this migration writes no rows, and a
    data-state guard is the shape that has previously refused to stamp a successfully-completed migration
    and stranded the rest of the chain behind it.
 
@@ -365,6 +370,7 @@ BEGIN
        OR OBJECT_ID(N'dbo.user_org_import_staging', N'U') IS NULL
        OR OBJECT_ID(N'dbo.user_org_import_changes', N'U') IS NULL
        OR COL_LENGTH(N'dbo.user_org_import_jobs', N'change_log_status') IS NULL
+       OR COL_LENGTH(N'dbo.user_org_types', N'revision') IS NULL
        OR NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.user_org_types') AND name = N'UX_user_org_types_name' AND is_unique = 1)
        OR NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.user_org_values') AND name = N'UX_user_org_values_type_name' AND is_unique = 1)
        OR NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.user_org_values') AND name = N'UX_user_org_values_id_type' AND is_unique = 1)

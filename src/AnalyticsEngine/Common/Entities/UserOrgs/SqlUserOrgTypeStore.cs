@@ -101,7 +101,7 @@ namespace Common.Entities.UserOrgs
     internal sealed class SqlUserOrgTypeStore : SqlUserOrgStoreBase, IUserOrgTypeStore
     {
         private const string SelectColumns =
-            "id, name, source_kind, entra_attribute_name, is_enabled, source_generation, created_utc, modified_utc, last_refreshed_utc";
+            "id, name, source_kind, entra_attribute_name, is_enabled, source_generation, created_utc, modified_utc, last_refreshed_utc, revision";
 
         public SqlUserOrgTypeStore(string connectionString) : base(connectionString)
         {
@@ -242,7 +242,8 @@ VALUES (@name, @sourceKind, @attr, @enabled, SYSUTCDATETIME());";
             bool clearAssignments,
             bool bumpGeneration,
             CancellationToken cancellationToken = default(CancellationToken),
-            int? expectedGeneration = null)
+            int? expectedGeneration = null,
+            int? expectedRevision = null)
         {
             Validate(type);
 
@@ -278,6 +279,9 @@ SET name = @name,
     -- generation did not move, re-enabling would rebuild the SAME cache key and resume from a token
     -- that has already advanced past those users. They would never be re-read.
     source_generation = source_generation + CASE WHEN @bumpGeneration = 1 THEN 1 ELSE 0 END,
+    -- Every save moves it, a rename included: it is what tells this save from one made in a dialog that
+    -- was opened before it.
+    revision = revision + 1,
     -- Values discarded below mean there is nothing left that the last refresh vouched for. Disabling
     -- or renaming keeps the values, and so keeps the time they were last brought up to date.
     last_refreshed_utc = CASE WHEN @clearAssignments = 1 THEN NULL ELSE last_refreshed_utc END
@@ -286,7 +290,11 @@ WHERE id = @id
   -- that can take seconds. Another admin's change of source, attribute or enabled flag since then
   -- moved the generation, and applying this update with side effects decided for the old row would
   -- keep values from the wrong source, or discard the right ones.
-  AND (@expectedGeneration IS NULL OR source_generation = @expectedGeneration);
+  AND (@expectedGeneration IS NULL OR source_generation = @expectedGeneration)
+  -- And the admin decided WHAT to save from the type as the page showed it when the dialog opened,
+  -- possibly minutes earlier. Without this a colleague's rename in between - which moves no generation -
+  -- would be put back without a word, and so would their disabling of the type or change of source.
+  AND (@expectedRevision IS NULL OR revision = @expectedRevision);
 
 SET @affected = @@ROWCOUNT;
 
@@ -322,6 +330,8 @@ SELECT @affected;";
                         cmd.Parameters.Add("@bumpGeneration", SqlDbType.Bit).Value = bumpGeneration;
                         cmd.Parameters.Add("@expectedGeneration", SqlDbType.Int).Value =
                             expectedGeneration.HasValue ? (object)expectedGeneration.Value : DBNull.Value;
+                        cmd.Parameters.Add("@expectedRevision", SqlDbType.Int).Value =
+                            expectedRevision.HasValue ? (object)expectedRevision.Value : DBNull.Value;
 
                         affected = Convert.ToInt32(
                             await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
@@ -566,6 +576,7 @@ WHERE t.source_kind = @entra
                 CreatedUtc = reader.GetDateTime(6),
                 ModifiedUtc = ReadNullableDate(reader, 7),
                 LastRefreshedUtc = ReadNullableDate(reader, 8),
+                Revision = reader.GetInt32(9),
             };
         }
     }

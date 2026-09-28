@@ -99,7 +99,9 @@ export default function UserOrgsPage() {
 
   const onSave = async (model: UserOrgTypeSave) => {
     if (editing) {
-      await updateOrgType(editing.id, model);
+      // The type as it was when the dialog opened - `editing` is not refreshed while it is open - so a
+      // colleague's save in the meantime is refused rather than silently undone.
+      await updateOrgType(editing.id, { ...model, expectedRevision: editing.revision });
       toast.success(t('userOrgs.toast.saved', { name: model.name }));
     } else {
       await createOrgType(model);

@@ -122,6 +122,17 @@ namespace Common.Entities.UserOrgs
         /// </remarks>
         public int SourceGeneration { get; set; } = 1;
 
+        /// <summary>
+        /// How many times an administrator has saved this type - moved by every save, and by nothing else.
+        /// </summary>
+        /// <remarks>
+        /// The admin page's concurrency token. <see cref="SourceGeneration"/> cannot be: it moves only when
+        /// the values stop being valid, because it is part of the delta-token key, so a rename leaves it
+        /// where it was. And the row itself changes on every refresh (<see cref="LastRefreshedUtc"/>), so
+        /// a row version would refuse an admin's save because an import had run.
+        /// </remarks>
+        public int Revision { get; set; } = 1;
+
         public DateTime CreatedUtc { get; set; }
 
         public DateTime? ModifiedUtc { get; set; }
