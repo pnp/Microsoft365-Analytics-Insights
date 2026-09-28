@@ -161,6 +161,48 @@ INSERT INTO dbo.user_org_assignments (user_id, org_type_id, org_value_id) VALUES
         }
 
         [TestMethod]
+        public async Task Load_ReadsOnlyTheOrganisationValuesSomebodyHolds()
+        {
+            // A value stays in the table after everyone has moved off it, until the type's source changes.
+            // Read whole, each load grew with every label a type has ever had - a re-labelled file imported
+            // monthly adds a full set each time - rather than with who is in which organisation now.
+            _db.Execute("INSERT INTO dbo.user_org_values (org_type_id, name) VALUES (1, N'Nobody is here any more');");
+            try
+            {
+                var loaded = new System.Collections.Generic.List<int>();
+                using (var connection = new SqlConnection(_db.ConnectionString))
+                {
+                    await connection.OpenAsync();
+                    using (var cmd = new SqlCommand(SqlUserDirectoryLoader.Sql, connection))
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                    {
+                        // Seven lookups, the users, the enabled types - then the values.
+                        for (var set = 0; set < 9; set++)
+                        {
+                            Assert.IsTrue(await reader.NextResultAsync(), $"Result set {set + 1} is missing.");
+                        }
+
+                        while (await reader.ReadAsync())
+                        {
+                            loaded.Add(reader.GetInt32(0));
+                        }
+                    }
+                }
+
+                CollectionAssert.AreEquivalent(new[] { 10, 11 }, loaded,
+                    "The values held by somebody in an enabled type - not the empty one, not the disabled type's.");
+
+                var snapshot = await UserFilterStores.CreateDirectoryLoader(_db.ConnectionString).LoadAsync();
+                AssertValue(snapshot, UserFilterDimensions.ForOrgType(1), 102, "CC-100");
+                AssertValue(snapshot, UserFilterDimensions.ForOrgType(1), 103, GreekOrgValue);
+            }
+            finally
+            {
+                _db.Execute("DELETE FROM dbo.user_org_values WHERE name = N'Nobody is here any more';");
+            }
+        }
+
+        [TestMethod]
         public async Task Load_ReadsOneCommittedMomentWhereTheDatabaseAllowsSnapshots()
         {
             // An import still writing must neither hold the load up nor leak half its changes into it.

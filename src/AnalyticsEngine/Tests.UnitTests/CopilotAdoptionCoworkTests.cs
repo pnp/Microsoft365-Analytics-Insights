@@ -1630,6 +1630,67 @@ namespace Tests.UnitTests
         {
             // End to end through the scope filter: the slice is rebuilt from narrowed rows, so the cap has
             // to travel with it - the view itself holds no licensed-user row that could say so.
+            var analysis = CappedAnalysisWithANewJoinerPastTheCap();
+
+            var service = new CopilotAdoptionService();
+            service.FinaliseSummary(analysis);
+            Assert.IsTrue(analysis.Summary.CoworkReadinessAvailable, "The tenant view has fluency for most people.");
+
+            var scoped = CopilotAdoptionScopeFilter.Apply(
+                analysis, CopilotAdoptionScope.ForEmailDomain("fabrikam.com"), service.FinaliseSummary);
+
+            Assert.IsFalse(scoped.Summary.CoworkReadinessAvailable);
+            Assert.IsTrue(scoped.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.CoworkSliceBeyondLicensedCap));
+            Assert.IsFalse(scoped.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.CoworkFluencyMissingAll));
+        }
+
+        [TestMethod]
+        public void Cowork_RowsOfASliceTheSummaryCannotScoreAreWithheldToo()
+        {
+            // The Cowork list and its export read the narrowed rows directly, not the summary. The tenant
+            // view scored the new joiner against a default fluency of 0 (with its partial warning), so a
+            // slice of only them handed that verdict out as a spending-policy list while its own summary
+            // said the tab could not be scored.
+            var analysis = CappedAnalysisWithANewJoinerPastTheCap();
+            var service = new CopilotAdoptionService();
+            service.FinaliseSummary(analysis);
+            Assert.AreEqual(2, analysis.CoworkReadiness.Count, "The tenant view lists both, as before.");
+
+            var listed = CopilotAdoptionScopeFilter.FilterRows(analysis, CopilotAdoptionScope.ForEmailDomain("fabrikam.com"));
+            Assert.AreEqual(0, listed.CoworkReadiness.Count, "The list and export agree with the summary.");
+
+            var summarised = CopilotAdoptionScopeFilter.Apply(
+                analysis, CopilotAdoptionScope.ForEmailDomain("fabrikam.com"), service.FinaliseSummary);
+            Assert.AreEqual(0, summarised.CoworkReadiness.Count);
+
+            var scorable = CopilotAdoptionScopeFilter.FilterRows(analysis, CopilotAdoptionScope.ForEmailDomain("contoso.com"));
+            Assert.AreEqual(1, scorable.CoworkReadiness.Count, "A slice with fluency to score keeps its rows.");
+        }
+
+        [TestMethod]
+        public void Cowork_AnUnscorableAnalysisPublishesNoRows()
+        {
+            // A slice reaches FinaliseCowork carrying the tenant's rows for its people. When it cannot be
+            // scored, those rows must not outlive the verdict.
+            var analysis = AnalysisWithOneCoworkSignal();
+            analysis.LicensedUsers = new List<LicensedUserAdoptionRow>();
+            analysis.CoworkReadiness = new List<CoworkReadinessRow>
+            {
+                CopilotAdoptionScoring.ScoreCoworkReadiness(analysis.CoworkSignals[0], Options()),
+            };
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.IsFalse(analysis.Summary.CoworkReadinessAvailable);
+            Assert.AreEqual(0, analysis.CoworkReadiness.Count);
+        }
+
+        /// <summary>
+        /// A capped tenant analysis: one seat holder the licensed-user query reached, and one newer one past
+        /// its cap whom the Cowork assessment still reached - each in their own email domain.
+        /// </summary>
+        private static CopilotAdoptionAnalysis CappedAnalysisWithANewJoinerPastTheCap()
+        {
             var assessed = HeavyCoordinator();
             assessed.UserId = 1;
             assessed.UserPrincipalName = "aisha.rahman@contoso.com";
@@ -1639,7 +1700,7 @@ namespace Tests.UnitTests
             newJoiner.UserPrincipalName = "noor.haddad@fabrikam.com";
             newJoiner.EmailDomain = "fabrikam.com";
 
-            var analysis = new CopilotAdoptionAnalysis
+            return new CopilotAdoptionAnalysis
             {
                 CoworkSignals = new List<CoworkReadinessSignalRow> { assessed, newJoiner },
                 LicensedUsers = new List<LicensedUserAdoptionRow>
@@ -1654,17 +1715,6 @@ namespace Tests.UnitTests
                 },
                 LicensedUsersCapped = true,
             };
-
-            var service = new CopilotAdoptionService();
-            service.FinaliseSummary(analysis);
-            Assert.IsTrue(analysis.Summary.CoworkReadinessAvailable, "The tenant view has fluency for most people.");
-
-            var scoped = CopilotAdoptionScopeFilter.Apply(
-                analysis, CopilotAdoptionScope.ForEmailDomain("fabrikam.com"), service.FinaliseSummary);
-
-            Assert.IsFalse(scoped.Summary.CoworkReadinessAvailable);
-            Assert.IsTrue(scoped.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.CoworkSliceBeyondLicensedCap));
-            Assert.IsFalse(scoped.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.CoworkFluencyMissingAll));
         }
 
         #endregion

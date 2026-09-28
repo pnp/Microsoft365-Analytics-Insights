@@ -76,10 +76,15 @@ BEGIN
     FROM dbo.user_org_types t
     WHERE t.is_enabled = 1;
 
+    -- Only the values somebody holds: they are what the assignments below are resolved against. A value
+    -- stays in the table after everyone has moved off it, until the type's source changes, so reading
+    -- every one would grow each load with the type's history rather than with its current membership.
     SELECT v.id, v.name
     FROM dbo.user_org_values v
     JOIN dbo.user_org_types t ON t.id = v.org_type_id
-    WHERE t.is_enabled = 1;
+    WHERE t.is_enabled = 1
+      AND EXISTS (SELECT 1 FROM dbo.user_org_assignments a
+                  WHERE a.org_type_id = v.org_type_id AND a.org_value_id = v.id);
 
     SELECT a.user_id, a.org_type_id, a.org_value_id
     FROM dbo.user_org_assignments a

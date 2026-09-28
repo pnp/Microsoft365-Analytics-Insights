@@ -2123,6 +2123,10 @@ namespace Common.Entities.CopilotAdoption
                 // missing usage-report import its unavailable card would otherwise blame.
                 summary.CoworkReadinessAvailable = false;
 
+                // Nothing to publish, so no rows either: a slice arrives here carrying the tenant's rows
+                // for its people, scored against a fluency of 0, and they must not outlive this verdict.
+                analysis.CoworkReadiness = new List<CoworkReadinessRow>();
+
                 // Except in a slice of an analysis whose licensed-user query stopped at its cap: the two
                 // queries keep different people past their caps - the licensed one by user id, Cowork by
                 // coordination load - so a view made up of the newest user records can hold Cowork signals
