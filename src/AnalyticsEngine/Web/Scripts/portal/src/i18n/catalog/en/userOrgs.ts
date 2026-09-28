@@ -122,6 +122,8 @@ export const userOrgs = {
   'userOrgs.test.graphProperty': 'Graph property',
   'userOrgs.test.rawValue': 'Value from Graph',
   'userOrgs.test.storedAs': 'Stored as',
+  'userOrgs.test.unverifiedBeforeDiscard':
+    'Saving this change discards the values this type holds now, so it can only be saved once a test finds a value.',
 
   // CSV import panel - controls
   'userOrgs.csv.fileLabel': 'Choose a CSV file',
@@ -386,6 +388,8 @@ export const userOrgs = {
     '\u201c{property}\u201d holds a list of values, not one value, so it cannot be an organisation type: a user can be in only one organisation of each type.',
   'userOrgs.message.noValue':
     'The attribute was read successfully, but this user has no value for it. During an import, that means their organisation value would be cleared.',
+  'userOrgs.message.noValueUnverified':
+    "Microsoft Graph accepted the schema extension '{container}', but this user has no value for it - and Graph does not check the property name after the dot, so a misspelt name reads exactly like this. Test with a user who has a value to be sure the name is right.",
   'userOrgs.message.wouldTruncate': 'The value is longer than {max} characters and would be shortened when stored.',
   'userOrgs.message.discoveryAuthFailed':
     "Could not authenticate to Microsoft Graph to look for directory extensions. Check the app registration's credentials and permissions; the service logs have the detail. You can still type a directory extension name in full and test it.",

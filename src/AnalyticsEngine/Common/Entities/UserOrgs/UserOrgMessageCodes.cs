@@ -55,6 +55,7 @@ namespace Common.Entities.UserOrgs
         public const string UnreadableResponse = "unreadableResponse";
         public const string MultiValued = "multiValued"; // property
         public const string NoValue = "noValue";
+        public const string NoValueUnverified = "noValueUnverified"; // container
         public const string WouldTruncate = "wouldTruncate"; // max
 
         // Attribute discovery

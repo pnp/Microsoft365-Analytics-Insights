@@ -9,7 +9,7 @@ namespace Common.Entities.Migrations
     /// or from a CSV uploaded in the portal.
     ///
     /// <para>
-    /// <b>Classification: purely additive.</b> Five new tables; no existing table is rewritten, no
+    /// <b>Classification: purely additive.</b> Six new tables; no existing table is rewritten, no
     /// existing column is altered and no existing query is being tuned. The benchmark gate that applies
     /// to <i>performance-motivated</i> schema changes therefore does not apply here - there is no
     /// "before" query to measure.

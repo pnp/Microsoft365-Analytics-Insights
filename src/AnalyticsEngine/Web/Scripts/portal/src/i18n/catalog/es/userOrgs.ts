@@ -122,6 +122,8 @@ export const userOrgs: Record<keyof typeof en, string> = {
   'userOrgs.test.graphProperty': 'Propiedad de Graph',
   'userOrgs.test.rawValue': 'Valor de Graph',
   'userOrgs.test.storedAs': 'Se almacena como',
+  'userOrgs.test.unverifiedBeforeDiscard':
+    'Guardar este cambio descarta los valores que este tipo tiene ahora, as\u00ed que solo se puede guardar cuando una prueba encuentre un valor.',
 
   // CSV import panel - controls
   'userOrgs.csv.fileLabel': 'Elegir un archivo CSV',
@@ -398,6 +400,8 @@ export const userOrgs: Record<keyof typeof en, string> = {
     '\u00ab{property}\u00bb contiene una lista de valores, no un valor, as\u00ed que no puede ser un tipo de organizaci\u00f3n: un usuario solo puede estar en una organizaci\u00f3n de cada tipo.',
   'userOrgs.message.noValue':
     'El atributo se ley\u00f3 correctamente, pero este usuario no tiene ning\u00fan valor. En una importaci\u00f3n, eso significa que se borrar\u00eda su valor de organizaci\u00f3n.',
+  'userOrgs.message.noValueUnverified':
+    "Microsoft Graph acept\u00f3 la extensi\u00f3n de esquema '{container}', pero este usuario no tiene ning\u00fan valor en ella, y Graph no comprueba el nombre de la propiedad que sigue al punto, as\u00ed que un nombre mal escrito se ve exactamente as\u00ed. Pru\u00e9belo con un usuario que tenga un valor para asegurarse de que el nombre es correcto.",
   'userOrgs.message.wouldTruncate':
     'El valor tiene m\u00e1s de {max} caracteres y se acortar\u00eda al guardarlo.',
   'userOrgs.message.discoveryAuthFailed':

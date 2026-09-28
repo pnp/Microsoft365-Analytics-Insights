@@ -142,6 +142,71 @@ describe('OrgTypeDialog', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
   });
 
+  it('will not discard a type\u2019s values on a schema extension property Graph never checked', async () => {
+    // Graph selects only the part before the dot, so a misspelt property after it reads as "this user
+    // has no value". Enough for a new type; not enough to throw away the values an existing one holds.
+    const schemaNoValue = testResult({
+      attributeName: 'contoso_costs.costCentre',
+      graphProperty: 'contoso_costs',
+      rawValue: null,
+      normalisedValue: null,
+      hasNoValue: true,
+      nameUnverified: true,
+      message: 'no value',
+      messageCode: 'noValueUnverified',
+      messageValues: { container: 'contoso_costs' },
+    });
+    renderWithProvider(
+      <OrgTypeDialog
+        open
+        editing={{ ...saved, source: 'csv', entraAttributeName: null }}
+        onDismiss={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    // Switching a CSV type with values to an Entra attribute discards them.
+    await userEvent.click(screen.getByLabelText('A custom Microsoft Entra attribute, read on every user import'));
+    typeAttribute('contoso_costs.costCentre');
+    testEntraAttribute.mockResolvedValue(schemaNoValue);
+    await typeInto(/Test it against a user/, 'someone@contoso.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Test' }));
+
+    expect(await screen.findByText(/Microsoft Graph accepted the schema extension 'contoso_costs'/)).toBeInTheDocument();
+    expect(screen.getByText(/so it can only be saved once a test finds a value/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+    testEntraAttribute.mockResolvedValue({ ...schemaNoValue, rawValue: 'CC-1042', normalisedValue: 'CC-1042', hasNoValue: false, messageCode: null });
+    await userEvent.click(screen.getByRole('button', { name: 'Test' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+  });
+
+  it('lets a new type rest on a schema extension test that found no value, and says what that cannot show', async () => {
+    renderWithProvider(<OrgTypeDialog open editing={null} onDismiss={vi.fn()} onSave={vi.fn()} />);
+
+    await typeInto(/^Name/, 'Cost Centre');
+    typeAttribute('contoso_costs.costCentre');
+    testEntraAttribute.mockResolvedValue(
+      testResult({
+        attributeName: 'contoso_costs.costCentre',
+        graphProperty: 'contoso_costs',
+        rawValue: null,
+        normalisedValue: null,
+        hasNoValue: true,
+        nameUnverified: true,
+        messageCode: 'noValueUnverified',
+        messageValues: { container: 'contoso_costs' },
+      }),
+    );
+    await typeInto(/Test it against a user/, 'someone@contoso.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Test' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+    expect(screen.getByText(/does not check the property name after the dot/)).toBeInTheDocument();
+    expect(screen.queryByText(/can only be saved once a test finds a value/)).not.toBeInTheDocument();
+  });
+
   it('keeps saving disabled when the attribute cannot be read, and explains why', async () => {
     renderWithProvider(<OrgTypeDialog open editing={null} onDismiss={vi.fn()} onSave={vi.fn()} />);
 

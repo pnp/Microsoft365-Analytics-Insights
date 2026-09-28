@@ -133,6 +133,18 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
     (provenAttribute !== null &&
       provenAttribute.trim().toLowerCase() === attribute.trim().toLowerCase());
 
+  // Whether saving throws away the values the type holds now: a change of source or attribute.
+  const wouldDiscard =
+    !!editing &&
+    editing.assignedUserCount > 0 &&
+    (source !== editing.source || (source === 'entra' && attribute.trim() !== (editing.entraAttributeName ?? '')));
+
+  // A schema extension's property after the dot is not checked by Graph, so "this user has no value" is
+  // also what a misspelt one looks like. Enough to set up a new type with; not enough to discard the
+  // values an existing one holds on - that needs a test that finds a value.
+  const unprovenForDiscard = (result: UserOrgTestResult | null) =>
+    !!result && result.succeeded && result.hasNoValue && result.nameUnverified === true && wouldDiscard;
+
   const canSave =
     name.trim().length > 0 &&
     (source !== 'entra' || attribute.trim().length > 0) &&
@@ -145,8 +157,9 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
       const result = await testEntraAttribute(attribute, testUpn);
       setTestResult(result);
       // A user who simply has no value still proves the attribute is readable, which is what saving
-      // is gated on - the attribute existing, not this particular person having a value for it.
-      setProvenAttribute(result.succeeded ? attribute : null);
+      // is gated on - the attribute existing, not this particular person having a value for it. Except
+      // where Graph never checked the name and the save would discard values: see unprovenForDiscard.
+      setProvenAttribute(result.succeeded && !unprovenForDiscard(result) ? attribute : null);
     } catch (e) {
       setTestResult({
         succeeded: false,
@@ -214,10 +227,7 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
                 </RadioGroup>
               </Field>
 
-              {editing &&
-                editing.assignedUserCount > 0 &&
-                (source !== editing.source ||
-                  (source === 'entra' && attribute.trim() !== (editing.entraAttributeName ?? ''))) && (
+              {wouldDiscard && (
                   <MessageBar intent="warning">
                     <MessageBarBody>
                       {t(
@@ -291,7 +301,14 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
                     </div>
                   </Field>
 
-                  {testResult && <TestOutcome result={testResult} styles={styles} t={t} />}
+                  {testResult && (
+                    <TestOutcome
+                      result={testResult}
+                      styles={styles}
+                      t={t}
+                      blocksSave={unprovenForDiscard(testResult)}
+                    />
+                  )}
 
                   {!attributeProven && !testResult && (
                     <Text size={200} className={styles.muted}>
@@ -336,10 +353,13 @@ function TestOutcome({
   result,
   styles,
   t,
+  blocksSave,
 }: {
   result: UserOrgTestResult;
   styles: ReturnType<typeof useStyles>;
   t: TFunction;
+  /** The test cannot vouch for the name, and the save would discard values on it. */
+  blocksSave: boolean;
 }) {
   if (!result.succeeded) {
     return (
@@ -356,6 +376,7 @@ function TestOutcome({
       <MessageBar intent={result.hasNoValue ? 'warning' : 'success'}>
         <MessageBarBody>
           {userOrgMessage(result.messageCode, result.messageValues, result.message, t) ?? t('userOrgs.test.succeeded')}
+          {blocksSave && <> {t('userOrgs.test.unverifiedBeforeDiscard')}</>}
         </MessageBarBody>
       </MessageBar>
       <div className={styles.resultGrid}>

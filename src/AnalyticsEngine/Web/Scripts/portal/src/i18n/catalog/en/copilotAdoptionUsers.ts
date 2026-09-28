@@ -126,6 +126,9 @@ export const copilotAdoptionUsers = {
   'copilotAdoptionUsers.opportunities.candidatesFoundNoMatches': '{count} candidates were found in this period, but none of them match.',
   'copilotAdoptionUsers.opportunities.clearFilters': 'Clear filters',
   'copilotAdoptionUsers.opportunities.noneQualified': 'Nobody in this tenant qualifies as a licence candidate for the selected period.',
+  'copilotAdoptionUsers.opportunities.noneQualifiedCapped': 'No candidate who made the ranked list is in this view for the selected period.',
+  'copilotAdoptionUsers.opportunities.cappedNotice':
+    'The candidate list reached its {cap}-candidate limit for the whole tenant, so candidates ranked below it were never listed. People in this view who would qualify may be among them.',
   'copilotAdoptionUsers.opportunities.emptyIntro': 'A user is listed here when {count} of the following are true. This is a shortlist for a paying seat, not a directory listing, so users with no recorded activity at all are deliberately left out - there is no business case to make for them.',
   'copilotAdoptionUsers.opportunities.emptyIntroAll': 'all',
   'copilotAdoptionUsers.opportunities.emptySkuRequirement': 'They hold none of the SKUs classified as a Copilot licence.',

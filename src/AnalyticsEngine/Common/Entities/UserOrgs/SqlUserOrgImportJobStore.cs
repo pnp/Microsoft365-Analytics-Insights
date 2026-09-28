@@ -845,9 +845,14 @@ END
 
 DECLARE @expectedGeneration INT, @isDraft BIT = 0;
 
+-- Only the administrator who previewed a file can import it. Drafts are numbered like every other
+-- job, so without this anyone signed in could guess another admin's draft - a preview they looked at
+-- and decided against, perhaps - and import it with a clear count they never saw, and a file they
+-- never had.
 SELECT @isDraft = 1, @expectedGeneration = expected_generation
 FROM dbo.user_org_import_jobs WITH (UPDLOCK, HOLDLOCK)
 WHERE id = @jobId AND org_type_id = @orgTypeId AND status = 6
+  AND started_by = @startedBy
   AND queued_utc > DATEADD(SECOND, -@draftLifetimeSecs, SYSUTCDATETIME());
 
 IF @isDraft = 0

@@ -157,6 +157,36 @@ DELETE FROM dbo.users;");
         #region Drafts
 
         [TestMethod]
+        public async Task OnlyTheAdministratorWhoPreviewedAFileCanImportIt()
+        {
+            // Drafts are numbered like any other job. A colleague guessing the number - of a preview its
+            // owner looked at and decided against, say - must not be able to import a file they never had,
+            // with a clear count nobody saw.
+            var a = AddUser("a@contoso.com");
+            var typeId = await NewType();
+            await Assign(typeId, (a, "Kept"));
+            var draftId = await Draft(typeId, Admin, new UserOrgStagedRow(2, "a@contoso.com", "Retail"));
+
+            try
+            {
+                await _jobs.CommitDraftAsync(draftId, typeId, UserOrgImportMode.Replace, int.MaxValue, "colleague@contoso.com");
+                Assert.Fail("Another administrator's preview must not be importable.");
+            }
+            catch (UserOrgValidationException ex)
+            {
+                Assert.AreEqual(UserOrgImportRefusalCodes.DraftNotFound, ex.Code);
+            }
+
+            var draft = await _jobs.GetJobAsync(draftId);
+            Assert.AreEqual(UserOrgImportStatus.Draft, draft.Status, "Still its owner's to import.");
+            Assert.AreEqual(Admin, draft.StartedBy);
+            Assert.AreEqual("Kept", await ValueOf(a));
+
+            await _jobs.CommitDraftAsync(draftId, typeId, UserOrgImportMode.Merge, 0, Admin);
+            Assert.AreEqual(UserOrgImportStatus.Pending, (await _jobs.GetJobAsync(draftId)).Status);
+        }
+
+        [TestMethod]
         public async Task ADraftIsStagedButIsNotAnImport()
         {
             AddUser("a@contoso.com");
@@ -284,7 +314,7 @@ DELETE FROM dbo.users;");
             var b = AddUser("b@contoso.com");
             var typeId = await NewType();
             await Assign(typeId, (a, "X"), (b, "Y"));
-            var draftId = await Draft(typeId, "previewer@contoso.com", new UserOrgStagedRow(2, "a@contoso.com", "X2"));
+            var draftId = await Draft(typeId, Admin, new UserOrgStagedRow(2, "a@contoso.com", "X2"));
             _db.Execute($"UPDATE dbo.user_org_import_jobs SET queued_utc = DATEADD(MINUTE, -20, SYSUTCDATETIME()) WHERE id = {draftId}");
 
             await _jobs.CommitDraftAsync(draftId, typeId, UserOrgImportMode.Replace, 1, Admin);
@@ -293,7 +323,7 @@ DELETE FROM dbo.users;");
             Assert.AreEqual(UserOrgImportStatus.Pending, job.Status);
             Assert.AreEqual(UserOrgImportMode.Replace, job.Mode);
             Assert.AreEqual(1, job.ConfirmedClearCount);
-            Assert.AreEqual(Admin, job.StartedBy, "Whoever imported it, not whoever previewed it.");
+            Assert.AreEqual(Admin, job.StartedBy, "Recorded against the administrator who previewed and imported it.");
             Assert.IsTrue(DateTime.UtcNow - job.QueuedUtc < TimeSpan.FromMinutes(5), "Queued when it was imported, not when it was previewed.");
         }
 
@@ -1014,10 +1044,11 @@ WHERE resource_type = 'APPLICATION' AND resource_database_id = DB_ID()
             var newer = await Draft(typeId, "two@contoso.com", new UserOrgStagedRow(2, "a@contoso.com", "Y"));
             await Draft(typeId, "three@contoso.com", new UserOrgStagedRow(2, "a@contoso.com", "Z"));
 
-            // Committed in the opposite order to the previews: the history follows the imports.
-            await _jobs.CommitDraftAsync(newer, typeId, UserOrgImportMode.Merge, 0, Admin);
+            // Committed in the opposite order to the previews: the history follows the imports. Each by
+            // the administrator who previewed it - nobody can import someone else's preview.
+            await _jobs.CommitDraftAsync(newer, typeId, UserOrgImportMode.Merge, 0, "two@contoso.com");
             _db.Execute($"UPDATE dbo.user_org_import_jobs SET status = 3, queued_utc = DATEADD(MINUTE, -10, SYSUTCDATETIME()) WHERE id = {newer}");
-            await _jobs.CommitDraftAsync(older, typeId, UserOrgImportMode.Merge, 0, Admin);
+            await _jobs.CommitDraftAsync(older, typeId, UserOrgImportMode.Merge, 0, "one@contoso.com");
 
             var history = await _jobs.ListJobsAsync(typeId, 10);
 
@@ -1197,6 +1228,48 @@ WHERE resource_type = 'APPLICATION' AND resource_database_id = DB_ID()
 
             Assert.Fail("The call should have been refused.");
             return null;
+        }
+
+        [TestMethod]
+        public async Task ASchemaExtensionTestThatFindsNoValueSaysGraphDidNotCheckTheName()
+        {
+            // Graph selects only the container, so for this user "no value" is also what a misspelt
+            // property after the dot looks like. Every other kind of attribute is checked whole by Graph.
+            var service = new UserOrgAdminService(
+                _types,
+                _assignments,
+                _jobs,
+                UserOrgStores.CreateUserLookup(_db.ConnectionString),
+                new NoValueGraph(),
+                id => _dispatched.Add(id),
+                resumeGate: new UserOrgResumeGate());
+
+            var schema = await service.TestAsync(
+                new UserOrgTestRequestModel { EntraAttributeName = "contoso_orgData.businessUnit", Upn = "a@contoso.com" },
+                CancellationToken.None);
+
+            Assert.IsTrue(schema.Succeeded);
+            Assert.IsTrue(schema.HasNoValue);
+            Assert.IsTrue(schema.NameUnverified);
+            Assert.AreEqual(UserOrgMessageCodes.NoValueUnverified, schema.MessageCode);
+            Assert.AreEqual("contoso_orgData", schema.MessageValues["container"]);
+
+            var slot = await service.TestAsync(
+                new UserOrgTestRequestModel { EntraAttributeName = "extensionAttribute1", Upn = "a@contoso.com" },
+                CancellationToken.None);
+
+            Assert.IsFalse(slot.NameUnverified, "Graph checks a flat property name itself.");
+            Assert.AreEqual(UserOrgMessageCodes.NoValue, slot.MessageCode);
+        }
+
+        /// <summary>A Graph probe for a user who exists but holds no value for the attribute.</summary>
+        private sealed class NoValueGraph : IUserOrgGraphProbe
+        {
+            public Task<UserOrgProbeOutcome> ResolveAsync(EntraOrgAttributeSpec spec, string upn, CancellationToken cancellationToken)
+                => Task.FromResult(new UserOrgProbeOutcome { Succeeded = true, HasNoValue = true });
+
+            public Task<UserOrgAttributeCatalogueModel> DiscoverAsync(CancellationToken cancellationToken)
+                => throw new NotSupportedException();
         }
 
         [TestMethod]

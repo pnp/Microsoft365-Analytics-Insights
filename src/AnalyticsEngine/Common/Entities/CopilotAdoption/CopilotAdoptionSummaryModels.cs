@@ -1171,6 +1171,7 @@ namespace Common.Entities.CopilotAdoption
         public const string CoworkFluencyMissingAll = "coworkFluencyMissingAll";
         public const string CoworkFluencyPartial = "coworkFluencyPartial";
         public const string CoworkSliceNotAssessed = "coworkSliceNotAssessed";
+        public const string CoworkReadinessCapped = "coworkReadinessCapped";
         public const string CouldNotLoad = "couldNotLoad";
         public const string ReclaimCaveat = "copilotAdoption.server.reclaimCaveat";
     }
@@ -1204,6 +1205,7 @@ namespace Common.Entities.CopilotAdoption
             { CopilotAdoptionWarningKeys.CoworkFluencyMissingAll, "Cowork readiness was measured, but the licensed-user analysis it takes Copilot fluency from did not complete, so the tab could not be scored. This is NOT a missing usage report import - the Cowork signals imported fine. Check the Health page and re-run." },
             { CopilotAdoptionWarningKeys.CoworkFluencyPartial, "Cowork readiness: {withoutFluency} of {total} seat holders were scored without a Copilot fluency figure, because they fall outside the {maxLicensed}-row licensed-user analysis this tab joins against. Their fluency reads as 0 rather than as unknown, so they band lower than they should - most will show as \"build fluency first\". Treat the tier of those rows as unreliable; the rest of the tab is unaffected." },
             { CopilotAdoptionWarningKeys.CoworkSliceNotAssessed, "Cowork readiness scores at most {maxUsers} seat holders, ranked by coordination load (when the Copilot audit log is imported, anyone it shows already using Cowork is taken first), and this tenant reached that limit. Nobody in this filtered population made the list, so there is nothing to show here. This is NOT a missing import: the Cowork assessment ran. Widen the filter, or read the Cowork tab for the whole tenant." },
+            { CopilotAdoptionWarningKeys.CoworkReadinessCapped, "Cowork readiness scores at most {maxUsers} seat holders, ranked by coordination load (when the Copilot audit log is imported, anyone it shows already using Cowork is taken first), and this tenant reached that limit. Every count on this tab describes the seat holders who made the list, not all of them; those left out are the ones with the least coordination load, who are the least likely Cowork candidates." },
             { CopilotAdoptionWarningKeys.CouldNotLoad, "Could not load {description}: {message}" },
         };
 

@@ -368,10 +368,22 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
             result.RawValue = outcome.RawValue;
             result.HasNoValue = outcome.HasNoValue;
+            result.NameUnverified = spec.Kind == EntraOrgAttributeKind.SchemaExtension;
             result.NormalisedValue = UserOrgRules.NormaliseOrgValue(outcome.RawValue);
             result.WouldTruncate = UserOrgRules.WouldTruncate(outcome.RawValue);
 
-            if (outcome.HasNoValue)
+            if (outcome.HasNoValue && result.NameUnverified)
+            {
+                // Graph selected the container and did not look inside it, so this reads exactly as a
+                // misspelt property name would. Said so, rather than "read successfully".
+                result.MessageCode = UserOrgMessageCodes.NoValueUnverified;
+                result.MessageValues = new Dictionary<string, object> { { "container", spec.SelectFragment } };
+                result.Message =
+                    $"Microsoft Graph accepted the schema extension '{spec.SelectFragment}', but this user has no value for "
+                    + "it - and Graph does not check the property name after the dot, so a misspelt name reads exactly "
+                    + "like this. Test with a user who has a value to be sure the name is right.";
+            }
+            else if (outcome.HasNoValue)
             {
                 result.MessageCode = UserOrgMessageCodes.NoValue;
                 result.Message =

@@ -45,6 +45,7 @@ export const USER_ORG_MESSAGE_KEYS: Record<string, TranslationKey> = {
   unreadableResponse: 'userOrgs.message.unreadableResponse',
   multiValued: 'userOrgs.message.multiValued',
   noValue: 'userOrgs.message.noValue',
+  noValueUnverified: 'userOrgs.message.noValueUnverified',
   wouldTruncate: 'userOrgs.message.wouldTruncate',
   discoveryAuthFailed: 'userOrgs.message.discoveryAuthFailed',
   discoveryForbidden: 'userOrgs.message.discoveryForbidden',

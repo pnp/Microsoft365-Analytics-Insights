@@ -6,7 +6,7 @@
    (DatabaseUpgrader / MigrateDatabaseToLatestVersion) and the web app Health page treat it as applied.
 
    WHAT IT DOES
-     Creates five new tables for configurable user organisations - admin-defined grouping dimensions
+     Creates six new tables for configurable user organisations - admin-defined grouping dimensions
      for users, populated either from a custom Entra attribute during the normal user-metadata import
      or from a CSV uploaded in the portal:
 
@@ -15,13 +15,15 @@
        dbo.user_org_assignments     which user is in which org (at most one value per type per user)
        dbo.user_org_import_jobs     one row per CSV upload, with status and row counts
        dbo.user_org_import_staging  the parsed rows of an upload, awaiting merge
+       dbo.user_org_import_changes  what an applied upload changed, user by user, until it is written
+                                    to the import's change log
 
      NOT TO BE CONFUSED WITH dbo.orgs / dbo.org_urls. Those are an unrelated and much older concept -
      mapping SharePoint URL bases so web-traffic hits can be scoped - and this script does not touch
      them. Everything created here is prefixed user_org_ for exactly that reason.
 
    CLASSIFICATION: PURELY ADDITIVE
-     Five new, empty tables. No existing table is rewritten, no existing column is altered, and no
+     Six new, empty tables. No existing table is rewritten, no existing column is altered, and no
      existing query is being tuned. There is therefore no "before" state to benchmark, and the
      measurement rule that governs performance-motivated schema changes does not apply.
 

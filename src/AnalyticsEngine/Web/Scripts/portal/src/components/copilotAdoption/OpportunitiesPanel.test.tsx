@@ -227,6 +227,28 @@ describe('OpportunitiesPanel licence headline', () => {
     expect(screen.getByRole('checkbox', { name: 'Recommended only' })).toBeTruthy();
   });
 
+  it('still says the candidate list was capped when this view has nobody on it', async () => {
+    // A filtered view whose people all ranked below the tenant-wide cut-off gets no headline, and the
+    // headline was the only place the cap was said - so the list read "nobody in this tenant qualifies".
+    await renderPanel(summary({
+      licenceOpportunityEstimate: { ...RECOMMENDED, cohortUsers: 0, candidatesCapped: true },
+      licenceChatUsersEstimate: undefined,
+    }));
+
+    expect(await screen.findByText(
+      'The candidate list reached its 50,000-candidate limit for the whole tenant, so candidates ranked below it were never listed. People in this view who would qualify may be among them.',
+    )).toBeTruthy();
+    expect(screen.getByText('No candidate who made the ranked list is in this view for the selected period.')).toBeTruthy();
+    expect(screen.queryByText(/Nobody in this tenant qualifies/)).toBeNull();
+  });
+
+  it('says nobody qualifies only when the list was complete', async () => {
+    await renderPanel(summary({ licenceOpportunityEstimate: { ...RECOMMENDED, cohortUsers: 0 }, licenceChatUsersEstimate: undefined }));
+
+    expect(await screen.findByText('Nobody in this tenant qualifies as a licence candidate for the selected period.')).toBeTruthy();
+    expect(screen.queryByText(/candidate limit/)).toBeNull();
+  });
+
   it('reads in Spanish', async () => {
     await loadCatalog('es');
     await renderPanel(summary(), 'es');

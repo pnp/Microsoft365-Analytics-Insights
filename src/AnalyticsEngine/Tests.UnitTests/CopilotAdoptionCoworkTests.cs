@@ -1481,6 +1481,61 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Cowork_SaysItsCountsCoverOnlyWhoItReached_WhenTheAssessmentStoppedAtItsCap()
+        {
+            // The query ranks by coordination load and stops at MaxCoworkUsersScored, so the seat holders
+            // with the least load were never assessed. On dev nothing said so, anywhere.
+            var analysis = PublishableCoworkAnalysis();
+
+            new CopilotAdoptionService(new CopilotAdoptionOptions { MaxCoworkUsersScored = 1 }).FinaliseSummary(analysis);
+
+            Assert.IsTrue(analysis.Summary.CoworkReadinessAvailable, "What it did assess is still published.");
+            var detail = analysis.Summary.WarningDetails.Single(d => d.Key == CopilotAdoptionWarningKeys.CoworkReadinessCapped);
+            Assert.AreEqual(1, detail.Values["maxUsers"]);
+        }
+
+        [TestMethod]
+        public void Cowork_SaysSoInASliceOfACappedAssessment_EvenWithPeopleInIt()
+        {
+            // A slice holds far fewer signals than the cap however many of its people the cap left out, so
+            // its own count cannot tell - only the tenant assessment it was cut from can.
+            var analysis = PublishableCoworkAnalysis();
+            analysis.CoworkAssessmentCapped = true;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.IsTrue(analysis.Summary.CoworkReadinessAvailable);
+            Assert.IsTrue(analysis.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.CoworkReadinessCapped));
+        }
+
+        [TestMethod]
+        public void Cowork_SaysNothingAboutACapTheAssessmentDidNotReach()
+        {
+            var analysis = PublishableCoworkAnalysis();
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.IsFalse(analysis.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.CoworkReadinessCapped));
+        }
+
+        /// <summary>One Cowork signal and the licensed-user row its fluency is taken from: a tab that publishes.</summary>
+        private static CopilotAdoptionAnalysis PublishableCoworkAnalysis()
+        {
+            var analysis = AnalysisWithOneCoworkSignal();
+            analysis.LicensedUsers = new List<LicensedUserAdoptionRow>
+            {
+                new LicensedUserAdoptionRow
+                {
+                    UserId = analysis.CoworkSignals[0].UserId,
+                    UserPrincipalName = analysis.CoworkSignals[0].UserPrincipalName,
+                    AdoptionScore = 70,
+                    AgentsUsed = 2,
+                },
+            };
+            return analysis;
+        }
+
+        [TestMethod]
         public void Cowork_IsPublished_WhenTheLicensedUserAnalysisIsPresent()
         {
             // The control for the test below: with the fluency input available, the tab publishes.

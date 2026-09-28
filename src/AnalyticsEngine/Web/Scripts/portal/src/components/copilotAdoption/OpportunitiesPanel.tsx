@@ -326,6 +326,8 @@ export default function OpportunitiesPanel({
   // With a licence estimate the tab is sectioned, and a list in the section that is not showing is
   // not printed - so it must not hold the printout up, or refuse it for being long.
   const sectioned = (summary?.licenceOpportunityEstimate?.cohortUsers ?? 0) > 0;
+  // The candidate query stopped at its tenant-wide cap, so people ranked below it were never listed.
+  const candidatesCapped = summary?.licenceOpportunityEstimate?.candidatesCapped ?? false;
   const printRows = usePrintAllRows<LicenceOpportunityRow>({
     enabled: (!sectioned || section === 'candidates') && !loading && data !== null,
     total: data?.total ?? 0,
@@ -462,7 +464,9 @@ export default function OpportunitiesPanel({
           ) : (
             <>
               <Text weight="semibold" block>
-                {t('copilotAdoptionUsers.opportunities.noneQualified')}
+                {t(candidatesCapped
+                  ? 'copilotAdoptionUsers.opportunities.noneQualifiedCapped'
+                  : 'copilotAdoptionUsers.opportunities.noneQualified')}
               </Text>
               <Text size={200} block className={styles.muted}>
                 {tNode('copilotAdoptionUsers.opportunities.emptyIntro', {
@@ -759,8 +763,21 @@ export default function OpportunitiesPanel({
   );
 
   // No estimate - nobody recommended, or no Microsoft 365 usage reports to model from - means no
-  // headline and nothing to show the working for: the list alone, exactly as before.
-  if (!((summary?.licenceOpportunityEstimate?.cohortUsers ?? 0) > 0)) return list;
+  // headline and nothing to show the working for: the list alone, exactly as before. Except that the
+  // headline is the only place the candidate cap was said: a view whose people all ranked below the
+  // tenant-wide cut-off would otherwise read as "nobody qualifies", when nobody below it was ranked.
+  if (!((summary?.licenceOpportunityEstimate?.cohortUsers ?? 0) > 0)) {
+    return candidatesCapped ? (
+      <div>
+        <MessageBar intent="warning" style={{ marginBottom: '12px' }}>
+          <MessageBarBody>
+            {t('copilotAdoptionUsers.opportunities.cappedNotice', { cap: formatCount(options.maxOpportunityCandidates) })}
+          </MessageBarBody>
+        </MessageBar>
+        {list}
+      </div>
+    ) : list;
+  }
 
   return (
     <div>

@@ -302,6 +302,14 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         [JsonProperty("hasNoValue")]
         public bool HasNoValue { get; set; }
 
+        /// <summary>
+        /// True when Graph cannot have checked the whole name: a schema extension's property after the dot
+        /// is not part of <c>$select</c>, so a misspelt one is answered like a user with no value. Only a
+        /// value found proves such a name.
+        /// </summary>
+        [JsonProperty("nameUnverified")]
+        public bool NameUnverified { get; set; }
+
         /// <summary>The English of <see cref="MessageCode"/> - the portal's fallback for a code it does not know.</summary>
         [JsonProperty("message")]
         public string Message { get; set; }

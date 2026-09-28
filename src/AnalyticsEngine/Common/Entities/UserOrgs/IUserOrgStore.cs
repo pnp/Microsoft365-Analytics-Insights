@@ -252,12 +252,13 @@ namespace Common.Entities.UserOrgs
 
         /// <summary>
         /// Turns a draft into a <see cref="UserOrgImportStatus.Pending"/> job, once every check has
-        /// passed inside the transaction that admits it.
+        /// passed inside the transaction that admits it. Only <paramref name="startedBy"/> - the
+        /// administrator who previewed the file - can import a draft; anyone else is told it does not exist.
         /// </summary>
         /// <exception cref="UserOrgValidationException">
-        /// With a code from <see cref="UserOrgImportRefusalCodes"/>: the draft expired or was already
-        /// imported, the type changed, another import is running, no row matches a user, or the import
-        /// would clear more users than <paramref name="confirmedClearCount"/>.
+        /// With a code from <see cref="UserOrgImportRefusalCodes"/>: the draft expired, was already
+        /// imported or belongs to another administrator, the type changed, another import is running, no
+        /// row matches a user, or the import would clear more users than <paramref name="confirmedClearCount"/>.
         /// </exception>
         Task CommitDraftAsync(
             int draftId,

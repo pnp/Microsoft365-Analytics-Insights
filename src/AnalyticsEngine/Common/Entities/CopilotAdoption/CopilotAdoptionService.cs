@@ -2176,6 +2176,19 @@ namespace Common.Entities.CopilotAdoption
                     });
             }
 
+            // An assessment that stopped at its row cap left out the seat holders with the least
+            // coordination load, so every count on the tab describes the ones it reached - in the tenant
+            // view, and in any slice of it, whose own signals are fewer than the cap however many it lost.
+            // An empty slice has already been answered with CoworkSliceNotAssessed above.
+            var maxCowork = summary.Options?.MaxCoworkUsersScored ?? _options.MaxCoworkUsersScored;
+            if (signals.Count >= maxCowork || analysis.CoworkAssessmentCapped)
+            {
+                CopilotAdoptionWarnings.Add(
+                    summary,
+                    CopilotAdoptionWarningKeys.CoworkReadinessCapped,
+                    new Dictionary<string, object> { { "maxUsers", maxCowork } });
+            }
+
             // Ordered so the people to act on are first: recommended before not, then by the strength of
             // the case. The CSV export inherits this, so a truncated read of it is still the right people.
             analysis.CoworkReadiness = rows

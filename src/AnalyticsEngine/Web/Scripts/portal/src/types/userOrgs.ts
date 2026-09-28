@@ -154,6 +154,11 @@ export interface UserOrgTestResult {
   wouldTruncate: boolean;
   /** The read worked, but this user has no value for the attribute. */
   hasNoValue: boolean;
+  /**
+   * Graph cannot have checked the whole name - a schema extension's property after the dot - so only a
+   * value found proves it. Absent from a server older than the page, which reads as false.
+   */
+  nameUnverified?: boolean;
   /** The server's English - only a fallback for a `messageCode` the portal does not know. */
   message: string | null;
   /** What to say, as a key from `UserOrgMessageCodes` on the server; word it from this. */
