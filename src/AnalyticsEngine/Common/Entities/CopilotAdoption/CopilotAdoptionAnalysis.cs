@@ -90,6 +90,17 @@ namespace Common.Entities.CopilotAdoption
         public IReadOnlyList<int> LicensedUsersNotAnalysed { get; set; }
 
         /// <summary>
+        /// True when the licensed-user query stopped at <see cref="CopilotAdoptionOptions.MaxLicensedUsersScored"/>
+        /// - in the tenant analysis, and in every slice of it, which inherits the cap.
+        /// </summary>
+        /// <remarks>
+        /// The one fact a slice needs to tell "nobody in this view was analysed" from "the analysis did not
+        /// run": the Cowork tab takes each person's Copilot fluency from the licensed-user rows, and a view
+        /// made up entirely of seat holders past the cap has Cowork signals but no licensed-user row at all.
+        /// </remarks>
+        public bool LicensedUsersCapped { get; set; }
+
+        /// <summary>
         /// The queries that produced this analysis, keyed by a short name, for the SQL popover the rest
         /// of the admin site uses. Showing the working is part of the point: these numbers get quoted
         /// in licence negotiations, so an admin has to be able to verify them independently.

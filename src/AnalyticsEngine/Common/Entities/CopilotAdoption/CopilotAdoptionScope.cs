@@ -183,6 +183,9 @@ namespace Common.Entities.CopilotAdoption
                 Agents = analysis.Agents,
 
                 LicensedUsers = Narrow(analysis.LicensedUsers, u => u.UserId, u => u.EmailDomain, scope),
+                // Like the opportunity cap below: the licensed-user query's cap was applied to the whole
+                // tenant, so a slice of it is just as short of the people past it.
+                LicensedUsersCapped = analysis.LicensedUsersCapped,
                 Opportunities = Narrow(analysis.Opportunities, o => o.UserId, o => o.EmailDomain, scope),
                 // The cap is applied to the tenant-wide ranking, so a narrowed list inherits it.
                 OpportunitiesCapped = analysis.OpportunitiesCapped,

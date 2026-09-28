@@ -626,10 +626,10 @@ namespace Tests.UnitTests
             public Task<int> CreateAsync(UserOrgType type, CancellationToken cancellationToken = default(CancellationToken))
                 => Task.FromResult(0);
 
-            public Task UpdateAsync(UserOrgType type, bool clearAssignments, bool bumpGeneration, CancellationToken cancellationToken = default(CancellationToken), int? expectedGeneration = null, int? expectedRevision = null)
+            public Task UpdateAsync(UserOrgType type, bool clearAssignments, bool bumpGeneration, CancellationToken cancellationToken = default(CancellationToken), int? expectedGeneration = null, int? expectedRevision = null, int? confirmedDiscardCount = null)
                 => Task.CompletedTask;
 
-            public Task DeleteAsync(int id, CancellationToken cancellationToken = default(CancellationToken))
+            public Task DeleteAsync(int id, CancellationToken cancellationToken = default(CancellationToken), int? expectedRevision = null)
                 => Task.CompletedTask;
 
             /// <summary>Every refresh the updater recorded, in order.</summary>

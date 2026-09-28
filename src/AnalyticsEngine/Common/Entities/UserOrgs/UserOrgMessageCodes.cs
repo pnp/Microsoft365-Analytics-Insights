@@ -23,6 +23,8 @@ namespace Common.Entities.UserOrgs
         public const string InvalidSource = "invalidSource";
         public const string TypeGone = "typeGone";
         public const string TypeChangedElsewhere = "typeChangedElsewhere"; // name
+        public const string DiscardExceedsConfirmed = "discardExceedsConfirmed"; // name, count
+        public const string TypeChangedBeforeDelete = "typeChangedBeforeDelete";
         public const string ImportRunningChange = "importRunningChange"; // name
         public const string ImportRunningDelete = "importRunningDelete";
 

@@ -950,6 +950,7 @@ namespace Common.Entities.CopilotAdoption
                 // Who the cap left out, from the uncapped assignments, so a filtered view can say how
                 // many of its own people are missing rather than showing them as nobody.
                 analysis.LicensedUsersNotAnalysed = NotAnalysed(assignmentsByUser.Keys, rows.Select(r => r.UserId));
+                analysis.LicensedUsersCapped = true;
             }
 
             foreach (var row in rows)
@@ -2121,6 +2122,25 @@ namespace Common.Entities.CopilotAdoption
                 // what tells the tab's own diagnostic channel that the fault was upstream rather than the
                 // missing usage-report import its unavailable card would otherwise blame.
                 summary.CoworkReadinessAvailable = false;
+
+                // Except in a slice of an analysis whose licensed-user query stopped at its cap: the two
+                // queries keep different people past their caps - the licensed one by user id, Cowork by
+                // coordination load - so a view made up of the newest user records can hold Cowork signals
+                // and no licensed-user row at all, with both queries complete. Still unavailable, for the
+                // same reason, but blamed on the cap rather than on a failure nobody can find.
+                if (analysis.LicensedUsersCapped)
+                {
+                    CopilotAdoptionWarnings.Add(
+                        summary,
+                        CopilotAdoptionWarningKeys.CoworkSliceBeyondLicensedCap,
+                        new Dictionary<string, object>
+                        {
+                            { "total", signals.Count },
+                            { "maxLicensed", summary.Options?.MaxLicensedUsersScored ?? _options.MaxLicensedUsersScored },
+                        });
+                    return;
+                }
+
                 CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.CoworkFluencyMissingAll);
                 return;
             }

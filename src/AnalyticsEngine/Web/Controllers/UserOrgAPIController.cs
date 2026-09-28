@@ -190,10 +190,14 @@ namespace Web.AnalyticsWeb.Controllers
                 cancellationToken).ConfigureAwait(false);
         }
 
-        /// <summary>DELETE api/UserOrg/types/{id}</summary>
+        /// <summary>DELETE api/UserOrg/types/{id}?expectedRevision=3</summary>
+        /// <remarks>
+        /// <c>expectedRevision</c> is the revision the page showed: a type a colleague has saved since is
+        /// refused rather than deleted. Omitted by a page too old to send it, and then not checked.
+        /// </remarks>
         [HttpDelete]
         [Route("types/{id:int}")]
-        public async Task<IHttpActionResult> DeleteType(int id, CancellationToken cancellationToken)
+        public async Task<IHttpActionResult> DeleteType(int id, CancellationToken cancellationToken, int? expectedRevision = null)
         {
             var forged = RejectIfNotXhr();
             if (forged != null) return forged;
@@ -201,7 +205,7 @@ namespace Web.AnalyticsWeb.Controllers
             return await RunAsync(
                 svc => InvalidatingAfter(async () =>
                 {
-                    await svc.DeleteAsync(id, cancellationToken).ConfigureAwait(false);
+                    await svc.DeleteAsync(id, expectedRevision, cancellationToken).ConfigureAwait(false);
                     return (object)new { deleted = true };
                 }),
                 "delete-type",

@@ -139,6 +139,11 @@ export interface UserOrgTypeSave {
   isEnabled: boolean;
   /** For an edit: the `revision` the type had when the dialog opened. */
   expectedRevision?: number;
+  /**
+   * For an edit: how many values the type held when the dialog opened - the number its discard warning
+   * showed. A save that would discard more is refused, since imports do not move the revision.
+   */
+  confirmedDiscardCount?: number;
 }
 
 export interface UserOrgTestResult {

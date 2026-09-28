@@ -8,6 +8,8 @@ import type { UserOrgImportJob, UserOrgType } from '../types/userOrgs';
 const fetchOrgTypes = vi.fn();
 const fetchOrgValues = vi.fn();
 const updateOrgTypeMock = vi.fn();
+const deleteOrgTypeMock = vi.fn();
+const toastError = vi.fn();
 
 vi.mock('../api/userOrgsApi', () => ({
   fetchOrgTypes: () => fetchOrgTypes(),
@@ -15,7 +17,7 @@ vi.mock('../api/userOrgsApi', () => ({
   fetchOrgMembers: vi.fn(),
   createOrgType: vi.fn(),
   updateOrgType: (...args: unknown[]) => updateOrgTypeMock(...args),
-  deleteOrgType: vi.fn(),
+  deleteOrgType: (...args: unknown[]) => deleteOrgTypeMock(...args),
   previewCsv: vi.fn(),
   importCsv: vi.fn(),
   fetchImportJob: vi.fn(),
@@ -29,6 +31,13 @@ vi.mock('../api/userOrgsApi', () => ({
       discoveryWarning: null,
     }),
   ),
+}));
+
+vi.mock('../components/toast', () => ({
+  default: Object.assign(vi.fn(), {
+    success: vi.fn(),
+    error: (...args: unknown[]) => toastError(...args),
+  }),
 }));
 
 function orgType(over: Partial<UserOrgType>): UserOrgType {
@@ -81,6 +90,8 @@ describe('UserOrgsPage', () => {
     fetchOrgTypes.mockReset();
     fetchOrgValues.mockReset();
     updateOrgTypeMock.mockReset();
+    deleteOrgTypeMock.mockReset();
+    toastError.mockReset();
     fetchOrgValues.mockResolvedValue({ orgTypeId: 1, page: 1, pageSize: 25, total: 0, items: [] });
   });
 
@@ -137,9 +148,11 @@ describe('UserOrgsPage', () => {
 
   it('saves an edit against the revision the type had when the dialog opened', async () => {
     // A colleague may save the same type while this dialog is open. Sending back the revision it was
-    // opened at is what lets the server refuse this save, rather than silently undo theirs.
+    // opened at is what lets the server refuse this save, rather than silently undo theirs - and the
+    // values it held then, the number its discard warning showed, which an import can change without
+    // moving the revision.
     fetchOrgTypes.mockResolvedValue([
-      orgType({ id: 4, name: 'Programme', source: 'csv', entraAttributeName: null, revision: 7 }),
+      orgType({ id: 4, name: 'Programme', source: 'csv', entraAttributeName: null, revision: 7, assignedUserCount: 12 }),
     ]);
     updateOrgTypeMock.mockResolvedValue(orgType({ id: 4, name: 'Programmes', source: 'csv', entraAttributeName: null, revision: 8 }));
     const user = userEvent.setup();
@@ -155,8 +168,62 @@ describe('UserOrgsPage', () => {
     await user.click(within(dialog).getByText('Save'));
 
     await waitFor(() =>
-      expect(updateOrgTypeMock).toHaveBeenCalledWith(4, expect.objectContaining({ name: 'Programmes', expectedRevision: 7 })),
+      expect(updateOrgTypeMock).toHaveBeenCalledWith(
+        4,
+        expect.objectContaining({ name: 'Programmes', expectedRevision: 7, confirmedDiscardCount: 12 }),
+      ),
     );
+  });
+
+  it('deletes against the revision the page showed, and catches up when a colleague has saved the type since', async () => {
+    // The confirmation names the type and its count as this page shows them. A colleague's save since
+    // makes it a different type, so the delete is refused - and the list is brought up to date, so the
+    // admin's next decision is made about the type as it now is.
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    fetchOrgTypes
+      .mockResolvedValueOnce([orgType({ id: 4, name: 'Programme', source: 'csv', entraAttributeName: null, revision: 7 })])
+      .mockResolvedValue([orgType({ id: 4, name: 'Initiative', source: 'csv', entraAttributeName: null, revision: 8 })]);
+    deleteOrgTypeMock.mockRejectedValueOnce(
+      Object.assign(new Error('server fallback'), { code: 'typeChangedBeforeDelete', values: {} }),
+    );
+    const user = userEvent.setup();
+    try {
+      renderWithProvider(<UserOrgsPage />);
+
+      await screen.findByRole('row', { name: /Programme/ });
+      await user.click(within(rowFor('Programme')).getByRole('button', { name: 'Delete' }));
+
+      await waitFor(() => expect(deleteOrgTypeMock).toHaveBeenCalledWith(4, 7));
+      await waitFor(() =>
+        expect(toastError).toHaveBeenCalledWith(
+          expect.stringMatching(/^Someone else changed this organisation type after the page loaded, so it was not deleted\./),
+        ),
+      );
+      expect(await screen.findByRole('row', { name: /Initiative/ })).toBeInTheDocument();
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it('catches up when a save is refused because an import has filled the type since the dialog opened', async () => {
+    fetchOrgTypes
+      .mockResolvedValueOnce([orgType({ id: 4, name: 'Programme', source: 'csv', entraAttributeName: null, revision: 7 })])
+      .mockResolvedValue([
+        orgType({ id: 4, name: 'Programme', source: 'csv', entraAttributeName: null, revision: 7, assignedUserCount: 200 }),
+      ]);
+    updateOrgTypeMock.mockRejectedValueOnce(
+      Object.assign(new Error('server fallback'), { code: 'discardExceedsConfirmed', values: { name: 'Programme', count: 200 } }),
+    );
+    const user = userEvent.setup();
+    renderWithProvider(<UserOrgsPage />);
+
+    await screen.findByRole('row', { name: /Programme/ });
+    await user.click(within(rowFor('Programme')).getByRole('button', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog', { hidden: true });
+    await user.click(within(dialog).getByText('Save'));
+
+    expect(await within(dialog).findByText(/now holds 200 values/)).toBeInTheDocument();
+    await waitFor(() => expect(fetchOrgTypes).toHaveBeenCalledTimes(2));
   });
 
   it('opens the type as a colleague left it once their save has refused this one, so the retry goes through', async () => {

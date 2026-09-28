@@ -66,6 +66,12 @@ namespace Common.Entities.UserOrgs
         /// colleague's change - a rename included - is refused with
         /// <see cref="UserOrgMessageCodes.TypeChangedElsewhere"/> rather than putting their change back.
         /// </param>
+        /// <param name="confirmedDiscardCount">
+        /// For a save that discards the type's values (<paramref name="clearAssignments"/>): how many the
+        /// admin was shown it would discard, or <c>null</c> not to check. Imports move neither the generation
+        /// nor the revision, so a type that has gained values since the dialog opened is refused with
+        /// <see cref="UserOrgMessageCodes.DiscardExceedsConfirmed"/> rather than emptied of values nobody saw.
+        /// </param>
         /// <exception cref="UserOrgValidationException">The name is already taken, the configuration is invalid, or the type changed since it was read.</exception>
         Task UpdateAsync(
             UserOrgType type,
@@ -73,7 +79,8 @@ namespace Common.Entities.UserOrgs
             bool bumpGeneration,
             CancellationToken cancellationToken = default(CancellationToken),
             int? expectedGeneration = null,
-            int? expectedRevision = null);
+            int? expectedRevision = null,
+            int? confirmedDiscardCount = null);
 
         /// <summary>
         /// Deletes an org type and everything hanging off it - assignments, values, import jobs and any
@@ -83,7 +90,15 @@ namespace Common.Entities.UserOrgs
         /// Done explicitly rather than by cascade: <c>user_org_assignments</c> already cascades from
         /// <c>dbo.users</c>, and SQL Server refuses a second cascade path into the same table.
         /// </remarks>
-        Task DeleteAsync(int id, CancellationToken cancellationToken = default(CancellationToken));
+        /// <param name="expectedRevision">
+        /// The <see cref="UserOrgType.Revision"/> the admin's page showed when they chose to delete it, or
+        /// <c>null</c> not to check. A type a colleague has saved since is refused with
+        /// <see cref="UserOrgMessageCodes.TypeChangedBeforeDelete"/> rather than deleted.
+        /// </param>
+        Task DeleteAsync(
+            int id,
+            CancellationToken cancellationToken = default(CancellationToken),
+            int? expectedRevision = null);
 
         /// <summary>
         /// Records that a user import which began at <paramref name="refreshedUtc"/> brought these

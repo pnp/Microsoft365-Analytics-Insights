@@ -93,6 +93,20 @@ namespace Common.Entities.UserOrgs
         {
             return reader.IsDBNull(ordinal) ? (DateTime?)null : reader.GetDateTime(ordinal);
         }
+
+        /// <summary>
+        /// The number a RAISERROR marker carries after its colon - <c>USERORG_CLEAR_EXCEEDS:12</c> - or 0.
+        /// </summary>
+        protected static int ParseTrailingNumber(string message)
+        {
+            var text = message ?? string.Empty;
+            var colon = text.IndexOf(':');
+            var digits = colon < 0 ? string.Empty : new string(text.Substring(colon + 1).TakeWhile(char.IsDigit).ToArray());
+            int value;
+            return int.TryParse(digits, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out value)
+                ? value
+                : 0;
+        }
     }
 
     /// <summary>
@@ -243,7 +257,8 @@ VALUES (@name, @sourceKind, @attr, @enabled, SYSUTCDATETIME());";
             bool bumpGeneration,
             CancellationToken cancellationToken = default(CancellationToken),
             int? expectedGeneration = null,
-            int? expectedRevision = null)
+            int? expectedRevision = null,
+            int? confirmedDiscardCount = null)
         {
             Validate(type);
 
@@ -264,6 +279,24 @@ IF @lockResult < 0
 BEGIN
     RAISERROR('USERORG_ACTIVE_JOB', 16, 1);
     RETURN;
+END
+
+-- A save that discards the type's values discards at most the ones the admin was shown. Imports move
+-- neither the generation nor the revision, so without this a dialog opened on an empty type - no warning,
+-- and a test that proves nothing accepted as proof - discards everything an import has brought in since.
+-- The type row is taken first, as every writer takes it: the Entra merge holds it while it writes, so no
+-- value can arrive for this type between this count and the delete below.
+IF @clearAssignments = 1 AND @confirmedDiscardCount IS NOT NULL
+BEGIN
+    DECLARE @held INT, @assigned INT;
+    SELECT @held = id FROM dbo.user_org_types WITH (UPDLOCK, HOLDLOCK) WHERE id = @id;
+    SELECT @assigned = COUNT(*) FROM dbo.user_org_assignments WHERE org_type_id = @id;
+
+    IF @assigned > @confirmedDiscardCount
+    BEGIN
+        RAISERROR('USERORG_DISCARD_EXCEEDS:%d', 16, 1, @assigned);
+        RETURN;
+    END
 END
 
 UPDATE dbo.user_org_types
@@ -332,6 +365,8 @@ SELECT @affected;";
                             expectedGeneration.HasValue ? (object)expectedGeneration.Value : DBNull.Value;
                         cmd.Parameters.Add("@expectedRevision", SqlDbType.Int).Value =
                             expectedRevision.HasValue ? (object)expectedRevision.Value : DBNull.Value;
+                        cmd.Parameters.Add("@confirmedDiscardCount", SqlDbType.Int).Value =
+                            confirmedDiscardCount.HasValue ? (object)Math.Max(0, confirmedDiscardCount.Value) : DBNull.Value;
 
                         affected = Convert.ToInt32(
                             await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
@@ -369,9 +404,22 @@ SELECT @affected;";
                     new Dictionary<string, object> { { "name", type.Name } },
                     ex);
             }
+            catch (SqlException ex) when (ex.Message.IndexOf("USERORG_DISCARD_EXCEEDS", StringComparison.Ordinal) >= 0)
+            {
+                var count = ParseTrailingNumber(ex.Message);
+                throw new UserOrgValidationException(
+                    $"'{type.Name}' now holds {count:N0} value(s), more than when you opened it, and this change would "
+                    + "discard them. Nothing was saved. Close this and open it again to see them before you decide.",
+                    UserOrgMessageCodes.DiscardExceedsConfirmed,
+                    new Dictionary<string, object> { { "name", type.Name }, { "count", count } },
+                    ex);
+            }
         }
 
-        public async Task DeleteAsync(int id, CancellationToken cancellationToken = default(CancellationToken))
+        public async Task DeleteAsync(
+            int id,
+            CancellationToken cancellationToken = default(CancellationToken),
+            int? expectedRevision = null)
         {
             // Children are deleted explicitly, innermost first, because the assignments table already
             // carries the one cascade path SQL Server allows it (from dbo.users). One transaction, so a
@@ -386,7 +434,7 @@ SELECT @affected;";
             // and a user-metadata merge for the same type deadlock. The application lock does not
             // cover it, because the merge is the one writer that does not take one.
             const string sql = @"
-DECLARE @lockResult INT, @locked INT, @lockName NVARCHAR(255) = N'user_org_type_' + CAST(@id AS NVARCHAR(20));
+DECLARE @lockResult INT, @locked INT, @revision INT, @lockName NVARCHAR(255) = N'user_org_type_' + CAST(@id AS NVARCHAR(20));
 
 EXEC @lockResult = sp_getapplock
     @Resource = @lockName, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 30000;
@@ -398,7 +446,16 @@ BEGIN
 END
 
 -- Take the type row before any of its children, and hold it for the transaction.
-SELECT @locked = id FROM dbo.user_org_types WITH (UPDLOCK, HOLDLOCK) WHERE id = @id;
+SELECT @locked = id, @revision = revision FROM dbo.user_org_types WITH (UPDLOCK, HOLDLOCK) WHERE id = @id;
+
+-- The type the admin confirmed deleting is the one the page showed them. A colleague's save since - a
+-- rename, a new source - makes it a different type to the one they chose, holding values that colleague
+-- means to keep, so it is refused rather than deleted.
+IF @locked IS NOT NULL AND @expectedRevision IS NOT NULL AND @revision <> @expectedRevision
+BEGIN
+    RAISERROR('USERORG_TYPE_CHANGED', 16, 1);
+    RETURN;
+END
 
 DELETE FROM dbo.user_org_import_jobs WHERE org_type_id = @id;
 DELETE FROM dbo.user_org_assignments WHERE org_type_id = @id;
@@ -411,6 +468,8 @@ DELETE FROM dbo.user_org_types WHERE id = @id;";
                 using (var cmd = Command(connection, sql, tx))
                 {
                     cmd.Parameters.Add("@id", SqlDbType.Int).Value = id;
+                    cmd.Parameters.Add("@expectedRevision", SqlDbType.Int).Value =
+                        expectedRevision.HasValue ? (object)expectedRevision.Value : DBNull.Value;
 
                     try
                     {
@@ -422,6 +481,15 @@ DELETE FROM dbo.user_org_types WHERE id = @id;";
                             "An import for this organisation type is running. Wait for it to finish before "
                             + "deleting the type.",
                             UserOrgMessageCodes.ImportRunningDelete,
+                            null,
+                            ex);
+                    }
+                    catch (SqlException ex) when (ex.Message.IndexOf("USERORG_TYPE_CHANGED", StringComparison.Ordinal) >= 0)
+                    {
+                        throw new UserOrgValidationException(
+                            "Someone else changed this organisation type after the page loaded, so it was not deleted. "
+                            + "Check it as it is now, and delete it again if you still want to.",
+                            UserOrgMessageCodes.TypeChangedBeforeDelete,
                             null,
                             ex);
                     }

@@ -254,6 +254,15 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         /// </summary>
         [JsonProperty("expectedRevision")]
         public int? ExpectedRevision { get; set; }
+
+        /// <summary>
+        /// For an edit: how many values the type held when the dialog opened - the number its discard
+        /// warning showed. A save that discards the type's values is refused as <c>discardExceedsConfirmed</c>
+        /// if it now holds more, because imports change a type's values without changing its revision. Null
+        /// for a create, or from a page too old to send it, and then not checked.
+        /// </summary>
+        [JsonProperty("confirmedDiscardCount")]
+        public int? ConfirmedDiscardCount { get; set; }
     }
 
     /// <summary>A request to resolve one attribute for one user.</summary>

@@ -108,8 +108,13 @@ export function updateOrgType(id: number, model: UserOrgTypeSave): Promise<UserO
   return send<UserOrgType>(`${baseUrl()}/types/${id}`, json('PUT', model));
 }
 
-export function deleteOrgType(id: number): Promise<{ deleted: boolean }> {
-  return send<{ deleted: boolean }>(`${baseUrl()}/types/${id}`, json('DELETE'));
+/**
+ * Deletes a type. `expectedRevision` is the revision the page showed: a type someone else has saved since
+ * is refused rather than deleted.
+ */
+export function deleteOrgType(id: number, expectedRevision?: number): Promise<{ deleted: boolean }> {
+  const query = expectedRevision === undefined ? '' : `?expectedRevision=${encodeURIComponent(String(expectedRevision))}`;
+  return send<{ deleted: boolean }>(`${baseUrl()}/types/${id}${query}`, json('DELETE'));
 }
 
 /**

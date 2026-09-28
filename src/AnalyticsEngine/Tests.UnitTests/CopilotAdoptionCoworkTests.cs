@@ -1591,6 +1591,82 @@ namespace Tests.UnitTests
             StringAssert.Contains(warning, "licensed-user analysis");
         }
 
+        [TestMethod]
+        public void Cowork_InASliceBeyondTheLicensedUserCap_BlamesTheCapNotAFailure()
+        {
+            // The licensed-user query keeps the lowest user ids past its cap and the Cowork query the most
+            // loaded people, so a view made up of the newest user records can hold Cowork signals and no
+            // licensed-user row at all, with both queries complete. Telling that admin to check Health and
+            // re-run sends them looking for a failure that does not exist.
+            var analysis = AnalysisWithOneCoworkSignal();
+            analysis.LicensedUsers = new List<LicensedUserAdoptionRow>();
+            analysis.LicensedUsersCapped = true;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.IsFalse(analysis.Summary.CoworkReadinessAvailable,
+                "Still unavailable: nobody in the view has a fluency figure to score them with.");
+            Assert.AreEqual(0, analysis.CoworkReadiness.Count);
+            Assert.IsFalse(analysis.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.CoworkFluencyMissingAll));
+            var detail = analysis.Summary.WarningDetails.Single(d => d.Key == CopilotAdoptionWarningKeys.CoworkSliceBeyondLicensedCap);
+            Assert.AreEqual(1, detail.Values["total"]);
+            Assert.AreEqual(CopilotAdoptionOptions.Default.MaxLicensedUsersScored, detail.Values["maxLicensed"]);
+        }
+
+        [TestMethod]
+        public void Cowork_StillBlamesAFailure_WhenTheLicensedUserQueryWasNotCapped()
+        {
+            var analysis = AnalysisWithOneCoworkSignal();
+            analysis.LicensedUsers = new List<LicensedUserAdoptionRow>();
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.IsTrue(analysis.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.CoworkFluencyMissingAll));
+            Assert.IsFalse(analysis.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.CoworkSliceBeyondLicensedCap));
+        }
+
+        [TestMethod]
+        public void Cowork_AFilteredViewOfACappedAnalysisKnowsTheCapWasReached()
+        {
+            // End to end through the scope filter: the slice is rebuilt from narrowed rows, so the cap has
+            // to travel with it - the view itself holds no licensed-user row that could say so.
+            var assessed = HeavyCoordinator();
+            assessed.UserId = 1;
+            assessed.UserPrincipalName = "aisha.rahman@contoso.com";
+            assessed.EmailDomain = "contoso.com";
+            var newJoiner = HeavyCoordinator();
+            newJoiner.UserId = 60001;
+            newJoiner.UserPrincipalName = "noor.haddad@fabrikam.com";
+            newJoiner.EmailDomain = "fabrikam.com";
+
+            var analysis = new CopilotAdoptionAnalysis
+            {
+                CoworkSignals = new List<CoworkReadinessSignalRow> { assessed, newJoiner },
+                LicensedUsers = new List<LicensedUserAdoptionRow>
+                {
+                    new LicensedUserAdoptionRow
+                    {
+                        UserId = 1,
+                        UserPrincipalName = "aisha.rahman@contoso.com",
+                        EmailDomain = "contoso.com",
+                        AdoptionScore = 70,
+                    },
+                },
+                LicensedUsersCapped = true,
+            };
+
+            var service = new CopilotAdoptionService();
+            service.FinaliseSummary(analysis);
+            Assert.IsTrue(analysis.Summary.CoworkReadinessAvailable, "The tenant view has fluency for most people.");
+
+            var scoped = CopilotAdoptionScopeFilter.Apply(
+                analysis, CopilotAdoptionScope.ForEmailDomain("fabrikam.com"), service.FinaliseSummary);
+
+            Assert.IsFalse(scoped.Summary.CoworkReadinessAvailable);
+            Assert.IsTrue(scoped.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.CoworkSliceBeyondLicensedCap));
+            Assert.IsFalse(scoped.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.CoworkFluencyMissingAll));
+        }
+
         #endregion
     }
 }

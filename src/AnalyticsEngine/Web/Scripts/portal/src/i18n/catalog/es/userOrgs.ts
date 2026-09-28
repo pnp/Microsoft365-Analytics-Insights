@@ -351,6 +351,10 @@ export const userOrgs: Record<keyof typeof en, string> = {
     'Ese tipo de organizaci\u00f3n ya no existe: es posible que se haya eliminado en otra sesi\u00f3n.',
   'userOrgs.message.typeChangedElsewhere':
     'Otra persona cambi\u00f3 \u00ab{name}\u00bb mientras usted lo editaba, as\u00ed que sus cambios no se han guardado. Cierre esta ventana y vuelva a abrirla para ver los suyos.',
+  'userOrgs.message.discardExceedsConfirmed':
+    '\u00ab{name}\u00bb tiene ahora {count} valores (m\u00e1s que cuando lo abri\u00f3) y este cambio los descartar\u00eda, as\u00ed que no se ha guardado nada. Cierre esta ventana y vuelva a abrirla para verlos antes de decidir.',
+  'userOrgs.message.typeChangedBeforeDelete':
+    'Otra persona cambi\u00f3 este tipo de organizaci\u00f3n despu\u00e9s de que se cargara la p\u00e1gina, as\u00ed que no se ha eliminado. La lista ya lo muestra tal como est\u00e1: rev\u00edselo y vuelva a eliminarlo si a\u00fan lo desea.',
   'userOrgs.message.importRunningChange':
     'Hay una importaci\u00f3n de {name} en curso. Espere a que termine antes de cambiar el tipo.',
   'userOrgs.message.importRunningDelete':

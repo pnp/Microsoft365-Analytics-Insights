@@ -17,6 +17,8 @@ export const USER_ORG_MESSAGE_KEYS: Record<string, TranslationKey> = {
   invalidSource: 'userOrgs.message.invalidSource',
   typeGone: 'userOrgs.message.typeGone',
   typeChangedElsewhere: 'userOrgs.message.typeChangedElsewhere',
+  discardExceedsConfirmed: 'userOrgs.message.discardExceedsConfirmed',
+  typeChangedBeforeDelete: 'userOrgs.message.typeChangedBeforeDelete',
   importRunningChange: 'userOrgs.message.importRunningChange',
   importRunningDelete: 'userOrgs.message.importRunningDelete',
   attributeRequired: 'userOrgs.message.attributeRequired',
@@ -76,6 +78,7 @@ export function userOrgMessage(
       property: String(facts.property ?? ''),
       container: String(facts.container ?? ''),
       max: formatNumber(Number(facts.max ?? 0)),
+      count: formatNumber(Number(facts.count ?? 0)),
       status: String(facts.status ?? ''),
     });
   }
@@ -99,12 +102,18 @@ export function userOrgErrorMessage(error: unknown, t: TFunction, fallbackKey: T
 }
 
 /**
- * Whether a refused save means the page's copy of the type is out of date: a colleague saved it after
- * the dialog opened, or deleted it. Recognised by code, like `userOrgErrorMessage`.
+ * Whether a refused save or delete means the page's copy of the type is out of date: a colleague saved it
+ * after the page showed it, deleted it, or an import has filled it since - so the list has to catch up
+ * before the admin decides again. Recognised by code, like `userOrgErrorMessage`.
  */
 export function isStaleTypeRefusal(error: unknown): boolean {
   const code = error instanceof Error ? (error as Error & { code?: unknown }).code : undefined;
-  return code === 'typeChangedElsewhere' || code === 'typeGone';
+  return (
+    code === 'typeChangedElsewhere' ||
+    code === 'typeGone' ||
+    code === 'discardExceedsConfirmed' ||
+    code === 'typeChangedBeforeDelete'
+  );
 }
 
 /**

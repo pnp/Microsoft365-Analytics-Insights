@@ -1698,10 +1698,11 @@ WHERE resource_type = 'APPLICATION' AND resource_database_id = DB_ID()
 
             public Task<int> CreateAsync(UserOrgType type, CancellationToken cancellationToken = default(CancellationToken)) => _inner.CreateAsync(type, cancellationToken);
 
-            public Task UpdateAsync(UserOrgType type, bool clearAssignments, bool bumpGeneration, CancellationToken cancellationToken = default(CancellationToken), int? expectedGeneration = null, int? expectedRevision = null)
-                => _inner.UpdateAsync(type, clearAssignments, bumpGeneration, cancellationToken, expectedGeneration);
+            public Task UpdateAsync(UserOrgType type, bool clearAssignments, bool bumpGeneration, CancellationToken cancellationToken = default(CancellationToken), int? expectedGeneration = null, int? expectedRevision = null, int? confirmedDiscardCount = null)
+                => _inner.UpdateAsync(type, clearAssignments, bumpGeneration, cancellationToken, expectedGeneration, expectedRevision, confirmedDiscardCount);
 
-            public Task DeleteAsync(int id, CancellationToken cancellationToken = default(CancellationToken)) => _inner.DeleteAsync(id, cancellationToken);
+            public Task DeleteAsync(int id, CancellationToken cancellationToken = default(CancellationToken), int? expectedRevision = null)
+                => _inner.DeleteAsync(id, cancellationToken, expectedRevision);
 
             public Task<int> RecordEntraRefreshAsync(IReadOnlyDictionary<int, int> expectedGenerations, DateTime refreshedUtc, CancellationToken cancellationToken = default(CancellationToken))
                 => _inner.RecordEntraRefreshAsync(expectedGenerations, refreshedUtc, cancellationToken);

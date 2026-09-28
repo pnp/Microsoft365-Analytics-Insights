@@ -101,8 +101,14 @@ export default function UserOrgsPage() {
     try {
       if (editing) {
         // The type as it was when the dialog opened - `editing` is not refreshed while it is open - so a
-        // colleague's save in the meantime is refused rather than silently undone.
-        await updateOrgType(editing.id, { ...model, expectedRevision: editing.revision });
+        // colleague's save in the meantime is refused rather than silently undone. And the values it held
+        // then, which is what the dialog's discard warning showed: a type an import has filled since is
+        // refused rather than emptied of values nobody was warned about.
+        await updateOrgType(editing.id, {
+          ...model,
+          expectedRevision: editing.revision,
+          confirmedDiscardCount: editing.assignedUserCount,
+        });
         toast.success(t('userOrgs.toast.saved', { name: model.name }));
       } else {
         await createOrgType(model);
@@ -130,10 +136,14 @@ export default function UserOrgsPage() {
     if (!window.confirm(message)) return;
 
     try {
-      await deleteOrgType(type.id);
+      // The revision the admin was shown: a type a colleague has saved since is refused, not deleted.
+      await deleteOrgType(type.id, type.revision);
       toast.success(t('userOrgs.toast.deleted', { name: type.name }));
       await changed();
     } catch (e) {
+      // Refused because this page's copy is out of date: bring the list up to date, so what the admin
+      // sees next is the type as it now is.
+      if (isStaleTypeRefusal(e)) await changed();
       toast.error(userOrgErrorMessage(e, t, 'errors.userOrgs.deleteFailed'));
     }
   };

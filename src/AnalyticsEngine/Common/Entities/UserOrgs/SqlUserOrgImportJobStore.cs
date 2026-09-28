@@ -1311,14 +1311,6 @@ DELETE FROM dbo.user_org_import_changes WHERE job_id = @jobId;";
             }
         }
 
-        private static int ParseTrailingNumber(string message)
-        {
-            var colon = message.IndexOf(':');
-            var digits = colon < 0 ? string.Empty : new string(message.Substring(colon + 1).TakeWhile(char.IsDigit).ToArray());
-            int value;
-            return int.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out value) ? value : 0;
-        }
-
         internal static UserOrgImportJob ReadJob(SqlDataReader reader)
         {
             return new UserOrgImportJob

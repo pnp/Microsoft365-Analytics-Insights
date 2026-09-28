@@ -46,6 +46,7 @@ export const COPILOT_ADOPTION_WARNING_KEYS = {
   CoworkFluencyPartial: 'coworkFluencyPartial',
   CoworkSliceNotAssessed: 'coworkSliceNotAssessed',
   CoworkReadinessCapped: 'coworkReadinessCapped',
+  CoworkSliceBeyondLicensedCap: 'coworkSliceBeyondLicensedCap',
   CouldNotLoad: 'couldNotLoad',
 } as const;
 
@@ -59,6 +60,7 @@ const COWORK_WARNING_KEYS = new Set<string>([
   COPILOT_ADOPTION_WARNING_KEYS.CoworkFluencyPartial,
   COPILOT_ADOPTION_WARNING_KEYS.CoworkSliceNotAssessed,
   COPILOT_ADOPTION_WARNING_KEYS.CoworkReadinessCapped,
+  COPILOT_ADOPTION_WARNING_KEYS.CoworkSliceBeyondLicensedCap,
 ]);
 
 const OPPORTUNITY_WARNING_KEYS = new Set<string>([

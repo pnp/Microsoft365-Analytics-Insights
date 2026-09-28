@@ -429,6 +429,114 @@ VALUES ('{upn.Replace("'", "''")}', {(accountEnabled.HasValue ? (accountEnabled.
         }
 
         [TestMethod]
+        public async Task Update_ThatWouldDiscardValuesTheDialogNeverShowedIsRefusedAndChangesNothing()
+        {
+            // Admin A opens a CSV type with nothing in it: no discard warning, and so no reason to prove a
+            // new attribute with a test that finds a value. Admin B imports a file into it. Imports move
+            // neither the generation nor the revision, so A's switch to Entra passed every fence - and
+            // discarded B's import, which A never saw.
+            var a = AddUser("a@contoso.com");
+            var b = AddUser("b@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var openedByA = await _types.GetAsync(typeId);
+            await _assignments.MergeAsync(new[]
+            {
+                new UserOrgAssignmentUpdate(a, typeId, "Retail"),
+                new UserOrgAssignmentUpdate(b, typeId, GreekOrgName),
+            });
+
+            openedByA.SourceKind = UserOrgSourceKind.EntraAttribute;
+            openedByA.EntraAttributeName = "extensionAttribute1";
+            UserOrgValidationException refusal = null;
+            try
+            {
+                await _types.UpdateAsync(
+                    openedByA, true, true, CancellationToken.None, openedByA.SourceGeneration, openedByA.Revision, confirmedDiscardCount: 0);
+            }
+            catch (UserOrgValidationException ex)
+            {
+                refusal = ex;
+            }
+
+            Assert.IsNotNull(refusal, "A save may discard only the values the admin was shown.");
+            Assert.AreEqual(UserOrgMessageCodes.DiscardExceedsConfirmed, refusal.Code);
+            Assert.AreEqual(2, refusal.Values["count"]);
+            var now = await _types.GetAsync(typeId);
+            Assert.AreEqual(UserOrgSourceKind.CsvUpload, now.SourceKind, "Nothing of the save was applied.");
+            Assert.AreEqual(openedByA.Revision, now.Revision);
+            Assert.AreEqual(openedByA.SourceGeneration, now.SourceGeneration);
+            Assert.AreEqual(2, Count($"SELECT COUNT(*) FROM dbo.user_org_assignments WHERE org_type_id = {typeId}"));
+
+            // Reopened, the dialog shows the two values and warns of them: that confirmation covers them.
+            await _types.UpdateAsync(
+                openedByA, true, true, CancellationToken.None, now.SourceGeneration, now.Revision, confirmedDiscardCount: 2);
+            Assert.AreEqual(UserOrgSourceKind.EntraAttribute, (await _types.GetAsync(typeId)).SourceKind);
+            Assert.AreEqual(0, Count($"SELECT COUNT(*) FROM dbo.user_org_assignments WHERE org_type_id = {typeId}"));
+        }
+
+        [TestMethod]
+        public async Task Update_TheDiscardCheckBindsOnlyASaveThatDiscards()
+        {
+            // A rename keeps every value, so a type that gained values since the dialog opened is still
+            // renamed; and a page too old to send the count is not checked, as before.
+            var a = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var opened = await _types.GetAsync(typeId);
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(a, typeId, "Retail") });
+
+            opened.Name = "Teams";
+            await _types.UpdateAsync(
+                opened, false, false, CancellationToken.None, opened.SourceGeneration, opened.Revision, confirmedDiscardCount: 0);
+            Assert.AreEqual("Teams", (await _types.GetAsync(typeId)).Name);
+            Assert.AreEqual(1, Count($"SELECT COUNT(*) FROM dbo.user_org_assignments WHERE org_type_id = {typeId}"));
+
+            var renamed = await _types.GetAsync(typeId);
+            renamed.SourceKind = UserOrgSourceKind.EntraAttribute;
+            renamed.EntraAttributeName = "extensionAttribute1";
+            await _types.UpdateAsync(renamed, true, true, CancellationToken.None, renamed.SourceGeneration, renamed.Revision);
+            Assert.AreEqual(0, Count($"SELECT COUNT(*) FROM dbo.user_org_assignments WHERE org_type_id = {typeId}"));
+        }
+
+        [TestMethod]
+        public async Task Delete_OfATypeAColleagueHasSavedSinceThePageLoadedIsRefusedAndKeepsEverything()
+        {
+            // Admin A's page shows the type at revision 1. Admin B renames it and repoints it; A then
+            // confirms deleting the type their page shows - which is no longer the one B means to keep.
+            var a = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var shownToA = await _types.GetAsync(typeId);
+            var savedByB = await _types.GetAsync(typeId);
+            savedByB.Name = "Cost Centre";
+            await _types.UpdateAsync(savedByB, false, false, CancellationToken.None, savedByB.SourceGeneration, savedByB.Revision);
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(a, typeId, "CC-1042") });
+
+            UserOrgValidationException refusal = null;
+            try
+            {
+                await _types.DeleteAsync(typeId, CancellationToken.None, shownToA.Revision);
+            }
+            catch (UserOrgValidationException ex)
+            {
+                refusal = ex;
+            }
+
+            Assert.IsNotNull(refusal, "A delete confirmed against an older copy of the type must be refused.");
+            Assert.AreEqual(UserOrgMessageCodes.TypeChangedBeforeDelete, refusal.Code);
+            Assert.AreEqual("Cost Centre", (await _types.GetAsync(typeId)).Name);
+            Assert.AreEqual(1, Count($"SELECT COUNT(*) FROM dbo.user_org_assignments WHERE org_type_id = {typeId}"));
+
+            var current = await _types.GetAsync(typeId);
+            await _types.DeleteAsync(typeId, CancellationToken.None, current.Revision);
+            Assert.IsNull(await _types.GetAsync(typeId), "Confirmed against the type as it is, it is deleted.");
+
+            // A type already gone is simply gone, and a page too old to send a revision is not checked.
+            await _types.DeleteAsync(typeId, CancellationToken.None, current.Revision);
+            var unfenced = await _types.CreateAsync(CsvType("Unchecked"));
+            await _types.DeleteAsync(unfenced);
+            Assert.IsNull(await _types.GetAsync(unfenced));
+        }
+
+        [TestMethod]
         public async Task GetEnabledEntraTypes_ExcludesDisabledAndCsvTypes()
         {
             await _types.CreateAsync(new UserOrgType

@@ -344,6 +344,10 @@ export const userOrgs = {
   'userOrgs.message.typeGone': 'That organisation type no longer exists - it may have been deleted in another session.',
   'userOrgs.message.typeChangedElsewhere':
     'Someone else changed \u201c{name}\u201d while you were editing it, so your changes were not saved. Close this and open it again to see theirs.',
+  'userOrgs.message.discardExceedsConfirmed':
+    '\u201c{name}\u201d now holds {count} values - more than when you opened it - and this change would discard them, so nothing was saved. Close this and open it again to see them before you decide.',
+  'userOrgs.message.typeChangedBeforeDelete':
+    'Someone else changed this organisation type after the page loaded, so it was not deleted. The list now shows it as it is: check it, and delete it again if you still want to.',
   'userOrgs.message.importRunningChange': 'An import for {name} is running. Wait for it to finish before changing the type.',
   'userOrgs.message.importRunningDelete':
     'An import for this organisation type is running. Wait for it to finish before deleting the type.',

@@ -149,7 +149,8 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                     sourceChanged || enabledChanged,
                     cancellationToken,
                     existing.SourceGeneration,
-                    model.ExpectedRevision)
+                    model.ExpectedRevision,
+                    model.ConfirmedDiscardCount)
                 .ConfigureAwait(false);
 
             // Mirrors what the store just did, for the answer to fall back on if the type cannot be read
@@ -187,9 +188,10 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             return ToModel(stored ?? new UserOrgTypeSummary { Type = saved });
         }
 
-        public Task DeleteAsync(int id, CancellationToken cancellationToken)
+        /// <param name="expectedRevision">The revision the admin's page showed, or null not to check.</param>
+        public Task DeleteAsync(int id, int? expectedRevision, CancellationToken cancellationToken)
         {
-            return _types.DeleteAsync(id, cancellationToken);
+            return _types.DeleteAsync(id, cancellationToken, expectedRevision);
         }
 
         /// <summary>
