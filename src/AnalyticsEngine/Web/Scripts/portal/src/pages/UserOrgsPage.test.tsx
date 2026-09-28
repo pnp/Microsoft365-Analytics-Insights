@@ -70,6 +70,7 @@ function failedImport(): UserOrgImportJob {
     rowsInvalid: 0,
     errorCode: null,
     errorMessage: 'The import failed.',
+    changeLog: null,
   };
 }
 

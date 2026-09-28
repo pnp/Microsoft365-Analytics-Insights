@@ -39,6 +39,15 @@ namespace Common.Entities.UserOrgs
             return new SqlUserOrgImportJobStore(Require(connectionString));
         }
 
+        /// <summary>
+        /// The applied imports' change lists waiting for the change log. The same SQL adapter as
+        /// <see cref="CreateImportJobStore"/>, through a narrower port.
+        /// </summary>
+        public static IUserOrgChangeOutbox CreateChangeOutbox(string connectionString)
+        {
+            return new SqlUserOrgImportJobStore(Require(connectionString));
+        }
+
         /// <summary>The read-only "who is in each organisation" queries behind the admin page.</summary>
         public static IUserOrgMembershipReader CreateMembershipReader(string connectionString)
         {

@@ -36,6 +36,12 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         /// <summary>The most past imports one history request returns.</summary>
         public const int MaxHistory = 50;
 
+        /// <summary>The most unwritten change logs one resume sweep sends to be written.</summary>
+        public const int MaxPendingChangeLogsPerSweep = 20;
+
+        /// <summary>Changes per page of the change list, unless the caller asks for fewer.</summary>
+        public const int DefaultChangePageSize = 50;
+
         private readonly IUserOrgTypeStore _types;
         private readonly IUserOrgAssignmentStore _assignments;
         private readonly IUserOrgImportJobStore _jobs;
@@ -45,7 +51,13 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         private readonly Func<DateTime> _utcNow;
         private readonly IUserOrgImportTelemetry _telemetry;
         private readonly UserOrgResumeGate _resumeGate;
+        private readonly IUserOrgChangeOutbox _changeOutbox;
+        private readonly Func<UserOrgChangeLogStatus, IUserOrgChangeLog> _changeLogFor;
+        private readonly Action<int> _dispatchChangeLog;
 
+        /// <param name="changeOutbox">Lists applied imports whose change log is still to be written, for the resume sweep.</param>
+        /// <param name="changeLogFor">The change log an import's list was written to, or null when that store is unreachable.</param>
+        /// <param name="dispatchChangeLog">Writes one import's change log in the background.</param>
         public UserOrgAdminService(
             IUserOrgTypeStore types,
             IUserOrgAssignmentStore assignments,
@@ -55,7 +67,10 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             Action<int> dispatchImport,
             Func<DateTime> utcNow = null,
             IUserOrgImportTelemetry telemetry = null,
-            UserOrgResumeGate resumeGate = null)
+            UserOrgResumeGate resumeGate = null,
+            IUserOrgChangeOutbox changeOutbox = null,
+            Func<UserOrgChangeLogStatus, IUserOrgChangeLog> changeLogFor = null,
+            Action<int> dispatchChangeLog = null)
         {
             _types = types ?? throw new ArgumentNullException(nameof(types));
             _assignments = assignments ?? throw new ArgumentNullException(nameof(assignments));
@@ -66,6 +81,9 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             _utcNow = utcNow ?? (() => DateTime.UtcNow);
             _telemetry = telemetry ?? NullUserOrgImportTelemetry.Instance;
             _resumeGate = resumeGate ?? UserOrgResumeGate.Shared;
+            _changeOutbox = changeOutbox;
+            _changeLogFor = changeLogFor ?? (status => status == UserOrgChangeLogStatus.Memory ? InMemoryUserOrgChangeLog.Shared : null);
+            _dispatchChangeLog = dispatchChangeLog;
         }
 
         #region Org types
@@ -602,6 +620,88 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         }
 
         /// <summary>
+        /// One page of what an import changed, user by user: the value before and after, in user principal
+        /// name order, optionally only the users whose UPN starts with <paramref name="search"/>.
+        /// </summary>
+        /// <returns>Null when there is no such import. Drafts are not imports.</returns>
+        /// <remarks>
+        /// Read from the store the job row says the list was written to. A list kept in memory is gone
+        /// once the web app restarts, and is never visible from another instance; that is reported as
+        /// <c>missing</c>, in words the portal can explain, rather than as an empty list - an empty list
+        /// would read as "this import changed nobody".
+        /// </remarks>
+        public async Task<UserOrgChangeLogPageModel> GetChangesAsync(
+            int jobId,
+            string search,
+            string continuation,
+            int pageSize,
+            CancellationToken cancellationToken)
+        {
+            var job = await _jobs.GetJobAsync(jobId, cancellationToken).ConfigureAwait(false);
+            if (job == null || job.Status == UserOrgImportStatus.Draft)
+            {
+                return null;
+            }
+
+            var model = new UserOrgChangeLogPageModel { JobId = jobId };
+            if (!job.ChangeLogStatus.HasValue)
+            {
+                model.Status = "none";
+                return model;
+            }
+
+            if (job.ChangeLogStatus.Value == UserOrgChangeLogStatus.Pending)
+            {
+                model.Status = "pending";
+                return model;
+            }
+
+            model.Storage = job.ChangeLogStatus.Value == UserOrgChangeLogStatus.TableStorage ? "tableStorage" : "memory";
+            var log = _changeLogFor(job.ChangeLogStatus.Value);
+            if (log == null)
+            {
+                model.Status = "unavailable";
+                return model;
+            }
+
+            var logId = UserOrgChangeLogKeys.LogId(job.Id, job.QueuedUtc);
+            try
+            {
+                var summary = await log.GetImportAsync(logId, cancellationToken).ConfigureAwait(false);
+                if (summary == null)
+                {
+                    model.Status = "missing";
+                    return model;
+                }
+
+                var page = await log
+                    .GetChangesAsync(logId, search, continuation, pageSize <= 0 ? DefaultChangePageSize : pageSize, cancellationToken)
+                    .ConfigureAwait(false);
+
+                model.Status = "available";
+                model.Summary = ToModel(summary);
+                model.Items = page.Items.Select(ToModel).ToList();
+                model.Continuation = page.Continuation;
+                return model;
+            }
+            catch (Exception ex) when (!(ex is UserOrgValidationException) && !cancellationToken.IsCancellationRequested)
+            {
+                // The storage account is reachable enough to have been chosen but refused this read - a
+                // firewall or role change since. Said as such, rather than failing the whole dialog.
+                Emit(new UserOrgImportTelemetryEvent
+                {
+                    Stage = UserOrgImportStages.ChangeLogStorageUnavailable,
+                    JobId = jobId,
+                    OrgTypeId = job.OrgTypeId,
+                    Code = "read",
+                    ExceptionType = ex.GetBaseException().GetType().Name,
+                });
+                model.Status = "unavailable";
+                return model;
+            }
+        }
+
+        /// <summary>
         /// Hands imports whose worker died back to a new one, and stops those that cannot sensibly be
         /// resumed. Returns the ids it dispatched.
         /// </summary>
@@ -631,9 +731,17 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
             var watch = Stopwatch.StartNew();
             IReadOnlyList<int> ids;
+            IReadOnlyList<int> pendingLogs = new int[0];
             try
             {
                 ids = await _jobs.ResumeStaleJobsAsync(cancellationToken).ConfigureAwait(false);
+                if (_changeOutbox != null && _dispatchChangeLog != null)
+                {
+                    // Applied imports whose change list never reached the log - the worker stopped between
+                    // the apply and the write, or the store refused it. The list is safe in the outbox.
+                    pendingLogs = await _changeOutbox.ListPendingAsync(MaxPendingChangeLogsPerSweep, cancellationToken)
+                        .ConfigureAwait(false);
+                }
             }
             catch (Exception ex)
             {
@@ -649,6 +757,11 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             foreach (var id in ids)
             {
                 _dispatchImport(id);
+            }
+
+            foreach (var id in pendingLogs)
+            {
+                _dispatchChangeLog(id);
             }
 
             if (ids.Count > 0)
@@ -791,6 +904,53 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 RowsInvalid = job.RowsInvalid,
                 ErrorCode = job.ErrorCode,
                 ErrorMessage = job.ErrorMessage,
+                ChangeLog = DescribeChangeLog(job.ChangeLogStatus),
+            };
+        }
+
+        internal static string DescribeChangeLog(UserOrgChangeLogStatus? status)
+        {
+            if (!status.HasValue)
+            {
+                return null;
+            }
+
+            switch (status.Value)
+            {
+                case UserOrgChangeLogStatus.Pending: return "pending";
+                case UserOrgChangeLogStatus.TableStorage: return "tableStorage";
+                default: return "memory";
+            }
+        }
+
+        internal static UserOrgChangeLogSummaryModel ToModel(UserOrgChangeLogImport import)
+        {
+            return new UserOrgChangeLogSummaryModel
+            {
+                OrgTypeName = import.OrgTypeName,
+                Mode = import.Mode == UserOrgImportMode.Replace ? "replace" : "merge",
+                StartedBy = import.StartedBy,
+                FileName = import.FileName,
+                QueuedUtc = Iso(import.QueuedUtc),
+                FinishedUtc = import.FinishedUtc.HasValue ? Iso(import.FinishedUtc.Value) : null,
+                Added = import.Added,
+                Changed = import.Changed,
+                Cleared = import.Cleared,
+                ChangeCount = import.ChangeCount,
+                StoredChanges = import.StoredChanges,
+                RowsUnknownUpn = import.RowsUnknownUpn,
+                RowsInvalid = import.RowsInvalid,
+            };
+        }
+
+        internal static UserOrgChangeModel ToModel(UserOrgChangeLogEntry entry)
+        {
+            return new UserOrgChangeModel
+            {
+                Upn = entry.Upn,
+                Before = entry.Before,
+                After = entry.After,
+                Kind = entry.Kind == UserOrgChangeKind.Added ? "added" : entry.Kind == UserOrgChangeKind.Changed ? "changed" : "cleared",
             };
         }
 

@@ -228,11 +228,16 @@ BEGIN
         -- language. error_message is the English, kept for a key the portal does not know.
         [error_code] nvarchar(64) NULL,
         [error_message] nvarchar(2000) NULL,
+        -- Where this import's change list is: NULL = there is none (the import did not apply);
+        -- 1 = captured with the changes, waiting to be written to the change log; 2 = written to Azure
+        -- Table Storage; 3 = written to the web app's memory, because no storage account was usable.
+        [change_log_status] tinyint NULL,
         CONSTRAINT [PK_user_org_import_jobs] PRIMARY KEY CLUSTERED ([id] ASC),
         CONSTRAINT [FK_user_org_import_jobs_type] FOREIGN KEY ([org_type_id])
             REFERENCES [dbo].[user_org_types] ([id]),
         CONSTRAINT [CK_user_org_import_jobs_mode] CHECK ([mode] IN (1, 2)),
-        CONSTRAINT [CK_user_org_import_jobs_status] CHECK ([status] IN (1, 2, 3, 4, 5, 6))
+        CONSTRAINT [CK_user_org_import_jobs_status] CHECK ([status] IN (1, 2, 3, 4, 5, 6)),
+        CONSTRAINT [CK_user_org_import_jobs_change_log_status] CHECK ([change_log_status] IN (1, 2, 3))
     );
 
     RAISERROR('UserOrganisations: created dbo.user_org_import_jobs.', 0, 1) WITH NOWAIT;
@@ -291,10 +296,44 @@ BEGIN
     RAISERROR('UserOrganisations: created IX_user_org_import_staging_job_upn.', 0, 1) WITH NOWAIT;
 END
 
+-- ---------------------------------------------------------------------------
+-- user_org_import_changes - what an applied CSV import changed, user by user,
+-- until it is written to the change log (Azure Table Storage, or memory).
+-- Filled in the same transaction as the changes themselves, so an applied
+-- import always has its change list, even if the web app stops straight
+-- afterwards; emptied once the list has been written. upn, old_value and
+-- new_value are copies taken when the import applied, because the log must
+-- still say who and what after the user or the value is gone.
+-- ---------------------------------------------------------------------------
+IF OBJECT_ID(N'dbo.user_org_import_changes', N'U') IS NULL
+   AND OBJECT_ID(N'dbo.user_org_import_jobs', N'U') IS NOT NULL
+BEGIN
+    CREATE TABLE [dbo].[user_org_import_changes]
+    (
+        [job_id] int NOT NULL,
+        [user_id] int NOT NULL,
+        [upn] nvarchar(250) NOT NULL,
+        [old_value] nvarchar(848) NULL,
+        [new_value] nvarchar(848) NULL,
+        CONSTRAINT [PK_user_org_import_changes] PRIMARY KEY CLUSTERED ([job_id] ASC, [user_id] ASC),
+        CONSTRAINT [FK_user_org_import_changes_job] FOREIGN KEY ([job_id])
+            REFERENCES [dbo].[user_org_import_jobs] ([id]) ON DELETE CASCADE
+    );
+
+    RAISERROR('UserOrganisations: created dbo.user_org_import_changes.', 0, 1) WITH NOWAIT;
+END
+ELSE IF OBJECT_ID(N'dbo.user_org_import_changes', N'U') IS NOT NULL
+BEGIN
+    RAISERROR('UserOrganisations: dbo.user_org_import_changes already exists.', 0, 1) WITH NOWAIT;
+END
+
 RAISERROR('UserOrganisations: finished.', 0, 1) WITH NOWAIT;
 ";
 
         public const string Down_Sql = @"SET NOCOUNT ON;
+
+IF OBJECT_ID(N'dbo.user_org_import_changes', N'U') IS NOT NULL
+    DROP TABLE [dbo].[user_org_import_changes];
 
 IF OBJECT_ID(N'dbo.user_org_import_staging', N'U') IS NOT NULL
     DROP TABLE [dbo].[user_org_import_staging];
@@ -314,7 +353,7 @@ IF OBJECT_ID(N'dbo.user_org_types', N'U') IS NOT NULL
 
         public override void Up()
         {
-            Console.WriteLine("DB SCHEMA: Applying 'UserOrganisations'. Adds the configurable user organisation tables (types, values, assignments, CSV import jobs and staging). Purely additive; no performance benchmark required.");
+            Console.WriteLine("DB SCHEMA: Applying 'UserOrganisations'. Adds the configurable user organisation tables (types, values, assignments, CSV import jobs, staging and change lists). Purely additive; no performance benchmark required.");
             Sql(Up_Sql, suppressTransaction: true);
         }
 

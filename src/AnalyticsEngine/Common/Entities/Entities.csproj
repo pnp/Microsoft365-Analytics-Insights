@@ -573,6 +573,8 @@
     <Compile Include="UserOrgs\SqlUserOrgMembershipReader.cs" />
     <Compile Include="UserOrgs\SqlUserOrgTypeStore.cs" />
     <Compile Include="UserOrgs\UserOrgCsvParser.cs" />
+    <Compile Include="UserOrgs\UserOrgChangeLog.cs" />
+    <Compile Include="UserOrgs\UserOrgChangeLogShipper.cs" />
     <Compile Include="UserOrgs\UserOrgImportRunner.cs" />
     <Compile Include="UserOrgs\UserOrgImportTelemetry.cs" />
     <Compile Include="UserOrgs\UserOrgModels.cs" />

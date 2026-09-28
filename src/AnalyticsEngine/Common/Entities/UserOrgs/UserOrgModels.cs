@@ -353,6 +353,60 @@ namespace Common.Entities.UserOrgs
         public string ErrorCode { get; set; }
 
         public string ErrorMessage { get; set; }
+
+        /// <summary>Where this import's change list is, or <c>null</c> when it has none because it did not apply.</summary>
+        public UserOrgChangeLogStatus? ChangeLogStatus { get; set; }
+    }
+
+    /// <summary>
+    /// Where an applied import's change list is. Persisted as <c>user_org_import_jobs.change_log_status</c>.
+    /// </summary>
+    public enum UserOrgChangeLogStatus : byte
+    {
+        /// <summary>Captured with the changes, in SQL, and waiting to be written to the change log.</summary>
+        Pending = 1,
+
+        /// <summary>Written to Azure Table Storage.</summary>
+        TableStorage = 2,
+
+        /// <summary>
+        /// Written to one web app process's memory, because no storage account was usable. Gone when that
+        /// process stops, and never visible from another instance.
+        /// </summary>
+        Memory = 3,
+    }
+
+    /// <summary>What one import did to one user's value.</summary>
+    public enum UserOrgChangeKind
+    {
+        /// <summary>The user had no value and was given one.</summary>
+        Added,
+
+        /// <summary>The user's value was replaced with a different one.</summary>
+        Changed,
+
+        /// <summary>The user's value was removed.</summary>
+        Cleared,
+    }
+
+    /// <summary>One user's change, as the apply captured it.</summary>
+    public sealed class UserOrgChangeRecord
+    {
+        public int UserId { get; set; }
+
+        /// <summary>The user's principal name when the import applied.</summary>
+        public string Upn { get; set; }
+
+        /// <summary>The value before the import, or <c>null</c> when the user had none.</summary>
+        public string OldValue { get; set; }
+
+        /// <summary>The value after the import, or <c>null</c> when it was cleared.</summary>
+        public string NewValue { get; set; }
+
+        public UserOrgChangeKind Kind =>
+            OldValue == null ? UserOrgChangeKind.Added
+            : NewValue == null ? UserOrgChangeKind.Cleared
+            : UserOrgChangeKind.Changed;
     }
 
     /// <summary>

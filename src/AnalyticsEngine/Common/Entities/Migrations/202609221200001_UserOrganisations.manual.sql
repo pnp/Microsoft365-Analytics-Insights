@@ -238,11 +238,16 @@ BEGIN
         -- language. error_message is the English, kept for a key the portal does not know.
         [error_code] nvarchar(64) NULL,
         [error_message] nvarchar(2000) NULL,
+        -- Where this import's change list is: NULL = there is none (the import did not apply);
+        -- 1 = captured with the changes, waiting to be written to the change log; 2 = written to Azure
+        -- Table Storage; 3 = written to the web app's memory, because no storage account was usable.
+        [change_log_status] tinyint NULL,
         CONSTRAINT [PK_user_org_import_jobs] PRIMARY KEY CLUSTERED ([id] ASC),
         CONSTRAINT [FK_user_org_import_jobs_type] FOREIGN KEY ([org_type_id])
             REFERENCES [dbo].[user_org_types] ([id]),
         CONSTRAINT [CK_user_org_import_jobs_mode] CHECK ([mode] IN (1, 2)),
-        CONSTRAINT [CK_user_org_import_jobs_status] CHECK ([status] IN (1, 2, 3, 4, 5, 6))
+        CONSTRAINT [CK_user_org_import_jobs_status] CHECK ([status] IN (1, 2, 3, 4, 5, 6)),
+        CONSTRAINT [CK_user_org_import_jobs_change_log_status] CHECK ([change_log_status] IN (1, 2, 3))
     );
 
     RAISERROR('UserOrganisations: created dbo.user_org_import_jobs.', 0, 1) WITH NOWAIT;
@@ -301,15 +306,46 @@ BEGIN
     RAISERROR('UserOrganisations: created IX_user_org_import_staging_job_upn.', 0, 1) WITH NOWAIT;
 END
 
+-- ---------------------------------------------------------------------------
+-- user_org_import_changes - what an applied CSV import changed, user by user,
+-- until it is written to the change log (Azure Table Storage, or memory).
+-- Filled in the same transaction as the changes themselves, so an applied
+-- import always has its change list, even if the web app stops straight
+-- afterwards; emptied once the list has been written. upn, old_value and
+-- new_value are copies taken when the import applied, because the log must
+-- still say who and what after the user or the value is gone.
+-- ---------------------------------------------------------------------------
+IF OBJECT_ID(N'dbo.user_org_import_changes', N'U') IS NULL
+   AND OBJECT_ID(N'dbo.user_org_import_jobs', N'U') IS NOT NULL
+BEGIN
+    CREATE TABLE [dbo].[user_org_import_changes]
+    (
+        [job_id] int NOT NULL,
+        [user_id] int NOT NULL,
+        [upn] nvarchar(250) NOT NULL,
+        [old_value] nvarchar(848) NULL,
+        [new_value] nvarchar(848) NULL,
+        CONSTRAINT [PK_user_org_import_changes] PRIMARY KEY CLUSTERED ([job_id] ASC, [user_id] ASC),
+        CONSTRAINT [FK_user_org_import_changes_job] FOREIGN KEY ([job_id])
+            REFERENCES [dbo].[user_org_import_jobs] ([id]) ON DELETE CASCADE
+    );
+
+    RAISERROR('UserOrganisations: created dbo.user_org_import_changes.', 0, 1) WITH NOWAIT;
+END
+ELSE IF OBJECT_ID(N'dbo.user_org_import_changes', N'U') IS NOT NULL
+BEGIN
+    RAISERROR('UserOrganisations: dbo.user_org_import_changes already exists.', 0, 1) WITH NOWAIT;
+END
+
 RAISERROR('UserOrganisations: finished.', 0, 1) WITH NOWAIT;
 
 /* ---------------------------------------------------------------------------------------------------
    Record the migration as applied.
 
-   The guard checks SCHEMA only - that the five tables this script creates actually exist. It
-   deliberately does NOT check any data state: this migration writes no rows, and a data-state guard is
-   the shape that has previously refused to stamp a successfully-completed migration and stranded the
-   rest of the chain behind it.
+   The guard checks SCHEMA only - that the six tables this script creates actually exist, and that
+   the import jobs table has this release's shape. It deliberately does NOT check any data state: this
+   migration writes no rows, and a data-state guard is the shape that has previously refused to stamp
+   a successfully-completed migration and stranded the rest of the chain behind it.
 
    The schema check still matters, because a severity-16 RAISERROR does not abort a batch - sqlcmd and
    SSMS carry on to the next one - so an unguarded stamp would record a failed apply as complete, after
@@ -323,7 +359,9 @@ BEGIN
        OR OBJECT_ID(N'dbo.user_org_assignments', N'U') IS NULL
        OR OBJECT_ID(N'dbo.user_org_import_jobs', N'U') IS NULL
        OR OBJECT_ID(N'dbo.user_org_import_staging', N'U') IS NULL
-        RAISERROR('UserOrganisations: NOT stamped - one or more of the user_org_* tables is missing, so the schema work did not complete. If dbo.users has no primary key the assignments table is skipped by design; create the normal schema first. Re-run this script, or run the installer to reconcile.', 16, 1);
+       OR OBJECT_ID(N'dbo.user_org_import_changes', N'U') IS NULL
+       OR COL_LENGTH(N'dbo.user_org_import_jobs', N'change_log_status') IS NULL
+        RAISERROR('UserOrganisations: NOT stamped - one or more of the user_org_* tables is missing or has an older shape, so the schema work did not complete. If dbo.users has no primary key the assignments table is skipped by design; create the normal schema first. Re-run this script, or run the installer to reconcile.', 16, 1);
     ELSE IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory
                         WHERE MigrationId = N'202609201430001_DropCopilotAdoptionPeriodTables')
         RAISERROR('UserOrganisations: the tables were created, but prerequisite migration 202609201430001_DropCopilotAdoptionPeriodTables is missing from __MigrationHistory, so it was NOT stamped. Upgrade to the previous release first, or run the installer to reconcile.', 16, 1);

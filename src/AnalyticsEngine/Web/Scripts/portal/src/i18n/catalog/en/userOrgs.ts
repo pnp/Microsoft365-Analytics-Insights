@@ -278,6 +278,50 @@ export const userOrgs = {
   'userOrgs.history.outcome.succeeded': 'Succeeded.',
   'userOrgs.history.counts':
     '{changed} changed, {cleared} cleared, {unknown} unknown, {unusable} unusable',
+  'userOrgs.history.column.changes': 'Changes',
+
+  // What an import changed
+  'userOrgs.changes.open': 'View changes',
+  'userOrgs.changes.openAfterImport': 'See what changed',
+  'userOrgs.changes.title': 'What this import changed',
+  'userOrgs.changes.close': 'Close',
+  'userOrgs.changes.importedBy': 'Imported {date} by {who} ({mode}) from {file}.',
+  'userOrgs.changes.importedByNoFile': 'Imported {date} by {who} ({mode}).',
+  'userOrgs.changes.counts': '{added} added, {changed} changed, {cleared} cleared',
+  'userOrgs.changes.storage.tableStorage': 'This change list is kept in Azure Table Storage.',
+  'userOrgs.changes.storage.memory':
+    "This change list is kept in this web server's memory only, because no storage account is set up. It's lost when the web app restarts, and other web servers can't see it.",
+  'userOrgs.changes.truncated':
+    'Only the first {stored} of {count} changes were kept: the in-memory change list is limited in size.',
+  'userOrgs.changes.status.pending': 'The change list is still being written. Try again in a moment.',
+  'userOrgs.changes.status.none': 'There is no change list for this import, because it was not applied.',
+  'userOrgs.changes.status.missingMemory':
+    'This change list was kept in memory and is no longer available: the web app has restarted since, or it is on another web server.',
+  'userOrgs.changes.status.missingTable':
+    'This change list could not be found in the storage account. It may have been deleted.',
+  'userOrgs.changes.status.unavailable':
+    "The storage account can't be reached right now, so the change list can't be shown. Try again later.",
+  'userOrgs.changes.retry': 'Try again',
+  'userOrgs.changes.searchPlaceholder': 'Search by user principal name',
+  'userOrgs.changes.tableLabel': 'Changes made by this import',
+  'userOrgs.changes.column.user': 'User',
+  'userOrgs.changes.column.before': 'Before',
+  'userOrgs.changes.column.after': 'After',
+  'userOrgs.changes.column.change': 'Change',
+  'userOrgs.changes.kind.added': 'Added',
+  'userOrgs.changes.kind.changed': 'Changed',
+  'userOrgs.changes.kind.cleared': 'Cleared',
+  'userOrgs.changes.noValue': '(no value)',
+  'userOrgs.changes.empty': 'This import changed nobody: everyone already had these values.',
+  'userOrgs.changes.noMatches': 'No changes for users whose name starts with \u201c{search}\u201d.',
+  'userOrgs.changes.loading': 'Loading changes...',
+  'userOrgs.changes.loadFailed': "The changes couldn't be loaded.",
+  'userOrgs.changes.loadMore': 'Show more',
+  'userOrgs.changes.showing': 'Showing {count} of {total}',
+  'userOrgs.changes.download': 'Download all changes (CSV)',
+  'userOrgs.changes.downloading': 'Downloading... {count} changes so far',
+  'userOrgs.changes.downloadFailed': "The download didn't finish. Try again.",
+  'userOrgs.changes.defaultFileName': 'user-organisation-changes',
 
   // Who is in each organisation
   'userOrgs.browse.title': 'Who is in each organisation',

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -304,6 +305,36 @@ namespace Common.Entities.UserOrgs
     }
 
     /// <summary>What importing a staged draft would do.</summary>
+    /// <summary>
+    /// The change lists of applied imports: captured in SQL in the transaction that makes the changes,
+    /// and held there until they are written to the change log (<see cref="IUserOrgChangeLog"/>).
+    /// </summary>
+    public interface IUserOrgChangeOutbox
+    {
+        /// <summary>
+        /// Takes the right to write one import's change log, or returns <c>null</c> when another worker -
+        /// in this process or on another instance - is already writing it. Disposing the lease gives it
+        /// up, and a worker that dies gives it up with its connection.
+        /// </summary>
+        Task<IDisposable> TryLeaseAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken));
+
+        /// <summary>One page of an import's changes, in user id order, starting after <paramref name="afterUserId"/>.</summary>
+        Task<IReadOnlyList<UserOrgChangeRecord>> ReadAsync(
+            int jobId,
+            int afterUserId,
+            int take,
+            CancellationToken cancellationToken = default(CancellationToken));
+
+        /// <summary>Records where the import's change log was written, and empties its outbox, in one transaction.</summary>
+        Task CompleteAsync(
+            int jobId,
+            UserOrgChangeLogStatus writtenTo,
+            CancellationToken cancellationToken = default(CancellationToken));
+
+        /// <summary>Applied imports whose change log has not been written yet, oldest first.</summary>
+        Task<IReadOnlyList<int>> ListPendingAsync(int take, CancellationToken cancellationToken = default(CancellationToken));
+    }
+
     public sealed class UserOrgDraftSummary
     {
         public int DraftId { get; set; }
@@ -367,5 +398,7 @@ namespace Common.Entities.UserOrgs
         public const string UploadTooLarge = "uploadTooLarge";
         public const string InvalidMode = "invalidMode";
         public const string InvalidColumns = "invalidColumns";
+        public const string ChangePageExpired = "changePageExpired";
+        public const string ImportNotFound = "importNotFound";
     }
 }

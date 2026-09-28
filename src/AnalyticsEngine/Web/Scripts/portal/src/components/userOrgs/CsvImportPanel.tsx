@@ -31,7 +31,8 @@ import {
   type TranslationKey,
 } from '../../i18n';
 import { STATUS_KEYS } from './userOrgShared';
-import { buildUnusableRowsCsv, unusableRowsFileName } from './csvUnusableRows';
+import { buildUnusableRowsCsv, downloadCsv, unusableRowsFileName } from './csvUnusableRows';
+import ImportChangesDialog from './ImportChangesDialog';
 import type {
   UserOrgCsvBlockingCode,
   UserOrgCsvColumnChoice,
@@ -133,6 +134,7 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [history, setHistory] = useState<UserOrgImportJob[]>([]);
+  const [changesFor, setChangesFor] = useState<UserOrgImportJob | null>(null);
 
   const running = job !== null && (job.status === 'pending' || job.status === 'running');
   const matchedRows = preview ? preview.totalRows - preview.unknownUpnCount : 0;
@@ -309,6 +311,7 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
         rowsInvalid: queued.rowsInvalid,
         errorCode: null,
         errorMessage: null,
+        changeLog: null,
       };
       setJob(queuedJob);
       setLastImport(queuedJob);
@@ -429,7 +432,7 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
         </>
       )}
 
-      {job && <JobProgress job={job} styles={styles} t={t} />}
+      {job && <JobProgress job={job} styles={styles} t={t} onShowChanges={setChangesFor} />}
 
       {lastImport && <LastImportLine job={lastImport} t={t} />}
 
@@ -441,6 +444,7 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
         jobs={history}
         styles={styles}
         t={t}
+        onShowChanges={setChangesFor}
         onToggle={async (open) => {
           setHistoryOpen(open);
           if (open && !historyLoaded) {
@@ -448,6 +452,8 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
           }
         }}
       />
+
+      <ImportChangesDialog job={changesFor} onDismiss={() => setChangesFor(null)} />
     </div>
   );
 }
@@ -681,14 +687,7 @@ function UnusableRowsDownload({
       },
       (code) => rowProblemMessage(code, code, t),
     );
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = unusableRowsFileName(preview.fileName, t('userOrgs.csv.unusable.defaultFileName'));
-    document.body.append(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+    downloadCsv(csv, unusableRowsFileName(preview.fileName, t('userOrgs.csv.unusable.defaultFileName')));
   };
 
   return (
@@ -792,10 +791,12 @@ function JobProgress({
   job,
   styles,
   t,
+  onShowChanges,
 }: {
   job: UserOrgImportJob;
   styles: ReturnType<typeof useStyles>;
   t: TFunction;
+  onShowChanges: (job: UserOrgImportJob) => void;
 }) {
   if (job.status === 'pending' || job.status === 'running') {
     return (
@@ -855,6 +856,11 @@ function JobProgress({
         </MessageBarBody>
       </MessageBar>
       <JobCounts job={job} styles={styles} t={t} />
+      {job.changeLog && (
+        <Button size="small" onClick={() => onShowChanges(job)}>
+          {t('userOrgs.changes.openAfterImport')}
+        </Button>
+      )}
     </div>
   );
 }
@@ -922,6 +928,7 @@ function ImportHistory({
   styles,
   t,
   onToggle,
+  onShowChanges,
 }: {
   open: boolean;
   loading: boolean;
@@ -931,6 +938,7 @@ function ImportHistory({
   styles: ReturnType<typeof useStyles>;
   t: TFunction;
   onToggle: (open: boolean) => void;
+  onShowChanges: (job: UserOrgImportJob) => void;
 }) {
   return (
     <details className={styles.history} open={open} onToggle={(e) => onToggle(e.currentTarget.open)}>
@@ -953,6 +961,7 @@ function ImportHistory({
               <TableHeaderCell>{t('userOrgs.history.column.status')}</TableHeaderCell>
               <TableHeaderCell>{t('userOrgs.history.column.counts')}</TableHeaderCell>
               <TableHeaderCell>{t('userOrgs.history.column.reason')}</TableHeaderCell>
+              <TableHeaderCell>{t('userOrgs.history.column.changes')}</TableHeaderCell>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -964,6 +973,13 @@ function ImportHistory({
                 <TableCell>{t(STATUS_KEYS[historyJob.status])}</TableCell>
                 <TableCell>{importCounts(historyJob, t)}</TableCell>
                 <TableCell>{historyJob.status === 'succeeded' ? t('userOrgs.history.reason.none') : jobErrorMessage(historyJob, t)}</TableCell>
+                <TableCell>
+                  {historyJob.status === 'succeeded' && historyJob.changeLog && (
+                    <Button size="small" appearance="subtle" onClick={() => onShowChanges(historyJob)}>
+                      {t('userOrgs.changes.open')}
+                    </Button>
+                  )}
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>

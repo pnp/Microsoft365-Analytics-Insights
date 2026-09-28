@@ -11,11 +11,12 @@ const mocks = vi.hoisted(() => ({
   importCsv: vi.fn(),
   fetchImportJob: vi.fn(),
   fetchImportHistory: vi.fn(),
+  fetchImportChanges: vi.fn(),
   UserOrgApiErrorCtor: undefined as unknown as typeof import('../../api/userOrgsApi').UserOrgApiError,
   SessionExpiredErrorCtor: undefined as unknown as typeof import('../../api/http').SessionExpiredError,
 }));
 
-const { previewCsv, importCsv, fetchImportJob, fetchImportHistory } = mocks;
+const { previewCsv, importCsv, fetchImportJob, fetchImportHistory, fetchImportChanges } = mocks;
 
 vi.mock('../../api/userOrgsApi', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/userOrgsApi')>();
@@ -26,6 +27,7 @@ vi.mock('../../api/userOrgsApi', async (importOriginal) => {
     importCsv: (...args: unknown[]) => mocks.importCsv(...args),
     fetchImportJob: (...args: unknown[]) => mocks.fetchImportJob(...args),
     fetchImportHistory: (...args: unknown[]) => mocks.fetchImportHistory(...args),
+    fetchImportChanges: (...args: unknown[]) => mocks.fetchImportChanges(...args),
   };
 });
 
@@ -105,6 +107,7 @@ function job(over: Partial<UserOrgImportJob> = {}): UserOrgImportJob {
     rowsInvalid: 0,
     errorCode: null,
     errorMessage: null,
+    changeLog: null,
     ...over,
   };
 }
@@ -123,6 +126,7 @@ describe('CsvImportPanel', () => {
     importCsv.mockReset();
     fetchImportJob.mockReset();
     fetchImportHistory.mockReset();
+    fetchImportChanges.mockReset();
     fetchImportHistory.mockResolvedValue([]);
   });
 
@@ -522,6 +526,32 @@ describe('CsvImportPanel', () => {
 
     expect(await screen.findByText(/Last import:/i)).toHaveTextContent('Succeeded.');
     expect(screen.getByText(/2 changed, 1 cleared, 1 unknown, 0 unusable/i)).toBeInTheDocument();
+  });
+
+  it('offers the change list for an import that applied, from the history and when it finishes', async () => {
+    fetchImportChanges.mockResolvedValue({
+      jobId: 7,
+      status: 'pending',
+      storage: null,
+      summary: null,
+      items: [],
+      continuation: null,
+    });
+    fetchImportHistory.mockResolvedValue([
+      job({ changeLog: 'tableStorage' }),
+      job({ id: 8, status: 'failed', errorCode: 'failed', changeLog: null }),
+    ]);
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+
+    await userEvent.click(screen.getByText('Import history'));
+    const table = await screen.findByRole('table', { name: 'Import history' });
+    const buttons = within(table).getAllByRole('button', { name: 'View changes' });
+    expect(buttons).toHaveLength(1);
+
+    await userEvent.click(buttons[0]);
+
+    await waitFor(() => expect(fetchImportChanges).toHaveBeenCalledWith(7, expect.anything(), expect.anything()));
+    expect(await screen.findByText(/still being written/i)).toBeInTheDocument();
   });
 
   it('loads import history on first expansion and renders counts and reasons', async () => {

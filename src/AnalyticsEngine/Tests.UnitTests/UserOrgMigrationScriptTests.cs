@@ -101,7 +101,7 @@ CREATE TABLE dbo.__MigrationHistory (
 
                 db.ExecuteScript(Script(), quotedIdentifierOn: false);
 
-                Assert.AreEqual(5, TableCount(db), "All five user_org tables should exist.");
+                Assert.AreEqual(6, TableCount(db), "All six user_org tables should exist.");
                 Assert.AreEqual(1, StampCount(db), "EF and the Health page decide from __MigrationHistory.");
 
                 Assert.AreEqual(
@@ -130,7 +130,7 @@ CREATE TABLE dbo.__MigrationHistory (
                 db.ExecuteScript(Script(), quotedIdentifierOn: false);
                 db.ExecuteScript(Script(), quotedIdentifierOn: false);
 
-                Assert.AreEqual(5, TableCount(db));
+                Assert.AreEqual(6, TableCount(db));
                 Assert.AreEqual(1, StampCount(db), "The stamp must not be duplicated.");
             }
         }
@@ -155,7 +155,7 @@ CREATE TABLE dbo.__MigrationHistory (
 
                 Assert.AreEqual(0, StampCount(db), "Nothing may be recorded when the chain is broken.");
                 Assert.AreEqual(
-                    5,
+                    6,
                     TableCount(db),
                     "The schema itself is additive and harmless, so it is created; only the stamp is withheld. "
                     + "Re-running after the predecessor is applied then stamps it.");

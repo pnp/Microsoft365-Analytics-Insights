@@ -281,6 +281,52 @@ export const userOrgs: Record<keyof typeof en, string> = {
   'userOrgs.history.outcome.succeeded': 'Correcta.',
   'userOrgs.history.counts':
     '{changed} modificados, {cleared} borrados, {unknown} desconocidos, {unusable} inutilizables',
+  'userOrgs.history.column.changes': 'Cambios',
+
+  // What an import changed
+  'userOrgs.changes.open': 'Ver cambios',
+  'userOrgs.changes.openAfterImport': 'Ver qu\u00e9 cambi\u00f3',
+  'userOrgs.changes.title': 'Qu\u00e9 cambi\u00f3 esta importaci\u00f3n',
+  'userOrgs.changes.close': 'Cerrar',
+  'userOrgs.changes.importedBy': 'Importado el {date} por {who} ({mode}) desde {file}.',
+  'userOrgs.changes.importedByNoFile': 'Importado el {date} por {who} ({mode}).',
+  'userOrgs.changes.counts': '{added} a\u00f1adidos, {changed} modificados, {cleared} borrados',
+  'userOrgs.changes.storage.tableStorage': 'Esta lista de cambios se guarda en Azure Table Storage.',
+  'userOrgs.changes.storage.memory':
+    'Esta lista de cambios solo se guarda en la memoria de este servidor web, porque no hay ninguna cuenta de almacenamiento configurada. Se pierde cuando la aplicaci\u00f3n web se reinicia y los dem\u00e1s servidores web no pueden verla.',
+  'userOrgs.changes.truncated':
+    'Solo se conservaron los primeros {stored} de {count} cambios: la lista de cambios en memoria tiene un tama\u00f1o limitado.',
+  'userOrgs.changes.status.pending':
+    'La lista de cambios todav\u00eda se est\u00e1 escribiendo. Vuelva a intentarlo en un momento.',
+  'userOrgs.changes.status.none': 'Esta importaci\u00f3n no tiene lista de cambios porque no se aplic\u00f3.',
+  'userOrgs.changes.status.missingMemory':
+    'Esta lista de cambios se guard\u00f3 en memoria y ya no est\u00e1 disponible: la aplicaci\u00f3n web se ha reiniciado desde entonces, o est\u00e1 en otro servidor web.',
+  'userOrgs.changes.status.missingTable':
+    'No se encontr\u00f3 esta lista de cambios en la cuenta de almacenamiento. Es posible que se haya eliminado.',
+  'userOrgs.changes.status.unavailable':
+    'No se puede acceder a la cuenta de almacenamiento en este momento, as\u00ed que no se puede mostrar la lista de cambios. Vuelva a intentarlo m\u00e1s tarde.',
+  'userOrgs.changes.retry': 'Reintentar',
+  'userOrgs.changes.searchPlaceholder': 'Buscar por nombre principal de usuario',
+  'userOrgs.changes.tableLabel': 'Cambios realizados por esta importaci\u00f3n',
+  'userOrgs.changes.column.user': 'Usuario',
+  'userOrgs.changes.column.before': 'Antes',
+  'userOrgs.changes.column.after': 'Despu\u00e9s',
+  'userOrgs.changes.column.change': 'Cambio',
+  'userOrgs.changes.kind.added': 'A\u00f1adido',
+  'userOrgs.changes.kind.changed': 'Modificado',
+  'userOrgs.changes.kind.cleared': 'Borrado',
+  'userOrgs.changes.noValue': '(sin valor)',
+  'userOrgs.changes.empty': 'Esta importaci\u00f3n no cambi\u00f3 a nadie: todos ten\u00edan ya estos valores.',
+  'userOrgs.changes.noMatches':
+    'No hay cambios de usuarios cuyo nombre empiece por \u00ab{search}\u00bb.',
+  'userOrgs.changes.loading': 'Cargando cambios...',
+  'userOrgs.changes.loadFailed': 'No se pudieron cargar los cambios.',
+  'userOrgs.changes.loadMore': 'Mostrar m\u00e1s',
+  'userOrgs.changes.showing': 'Mostrando {count} de {total}',
+  'userOrgs.changes.download': 'Descargar todos los cambios (CSV)',
+  'userOrgs.changes.downloading': 'Descargando... {count} cambios hasta ahora',
+  'userOrgs.changes.downloadFailed': 'La descarga no termin\u00f3. Vuelva a intentarlo.',
+  'userOrgs.changes.defaultFileName': 'cambios-organizaciones-de-usuario',
 
   // Who is in each organisation
   'userOrgs.browse.title': 'Qui\u00e9n pertenece a cada organizaci\u00f3n',

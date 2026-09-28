@@ -114,6 +114,18 @@ namespace Common.Entities.UserOrgs
 
         /// <summary>The web app began shutting down while imports were in flight on it.</summary>
         public const string HostStopping = "HostStopping";
+
+        /// <summary>An applied import's change list was written; <c>Code</c> says where, <c>Count</c> how many changes.</summary>
+        public const string ChangeLogWritten = "ChangeLogWritten";
+
+        /// <summary>Writing a change list failed. It stays in the outbox and is written again later.</summary>
+        public const string ChangeLogFailed = "ChangeLogFailed";
+
+        /// <summary>
+        /// A storage account is configured but Table Storage could not be used, so change lists go to memory
+        /// for now; <c>Code</c> classifies why.
+        /// </summary>
+        public const string ChangeLogStorageUnavailable = "ChangeLogStorageUnavailable";
     }
 
     /// <summary>Discards every event. The default, so telemetry is always optional.</summary>

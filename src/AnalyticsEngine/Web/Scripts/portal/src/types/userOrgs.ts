@@ -40,6 +40,63 @@ export interface UserOrgImportJob {
   errorCode: UserOrgImportErrorCode | string | null;
   /** The server's English wording - only a fallback for an `errorCode` the portal does not know. */
   errorMessage: string | null;
+  /** Where the import's change list is, or null when there is none because it did not apply. */
+  changeLog: UserOrgChangeLogState | null;
+}
+
+/**
+ * Where an import's change list is kept. `memory` is one web server's memory only: gone when the web
+ * app restarts, and never visible from another instance.
+ */
+export type UserOrgChangeLogState = 'pending' | 'tableStorage' | 'memory';
+
+/** What one import did to one user's value. */
+export type UserOrgChangeKind = 'added' | 'changed' | 'cleared';
+
+/** One user's change. Every field is tenant data, shown as stored. */
+export interface UserOrgChange {
+  upn: string;
+  /** The value before the import, or null when the user had none. */
+  before: string | null;
+  /** The value after the import, or null when it was cleared. */
+  after: string | null;
+  kind: UserOrgChangeKind | string;
+}
+
+/** The import a change list describes. */
+export interface UserOrgChangeLogSummary {
+  orgTypeName: string | null;
+  mode: UserOrgImportMode;
+  startedBy: string | null;
+  fileName: string | null;
+  queuedUtc: string;
+  finishedUtc: string | null;
+  added: number;
+  changed: number;
+  cleared: number;
+  changeCount: number;
+  /** How many changes the list holds - fewer than `changeCount` only when it was kept in memory and ran out of room. */
+  storedChanges: number;
+  rowsUnknownUpn: number;
+  rowsInvalid: number;
+}
+
+/**
+ * `available`; `pending` - still being written; `none` - the import did not apply; `missing` - kept in
+ * memory and lost to a restart or on another server, or deleted from storage; `unavailable` - the
+ * storage account cannot be reached right now.
+ */
+export type UserOrgChangeLogStatus = 'available' | 'pending' | 'none' | 'missing' | 'unavailable';
+
+/** One page of what an import changed, in user principal name order. */
+export interface UserOrgChangeLogPage {
+  jobId: number;
+  status: UserOrgChangeLogStatus | string;
+  storage: 'tableStorage' | 'memory' | null;
+  summary: UserOrgChangeLogSummary | null;
+  items: UserOrgChange[];
+  /** Pass back for the next page; null when this is the last. */
+  continuation: string | null;
 }
 
 /** Why a finished job did not succeed. Keep in step with `UserOrgImportErrorCodes` on the server. */

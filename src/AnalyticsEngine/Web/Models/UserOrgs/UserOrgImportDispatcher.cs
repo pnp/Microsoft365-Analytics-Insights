@@ -51,12 +51,17 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         /// so the reports' user filter sees the new organisations straight away - even when nobody is
         /// polling the job.
         /// </param>
+        /// <param name="changeLogShipper">
+        /// Writes the import's change list to the change log once it has applied, or <c>null</c> to leave
+        /// that to the resume sweep.
+        /// </param>
         public static void Start(
             int jobId,
             IUserOrgImportJobStore jobStore,
             Action<Exception, string> reportFailure = null,
             IUserOrgImportTelemetry telemetry = null,
-            Action onSucceeded = null)
+            Action onSucceeded = null,
+            Func<UserOrgChangeLogShipper> changeLogShipper = null)
         {
             if (jobStore == null)
             {
@@ -69,16 +74,12 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
             Func<Task> run = async () =>
             {
+                UserOrgImportJob job;
                 try
                 {
-                    var job = await new UserOrgImportRunner(jobStore, events)
+                    job = await new UserOrgImportRunner(jobStore, events)
                         .RunAsync(jobId, CancellationToken.None)
                         .ConfigureAwait(false);
-
-                    if (job != null && job.Status == UserOrgImportStatus.Succeeded)
-                    {
-                        succeeded();
-                    }
                 }
                 catch (Exception ex)
                 {
@@ -86,19 +87,63 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                     // task. The runner has already recorded the failure on the job row for the admin;
                     // this is the copy an engineer sees. Both are needed - one is the user-facing
                     // answer, the other is the diagnosable one.
-                    try
-                    {
-                        report(ex, $"User organisation CSV import (job {jobId})");
-                    }
-                    catch (Exception)
-                    {
-                        // Failure telemetry is best-effort and must never replace the original fault.
-                    }
+                    Report(report, ex, $"User organisation CSV import (job {jobId})");
+                    return;
+                }
+
+                if (job == null || job.Status != UserOrgImportStatus.Succeeded)
+                {
+                    return;
+                }
+
+                // The directory first: the organisations have changed whether or not the log is written.
+                try
+                {
+                    succeeded();
+                }
+                catch (Exception ex)
+                {
+                    Report(report, ex, $"User organisation CSV import (job {jobId}): refreshing the user directory");
+                }
+
+                if (changeLogShipper != null)
+                {
+                    await ShipQuietlyAsync(changeLogShipper, jobId, report).ConfigureAwait(false);
                 }
             };
 
             events.Record(new UserOrgImportTelemetryEvent { Stage = UserOrgImportStages.Dispatched, JobId = jobId });
+            Queue(run);
+        }
 
+        /// <summary>Writes one applied import's change log in the background, for the resume sweep.</summary>
+        public static void StartChangeLog(int jobId, Func<UserOrgChangeLogShipper> changeLogShipper, Action<Exception, string> reportFailure = null)
+        {
+            if (changeLogShipper == null)
+            {
+                throw new ArgumentNullException(nameof(changeLogShipper));
+            }
+
+            var report = reportFailure ?? WebExceptionTelemetry.Report;
+            Queue(() => ShipQuietlyAsync(changeLogShipper, jobId, report));
+        }
+
+        private static async Task ShipQuietlyAsync(Func<UserOrgChangeLogShipper> changeLogShipper, int jobId, Action<Exception, string> report)
+        {
+            try
+            {
+                await changeLogShipper().ShipAsync(jobId, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Not a failed import: the changes are applied, and the list waits in the outbox for the
+                // resume sweep to write it again. Reported so a store that keeps refusing is visible.
+                Report(report, ex, $"User organisation change log (job {jobId})");
+            }
+        }
+
+        private static void Queue(Func<Task> run)
+        {
             if (HostingEnvironment.IsHosted)
             {
                 // Silently not scheduled once shutdown has begun. The job then waits Pending, and the
@@ -108,6 +153,18 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             else
             {
                 Task.Run(run);
+            }
+        }
+
+        private static void Report(Action<Exception, string> report, Exception ex, string context)
+        {
+            try
+            {
+                report(ex, context);
+            }
+            catch (Exception)
+            {
+                // Failure telemetry is best-effort and must never replace the original fault.
             }
         }
     }

@@ -327,11 +327,13 @@ CREATE TABLE [dbo].[user_org_import_jobs] (
     [attempts] tinyint NOT NULL CONSTRAINT [DF_user_org_import_jobs_attempts] DEFAULT (0),
     [error_code] nvarchar(64) NULL,
     [error_message] nvarchar(2000) NULL,
+    [change_log_status] tinyint NULL,
     CONSTRAINT [PK_user_org_import_jobs] PRIMARY KEY CLUSTERED ([id] ASC),
     CONSTRAINT [FK_user_org_import_jobs_type] FOREIGN KEY ([org_type_id])
         REFERENCES [dbo].[user_org_types] ([id]),
     CONSTRAINT [CK_user_org_import_jobs_mode] CHECK ([mode] IN (1, 2)),
-    CONSTRAINT [CK_user_org_import_jobs_status] CHECK ([status] IN (1, 2, 3, 4, 5, 6))
+    CONSTRAINT [CK_user_org_import_jobs_status] CHECK ([status] IN (1, 2, 3, 4, 5, 6)),
+    CONSTRAINT [CK_user_org_import_jobs_change_log_status] CHECK ([change_log_status] IN (1, 2, 3))
 );
 
 CREATE NONCLUSTERED INDEX [IX_user_org_import_jobs_type_queued]
@@ -353,6 +355,20 @@ CREATE TABLE [dbo].[user_org_import_staging] (
 CREATE NONCLUSTERED INDEX [IX_user_org_import_staging_job_upn]
     ON [dbo].[user_org_import_staging] ([job_id] ASC, [upn] ASC)
     INCLUDE ([org_value]);
+
+
+-- Creating table 'user_org_import_changes'
+-- What an applied CSV import changed, user by user, until it is written to the change log.
+CREATE TABLE [dbo].[user_org_import_changes] (
+    [job_id] int NOT NULL,
+    [user_id] int NOT NULL,
+    [upn] nvarchar(250) NOT NULL,
+    [old_value] nvarchar(848) NULL,
+    [new_value] nvarchar(848) NULL,
+    CONSTRAINT [PK_user_org_import_changes] PRIMARY KEY CLUSTERED ([job_id] ASC, [user_id] ASC),
+    CONSTRAINT [FK_user_org_import_changes_job] FOREIGN KEY ([job_id])
+        REFERENCES [dbo].[user_org_import_jobs] ([id]) ON DELETE CASCADE
+);
 
 
 

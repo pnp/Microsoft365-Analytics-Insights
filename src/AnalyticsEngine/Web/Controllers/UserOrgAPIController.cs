@@ -75,6 +75,14 @@ namespace Web.AnalyticsWeb.Controllers
 
             var jobs = UserOrgStores.CreateImportJobStore(connectionString);
 
+            // Built per use rather than captured, like the import's job store: it runs after the request.
+            Func<UserOrgChangeLogShipper> shipper = () => new UserOrgChangeLogShipper(
+                UserOrgStores.CreateImportJobStore(connectionString),
+                UserOrgStores.CreateChangeOutbox(connectionString),
+                UserOrgStores.CreateTypeStore(connectionString),
+                UserOrgChangeLogs.ForWriting,
+                UserOrgImportAppInsights.Default);
+
             return new UserOrgAdminService(
                 UserOrgStores.CreateTypeStore(connectionString),
                 UserOrgStores.CreateAssignmentStore(connectionString),
@@ -83,8 +91,12 @@ namespace Web.AnalyticsWeb.Controllers
                 new UserOrgGraphProbe(config),
                 // A store built here rather than captured from the request: the import outlives the
                 // request, so anything scoped to it would already be disposed by the time it ran.
-                jobId => UserOrgImportDispatcher.Start(jobId, UserOrgStores.CreateImportJobStore(connectionString)),
-                telemetry: UserOrgImportAppInsights.Default);
+                jobId => UserOrgImportDispatcher.Start(
+                    jobId, UserOrgStores.CreateImportJobStore(connectionString), changeLogShipper: shipper),
+                telemetry: UserOrgImportAppInsights.Default,
+                changeOutbox: UserOrgStores.CreateChangeOutbox(connectionString),
+                changeLogFor: UserOrgChangeLogs.ForReading,
+                dispatchChangeLog: jobId => UserOrgImportDispatcher.StartChangeLog(jobId, shipper));
         }
 
         /// <summary>
@@ -349,6 +361,37 @@ namespace Web.AnalyticsWeb.Controllers
 
         /// <summary>Jobs whose success has already refreshed this process's user directory.</summary>
         private static readonly ConcurrentDictionary<int, byte> DirectoryRefreshedForJobs = new ConcurrentDictionary<int, byte>();
+
+        /// <summary>
+        /// GET api/UserOrg/jobs/{id}/changes?search=&amp;continuation=&amp;pageSize=50 - what an import changed,
+        /// user by user.
+        /// </summary>
+        /// <remarks>
+        /// The request's token goes to the guard: the dialog aborts its request each time the admin types
+        /// in the search box, and that is not a fault.
+        /// </remarks>
+        [HttpGet]
+        [Route("jobs/{id:int}/changes")]
+        public async Task<IHttpActionResult> GetChanges(
+            int id,
+            CancellationToken cancellationToken,
+            string search = null,
+            string continuation = null,
+            int pageSize = UserOrgAdminService.DefaultChangePageSize)
+        {
+            return await GuardAsync<object>(async () =>
+            {
+                var page = await _serviceFactory()
+                    .GetChangesAsync(id, search, continuation, pageSize, cancellationToken)
+                    .ConfigureAwait(false);
+                if (page == null)
+                {
+                    throw new UserOrgNotFoundException("That import job was not found.");
+                }
+
+                return page;
+            }, cancellationToken, "changes").ConfigureAwait(false);
+        }
 
         #endregion
 

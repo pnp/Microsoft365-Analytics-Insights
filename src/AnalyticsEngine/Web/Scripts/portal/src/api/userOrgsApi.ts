@@ -3,6 +3,7 @@ import { translateActive } from '../i18n/runtime';
 import type {
   UserOrgAttributeCatalogue,
   UserOrgBrowseQuery,
+  UserOrgChangeLogPage,
   UserOrgCsvColumnChoice,
   UserOrgCsvPreview,
   UserOrgImportJob,
@@ -184,6 +185,26 @@ export function fetchImportJob(jobId: number, signal?: AbortSignal): Promise<Use
 /** An org type's most recent imports, newest first. Previews that were never imported are not listed. */
 export function fetchImportHistory(orgTypeId: number, take = 10, signal?: AbortSignal): Promise<UserOrgImportJob[]> {
   return send<UserOrgImportJob[]>(`${baseUrl()}/types/${orgTypeId}/imports?take=${take}`, { ...json('GET'), signal });
+}
+
+/** The most changes the server returns in one page. */
+export const MAX_CHANGE_PAGE_SIZE = 1000;
+
+/**
+ * One page of what an import changed, user by user, in user principal name order. `search` keeps only
+ * the users whose UPN starts with it; `continuation` is the previous page's, for the next one.
+ */
+export function fetchImportChanges(
+  jobId: number,
+  query: { search?: string; continuation?: string | null; pageSize?: number } = {},
+  signal?: AbortSignal,
+): Promise<UserOrgChangeLogPage> {
+  const params = new URLSearchParams();
+  if (query.search) params.set('search', query.search);
+  if (query.continuation) params.set('continuation', query.continuation);
+  if (query.pageSize) params.set('pageSize', String(Math.min(query.pageSize, MAX_CHANGE_PAGE_SIZE)));
+  const qs = params.toString();
+  return send<UserOrgChangeLogPage>(`${baseUrl()}/jobs/${jobId}/changes${qs ? `?${qs}` : ''}`, { ...json('GET'), signal });
 }
 
 function browseQueryString(query: UserOrgBrowseQuery): string {

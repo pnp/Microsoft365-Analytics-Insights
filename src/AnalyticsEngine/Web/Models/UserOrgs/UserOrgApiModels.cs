@@ -116,6 +116,112 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
         [JsonProperty("errorMessage")]
         public string ErrorMessage { get; set; }
+
+        /// <summary>
+        /// Where the import's change list is: <c>pending</c> (being written), <c>tableStorage</c>,
+        /// <c>memory</c> (this web server only, until it restarts), or null when there is none because the
+        /// import did not apply.
+        /// </summary>
+        [JsonProperty("changeLog")]
+        public string ChangeLog { get; set; }
+    }
+
+    /// <summary>One page of what an import changed, user by user.</summary>
+    public class UserOrgChangeLogPageModel
+    {
+        [JsonProperty("jobId")]
+        public int JobId { get; set; }
+
+        /// <summary>
+        /// <c>available</c>; <c>pending</c> (still being written); <c>none</c> (the import did not apply);
+        /// <c>missing</c> (it was kept in memory and the web app has restarted since, or it is on another
+        /// web server, or it was deleted from storage); or <c>unavailable</c> (the storage account cannot be
+        /// reached right now).
+        /// </summary>
+        [JsonProperty("status")]
+        public string Status { get; set; }
+
+        /// <summary><c>tableStorage</c> or <c>memory</c>, or null when there is no log.</summary>
+        [JsonProperty("storage")]
+        public string Storage { get; set; }
+
+        /// <summary>The import the log describes, or null unless <see cref="Status"/> is <c>available</c>.</summary>
+        [JsonProperty("summary")]
+        public UserOrgChangeLogSummaryModel Summary { get; set; }
+
+        [JsonProperty("items")]
+        public List<UserOrgChangeModel> Items { get; set; } = new List<UserOrgChangeModel>();
+
+        /// <summary>Pass back as <c>continuation</c> for the next page, or null when this is the last.</summary>
+        [JsonProperty("continuation")]
+        public string Continuation { get; set; }
+    }
+
+    /// <summary>An import as its change log records it. Names and addresses are tenant data, shown as stored.</summary>
+    public class UserOrgChangeLogSummaryModel
+    {
+        [JsonProperty("orgTypeName")]
+        public string OrgTypeName { get; set; }
+
+        /// <summary>"replace" or "merge".</summary>
+        [JsonProperty("mode")]
+        public string Mode { get; set; }
+
+        [JsonProperty("startedBy")]
+        public string StartedBy { get; set; }
+
+        [JsonProperty("fileName")]
+        public string FileName { get; set; }
+
+        [JsonProperty("queuedUtc")]
+        public string QueuedUtc { get; set; }
+
+        [JsonProperty("finishedUtc")]
+        public string FinishedUtc { get; set; }
+
+        [JsonProperty("added")]
+        public int Added { get; set; }
+
+        [JsonProperty("changed")]
+        public int Changed { get; set; }
+
+        [JsonProperty("cleared")]
+        public int Cleared { get; set; }
+
+        [JsonProperty("changeCount")]
+        public int ChangeCount { get; set; }
+
+        /// <summary>
+        /// How many changes the log holds. Fewer than <see cref="ChangeCount"/> only when it was kept in
+        /// memory and ran out of room.
+        /// </summary>
+        [JsonProperty("storedChanges")]
+        public int StoredChanges { get; set; }
+
+        [JsonProperty("rowsUnknownUpn")]
+        public int RowsUnknownUpn { get; set; }
+
+        [JsonProperty("rowsInvalid")]
+        public int RowsInvalid { get; set; }
+    }
+
+    /// <summary>One user's change.</summary>
+    public class UserOrgChangeModel
+    {
+        [JsonProperty("upn")]
+        public string Upn { get; set; }
+
+        /// <summary>The value before the import, or null when the user had none.</summary>
+        [JsonProperty("before")]
+        public string Before { get; set; }
+
+        /// <summary>The value after the import, or null when it was cleared.</summary>
+        [JsonProperty("after")]
+        public string After { get; set; }
+
+        /// <summary>"added", "changed" or "cleared".</summary>
+        [JsonProperty("kind")]
+        public string Kind { get; set; }
     }
 
     /// <summary>A create/update request from the admin page.</summary>

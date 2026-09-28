@@ -17,7 +17,7 @@ namespace Common.Entities.UserOrgs
     /// App Service recycle mid-import leaves a visible, resumable record instead of a request that
     /// silently stopped existing. It also gives the admin page an audit trail of who imported what.
     /// </remarks>
-    internal sealed class SqlUserOrgImportJobStore : SqlUserOrgStoreBase, IUserOrgImportJobStore
+    internal sealed class SqlUserOrgImportJobStore : SqlUserOrgStoreBase, IUserOrgImportJobStore, IUserOrgChangeOutbox
     {
         /// <summary>
         /// The job columns, in the order <see cref="ReadJob"/> reads them.
@@ -30,7 +30,7 @@ namespace Common.Entities.UserOrgs
         internal const string JobColumns =
             "id, org_type_id, mode, status, file_name, started_by, queued_utc, started_utc, finished_utc, "
             + "heartbeat_utc, rows_total, rows_applied, rows_cleared, rows_unknown_upn, rows_invalid, confirmed_clear_count, "
-            + "expected_generation, attempts, error_code, error_message";
+            + "expected_generation, attempts, error_code, error_message, change_log_status";
 
         /// <summary>The same columns, qualified with a table alias for a query that needs one.</summary>
         internal static string JobColumnsFor(string alias)
@@ -494,11 +494,18 @@ WHERE m.org_value IS NOT NULL
 
 DECLARE @cleared INT = 0, @applied INT = 0;
 
+-- Every change, user by user, for the change log: the value before and after, captured by the
+-- statements that make the changes, so the log cannot describe anything but what was done. The four
+-- statements below touch disjoint sets of users, so one row per user is all there can be.
+CREATE TABLE #user_org_changes (user_id INT NOT NULL PRIMARY KEY, old_value_id INT NULL, new_value_id INT NULL);
+
 IF @mode = 1
 BEGIN
     -- Replace: the file is the complete membership of this org type, so anyone it does not give a
     -- value to loses theirs - including users it lists with a blank value.
     DELETE a
+    OUTPUT deleted.user_id, deleted.org_value_id, CAST(NULL AS INT)
+        INTO #user_org_changes (user_id, old_value_id, new_value_id)
     FROM dbo.user_org_assignments a
     WHERE a.org_type_id = @orgTypeId
       AND NOT EXISTS (SELECT 1 FROM #user_org_matched m
@@ -509,6 +516,8 @@ ELSE
 BEGIN
     -- Merge: only the users the file actually mentions change, and only a blank value clears.
     DELETE a
+    OUTPUT deleted.user_id, deleted.org_value_id, CAST(NULL AS INT)
+        INTO #user_org_changes (user_id, old_value_id, new_value_id)
     FROM dbo.user_org_assignments a
     JOIN #user_org_matched m ON m.user_id = a.user_id
     WHERE a.org_type_id = @orgTypeId AND m.org_value IS NULL;
@@ -518,6 +527,8 @@ END
 UPDATE a
 SET a.org_value_id = v.id,
     a.last_updated_utc = SYSUTCDATETIME()
+OUTPUT inserted.user_id, deleted.org_value_id, inserted.org_value_id
+    INTO #user_org_changes (user_id, old_value_id, new_value_id)
 FROM dbo.user_org_assignments a
 JOIN #user_org_matched m ON m.user_id = a.user_id
 JOIN dbo.user_org_values v ON v.org_type_id = @orgTypeId AND v.name = m.org_value
@@ -527,6 +538,8 @@ WHERE a.org_type_id = @orgTypeId
 SET @applied = @@ROWCOUNT;
 
 INSERT INTO dbo.user_org_assignments (user_id, org_type_id, org_value_id)
+OUTPUT inserted.user_id, CAST(NULL AS INT), inserted.org_value_id
+    INTO #user_org_changes (user_id, old_value_id, new_value_id)
 SELECT m.user_id, @orgTypeId, v.id
 FROM #user_org_matched m
 JOIN dbo.user_org_values v ON v.org_type_id = @orgTypeId AND v.name = m.org_value
@@ -534,6 +547,16 @@ WHERE m.org_value IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM dbo.user_org_assignments a
                   WHERE a.user_id = m.user_id AND a.org_type_id = @orgTypeId);
 SET @applied = @applied + @@ROWCOUNT;
+
+-- The change list goes to the outbox in this same transaction, so an import that applied always has
+-- one - even if the web app stops before it is written to the change log. The UPN and the value names
+-- are copied now, because the log must still say who and what after either is gone.
+INSERT INTO dbo.user_org_import_changes (job_id, user_id, upn, old_value, new_value)
+SELECT @jobId, c.user_id, u.user_name, ov.name, nv.name
+FROM #user_org_changes c
+JOIN dbo.users u ON u.id = c.user_id
+LEFT JOIN dbo.user_org_values ov ON ov.id = c.old_value_id
+LEFT JOIN dbo.user_org_values nv ON nv.id = c.new_value_id;
 
 -- rows_invalid is recorded when the file is parsed, not here, so it is deliberately left alone.
 --
@@ -549,6 +572,7 @@ SET rows_total = @rowsTotal,
     finished_utc = SYSUTCDATETIME(),
     error_code = NULL,
     error_message = NULL,
+    change_log_status = 1,
     heartbeat_utc = SYSUTCDATETIME()
 WHERE id = @jobId;
 
@@ -556,6 +580,7 @@ WHERE id = @jobId;
 -- when the file changed nobody, which is still a confirmation that the values are current.
 UPDATE dbo.user_org_types SET last_refreshed_utc = SYSUTCDATETIME() WHERE id = @orgTypeId;
 
+DROP TABLE #user_org_changes;
 DROP TABLE #user_org_matched;";
 
         /// <summary>
@@ -1019,6 +1044,174 @@ WHERE status = 6 AND queued_utc < DATEADD(SECOND, -@draftLifetimeSecs, @now);";
             return ids;
         }
 
+        #region Change outbox
+
+        public async Task<IDisposable> TryLeaseAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            // A transaction-owned application lock on a connection of its own, held for as long as the
+            // lease lives. Transaction-owned rather than session-owned because a pooled connection is not
+            // reset when it goes back to the pool - a session lock could outlive its lease - whereas
+            // rolling the transaction back always releases it. A worker that dies releases it with its
+            // connection. The transaction touches no data, so it blocks nothing else.
+            var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+            SqlTransaction tx = null;
+            try
+            {
+                tx = connection.BeginTransaction();
+                using (var cmd = Command(connection, @"
+DECLARE @result INT;
+EXEC @result = sp_getapplock @Resource = @name, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 0;
+SELECT @result;", tx))
+                {
+                    cmd.Parameters.Add("@name", SqlDbType.NVarChar, 255).Value =
+                        "user_org_changelog_" + jobId.ToString(CultureInfo.InvariantCulture);
+                    var result = Convert.ToInt32(await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
+                    if (result < 0)
+                    {
+                        tx.Rollback();
+                        tx.Dispose();
+                        connection.Dispose();
+                        return null;
+                    }
+                }
+
+                return new TransactionLease(connection, tx);
+            }
+            catch
+            {
+                tx?.Dispose();
+                connection.Dispose();
+                throw;
+            }
+        }
+
+        public async Task<IReadOnlyList<UserOrgChangeRecord>> ReadAsync(
+            int jobId,
+            int afterUserId,
+            int take,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            const string sql = @"
+SELECT TOP (@take) user_id, upn, old_value, new_value
+FROM dbo.user_org_import_changes
+WHERE job_id = @jobId AND user_id > @after
+ORDER BY user_id;";
+
+            var changes = new List<UserOrgChangeRecord>();
+            using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
+            using (var cmd = Command(connection, sql))
+            {
+                cmd.Parameters.Add("@jobId", SqlDbType.Int).Value = jobId;
+                cmd.Parameters.Add("@after", SqlDbType.Int).Value = afterUserId;
+                cmd.Parameters.Add("@take", SqlDbType.Int).Value = Math.Max(1, take);
+
+                using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        changes.Add(new UserOrgChangeRecord
+                        {
+                            UserId = reader.GetInt32(0),
+                            Upn = ReadString(reader, 1),
+                            OldValue = ReadString(reader, 2),
+                            NewValue = ReadString(reader, 3),
+                        });
+                    }
+                }
+            }
+
+            return changes;
+        }
+
+        public async Task CompleteAsync(
+            int jobId,
+            UserOrgChangeLogStatus writtenTo,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            if (writtenTo == UserOrgChangeLogStatus.Pending)
+            {
+                throw new ArgumentOutOfRangeException(nameof(writtenTo), "A change log is completed by saying where it was written.");
+            }
+
+            // One transaction, so the job never says the log was written while its outbox still holds the
+            // list - nothing would ever pick those rows up again.
+            const string sql = @"
+UPDATE dbo.user_org_import_jobs SET change_log_status = @status WHERE id = @jobId AND change_log_status = 1;
+DELETE FROM dbo.user_org_import_changes WHERE job_id = @jobId;";
+
+            using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
+            using (var tx = connection.BeginTransaction())
+            {
+                using (var cmd = Command(connection, sql, tx))
+                {
+                    cmd.Parameters.Add("@jobId", SqlDbType.Int).Value = jobId;
+                    cmd.Parameters.Add("@status", SqlDbType.TinyInt).Value = (byte)writtenTo;
+                    await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                tx.Commit();
+            }
+        }
+
+        public async Task<IReadOnlyList<int>> ListPendingAsync(int take, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            const string sql = @"
+SELECT TOP (@take) id
+FROM dbo.user_org_import_jobs
+WHERE status = 3 AND change_log_status = 1
+ORDER BY id;";
+
+            var ids = new List<int>();
+            using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
+            using (var cmd = Command(connection, sql))
+            {
+                cmd.Parameters.Add("@take", SqlDbType.Int).Value = Math.Max(1, take);
+                using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        ids.Add(reader.GetInt32(0));
+                    }
+                }
+            }
+
+            return ids;
+        }
+
+        /// <summary>Holds an application lock for as long as it lives.</summary>
+        private sealed class TransactionLease : IDisposable
+        {
+            private SqlConnection _connection;
+            private SqlTransaction _tx;
+
+            public TransactionLease(SqlConnection connection, SqlTransaction tx)
+            {
+                _connection = connection;
+                _tx = tx;
+            }
+
+            public void Dispose()
+            {
+                var tx = Interlocked.Exchange(ref _tx, null);
+                var connection = Interlocked.Exchange(ref _connection, null);
+                try
+                {
+                    tx?.Rollback();
+                }
+                catch (Exception)
+                {
+                    // The connection is going away regardless, and the lock with it.
+                }
+                finally
+                {
+                    tx?.Dispose();
+                    connection?.Dispose();
+                }
+            }
+        }
+
+        #endregion
+
         private static async Task BulkStageAsync(
             SqlConnection connection,
             SqlTransaction tx,
@@ -1073,6 +1266,7 @@ WHERE status = 6 AND queued_utc < DATEADD(SECOND, -@draftLifetimeSecs, @now);";
                 Attempts = reader.GetByte(17),
                 ErrorCode = ReadString(reader, 18),
                 ErrorMessage = ReadString(reader, 19),
+                ChangeLogStatus = reader.IsDBNull(20) ? (UserOrgChangeLogStatus?)null : (UserOrgChangeLogStatus)reader.GetByte(20),
             };
         }
 

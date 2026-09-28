@@ -79,6 +79,7 @@ DELETE FROM dbo.users;");
         private static IUserOrgTypeStore _types;
         private static IUserOrgAssignmentStore _assignments;
         private static IUserOrgImportJobStore _jobs;
+        private static IUserOrgChangeOutbox _outbox;
 
         [ClassInitialize]
         public static void ClassInit(TestContext context)
@@ -87,6 +88,7 @@ DELETE FROM dbo.users;");
             _types = UserOrgStores.CreateTypeStore(_db.ConnectionString);
             _assignments = UserOrgStores.CreateAssignmentStore(_db.ConnectionString);
             _jobs = UserOrgStores.CreateImportJobStore(_db.ConnectionString);
+            _outbox = UserOrgStores.CreateChangeOutbox(_db.ConnectionString);
         }
 
         [ClassCleanup]
@@ -550,6 +552,228 @@ WHERE id = {draftId}");
 
         #endregion
 
+        #region Change log
+
+        /// <summary>Previews, imports and applies a file, as the portal and the worker would.</summary>
+        private static async Task<int> Applied(int typeId, UserOrgImportMode mode, params UserOrgStagedRow[] rows)
+        {
+            var draftId = await Draft(typeId, Admin, rows);
+            await _jobs.CommitDraftAsync(draftId, typeId, mode, int.MaxValue, Admin);
+            Assert.IsTrue(await _jobs.TryClaimJobAsync(draftId));
+            await _jobs.ApplyAsync(draftId);
+            return draftId;
+        }
+
+        private static UserOrgChangeLogShipper Shipper(IUserOrgChangeLog log)
+        {
+            return new UserOrgChangeLogShipper(_jobs, _outbox, _types, () => log);
+        }
+
+        [TestMethod]
+        public async Task TheApplyCapturesEveryChangeWithItsBeforeAndAfter()
+        {
+            var a = AddUser("a@contoso.com");
+            var b = AddUser("b@contoso.com");
+            var c = AddUser("c@contoso.com");
+            AddUser("d@contoso.com");
+            var same = AddUser("same@contoso.com");
+            var typeId = await NewType();
+            await Assign(typeId, (a, "X"), (b, "Y"), (c, "Z"), (same, "Kept"));
+
+            var jobId = await Applied(
+                typeId,
+                UserOrgImportMode.Replace,
+                new UserOrgStagedRow(2, "a@contoso.com", "X2"),
+                new UserOrgStagedRow(3, "b@contoso.com", null),
+                new UserOrgStagedRow(4, "d@contoso.com", "Καλημέρα κόσμε"),
+                new UserOrgStagedRow(5, "same@contoso.com", "Kept"),
+                new UserOrgStagedRow(6, "nobody@contoso.com", "W"));
+
+            var job = await _jobs.GetJobAsync(jobId);
+            Assert.AreEqual(UserOrgChangeLogStatus.Pending, job.ChangeLogStatus, "Captured with the changes, in the same transaction.");
+
+            var changes = (await _outbox.ReadAsync(jobId, 0, 100)).ToDictionary(x => x.Upn);
+            Assert.AreEqual(job.RowsApplied + job.RowsCleared, changes.Count, "One change per user the import touched - and no others.");
+            Assert.IsFalse(changes.ContainsKey("same@contoso.com"), "A user whose value did not change was not changed.");
+
+            Assert.AreEqual("X", changes["a@contoso.com"].OldValue);
+            Assert.AreEqual("X2", changes["a@contoso.com"].NewValue);
+            Assert.AreEqual(UserOrgChangeKind.Changed, changes["a@contoso.com"].Kind);
+            Assert.AreEqual(UserOrgChangeKind.Cleared, changes["b@contoso.com"].Kind, "Blank in the file.");
+            Assert.AreEqual("Y", changes["b@contoso.com"].OldValue);
+            Assert.AreEqual(UserOrgChangeKind.Cleared, changes["c@contoso.com"].Kind, "Absent from a Replace.");
+            Assert.AreEqual(UserOrgChangeKind.Added, changes["d@contoso.com"].Kind);
+            Assert.AreEqual("Καλημέρα κόσμε", changes["d@contoso.com"].NewValue);
+        }
+
+        [TestMethod]
+        public async Task ARefusedApplyCapturesNothing()
+        {
+            var a = AddUser("a@contoso.com");
+            var typeId = await NewType();
+            await Assign(typeId, (a, "X"));
+            var draftId = await Draft(typeId, Admin, new UserOrgStagedRow(2, "a@contoso.com", null));
+            await _jobs.CommitDraftAsync(draftId, typeId, UserOrgImportMode.Merge, 1, Admin);
+            _db.Execute($"UPDATE dbo.user_org_import_jobs SET confirmed_clear_count = 0 WHERE id = {draftId}");
+            await _jobs.TryClaimJobAsync(draftId);
+
+            try
+            {
+                await _jobs.ApplyAsync(draftId);
+                Assert.Fail("A clear nobody confirmed must be refused.");
+            }
+            catch (UserOrgValidationException)
+            {
+            }
+
+            Assert.IsNull((await _jobs.GetJobAsync(draftId)).ChangeLogStatus);
+            Assert.AreEqual(0, Count($"SELECT COUNT(*) FROM dbo.user_org_import_changes WHERE job_id = {draftId}"));
+        }
+
+        [TestMethod]
+        public async Task ShippingWritesTheLogAndEmptiesTheOutbox()
+        {
+            var a = AddUser("a@contoso.com");
+            AddUser("b@contoso.com");
+            var typeId = await NewType("Cost Centre");
+            await Assign(typeId, (a, "X"));
+            var jobId = await Applied(
+                typeId,
+                UserOrgImportMode.Replace,
+                new UserOrgStagedRow(2, "b@contoso.com", "Y"));
+            var log = new InMemoryUserOrgChangeLog();
+
+            Assert.AreEqual(UserOrgChangeLogShipOutcome.Written, await Shipper(log).ShipAsync(jobId));
+
+            var job = await _jobs.GetJobAsync(jobId);
+            Assert.AreEqual(UserOrgChangeLogStatus.Memory, job.ChangeLogStatus);
+            Assert.AreEqual(0, Count($"SELECT COUNT(*) FROM dbo.user_org_import_changes WHERE job_id = {jobId}"));
+
+            var logId = UserOrgChangeLogKeys.LogId(job.Id, job.QueuedUtc);
+            var summary = await log.GetImportAsync(logId, CancellationToken.None);
+            Assert.AreEqual("Cost Centre", summary.OrgTypeName);
+            Assert.AreEqual(Admin, summary.StartedBy);
+            Assert.AreEqual(UserOrgImportMode.Replace, summary.Mode);
+            Assert.AreEqual(1, summary.Added);
+            Assert.AreEqual(1, summary.Cleared);
+            Assert.AreEqual(0, summary.Changed);
+
+            var page = await log.GetChangesAsync(logId, null, null, 50, CancellationToken.None);
+            CollectionAssert.AreEqual(new[] { "a@contoso.com", "b@contoso.com" }, page.Items.Select(i => i.Upn).ToArray());
+
+            Assert.AreEqual(UserOrgChangeLogShipOutcome.NothingToWrite, await Shipper(log).ShipAsync(jobId), "Written once.");
+        }
+
+        [TestMethod]
+        public async Task AnInterruptedWriteIsRepeatedWithoutDuplicatingAChange()
+        {
+            AddUser("a@contoso.com");
+            AddUser("b@contoso.com");
+            var typeId = await NewType();
+            var jobId = await Applied(
+                typeId,
+                UserOrgImportMode.Merge,
+                new UserOrgStagedRow(2, "a@contoso.com", "X"),
+                new UserOrgStagedRow(3, "b@contoso.com", "Y"));
+            var log = new InMemoryUserOrgChangeLog();
+
+            try
+            {
+                await Shipper(new FailingOnCompleteLog(log)).ShipAsync(jobId);
+                Assert.Fail("The write was meant to fail.");
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            Assert.AreEqual(UserOrgChangeLogStatus.Pending, (await _jobs.GetJobAsync(jobId)).ChangeLogStatus, "Still to be written.");
+            Assert.AreEqual(2, Count($"SELECT COUNT(*) FROM dbo.user_org_import_changes WHERE job_id = {jobId}"), "Safe in the outbox.");
+            CollectionAssert.Contains((await _outbox.ListPendingAsync(10)).ToList(), jobId, "The resume sweep will find it.");
+
+            Assert.AreEqual(UserOrgChangeLogShipOutcome.Written, await Shipper(log).ShipAsync(jobId));
+
+            var job = await _jobs.GetJobAsync(jobId);
+            var summary = await log.GetImportAsync(UserOrgChangeLogKeys.LogId(job.Id, job.QueuedUtc), CancellationToken.None);
+            Assert.AreEqual(2, summary.StoredChanges);
+            Assert.AreEqual(2, log.StoredChanges, "The repeat replaced the first attempt's changes rather than adding to them.");
+            Assert.AreEqual(0, (await _outbox.ListPendingAsync(10)).Count);
+        }
+
+        [TestMethod]
+        public async Task OnlyOneWorkerWritesAnImportsLog()
+        {
+            AddUser("a@contoso.com");
+            var typeId = await NewType();
+            var jobId = await Applied(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(2, "a@contoso.com", "X"));
+            var log = new InMemoryUserOrgChangeLog();
+
+            using (var lease = await _outbox.TryLeaseAsync(jobId))
+            {
+                Assert.IsNotNull(lease);
+                Assert.IsNull(await _outbox.TryLeaseAsync(jobId), "The lease is exclusive.");
+                Assert.AreEqual(UserOrgChangeLogShipOutcome.LeaseHeld, await Shipper(log).ShipAsync(jobId));
+            }
+
+            Assert.AreEqual(UserOrgChangeLogShipOutcome.Written, await Shipper(log).ShipAsync(jobId), "Released with the lease.");
+        }
+
+        [TestMethod]
+        public async Task AnImportThatChangedNobodyStillHasALog()
+        {
+            // Confirmation that the values were already current is worth recording too.
+            var a = AddUser("a@contoso.com");
+            var typeId = await NewType();
+            await Assign(typeId, (a, "X"));
+            var jobId = await Applied(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(2, "a@contoso.com", "X"));
+            var log = new InMemoryUserOrgChangeLog();
+
+            Assert.AreEqual(UserOrgChangeLogShipOutcome.Written, await Shipper(log).ShipAsync(jobId));
+
+            var job = await _jobs.GetJobAsync(jobId);
+            var summary = await log.GetImportAsync(UserOrgChangeLogKeys.LogId(job.Id, job.QueuedUtc), CancellationToken.None);
+            Assert.AreEqual(0, summary.ChangeCount);
+        }
+
+        [TestMethod]
+        public async Task DeletingTheOrgTypeTakesAnUnwrittenListWithIt()
+        {
+            AddUser("a@contoso.com");
+            var typeId = await NewType();
+            var jobId = await Applied(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(2, "a@contoso.com", "X"));
+
+            await _types.DeleteAsync(typeId);
+
+            Assert.AreEqual(0, Count($"SELECT COUNT(*) FROM dbo.user_org_import_changes WHERE job_id = {jobId}"));
+            Assert.AreEqual(0, (await _outbox.ListPendingAsync(10)).Count);
+        }
+
+        /// <summary>Appends normally, then fails to write the summary - a worker dying half way.</summary>
+        private sealed class FailingOnCompleteLog : IUserOrgChangeLog
+        {
+            private readonly IUserOrgChangeLog _inner;
+
+            public FailingOnCompleteLog(IUserOrgChangeLog inner)
+            {
+                _inner = inner;
+            }
+
+            public UserOrgChangeLogStatus Destination => _inner.Destination;
+
+            public Task AppendAsync(UserOrgChangeLogImport import, IReadOnlyList<UserOrgChangeRecord> changes, CancellationToken cancellationToken)
+                => _inner.AppendAsync(import, changes, cancellationToken);
+
+            public Task CompleteAsync(UserOrgChangeLogImport import, CancellationToken cancellationToken)
+                => throw new InvalidOperationException("the storage account went away");
+
+            public Task<UserOrgChangeLogImport> GetImportAsync(string logId, CancellationToken cancellationToken)
+                => _inner.GetImportAsync(logId, cancellationToken);
+
+            public Task<UserOrgChangeLogPage> GetChangesAsync(string logId, string search, string continuation, int pageSize, CancellationToken cancellationToken)
+                => _inner.GetChangesAsync(logId, search, continuation, pageSize, cancellationToken);
+        }
+
+        #endregion
+
         #region History
 
         [TestMethod]
@@ -639,11 +863,14 @@ WHERE id = {draftId}");
         private static ScratchDatabase _db;
 
         private List<int> _dispatched;
+        private List<int> _dispatchedChangeLogs;
         private RecordingTelemetry _telemetry;
         private UserOrgAdminService _service;
         private IUserOrgImportJobStore _jobs;
         private IUserOrgTypeStore _types;
         private IUserOrgAssignmentStore _assignments;
+        private IUserOrgChangeOutbox _outbox;
+        private InMemoryUserOrgChangeLog _memoryLog;
 
         [ClassInitialize]
         public static void ClassInit(TestContext context)
@@ -662,11 +889,19 @@ WHERE id = {draftId}");
         {
             UserOrgImportTestSchema.Reset(_db);
             _dispatched = new List<int>();
+            _dispatchedChangeLogs = new List<int>();
             _telemetry = new RecordingTelemetry();
             _types = UserOrgStores.CreateTypeStore(_db.ConnectionString);
             _assignments = UserOrgStores.CreateAssignmentStore(_db.ConnectionString);
             _jobs = UserOrgStores.CreateImportJobStore(_db.ConnectionString);
-            _service = new UserOrgAdminService(
+            _outbox = UserOrgStores.CreateChangeOutbox(_db.ConnectionString);
+            _memoryLog = new InMemoryUserOrgChangeLog();
+            _service = ServiceReadingFrom(_memoryLog);
+        }
+
+        private UserOrgAdminService ServiceReadingFrom(IUserOrgChangeLog log)
+        {
+            return new UserOrgAdminService(
                 _types,
                 _assignments,
                 _jobs,
@@ -674,7 +909,10 @@ WHERE id = {draftId}");
                 new NoGraph(),
                 id => _dispatched.Add(id),
                 telemetry: _telemetry,
-                resumeGate: new UserOrgResumeGate());
+                resumeGate: new UserOrgResumeGate(),
+                changeOutbox: _outbox,
+                changeLogFor: status => status == log.Destination ? log : null,
+                dispatchChangeLog: id => _dispatchedChangeLogs.Add(id));
         }
 
         private sealed class NoGraph : IUserOrgGraphProbe
@@ -948,6 +1186,107 @@ WHERE id = {draftId}");
                     Assert.IsFalse((text ?? string.Empty).Contains("Secret"), item.Stage);
                 }
             }
+        }
+
+        /// <summary>Previews, imports and applies a file through the service, then returns the job id.</summary>
+        private async Task<int> ImportThroughTheService(int typeId, string csv, UserOrgImportMode mode = UserOrgImportMode.Merge)
+        {
+            var preview = await Preview(typeId, csv);
+            var queued = await _service.CommitImportAsync(typeId, preview.DraftId.Value, mode, int.MaxValue, Admin, CancellationToken.None);
+            var job = await new UserOrgImportRunner(_jobs).RunAsync(queued.JobId);
+            Assert.AreEqual(UserOrgImportStatus.Succeeded, job.Status);
+            return queued.JobId;
+        }
+
+        [TestMethod]
+        public async Task TheChangeListIsReadBackFromWhereItWasWritten()
+        {
+            var a = AddUser("a@contoso.com");
+            AddUser("b@contoso.com");
+            var typeId = await NewType("Cost Centre");
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(a, typeId, "Old") });
+            var jobId = await ImportThroughTheService(typeId, "UPN,Cost Centre\r\na@contoso.com,New\r\nb@contoso.com,Καλημέρα κόσμε\r\n");
+
+            var pending = await _service.GetChangesAsync(jobId, null, null, 50, CancellationToken.None);
+            Assert.AreEqual("pending", pending.Status, "Applied, not yet written.");
+            Assert.AreEqual("pending", (await _service.GetJobAsync(jobId, CancellationToken.None)).ChangeLog);
+
+            await new UserOrgChangeLogShipper(_jobs, _outbox, _types, () => _memoryLog).ShipAsync(jobId);
+
+            var page = await _service.GetChangesAsync(jobId, null, null, 50, CancellationToken.None);
+            Assert.AreEqual("available", page.Status);
+            Assert.AreEqual("memory", page.Storage);
+            Assert.AreEqual("memory", (await _service.GetJobAsync(jobId, CancellationToken.None)).ChangeLog);
+            Assert.AreEqual(1, page.Summary.Added);
+            Assert.AreEqual(1, page.Summary.Changed);
+            Assert.AreEqual("Cost Centre", page.Summary.OrgTypeName);
+            Assert.AreEqual(Admin, page.Summary.StartedBy);
+            CollectionAssert.AreEqual(new[] { "a@contoso.com", "b@contoso.com" }, page.Items.Select(i => i.Upn).ToArray());
+            Assert.AreEqual("Old", page.Items[0].Before);
+            Assert.AreEqual("New", page.Items[0].After);
+            Assert.AreEqual("changed", page.Items[0].Kind);
+            Assert.AreEqual("added", page.Items[1].Kind);
+            Assert.AreEqual("Καλημέρα κόσμε", page.Items[1].After);
+
+            var searched = await _service.GetChangesAsync(jobId, "B", null, 50, CancellationToken.None);
+            CollectionAssert.AreEqual(new[] { "b@contoso.com" }, searched.Items.Select(i => i.Upn).ToArray());
+
+            // A web app that has restarted since has an empty memory log: said as such, not as "no changes".
+            var restarted = ServiceReadingFrom(new InMemoryUserOrgChangeLog());
+            Assert.AreEqual("missing", (await restarted.GetChangesAsync(jobId, null, null, 50, CancellationToken.None)).Status);
+
+            // A store that cannot be reached right now.
+            var unreachable = ServiceReadingFrom(new UnreachableLog());
+            Assert.AreEqual("unavailable", (await unreachable.GetChangesAsync(jobId, null, null, 50, CancellationToken.None)).Status);
+        }
+
+        [TestMethod]
+        public async Task AnImportThatDidNotApplyHasNoChangeList()
+        {
+            AddUser("a@contoso.com");
+            var typeId = await NewType();
+            var preview = await Preview(typeId, "UPN,Team\r\na@contoso.com,X\r\n");
+
+            Assert.IsNull(await _service.GetChangesAsync(preview.DraftId.Value, null, null, 50, CancellationToken.None), "A draft is not an import.");
+
+            await _service.CommitImportAsync(typeId, preview.DraftId.Value, UserOrgImportMode.Merge, 0, Admin, CancellationToken.None);
+            _db.Execute($"UPDATE dbo.user_org_import_jobs SET status = 4 WHERE id = {preview.DraftId.Value}");
+
+            var page = await _service.GetChangesAsync(preview.DraftId.Value, null, null, 50, CancellationToken.None);
+            Assert.AreEqual("none", page.Status);
+            Assert.IsNull((await _service.GetJobAsync(preview.DraftId.Value, CancellationToken.None)).ChangeLog);
+        }
+
+        [TestMethod]
+        public async Task TheResumeSweepSendsUnwrittenChangeListsToBeWritten()
+        {
+            // The worker stopped between the apply and the write: the list is in the outbox, and the
+            // sweep is what gets it written.
+            AddUser("a@contoso.com");
+            var typeId = await NewType();
+            var jobId = await ImportThroughTheService(typeId, "UPN,Team\r\na@contoso.com,X\r\n");
+
+            await _service.ResumeInterruptedImportsAsync(CancellationToken.None, force: true);
+
+            CollectionAssert.AreEqual(new[] { jobId }, _dispatchedChangeLogs);
+        }
+
+        /// <summary>A change log whose store refuses every read.</summary>
+        private sealed class UnreachableLog : IUserOrgChangeLog
+        {
+            public UserOrgChangeLogStatus Destination => UserOrgChangeLogStatus.Memory;
+
+            public Task AppendAsync(UserOrgChangeLogImport import, IReadOnlyList<UserOrgChangeRecord> changes, CancellationToken cancellationToken)
+                => throw new InvalidOperationException("unreachable");
+
+            public Task CompleteAsync(UserOrgChangeLogImport import, CancellationToken cancellationToken)
+                => throw new InvalidOperationException("unreachable");
+
+            public Task<UserOrgChangeLogImport> GetImportAsync(string logId, CancellationToken cancellationToken)
+                => throw new InvalidOperationException("unreachable");
+
+            public Task<UserOrgChangeLogPage> GetChangesAsync(string logId, string search, string continuation, int pageSize, CancellationToken cancellationToken)
+                => throw new InvalidOperationException("unreachable");
         }
     }
 }
