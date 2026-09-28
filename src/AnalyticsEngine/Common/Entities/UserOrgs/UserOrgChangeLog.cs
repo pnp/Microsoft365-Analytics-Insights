@@ -231,10 +231,12 @@ namespace Common.Entities.UserOrgs
     /// <remarks>
     /// <para>
     /// Bounded, because it shares the web process with every report. It holds at most
-    /// <see cref="DefaultMaxChanges"/> changes across all imports; the oldest complete logs are dropped
-    /// first to make room, and an import too big on its own keeps its first changes and says how many it
-    /// dropped (<see cref="UserOrgChangeLogImport.StoredChanges"/>). At roughly 150 bytes a change, the
-    /// cap costs about 15 MB.
+    /// <see cref="DefaultMaxChanges"/> changes across all imports, and at most <see cref="DefaultMaxLogs"/>
+    /// imports' logs however few changes they hold. To make room it drops a log whose writer abandoned it
+    /// part-written (<see cref="AbandonedAfter"/>) and then the oldest complete one, and an import too big
+    /// on its own keeps its first changes and says how many it dropped
+    /// (<see cref="UserOrgChangeLogImport.StoredChanges"/>). At roughly 150 bytes a change, the cap costs
+    /// about 15 MB.
     /// </para>
     /// <para>
     /// Everything in it is lost when the process stops, and another instance of a scaled-out site never
@@ -245,18 +247,48 @@ namespace Common.Entities.UserOrgs
     {
         public const int DefaultMaxChanges = 100000;
 
+        /// <summary>
+        /// The most import logs kept, whatever they hold. The change cap alone does not bound a log that
+        /// changed nobody - importing the same file again and again would keep one summary each, forever.
+        /// </summary>
+        public const int DefaultMaxLogs = 1000;
+
+        /// <summary>
+        /// How long an unfinished log can go unwritten before it counts as abandoned. The shipper writes a
+        /// log's pages back to back, so one idle this long has lost its writer - to a lease lost mid-write,
+        /// say, with the retry landing on another instance's memory. Until then it can not be dropped, because
+        /// its writer may still be going; after it, it would otherwise hold its changes until the process
+        /// stopped, out of reach of every cap.
+        /// </summary>
+        public static readonly TimeSpan AbandonedAfter = TimeSpan.FromHours(1);
+
         /// <summary>The log every request in this process shares.</summary>
         public static readonly InMemoryUserOrgChangeLog Shared = new InMemoryUserOrgChangeLog();
 
         private readonly int _maxChanges;
+        private readonly int _maxLogs;
+        private readonly Func<DateTime> _utcNow;
         private readonly object _gate = new object();
         private readonly Dictionary<string, Log> _logs = new Dictionary<string, Log>(StringComparer.Ordinal);
         private int _stored;
         private long _order;
 
-        public InMemoryUserOrgChangeLog(int maxChanges = DefaultMaxChanges)
+        public InMemoryUserOrgChangeLog(int maxChanges = DefaultMaxChanges, int maxLogs = DefaultMaxLogs)
+            : this(maxChanges, maxLogs, () => DateTime.UtcNow)
         {
+        }
+
+        /// <param name="utcNow">The clock that decides when an unfinished log was abandoned.</param>
+        internal InMemoryUserOrgChangeLog(int maxChanges, int maxLogs, Func<DateTime> utcNow)
+        {
+            if (utcNow == null)
+            {
+                throw new ArgumentNullException(nameof(utcNow));
+            }
+
             _maxChanges = Math.Max(1, maxChanges);
+            _maxLogs = Math.Max(1, maxLogs);
+            _utcNow = utcNow;
         }
 
         public UserOrgChangeLogStatus Destination => UserOrgChangeLogStatus.Memory;
@@ -343,7 +375,12 @@ namespace Common.Entities.UserOrgs
                 log.Sorted = log.Changes.OrderBy(p => p.Key, StringComparer.Ordinal).ToArray();
                 log.Summary = import.Copy();
                 log.Summary.StoredChanges = log.Sorted.Length;
-                log.Order = ++_order;
+
+                // Abandoned and then the oldest complete logs go first, as when making room for changes -
+                // never this one.
+                while (_logs.Count > _maxLogs && Evict(log))
+                {
+                }
             }
 
             return Task.CompletedTask;
@@ -435,28 +472,47 @@ namespace Common.Entities.UserOrgs
                 log.Summary = null;
             }
 
+            // Every write counts, so a log being written is never the one that looks abandoned.
+            log.Order = ++_order;
+            log.LastWrittenUtc = _utcNow();
             return log;
         }
 
-        /// <summary>Drops the oldest complete log other than <paramref name="keep"/>. False when there is none to drop.</summary>
+        /// <summary>Drops logs other than <paramref name="keep"/> until a change fits. False when none can go.</summary>
         private bool MakeRoom(Log keep)
         {
             while (_stored >= _maxChanges)
             {
-                var oldest = _logs
-                    .Where(p => !ReferenceEquals(p.Value, keep) && p.Value.Summary != null)
-                    .OrderBy(p => p.Value.Order)
-                    .Select(p => p.Key)
-                    .FirstOrDefault();
-                if (oldest == null)
+                if (!Evict(keep))
                 {
                     return false;
                 }
-
-                _stored -= _logs[oldest].Changes.Count;
-                _logs.Remove(oldest);
             }
 
+            return true;
+        }
+
+        /// <summary>
+        /// Drops one log other than <paramref name="keep"/>: an abandoned unfinished one if there is one,
+        /// since nobody can read it, and otherwise the oldest complete one. False when there is neither.
+        /// </summary>
+        private bool Evict(Log keep)
+        {
+            var abandonedBy = _utcNow() - AbandonedAfter;
+            var oldest = _logs
+                .Where(p => !ReferenceEquals(p.Value, keep)
+                            && (p.Value.Summary != null || p.Value.LastWrittenUtc <= abandonedBy))
+                .OrderBy(p => p.Value.Summary != null)
+                .ThenBy(p => p.Value.Order)
+                .Select(p => p.Key)
+                .FirstOrDefault();
+            if (oldest == null)
+            {
+                return false;
+            }
+
+            _stored -= _logs[oldest].Changes.Count;
+            _logs.Remove(oldest);
             return true;
         }
 
@@ -490,7 +546,10 @@ namespace Common.Entities.UserOrgs
 
             public UserOrgChangeLogImport Summary;
 
+            /// <summary>When it was last written, in write order: the oldest goes first.</summary>
             public long Order;
+
+            public DateTime LastWrittenUtc;
 
             public int InternedCount => _names.Count;
 

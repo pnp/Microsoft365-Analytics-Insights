@@ -30,7 +30,7 @@ import {
   type TFunction,
   type TranslationKey,
 } from '../../i18n';
-import { STATUS_KEYS } from './userOrgShared';
+import { STATUS_KEYS, userOrgErrorMessage } from './userOrgShared';
 import { buildUnusableRowsCsv, downloadCsv, unusableRowsFileName } from './csvUnusableRows';
 import ImportChangesDialog from './ImportChangesDialog';
 import type {
@@ -229,7 +229,7 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
       setHistory(await fetchImportHistory(orgType.id, HISTORY_TAKE, controller.signal));
       setHistoryLoaded(true);
     } catch (e) {
-      setHistoryError(e instanceof Error ? e.message : t('errors.userOrgs.loadFailed'));
+      setHistoryError(userOrgErrorMessage(e, t, 'errors.userOrgs.loadFailed'));
     } finally {
       setHistoryLoading(false);
     }
@@ -1049,7 +1049,8 @@ function apiErrorMessage(error: unknown, t: TFunction): string {
       confirmed: formatNumber(Number(error.values.confirmed ?? 0)),
     });
   }
-  return error instanceof Error ? error.message : t('errors.userOrgs.importNotStarted');
+  // The API's general codes - a type deleted elsewhere, a fault - are worded like everywhere else.
+  return userOrgErrorMessage(error, t, 'errors.userOrgs.importNotStarted');
 }
 
 function jobErrorMessage(job: UserOrgImportJob, t: TFunction): string {

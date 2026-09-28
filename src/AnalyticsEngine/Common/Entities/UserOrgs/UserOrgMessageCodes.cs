@@ -2,8 +2,8 @@ namespace Common.Entities.UserOrgs
 {
     /// <summary>
     /// Stable keys for the messages the user organisation API writes for an administrator: organisation
-    /// type and attribute validation, the live attribute test, attribute discovery, and changes refused
-    /// while an import runs.
+    /// type and attribute validation, the live attribute test, attribute discovery, changes refused
+    /// while an import runs, and the API's own not-found and fault replies.
     /// </summary>
     /// <remarks>
     /// The API reports facts and the portal writes the sentences: each message is sent with one of these
@@ -63,5 +63,11 @@ namespace Common.Entities.UserOrgs
         public const string DiscoveryGraphError = "discoveryGraphError"; // status
         public const string DiscoveryNoneReturned = "discoveryNoneReturned";
         public const string DiscoveryUnreachable = "discoveryUnreachable";
+
+        // The API's own replies: something asked for that is gone, and requests it would not or could not answer
+        public const string JobGone = "jobGone";
+        public const string ValueGone = "valueGone";
+        public const string NotFromPortal = "notFromPortal";
+        public const string Unexpected = "unexpected";
     }
 }

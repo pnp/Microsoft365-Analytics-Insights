@@ -633,6 +633,38 @@ WHERE id = {draftId}");
         }
 
         [TestMethod]
+        public async Task AJobRetiredWhileItWasApplyingIsNotReportedAsApplied()
+        {
+            // The resume sweep retires a job whose worker has gone quiet, without the type's lock, and
+            // deletes its staged rows. Here a trigger retires the job in the middle of the apply - after
+            // its writes, before it records its success - as a sweep on another instance could.
+            var a = AddUser("a@contoso.com");
+            var typeId = await NewType();
+            var draftId = await Draft(typeId, Admin, new UserOrgStagedRow(2, "a@contoso.com", "X"));
+            await _jobs.CommitDraftAsync(draftId, typeId, UserOrgImportMode.Merge, 0, Admin);
+            Assert.IsTrue(await _jobs.TryClaimJobAsync(draftId));
+
+            _db.Execute(@"
+CREATE TRIGGER dbo.tr_test_sweep_retires ON dbo.user_org_import_changes AFTER INSERT AS
+BEGIN
+    SET NOCOUNT ON;
+    UPDATE dbo.user_org_import_jobs SET status = 4 WHERE id IN (SELECT job_id FROM inserted);
+END");
+            try
+            {
+                await Assert.ThrowsExceptionAsync<UserOrgJobSupersededException>(() => _jobs.ApplyAsync(draftId));
+            }
+            finally
+            {
+                _db.Execute("DROP TRIGGER dbo.tr_test_sweep_retires;");
+            }
+
+            Assert.AreEqual(0, (await _assignments.GetForUserAsync(a)).Count, "Nothing it did survives.");
+            Assert.AreNotEqual(UserOrgImportStatus.Succeeded, (await _jobs.GetJobAsync(draftId)).Status);
+            Assert.AreEqual(0, Count($"SELECT COUNT(*) FROM dbo.user_org_import_changes WHERE job_id = {draftId}"));
+        }
+
+        [TestMethod]
         public async Task ARefusedApplyCapturesNothing()
         {
             var a = AddUser("a@contoso.com");

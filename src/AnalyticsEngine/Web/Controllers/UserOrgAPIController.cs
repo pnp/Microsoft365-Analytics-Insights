@@ -371,7 +371,7 @@ namespace Web.AnalyticsWeb.Controllers
                 var job = await svc.GetJobAsync(id, cancellationToken).ConfigureAwait(false);
                 if (job == null)
                 {
-                    throw new UserOrgNotFoundException("That import job was not found.");
+                    throw new UserOrgNotFoundException("That import job was not found.", UserOrgMessageCodes.JobGone);
                 }
 
                 // The worker clears this process's cached directory itself when an import succeeds.
@@ -404,7 +404,7 @@ namespace Web.AnalyticsWeb.Controllers
                 var imports = await svc.ListImportsAsync(id, take, cancellationToken).ConfigureAwait(false);
                 if (imports == null)
                 {
-                    throw new UserOrgNotFoundException("That organisation type no longer exists.");
+                    throw new UserOrgNotFoundException("That organisation type no longer exists.", UserOrgMessageCodes.TypeGone);
                 }
 
                 return imports;
@@ -438,7 +438,7 @@ namespace Web.AnalyticsWeb.Controllers
                     .ConfigureAwait(false);
                 if (page == null)
                 {
-                    throw new UserOrgNotFoundException("That import job was not found.");
+                    throw new UserOrgNotFoundException("That import job was not found.", UserOrgMessageCodes.JobGone);
                 }
 
                 return page;
@@ -469,7 +469,7 @@ namespace Web.AnalyticsWeb.Controllers
                     .ConfigureAwait(false);
                 if (result == null)
                 {
-                    throw new UserOrgNotFoundException("That organisation type no longer exists.");
+                    throw new UserOrgNotFoundException("That organisation type no longer exists.", UserOrgMessageCodes.TypeGone);
                 }
                 return result;
             }, cancellationToken).ConfigureAwait(false);
@@ -496,7 +496,7 @@ namespace Web.AnalyticsWeb.Controllers
                     .ConfigureAwait(false);
                 if (result == null)
                 {
-                    throw new UserOrgNotFoundException("That organisation no longer exists.");
+                    throw new UserOrgNotFoundException("That organisation no longer exists.", UserOrgMessageCodes.ValueGone);
                 }
                 return result;
             }, cancellationToken).ConfigureAwait(false);
@@ -669,7 +669,9 @@ namespace Web.AnalyticsWeb.Controllers
 
             return Content(
                 HttpStatusCode.BadRequest,
-                new ApiErrorModel("This request did not come from the portal. Reload the page and try again."));
+                new ApiErrorModel(
+                    "This request did not come from the portal. Reload the page and try again.",
+                    UserOrgMessageCodes.NotFromPortal));
         }
 
         private Task<IHttpActionResult> RunAsync<T>(Func<UserOrgAdminService, Task<T>> work, string route = null, CancellationToken cancellationToken = default(CancellationToken))
@@ -712,7 +714,7 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch (UserOrgNotFoundException ex)
             {
-                return Content(HttpStatusCode.NotFound, new ApiErrorModel(ex.Message));
+                return Content(HttpStatusCode.NotFound, new ApiErrorModel(ex.Message, ex.Code));
             }
             catch (Exception) when (cancellationToken.IsCancellationRequested)
             {
@@ -730,7 +732,9 @@ namespace Web.AnalyticsWeb.Controllers
 
                 return Content(
                     HttpStatusCode.InternalServerError,
-                    new ApiErrorModel("Something went wrong handling that request. Check the service logs for details."));
+                    new ApiErrorModel(
+                        "Something went wrong handling that request. Check the service logs for details.",
+                        UserOrgMessageCodes.Unexpected));
             }
         }
 
@@ -740,8 +744,12 @@ namespace Web.AnalyticsWeb.Controllers
     /// <summary>Thrown when an org resource does not exist, so the controller can answer 404.</summary>
     public sealed class UserOrgNotFoundException : Exception
     {
-        public UserOrgNotFoundException(string message) : base(message)
+        /// <param name="code">What is gone, from <see cref="UserOrgMessageCodes"/> - the portal words it.</param>
+        public UserOrgNotFoundException(string message, string code) : base(message)
         {
+            Code = code;
         }
+
+        public string Code { get; }
     }
 }

@@ -819,6 +819,7 @@ describe('User data lookup category labels', () => {
  */
 const USER_ORG_MESSAGE_CODES = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'UserOrgs', 'UserOrgMessageCodes.cs');
 const USER_ORG_ADMIN_SERVICE = join(process.cwd(), '..', '..', 'Models', 'UserOrgs', 'UserOrgAdminService.cs');
+const USER_ORG_CONTROLLER = join(process.cwd(), '..', '..', 'Controllers', 'UserOrgAPIController.cs');
 
 function userOrgMessageCodes(): string[] {
   const source = readFileSync(USER_ORG_MESSAGE_CODES, 'utf8');
@@ -853,6 +854,32 @@ describe('User organisation server messages', () => {
     );
 
     expect({ wrong, orphanKeys }).toEqual({ wrong: [], orphanKeys: [] });
+  });
+
+  it('sends a code with every error the controller answers', () => {
+    // A reply without a code keeps the portal's own "Request failed (500)", because the page cannot word
+    // server English it does not recognise - so a sentence the controller writes without one is wasted
+    // on every reader, and only an English one could have read it.
+    const source = readFileSync(USER_ORG_CONTROLLER, 'utf8');
+    const literal = String.raw`\$?"(?:[^"\\]|\\.)*"`;
+    const coded = new RegExp(
+      String.raw`new ApiErrorModel\(\s*(?:${literal}|ex\.Message)\s*,\s*(?:UserOrg\w+Codes\.\w+|ex\.Code)\s*\)`,
+      'g',
+    );
+    const errors = [...source.matchAll(/new ApiErrorModel\(/g)].length;
+    expect(errors).toBeGreaterThanOrEqual(9);
+    expect([...source.matchAll(coded)].length, 'an ApiErrorModel sent without a code').toBe(errors);
+    expect(
+      [...source.matchAll(/\bContent\s*\(/g)].length,
+      'a UserOrgAPIController Content(...) reply that is not an ApiErrorModel',
+    ).toBe([...source.matchAll(/\bContent\s*\(\s*HttpStatusCode\.\w+,\s*new ApiErrorModel\(/g)].length);
+
+    const notFound = [...source.matchAll(/new UserOrgNotFoundException\(/g)].length;
+    expect(notFound).toBeGreaterThanOrEqual(5);
+    expect(
+      [...source.matchAll(/new UserOrgNotFoundException\(\s*"(?:[^"\\]|\\.)*"\s*,\s*UserOrgMessageCodes\.\w+\s*\)/g)].length,
+      'a UserOrgNotFoundException thrown without a code',
+    ).toBe(notFound);
   });
 
   it('words every CSV separator the server can name, and nothing it cannot', () => {

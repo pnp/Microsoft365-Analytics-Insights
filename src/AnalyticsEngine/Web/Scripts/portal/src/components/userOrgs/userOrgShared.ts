@@ -51,6 +51,10 @@ export const USER_ORG_MESSAGE_KEYS: Record<string, TranslationKey> = {
   discoveryGraphError: 'userOrgs.message.discoveryGraphError',
   discoveryNoneReturned: 'userOrgs.message.discoveryNoneReturned',
   discoveryUnreachable: 'userOrgs.message.discoveryUnreachable',
+  jobGone: 'userOrgs.message.jobGone',
+  valueGone: 'userOrgs.message.valueGone',
+  notFromPortal: 'userOrgs.message.notFromPortal',
+  unexpected: 'userOrgs.message.unexpected',
 };
 
 /**

@@ -408,6 +408,14 @@ export const userOrgs: Record<keyof typeof en, string> = {
     'No se devolvi\u00f3 ninguna extensi\u00f3n de directorio. Seg\u00fan su documentaci\u00f3n, la llamada de detecci\u00f3n de Microsoft Graph no devuelve nada en inquilinos con m\u00e1s de 1000 entidades de servicio, as\u00ed que esto no significa necesariamente que el inquilino no tenga ninguna. Puede escribir el nombre completo de una extensi\u00f3n de directorio y probarlo.',
   'userOrgs.message.discoveryUnreachable':
     'No se pudo contactar con Microsoft Graph para enumerar las extensiones de directorio. Los registros del servicio tienen el detalle. Puede escribir igualmente el nombre completo de una extensi\u00f3n de directorio y probarlo.',
+  'userOrgs.message.jobGone':
+    'No se ha encontrado esa importaci\u00f3n. Vuelva a cargar la p\u00e1gina para ver las importaciones m\u00e1s recientes.',
+  'userOrgs.message.valueGone':
+    'Esa organizaci\u00f3n ya no existe: es posible que una importaci\u00f3n posterior la haya eliminado.',
+  'userOrgs.message.notFromPortal':
+    'Esta solicitud no procede del portal. Vuelva a cargar la p\u00e1gina e int\u00e9ntelo de nuevo.',
+  'userOrgs.message.unexpected':
+    'Se ha producido un error al procesar la solicitud. Consulte los registros del servicio para obtener m\u00e1s detalles.',
 
   // Who is in each organisation
   'userOrgs.browse.title': 'Qui\u00e9n pertenece a cada organizaci\u00f3n',

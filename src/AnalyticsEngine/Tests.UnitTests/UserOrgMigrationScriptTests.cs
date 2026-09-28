@@ -3,6 +3,7 @@ using Microsoft.Data.SqlClient;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.IO;
+using System.Linq;
 
 namespace Tests.UnitTests
 {
@@ -159,6 +160,53 @@ CREATE TABLE dbo.__MigrationHistory (
                     TableCount(db),
                     "The schema itself is additive and harmless, so it is created; only the stamp is withheld. "
                     + "Re-running after the predecessor is applied then stamps it.");
+            }
+        }
+
+        [TestMethod]
+        public void AUniqueIndexThatCannotBeBuiltStopsTheScriptBeforeItStamps()
+        {
+            // Duplicate rows fail the unique index with Msg 1505, which ends the whole batch rather than
+            // its own statement - so nothing after it runs, the stamp included, and a re-run after the
+            // duplicates are removed builds the index. EF never retries a stamped migration.
+            using (var db = NewDatabase())
+            {
+                StampPredecessor(db);
+                db.Execute(UserOrganisations.Up_Sql);
+                db.Execute(@"
+DROP INDEX UX_user_org_values_type_name ON dbo.user_org_values;
+SET IDENTITY_INSERT dbo.user_org_types ON;
+INSERT INTO dbo.user_org_types (id, name, source_kind, is_enabled) VALUES (1, N'Team', 2, 1);
+SET IDENTITY_INSERT dbo.user_org_types OFF;
+INSERT INTO dbo.user_org_values (org_type_id, name) VALUES (1, N'Retail'), (1, N'Retail');");
+
+                var refusal = Assert.ThrowsException<SqlException>(() => db.ExecuteScript(Script(), quotedIdentifierOn: false));
+
+                Assert.IsTrue(refusal.Errors.Cast<SqlError>().Any(e => e.Number == 1505), refusal.Message);
+                Assert.AreEqual(0, StampCount(db), "A migration whose index is missing is not recorded as applied.");
+            }
+        }
+
+        [TestMethod]
+        public void AnIndexOfTheWrongShapeIsNotStamped()
+        {
+            // The script skips an index whose name already exists, so one created by hand without its
+            // UNIQUE would be taken as built - and with a guard that checked only the tables, the migration
+            // recorded as done, leaving nothing to stop a second copy of an organisation's value.
+            using (var db = NewDatabase())
+            {
+                StampPredecessor(db);
+                db.Execute(UserOrganisations.Up_Sql);
+                db.Execute(@"
+DROP INDEX UX_user_org_values_type_name ON dbo.user_org_values;
+CREATE NONCLUSTERED INDEX UX_user_org_values_type_name ON dbo.user_org_values (org_type_id, name);");
+
+                var refusal = Assert.ThrowsException<SqlException>(() => db.ExecuteScript(Script(), quotedIdentifierOn: false));
+
+                Assert.IsTrue(
+                    refusal.Errors.Cast<SqlError>().Any(e => e.Message.Contains("NOT stamped") && e.Message.Contains("their indexes")),
+                    "The guard must say why it did not stamp: " + refusal.Message);
+                Assert.AreEqual(0, StampCount(db), "A migration whose index has the wrong shape is not recorded as applied.");
             }
         }
 

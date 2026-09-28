@@ -395,6 +395,10 @@ export const userOrgs = {
     "No directory extensions were returned. Microsoft Graph's discovery call is documented as returning nothing on tenants with more than 1,000 service principals, so this does not necessarily mean the tenant has none. You can type a directory extension name in full and test it.",
   'userOrgs.message.discoveryUnreachable':
     'Could not reach Microsoft Graph to list directory extensions. The service logs have the detail. You can still type a directory extension name in full and test it.',
+  'userOrgs.message.jobGone': 'That import could not be found. Reload the page to see the latest imports.',
+  'userOrgs.message.valueGone': 'That organisation no longer exists - a later import may have removed it.',
+  'userOrgs.message.notFromPortal': 'This request did not come from the portal. Reload the page and try again.',
+  'userOrgs.message.unexpected': 'Something went wrong handling that request. Check the service logs for details.',
 
   // Who is in each organisation
   'userOrgs.browse.title': 'Who is in each organisation',

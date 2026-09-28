@@ -202,6 +202,61 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task TheMemoryLogKeepsSoManyImportsEvenWhenTheyChangedNobody()
+        {
+            // Importing the same file again and again changes nobody, so the change cap alone never evicts
+            // anything - one summary each would pile up for as long as the web app runs.
+            var log = new InMemoryUserOrgChangeLog(maxChanges: 100, maxLogs: 3);
+            for (var job = 1; job <= 5; job++)
+            {
+                await Write(log, job + "-1");
+            }
+
+            Assert.IsNull(await log.GetImportAsync("1-1", CancellationToken.None), "The oldest went first.");
+            Assert.IsNull(await log.GetImportAsync("2-1", CancellationToken.None));
+            foreach (var kept in new[] { "3-1", "4-1", "5-1" })
+            {
+                Assert.IsNotNull(await log.GetImportAsync(kept, CancellationToken.None), kept);
+            }
+        }
+
+        [TestMethod]
+        public async Task AnUnfinishedLogIsKeptWhileItsWriterMayStillBeWritingIt()
+        {
+            var now = new DateTime(2026, 1, 1, 9, 0, 0, DateTimeKind.Utc);
+            var log = new InMemoryUserOrgChangeLog(2, 10, () => now);
+            await log.AppendAsync(
+                Import("1-1"),
+                new[] { Change(1, "a@contoso.com", null, "X"), Change(2, "b@contoso.com", null, "X") },
+                CancellationToken.None);
+
+            now = now.Add(InMemoryUserOrgChangeLog.AbandonedAfter).AddSeconds(-1);
+            await Write(log, "2-1", Change(3, "c@contoso.com", null, "Y"));
+
+            Assert.AreEqual(0, (await log.GetImportAsync("2-1", CancellationToken.None)).StoredChanges, "Nothing could be dropped for it.");
+            Assert.AreEqual(2, log.StoredChanges, "The unfinished log was left alone.");
+        }
+
+        [TestMethod]
+        public async Task AnAbandonedUnfinishedLogMakesRoomAtLast()
+        {
+            // Its writer lost the lease part-way, and the retry wrote the import on another instance - into
+            // that instance's memory. Nothing will ever finish this copy, and nobody can read it.
+            var now = new DateTime(2026, 1, 1, 9, 0, 0, DateTimeKind.Utc);
+            var log = new InMemoryUserOrgChangeLog(2, 10, () => now);
+            await log.AppendAsync(
+                Import("1-1"),
+                new[] { Change(1, "a@contoso.com", null, "X"), Change(2, "b@contoso.com", null, "X") },
+                CancellationToken.None);
+
+            now = now.Add(InMemoryUserOrgChangeLog.AbandonedAfter);
+            await Write(log, "2-1", Change(3, "c@contoso.com", null, "Y"));
+
+            Assert.AreEqual(1, (await log.GetImportAsync("2-1", CancellationToken.None)).StoredChanges);
+            Assert.AreEqual(1, log.StoredChanges, "The abandoned log's changes were released.");
+        }
+
+        [TestMethod]
         public async Task AChangeThatDoesNotFitHoldsNoMemory()
         {
             // The cap bounds memory only if a change that is dropped keeps nothing. Interning its values

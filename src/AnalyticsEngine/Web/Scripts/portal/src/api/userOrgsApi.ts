@@ -40,9 +40,11 @@ export class UserOrgApiError extends Error {
 /**
  * Pulls the server's message out of an error response.
  *
- * The API answers a rejected configuration with a 400 and a message written for an IT admin - which
- * attribute is wrong and why. Falling back to "Request failed (400)" would throw away the only
- * useful part, and this page is almost entirely about getting a configuration right.
+ * The API answers a rejected configuration with a 400, a stable `code` and the facts behind it, and
+ * the page words the code in the reader's language. The server's English is kept only beside a code,
+ * as the fallback for one this build does not know; a reply without a code - a proxy's error page, or
+ * a server older than its page - keeps the portal's own words, so it never reaches a Spanish page in
+ * English.
  */
 async function toError(response: Response): Promise<Error> {
   let message = translateActive('errors.userOrgs.requestFailed', { status: response.status });
@@ -50,11 +52,11 @@ async function toError(response: Response): Promise<Error> {
   let values: Record<string, string | number | null> | null = null;
   try {
     const body = await response.json();
-    if (body && typeof body.message === 'string' && body.message.length > 0) {
-      message = body.message;
-    }
     if (body && typeof body.code === 'string' && body.code.length > 0) {
       code = body.code;
+      if (typeof body.message === 'string' && body.message.length > 0) {
+        message = body.message;
+      }
     }
     if (body && body.values && typeof body.values === 'object') {
       values = body.values;

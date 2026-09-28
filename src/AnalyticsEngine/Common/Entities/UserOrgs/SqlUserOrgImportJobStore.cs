@@ -576,7 +576,17 @@ SET rows_total = @rowsTotal,
     error_message = NULL,
     change_log_status = 1,
     heartbeat_utc = SYSUTCDATETIME()
-WHERE id = @jobId;
+WHERE id = @jobId AND status = 2;
+
+-- Still Running at the end, as at the start. The resume sweep retires a job whose worker has gone quiet
+-- without taking the type's lock, and deletes its staged rows - possibly before this read them. A job it
+-- retired meanwhile must not be reported as applied: refused, so the caller rolls back every change
+-- above, and the job keeps the outcome the sweep gave it.
+IF @@ROWCOUNT = 0
+BEGIN
+    RAISERROR('USERORG_JOB_NOT_RUNNABLE', 16, 1);
+    RETURN;
+END
 
 -- In the same transaction as the writes, so the refresh time and the values cannot disagree - even
 -- when the file changed nobody, which is still a confirmation that the values are current.

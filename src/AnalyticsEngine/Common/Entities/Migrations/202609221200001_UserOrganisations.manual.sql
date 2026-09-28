@@ -342,14 +342,18 @@ RAISERROR('UserOrganisations: finished.', 0, 1) WITH NOWAIT;
 /* ---------------------------------------------------------------------------------------------------
    Record the migration as applied.
 
-   The guard checks SCHEMA only - that the six tables this script creates actually exist, and that
-   the import jobs table has this release's shape. It deliberately does NOT check any data state: this
-   migration writes no rows, and a data-state guard is the shape that has previously refused to stamp
-   a successfully-completed migration and stranded the rest of the chain behind it.
+   The guard checks SCHEMA only - that the six tables this script creates actually exist, that the
+   import jobs table has this release's shape, and that every index it builds is there, unique where it
+   must be. It deliberately does NOT check any data state: this migration writes no rows, and a
+   data-state guard is the shape that has previously refused to stamp a successfully-completed migration
+   and stranded the rest of the chain behind it.
 
-   The schema check still matters, because a severity-16 RAISERROR does not abort a batch - sqlcmd and
-   SSMS carry on to the next one - so an unguarded stamp would record a failed apply as complete, after
-   which EF never retries it.
+   The schema check still matters, because most severity-16 errors end only their own statement - the
+   statements after it run, and sqlcmd and SSMS carry on to the next batch - so an unguarded stamp could
+   record a failed apply as complete, after which EF never retries it. The indexes are checked, and for
+   uniqueness, because the script skips any index whose name already exists: one created by hand
+   without its UNIQUE would otherwise be taken as built. (A unique index that cannot be built on
+   duplicate rows is not one of these - that error ends the whole batch, so it never reaches the stamp.)
    --------------------------------------------------------------------------------------------------- */
 IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory
                WHERE MigrationId = N'202609221200001_UserOrganisations')
@@ -361,7 +365,13 @@ BEGIN
        OR OBJECT_ID(N'dbo.user_org_import_staging', N'U') IS NULL
        OR OBJECT_ID(N'dbo.user_org_import_changes', N'U') IS NULL
        OR COL_LENGTH(N'dbo.user_org_import_jobs', N'change_log_status') IS NULL
-        RAISERROR('UserOrganisations: NOT stamped - one or more of the user_org_* tables is missing or has an older shape, so the schema work did not complete. If dbo.users has no primary key the assignments table is skipped by design; create the normal schema first. Re-run this script, or run the installer to reconcile.', 16, 1);
+       OR NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.user_org_types') AND name = N'UX_user_org_types_name' AND is_unique = 1)
+       OR NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.user_org_values') AND name = N'UX_user_org_values_type_name' AND is_unique = 1)
+       OR NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.user_org_values') AND name = N'UX_user_org_values_id_type' AND is_unique = 1)
+       OR NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.user_org_assignments') AND name = N'IX_user_org_assignments_value')
+       OR NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.user_org_import_jobs') AND name = N'IX_user_org_import_jobs_type_queued')
+       OR NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.user_org_import_staging') AND name = N'IX_user_org_import_staging_job_upn')
+        RAISERROR('UserOrganisations: NOT stamped - one or more of the user_org_* tables or their indexes is missing or has an older shape, so the schema work did not complete. If dbo.users has no primary key the assignments table is skipped by design; create the normal schema first. Re-run this script, or run the installer to reconcile.', 16, 1);
     ELSE IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory
                         WHERE MigrationId = N'202609201430001_DropCopilotAdoptionPeriodTables')
         RAISERROR('UserOrganisations: the tables were created, but prerequisite migration 202609201430001_DropCopilotAdoptionPeriodTables is missing from __MigrationHistory, so it was NOT stamped. Upgrade to the previous release first, or run the installer to reconcile.', 16, 1);
