@@ -50,6 +50,11 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         public const int MaxSupportedUserRows = 1000000;
 
+        /// <summary>
+        /// What a workbook exported without the See PII permission says where the individual rows would be.
+        /// </summary>
+        internal const string IndividualDataWithheld = "not included (needs the See PII permission)";
+
         /// <summary>Builds the workbook and returns it as a byte array ready to stream to the browser.</summary>
         /// <param name="analysis">The cached analysis the page was rendered from. Never modified.</param>
         /// <param name="timeSaved">
@@ -57,17 +62,24 @@ namespace Common.Entities.CopilotAdoption
         /// They change the two modelled estimate sheets and the matching rows of the Settings sheet and
         /// nothing else: no measured figure depends on them.
         /// </param>
-        public static byte[] Build(CopilotAdoptionAnalysis analysis, TimeSavedOverrides timeSaved = null)
+        /// <param name="includeIndividualData">
+        /// False for a reader without the portal's See PII permission (#661). The Licensed users and
+        /// Licence opportunities sheets are left out, the Cowork readiness sheet keeps its aggregate
+        /// sections but not its candidate list, and the accountability roll-up is left out when its rows
+        /// are managers - see <see cref="CopilotAdoptionSummary.WithoutIndividualData"/>. An export is
+        /// never less redacted than the screen it came from.
+        /// </param>
+        public static byte[] Build(CopilotAdoptionAnalysis analysis, TimeSavedOverrides timeSaved = null, bool includeIndividualData = true)
         {
             if (analysis == null) throw new ArgumentNullException(nameof(analysis));
 
             using (var workbook = new XlsxWriter())
             {
-                var summary = analysis.Summary;
+                var summary = includeIndividualData ? analysis.Summary : analysis.Summary.WithoutIndividualData();
                 var configured = summary.Options ?? CopilotAdoptionOptions.Default;
                 var modelOptions = timeSaved != null && timeSaved.Any ? timeSaved.ApplyTo(configured) : configured;
 
-                WriteReportSheet(workbook, summary);
+                WriteReportSheet(workbook, summary, includeIndividualData);
                 WriteHeadlineSheet(workbook, summary);
                 WriteFunnelSheet(workbook, summary);
                 WriteEngagementSheet(workbook, summary);
@@ -77,10 +89,10 @@ namespace Common.Entities.CopilotAdoption
                 WriteAgentSheet(workbook, summary);
                 WriteUnlicensedSheet(workbook, summary);
                 WriteActionPlanSheet(workbook, summary);
-                WriteLicensedUsersSheet(workbook, analysis);
-                WriteCoworkSheet(workbook, analysis);
+                if (includeIndividualData) WriteLicensedUsersSheet(workbook, analysis);
+                WriteCoworkSheet(workbook, analysis, includeIndividualData);
                 WriteCoworkEstimateSheet(workbook, summary, configured, modelOptions);
-                WriteOpportunitiesSheet(workbook, analysis);
+                if (includeIndividualData) WriteOpportunitiesSheet(workbook, analysis);
                 WriteLicenceEstimateSheet(workbook, summary, configured, modelOptions);
                 WriteMethodSheet(workbook, summary);
                 WriteSnapshotFactsSheet(workbook, summary);
@@ -119,7 +131,7 @@ namespace Common.Entities.CopilotAdoption
         /// scored by the same rules, and this is what lets a reader confirm that rather than assume
         /// it - the tuning is adjustable, so "adoption went up" could otherwise mean "the bar moved".
         /// </summary>
-        private static void WriteReportSheet(XlsxWriter workbook, CopilotAdoptionSummary summary)        {
+        private static void WriteReportSheet(XlsxWriter workbook, CopilotAdoptionSummary summary, bool includeIndividualData)        {
             var sheet = workbook.AddSheet("Report");
             sheet.SetColumnWidths(42, 34, 60);
 
@@ -198,10 +210,22 @@ namespace Common.Entities.CopilotAdoption
             }
             AddMeta(sheet, "Accountability grouped by", summary.AccountabilityDimension,
                 "The organisational field the accountability roll-up is grouped by. Two snapshots grouped differently are not comparable on that sheet.");
-            AddMeta(sheet, "Individual rows", summary.Options == null ? string.Empty : "See per-user sheets",
-                "The Licensed users, Cowork readiness and Licence opportunities sheets carry individual-level "
-                + "governance data - sign-in name, email address, email domain, office, company, country, manager, "
-                + "and who excluded a seat from reclaim and when. Do not share externally without a legal basis.");
+            if (includeIndividualData)
+            {
+                AddMeta(sheet, "Individual rows", summary.Options == null ? string.Empty : "See per-user sheets",
+                    "The Licensed users, Cowork readiness and Licence opportunities sheets carry individual-level "
+                    + "governance data - sign-in name, email address, email domain, office, company, country, manager, "
+                    + "and who excluded a seat from reclaim and when. Do not share externally without a legal basis.");
+            }
+            else
+            {
+                // Said on the cover sheet, because a reader comparing this file with one exported by a
+                // colleague who holds the permission would otherwise take the missing sheets for missing data.
+                AddMeta(sheet, "Individual rows", IndividualDataWithheld,
+                    "Exported without the portal's See PII permission, so this workbook describes groups only. The "
+                    + "Licensed users and Licence opportunities sheets, the Cowork candidate list and any roll-up "
+                    + "labelled with a manager's name are left out. Every aggregate figure still covers the whole population.");
+            }
 
             sheet.AddBlankRow();
             sheet.AddHeaderRow("Data source", "Available", "Notes");
@@ -1380,7 +1404,7 @@ namespace Common.Entities.CopilotAdoption
         /// The Cowork readiness view: who already uses Cowork, who should be enabled next, and the
         /// department order to roll it out in.
         /// </summary>
-        private static void WriteCoworkSheet(XlsxWriter workbook, CopilotAdoptionAnalysis analysis)
+        private static void WriteCoworkSheet(XlsxWriter workbook, CopilotAdoptionAnalysis analysis, bool includeIndividualData)
         {
             var summary = analysis.Summary;
             if (!summary.CoworkReadinessAvailable) return;
@@ -1576,6 +1600,15 @@ namespace Common.Entities.CopilotAdoption
             // The people.
             sheet.AddBlankRow();
             sheet.AddBlankRow();
+
+            if (!includeIndividualData)
+            {
+                sheet.AddTitle("Cowork candidates - " + IndividualDataWithheld);
+                sheet.AddRow(XlsxCell.Wrapped(
+                    "This workbook was exported without the portal's See PII permission, so the named list of "
+                    + "seat holders is left out. The tier counts and department figures above cover everyone."));
+                return;
+            }
 
             var cap = RowCap(summary);
             var truncated = rows.Count > cap;

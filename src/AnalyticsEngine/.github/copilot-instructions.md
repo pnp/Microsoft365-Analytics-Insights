@@ -31,6 +31,23 @@ Existing component tests assert English wording, and `renderWithProvider` pins t
 
 Both checks run in CI: `tests.yml` builds the solution (which runs `npm run build`, hence `tsc`) and then runs `npm run test` in the portal directory, inside `test_dotnet (Release)` — a required check on `dev` and `main`. A branch that leaves a string untranslated cannot be merged. The `release-manager` agent runs them again before cutting a release and refuses to release on a failure.
 
+## Portal permissions — every Web API endpoint decides who may call it
+The portal has two permissions on top of "can sign in" (issues #660, #661), granted by **Entra ID app roles** on the runtime app registration and enforced unless the `EnforcePortalRoles` app setting is `false`:
+
+| Permission | App role | Grants |
+|---|---|---|
+| Administration | `Portal.Administration` | the Administration area (`/admin/*`) and its APIs |
+| See PII | `Portal.SeePII` | anything about an identifiable person: per-person rows, named lists (top users, organisers, champions, a roll-up labelled with a manager), their CSV/XLSX exports |
+
+They are independent — Administration does **not** imply See PII. Aggregates are for every signed-in user.
+
+- **A new Web API action must be classified.** `PortalPermissionTests.ExpectedAccess` lists every action with who may call it; `EveryWebApiAction_HasDecidedWhoMayCallIt` fails for one it does not know. Decide, then either put `[RequirePortalPermission(PortalPermission.X)]` (from `Web/Security`) on the action or controller, or record it as open to any signed-in user. Every controller also needs `[Authorize]` unless it is deliberately anonymous (the Graph webhook, the AITracker's `ImportConfig`).
+- **Per-person endpoints are refused with 403, not emptied.** The filter answers `{ code: "portalPermissionRequired", permission, role, message }`, which the SPA's `apiFetch` turns into a translated error. Never 401 — the OIDC middleware turns that into a sign-in redirect, and signing in again cannot grant a role.
+- **A mixed response is trimmed on a copy.** When an endpoint returns aggregates *and* named rows (the Copilot Adoption summary's manager roll-up, Teams meetings' top organisers, the DLP top-users table), remove the named part for a reader without See PII — but results are cached and shared between readers, so return a trimmed **copy** (`MemberwiseClone` + replace the collection, see `CopilotAdoptionSummary.WithoutIndividualData`), never edit the cached object. Prefer not running the per-person query at all when the model is built per request (`DlpAPIController.BuildSummaryAsync`).
+- **An export is never less redacted than the screen.** A workbook or CSV that contains per-person rows needs See PII, or must omit them (`CopilotAdoptionWorkbook.Build(..., includeIndividualData: false)`).
+- **The SPA hides what the server refuses.** `api/PortalAccess` tells it what the user holds; see the *Permissions* section of [`Web/Scripts/portal/README.md`](../Web/Scripts/portal/README.md).
+- Role checks are per request from the auth cookie, so a role change takes effect at the user's next sign-in. `EnforcePortalRoles` is read through `ConfigurationManager.AppSettings` — port it when forward-porting to `net10`.
+
 ## Installer config schema — bump `CONFIG_VERSION` on every change
 Whenever you change the **installer's saved config schema** — any add / remove / rename of a persisted property on `BaseSolutionInstallConfig`, `SolutionInstallConfig`, `TargetSolutionConfig` or `ImportTaskSettings` (a new import toggle, a new Azure-resource field, etc.) — you **must** bump `CONFIG_VERSION` in [`Common/Entities/Installer/BaseSolutionInstallConfig.cs`](../Common/Entities/Installer/BaseSolutionInstallConfig.cs). Use `Major.Minor.Patch`: **minor** for additive / back-compatible changes, **major** for breaking ones. Add a one-line entry to the `// History:` comment next to the constant describing what changed. This value becomes the `ConfigSchemaVersion` stamped into every saved `*.json` config, so keeping it in step with the schema is how config compatibility is reasoned about across upgrades. Do this in the **same** change that alters the schema — don't leave it to a follow-up.
 

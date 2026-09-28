@@ -9,6 +9,7 @@ using System.Net.Http.Headers;
 using System.Runtime.Caching;
 using System.Threading.Tasks;
 using System.Web.Http;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -34,6 +35,11 @@ namespace Web.AnalyticsWeb.Controllers
     /// some date indexes, and an admin flipping between tabs or nudging the period should not pay for
     /// a full re-run each time. The cache key carries the window, the grouping and the UTC date, so it
     /// can never be served across a day boundary.
+    /// </para>
+    /// <para>
+    /// People are behind the portal's See PII permission (#661): the People tab and its exports are
+    /// refused without it, and the meetings section is served without its named leaderboards. The cached
+    /// section is the complete one; a reader without the permission gets a trimmed copy of it.
     /// </para>
     /// </remarks>
     [Authorize]
@@ -110,7 +116,9 @@ namespace Web.AnalyticsWeb.Controllers
             int top = TeamsExplorerQuery.DefaultTop)
         {
             var query = BuildQuery(days, TeamsExplorerQuery.DefaultGrouping, top);
-            return CachedAsync("meetings", query, () => _store.GetMeetingsAsync(query));
+            Func<TeamsMeetings, TeamsMeetings> forReader = null;
+            if (!PortalAccess.Evaluate(Request, User).SeePii) forReader = m => m.WithoutIndividualData();
+            return CachedAsync("meetings", query, () => _store.GetMeetingsAsync(query), forReader);
         }
 
         // GET: api/TeamsExplorer/collaboration?days=28
@@ -139,6 +147,7 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/TeamsExplorer/people?days=28&top=20
         [HttpGet]
         [Route("people")]
+        [RequirePortalPermission(PortalPermission.SeePii)]
         public Task<IHttpActionResult> People(
             int days = TeamsExplorerQuery.DefaultWindowDays,
             int top = TeamsExplorerQuery.DefaultTop)
@@ -172,6 +181,11 @@ namespace Web.AnalyticsWeb.Controllers
                         "Unknown export. Supported sections: "
                         + string.Join(", ", TeamsExplorerExports.Sections) + "."),
                 };
+            }
+
+            if (TeamsExplorerExports.NamesPeople(section) && !PortalAccess.Evaluate(Request, User).SeePii)
+            {
+                return Request.CreateResponse(HttpStatusCode.Forbidden, PortalPermissionDeniedModel.For(PortalPermission.SeePii));
             }
 
             var query = BuildQuery(days, groupBy, top);
@@ -254,17 +268,23 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         /// <summary>Serves a section from the short-lived cache, or builds and caches it.</summary>
+        /// <param name="forReader">
+        /// Applied to what this reader is sent, never to what is cached: the cache holds the complete
+        /// section, and <paramref name="forReader"/> returns a trimmed copy for a reader who may not see
+        /// all of it. Null sends the section as it is.
+        /// </param>
         private async Task<IHttpActionResult> CachedAsync<T>(
             string section,
             TeamsExplorerQuery query,
-            Func<Task<T>> build)
+            Func<Task<T>> build,
+            Func<T, T> forReader = null)
             where T : class
         {
             var key = query.CacheKey(section);
 
             if (MemoryCache.Default.Get(key) is T cached)
             {
-                return Ok(cached);
+                return Ok(forReader == null ? cached : forReader(cached));
             }
 
             var model = await build().ConfigureAwait(false);
@@ -273,7 +293,7 @@ namespace Web.AnalyticsWeb.Controllers
             // diagnostic, and re-running a query that just timed out on every reload only makes a
             // struggling database worse.
             MemoryCache.Default.Set(key, model, DateTimeOffset.UtcNow.AddSeconds(CacheSeconds));
-            return Ok(model);
+            return Ok(forReader == null ? model : forReader(model));
         }
 
         private static HttpResponseMessage CsvResponse(byte[] csv, string fileName)

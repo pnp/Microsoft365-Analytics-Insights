@@ -701,6 +701,43 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Workbook_WithoutIndividualData_NamesNobody_ButKeepsEveryAggregate()
+        {
+            // The workbook a reader without the portal's See PII permission downloads (#661). An export
+            // must never be less redacted than the screen it came from.
+            var analysis = SyntheticAnalysis();
+            var full = CopilotAdoptionWorkbook.Build(analysis);
+            var trimmed = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
+
+            // The control: the fixture really does name people, so the absence below means something.
+            StringAssert.Contains(SheetText(full), "user1@contoso.com");
+            StringAssert.Contains(SheetText(full), "candidate@contoso.com");
+
+            var text = SheetText(trimmed);
+            Assert.IsFalse(text.Contains("@contoso.com"), "No sign-in name, email address or manager may reach this file.");
+
+            var names = WorkbookSheetNames(trimmed);
+            CollectionAssert.DoesNotContain(names, "Licensed users");
+            CollectionAssert.DoesNotContain(names, "Licence opportunities");
+            foreach (var aggregate in WorkbookSheetNames(full).Except(new[] { "Licensed users", "Licence opportunities" }))
+            {
+                CollectionAssert.Contains(names, aggregate, "Only the per-person sheets may be left out.");
+            }
+
+            // Cowork keeps its tiers and department order, and says where the named list went.
+            var cowork = SheetCells(trimmed, "Cowork readiness");
+            CollectionAssert.Contains(cowork, "Rollout order by department");
+            Assert.IsTrue(cowork.Any(c => c.Contains("needs the See PII permission")));
+
+            // The cover sheet says so, so a reader comparing it with a colleague's full export does not
+            // take the missing sheets for missing data.
+            Assert.IsTrue(SheetCells(trimmed, "Report").Any(c => c.Contains("not included (needs the See PII permission)")));
+            Assert.IsFalse(text.Contains("Accountability roll-up"), "The roll-up's rows are managers when it is grouped by manager.");
+
+            Assert.IsTrue(analysis.Summary.AccountabilityRollup.Count > 0, "The cached analysis must never be edited for one reader.");
+        }
+
+        [TestMethod]
         public void Workbook_SaysWhatEachResourceTypeValueActuallyDescribes()
         {
             // Issue #468: the workbook used to introduce these rows as "what Copilot grounded its

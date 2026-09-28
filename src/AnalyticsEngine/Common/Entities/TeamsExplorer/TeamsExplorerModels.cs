@@ -363,6 +363,19 @@ namespace Common.Entities.TeamsExplorer
         public List<TeamsNamedCountRow> TopOrganisers { get; set; } = new List<TeamsNamedCountRow>();
         public List<TeamsNamedCountRow> TopAttendees { get; set; } = new List<TeamsNamedCountRow>();
         public TeamsCallQuality Quality { get; set; } = new TeamsCallQuality();
+
+        /// <summary>
+        /// This section without the two leaderboards that name people, for a reader who does not hold the
+        /// portal's See PII permission (#661). A shallow copy: the section is cached and shared between
+        /// readers, so the instance itself must never be edited for one of them.
+        /// </summary>
+        public TeamsMeetings WithoutIndividualData()
+        {
+            var copy = (TeamsMeetings)MemberwiseClone();
+            copy.TopOrganisers = new List<TeamsNamedCountRow>();
+            copy.TopAttendees = new List<TeamsNamedCountRow>();
+            return copy;
+        }
     }
 
     #endregion

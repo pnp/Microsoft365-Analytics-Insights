@@ -18,6 +18,28 @@ namespace Common.Entities.TeamsExplorer
         /// <summary>The sections that can be exported, as their URL segment.</summary>
         public static readonly string[] Sections = { "people", "dormant", "teams", "channels", "adoption" };
 
+        /// <summary>
+        /// The exports that carry no person. Every other section lists named people and needs the portal's
+        /// See PII permission (#661).
+        /// </summary>
+        /// <remarks>
+        /// An allow-list of the aggregate sections rather than a list of the personal ones, so a section
+        /// added later - and the champions list the export switch falls back to - is treated as personal
+        /// until someone decides otherwise.
+        /// </remarks>
+        public static readonly string[] AggregateSections = { "teams", "channels", "adoption" };
+
+        /// <summary>True when the export <paramref name="section"/> lists individual people.</summary>
+        public static bool NamesPeople(string section)
+        {
+            foreach (var aggregate in AggregateSections)
+            {
+                if (string.Equals(aggregate, section, System.StringComparison.OrdinalIgnoreCase)) return false;
+            }
+
+            return true;
+        }
+
         /// <summary>True when <paramref name="section"/> names a real export.</summary>
         public static bool IsKnownSection(string section)
         {

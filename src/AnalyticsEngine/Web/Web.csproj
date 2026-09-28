@@ -274,6 +274,9 @@
     <Compile Include="Models\UserOrgs\UserOrgImportDispatcher.cs" />
     <Compile Include="Models\UserOrgs\UserOrgMembershipService.cs" />
     <Compile Include="Controllers\UserImportCheckpointAPIController.cs" />
+    <Compile Include="Controllers\PortalAccessAPIController.cs" />
+    <Compile Include="Security\PortalPermissions.cs" />
+    <Compile Include="Security\RequirePortalPermissionAttribute.cs" />
     <Compile Include="Global.asax.cs">
       <DependentUpon>Global.asax</DependentUpon>
     </Compile>

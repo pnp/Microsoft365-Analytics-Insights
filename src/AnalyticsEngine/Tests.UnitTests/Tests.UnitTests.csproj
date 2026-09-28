@@ -34,6 +34,8 @@
     <Compile Include="LicenceActivityTests.cs" />
     <Compile Include="LicenceActivityApiTests.cs" />
     <Compile Include="LicenceActivityHttpHost.cs" />
+    <Compile Include="PortalPermissionTests.cs" />
+    <Compile Include="PortalTestHost.cs" />
     <Compile Include="LicenceActivityLoadTests.cs" />
     <Compile Include="LicenceActivitySqlFixture.cs" />
     <Compile Include="LicenceActivitySqlTests.cs" />
@@ -149,6 +151,7 @@
     <Reference Include="System.Net" />
     <Reference Include="System.Net.Http.WebRequest" />
     <Reference Include="System.Numerics" />
+    <Reference Include="System.Runtime.Caching" />
     <Reference Include="System.Runtime.Serialization" />
     <Reference Include="System.Security" />
     <Reference Include="System.ServiceModel" />

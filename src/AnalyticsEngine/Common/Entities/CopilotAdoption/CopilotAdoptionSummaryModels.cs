@@ -423,6 +423,35 @@ namespace Common.Entities.CopilotAdoption
     /// <summary>The executive view: headline numbers, the adoption funnel and the breakdown charts.</summary>
     public class CopilotAdoptionSummary
     {
+        /// <summary>
+        /// This summary without the parts that name a person, for a reader who does not hold the portal's
+        /// See PII permission (#661). Never modifies this instance.
+        /// </summary>
+        /// <remarks>
+        /// <para>A copy rather than an edit because summaries are cached and shared: the analysis coordinator
+        /// hands the same instance to every reader of a period for ten minutes, and the next one may hold
+        /// the permission. The copy is shallow on purpose - only the one collection it replaces differs.</para>
+        /// <para>Only the accountability roll-up names anyone, and only when it is grouped by direct manager:
+        /// each row is then labelled with a manager's sign-in name and describes that manager's team.
+        /// Grouped by department, country, office or company it is an aggregate like every other breakdown
+        /// here, all of which <see cref="CopilotAdoptionOptions.MinSeatsPerSegment"/> already keeps too large
+        /// to single anyone out, so the summary is returned as it is.</para>
+        /// </remarks>
+        public CopilotAdoptionSummary WithoutIndividualData()
+        {
+            if (!string.Equals(
+                    CopilotAdoptionService.NormaliseAccountabilityDimension(AccountabilityDimension),
+                    CopilotAdoptionAccountabilityDimensions.DirectManager,
+                    StringComparison.Ordinal))
+            {
+                return this;
+            }
+
+            var copy = (CopilotAdoptionSummary)MemberwiseClone();
+            copy.AccountabilityRollup = new List<AccountabilityRollupRow>();
+            return copy;
+        }
+
         [JsonProperty("generatedUtc")]
         public DateTime GeneratedUtc { get; set; }
 

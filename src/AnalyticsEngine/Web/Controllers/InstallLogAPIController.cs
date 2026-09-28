@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -13,6 +14,7 @@ namespace Web.AnalyticsWeb.Controllers
     /// <c>sys_configs</c> table). The most recent entry is the current configuration.
     /// </summary>
     [Authorize]
+    [RequirePortalPermission(PortalPermission.Administration)]
     [RoutePrefix("api/InstallLog")]
     public class InstallLogAPIController : ApiController
     {

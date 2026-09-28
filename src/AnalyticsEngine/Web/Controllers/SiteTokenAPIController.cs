@@ -2,10 +2,16 @@ using Common.Entities.Config;
 using Common.Entities.Models;
 using System.Threading.Tasks;
 using System.Web.Http;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
+    /// <summary>
+    /// Hands the signed-in user's own Graph token to the Teams permissions page, which is part of the
+    /// Administration area. Nothing else in the portal needs it.
+    /// </summary>
     [Authorize]
+    [RequirePortalPermission(PortalPermission.Administration)]
     public class SiteTokenAPIController : BaseAPIController
     {
         // POST: api/SiteTokenAPI
