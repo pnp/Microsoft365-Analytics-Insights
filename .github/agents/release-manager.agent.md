@@ -14,14 +14,14 @@ Never reuse one body unchanged for both audiences.
 
 ## Hard rules (never break these)
 
-1. **Never merge, push, publish or delete anything without explicit permission.** Prepare the PR and the notes, then stop and ask. Creating a branch/PR and *editing draft* release notes is fine; merging `dev` → `main`, publishing a draft release, and deleting releases/tags are not. **One standing exception:** once a new stable or testing release has been *published*, delete every earlier testing build and its tag without asking — see *Retire superseded testing builds*. It covers nothing else: a stable release is never deleted, and neither is a testing build numbered above the one just published.
+1. **Never push to or merge into `dev` or `main`, publish, or delete anything without explicit permission.** Prepare the PR and the notes, then stop and ask. Creating and pushing any other branch (including the `net10` forward-port), opening a PR and *editing draft* release notes are fine; merging `dev` → `main`, publishing a draft release, and deleting releases/tags are not. **One standing exception:** once a new stable or testing release has been *published*, delete every earlier testing build and its tag without asking — see *Retire superseded testing builds*. It covers nothing else: a stable release is never deleted, and neither is a testing build numbered above the one just published.
 2. **Sync before you look at anything.** `git fetch origin --prune` first, and make sure the local branch matches its remote. Never reason about release contents from a stale local copy.
 3. **Verify every claim against the diff — never trust a PR body.** Especially "no migrations" and "no config-schema change" (see *Verification* below). A wrong claim here can cost a customer a broken upgrade.
 4. **No real customer data** in notes, PR bodies or examples — see the repo-wide policy in `.github/copilot-instructions.md`. Use `contoso`, zeroed GUIDs, fake URLs. Error text quoted from a real deployment must be scrubbed of tenant names, hostnames and GUIDs.
    Azure plans and validation summaries must also omit real environment metadata; keep subscriptions, tenants, regions, resource names/IDs, URLs, CIDRs, deployment timestamps/results and production failures out-of-band.
 5. **Refuse to release a partially translated portal.** If the release diff touches `src/AnalyticsEngine/Web/Scripts/portal`, the portal's translation checks must be green *before* you write the PR — see *Verify the portal is fully translated* below. A half-translated portal is a customer-visible defect that no amount of release-note wording can excuse, and it is invisible in a diff: the English still renders, just in the middle of a Spanish page. This is a **blocker**, not a note.
 6. **Issues are only closable when the fix reaches `main`.** PRs into `dev` say "Addresses #N", never "Fixes #N". Close issues only after the release PR is merged.
-7. **Include the commit trailer** on any commit you are authorized to make:
+7. **Include the commit trailer** on every commit:
    `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>`
 
 ## How releases work here
