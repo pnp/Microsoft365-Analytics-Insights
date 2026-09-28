@@ -65,6 +65,24 @@ namespace Common.Entities.UserFilters
         }
 
         /// <summary>
+        /// A person's email domain as the directory derived it - with the same
+        /// <c>CopilotAdoptionEmailDomain.From</c> a report's rows use - or <c>null</c> when they have none or
+        /// the directory does not hold them.
+        /// </summary>
+        /// <remarks>
+        /// For a person a report holds no row for, so the report's email-domain axis can be applied to them
+        /// as well as the filter.
+        /// </remarks>
+        public string EmailDomainOf(int userId)
+        {
+            var column = _snapshot.Column(UserFilterDimensions.EmailDomain);
+            if (column?.ValueByRow == null || !_snapshot.TryGetRow(userId, out var row)) return null;
+
+            var index = column.ValueByRow[row];
+            return index < 0 ? null : column.Values[index];
+        }
+
+        /// <summary>
         /// The display name of a dimension for the server's English artefacts: the admin's name for a
         /// custom organisation type, the English name of an Entra attribute.
         /// </summary>

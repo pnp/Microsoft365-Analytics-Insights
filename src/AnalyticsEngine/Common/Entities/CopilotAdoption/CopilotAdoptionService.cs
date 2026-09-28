@@ -946,6 +946,10 @@ namespace Common.Entities.CopilotAdoption
                     {
                         { "maxUsers", _options.MaxLicensedUsersScored },
                     });
+
+                // Who the cap left out, from the uncapped assignments, so a filtered view can say how
+                // many of its own people are missing rather than showing them as nobody.
+                analysis.LicensedUsersNotAnalysed = NotAnalysed(assignmentsByUser.Keys, rows.Select(r => r.UserId));
             }
 
             foreach (var row in rows)
@@ -972,6 +976,13 @@ namespace Common.Entities.CopilotAdoption
             {
                 summary.LicensedUsers = analysis.LicensedUsers.Count;
             }
+        }
+
+        /// <summary>The seat holders a capped licensed-user query did not return, in the order given.</summary>
+        internal static int[] NotAnalysed(IEnumerable<int> seatHolders, IEnumerable<int> analysed)
+        {
+            var covered = new HashSet<int>(analysed);
+            return seatHolders.Where(id => !covered.Contains(id)).ToArray();
         }
 
         private async Task BuildUsageByAppAsync(

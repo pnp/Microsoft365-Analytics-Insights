@@ -30,6 +30,7 @@ export const COPILOT_ADOPTION_WARNING_KEYS = {
   UnlicensedUsageCapped: 'unlicensedUsageCapped',
   LicensedUserDetailCapped: 'licensedUserDetailCapped',
   LicensedUsersSubset: 'licensedUsersSubset',
+  ScopedLicensedUsersNotAnalysed: 'scopedLicensedUsersNotAnalysed',
   LicenceOpportunitiesNoSources: 'licenceOpportunitiesNoSources',
   LicenceCandidatesAuditOnly: 'licenceCandidatesAuditOnly',
   CoworkReadinessNoSources: 'coworkReadinessNoSources',

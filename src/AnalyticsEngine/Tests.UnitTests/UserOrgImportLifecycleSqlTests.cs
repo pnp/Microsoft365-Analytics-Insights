@@ -1200,6 +1200,35 @@ WHERE resource_type = 'APPLICATION' AND resource_database_id = DB_ID()
         }
 
         [TestMethod]
+        public async Task ASaveAnswersWithTheTypeAsItIsNowStored()
+        {
+            // Built from what was submitted, the answer carried a creation date of year 1 and no members -
+            // disagreeing with the list the page loads next, and useless to any other client.
+            var created = await _service.CreateAsync(
+                new UserOrgTypeSaveModel { Name = "Team", Source = "csv", IsEnabled = true },
+                CancellationToken.None);
+
+            Assert.AreEqual(1, created.Revision);
+            Assert.IsFalse(created.CreatedUtc.StartsWith("0001", StringComparison.Ordinal), created.CreatedUtc);
+            Assert.AreEqual(0, created.AssignedUserCount);
+
+            var user = AddUser("a@contoso.com");
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, created.Id, "Retail") });
+
+            var renamed = await _service.UpdateAsync(
+                created.Id,
+                new UserOrgTypeSaveModel { Name = "Teams", Source = "csv", IsEnabled = true, ExpectedRevision = created.Revision },
+                CancellationToken.None);
+
+            Assert.AreEqual("Teams", renamed.Name);
+            Assert.AreEqual(2, renamed.Revision);
+            Assert.AreEqual(created.CreatedUtc, renamed.CreatedUtc);
+            Assert.IsNotNull(renamed.ModifiedUtc);
+            Assert.AreEqual(1, renamed.AssignedUserCount, "A rename keeps its members, and says so.");
+            Assert.AreEqual(1, renamed.DistinctValueCount);
+        }
+
+        [TestMethod]
         public async Task ASaveFromADialogOpenedBeforeAColleaguesSaveIsRefused()
         {
             // The page sends back the revision each dialog opened at. B's rename goes through and says

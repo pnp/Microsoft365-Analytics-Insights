@@ -237,7 +237,96 @@ namespace Tests.UnitTests
             Assert.IsFalse(CopilotAdoptionWorkbook.FileName(analysis.Summary).Contains("filtered"));
         }
 
+        [TestMethod]
+        public void AFilteredViewPastTheLicensedUserCapSaysHowManyOfItsPeopleWereNotAnalysed()
+        {
+            // The detail query stopped at its row cap, and it cuts the newest user records first. Seat
+            // holders 11 and 12 are in Sales; 13 is in Engineering. None of them has a row to narrow.
+            var analysis = Analysis();
+            var service = Service();
+            service.FinaliseSummary(analysis);
+            analysis.LicensedUsersNotAnalysed = new[] { 11, 12, 13 };
+
+            var scoped = NarrowPastTheCap(analysis, null, Sales, service);
+
+            var detail = scoped.Summary.WarningDetails.Single(d => d.Key == CopilotAdoptionWarningKeys.ScopedLicensedUsersNotAnalysed);
+            Assert.AreEqual(2, detail.Values["count"]);
+            Assert.AreEqual(analysis.Summary.Options.MaxLicensedUsersScored, detail.Values["maxUsers"]);
+            StringAssert.Contains(scoped.Summary.Warnings.Last(), "(2 of them)");
+            Assert.AreEqual(4, scoped.Summary.LicensedUsers, "The figures still describe the people analysed; the warning says who they leave out.");
+            Assert.IsFalse(
+                analysis.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.ScopedLicensedUsersNotAnalysed),
+                "The tenant view has its own cap warning.");
+        }
+
+        [TestMethod]
+        public void TheEmailDomainIsAppliedToThePeopleNotAnalysedToo()
+        {
+            var analysis = Analysis();
+            var service = Service();
+            service.FinaliseSummary(analysis);
+            analysis.LicensedUsersNotAnalysed = new[] { 11, 12, 13 };
+
+            var scoped = NarrowPastTheCap(analysis, "fabrikam.com", Sales, service);
+
+            Assert.AreEqual(
+                1,
+                scoped.Summary.WarningDetails.Single(d => d.Key == CopilotAdoptionWarningKeys.ScopedLicensedUsersNotAnalysed).Values["count"],
+                "Only lee@fabrikam.com is in Sales at fabrikam.com.");
+        }
+
+        [TestMethod]
+        public void NothingIsSaidWhenNoneOfThePeopleNotAnalysedWouldBeInTheView()
+        {
+            var analysis = Analysis();
+            var service = Service();
+            service.FinaliseSummary(analysis);
+
+            analysis.LicensedUsersNotAnalysed = new[] { 13 };
+            Assert.IsFalse(HasNotAnalysedWarning(NarrowPastTheCap(analysis, null, Sales, service)), "13 is not in Sales.");
+
+            analysis.LicensedUsersNotAnalysed = null;
+            Assert.IsFalse(HasNotAnalysedWarning(NarrowPastTheCap(analysis, null, Sales, service)), "The query was not capped.");
+
+            // An email domain alone has no directory to look a person up in, so that stays with the
+            // tenant-wide cap warning, as before.
+            analysis.LicensedUsersNotAnalysed = new[] { 11, 12, 13 };
+            var domainOnly = CopilotAdoptionScopeFilter.Apply(analysis, CopilotAdoptionScope.ForEmailDomain("contoso.com"), service.FinaliseSummary);
+            Assert.IsFalse(HasNotAnalysedWarning(domainOnly));
+        }
+
+        [TestMethod]
+        public void ThePeopleNotAnalysedAreTheSeatHoldersTheCappedQueryDidNotReturn()
+        {
+            CollectionAssert.AreEqual(
+                new[] { 13, 11 },
+                CopilotAdoptionService.NotAnalysed(new[] { 13, 4, 11, 1 }, new[] { 1, 4, 99 }));
+        }
+
         #region Fixture
+
+        private const string Sales = "[{\"d\":\"department\",\"v\":[\"Sales\"]}]";
+
+        private static bool HasNotAnalysedWarning(CopilotAdoptionAnalysis scoped) =>
+            scoped.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.ScopedLicensedUsersNotAnalysed);
+
+        /// <summary>Narrows against a directory that also holds three seat holders the analysis never covered.</summary>
+        private static CopilotAdoptionAnalysis NarrowPastTheCap(
+            CopilotAdoptionAnalysis analysis, string emailDomain, string encoded, CopilotAdoptionService service)
+        {
+            var builder = new UserDirectorySnapshotBuilder();
+            foreach (var person in People)
+            {
+                builder.AddUser(new UserDirectoryEntry { UserId = person.Id, UserPrincipalName = person.Upn, Department = person.Department, AccountEnabled = true });
+            }
+
+            builder.AddUser(new UserDirectoryEntry { UserId = 11, UserPrincipalName = "kim@contoso.com", Department = "Sales", AccountEnabled = true });
+            builder.AddUser(new UserDirectoryEntry { UserId = 12, UserPrincipalName = "lee@fabrikam.com", Department = "Sales", AccountEnabled = true });
+            builder.AddUser(new UserDirectoryEntry { UserId = 13, UserPrincipalName = "max@contoso.com", Department = "Engineering", AccountEnabled = true });
+
+            var filter = UserFilterCompiler.Compile(UserFilterCodec.Parse(encoded), builder.Build(Now));
+            return CopilotAdoptionScopeFilter.Apply(analysis, CopilotAdoptionScope.Create(emailDomain, filter), service.FinaliseSummary);
+        }
 
         private static CopilotAdoptionService Service()
         {

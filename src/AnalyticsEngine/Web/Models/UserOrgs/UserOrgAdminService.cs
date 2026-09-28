@@ -107,7 +107,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         {
             var type = await ValidateAndProbeAsync(model, cancellationToken).ConfigureAwait(false);
             type.Id = await _types.CreateAsync(type, cancellationToken).ConfigureAwait(false);
-            return ToModel(new UserOrgTypeSummary { Type = type });
+            return await AsStoredAsync(type, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task<UserOrgTypeModel> UpdateAsync(int id, UserOrgTypeSaveModel model, CancellationToken cancellationToken)
@@ -152,12 +152,39 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                     model.ExpectedRevision)
                 .ConfigureAwait(false);
 
-            // Mirrors what the store just did, so the response does not claim a refresh for values the
-            // update has discarded, or carry a revision the next save would be refused for.
+            // Mirrors what the store just did, for the answer to fall back on if the type cannot be read
+            // back: no refresh claimed for values the update has discarded, and the revision the next save
+            // needs.
             type.LastRefreshedUtc = sourceChanged ? null : existing.LastRefreshedUtc;
             type.Revision = (model.ExpectedRevision ?? existing.Revision) + 1;
 
-            return ToModel(new UserOrgTypeSummary { Type = type });
+            return await AsStoredAsync(type, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// The type as it is now stored, with its counts and last import - what a save answers with.
+        /// </summary>
+        /// <remarks>
+        /// Read back rather than built from what was submitted, which knows nothing of when the type was
+        /// created, who is in it or its last import: the answer used to carry a creation date of year 1 and
+        /// no members, disagreeing with the list the page loads next. The save is already committed when
+        /// this runs, so a failure to read it back is answered with what was saved rather than with an
+        /// error that would tell the admin it had not been.
+        /// </remarks>
+        private async Task<UserOrgTypeModel> AsStoredAsync(UserOrgType saved, CancellationToken cancellationToken)
+        {
+            UserOrgTypeSummary stored = null;
+            try
+            {
+                stored = (await _types.GetSummariesAsync(cancellationToken).ConfigureAwait(false))
+                    .FirstOrDefault(s => s.Type != null && s.Type.Id == saved.Id);
+            }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Answered with what was saved - see the remarks.
+            }
+
+            return ToModel(stored ?? new UserOrgTypeSummary { Type = saved });
         }
 
         public Task DeleteAsync(int id, CancellationToken cancellationToken)

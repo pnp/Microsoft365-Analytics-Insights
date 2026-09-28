@@ -74,6 +74,23 @@ namespace Common.Entities.CopilotAdoption
 
             return UserFilter == null || UserFilter.Matches(userId);
         }
+
+        /// <summary>
+        /// Whether a person the analysis holds no row for would be in scope, where the scope can tell. A user
+        /// filter carries the directory, which knows the person's attributes and email domain alike; an email
+        /// domain on its own has nothing to look a missing person up in, so that answers <c>null</c>.
+        /// </summary>
+        public bool? IncludesFromDirectory(int userId)
+        {
+            if (UserFilter == null) return null;
+            if (!UserFilter.Matches(userId)) return false;
+
+            return string.IsNullOrWhiteSpace(EmailDomain)
+                || string.Equals(
+                    CopilotAdoptionEmailDomain.Label(UserFilter.EmailDomainOf(userId)),
+                    EmailDomain,
+                    StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     /// <summary>
@@ -276,8 +293,46 @@ namespace Common.Entities.CopilotAdoption
 
             ScopeSeatLicenceTypes(scoped);
             CarryUnscopedSections(tenant, scoped.Summary);
+            WarnOfSeatHoldersNotAnalysed(analysis, scope, scoped.Summary);
 
             return scoped;
+        }
+
+        /// <summary>
+        /// Says how many licence holders this view selects that the analysis never covered, when its
+        /// licensed-user query stopped at its row cap.
+        /// </summary>
+        /// <remarks>
+        /// <para>The cap follows internal user id, so it cuts the newest user records first, and a custom
+        /// organisation - a new joiners' programme, a subsidiary onboarded last year - can be made largely or
+        /// entirely of them. Narrowed from the capped rows alone, such a view reads as nobody, beside a
+        /// tenant-wide warning that cannot say how much of this one view is missing. So the people the cap
+        /// left out are counted against the scope too, through the user filter's directory.</para>
+        /// <para>Only a scope with a user filter can: an email domain on its own has no directory to look a
+        /// person without a row up in, and the tenant-wide warning already covers that case as before.</para>
+        /// </remarks>
+        private static void WarnOfSeatHoldersNotAnalysed(
+            CopilotAdoptionAnalysis analysis, CopilotAdoptionScope scope, CopilotAdoptionSummary scoped)
+        {
+            var notAnalysed = analysis.LicensedUsersNotAnalysed;
+            if (notAnalysed == null || notAnalysed.Count == 0 || scope.UserFilter == null) return;
+
+            var inScope = 0;
+            foreach (var userId in notAnalysed)
+            {
+                if (scope.IncludesFromDirectory(userId) == true) inScope++;
+            }
+
+            if (inScope == 0) return;
+
+            CopilotAdoptionWarnings.Add(
+                scoped,
+                CopilotAdoptionWarningKeys.ScopedLicensedUsersNotAnalysed,
+                new Dictionary<string, object>
+                {
+                    { "count", inScope },
+                    { "maxUsers", scoped.Options?.MaxLicensedUsersScored ?? CopilotAdoptionOptions.Default.MaxLicensedUsersScored },
+                });
         }
 
         /// <summary>
