@@ -577,6 +577,7 @@
     <Compile Include="UserOrgs\UserOrgChangeLogShipper.cs" />
     <Compile Include="UserOrgs\UserOrgImportRunner.cs" />
     <Compile Include="UserOrgs\UserOrgImportTelemetry.cs" />
+    <Compile Include="UserOrgs\UserOrgMessageCodes.cs" />
     <Compile Include="UserOrgs\UserOrgModels.cs" />
     <Compile Include="UserOrgs\UserOrgRules.cs" />
     <Compile Include="UserOrgs\UserOrgStores.cs" />

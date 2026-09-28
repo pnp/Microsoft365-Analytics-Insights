@@ -466,10 +466,12 @@ BEGIN
 END
 
 DECLARE @rowsTotal INT = (SELECT COUNT(*) FROM dbo.user_org_import_staging WHERE job_id = @jobId);
-DECLARE @distinctUpns INT = (SELECT COUNT(DISTINCT upn) FROM dbo.user_org_import_staging WHERE job_id = @jobId);
 " + MatchStagedRowsSql + @"
-DECLARE @matched INT = (SELECT COUNT(*) FROM #user_org_matched);
-DECLARE @unknown INT = CASE WHEN @distinctUpns > @matched THEN @distinctUpns - @matched ELSE 0 END;
+-- Rows, not people: the same count the preview showed (SummariseDraftAsync), so the finished import's
+-- figures reconcile with it - a file listing one unknown person on 900 lines says 900.
+DECLARE @unknown INT = (SELECT COUNT(*) FROM dbo.user_org_import_staging s
+                        WHERE s.job_id = @jobId
+                          AND NOT EXISTS (SELECT 1 FROM dbo.users u WHERE u.user_name = s.upn));
 " + ClearCountSql + @"
 -- The confirmation is re-tested HERE, inside the transaction that does the deleting, using the
 -- DELETEs' own predicates so the two cannot disagree. The web request checked it as well, but

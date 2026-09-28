@@ -147,7 +147,12 @@ export interface UserOrgTestResult {
   wouldTruncate: boolean;
   /** The read worked, but this user has no value for the attribute. */
   hasNoValue: boolean;
+  /** The server's English - only a fallback for a `messageCode` the portal does not know. */
   message: string | null;
+  /** What to say, as a key from `UserOrgMessageCodes` on the server; word it from this. */
+  messageCode?: string | null;
+  /** The facts behind `messageCode`: a property name, an HTTP status, a length limit. */
+  messageValues?: Record<string, string | number | null> | null;
 }
 
 export interface UserOrgCsvPreviewRow {
@@ -325,7 +330,10 @@ export interface UserOrgAttributeCatalogue {
   /**
    * Why the directory extension list may be incomplete. Microsoft documents the discovery call as
    * returning nothing at all on tenants with more than 1,000 service principals, so an empty list
-   * must never be shown as "this tenant has none".
+   * must never be shown as "this tenant has none". The server's English - word it from the code.
    */
   discoveryWarning: string | null;
+  /** The warning as a key from `UserOrgMessageCodes` on the server. */
+  discoveryWarningCode?: string | null;
+  discoveryWarningValues?: Record<string, string | number | null> | null;
 }

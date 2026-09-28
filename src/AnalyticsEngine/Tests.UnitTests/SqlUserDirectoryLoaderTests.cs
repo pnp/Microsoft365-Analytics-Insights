@@ -1,5 +1,6 @@
 using Common.Entities.Migrations;
 using Common.Entities.UserFilters;
+using Microsoft.Data.SqlClient;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Linq;
@@ -157,6 +158,41 @@ INSERT INTO dbo.user_org_assignments (user_id, org_type_id, org_value_id) VALUES
             Assert.AreEqual(4, snapshot.PeopleCount);
             Assert.IsFalse(snapshot.Dimensions.Any(d => d.Kind == UserFilterDimensionKind.Custom));
             AssertValue(snapshot, UserFilterDimensions.Department, 101, "Sales");
+        }
+
+        [TestMethod]
+        public async Task Load_ReadsOneCommittedMomentWhereTheDatabaseAllowsSnapshots()
+        {
+            // An import still writing must neither hold the load up nor leak half its changes into it.
+            // Under READ COMMITTED the load would wait on the writer's lock, so finishing at all - with
+            // the committed value - shows the statements really did run in one SNAPSHOT transaction.
+            using (var db = ScratchDatabase.Create("userfiltersnapshot"))
+            {
+                db.Execute(UsersSchema);
+                db.Execute(UserOrganisations.Up_Sql);
+                db.Execute(Data);
+                db.Execute("ALTER DATABASE CURRENT SET ALLOW_SNAPSHOT_ISOLATION ON;");
+
+                using (var writer = new SqlConnection(db.ConnectionString))
+                {
+                    await writer.OpenAsync();
+                    using (var tx = writer.BeginTransaction())
+                    {
+                        using (var update = new SqlCommand("UPDATE dbo.users SET department_id = 2 WHERE id = 102;", writer, tx))
+                        {
+                            await update.ExecuteNonQueryAsync();
+                        }
+
+                        var load = UserFilterStores.CreateDirectoryLoader(db.ConnectionString).LoadAsync();
+                        var first = await Task.WhenAny(load, Task.Delay(TimeSpan.FromSeconds(30)));
+
+                        Assert.AreSame(load, first, "The load waited for an uncommitted write, so it was not reading a snapshot.");
+                        AssertValue(await load, UserFilterDimensions.Department, 102, "Sales");
+
+                        tx.Rollback();
+                    }
+                }
+            }
         }
 
         private static void AssertValue(UserDirectorySnapshot snapshot, string dimension, int userId, string expected)

@@ -144,6 +144,62 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Parse_LimitsThePiecesOfTextOneConditionLooksFor()
+        {
+            // Each piece of text is searched for in every distinct value - one per person for the user
+            // name - so the limit is far lower than for exact values, which are a lookup each.
+            Assert.AreEqual(
+                UserFilterCodec.MaxTextTermsPerClause,
+                UserFilterCodec.Parse(TextClauses(UserFilterDimensions.UserName, "contains", UserFilterCodec.MaxTextTermsPerClause))
+                    .Clauses.Single().Values.Count,
+                "The limit itself is allowed.");
+
+            foreach (var op in new[] { "contains", "notContains" })
+            {
+                var ex = Assert.ThrowsException<UserFilterFormatException>(
+                    () => UserFilterCodec.Parse(TextClauses(UserFilterDimensions.Department, op, UserFilterCodec.MaxTextTermsPerClause + 1)));
+                StringAssert.Contains(ex.Message, "pieces of text");
+            }
+
+            Assert.AreEqual(
+                UserFilterCodec.MaxTextTermsPerClause + 1,
+                UserFilterCodec.Parse(TextClauses(UserFilterDimensions.Department, "is", UserFilterCodec.MaxTextTermsPerClause + 1))
+                    .Clauses.Single().Values.Count,
+                "Exact values are not text searches, so they keep the far higher per-condition limit.");
+        }
+
+        [TestMethod]
+        public void Parse_LimitsThePiecesOfTextTheWholeFilterLooksFor()
+        {
+            // Split across conditions, each within its own limit, the whole filter still searches for
+            // more text than one request should pay for.
+            var half = UserFilterCodec.MaxTextTerms / 2;
+            var withinLimit = "[" + TextClause(UserFilterDimensions.UserName, "contains", half, "a")
+                + "," + TextClause(UserFilterDimensions.Department, "notContains", UserFilterCodec.MaxTextTerms - half, "b") + "]";
+            Assert.AreEqual(2, UserFilterCodec.Parse(withinLimit).Clauses.Count);
+
+            var overLimit = "[" + TextClause(UserFilterDimensions.UserName, "contains", half, "a")
+                + "," + TextClause(UserFilterDimensions.Department, "notContains", UserFilterCodec.MaxTextTerms - half + 1, "b") + "]";
+            var ex = Assert.ThrowsException<UserFilterFormatException>(() => UserFilterCodec.Parse(overLimit));
+            StringAssert.Contains(ex.Message, "in all");
+
+            var exactValuesDoNotCount = "[" + TextClause(UserFilterDimensions.UserName, "contains", UserFilterCodec.MaxTextTerms, "a")
+                + "," + TextClause(UserFilterDimensions.Department, "is", 20, "b") + "]";
+            Assert.AreEqual(2, UserFilterCodec.Parse(exactValuesDoNotCount).Clauses.Count);
+        }
+
+        private static string TextClauses(string dimension, string op, int count)
+        {
+            return "[" + TextClause(dimension, op, count, "t") + "]";
+        }
+
+        private static string TextClause(string dimension, string op, int count, string prefix)
+        {
+            var values = Enumerable.Range(0, count).Select(i => "\"" + prefix + i + "\"");
+            return "{\"d\":\"" + dimension + "\",\"op\":\"" + op + "\",\"v\":[" + string.Join(",", values) + "]}";
+        }
+
+        [TestMethod]
         public void Parse_RejectsAValueWiderThanAnOrganisationName()
         {
             var value = new string('x', UserFilterCodec.MaxValueLength + 1);

@@ -80,9 +80,11 @@ namespace Common.Entities.UserOrgs
         internal const string OnPremisesContainer = "onPremisesExtensionAttributes";
         internal const string EmployeeOrgDataContainer = "employeeOrgData";
 
-        // extension_{32 hex - the owning application's id with its hyphens removed}_{name}
+        // extension_{32 hex - the owning application's id with its hyphens removed}_{name}. The name is
+        // letters, digits and underscores: Entra Connect writes on-premises attributes as, for example,
+        // extension_{appId}_msDS_cloudExtensionAttribute1.
         private static readonly Regex DirectoryExtensionPattern =
-            new Regex(@"^extension_[0-9a-fA-F]{32}_[A-Za-z][A-Za-z0-9]*$", RegexOptions.Compiled);
+            new Regex(@"^extension_[0-9a-fA-F]{32}_[A-Za-z0-9][A-Za-z0-9_]*$", RegexOptions.Compiled);
 
         private static readonly Regex OnPremisesAttributePattern =
             new Regex(@"^extensionAttribute([0-9]{1,2})$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -146,17 +148,29 @@ namespace Common.Entities.UserOrgs
         /// <param name="value">The raw name typed or chosen in the portal.</param>
         /// <param name="spec">The parsed spec, or <c>null</c> when parsing failed.</param>
         /// <param name="error">
-        /// An operator-facing explanation when parsing failed, or <c>null</c> on success. Worded for an
-        /// IT admin, because it is shown directly in the portal.
+        /// An operator-facing explanation when parsing failed, or <c>null</c> on success - the English of
+        /// <see cref="TryParse(string, out EntraOrgAttributeSpec, out EntraOrgAttributeParseFailure)"/>.
         /// </param>
         public static bool TryParse(string value, out EntraOrgAttributeSpec spec, out string error)
         {
+            EntraOrgAttributeParseFailure failure;
+            var parsed = TryParse(value, out spec, out failure);
+            error = failure?.Message;
+            return parsed;
+        }
+
+        /// <summary>
+        /// Parses an admin-supplied attribute name, saying why it failed as a stable code the portal can
+        /// word in the reader's language.
+        /// </summary>
+        public static bool TryParse(string value, out EntraOrgAttributeSpec spec, out EntraOrgAttributeParseFailure failure)
+        {
             spec = null;
-            error = null;
+            failure = null;
 
             if (string.IsNullOrWhiteSpace(value))
             {
-                error = "An Entra attribute name is required.";
+                failure = Fail(UserOrgMessageCodes.AttributeRequired, "An Entra attribute name is required.");
                 return false;
             }
 
@@ -164,16 +178,21 @@ namespace Common.Entities.UserOrgs
 
             if (trimmed.IndexOf('/') >= 0)
             {
-                error =
+                failure = Fail(
+                    UserOrgMessageCodes.OpenExtension,
                     "Open extensions (read with $expand=extensions) can't be used. Microsoft Graph does not " +
                     "support $expand on /users/delta, which is how this product tracks user changes. Use a " +
-                    "directory extension, a schema extension, or one of the extensionAttribute1-15 slots instead.";
+                    "directory extension, a schema extension, or one of the extensionAttribute1-15 slots instead.");
                 return false;
             }
 
             if (trimmed.Any(char.IsWhiteSpace))
             {
-                error = $"'{trimmed}' is not a valid attribute name - attribute names cannot contain spaces.";
+                failure = Fail(
+                    UserOrgMessageCodes.AttributeHasSpaces,
+                    $"'{trimmed}' is not a valid attribute name - attribute names cannot contain spaces.",
+                    "attribute",
+                    trimmed);
                 return false;
             }
 
@@ -183,10 +202,13 @@ namespace Common.Entities.UserOrgs
             {
                 if (!DirectoryExtensionPattern.IsMatch(trimmed))
                 {
-                    error =
+                    failure = Fail(
+                        UserOrgMessageCodes.BadDirectoryExtension,
                         $"'{trimmed}' looks like a directory extension but is not in the required format " +
                         "extension_{applicationId-without-hyphens}_{name}, where the application id is exactly " +
-                        "32 hexadecimal characters.";
+                        "32 hexadecimal characters.",
+                        "attribute",
+                        trimmed);
                     return false;
                 }
 
@@ -202,12 +224,16 @@ namespace Common.Entities.UserOrgs
             var dotIndex = trimmed.IndexOf('.');
             if (dotIndex < 0)
             {
-                return TryParseUndotted(trimmed, out spec, out error);
+                return TryParseUndotted(trimmed, out spec, out failure);
             }
 
             if (trimmed.IndexOf('.', dotIndex + 1) >= 0)
             {
-                error = $"'{trimmed}' is not a valid attribute name - it has more than one '.' separator.";
+                failure = Fail(
+                    UserOrgMessageCodes.TooManyDots,
+                    $"'{trimmed}' is not a valid attribute name - it has more than one '.' separator.",
+                    "attribute",
+                    trimmed);
                 return false;
             }
 
@@ -216,14 +242,18 @@ namespace Common.Entities.UserOrgs
 
             if (child.Length == 0)
             {
-                error = $"'{trimmed}' is not a valid attribute name - nothing follows the '.' separator.";
+                failure = Fail(
+                    UserOrgMessageCodes.NothingAfterDot,
+                    $"'{trimmed}' is not a valid attribute name - nothing follows the '.' separator.",
+                    "attribute",
+                    trimmed);
                 return false;
             }
 
             if (string.Equals(container, OnPremisesContainer, StringComparison.OrdinalIgnoreCase))
             {
                 // Accept the fully-qualified spelling and collapse it to the short one.
-                return TryParseOnPremisesAttribute(child, out spec, out error);
+                return TryParseOnPremisesAttribute(child, out spec, out failure);
             }
 
             if (string.Equals(container, EmployeeOrgDataContainer, StringComparison.OrdinalIgnoreCase))
@@ -232,9 +262,12 @@ namespace Common.Entities.UserOrgs
                     .FirstOrDefault(p => string.Equals(p, child, StringComparison.OrdinalIgnoreCase));
                 if (known == null)
                 {
-                    error =
+                    failure = Fail(
+                        UserOrgMessageCodes.NotEmployeeOrgDataProperty,
                         $"'{child}' is not a property of employeeOrgData. Microsoft Graph defines only " +
-                        $"{string.Join(" and ", EmployeeOrgDataProperties)}.";
+                        $"{string.Join(" and ", EmployeeOrgDataProperties)}.",
+                        "property",
+                        child);
                     return false;
                 }
 
@@ -249,24 +282,34 @@ namespace Common.Entities.UserOrgs
 
             if (container.StartsWith("extension_", StringComparison.OrdinalIgnoreCase))
             {
-                error =
+                failure = Fail(
+                    UserOrgMessageCodes.DirectoryExtensionSubProperty,
                     $"'{trimmed}' is not valid. A directory extension is a single flat property, so it must " +
-                    "not have a '.' sub-property.";
+                    "not have a '.' sub-property.",
+                    "attribute",
+                    trimmed);
                 return false;
             }
 
             if (!SchemaExtensionContainerPattern.IsMatch(container))
             {
-                error =
+                failure = Fail(
+                    UserOrgMessageCodes.UnknownContainer,
                     $"'{container}' is not a recognised property. Expected one of the extensionAttribute1-15 " +
                     "slots, employeeOrgData.costCenter, employeeOrgData.division, a directory extension " +
-                    "(extension_{appId}_{name}), or a schema extension ({owner}_{schemaName}.{property}).";
+                    "(extension_{appId}_{name}), or a schema extension ({owner}_{schemaName}.{property}).",
+                    "container",
+                    container);
                 return false;
             }
 
             if (!SchemaExtensionPropertyPattern.IsMatch(child))
             {
-                error = $"'{child}' is not a valid schema extension property name.";
+                failure = Fail(
+                    UserOrgMessageCodes.BadSchemaProperty,
+                    $"'{child}' is not a valid schema extension property name.",
+                    "property",
+                    child);
                 return false;
             }
 
@@ -279,14 +322,19 @@ namespace Common.Entities.UserOrgs
             return true;
         }
 
-        private static bool TryParseUndotted(string trimmed, out EntraOrgAttributeSpec spec, out string error)
+        private static EntraOrgAttributeParseFailure Fail(string code, string message, string valueName = null, string value = null)
+        {
+            return new EntraOrgAttributeParseFailure(code, message, valueName, value);
+        }
+
+        private static bool TryParseUndotted(string trimmed, out EntraOrgAttributeSpec spec, out EntraOrgAttributeParseFailure failure)
         {
             spec = null;
-            error = null;
+            failure = null;
 
             if (trimmed.StartsWith("extensionAttribute", StringComparison.OrdinalIgnoreCase))
             {
-                return TryParseOnPremisesAttribute(trimmed, out spec, out error);
+                return TryParseOnPremisesAttribute(trimmed, out spec, out failure);
             }
 
             var builtIn = BuiltInPropertyNames
@@ -304,39 +352,47 @@ namespace Common.Entities.UserOrgs
 
             if (string.Equals(trimmed, EmployeeOrgDataContainer, StringComparison.OrdinalIgnoreCase))
             {
-                error =
+                failure = Fail(
+                    UserOrgMessageCodes.EmployeeOrgDataContainer,
                     "employeeOrgData is a container, not a value. Use employeeOrgData.costCenter or " +
-                    "employeeOrgData.division.";
+                    "employeeOrgData.division.");
                 return false;
             }
 
             if (string.Equals(trimmed, OnPremisesContainer, StringComparison.OrdinalIgnoreCase))
             {
-                error =
+                failure = Fail(
+                    UserOrgMessageCodes.OnPremisesContainer,
                     "onPremisesExtensionAttributes is a container, not a value. Use one of its slots, for " +
-                    "example extensionAttribute1.";
+                    "example extensionAttribute1.");
                 return false;
             }
 
-            error =
+            failure = Fail(
+                UserOrgMessageCodes.UnsupportedAttribute,
                 $"'{trimmed}' is not a supported org attribute. Expected one of the extensionAttribute1-15 " +
                 $"slots, {string.Join(" or ", BuiltInPropertyNames)}, employeeOrgData.costCenter, " +
                 "employeeOrgData.division, a directory extension (extension_{appId}_{name}), or a schema " +
-                "extension ({owner}_{schemaName}.{property}).";
+                "extension ({owner}_{schemaName}.{property}).",
+                "attribute",
+                trimmed);
             return false;
         }
 
-        private static bool TryParseOnPremisesAttribute(string candidate, out EntraOrgAttributeSpec spec, out string error)
+        private static bool TryParseOnPremisesAttribute(string candidate, out EntraOrgAttributeSpec spec, out EntraOrgAttributeParseFailure failure)
         {
             spec = null;
-            error = null;
+            failure = null;
 
             var match = OnPremisesAttributePattern.Match(candidate);
             if (!match.Success)
             {
-                error =
+                failure = Fail(
+                    UserOrgMessageCodes.BadOnPremisesAttribute,
                     $"'{candidate}' is not a valid on-premises extension attribute. Expected extensionAttribute1 " +
-                    "through extensionAttribute15.";
+                    "through extensionAttribute15.",
+                    "attribute",
+                    candidate);
                 return false;
             }
 
@@ -344,9 +400,12 @@ namespace Common.Entities.UserOrgs
             if (!int.TryParse(match.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out slot)
                 || slot < 1 || slot > 15)
             {
-                error =
+                failure = Fail(
+                    UserOrgMessageCodes.BadOnPremisesAttribute,
                     $"'{candidate}' is out of range. Entra provides extensionAttribute1 through " +
-                    "extensionAttribute15.";
+                    "extensionAttribute15.",
+                    "attribute",
+                    candidate);
                 return false;
             }
 
@@ -404,5 +463,27 @@ namespace Common.Entities.UserOrgs
         {
             return Canonical;
         }
+    }
+
+    /// <summary>Why an attribute name could not be parsed.</summary>
+    public sealed class EntraOrgAttributeParseFailure
+    {
+        public EntraOrgAttributeParseFailure(string code, string message, string valueName = null, string value = null)
+        {
+            Code = code;
+            Message = message;
+            Values = valueName == null
+                ? new Dictionary<string, object>()
+                : new Dictionary<string, object> { { valueName, value } };
+        }
+
+        /// <summary>A key from <see cref="UserOrgMessageCodes"/>.</summary>
+        public string Code { get; }
+
+        /// <summary>The English explanation - the portal's fallback for a code it does not know.</summary>
+        public string Message { get; }
+
+        /// <summary>The facts the message is about: the attribute, property or container as typed.</summary>
+        public IReadOnlyDictionary<string, object> Values { get; }
     }
 }

@@ -16,6 +16,8 @@ import { SERVER_PLACEHOLDER_KEYS, serverPlaceholderText } from '../../components
 import { TEAMS_MEETING_BUCKET_LABEL_KEYS, TEAMS_SEGMENT_TEXT_KEYS } from '../../components/teamsExplorer/teamsShared';
 import { WEB_ACTIVITY_AVAILABILITY_REASON_KEYS } from '../../components/webActivity/AvailabilityBar';
 import { USER_DATA_WORKLOADS_BY_FLAG } from '../../components/userlookup/CategoryRow';
+import { USER_ORG_MESSAGE_KEYS } from '../../components/userOrgs/userOrgShared';
+import { CSV_DELIMITER_KEYS } from '../../components/userOrgs/CsvImportPanel';
 import { ACCOUNTABILITY_DIMENSION_TEXT, ACCOUNTABILITY_EMPTY_SEGMENT_KEYS } from '../../pages/CopilotAdoptionPage';
 import { ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY } from '../../pages/InsightsOverviewPage';
 import { OFFICE_PLATFORM_LABEL_KEYS } from '../../pages/ReportsPage';
@@ -807,6 +809,67 @@ describe('User data lookup category labels', () => {
       .filter((key) => !known.has(key));
 
     expect([...new Set(orphans)], 'These user lookup category catalog entries are not in UserDataLookupRules.').toEqual([]);
+  });
+});
+
+/**
+ * User organisation messages are sent as codes from UserOrgMessageCodes, with the server's English as
+ * a fallback. The SPA words each code from USER_ORG_MESSAGE_KEYS; an unmapped code would show that
+ * English to a Spanish reader with every other check green.
+ */
+const USER_ORG_MESSAGE_CODES = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'UserOrgs', 'UserOrgMessageCodes.cs');
+const USER_ORG_ADMIN_SERVICE = join(process.cwd(), '..', '..', 'Models', 'UserOrgs', 'UserOrgAdminService.cs');
+
+function userOrgMessageCodes(): string[] {
+  const source = readFileSync(USER_ORG_MESSAGE_CODES, 'utf8');
+  return [...source.matchAll(/public\s+const\s+string\s+\w+\s*=\s*"([^"]+)";/g)].map((m) => m[1]);
+}
+
+describe('User organisation server messages', () => {
+  it('finds the file that defines them', () => {
+    expect(() => readFileSync(USER_ORG_MESSAGE_CODES, 'utf8')).not.toThrow();
+    expect(userOrgMessageCodes().length).toBeGreaterThanOrEqual(30);
+  });
+
+  it('words every code the server can send, and nothing it cannot', () => {
+    const server = sortedUnique(userOrgMessageCodes());
+    const mapped = sortedUnique(Object.keys(USER_ORG_MESSAGE_KEYS));
+
+    expect(
+      {
+        missing: server.filter((code) => !mapped.includes(code)),
+        orphans: mapped.filter((code) => !server.includes(code)),
+      },
+      'UserOrgMessageCodes and USER_ORG_MESSAGE_KEYS must be an exact two-way match.',
+    ).toEqual({ missing: [], orphans: [] });
+  });
+
+  it('maps each code to its own catalogue entry', () => {
+    const wrong = Object.entries(USER_ORG_MESSAGE_KEYS)
+      .filter(([code, key]) => key !== `userOrgs.message.${code}` || !(key in EN_CATALOG))
+      .map(([code, key]) => `${code} -> ${key}`);
+    const orphanKeys = catalogKeys('userOrgs.message.').filter(
+      (key) => !Object.values(USER_ORG_MESSAGE_KEYS).includes(key as never),
+    );
+
+    expect({ wrong, orphanKeys }).toEqual({ wrong: [], orphanKeys: [] });
+  });
+
+  it('words every CSV separator the server can name, and nothing it cannot', () => {
+    // DescribeDelimiter sends a token, not a word, so "semicolon" is never shown to a Spanish reader.
+    const body = /static string DescribeDelimiter\(char delimiter\)\s*\{([\s\S]*?)\n        \}/.exec(
+      readFileSync(USER_ORG_ADMIN_SERVICE, 'utf8'),
+    )?.[1];
+    expect(body, 'UserOrgAdminService.DescribeDelimiter was not found.').toBeTruthy();
+
+    const server = sortedUnique([...(body ?? '').matchAll(/return\s+"([^"]+)";/g)].map((m) => m[1]));
+    expect(server.length).toBeGreaterThanOrEqual(4);
+    expect(sortedUnique(Object.keys(CSV_DELIMITER_KEYS))).toEqual(server);
+
+    const wrong = Object.entries(CSV_DELIMITER_KEYS)
+      .filter(([token, key]) => key !== `userOrgs.csv.delimiter.${token}` || !(key in EN_CATALOG))
+      .map(([token, key]) => `${token} -> ${key}`);
+    expect(wrong).toEqual([]);
   });
 });
 

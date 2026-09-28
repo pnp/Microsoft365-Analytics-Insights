@@ -55,6 +55,14 @@ export const MAX_ENCODED_FILTER_LENGTH = 6000;
 /** Mirrors `UserFilterCodec.MaxClauses`. */
 export const MAX_CLAUSES = 25;
 
+/**
+ * Mirrors `UserFilterCodec.MaxTextTermsPerClause` and `MaxTextTerms`: each piece of text a "contains"
+ * condition looks for is searched for in every distinct value - one per person for the user name - so
+ * these are far lower than the number of values a condition may pick from a list.
+ */
+export const MAX_TEXT_TERMS_PER_CLAUSE = 10;
+export const MAX_TEXT_TERMS = 10;
+
 export function isEntraDimension(key: string): key is EntraDimensionKey {
   return (ENTRA_DIMENSION_KEYS as readonly string[]).includes(key);
 }
@@ -193,11 +201,25 @@ export function withDimensionValue(filter: UserFilter, dimension: string, value:
 }
 
 /**
- * Whether a filter can be sent at all: within the server's clause limit and short enough for a query
- * string. An edit that would break either is refused where it is made, never sent to be rejected.
+ * Whether a filter can be sent at all: within the server's clause and text-search limits and short
+ * enough for a query string. An edit that would break any of them is refused where it is made, never
+ * sent to be rejected.
  */
 export function fitsLimits(filter: UserFilter): boolean {
-  return filter.clauses.length <= MAX_CLAUSES && encodedFilterLength(filter) <= MAX_ENCODED_FILTER_LENGTH;
+  return (
+    filter.clauses.length <= MAX_CLAUSES &&
+    !hasTooManyTextTerms(filter) &&
+    encodedFilterLength(filter) <= MAX_ENCODED_FILTER_LENGTH
+  );
+}
+
+/** Whether the filter looks for more pieces of text than the server will search for. */
+export function hasTooManyTextTerms(filter: UserFilter): boolean {
+  const textClauses = filter.clauses.filter((c) => isTextOperator(c.operator));
+  return (
+    textClauses.some((c) => c.values.length > MAX_TEXT_TERMS_PER_CLAUSE) ||
+    textClauses.reduce((total, c) => total + c.values.length, 0) > MAX_TEXT_TERMS
+  );
 }
 
 /**

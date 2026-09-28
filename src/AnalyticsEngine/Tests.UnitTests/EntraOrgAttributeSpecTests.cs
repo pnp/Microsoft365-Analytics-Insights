@@ -146,6 +146,100 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void DirectoryExtension_AcceptsUnderscoresInTheName()
+        {
+            // Entra Connect syncs on-premises attributes as directory extensions whose names carry
+            // underscores of their own - extension_{appId}_msDS_cloudExtensionAttribute1 - and those are
+            // exactly the attributes a customer with an unfinished Entra clean-up is likely to have.
+            const string synced = "extension_0123456789abcdef0123456789abcdef_msDS_cloudExtensionAttribute1";
+
+            var spec = Parse(synced);
+
+            Assert.AreEqual(EntraOrgAttributeKind.DirectoryExtension, spec.Kind);
+            Assert.AreEqual(synced, spec.SelectFragment);
+            Assert.AreEqual(synced, spec.Canonical);
+            CollectionAssert.AreEqual(new[] { synced }, spec.JsonPath.ToArray());
+
+            Assert.AreEqual(
+                "extension_0123456789abcdef0123456789abcdef_cost_centre_2",
+                Parse("extension_0123456789abcdef0123456789abcdef_cost_centre_2").Canonical);
+        }
+
+        [TestMethod]
+        public void DirectoryExtension_NameMustStartWithALetterOrDigit()
+        {
+            Reject("extension_0123456789abcdef0123456789abcdef__costCentre");
+            Reject("extension_0123456789abcdef0123456789abcdef_");
+            Reject("extension_0123456789abcdef0123456789abcdef_cost-centre");
+        }
+
+        [TestMethod]
+        public void EveryRefusal_CarriesAStableCodeAndTheValueItIsAbout()
+        {
+            // The portal words these in the reader's language from the code, and quotes the value back
+            // from Values - so the code must be the right one and the value must be what was typed,
+            // not a server-written sentence.
+            AssertRefusal(null, UserOrgMessageCodes.AttributeRequired, null, null);
+            AssertRefusal("  ", UserOrgMessageCodes.AttributeRequired, null, null);
+            AssertRefusal("extensions/com.contoso.orgData", UserOrgMessageCodes.OpenExtension, null, null);
+            AssertRefusal("cost centre", UserOrgMessageCodes.AttributeHasSpaces, "attribute", "cost centre");
+            AssertRefusal("extension_tooshort_costCentre", UserOrgMessageCodes.BadDirectoryExtension, "attribute", "extension_tooshort_costCentre");
+            AssertRefusal("a.b.c", UserOrgMessageCodes.TooManyDots, "attribute", "a.b.c");
+            AssertRefusal("employeeOrgData.", UserOrgMessageCodes.NothingAfterDot, "attribute", "employeeOrgData.");
+            AssertRefusal("employeeOrgData.teamName", UserOrgMessageCodes.NotEmployeeOrgDataProperty, "property", "teamName");
+            AssertRefusal(
+                "extension_0123456789abcdef0123456789abcdef_costCentre.sub",
+                UserOrgMessageCodes.DirectoryExtensionSubProperty,
+                "attribute",
+                "extension_0123456789abcdef0123456789abcdef_costCentre.sub");
+            AssertRefusal("9contoso.businessUnit", UserOrgMessageCodes.UnknownContainer, "container", "9contoso");
+            AssertRefusal("contoso_orgData.9unit", UserOrgMessageCodes.BadSchemaProperty, "property", "9unit");
+            AssertRefusal("employeeOrgData", UserOrgMessageCodes.EmployeeOrgDataContainer, null, null);
+            AssertRefusal("onPremisesExtensionAttributes", UserOrgMessageCodes.OnPremisesContainer, null, null);
+            AssertRefusal("totallyUnknownProperty", UserOrgMessageCodes.UnsupportedAttribute, "attribute", "totallyUnknownProperty");
+            AssertRefusal("department", UserOrgMessageCodes.UnsupportedAttribute, "attribute", "department");
+            AssertRefusal("extensionAttribute16", UserOrgMessageCodes.BadOnPremisesAttribute, "attribute", "extensionAttribute16");
+            AssertRefusal("extensionAttributeX", UserOrgMessageCodes.BadOnPremisesAttribute, "attribute", "extensionAttributeX");
+        }
+
+        [TestMethod]
+        public void TheStringOverload_ReportsTheSameEnglishAsTheCodedOne()
+        {
+            EntraOrgAttributeSpec spec;
+            string error;
+            EntraOrgAttributeParseFailure failure;
+
+            Assert.IsFalse(EntraOrgAttributeSpec.TryParse("employeeOrgData.teamName", out spec, out error));
+            Assert.IsFalse(EntraOrgAttributeSpec.TryParse("employeeOrgData.teamName", out spec, out failure));
+            Assert.AreEqual(failure.Message, error);
+
+            Assert.IsTrue(EntraOrgAttributeSpec.TryParse("employeeType", out spec, out failure));
+            Assert.IsNull(failure, "A name that parses has no failure.");
+        }
+
+        private static void AssertRefusal(string value, string code, string valueName, string expected)
+        {
+            EntraOrgAttributeSpec spec;
+            EntraOrgAttributeParseFailure failure;
+
+            Assert.IsFalse(EntraOrgAttributeSpec.TryParse(value, out spec, out failure), $"'{value}' should be refused.");
+            Assert.IsNull(spec);
+            Assert.IsNotNull(failure);
+            Assert.AreEqual(code, failure.Code, $"The code for '{value}'.");
+            Assert.IsFalse(string.IsNullOrWhiteSpace(failure.Message), "The English fallback must still be there.");
+
+            if (valueName == null)
+            {
+                Assert.AreEqual(0, failure.Values.Count, $"'{value}' names no value.");
+            }
+            else
+            {
+                Assert.AreEqual(1, failure.Values.Count, $"'{value}' names one value.");
+                Assert.AreEqual(expected, failure.Values[valueName], $"The {valueName} quoted for '{value}'.");
+            }
+        }
+
+        [TestMethod]
         public void SchemaExtension_SelectsTheContainerAndKeepsTheSubProperty()
         {
             var spec = Parse("contoso_orgData.businessUnit");

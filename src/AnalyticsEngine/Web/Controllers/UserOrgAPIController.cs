@@ -139,7 +139,7 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("types")]
         public async Task<IHttpActionResult> GetTypes(CancellationToken cancellationToken)
         {
-            return await RunAsync(svc => svc.ListAsync(cancellationToken)).ConfigureAwait(false);
+            return await RunAsync(svc => svc.ListAsync(cancellationToken), "types", cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>POST api/UserOrg/types</summary>
@@ -150,7 +150,7 @@ namespace Web.AnalyticsWeb.Controllers
             var forged = RejectIfNotXhr();
             if (forged != null) return forged;
 
-            var result = await RunAsync(svc => svc.CreateAsync(model, cancellationToken)).ConfigureAwait(false);
+            var result = await RunAsync(svc => svc.CreateAsync(model, cancellationToken), "create-type", cancellationToken).ConfigureAwait(false);
             InvalidateUserFilterDirectory();
             return result;
         }
@@ -163,7 +163,7 @@ namespace Web.AnalyticsWeb.Controllers
             var forged = RejectIfNotXhr();
             if (forged != null) return forged;
 
-            var result = await RunAsync(svc => svc.UpdateAsync(id, model, cancellationToken)).ConfigureAwait(false);
+            var result = await RunAsync(svc => svc.UpdateAsync(id, model, cancellationToken), "update-type", cancellationToken).ConfigureAwait(false);
             InvalidateUserFilterDirectory();
             return result;
         }
@@ -180,7 +180,7 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 await svc.DeleteAsync(id, cancellationToken).ConfigureAwait(false);
                 return (object)new { deleted = true };
-            }).ConfigureAwait(false);
+            }, "delete-type", cancellationToken).ConfigureAwait(false);
             InvalidateUserFilterDirectory();
             return result;
         }
@@ -215,7 +215,7 @@ namespace Web.AnalyticsWeb.Controllers
             var forged = RejectIfNotXhr();
             if (forged != null) return forged;
 
-            return await RunAsync(svc => svc.TestAsync(request, cancellationToken)).ConfigureAwait(false);
+            return await RunAsync(svc => svc.TestAsync(request, cancellationToken), "test-entra", cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>GET api/UserOrg/attributes - the attribute picker's contents.</summary>
@@ -223,7 +223,7 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("attributes")]
         public async Task<IHttpActionResult> GetAttributes(CancellationToken cancellationToken)
         {
-            return await RunAsync(svc => svc.DiscoverAttributesAsync(cancellationToken)).ConfigureAwait(false);
+            return await RunAsync(svc => svc.DiscoverAttributesAsync(cancellationToken), "attributes", cancellationToken).ConfigureAwait(false);
         }
 
         #endregion
@@ -255,7 +255,7 @@ namespace Web.AnalyticsWeb.Controllers
                 var startedBy = User?.Identity?.Name ?? "unknown";
                 return await RunAsync(svc => svc.PreviewAsync(
                     upload.File.Content, upload.File.FileName, orgTypeId, startedBy, userColumn, valueColumn, cancellationToken),
-                    "preview-csv").ConfigureAwait(false);
+                    "preview-csv", cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -306,7 +306,7 @@ namespace Web.AnalyticsWeb.Controllers
             var startedBy = User?.Identity?.Name ?? "unknown";
             return await RunAsync(svc => svc.CommitImportAsync(
                 orgTypeId, draftId.Value, importMode, confirmedClearCount, startedBy, cancellationToken),
-                "import-csv").ConfigureAwait(false);
+                "import-csv", cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>GET api/UserOrg/jobs/{id} - import progress.</summary>
@@ -339,7 +339,7 @@ namespace Web.AnalyticsWeb.Controllers
                 }
 
                 return job;
-            }, "jobs").ConfigureAwait(false);
+            }, "jobs", cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>GET api/UserOrg/types/{id}/imports?take=10 - the org type's recent imports, newest first.</summary>
@@ -356,7 +356,7 @@ namespace Web.AnalyticsWeb.Controllers
                 }
 
                 return imports;
-            }, "imports").ConfigureAwait(false);
+            }, "imports", cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>Jobs whose success has already refreshed this process's user directory.</summary>
@@ -620,11 +620,11 @@ namespace Web.AnalyticsWeb.Controllers
                 new ApiErrorModel("This request did not come from the portal. Reload the page and try again."));
         }
 
-        private Task<IHttpActionResult> RunAsync<T>(Func<UserOrgAdminService, Task<T>> work, string route = null)
+        private Task<IHttpActionResult> RunAsync<T>(Func<UserOrgAdminService, Task<T>> work, string route = null, CancellationToken cancellationToken = default(CancellationToken))
         {
             // The factory runs inside the guard, so a missing connection string is a sanitised 500
             // rather than an unhandled exception.
-            return GuardAsync(() => work(_serviceFactory()), route: route);
+            return GuardAsync(() => work(_serviceFactory()), cancellationToken, route);
         }
 
         /// <summary>

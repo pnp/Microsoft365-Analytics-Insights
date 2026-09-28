@@ -323,6 +323,76 @@ export const userOrgs = {
   'userOrgs.changes.downloadFailed': "The download didn't finish. Try again.",
   'userOrgs.changes.defaultFileName': 'user-organisation-changes',
 
+  // CSV column separators, as the preview names them
+  'userOrgs.csv.delimiter.comma': 'comma',
+  'userOrgs.csv.delimiter.semicolon': 'semicolon',
+  'userOrgs.csv.delimiter.tab': 'tab',
+  'userOrgs.csv.delimiter.pipe': 'pipe',
+
+  // Messages the API sends as a code (UserOrgMessageCodes.cs); the server's English is only a fallback
+  'userOrgs.message.noType': 'No organisation type was supplied.',
+  'userOrgs.message.nameRequired': 'An organisation type name is required.',
+  'userOrgs.message.nameTooLong': 'An organisation type name can be at most {max} characters.',
+  'userOrgs.message.duplicateName': 'An organisation type called \u201c{name}\u201d already exists.',
+  'userOrgs.message.invalidSource': 'An organisation type takes its values either from an Entra attribute or from a CSV file.',
+  'userOrgs.message.typeGone': 'That organisation type no longer exists - it may have been deleted in another session.',
+  'userOrgs.message.importRunningChange': 'An import for {name} is running. Wait for it to finish before changing the type.',
+  'userOrgs.message.importRunningDelete':
+    'An import for this organisation type is running. Wait for it to finish before deleting the type.',
+  'userOrgs.message.attributeRequired': 'An Entra attribute name is required.',
+  'userOrgs.message.openExtension':
+    "Open extensions (read with $expand=extensions) can't be used: Microsoft Graph does not support $expand on /users/delta, which is how this product tracks user changes. Use a directory extension, a schema extension, or one of the extensionAttribute1-15 slots instead.",
+  'userOrgs.message.attributeHasSpaces':
+    '\u201c{attribute}\u201d is not a valid attribute name - attribute names cannot contain spaces.',
+  'userOrgs.message.badDirectoryExtension':
+    '\u201c{attribute}\u201d looks like a directory extension but is not in the required format extension_<application id>_<name>, where the application id is exactly 32 hexadecimal characters.',
+  'userOrgs.message.tooManyDots': '\u201c{attribute}\u201d is not a valid attribute name - it has more than one \u201c.\u201d separator.',
+  'userOrgs.message.nothingAfterDot':
+    '\u201c{attribute}\u201d is not a valid attribute name - nothing follows the \u201c.\u201d separator.',
+  'userOrgs.message.notEmployeeOrgDataProperty':
+    '\u201c{property}\u201d is not a property of employeeOrgData. Microsoft Graph defines only costCenter and division.',
+  'userOrgs.message.directoryExtensionSubProperty':
+    '\u201c{attribute}\u201d is not valid. A directory extension is a single flat property, so it cannot have a \u201c.\u201d sub-property.',
+  'userOrgs.message.unknownContainer':
+    '\u201c{container}\u201d is not a recognised property. Expected one of the extensionAttribute1-15 slots, employeeOrgData.costCenter, employeeOrgData.division, a directory extension (extension_<application id>_<name>), or a schema extension (<owner>_<schema name>.<property>).',
+  'userOrgs.message.badSchemaProperty': '\u201c{property}\u201d is not a valid schema extension property name.',
+  'userOrgs.message.employeeOrgDataContainer':
+    'employeeOrgData is a container, not a value. Use employeeOrgData.costCenter or employeeOrgData.division.',
+  'userOrgs.message.onPremisesContainer':
+    'onPremisesExtensionAttributes is a container, not a value. Use one of its slots, for example extensionAttribute1.',
+  'userOrgs.message.unsupportedAttribute':
+    '\u201c{attribute}\u201d is not a supported organisation attribute. Expected one of the extensionAttribute1-15 slots, employeeId or employeeType, employeeOrgData.costCenter, employeeOrgData.division, a directory extension (extension_<application id>_<name>), or a schema extension (<owner>_<schema name>.<property>).',
+  'userOrgs.message.badOnPremisesAttribute':
+    '\u201c{attribute}\u201d is not a valid on-premises extension attribute. Expected extensionAttribute1 through extensionAttribute15.',
+  'userOrgs.message.noTestRequest': 'No test request was supplied.',
+  'userOrgs.message.upnRequired': 'A user principal name is required.',
+  'userOrgs.message.graphAuthFailed':
+    "Could not authenticate to Microsoft Graph. Check that the app registration's client secret or certificate has not expired, and that it has the User.Read.All application permission with admin consent. The service logs have the detail.",
+  'userOrgs.message.userNotFound': 'That user was not found in this tenant. Check the user principal name.',
+  'userOrgs.message.propertyRejected':
+    'Microsoft Graph does not recognise the property \u201c{property}\u201d on a user. Check the attribute name - a directory extension must be in the full extension_<application id>_<name> form. This attribute cannot be used until Graph accepts it: saving it would make every user import fail.',
+  'userOrgs.message.notAuthorised':
+    'This app registration is not allowed to read that user or that property. Reading users needs the User.Read.All application permission, granted with admin consent.',
+  'userOrgs.message.throttled': 'Microsoft Graph is throttling this tenant right now. Wait a moment and try again.',
+  'userOrgs.message.graphError':
+    'Microsoft Graph returned HTTP {status}. Try again in a moment; the service logs have the detail if it keeps happening.',
+  'userOrgs.message.unreadableResponse': 'Microsoft Graph returned a response that could not be read.',
+  'userOrgs.message.multiValued':
+    '\u201c{property}\u201d holds a list of values, not one value, so it cannot be an organisation type: a user can be in only one organisation of each type.',
+  'userOrgs.message.noValue':
+    'The attribute was read successfully, but this user has no value for it. During an import, that means their organisation value would be cleared.',
+  'userOrgs.message.wouldTruncate': 'The value is longer than {max} characters and would be shortened when stored.',
+  'userOrgs.message.discoveryAuthFailed':
+    "Could not authenticate to Microsoft Graph to look for directory extensions. Check the app registration's credentials and permissions; the service logs have the detail. You can still type a directory extension name in full and test it.",
+  'userOrgs.message.discoveryForbidden':
+    'This app registration cannot list directory extensions - that call needs the Directory.Read.All application permission, which is more than the rest of this product requires. You can still type a directory extension name in full and test it.',
+  'userOrgs.message.discoveryGraphError':
+    'Microsoft Graph could not list directory extensions (HTTP {status}). You can still type a directory extension name in full and test it.',
+  'userOrgs.message.discoveryNoneReturned':
+    "No directory extensions were returned. Microsoft Graph's discovery call is documented as returning nothing on tenants with more than 1,000 service principals, so this does not necessarily mean the tenant has none. You can type a directory extension name in full and test it.",
+  'userOrgs.message.discoveryUnreachable':
+    'Could not reach Microsoft Graph to list directory extensions. The service logs have the detail. You can still type a directory extension name in full and test it.',
+
   // Who is in each organisation
   'userOrgs.browse.title': 'Who is in each organisation',
   'userOrgs.browse.intro':

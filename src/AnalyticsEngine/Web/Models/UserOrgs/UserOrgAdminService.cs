@@ -110,7 +110,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             var existing = await _types.GetAsync(id, cancellationToken).ConfigureAwait(false);
             if (existing == null)
             {
-                throw new UserOrgValidationException("That organisation type no longer exists.");
+                throw new UserOrgValidationException("That organisation type no longer exists.", UserOrgMessageCodes.TypeGone);
             }
 
             var type = await ValidateAndProbeAsync(model, cancellationToken).ConfigureAwait(false);
@@ -172,14 +172,15 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         {
             if (model == null)
             {
-                throw new UserOrgValidationException("No organisation type was supplied.");
+                throw new UserOrgValidationException("No organisation type was supplied.", UserOrgMessageCodes.NoType);
             }
 
             string name;
             string error;
-            if (!UserOrgRules.TryNormaliseOrgTypeName(model.Name, out name, out error))
+            string code;
+            if (!UserOrgRules.TryNormaliseOrgTypeName(model.Name, out name, out error, out code))
             {
-                throw new UserOrgValidationException(error);
+                throw UserOrgRules.NameRefusal(error, code);
             }
 
             var sourceKind = ParseSource(model.Source);
@@ -197,10 +198,10 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             }
 
             EntraOrgAttributeSpec spec;
-            string attributeError;
-            if (!EntraOrgAttributeSpec.TryParse(model.EntraAttributeName, out spec, out attributeError))
+            EntraOrgAttributeParseFailure failure;
+            if (!EntraOrgAttributeSpec.TryParse(model.EntraAttributeName, out spec, out failure))
             {
-                throw new UserOrgValidationException(attributeError);
+                throw UserOrgRules.AttributeRefusal(failure);
             }
 
             // Parsed and normalised either way, so what is stored is always canonical; only the live
@@ -240,7 +241,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
             if (outcome != null && !outcome.Succeeded && outcome.RejectedTheProperty)
             {
-                throw new UserOrgValidationException(outcome.Message);
+                throw new UserOrgValidationException(outcome.Message, outcome.MessageCode, outcome.MessageValues);
             }
         }
 
@@ -268,7 +269,8 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 return UserOrgSourceKind.CsvUpload;
             }
 
-            throw new UserOrgValidationException("The organisation source must be either 'entra' or 'csv'.");
+            throw new UserOrgValidationException(
+                "The organisation source must be either 'entra' or 'csv'.", UserOrgMessageCodes.InvalidSource);
         }
 
         #endregion
@@ -282,14 +284,23 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         {
             if (request == null)
             {
-                return new UserOrgTestResultModel { Message = "No test request was supplied." };
+                return new UserOrgTestResultModel
+                {
+                    Message = "No test request was supplied.",
+                    MessageCode = UserOrgMessageCodes.NoTestRequest,
+                };
             }
 
             EntraOrgAttributeSpec spec;
-            string error;
-            if (!EntraOrgAttributeSpec.TryParse(request.EntraAttributeName, out spec, out error))
+            EntraOrgAttributeParseFailure failure;
+            if (!EntraOrgAttributeSpec.TryParse(request.EntraAttributeName, out spec, out failure))
             {
-                return new UserOrgTestResultModel { Message = error };
+                return new UserOrgTestResultModel
+                {
+                    Message = failure.Message,
+                    MessageCode = failure.Code,
+                    MessageValues = failure.Values.Count == 0 ? null : failure.Values.ToDictionary(p => p.Key, p => p.Value),
+                };
             }
 
             var result = new UserOrgTestResultModel
@@ -303,6 +314,8 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
             result.Succeeded = outcome.Succeeded;
             result.Message = outcome.Message;
+            result.MessageCode = outcome.MessageCode;
+            result.MessageValues = outcome.MessageValues;
 
             if (!outcome.Succeeded)
             {
@@ -316,12 +329,15 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
             if (outcome.HasNoValue)
             {
+                result.MessageCode = UserOrgMessageCodes.NoValue;
                 result.Message =
                     "The attribute was read successfully, but this user has no value for it. "
                     + "During an import that means their organisation value would be cleared.";
             }
             else if (result.WouldTruncate)
             {
+                result.MessageCode = UserOrgMessageCodes.WouldTruncate;
+                result.MessageValues = new Dictionary<string, object> { { "max", UserOrgRules.MaxOrgValueLength } };
                 result.Message =
                     $"The value is longer than {UserOrgRules.MaxOrgValueLength} characters and would be shortened when stored.";
             }

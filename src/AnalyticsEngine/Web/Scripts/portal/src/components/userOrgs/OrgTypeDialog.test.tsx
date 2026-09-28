@@ -229,4 +229,62 @@ describe('OrgTypeDialog', () => {
       expect(screen.getByText(/No directory extensions were returned/)).toBeInTheDocument(),
     );
   });
+
+  it('words a coded discovery warning in the reader\u2019s language, not the server\u2019s English', async () => {
+    fetchAttributeCatalogue.mockResolvedValue(
+      catalogue({
+        discoveryWarning: 'Microsoft Graph could not list directory extensions (HTTP 503).',
+        discoveryWarningCode: 'discoveryGraphError',
+        discoveryWarningValues: { status: 503 },
+      }),
+    );
+    renderWithProvider(<OrgTypeDialog open editing={null} onDismiss={vi.fn()} onSave={vi.fn()} />, { language: 'es' });
+
+    expect(await screen.findByText(/no pudo enumerar las extensiones de directorio \(HTTP 503\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/could not list directory extensions/)).not.toBeInTheDocument();
+  });
+
+  it('words a coded test outcome, with its facts, in the reader\u2019s language', async () => {
+    renderWithProvider(<OrgTypeDialog open editing={null} onDismiss={vi.fn()} onSave={vi.fn()} />, { language: 'es' });
+
+    fireEvent.input(screen.getByRole('combobox', { name: /Atributo de Entra/ }), {
+      target: { value: 'extension_00000000000000000000000000000000_skills' },
+    });
+    testEntraAttribute.mockResolvedValue(
+      testResult({
+        succeeded: false,
+        message: 'server English fallback',
+        messageCode: 'multiValued',
+        messageValues: { property: 'extension_00000000000000000000000000000000_skills' },
+      }),
+    );
+    await typeInto(/Pru\u00e9belo con un usuario/, 'someone@contoso.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Probar' }));
+
+    expect(
+      await screen.findByText(/\u00abextension_00000000000000000000000000000000_skills\u00bb contiene una lista de valores/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('server English fallback')).not.toBeInTheDocument();
+  });
+
+  it('words a coded save refusal, and falls back to the server\u2019s text for a code it does not know', async () => {
+    const known = Object.assign(new Error('An organisation type called \u2018x\u2019 already exists.'), {
+      code: 'duplicateName',
+      values: { name: 'Cost Centre' },
+    });
+    const unknown = Object.assign(new Error('Something only a newer server knows how to say.'), {
+      code: 'somethingNew',
+      values: {},
+    });
+    const onSave = vi.fn().mockRejectedValueOnce(known).mockRejectedValueOnce(unknown);
+    renderWithProvider(<OrgTypeDialog open editing={null} onDismiss={vi.fn()} onSave={onSave} />);
+
+    await typeInto(/^Name/, 'Cost Centre');
+    await userEvent.click(screen.getByLabelText(/A CSV file uploaded here/));
+    await userEvent.click(await screen.findByRole('button', { name: 'Save' }));
+    expect(await screen.findByText('An organisation type called \u201cCost Centre\u201d already exists.')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText('Something only a newer server knows how to say.')).toBeInTheDocument();
+  });
 });

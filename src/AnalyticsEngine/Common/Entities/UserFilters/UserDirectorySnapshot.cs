@@ -574,7 +574,7 @@ namespace Common.Entities.UserFilters
             return sizes;
         }
 
-        private sealed class PendingAssignment
+        private struct PendingAssignment
         {
             public int UserId;
             public int OrgTypeId;

@@ -85,11 +85,28 @@ ORDER BY t.name;";
                     .ConfigureAwait(false);
                 return rows;
             }
-            catch (Exception)
+            catch (Exception ex) when (IsMissingTable(ex))
             {
-                // No user_org tables on this database yet. Organisations are simply not shown.
+                // No user_org tables on this database yet. Organisations are simply not shown. Anything
+                // else - a timeout, a permission, a deadlock - is a fault and is reported as one, rather
+                // than shown as a person who belongs to no organisation.
                 return new List<UserOrgValueModel>();
             }
+        }
+
+        /// <summary>SQL error 208, "Invalid object name": the database predates the user organisation tables.</summary>
+        private static bool IsMissingTable(Exception ex)
+        {
+            for (var current = ex; current != null; current = current.InnerException)
+            {
+                var sql = current as Microsoft.Data.SqlClient.SqlException;
+                if (sql != null && sql.Number == 208)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         public async Task<int?> GetUserIdAsync(string upn)

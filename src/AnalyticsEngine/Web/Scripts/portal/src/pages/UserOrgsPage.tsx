@@ -28,7 +28,7 @@ import OrgMembersBrowser from '../components/userOrgs/OrgMembersBrowser';
 import OrgTypeDialog from '../components/userOrgs/OrgTypeDialog';
 import { createOrgType, deleteOrgType, fetchOrgTypes, updateOrgType } from '../api/userOrgsApi';
 import { formatDateParts, formatNumber, plural, useT } from '../i18n';
-import { neverRefreshedKey, STATUS_KEYS } from '../components/userOrgs/userOrgShared';
+import { neverRefreshedKey, STATUS_KEYS, userOrgErrorMessage } from '../components/userOrgs/userOrgShared';
 import type { UserOrgType, UserOrgTypeSave } from '../types/userOrgs';
 
 const useStyles = makeStyles({
@@ -81,7 +81,7 @@ export default function UserOrgsPage() {
       setTypes(await fetchOrgTypes());
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('errors.userOrgs.loadFailed'));
+      setError(userOrgErrorMessage(e, t, 'errors.userOrgs.loadFailed'));
     }
   }, [t]);
 
@@ -116,7 +116,7 @@ export default function UserOrgsPage() {
       toast.success(t('userOrgs.toast.deleted', { name: type.name }));
       await load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t('errors.userOrgs.deleteFailed'));
+      toast.error(userOrgErrorMessage(e, t, 'errors.userOrgs.deleteFailed'));
     }
   };
 

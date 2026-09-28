@@ -107,6 +107,18 @@ const JOB_ERROR_KEYS: Record<UserOrgImportErrorCode, TranslationKey> = {
   interruptedRepeatedly: 'userOrgs.job.error.interruptedRepeatedly',
 };
 
+/** The separator the server detected, as a token (`UserOrgAdminService.DescribeDelimiter`). */
+export const CSV_DELIMITER_KEYS: Record<string, TranslationKey> = {
+  comma: 'userOrgs.csv.delimiter.comma',
+  semicolon: 'userOrgs.csv.delimiter.semicolon',
+  tab: 'userOrgs.csv.delimiter.tab',
+  pipe: 'userOrgs.csv.delimiter.pipe',
+};
+
+function delimiterName(token: string, t: TFunction): string {
+  return Object.prototype.hasOwnProperty.call(CSV_DELIMITER_KEYS, token) ? t(CSV_DELIMITER_KEYS[token]) : token;
+}
+
 export interface CsvImportPanelProps {
   orgType: UserOrgType;
   /** Called when an import finishes, so the page can refresh its counts. */
@@ -135,6 +147,8 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [history, setHistory] = useState<UserOrgImportJob[]>([]);
   const [changesFor, setChangesFor] = useState<UserOrgImportJob | null>(null);
+  // Which preview request is the latest; see runPreview.
+  const previewRun = useRef(0);
 
   const running = job !== null && (job.status === 'pending' || job.status === 'running');
   const matchedRows = preview ? preview.totalRows - preview.unknownUpnCount : 0;
@@ -222,17 +236,23 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
   };
 
   const runPreview = async (chosen: File, chosenColumns: UserOrgCsvColumnChoice, previous: UserOrgCsvPreview | null = null) => {
+    // Only the latest preview may land. Clear, or another file chosen, while a slow one is reading
+    // makes this one stale - and applying it anyway would bring back the file the admin just cleared,
+    // with its draft ready to import.
+    const run = ++previewRun.current;
     setBusy(true);
     setError(null);
     setConfirmedClear(false);
     try {
       const nextPreview = await previewCsv(orgType.id, chosen, chosenColumns);
+      if (run !== previewRun.current) return;
       setPreview(nextPreview);
       setColumns({
         userColumn: nextPreview.userColumnIndex ?? chosenColumns.userColumn,
         valueColumn: nextPreview.valueColumnIndex ?? chosenColumns.valueColumn,
       });
     } catch (e) {
+      if (run !== previewRun.current) return;
       if (previous) {
         // A failed re-read with other columns keeps the preview the admin already has, and puts the
         // column choice back to what that preview actually used - so what is shown, and what an
@@ -247,11 +267,13 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
       }
       setError(apiErrorMessage(e, t));
     } finally {
-      setBusy(false);
+      if (run === previewRun.current) setBusy(false);
     }
   };
 
   const chooseFile = async (chosen: File | null) => {
+    previewRun.current++;
+    setBusy(false);
     setFile(chosen);
     setPreview(null);
     setError(null);
@@ -323,6 +345,9 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
   };
 
   const reset = () => {
+    // Abandons a preview still being read: see runPreview.
+    previewRun.current++;
+    setBusy(false);
     setFile(null);
     setPreview(null);
     setJob(null);
@@ -553,9 +578,9 @@ function PreviewTable({
               ? t('userOrgs.csv.headerFound', {
                   upnColumn: preview.upnColumnName ?? '',
                   orgColumn: preview.orgColumnName ?? '',
-                  delimiter: preview.delimiter,
+                  delimiter: delimiterName(preview.delimiter, t),
                 })
-              : t('userOrgs.csv.headerMissing', { delimiter: preview.delimiter })}
+              : t('userOrgs.csv.headerMissing', { delimiter: delimiterName(preview.delimiter, t) })}
           </Text>
 
           <Text size={200} className={styles.muted} block>

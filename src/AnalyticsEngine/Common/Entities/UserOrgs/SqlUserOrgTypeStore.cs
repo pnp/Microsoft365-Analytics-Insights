@@ -224,9 +224,17 @@ VALUES (@name, @sourceKind, @attr, @enabled, SYSUTCDATETIME());";
             }
             catch (SqlException ex) when (IsDuplicateKey(ex))
             {
-                throw new UserOrgValidationException(
-                    $"An organisation type called '{type.Name}' already exists.", ex);
+                throw DuplicateName(type.Name, ex);
             }
+        }
+
+        private static UserOrgValidationException DuplicateName(string name, Exception inner)
+        {
+            return new UserOrgValidationException(
+                $"An organisation type called '{name}' already exists.",
+                UserOrgMessageCodes.DuplicateName,
+                new Dictionary<string, object> { { "name", name } },
+                inner);
         }
 
         public async Task UpdateAsync(
@@ -308,7 +316,8 @@ SELECT @affected;";
                     if (affected == 0)
                     {
                         throw new UserOrgValidationException(
-                            "That organisation type no longer exists - it may have been deleted in another session.");
+                            "That organisation type no longer exists - it may have been deleted in another session.",
+                            UserOrgMessageCodes.TypeGone);
                     }
 
                     tx.Commit();
@@ -316,15 +325,17 @@ SELECT @affected;";
             }
             catch (SqlException ex) when (IsDuplicateKey(ex))
             {
-                throw new UserOrgValidationException(
-                    $"An organisation type called '{type.Name}' already exists.", ex);
+                throw DuplicateName(type.Name, ex);
             }
             catch (SqlException ex) when (ex.Message.IndexOf("USERORG_ACTIVE_JOB", StringComparison.Ordinal) >= 0)
             {
                 // Same marker DeleteAsync translates. Without this the admin waits out the lock
                 // timeout and then gets a generic 500 instead of being told an import is running.
                 throw new UserOrgValidationException(
-                    $"An import for '{type.Name}' is running. Wait for it to finish before changing the type.", ex);
+                    $"An import for '{type.Name}' is running. Wait for it to finish before changing the type.",
+                    UserOrgMessageCodes.ImportRunningChange,
+                    new Dictionary<string, object> { { "name", type.Name } },
+                    ex);
             }
         }
 
@@ -377,7 +388,10 @@ DELETE FROM dbo.user_org_types WHERE id = @id;";
                     {
                         throw new UserOrgValidationException(
                             "An import for this organisation type is running. Wait for it to finish before "
-                            + "deleting the type.", ex);
+                            + "deleting the type.",
+                            UserOrgMessageCodes.ImportRunningDelete,
+                            null,
+                            ex);
                     }
                 }
 
@@ -453,9 +467,10 @@ WHERE t.source_kind = @entra
 
             string normalisedName;
             string error;
-            if (!UserOrgRules.TryNormaliseOrgTypeName(type.Name, out normalisedName, out error))
+            string code;
+            if (!UserOrgRules.TryNormaliseOrgTypeName(type.Name, out normalisedName, out error, out code))
             {
-                throw new UserOrgValidationException(error);
+                throw UserOrgRules.NameRefusal(error, code);
             }
 
             type.Name = normalisedName;
@@ -463,10 +478,10 @@ WHERE t.source_kind = @entra
             if (type.SourceKind == UserOrgSourceKind.EntraAttribute)
             {
                 EntraOrgAttributeSpec spec;
-                string attrError;
-                if (!EntraOrgAttributeSpec.TryParse(type.EntraAttributeName, out spec, out attrError))
+                EntraOrgAttributeParseFailure failure;
+                if (!EntraOrgAttributeSpec.TryParse(type.EntraAttributeName, out spec, out failure))
                 {
-                    throw new UserOrgValidationException(attrError);
+                    throw UserOrgRules.AttributeRefusal(failure);
                 }
 
                 // Store the canonical spelling, so the same slot cannot be configured twice under two

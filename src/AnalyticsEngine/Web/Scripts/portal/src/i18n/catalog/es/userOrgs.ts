@@ -328,6 +328,84 @@ export const userOrgs: Record<keyof typeof en, string> = {
   'userOrgs.changes.downloadFailed': 'La descarga no termin\u00f3. Vuelva a intentarlo.',
   'userOrgs.changes.defaultFileName': 'cambios-organizaciones-de-usuario',
 
+  // CSV column separators, as the preview names them
+  'userOrgs.csv.delimiter.comma': 'comas',
+  'userOrgs.csv.delimiter.semicolon': 'punto y coma',
+  'userOrgs.csv.delimiter.tab': 'tabulaciones',
+  'userOrgs.csv.delimiter.pipe': 'barras verticales',
+
+  // Messages the API sends as a code (UserOrgMessageCodes.cs); the server's English is only a fallback
+  'userOrgs.message.noType': 'No se ha indicado ning\u00fan tipo de organizaci\u00f3n.',
+  'userOrgs.message.nameRequired': 'El nombre del tipo de organizaci\u00f3n es obligatorio.',
+  'userOrgs.message.nameTooLong': 'El nombre de un tipo de organizaci\u00f3n puede tener como m\u00e1ximo {max} caracteres.',
+  'userOrgs.message.duplicateName': 'Ya existe un tipo de organizaci\u00f3n llamado \u00ab{name}\u00bb.',
+  'userOrgs.message.invalidSource':
+    'Un tipo de organizaci\u00f3n toma sus valores de un atributo de Entra o de un archivo CSV.',
+  'userOrgs.message.typeGone':
+    'Ese tipo de organizaci\u00f3n ya no existe: es posible que se haya eliminado en otra sesi\u00f3n.',
+  'userOrgs.message.importRunningChange':
+    'Hay una importaci\u00f3n de {name} en curso. Espere a que termine antes de cambiar el tipo.',
+  'userOrgs.message.importRunningDelete':
+    'Hay una importaci\u00f3n de este tipo de organizaci\u00f3n en curso. Espere a que termine antes de eliminar el tipo.',
+  'userOrgs.message.attributeRequired': 'El nombre del atributo de Entra es obligatorio.',
+  'userOrgs.message.openExtension':
+    'No se pueden usar extensiones abiertas (las que se leen con $expand=extensions): Microsoft Graph no admite $expand en /users/delta, que es como este producto sigue los cambios de los usuarios. Use una extensi\u00f3n de directorio, una extensi\u00f3n de esquema o una de las ranuras extensionAttribute1-15.',
+  'userOrgs.message.attributeHasSpaces':
+    '\u00ab{attribute}\u00bb no es un nombre de atributo v\u00e1lido: los nombres de atributo no pueden contener espacios.',
+  'userOrgs.message.badDirectoryExtension':
+    '\u00ab{attribute}\u00bb parece una extensi\u00f3n de directorio, pero no tiene el formato obligatorio extension_<id. de aplicaci\u00f3n>_<nombre>, en el que el id. de aplicaci\u00f3n tiene exactamente 32 caracteres hexadecimales.',
+  'userOrgs.message.tooManyDots':
+    '\u00ab{attribute}\u00bb no es un nombre de atributo v\u00e1lido: tiene m\u00e1s de un separador \u00ab.\u00bb.',
+  'userOrgs.message.nothingAfterDot':
+    '\u00ab{attribute}\u00bb no es un nombre de atributo v\u00e1lido: no hay nada despu\u00e9s del separador \u00ab.\u00bb.',
+  'userOrgs.message.notEmployeeOrgDataProperty':
+    '\u00ab{property}\u00bb no es una propiedad de employeeOrgData. Microsoft Graph solo define costCenter y division.',
+  'userOrgs.message.directoryExtensionSubProperty':
+    '\u00ab{attribute}\u00bb no es v\u00e1lido. Una extensi\u00f3n de directorio es una \u00fanica propiedad plana, as\u00ed que no puede tener una subpropiedad con \u00ab.\u00bb.',
+  'userOrgs.message.unknownContainer':
+    '\u00ab{container}\u00bb no es una propiedad reconocida. Se esperaba una de las ranuras extensionAttribute1-15, employeeOrgData.costCenter, employeeOrgData.division, una extensi\u00f3n de directorio (extension_<id. de aplicaci\u00f3n>_<nombre>) o una extensi\u00f3n de esquema (<propietario>_<nombre de esquema>.<propiedad>).',
+  'userOrgs.message.badSchemaProperty':
+    '\u00ab{property}\u00bb no es un nombre de propiedad de extensi\u00f3n de esquema v\u00e1lido.',
+  'userOrgs.message.employeeOrgDataContainer':
+    'employeeOrgData es un contenedor, no un valor. Use employeeOrgData.costCenter o employeeOrgData.division.',
+  'userOrgs.message.onPremisesContainer':
+    'onPremisesExtensionAttributes es un contenedor, no un valor. Use una de sus ranuras, por ejemplo extensionAttribute1.',
+  'userOrgs.message.unsupportedAttribute':
+    '\u00ab{attribute}\u00bb no es un atributo de organizaci\u00f3n compatible. Se esperaba una de las ranuras extensionAttribute1-15, employeeId o employeeType, employeeOrgData.costCenter, employeeOrgData.division, una extensi\u00f3n de directorio (extension_<id. de aplicaci\u00f3n>_<nombre>) o una extensi\u00f3n de esquema (<propietario>_<nombre de esquema>.<propiedad>).',
+  'userOrgs.message.badOnPremisesAttribute':
+    '\u00ab{attribute}\u00bb no es un atributo de extensi\u00f3n local v\u00e1lido. Se esperaba de extensionAttribute1 a extensionAttribute15.',
+  'userOrgs.message.noTestRequest': 'No se ha indicado ninguna solicitud de prueba.',
+  'userOrgs.message.upnRequired': 'El nombre principal de usuario es obligatorio.',
+  'userOrgs.message.graphAuthFailed':
+    'No se pudo autenticar en Microsoft Graph. Compruebe que el secreto de cliente o el certificado del registro de aplicaci\u00f3n no ha caducado y que tiene el permiso de aplicaci\u00f3n User.Read.All con el consentimiento del administrador. Los registros del servicio tienen el detalle.',
+  'userOrgs.message.userNotFound':
+    'No se encontr\u00f3 ese usuario en este inquilino. Compruebe el nombre principal de usuario.',
+  'userOrgs.message.propertyRejected':
+    'Microsoft Graph no reconoce la propiedad \u00ab{property}\u00bb en un usuario. Compruebe el nombre del atributo: una extensi\u00f3n de directorio debe tener la forma completa extension_<id. de aplicaci\u00f3n>_<nombre>. Este atributo no se puede usar hasta que Graph lo acepte: guardarlo har\u00eda fallar todas las importaciones de usuarios.',
+  'userOrgs.message.notAuthorised':
+    'Este registro de aplicaci\u00f3n no tiene permiso para leer ese usuario o esa propiedad. Para leer usuarios se necesita el permiso de aplicaci\u00f3n User.Read.All, concedido con el consentimiento del administrador.',
+  'userOrgs.message.throttled':
+    'Microsoft Graph est\u00e1 limitando las solicitudes de este inquilino en este momento. Espere un momento y vuelva a intentarlo.',
+  'userOrgs.message.graphError':
+    'Microsoft Graph devolvi\u00f3 HTTP {status}. Vuelva a intentarlo en un momento; si sigue ocurriendo, los registros del servicio tienen el detalle.',
+  'userOrgs.message.unreadableResponse': 'Microsoft Graph devolvi\u00f3 una respuesta que no se pudo leer.',
+  'userOrgs.message.multiValued':
+    '\u00ab{property}\u00bb contiene una lista de valores, no un valor, as\u00ed que no puede ser un tipo de organizaci\u00f3n: un usuario solo puede estar en una organizaci\u00f3n de cada tipo.',
+  'userOrgs.message.noValue':
+    'El atributo se ley\u00f3 correctamente, pero este usuario no tiene ning\u00fan valor. En una importaci\u00f3n, eso significa que se borrar\u00eda su valor de organizaci\u00f3n.',
+  'userOrgs.message.wouldTruncate':
+    'El valor tiene m\u00e1s de {max} caracteres y se acortar\u00eda al guardarlo.',
+  'userOrgs.message.discoveryAuthFailed':
+    'No se pudo autenticar en Microsoft Graph para buscar extensiones de directorio. Compruebe las credenciales y los permisos del registro de aplicaci\u00f3n; los registros del servicio tienen el detalle. Puede escribir igualmente el nombre completo de una extensi\u00f3n de directorio y probarlo.',
+  'userOrgs.message.discoveryForbidden':
+    'Este registro de aplicaci\u00f3n no puede enumerar las extensiones de directorio: esa llamada necesita el permiso de aplicaci\u00f3n Directory.Read.All, que es m\u00e1s de lo que requiere el resto de este producto. Puede escribir igualmente el nombre completo de una extensi\u00f3n de directorio y probarlo.',
+  'userOrgs.message.discoveryGraphError':
+    'Microsoft Graph no pudo enumerar las extensiones de directorio (HTTP {status}). Puede escribir igualmente el nombre completo de una extensi\u00f3n de directorio y probarlo.',
+  'userOrgs.message.discoveryNoneReturned':
+    'No se devolvi\u00f3 ninguna extensi\u00f3n de directorio. Seg\u00fan su documentaci\u00f3n, la llamada de detecci\u00f3n de Microsoft Graph no devuelve nada en inquilinos con m\u00e1s de 1000 entidades de servicio, as\u00ed que esto no significa necesariamente que el inquilino no tenga ninguna. Puede escribir el nombre completo de una extensi\u00f3n de directorio y probarlo.',
+  'userOrgs.message.discoveryUnreachable':
+    'No se pudo contactar con Microsoft Graph para enumerar las extensiones de directorio. Los registros del servicio tienen el detalle. Puede escribir igualmente el nombre completo de una extensi\u00f3n de directorio y probarlo.',
+
   // Who is in each organisation
   'userOrgs.browse.title': 'Qui\u00e9n pertenece a cada organizaci\u00f3n',
   'userOrgs.browse.intro':

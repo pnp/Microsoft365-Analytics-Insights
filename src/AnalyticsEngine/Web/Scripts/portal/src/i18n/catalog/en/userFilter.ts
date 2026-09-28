@@ -60,6 +60,8 @@ const userFilter = {
   'userFilter.editor.truncatedNames': 'Showing {shown} of {total} names. Type to search the rest.',
   'userFilter.editor.chooseValue': 'Choose at least one value.',
   'userFilter.editor.tooLong': 'This filter is too long to apply. Use fewer values, a “contains” condition or a custom organisation.',
+  'userFilter.editor.tooManyTerms':
+    'A filter can look for at most {max} pieces of text in all. Remove some, or pick values from a list instead.',
   'userFilter.editor.managementChainHint': 'Everyone who reports to the chosen managers, directly or through other managers. The managers themselves are not included.',
   'userFilter.editor.userNameHint': 'Matches the sign-in name (user principal name), such as megan.bowen@contoso.com. Use “contains” to find part of a name, or “is” to pick named people.',
   'userFilter.editor.unknownDimension': 'This attribute is no longer available, so a condition on it matches nobody.',

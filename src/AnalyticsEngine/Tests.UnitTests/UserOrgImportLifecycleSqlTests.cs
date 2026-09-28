@@ -1171,6 +1171,28 @@ WHERE id = {draftId}");
         }
 
         [TestMethod]
+        public async Task TheFinishedImportCountsUnknownPeopleTheWayThePreviewDid()
+        {
+            // Rows, not people, in both places. The finished import used to count distinct UPNs, so a
+            // file naming one unknown person on three lines previewed as "3 not found" and finished as
+            // "1 not found" - two figures an administrator could not reconcile.
+            var known = AddUser("known@contoso.com");
+            var typeId = await NewType();
+            const string csv = "UPN,Team\r\nknown@contoso.com,Retail\r\nghost@contoso.com,A\r\nGHOST@contoso.com,B\r\nghost@contoso.com,C\r\nother-ghost@contoso.com,D\r\n";
+
+            var preview = await Preview(typeId, csv);
+            Assert.AreEqual(4, preview.UnknownUpnCount, "The preview counts every line naming nobody.");
+
+            var queued = await _service.CommitImportAsync(typeId, preview.DraftId.Value, UserOrgImportMode.Merge, 0, Admin, CancellationToken.None);
+            var job = await new UserOrgImportRunner(_jobs).RunAsync(queued.JobId);
+
+            Assert.AreEqual(UserOrgImportStatus.Succeeded, job.Status);
+            Assert.AreEqual(preview.UnknownUpnCount, job.RowsUnknownUpn, "The finished import reports the figure the preview did.");
+            Assert.AreEqual(1, job.RowsApplied);
+            Assert.AreEqual("Retail", (await _assignments.GetForUserAsync(known)).Single().Value);
+        }
+
+        [TestMethod]
         public async Task TelemetryCarriesNoTenantData()
         {
             AddUser("a@contoso.com");

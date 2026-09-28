@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { EMPTY_USER_FILTER, type UserFilter, type UserFilterClause } from '../../types/userFilter';
 import {
+  MAX_TEXT_TERMS,
+  MAX_TEXT_TERMS_PER_CLAUSE,
   addClause,
   encodedFilterLength,
   fitsLimits,
   groupClauseIndexes,
+  hasTooManyTextTerms,
   isEmptyFilter,
   parseUserFilter,
   removeClause,
@@ -204,6 +207,25 @@ describe('narrowing the whole filter to one value', () => {
     expect(narrowed.clauses).toHaveLength(26);
     expect(fitsLimits(narrowed)).toBe(false);
     expect(fitsLimits({ clauses: groups })).toBe(true);
+  });
+
+  it('keeps text searches within what the server will run, per condition and in all', () => {
+    // Each piece of text is searched for in every distinct value - one per person for the user name -
+    // so these limits are far below the 500 values a condition may pick from a list.
+    const terms = (n: number, prefix: string) => Array.from({ length: n }, (_, i) => `${prefix}${i}`);
+    const contains = (values: string[], join: 'and' | 'or' = 'and') =>
+      clause('userName', values, { operator: 'contains', join });
+
+    expect(hasTooManyTextTerms({ clauses: [contains(terms(MAX_TEXT_TERMS_PER_CLAUSE, 'a'))] })).toBe(false);
+    expect(hasTooManyTextTerms({ clauses: [contains(terms(MAX_TEXT_TERMS_PER_CLAUSE + 1, 'a'))] })).toBe(true);
+    expect(
+      hasTooManyTextTerms({ clauses: [contains(terms(6, 'a')), contains(terms(MAX_TEXT_TERMS - 5, 'b'), 'or')] }),
+    ).toBe(true);
+    expect(fitsLimits({ clauses: [contains(terms(MAX_TEXT_TERMS + 1, 'a'))] })).toBe(false);
+    expect(
+      hasTooManyTextTerms({ clauses: [clause('department', terms(400, 'D'))] }),
+      'Picked values are exact lookups, not searches.',
+    ).toBe(false);
   });
 
   it('reports the single value only when every group requires exactly it', () => {

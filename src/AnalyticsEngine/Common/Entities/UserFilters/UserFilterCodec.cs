@@ -42,6 +42,21 @@ namespace Common.Entities.UserFilters
         /// <summary>Per clause. Beyond this, "contains" or a custom organisation is the right tool.</summary>
         public const int MaxValuesPerClause = 500;
 
+        /// <summary>
+        /// Pieces of text one "contains" / "does not contain" condition may look for.
+        /// </summary>
+        /// <remarks>
+        /// Far below <see cref="MaxValuesPerClause"/>, because the costs differ: an exact value is one
+        /// lookup, but each piece of text is searched for in every distinct value of the attribute - one
+        /// per person for the user name. At 200,000 users two terms take about 200 ms to compile, so 500
+        /// terms in each of 25 conditions was minutes of CPU from one request. The portal enforces the
+        /// same limits (<c>userFilterModel.ts</c>).
+        /// </remarks>
+        public const int MaxTextTermsPerClause = 10;
+
+        /// <summary>Pieces of text the whole filter may look for, across every condition - about a second at 200,000 users.</summary>
+        public const int MaxTextTerms = 10;
+
         /// <summary>The widest organisation value the schema stores (<c>user_org_values.name</c>).</summary>
         public const int MaxValueLength = 848;
 
@@ -102,6 +117,13 @@ namespace Common.Entities.UserFilters
             for (var i = 0; i < array.Count; i++)
             {
                 clauses.Add(ParseClause(array[i], i + 1));
+            }
+
+            var textTerms = clauses.Where(c => c.IsTextMatch).Sum(c => c.Values.Count);
+            if (textTerms > MaxTextTerms)
+            {
+                throw new UserFilterFormatException(
+                    $"The filter looks for {textTerms:N0} pieces of text in all; the limit is {MaxTextTerms:N0}.");
             }
 
             return new UserFilterExpression(clauses);
@@ -244,6 +266,12 @@ namespace Common.Entities.UserFilters
                 throw new UserFilterFormatException(
                     $"Condition {number} has {values.Count:N0} values; the limit is {MaxValuesPerClause:N0}. "
                     + "Use a 'contains' condition or a custom organisation instead.");
+            }
+
+            if ((op == UserFilterOperator.Contains || op == UserFilterOperator.NotContains) && values.Count > MaxTextTermsPerClause)
+            {
+                throw new UserFilterFormatException(
+                    $"Condition {number} looks for {values.Count:N0} pieces of text; the limit is {MaxTextTermsPerClause:N0}.");
             }
 
             return values;

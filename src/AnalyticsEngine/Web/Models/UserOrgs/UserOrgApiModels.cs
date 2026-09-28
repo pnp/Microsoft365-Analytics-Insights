@@ -286,8 +286,17 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         [JsonProperty("hasNoValue")]
         public bool HasNoValue { get; set; }
 
+        /// <summary>The English of <see cref="MessageCode"/> - the portal's fallback for a code it does not know.</summary>
         [JsonProperty("message")]
         public string Message { get; set; }
+
+        /// <summary>A key from <c>UserOrgMessageCodes</c> the portal words the outcome from.</summary>
+        [JsonProperty("messageCode")]
+        public string MessageCode { get; set; }
+
+        /// <summary>The facts behind <see cref="MessageCode"/>: a property name, an HTTP status, a length limit.</summary>
+        [JsonProperty("messageValues", NullValueHandling = NullValueHandling.Ignore)]
+        public Dictionary<string, object> MessageValues { get; set; }
     }
 
     /// <summary>
@@ -541,6 +550,17 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         /// </summary>
         [JsonProperty("discoveryWarning")]
         public string DiscoveryWarning { get; set; }
+
+        /// <summary>
+        /// A key from <c>UserOrgMessageCodes</c> the portal words the warning from; <see cref="DiscoveryWarning"/>
+        /// is the English fallback for a code it does not know.
+        /// </summary>
+        [JsonProperty("discoveryWarningCode")]
+        public string DiscoveryWarningCode { get; set; }
+
+        /// <summary>The facts behind <see cref="DiscoveryWarningCode"/> - the HTTP status, where there is one.</summary>
+        [JsonProperty("discoveryWarningValues", NullValueHandling = NullValueHandling.Ignore)]
+        public Dictionary<string, object> DiscoveryWarningValues { get; set; }
     }
 
     /// <summary>One page of an org type's organisations, largest first, for "who is in each organisation".</summary>

@@ -18,19 +18,16 @@ namespace Common.Entities.UserFilters
     {
         private readonly UserDirectorySnapshot _snapshot;
         private readonly bool[] _matchedRows;
-        private readonly bool _matchesUnknownUser;
 
         internal CompiledUserFilter(
             UserFilterExpression expression,
             UserDirectorySnapshot snapshot,
             bool[] matchedRows,
-            bool matchesUnknownUser,
             IReadOnlyList<string> unknownDimensions)
         {
             Expression = expression;
             _snapshot = snapshot;
             _matchedRows = matchedRows;
-            _matchesUnknownUser = matchesUnknownUser;
             UnknownDimensions = unknownDimensions;
             MatchedPeople = matchedRows.Count(m => m);
         }
@@ -56,12 +53,15 @@ namespace Common.Entities.UserFilters
         /// Whether a person matches the filter.
         /// </summary>
         /// <remarks>
-        /// A user id the snapshot does not hold - somebody imported after it was read - is evaluated as a
-        /// person with no value for anything, which is the only answer that does not guess.
+        /// A user id the snapshot does not hold - somebody imported after it was read - matches nothing.
+        /// Nothing is known about them, so no condition can be shown to hold: treating them as having no
+        /// values would put a Sales user imported a minute ago into "Department is not Sales". Excluding
+        /// them also keeps the report's population the one <see cref="MatchedPeople"/> counts. They are
+        /// picked up when the directory is next read.
         /// </remarks>
         public bool Matches(int userId)
         {
-            return _snapshot.TryGetRow(userId, out var row) ? _matchedRows[row] : _matchesUnknownUser;
+            return _snapshot.TryGetRow(userId, out var row) && _matchedRows[row];
         }
 
         /// <summary>
@@ -130,7 +130,6 @@ namespace Common.Entities.UserFilters
             }
 
             var matched = new bool[count];
-            var matchesUnknownUser = false;
 
             foreach (var group in expression.Groups)
             {
@@ -144,11 +143,9 @@ namespace Common.Entities.UserFilters
                     for (var i = 0; i < results.Length && all; i++) all = results[i].Rows[row];
                     matched[row] = all;
                 }
-
-                if (!matchesUnknownUser) matchesUnknownUser = results.All(r => r.UnknownUser);
             }
 
-            return new CompiledUserFilter(expression, snapshot, matched, matchesUnknownUser, unknown.AsReadOnly());
+            return new CompiledUserFilter(expression, snapshot, matched, unknown.AsReadOnly());
         }
 
         private static ClauseResult Evaluate(UserFilterClause clause, UserDirectorySnapshot snapshot, List<string> unknown)
@@ -166,7 +163,7 @@ namespace Common.Entities.UserFilters
                 // An empty result is the failure a reader notices; a widened one is not. Reported, not
                 // rejected, so a link saved before the change still opens and says why.
                 if (!unknown.Contains(clause.Dimension)) unknown.Add(clause.Dimension);
-                return new ClauseResult { Rows = positive, UnknownUser = false };
+                return new ClauseResult { Rows = positive };
             }
 
             if (string.Equals(clause.Dimension, UserFilterDimensions.ManagementChain, StringComparison.Ordinal))
@@ -189,16 +186,12 @@ namespace Common.Entities.UserFilters
                 }
             }
 
-            // A person the snapshot does not hold has no value for anything.
-            var unknownUser = clause.IncludeNotSet;
-
             if (clause.IsNegated)
             {
                 for (var row = 0; row < count; row++) positive[row] = !positive[row];
-                unknownUser = !unknownUser;
             }
 
-            return new ClauseResult { Rows = positive, UnknownUser = unknownUser };
+            return new ClauseResult { Rows = positive };
         }
 
         /// <summary>
@@ -246,7 +239,6 @@ namespace Common.Entities.UserFilters
         private sealed class ClauseResult
         {
             public bool[] Rows;
-            public bool UnknownUser;
         }
     }
 }

@@ -40,8 +40,25 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         /// </remarks>
         public bool RejectedTheProperty { get; set; }
 
-        /// <summary>An operator-facing explanation when it failed.</summary>
+        /// <summary>An operator-facing explanation when it failed - the English of <see cref="MessageCode"/>.</summary>
         public string Message { get; set; }
+
+        /// <summary>A key from <see cref="UserOrgMessageCodes"/> the portal words <see cref="Message"/> from.</summary>
+        public string MessageCode { get; set; }
+
+        /// <summary>The facts behind <see cref="MessageCode"/>, or <c>null</c>.</summary>
+        public Dictionary<string, object> MessageValues { get; set; }
+
+        internal static UserOrgProbeOutcome Failed(string code, string message, Dictionary<string, object> values = null, bool rejectedTheProperty = false)
+        {
+            return new UserOrgProbeOutcome
+            {
+                MessageCode = code,
+                Message = message,
+                MessageValues = values,
+                RejectedTheProperty = rejectedTheProperty,
+            };
+        }
     }
 
     /// <summary>
@@ -116,7 +133,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             var normalisedUpn = UserOrgRules.NormaliseUpn(upn);
             if (normalisedUpn == null)
             {
-                return new UserOrgProbeOutcome { Message = "A user principal name is required." };
+                return UserOrgProbeOutcome.Failed(UserOrgMessageCodes.UpnRequired, "A user principal name is required.");
             }
 
             string token;
@@ -131,12 +148,11 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 // rendered verbatim in the portal. None of it is something the admin can act on -
                 // the actionable part is which credential to check - and the full exception still
                 // reaches Application Insights.
-                return new UserOrgProbeOutcome
-                {
-                    Message = "Could not authenticate to Microsoft Graph. Check the app registration's client "
+                return UserOrgProbeOutcome.Failed(
+                    UserOrgMessageCodes.GraphAuthFailed,
+                    "Could not authenticate to Microsoft Graph. Check the app registration's client "
                         + "secret or certificate has not expired, and that it has the User.Read.All application "
-                        + "permission with admin consent granted. The service logs have the detail.",
-                };
+                        + "permission with admin consent granted. The service logs have the detail.");
             }
 
             var url = $"{GraphRoot}/users/{Uri.EscapeDataString(normalisedUpn)}?$select={Uri.EscapeDataString(spec.SelectFragment)}";
@@ -151,15 +167,12 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
                     if (!response.IsSuccessStatusCode)
                     {
-                        return new UserOrgProbeOutcome
-                        {
-                            Message = DescribeFailure(response.StatusCode, body, spec),
-
-                            // Graph validates $select before it resolves the user, so a 400 means the
-                            // property is unusable while a 404 only means this particular person does
-                            // not exist. Only the former may block a configuration from being saved.
-                            RejectedTheProperty = response.StatusCode == HttpStatusCode.BadRequest,
-                        };
+                        // Graph validates $select before it resolves the user, so a 400 means the
+                        // property is unusable while a 404 only means this particular person does not
+                        // exist. Only the former may block a configuration from being saved.
+                        var failure = DescribeFailure(response.StatusCode, spec);
+                        failure.RejectedTheProperty = response.StatusCode == HttpStatusCode.BadRequest;
+                        return failure;
                     }
 
                     IDictionary<string, JToken> properties;
@@ -170,7 +183,21 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                     }
                     catch (JsonException)
                     {
-                        return new UserOrgProbeOutcome { Message = "Microsoft Graph returned a response that could not be read." };
+                        return UserOrgProbeOutcome.Failed(
+                            UserOrgMessageCodes.UnreadableResponse, "Microsoft Graph returned a response that could not be read.");
+                    }
+
+                    // A list, not a value: a multi-valued directory extension. A user has at most one
+                    // value per organisation type, and the importer would read every user's list as "no
+                    // value" and clear them all - so it is refused here, where it can still be fixed.
+                    if (UserOrgRules.IsMultiValued(properties, spec))
+                    {
+                        return UserOrgProbeOutcome.Failed(
+                            UserOrgMessageCodes.MultiValued,
+                            $"'{spec.Canonical}' holds a list of values, not one value, so it cannot be an organisation "
+                                + "type: a user can be in only one organisation of each type.",
+                            new Dictionary<string, object> { { "property", spec.Canonical } },
+                            rejectedTheProperty: true);
                     }
 
                     // Exactly the extraction the importer performs, so what is shown here is what would
@@ -204,6 +231,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             }
             catch (Exception)
             {
+                catalogue.DiscoveryWarningCode = UserOrgMessageCodes.DiscoveryAuthFailed;
                 catalogue.DiscoveryWarning =
                     "Could not authenticate to Microsoft Graph to look for directory extensions. Check the app "
                     + "registration's credentials and permissions; the service logs have the detail. You can still "
@@ -224,6 +252,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
                         if (response.StatusCode == HttpStatusCode.Forbidden || response.StatusCode == HttpStatusCode.Unauthorized)
                         {
+                            catalogue.DiscoveryWarningCode = UserOrgMessageCodes.DiscoveryForbidden;
                             catalogue.DiscoveryWarning =
                                 "This app registration cannot list directory extensions - that specific call needs the "
                                 + "Directory.Read.All application permission, which is more than the rest of this product "
@@ -233,6 +262,8 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
                         if (!response.IsSuccessStatusCode)
                         {
+                            catalogue.DiscoveryWarningCode = UserOrgMessageCodes.DiscoveryGraphError;
+                            catalogue.DiscoveryWarningValues = new Dictionary<string, object> { { "status", (int)response.StatusCode } };
                             catalogue.DiscoveryWarning =
                                 "Microsoft Graph could not list directory extensions (HTTP " + (int)response.StatusCode
                                 + "). You can still type a directory extension name in full and test it.";
@@ -248,6 +279,13 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                             {
                                 var name = item.Value<string>("name");
                                 if (string.IsNullOrWhiteSpace(name))
+                                {
+                                    continue;
+                                }
+
+                                // A list of values per user cannot be an organisation: a user has at most one
+                                // value per type, and the importer would read every list as "no value".
+                                if (item.Value<bool?>("isMultiValued") == true)
                                 {
                                     continue;
                                 }
@@ -275,6 +313,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                             // with more than 1,000 service principals - which many real tenants exceed,
                             // Microsoft's own first-party apps alone contributing a large number. An
                             // empty list must therefore never be presented as "there are none".
+                            catalogue.DiscoveryWarningCode = UserOrgMessageCodes.DiscoveryNoneReturned;
                             catalogue.DiscoveryWarning =
                                 "No directory extensions were returned. Note that Microsoft Graph's discovery call is "
                                 + "documented as returning nothing on tenants with more than 1,000 service principals, so "
@@ -285,6 +324,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 }
                 catch (Exception)
                 {
+                    catalogue.DiscoveryWarningCode = UserOrgMessageCodes.DiscoveryUnreachable;
                     catalogue.DiscoveryWarning =
                         "Could not reach Microsoft Graph to list directory extensions. The service logs have the "
                         + "detail. You can still type a directory extension name in full and test it.";
@@ -300,64 +340,45 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         /// <remarks>
         /// The 400 case is the one that matters. It is what an admin sees when the attribute does not
         /// exist in the tenant, and it is exactly the failure that would otherwise break the user
-        /// import - so it gets a specific explanation rather than a status code.
+        /// import - so it gets a specific explanation rather than a status code. Graph's own error text
+        /// is never passed on: it is English whatever the reader's language, and it can echo the
+        /// request back. The status code is the only fact given for anything unexpected.
         /// </remarks>
-        internal static string DescribeFailure(HttpStatusCode statusCode, string body, EntraOrgAttributeSpec spec)
+        internal static UserOrgProbeOutcome DescribeFailure(HttpStatusCode statusCode, EntraOrgAttributeSpec spec)
         {
             switch (statusCode)
             {
                 case HttpStatusCode.NotFound:
-                    return "That user was not found in this tenant. Check the user principal name.";
+                    return UserOrgProbeOutcome.Failed(
+                        UserOrgMessageCodes.UserNotFound, "That user was not found in this tenant. Check the user principal name.");
 
                 case HttpStatusCode.BadRequest:
-                    return
+                    return UserOrgProbeOutcome.Failed(
+                        UserOrgMessageCodes.PropertyRejected,
                         $"Microsoft Graph does not recognise the property '{spec.SelectFragment}' on a user. Check the "
-                        + "attribute name - for a directory extension it must be the full "
-                        + "extension_{applicationId}_{name} form. This attribute cannot be used until Graph accepts it: "
-                        + "saving it would make every user import fail.";
+                            + "attribute name - for a directory extension it must be the full "
+                            + "extension_{applicationId}_{name} form. This attribute cannot be used until Graph accepts it: "
+                            + "saving it would make every user import fail.",
+                        new Dictionary<string, object> { { "property", spec.SelectFragment } });
 
                 case HttpStatusCode.Unauthorized:
                 case HttpStatusCode.Forbidden:
-                    return
+                    return UserOrgProbeOutcome.Failed(
+                        UserOrgMessageCodes.NotAuthorised,
                         "This app registration is not allowed to read that user or that property. Reading users needs the "
-                        + "User.Read.All application permission, granted with admin consent.";
+                            + "User.Read.All application permission, granted with admin consent.");
 
                 case (HttpStatusCode)429:
-                    return "Microsoft Graph is throttling this tenant right now. Wait a moment and try again.";
+                    return UserOrgProbeOutcome.Failed(
+                        UserOrgMessageCodes.Throttled, "Microsoft Graph is throttling this tenant right now. Wait a moment and try again.");
 
                 default:
-                    return $"Microsoft Graph returned HTTP {(int)statusCode}. " + Summarise(body);
+                    return UserOrgProbeOutcome.Failed(
+                        UserOrgMessageCodes.GraphError,
+                        $"Microsoft Graph returned HTTP {(int)statusCode}. Try again in a moment; the service logs have the detail "
+                            + "if it keeps happening.",
+                        new Dictionary<string, object> { { "status", (int)statusCode } });
             }
-        }
-
-        /// <summary>
-        /// Pulls just the message out of a Graph error body.
-        /// </summary>
-        /// <remarks>
-        /// Never returns the raw body. A Graph error can echo back the request, and this text is shown
-        /// in a portal and may be pasted into a support ticket.
-        /// </remarks>
-        private static string Summarise(string body)
-        {
-            if (string.IsNullOrWhiteSpace(body))
-            {
-                return string.Empty;
-            }
-
-            try
-            {
-                var message = JObject.Parse(body)["error"]?["message"]?.Value<string>();
-                if (!string.IsNullOrWhiteSpace(message))
-                {
-                    return message.Length > 300 ? message.Substring(0, 300) : message;
-                }
-            }
-            catch (JsonException)
-            {
-                // Not a Graph error envelope; say nothing rather than leaking the body.
-            }
-
-            return string.Empty;
         }
 
         private async Task<string> GetTokenAsync(CancellationToken cancellationToken)

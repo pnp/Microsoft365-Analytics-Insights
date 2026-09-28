@@ -23,6 +23,7 @@ import {
 import { fetchAttributeCatalogue, testEntraAttribute } from '../../api/userOrgsApi';
 import { formatNumber, plural, useT, type TFunction } from '../../i18n';
 import CsvFileFormat from './CsvFileFormat';
+import { userOrgErrorMessage, userOrgMessage } from './userOrgShared';
 import type {
   UserOrgAttributeCatalogue,
   UserOrgSource,
@@ -156,7 +157,7 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
         normalisedValue: null,
         wouldTruncate: false,
         hasNoValue: false,
-        message: e instanceof Error ? e.message : t('errors.userOrgs.testFailed'),
+        message: userOrgErrorMessage(e, t, 'errors.userOrgs.testFailed'),
       });
       setProvenAttribute(null);
     } finally {
@@ -175,7 +176,7 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
         isEnabled,
       });
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : t('errors.userOrgs.saveFailed'));
+      setSaveError(userOrgErrorMessage(e, t, 'errors.userOrgs.saveFailed'));
     } finally {
       setSaving(false);
     }
@@ -256,7 +257,14 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
 
                   {catalogue?.discoveryWarning && (
                     <MessageBar intent="info">
-                      <MessageBarBody>{catalogue.discoveryWarning}</MessageBarBody>
+                      <MessageBarBody>
+                        {userOrgMessage(
+                          catalogue.discoveryWarningCode,
+                          catalogue.discoveryWarningValues,
+                          catalogue.discoveryWarning,
+                          t,
+                        )}
+                      </MessageBarBody>
                     </MessageBar>
                   )}
 
@@ -335,7 +343,9 @@ function TestOutcome({
   if (!result.succeeded) {
     return (
       <MessageBar intent="error">
-        <MessageBarBody>{result.message ?? t('userOrgs.test.failed')}</MessageBarBody>
+        <MessageBarBody>
+          {userOrgMessage(result.messageCode, result.messageValues, result.message, t) ?? t('userOrgs.test.failed')}
+        </MessageBarBody>
       </MessageBar>
     );
   }
@@ -343,7 +353,9 @@ function TestOutcome({
   return (
     <div>
       <MessageBar intent={result.hasNoValue ? 'warning' : 'success'}>
-        <MessageBarBody>{result.message ?? t('userOrgs.test.succeeded')}</MessageBarBody>
+        <MessageBarBody>
+          {userOrgMessage(result.messageCode, result.messageValues, result.message, t) ?? t('userOrgs.test.succeeded')}
+        </MessageBarBody>
       </MessageBar>
       <div className={styles.resultGrid}>
         <Text className={styles.label}>{t('userOrgs.test.graphProperty')}</Text>

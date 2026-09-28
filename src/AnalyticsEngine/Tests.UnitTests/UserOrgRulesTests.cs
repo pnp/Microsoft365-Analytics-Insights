@@ -179,6 +179,87 @@ namespace Tests.UnitTests
                 new string('n', UserOrgRules.MaxOrgTypeNameLength + 1), out name, out error));
         }
 
+        [TestMethod]
+        public void TryNormaliseOrgTypeName_SaysWhyAsACodeThePortalCanWord()
+        {
+            string name;
+            string error;
+            string code;
+
+            Assert.IsTrue(UserOrgRules.TryNormaliseOrgTypeName("Cost Centre", out name, out error, out code));
+            Assert.IsNull(code);
+            Assert.IsNull(error);
+
+            Assert.IsFalse(UserOrgRules.TryNormaliseOrgTypeName(" ", out name, out error, out code));
+            Assert.AreEqual(UserOrgMessageCodes.NameRequired, code);
+
+            Assert.IsFalse(UserOrgRules.TryNormaliseOrgTypeName(
+                new string('n', UserOrgRules.MaxOrgTypeNameLength + 1), out name, out error, out code));
+            Assert.AreEqual(UserOrgMessageCodes.NameTooLong, code);
+
+            var refusal = UserOrgRules.NameRefusal(error, code);
+            Assert.AreEqual(UserOrgMessageCodes.NameTooLong, refusal.Code);
+            Assert.AreEqual(error, refusal.Message, "The English stays the fallback.");
+            Assert.AreEqual(UserOrgRules.MaxOrgTypeNameLength, refusal.Values["max"], "The limit is a fact the portal formats itself.");
+
+            Assert.IsNull(
+                UserOrgRules.NameRefusal("An organisation type name is required.", UserOrgMessageCodes.NameRequired).Values,
+                "A refusal with nothing to quote carries no values.");
+        }
+
+        [TestMethod]
+        public void AttributeRefusal_CarriesTheParserCodeAndTheValueItQuoted()
+        {
+            EntraOrgAttributeSpec spec;
+            EntraOrgAttributeParseFailure failure;
+            Assert.IsFalse(EntraOrgAttributeSpec.TryParse("employeeOrgData.teamName", out spec, out failure));
+
+            var refusal = UserOrgRules.AttributeRefusal(failure);
+
+            Assert.AreEqual(UserOrgMessageCodes.NotEmployeeOrgDataProperty, refusal.Code);
+            Assert.AreEqual(failure.Message, refusal.Message);
+            Assert.AreEqual("teamName", refusal.Values["property"]);
+
+            Assert.IsFalse(EntraOrgAttributeSpec.TryParse("employeeOrgData", out spec, out failure));
+            Assert.IsNull(UserOrgRules.AttributeRefusal(failure).Values);
+        }
+
+        #endregion
+
+        #region IsMultiValued
+
+        [TestMethod]
+        public void IsMultiValued_OnlyForAJsonArray()
+        {
+            // A multi-valued directory extension comes back as an array. A user has one value per
+            // organisation type, so the admin must be told the attribute can't be used - rather than
+            // being shown "no value" for every user, which is what ExtractRawValue alone would report.
+            const string extension = "extension_0123456789abcdef0123456789abcdef_costCentres";
+            var spec = Spec(extension);
+
+            Assert.IsTrue(UserOrgRules.IsMultiValued(Props(@"{ """ + extension + @""": [ ""Retail"", ""Ops"" ] }"), spec));
+            Assert.IsTrue(UserOrgRules.IsMultiValued(Props(@"{ """ + extension + @""": [ ] }"), spec), "An empty array is still multi-valued.");
+            Assert.IsTrue(
+                UserOrgRules.IsMultiValued(Props(@"{ """ + extension.ToUpperInvariant() + @""": [ ""Retail"" ] }"), spec),
+                "The same case-insensitive walk as ExtractRawValue.");
+
+            Assert.IsFalse(UserOrgRules.IsMultiValued(Props(@"{ """ + extension + @""": ""Retail"" }"), spec));
+            Assert.IsFalse(UserOrgRules.IsMultiValued(Props(@"{ """ + extension + @""": null }"), spec));
+            Assert.IsFalse(UserOrgRules.IsMultiValued(Props(@"{ """ + extension + @""": { ""a"": 1 } }"), spec));
+            Assert.IsFalse(UserOrgRules.IsMultiValued(Props("{ }"), spec));
+            Assert.IsFalse(UserOrgRules.IsMultiValued(null, spec));
+            Assert.IsFalse(UserOrgRules.IsMultiValued(Props("{ }"), null));
+        }
+
+        [TestMethod]
+        public void IsMultiValued_FollowsANestedPath()
+        {
+            var spec = Spec("employeeOrgData.division");
+
+            Assert.IsTrue(UserOrgRules.IsMultiValued(Props(@"{ ""employeeOrgData"": { ""division"": [ ""A"" ] } }"), spec));
+            Assert.IsFalse(UserOrgRules.IsMultiValued(Props(@"{ ""employeeOrgData"": [ ""A"" ] }"), spec), "The container, not the value, is the array.");
+        }
+
         #endregion
 
         #region ExtractRawValue

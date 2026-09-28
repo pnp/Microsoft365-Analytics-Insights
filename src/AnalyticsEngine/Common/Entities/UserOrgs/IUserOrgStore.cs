@@ -399,6 +399,5 @@ namespace Common.Entities.UserOrgs
         public const string InvalidMode = "invalidMode";
         public const string InvalidColumns = "invalidColumns";
         public const string ChangePageExpired = "changePageExpired";
-        public const string ImportNotFound = "importNotFound";
     }
 }

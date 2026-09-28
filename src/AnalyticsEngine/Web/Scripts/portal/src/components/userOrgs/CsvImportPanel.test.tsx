@@ -149,6 +149,50 @@ describe('CsvImportPanel', () => {
     expect(screen.getByText(/1 row in the file matches no user/i)).toBeInTheDocument();
   });
 
+  it('forgets a preview that was still being read when the file was cleared', async () => {
+    // A slow preview landing after Clear used to bring the cleared file back, draft and all, ready to
+    // import.
+    let resolvePreview!: (value: UserOrgCsvPreview) => void;
+    previewCsv.mockReturnValue(new Promise<UserOrgCsvPreview>((resolve) => { resolvePreview = resolve; }));
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+
+    await chooseFile();
+    expect(screen.getByText('Reading the file and checking every user...')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(screen.queryByText('Reading the file and checking every user...')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Choose a CSV file')).toBeEnabled();
+
+    await act(async () => { resolvePreview(preview()); });
+
+    expect(screen.queryByText('alex.wilber@contoso.com')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Import/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Clear' })).not.toBeInTheDocument();
+  });
+
+  it('shows only the latest file when an earlier preview finishes last', async () => {
+    let resolveFirst!: (value: UserOrgCsvPreview) => void;
+    previewCsv
+      .mockReturnValueOnce(new Promise<UserOrgCsvPreview>((resolve) => { resolveFirst = resolve; }))
+      .mockResolvedValueOnce(
+        preview({
+          fileName: 'second.csv',
+          rows: [{ lineNumber: 2, upn: 'megan.bowen@contoso.com', orgValue: 'Finance', userExists: true, clearsValue: false }],
+        }),
+      );
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+
+    await chooseFile(csvFile('first.csv'));
+    await userEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    await chooseFile(csvFile('second.csv'));
+    expect(await screen.findByText('megan.bowen@contoso.com')).toBeInTheDocument();
+
+    await act(async () => { resolveFirst(preview()); });
+
+    expect(screen.getByText('megan.bowen@contoso.com')).toBeInTheDocument();
+    expect(screen.queryByText('alex.wilber@contoso.com')).not.toBeInTheDocument();
+  });
+
   it.each([
     ['notUtf8', /isn't saved as UTF-8/i],
     ['excelWorkbook', /Excel workbook, not a CSV/i],

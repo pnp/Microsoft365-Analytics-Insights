@@ -20,15 +20,17 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { Add16Regular, Filter16Regular } from '@fluentui/react-icons';
-import { useT, type TFunction } from '../../i18n';
+import { formatNumber, useT, type TFunction } from '../../i18n';
 import type { UserFilter, UserFilterClause, UserFilterDimension, UserFilterJoin } from '../../types/userFilter';
 import UserFilterClauseEditor, { DimensionCue } from './UserFilterClauseEditor';
 import { describeClause, describeUserFilter, dimensionLabel, operatorShortLabel, valueLabel } from './describeUserFilter';
 import {
   MAX_CLAUSES,
+  MAX_TEXT_TERMS,
   addClause,
   fitsLimits,
   groupClauseIndexes,
+  hasTooManyTextTerms,
   isCustomDimension,
   isTextOperator,
   newClause,
@@ -171,7 +173,12 @@ export default function UserFilterBar({ filter, onChange, echoNames }: UserFilte
   const condition = (clause: UserFilterClause) =>
     describeClause(t, clause, dimensionLabel(t, clause.dimension, source));
 
-  const tooLong = (candidate: UserFilter) => (fitsLimits(candidate) ? null : t('userFilter.editor.tooLong'));
+  const tooLong = (candidate: UserFilter) => {
+    if (fitsLimits(candidate)) return null;
+    return hasTooManyTextTerms(candidate)
+      ? t('userFilter.editor.tooManyTerms', { max: formatNumber(MAX_TEXT_TERMS) })
+      : t('userFilter.editor.tooLong');
+  };
 
   // The filter an editor's draft would produce. The connector belongs to the bar, not the editor: it
   // can be switched while the condition is open, and the editor's copy is the one it opened with.

@@ -173,12 +173,24 @@ namespace Common.Entities.UserOrgs
         /// </summary>
         public static bool TryNormaliseOrgTypeName(string rawName, out string normalised, out string error)
         {
+            string code;
+            return TryNormaliseOrgTypeName(rawName, out normalised, out error, out code);
+        }
+
+        /// <summary>
+        /// Validates an admin-supplied org type name, also saying why it failed as a key from
+        /// <see cref="UserOrgMessageCodes"/>.
+        /// </summary>
+        public static bool TryNormaliseOrgTypeName(string rawName, out string normalised, out string error, out string code)
+        {
             normalised = null;
             error = null;
+            code = null;
 
             if (string.IsNullOrWhiteSpace(rawName))
             {
                 error = "An organisation type name is required.";
+                code = UserOrgMessageCodes.NameRequired;
                 return false;
             }
 
@@ -186,11 +198,43 @@ namespace Common.Entities.UserOrgs
             if (trimmed.Length > MaxOrgTypeNameLength)
             {
                 error = $"An organisation type name can be at most {MaxOrgTypeNameLength} characters.";
+                code = UserOrgMessageCodes.NameTooLong;
                 return false;
             }
 
             normalised = trimmed;
             return true;
+        }
+
+        /// <summary>
+        /// The refusal for an org type name <see cref="TryNormaliseOrgTypeName(string, out string, out string, out string)"/>
+        /// rejected, with the facts the portal words it from.
+        /// </summary>
+        public static UserOrgValidationException NameRefusal(string error, string code)
+        {
+            return new UserOrgValidationException(
+                error,
+                code,
+                code == UserOrgMessageCodes.NameTooLong ? new Dictionary<string, object> { { "max", MaxOrgTypeNameLength } } : null);
+        }
+
+        /// <summary>The refusal for an attribute name the parser rejected.</summary>
+        public static UserOrgValidationException AttributeRefusal(EntraOrgAttributeParseFailure failure)
+        {
+            return new UserOrgValidationException(
+                failure.Message,
+                failure.Code,
+                failure.Values.Count == 0 ? null : failure.Values.ToDictionary(p => p.Key, p => p.Value));
+        }
+
+        /// <summary>
+        /// Whether the configured attribute's value is a JSON array - a multi-valued directory extension,
+        /// which cannot be an organisation: a user has at most one value per organisation type.
+        /// </summary>
+        public static bool IsMultiValued(IDictionary<string, JToken> graphProperties, EntraOrgAttributeSpec spec)
+        {
+            var token = ExtractToken(graphProperties, spec);
+            return token != null && token.Type == JTokenType.Array;
         }
 
         /// <summary>
@@ -211,6 +255,12 @@ namespace Common.Entities.UserOrgs
         /// be surprising. Objects and arrays are rejected - there is no sensible single value to take.
         /// </remarks>
         public static string ExtractRawValue(IDictionary<string, JToken> graphProperties, EntraOrgAttributeSpec spec)
+        {
+            return TokenToValue(ExtractToken(graphProperties, spec));
+        }
+
+        /// <summary>The configured attribute's JSON token, or <c>null</c> when the user has none.</summary>
+        private static JToken ExtractToken(IDictionary<string, JToken> graphProperties, EntraOrgAttributeSpec spec)
         {
             if (graphProperties == null || spec == null || spec.JsonPath == null || spec.JsonPath.Count == 0)
             {
@@ -240,7 +290,7 @@ namespace Common.Entities.UserOrgs
                 }
             }
 
-            return TokenToValue(current);
+            return current;
         }
 
         private static bool TryGetProperty(IDictionary<string, JToken> properties, string name, out JToken value)

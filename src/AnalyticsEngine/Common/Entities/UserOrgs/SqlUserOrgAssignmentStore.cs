@@ -152,8 +152,6 @@ SELECT @applied AS applied, @cleared AS cleared, @valuesCreated AS values_create
                 return result;
             }
 
-            var batch = BuildBatchTable(deduplicated, expectedGenerations);
-
             using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
             {
                 using (var cmd = Command(connection, CreateTempTableSql))
@@ -161,17 +159,22 @@ SELECT @applied AS applied, @cleared AS cleared, @valuesCreated AS values_create
                     await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
                 }
 
+                // Streamed rather than copied into a DataTable first. A first full enumeration of a
+                // 200,000-user tenant with five Entra org types is a million rows, and a DataTable of
+                // them held a third copy of the batch - hundreds of megabytes in the importer - on top
+                // of the updates and their de-duplication.
                 using (var bulkCopy = new SqlBulkCopy(connection))
+                using (var rows = new AssignmentUpdateReader(deduplicated, expectedGenerations))
                 {
                     bulkCopy.DestinationTableName = TempTableName;
                     bulkCopy.BatchSize = 10000;
                     bulkCopy.BulkCopyTimeout = CommandTimeoutSeconds;
-                    bulkCopy.ColumnMappings.Add("user_id", "user_id");
-                    bulkCopy.ColumnMappings.Add("org_type_id", "org_type_id");
-                    bulkCopy.ColumnMappings.Add("org_value", "org_value");
-                    bulkCopy.ColumnMappings.Add("expected_generation", "expected_generation");
+                    bulkCopy.ColumnMappings.Add(0, "user_id");
+                    bulkCopy.ColumnMappings.Add(1, "org_type_id");
+                    bulkCopy.ColumnMappings.Add(2, "org_value");
+                    bulkCopy.ColumnMappings.Add(3, "expected_generation");
 
-                    await bulkCopy.WriteToServerAsync(batch, cancellationToken).ConfigureAwait(false);
+                    await bulkCopy.WriteToServerAsync(rows, cancellationToken).ConfigureAwait(false);
                 }
 
                 // One transaction around the four statements. They are not independent: the clear
@@ -361,38 +364,122 @@ ORDER BY t.name;";
         }
 
         /// <summary>
-        /// Builds the <see cref="DataTable"/> that is bulk-copied up. Column order and types must match
+        /// Streams a batch of updates into <see cref="SqlBulkCopy"/>, in the column order of
         /// <see cref="CreateTempTableSql"/>.
         /// </summary>
-        internal static DataTable BuildBatchTable(
-            IReadOnlyList<UserOrgAssignmentUpdate> updates,
-            IReadOnlyDictionary<int, int> expectedGenerations = null)
+        internal sealed class AssignmentUpdateReader : IDataReader
         {
-            var table = new DataTable();
-            table.Columns.Add("user_id", typeof(int));
-            table.Columns.Add("org_type_id", typeof(int));
-            table.Columns.Add("org_value", typeof(string));
-            table.Columns.Add("expected_generation", typeof(int));
+            private static readonly string[] Names = { "user_id", "org_type_id", "org_value", "expected_generation" };
 
-            foreach (var update in updates)
+            private readonly IReadOnlyList<UserOrgAssignmentUpdate> _updates;
+            private readonly IReadOnlyDictionary<int, int> _expectedGenerations;
+            private readonly object[] _current = new object[4];
+            private int _index = -1;
+
+            public AssignmentUpdateReader(IReadOnlyList<UserOrgAssignmentUpdate> updates, IReadOnlyDictionary<int, int> expectedGenerations)
             {
+                _updates = updates ?? new UserOrgAssignmentUpdate[0];
+                _expectedGenerations = expectedGenerations;
+            }
+
+            public int FieldCount => Names.Length;
+
+            public int Depth => 0;
+
+            public bool IsClosed => false;
+
+            public int RecordsAffected => -1;
+
+            public object this[int i] => GetValue(i);
+
+            public object this[string name] => GetValue(GetOrdinal(name));
+
+            /// <remarks>One buffer, reused: SqlBulkCopy has read the row before it asks for the next.</remarks>
+            public bool Read()
+            {
+                if (++_index >= _updates.Count)
+                {
+                    return false;
+                }
+
+                var update = _updates[_index];
+
                 // Normalised again here rather than trusted. This is the last point before the value
                 // reaches an nvarchar(848) column, and a caller that skipped normalisation would
                 // otherwise get a truncation error from SQL Server instead of a stored value.
                 var value = UserOrgRules.NormaliseOrgValue(update.OrgValue);
 
                 var generation = 0;
-                var haveGeneration = expectedGenerations != null
-                    && expectedGenerations.TryGetValue(update.OrgTypeId, out generation);
+                var haveGeneration = _expectedGenerations != null
+                    && _expectedGenerations.TryGetValue(update.OrgTypeId, out generation);
 
-                table.Rows.Add(
-                    update.UserId,
-                    update.OrgTypeId,
-                    value == null ? (object)DBNull.Value : value,
-                    haveGeneration ? (object)generation : DBNull.Value);
+                _current[0] = update.UserId;
+                _current[1] = update.OrgTypeId;
+                _current[2] = value == null ? (object)DBNull.Value : value;
+                _current[3] = haveGeneration ? (object)generation : DBNull.Value;
+                return true;
             }
 
-            return table;
+            public object GetValue(int i) => _current[i];
+
+            public int GetValues(object[] values)
+            {
+                var count = Math.Min(values.Length, FieldCount);
+                Array.Copy(_current, values, count);
+                return count;
+            }
+
+            public bool IsDBNull(int i) => _current[i] is DBNull;
+
+            public string GetName(int i) => Names[i];
+
+            public int GetOrdinal(string name) => Array.IndexOf(Names, name);
+
+            public Type GetFieldType(int i) => i == 2 ? typeof(string) : typeof(int);
+
+            public string GetDataTypeName(int i) => i == 2 ? "nvarchar" : "int";
+
+            public int GetInt32(int i) => (int)_current[i];
+
+            public string GetString(int i) => (string)_current[i];
+
+            public bool NextResult() => false;
+
+            public void Close()
+            {
+            }
+
+            public void Dispose()
+            {
+            }
+
+            public DataTable GetSchemaTable() => throw new NotSupportedException();
+
+            public bool GetBoolean(int i) => throw new NotSupportedException();
+
+            public byte GetByte(int i) => throw new NotSupportedException();
+
+            public long GetBytes(int i, long fieldOffset, byte[] buffer, int bufferoffset, int length) => throw new NotSupportedException();
+
+            public char GetChar(int i) => throw new NotSupportedException();
+
+            public long GetChars(int i, long fieldoffset, char[] buffer, int bufferoffset, int length) => throw new NotSupportedException();
+
+            public IDataReader GetData(int i) => throw new NotSupportedException();
+
+            public DateTime GetDateTime(int i) => throw new NotSupportedException();
+
+            public decimal GetDecimal(int i) => throw new NotSupportedException();
+
+            public double GetDouble(int i) => throw new NotSupportedException();
+
+            public float GetFloat(int i) => throw new NotSupportedException();
+
+            public Guid GetGuid(int i) => throw new NotSupportedException();
+
+            public short GetInt16(int i) => throw new NotSupportedException();
+
+            public long GetInt64(int i) => throw new NotSupportedException();
         }
     }
 }

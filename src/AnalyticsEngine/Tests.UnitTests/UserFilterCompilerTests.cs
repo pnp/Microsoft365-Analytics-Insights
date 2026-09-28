@@ -298,13 +298,16 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void AUserTheSnapshotDoesNotHold_IsEvaluatedAsHavingNoValues()
+        public void AUserTheSnapshotDoesNotHold_MatchesNoFilter()
         {
-            // Imported after the snapshot was read. Guessing either way would be wrong; "no value for
-            // anything" is the only honest reading.
+            // Imported after the snapshot was read, so nothing is known about them. Reading them as
+            // "no value for anything" put a Sales user imported a minute ago into "Department is not
+            // Sales"; excluding them is the only answer that asserts nothing, and it keeps the report's
+            // population the one MatchedPeople counts.
             Assert.IsFalse(Compile("[{\"d\":\"department\",\"v\":[\"Sales\"]}]").Matches(999));
-            Assert.IsTrue(Compile("[{\"d\":\"department\",\"op\":\"isNot\",\"v\":[\"Sales\"]}]").Matches(999));
-            Assert.IsTrue(Compile("[{\"d\":\"department\",\"v\":[],\"n\":true}]").Matches(999));
+            Assert.IsFalse(Compile("[{\"d\":\"department\",\"op\":\"isNot\",\"v\":[\"Sales\"]}]").Matches(999));
+            Assert.IsFalse(Compile("[{\"d\":\"department\",\"v\":[],\"n\":true}]").Matches(999));
+            Assert.IsFalse(Compile("[{\"d\":\"userName\",\"op\":\"notContains\",\"v\":[\"svc-\"]}]").Matches(999));
         }
 
         [TestMethod]

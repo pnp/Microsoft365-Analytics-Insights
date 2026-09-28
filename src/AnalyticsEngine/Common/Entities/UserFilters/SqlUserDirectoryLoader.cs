@@ -2,6 +2,7 @@ using DataUtils.Sql;
 using Microsoft.Data.SqlClient;
 using System;
 using System.Collections.Generic;
+using System.Data;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -42,8 +43,9 @@ namespace Common.Entities.UserFilters
     /// would send the same department name across the wire once per person - 200,000 times over for
     /// a large tenant - where the ids cost four bytes each. The organisation assignments are sent the
     /// same way, as three integers per row with the value names in their own result set.</para>
-    /// <para>Plain scans, no new index: every table is read whole, which is what a scan is for, and the
-    /// statement is read-only so it takes no locks beyond READ COMMITTED's momentary shared ones.</para>
+    /// <para>Plain scans, no new index: every table is read whole, which is what a scan is for. Read in
+    /// one SNAPSHOT transaction where the database allows it, so all the result sets describe the same
+    /// moment; otherwise under READ COMMITTED, which takes only momentary shared locks.</para>
     /// <para>The user organisation tables are optional. A database that has not been upgraded to the
     /// migration that creates them still yields a snapshot of the Entra attributes rather than an error.</para>
     /// </remarks>
@@ -100,63 +102,100 @@ END";
             {
                 await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
-                using (var cmd = new SqlCommand(Sql, connection) { CommandTimeout = CommandTimeoutSeconds })
-                using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+                // Eleven statements, and without a transaction each reads a different moment. An import
+                // committing between the organisation values and the assignments leaves assignments
+                // naming a value the loader never saw, and they are dropped; the same goes for a new
+                // department between the lookups and the users. Under a SNAPSHOT transaction every
+                // statement reads the same moment. Azure SQL allows it by default; a database that does
+                // not is read as before.
+                var snapshot = await SnapshotIsolationAllowedAsync(connection, cancellationToken).ConfigureAwait(false);
+                using (var tx = snapshot ? connection.BeginTransaction(IsolationLevel.Snapshot) : null)
                 {
-                    var departments = await ReadLookupAsync(reader, cancellationToken).ConfigureAwait(false);
-                    var jobTitles = await NextLookupAsync(reader, cancellationToken).ConfigureAwait(false);
-                    var companies = await NextLookupAsync(reader, cancellationToken).ConfigureAwait(false);
-                    var offices = await NextLookupAsync(reader, cancellationToken).ConfigureAwait(false);
-                    var countries = await NextLookupAsync(reader, cancellationToken).ConfigureAwait(false);
-                    var states = await NextLookupAsync(reader, cancellationToken).ConfigureAwait(false);
-                    var usageLocations = await NextLookupAsync(reader, cancellationToken).ConfigureAwait(false);
-
-                    // Read synchronously row by row: SqlClient's per-row ReadAsync costs more than the row
-                    // itself for a result this narrow, and this whole load already runs on a thread-pool
-                    // thread of its own (see CachedUserDirectorySource), never on a request's.
-                    await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
-                    while (reader.Read())
+                    using (var cmd = new SqlCommand(Sql, connection, tx) { CommandTimeout = CommandTimeoutSeconds })
+                    using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
                     {
-                        builder.AddUser(new UserDirectoryEntry
-                        {
-                            UserId = reader.GetInt32(0),
-                            UserPrincipalName = reader.IsDBNull(1) ? null : reader.GetString(1),
-                            Mail = reader.IsDBNull(2) ? null : reader.GetString(2),
-                            AccountEnabled = reader.IsDBNull(3) ? (bool?)null : reader.GetBoolean(3),
-                            ManagerUserId = reader.IsDBNull(4) ? (int?)null : reader.GetInt32(4),
-                            Department = Lookup(departments, reader, 5),
-                            JobTitle = Lookup(jobTitles, reader, 6),
-                            CompanyName = Lookup(companies, reader, 7),
-                            OfficeLocation = Lookup(offices, reader, 8),
-                            Country = Lookup(countries, reader, 9),
-                            StateOrProvince = Lookup(states, reader, 10),
-                            UsageLocation = Lookup(usageLocations, reader, 11),
-                        });
+                        await ReadAllAsync(reader, builder, cancellationToken).ConfigureAwait(false);
                     }
 
-                    // Absent on a database that predates user organisations - see the remarks.
-                    if (await reader.NextResultAsync(cancellationToken).ConfigureAwait(false))
+                    if (tx != null)
                     {
-                        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                        {
-                            builder.AddOrgType(reader.GetInt32(0), reader.GetString(1));
-                        }
+                        tx.Commit();
 
-                        var values = await NextLookupAsync(reader, cancellationToken).ConfigureAwait(false);
-
-                        await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
-                        while (reader.Read())
+                        // Older SQL Server versions do not reset the isolation level when a pooled
+                        // connection is reused, and the next user of this one expects READ COMMITTED.
+                        using (var reset = new SqlCommand("SET TRANSACTION ISOLATION LEVEL READ COMMITTED;", connection))
                         {
-                            if (values.TryGetValue(reader.GetInt32(2), out var value))
-                            {
-                                builder.AddOrgAssignment(reader.GetInt32(0), reader.GetInt32(1), value);
-                            }
+                            await reset.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
                         }
                     }
                 }
             }
 
             return builder.Build(DateTime.UtcNow);
+        }
+
+        private static async Task<bool> SnapshotIsolationAllowedAsync(SqlConnection connection, CancellationToken cancellationToken)
+        {
+            using (var cmd = new SqlCommand(
+                "SELECT snapshot_isolation_state FROM sys.databases WHERE database_id = DB_ID();", connection))
+            {
+                var state = await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+                return state != null && state != DBNull.Value && Convert.ToInt32(state) == 1;
+            }
+        }
+
+        private static async Task ReadAllAsync(SqlDataReader reader, UserDirectorySnapshotBuilder builder, CancellationToken cancellationToken)
+        {
+            var departments = await ReadLookupAsync(reader, cancellationToken).ConfigureAwait(false);
+            var jobTitles = await NextLookupAsync(reader, cancellationToken).ConfigureAwait(false);
+            var companies = await NextLookupAsync(reader, cancellationToken).ConfigureAwait(false);
+            var offices = await NextLookupAsync(reader, cancellationToken).ConfigureAwait(false);
+            var countries = await NextLookupAsync(reader, cancellationToken).ConfigureAwait(false);
+            var states = await NextLookupAsync(reader, cancellationToken).ConfigureAwait(false);
+            var usageLocations = await NextLookupAsync(reader, cancellationToken).ConfigureAwait(false);
+
+            // Read synchronously row by row: SqlClient's per-row ReadAsync costs more than the row
+            // itself for a result this narrow, and this whole load already runs on a thread-pool
+            // thread of its own (see CachedUserDirectorySource), never on a request's.
+            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+            while (reader.Read())
+            {
+                builder.AddUser(new UserDirectoryEntry
+                {
+                    UserId = reader.GetInt32(0),
+                    UserPrincipalName = reader.IsDBNull(1) ? null : reader.GetString(1),
+                    Mail = reader.IsDBNull(2) ? null : reader.GetString(2),
+                    AccountEnabled = reader.IsDBNull(3) ? (bool?)null : reader.GetBoolean(3),
+                    ManagerUserId = reader.IsDBNull(4) ? (int?)null : reader.GetInt32(4),
+                    Department = Lookup(departments, reader, 5),
+                    JobTitle = Lookup(jobTitles, reader, 6),
+                    CompanyName = Lookup(companies, reader, 7),
+                    OfficeLocation = Lookup(offices, reader, 8),
+                    Country = Lookup(countries, reader, 9),
+                    StateOrProvince = Lookup(states, reader, 10),
+                    UsageLocation = Lookup(usageLocations, reader, 11),
+                });
+            }
+
+            // Absent on a database that predates user organisations - see the remarks.
+            if (await reader.NextResultAsync(cancellationToken).ConfigureAwait(false))
+            {
+                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    builder.AddOrgType(reader.GetInt32(0), reader.GetString(1));
+                }
+
+                var values = await NextLookupAsync(reader, cancellationToken).ConfigureAwait(false);
+
+                await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+                while (reader.Read())
+                {
+                    if (values.TryGetValue(reader.GetInt32(2), out var value))
+                    {
+                        builder.AddOrgAssignment(reader.GetInt32(0), reader.GetInt32(1), value);
+                    }
+                }
+            }
         }
 
         private static async Task<Dictionary<int, string>> NextLookupAsync(SqlDataReader reader, CancellationToken cancellationToken)
