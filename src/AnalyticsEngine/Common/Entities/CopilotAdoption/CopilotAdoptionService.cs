@@ -1649,11 +1649,15 @@ namespace Common.Entities.CopilotAdoption
             // for a seat - the figure a licence purchase is justified with, and the only place the Copilot
             // minutes are applied. Modelled only when the Microsoft 365 usage reports supplied the volumes
             // it multiplies: without them every candidate has zero meetings, emails and documents, and
-            // "0 hours" would read as a finding about the candidates rather than as a missing import.
+            // "0 hours" would read as a finding about the candidates rather than as a missing import. The
+            // candidate cap is kept either way: it is a fact about the list, not about the figure, and this
+            // estimate is where the portal reads it - without it a tenant with no usage reports, and every
+            // filtered view of it, said nothing about the cap, and a view whose candidates all ranked below
+            // the tenant-wide cut-off read as "nobody in this tenant qualifies".
             var volumesObserved = summary.DataSources?.M365UsageReportsAvailable ?? false;
             summary.LicenceOpportunityEstimate = volumesObserved
                 ? CopilotAdoptionScoring.EstimateLicenceValue(recommended, _options, analysis.OpportunitiesCapped)
-                : new LicenceValueEstimate();
+                : new LicenceValueEstimate { CandidatesCapped = analysis.OpportunitiesCapped };
 
             // Beside it, the candidates already using Copilot Chat without a licence: the same definition
             // as the list's "Already using Copilot" filter, so a reader can bring up exactly these people.
@@ -1662,7 +1666,7 @@ namespace Common.Entities.CopilotAdoption
                     recommended.Where(o => o.UnlicensedCopilotInteractions > 0).ToList(),
                     _options,
                     analysis.OpportunitiesCapped)
-                : new LicenceValueEstimate();
+                : new LicenceValueEstimate { CandidatesCapped = analysis.OpportunitiesCapped };
 
             // Last, because it reads the licensed, unlicensed, opportunity and Cowork populations
             // together - the point of the domain view is that those four answer one question per

@@ -57,6 +57,19 @@ export interface OrgTypeDialogProps {
 }
 
 /**
+ * What two attribute names have in common when the server treats them as the same attribute: it
+ * compares canonical names ignoring case (UserOrgAdminService.UpdateAsync), and the canonical form
+ * drops the optional `onPremisesExtensionAttributes.` prefix and a slot's leading zero
+ * (EntraOrgAttributeSpec.Canonical). Values are read ignoring case too, so names that differ only in
+ * these ways read the same values - and saving one over the other discards nothing.
+ */
+function attributeKey(name: string | null | undefined): string {
+  const key = (name ?? '').trim().toLowerCase();
+  const slot = /^(?:onpremisesextensionattributes\.)?extensionattribute0*(\d+)$/.exec(key);
+  return slot ? `extensionattribute${Number(slot[1])}` : key;
+}
+
+/**
  * Create or edit an org type.
  *
  * For an Entra-sourced type the attribute must be proved against a real user before it can be saved.
@@ -129,15 +142,15 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
   // no non-destructive option at all.
   const needsProof = source === 'entra' && isEnabled;
   const attributeProven =
-    !needsProof ||
-    (provenAttribute !== null &&
-      provenAttribute.trim().toLowerCase() === attribute.trim().toLowerCase());
+    !needsProof || (provenAttribute !== null && attributeKey(provenAttribute) === attributeKey(attribute));
 
-  // Whether saving throws away the values the type holds now: a change of source or attribute.
+  // Whether saving throws away the values the type holds now: a change of source or attribute - by the
+  // server's measure of "the same attribute", or the warning below cries wolf over a change of case.
   const wouldDiscard =
     !!editing &&
     editing.assignedUserCount > 0 &&
-    (source !== editing.source || (source === 'entra' && attribute.trim() !== (editing.entraAttributeName ?? '')));
+    (source !== editing.source ||
+      (source === 'entra' && attributeKey(attribute) !== attributeKey(editing.entraAttributeName)));
 
   // A schema extension's property after the dot is not checked by Graph, so "this user has no value" is
   // also what a misspelt one looks like. Enough to set up a new type with; not enough to discard the
@@ -254,7 +267,13 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
                       value={attribute}
                       selectedOptions={attribute ? [attribute] : []}
                       onInput={(e) => setAttribute((e.target as HTMLInputElement).value)}
-                      onOptionSelect={(_e, d) => setAttribute(d.optionValue ?? '')}
+                      // Fluent clears the selection as soon as the text stops matching the selected option,
+                      // and reports that as a selection of nothing - after onInput, so taking it at its word
+                      // emptied the field on the first keystroke or paste over an existing type's attribute.
+                      // The text arrives through onInput; only a real pick from the list replaces it.
+                      onOptionSelect={(_e, d) => {
+                        if (d.optionValue !== undefined) setAttribute(d.optionValue);
+                      }}
                       placeholder="extensionAttribute1"
                       maxLength={200}
                     >

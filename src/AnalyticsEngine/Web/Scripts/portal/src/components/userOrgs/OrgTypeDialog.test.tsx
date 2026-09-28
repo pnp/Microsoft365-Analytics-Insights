@@ -285,6 +285,80 @@ describe('OrgTypeDialog', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
   });
 
+  it('keeps what the admin types over an existing type\u2019s attribute', async () => {
+    // Fluent clears the Combobox selection once the text stops matching it, reported as a selection of
+    // nothing. Taken at its word, the first keystroke or paste over a saved attribute emptied the field.
+    renderWithProvider(<OrgTypeDialog open editing={saved} onDismiss={vi.fn()} onSave={vi.fn()} />);
+
+    typeAttribute('contoso_costs.costCentre');
+    await typeInto(/Test it against a user/, 'someone@contoso.com');
+
+    expect(screen.getByRole('combobox', { name: /Entra attribute/ })).toHaveValue('contoso_costs.costCentre');
+    expect(screen.getByRole('button', { name: 'Test' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
+  it('still takes an attribute picked from the list', async () => {
+    renderWithProvider(<OrgTypeDialog open editing={saved} onDismiss={vi.fn()} onSave={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole('combobox', { name: /Entra attribute/ }));
+    await userEvent.click(await screen.findByRole('option', { name: 'employeeType' }));
+
+    expect(screen.getByRole('combobox', { name: /Entra attribute/ })).toHaveValue('employeeType');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
+  it('treats a change of case alone as the same attribute, as the server does', async () => {
+    // The server compares attribute names ignoring case and reads values ignoring case, so this save
+    // keeps every value. Warning that it discards them - or refusing it on a test that found no value -
+    // would stop an admin making a harmless correction.
+    renderWithProvider(
+      <OrgTypeDialog
+        open
+        editing={{ ...saved, entraAttributeName: 'contoso_costs.costCentre' }}
+        onDismiss={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    typeAttribute('contoso_costs.costcentre');
+    testEntraAttribute.mockResolvedValue(
+      testResult({
+        attributeName: 'contoso_costs.costcentre',
+        graphProperty: 'contoso_costs',
+        rawValue: null,
+        normalisedValue: null,
+        hasNoValue: true,
+        nameUnverified: true,
+        messageCode: 'noValueUnverified',
+        messageValues: { container: 'contoso_costs' },
+      }),
+    );
+    await typeInto(/Test it against a user/, 'someone@contoso.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Test' }));
+
+    expect(await screen.findByText(/does not check the property name after the dot/)).toBeInTheDocument();
+    expect(screen.queryByText(/Saving this discards/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/can only be saved once a test finds a value/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+  });
+
+  it('treats the long and zero-padded spellings of an extension attribute slot as the same slot', async () => {
+    // Both are stored as extensionAttribute1 (EntraOrgAttributeSpec.Canonical): nothing to re-prove,
+    // nothing discarded. A different slot still is.
+    renderWithProvider(<OrgTypeDialog open editing={saved} onDismiss={vi.fn()} onSave={vi.fn()} />);
+
+    typeAttribute('onPremisesExtensionAttributes.extensionAttribute01');
+
+    expect(screen.queryByText(/Saving this discards/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+
+    typeAttribute('extensionAttribute2');
+
+    expect(screen.getByText(/Saving this discards the 10 values this type holds today/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
   it('surfaces the discovery warning rather than presenting an empty list as "none exist"', async () => {
     fetchAttributeCatalogue.mockResolvedValue(
       catalogue({ discoveryWarning: 'No directory extensions were returned.' }),

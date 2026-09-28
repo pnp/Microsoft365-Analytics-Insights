@@ -316,6 +316,44 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Summary_StillSaysTheListWasCapped_WhenTheUsageReportsAreUnavailable()
+        {
+            // Nothing is modelled without the usage reports, but the cap is a fact about the candidate list
+            // and the estimate is where the portal reads it. Dropped here, a filtered view whose candidates
+            // all ranked below the tenant-wide cut-off read as "nobody in this tenant qualifies".
+            var analysis = AnalysisWith(ProvenDemand("proven@contoso.com"), WorkloadInferred("busy@fabrikam.com"));
+            analysis.Summary.DataSources.M365UsageReportsAvailable = false;
+            analysis.OpportunitiesCapped = true;
+
+            var service = new CopilotAdoptionService();
+            service.FinaliseSummary(analysis);
+
+            Assert.AreEqual(0, analysis.Summary.LicenceOpportunityEstimate.CohortUsers, "Still nothing modelled.");
+            Assert.IsTrue(analysis.Summary.LicenceOpportunityEstimate.CandidatesCapped);
+            Assert.IsTrue(analysis.Summary.LicenceChatUsersEstimate.CandidatesCapped);
+
+            var scoped = CopilotAdoptionScopeFilter.Apply(
+                analysis, CopilotAdoptionScope.ForEmailDomain("northwind.com"), service.FinaliseSummary);
+
+            Assert.AreEqual(0, scoped.Summary.RecommendedForLicence, "Nobody in this view made the ranked list.");
+            Assert.AreEqual(0, scoped.Summary.LicenceOpportunityEstimate.CohortUsers);
+            Assert.IsTrue(scoped.Summary.LicenceOpportunityEstimate.CandidatesCapped,
+                "The view must still say the list it was cut from stopped at its cap.");
+        }
+
+        [TestMethod]
+        public void Summary_SaysNothingAboutACap_WhenTheUsageReportsAreUnavailableAndTheListWasComplete()
+        {
+            var analysis = AnalysisWith(ProvenDemand(), WorkloadInferred());
+            analysis.Summary.DataSources.M365UsageReportsAvailable = false;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.IsFalse(analysis.Summary.LicenceOpportunityEstimate.CandidatesCapped);
+            Assert.IsFalse(analysis.Summary.LicenceChatUsersEstimate.CandidatesCapped);
+        }
+
+        [TestMethod]
         public void Summary_CarriesTheCapIntoTheEstimate_AndIntoAnEmailDomainScope()
         {
             var analysis = AnalysisWith(

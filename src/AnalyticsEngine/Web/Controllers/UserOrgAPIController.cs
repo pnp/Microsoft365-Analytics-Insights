@@ -311,7 +311,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             using (upload.File)
             {
-                var startedBy = User?.Identity?.Name ?? "unknown";
+                var startedBy = CurrentAdministrator;
                 return await RunAsync(svc => svc.PreviewAsync(
                     upload.File.Content, upload.File.FileName, orgTypeId, startedBy, userColumn, valueColumn, cancellationToken, requestedUtc),
                     "preview-csv", cancellationToken).ConfigureAwait(false);
@@ -362,11 +362,24 @@ namespace Web.AnalyticsWeb.Controllers
                     UserOrgImportRefusalCodes.DraftNotFound));
             }
 
-            var startedBy = User?.Identity?.Name ?? "unknown";
+            var startedBy = CurrentAdministrator;
             return await RunAsync(svc => svc.CommitImportAsync(
                 orgTypeId, draftId.Value, importMode, confirmedClearCount, startedBy, cancellationToken),
                 "import-csv", cancellationToken).ConfigureAwait(false);
         }
+
+        /// <summary>
+        /// Who is previewing or importing a file: recorded against the job, and the owner of a draft -
+        /// only the administrator who previewed a file can import it (CommitDraftAsync).
+        /// </summary>
+        /// <remarks>
+        /// <c>Identity.Name</c> is the ID token's <c>unique_name</c> - the user principal name - not the
+        /// display name: sign-in uses the v1 endpoint (<c>AppConfig.Authority</c>) with the default name
+        /// claim, and the JWT handler maps only <c>unique_name</c> to it, leaving <c>name</c> unmapped. So
+        /// two administrators who share a display name are still two owners. The product already relies on
+        /// it being per user: each signed-in user's refresh token is cached under it (ClaimsRedisManager).
+        /// </remarks>
+        private string CurrentAdministrator => User?.Identity?.Name ?? "unknown";
 
         /// <summary>GET api/UserOrg/jobs/{id} - import progress.</summary>
         [HttpGet]
