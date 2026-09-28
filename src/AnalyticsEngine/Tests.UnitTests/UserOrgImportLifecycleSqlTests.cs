@@ -169,7 +169,7 @@ DELETE FROM dbo.users;");
             Assert.IsNull(await _jobs.GetActiveJobForTypeAsync(typeId), "A preview must not block anyone's import.");
             Assert.AreEqual(0, (await _jobs.ListJobsAsync(typeId, 10)).Count, "Nor appear in the import history.");
             Assert.IsNull((await _types.GetSummariesAsync()).Single().LastImport, "Nor be shown as the last import.");
-            Assert.IsFalse(await _jobs.TryClaimJobAsync(draftId), "Nor ever be picked up by a worker.");
+            Assert.IsNull(await _jobs.TryClaimJobAsync(draftId), "Nor ever be picked up by a worker.");
         }
 
         [TestMethod]
@@ -432,7 +432,7 @@ DELETE FROM dbo.users;");
             var typeId = await NewType();
             var draftId = await Draft(typeId, Admin, new UserOrgStagedRow(2, "a@contoso.com", "Retail"));
             await _jobs.CommitDraftAsync(draftId, typeId, UserOrgImportMode.Merge, 0, Admin);
-            Assert.IsTrue(await _jobs.TryClaimJobAsync(draftId));
+            Assert.IsNotNull(await _jobs.TryClaimJobAsync(draftId));
 
             var applied = await _jobs.ApplyAsync(draftId);
 
@@ -485,14 +485,55 @@ DELETE FROM dbo.users;");
             var draftId = await Draft(typeId, Admin, new UserOrgStagedRow(2, "a@contoso.com", "X"));
             await _jobs.CommitDraftAsync(draftId, typeId, UserOrgImportMode.Merge, 0, Admin);
 
-            Assert.IsTrue(await _jobs.TryClaimJobAsync(draftId));
-            Assert.IsFalse(await _jobs.TryClaimJobAsync(draftId), "A live worker keeps its job.");
+            Assert.IsNotNull(await _jobs.TryClaimJobAsync(draftId));
+            Assert.IsNull(await _jobs.TryClaimJobAsync(draftId), "A live worker keeps its job.");
             Assert.AreEqual(1, (await _jobs.GetJobAsync(draftId)).Attempts);
 
             _db.Execute($"UPDATE dbo.user_org_import_jobs SET heartbeat_utc = DATEADD(MINUTE, -2, SYSUTCDATETIME()) WHERE id = {draftId}");
 
-            Assert.IsTrue(await _jobs.TryClaimJobAsync(draftId), "A worker that went quiet is taken over.");
+            Assert.IsNotNull(await _jobs.TryClaimJobAsync(draftId), "A worker that went quiet is taken over.");
             Assert.AreEqual(2, (await _jobs.GetJobAsync(draftId)).Attempts);
+        }
+
+        [TestMethod]
+        public async Task AWorkerThatWasTakenOverCannotFailTheImportThatTookItOver()
+        {
+            // Worker A went quiet long enough to be taken over, but was only slow. Its apply then faults. A
+            // failure recorded over B's live claim - and B's staged rows deleted with it - would end an
+            // import B is about to finish, and send the admin back to upload the file again.
+            var a = AddUser("a@contoso.com");
+            var typeId = await NewType();
+            var draftId = await Draft(typeId, Admin, new UserOrgStagedRow(2, "a@contoso.com", "Retail"));
+            await _jobs.CommitDraftAsync(draftId, typeId, UserOrgImportMode.Merge, 0, Admin);
+
+            var claimedByA = await _jobs.TryClaimJobAsync(draftId);
+            _db.Execute($"UPDATE dbo.user_org_import_jobs SET heartbeat_utc = DATEADD(MINUTE, -2, SYSUTCDATETIME()) WHERE id = {draftId}");
+            var claimedByB = await _jobs.TryClaimJobAsync(draftId);
+            Assert.AreEqual(1, claimedByA);
+            Assert.AreEqual(2, claimedByB, "The takeover is a claim of its own.");
+
+            await _jobs.CompleteJobAsync(draftId, UserOrgImportStatus.Failed, "A's fault", CancellationToken.None, UserOrgImportErrorCodes.Failed, claimedByA);
+
+            Assert.AreEqual(UserOrgImportStatus.Running, (await _jobs.GetJobAsync(draftId)).Status, "B's claim stands.");
+            Assert.AreEqual(1, Count($"SELECT COUNT(*) FROM dbo.user_org_import_staging WHERE job_id = {draftId}"), "And so do the rows it works from.");
+
+            Assert.AreEqual(UserOrgImportStatus.Succeeded, (await _jobs.ApplyAsync(draftId)).Status);
+            Assert.AreEqual("Retail", await ValueOf(a));
+        }
+
+        [TestMethod]
+        public async Task TheLiveClaimStillRecordsItsOwnFailure()
+        {
+            AddUser("a@contoso.com");
+            var typeId = await NewType();
+            var draftId = await Draft(typeId, Admin, new UserOrgStagedRow(2, "a@contoso.com", "Retail"));
+            await _jobs.CommitDraftAsync(draftId, typeId, UserOrgImportMode.Merge, 0, Admin);
+            var claim = await _jobs.TryClaimJobAsync(draftId);
+
+            await _jobs.CompleteJobAsync(draftId, UserOrgImportStatus.Failed, "its own fault", CancellationToken.None, UserOrgImportErrorCodes.Failed, claim);
+
+            Assert.AreEqual(UserOrgImportStatus.Failed, (await _jobs.GetJobAsync(draftId)).Status);
+            Assert.AreEqual(0, Count($"SELECT COUNT(*) FROM dbo.user_org_import_staging WHERE job_id = {draftId}"), "Nobody can run it now.");
         }
 
         [TestMethod]
@@ -585,7 +626,7 @@ WHERE id = {draftId}");
         {
             var draftId = await Draft(typeId, Admin, rows);
             await _jobs.CommitDraftAsync(draftId, typeId, mode, int.MaxValue, Admin);
-            Assert.IsTrue(await _jobs.TryClaimJobAsync(draftId));
+            Assert.IsNotNull(await _jobs.TryClaimJobAsync(draftId));
             await _jobs.ApplyAsync(draftId);
             return draftId;
         }
@@ -642,7 +683,7 @@ WHERE id = {draftId}");
             var typeId = await NewType();
             var draftId = await Draft(typeId, Admin, new UserOrgStagedRow(2, "a@contoso.com", "X"));
             await _jobs.CommitDraftAsync(draftId, typeId, UserOrgImportMode.Merge, 0, Admin);
-            Assert.IsTrue(await _jobs.TryClaimJobAsync(draftId));
+            Assert.IsNotNull(await _jobs.TryClaimJobAsync(draftId));
 
             _db.Execute(@"
 CREATE TRIGGER dbo.tr_test_sweep_retires ON dbo.user_org_import_changes AFTER INSERT AS

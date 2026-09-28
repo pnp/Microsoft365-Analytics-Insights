@@ -17,7 +17,7 @@ import { TEAMS_MEETING_BUCKET_LABEL_KEYS, TEAMS_SEGMENT_TEXT_KEYS } from '../../
 import { WEB_ACTIVITY_AVAILABILITY_REASON_KEYS } from '../../components/webActivity/AvailabilityBar';
 import { USER_DATA_WORKLOADS_BY_FLAG } from '../../components/userlookup/CategoryRow';
 import { USER_ORG_MESSAGE_KEYS } from '../../components/userOrgs/userOrgShared';
-import { CSV_DELIMITER_KEYS } from '../../components/userOrgs/CsvImportPanel';
+import { BLOCKING_KEYS, CSV_DELIMITER_KEYS, ROW_PROBLEM_KEYS } from '../../components/userOrgs/CsvImportPanel';
 import { ACCOUNTABILITY_DIMENSION_TEXT, ACCOUNTABILITY_EMPTY_SEGMENT_KEYS } from '../../pages/CopilotAdoptionPage';
 import { ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY } from '../../pages/InsightsOverviewPage';
 import { OFFICE_PLATFORM_LABEL_KEYS } from '../../pages/ReportsPage';
@@ -820,6 +820,7 @@ describe('User data lookup category labels', () => {
 const USER_ORG_MESSAGE_CODES = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'UserOrgs', 'UserOrgMessageCodes.cs');
 const USER_ORG_ADMIN_SERVICE = join(process.cwd(), '..', '..', 'Models', 'UserOrgs', 'UserOrgAdminService.cs');
 const USER_ORG_CONTROLLER = join(process.cwd(), '..', '..', 'Controllers', 'UserOrgAPIController.cs');
+const USER_ORG_CSV_PARSER = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'UserOrgs', 'UserOrgCsvParser.cs');
 
 function userOrgMessageCodes(): string[] {
   const source = readFileSync(USER_ORG_MESSAGE_CODES, 'utf8');
@@ -897,6 +898,28 @@ describe('User organisation server messages', () => {
       .filter(([token, key]) => key !== `userOrgs.csv.delimiter.${token}` || !(key in EN_CATALOG))
       .map(([token, key]) => `${token} -> ${key}`);
     expect(wrong).toEqual([]);
+  });
+
+  it('words every CSV row problem and every refused-file reason the server can send, and nothing it cannot', () => {
+    // A code the page does not know falls back to the server's English reason - the one sentence a
+    // Spanish reader then sees in English, with every other check green.
+    const parser = readFileSync(USER_ORG_CSV_PARSER, 'utf8');
+    for (const [className, keys, prefix] of [
+      ['UserOrgCsvProblemCodes', ROW_PROBLEM_KEYS, 'userOrgs.csv.problem.'],
+      ['UserOrgCsvBlockingCodes', BLOCKING_KEYS, 'userOrgs.csv.blocking.'],
+    ] as const) {
+      const body = new RegExp(`public static class ${className}\\s*\\{([\\s\\S]*?)\\n    \\}`).exec(parser)?.[1];
+      expect(body, `${className} was not found.`).toBeTruthy();
+
+      const server = sortedUnique([...(body ?? '').matchAll(/public\s+const\s+string\s+\w+\s*=\s*"([^"]+)";/g)].map((m) => m[1]));
+      expect(server.length, className).toBeGreaterThanOrEqual(4);
+      expect(sortedUnique(Object.keys(keys)), className).toEqual(server);
+
+      const wrong = Object.entries(keys)
+        .filter(([code, key]) => key !== `${prefix}${code}` || !(key in EN_CATALOG))
+        .map(([code, key]) => `${code} -> ${key}`);
+      expect(wrong, className).toEqual([]);
+    }
   });
 });
 

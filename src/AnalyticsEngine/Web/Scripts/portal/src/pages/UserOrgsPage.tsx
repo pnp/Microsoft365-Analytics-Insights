@@ -29,7 +29,7 @@ import OrgTypeDialog from '../components/userOrgs/OrgTypeDialog';
 import { createOrgType, deleteOrgType, fetchOrgTypes, updateOrgType } from '../api/userOrgsApi';
 import { invalidateUserFilterDimensions } from '../components/userFilter/useUserFilterDimensions';
 import { formatDateParts, formatNumber, plural, useT } from '../i18n';
-import { neverRefreshedKey, STATUS_KEYS, userOrgErrorMessage } from '../components/userOrgs/userOrgShared';
+import { isStaleTypeRefusal, neverRefreshedKey, STATUS_KEYS, userOrgErrorMessage } from '../components/userOrgs/userOrgShared';
 import type { UserOrgType, UserOrgTypeSave } from '../types/userOrgs';
 
 const useStyles = makeStyles({
@@ -98,14 +98,22 @@ export default function UserOrgsPage() {
   }, [load]);
 
   const onSave = async (model: UserOrgTypeSave) => {
-    if (editing) {
-      // The type as it was when the dialog opened - `editing` is not refreshed while it is open - so a
-      // colleague's save in the meantime is refused rather than silently undone.
-      await updateOrgType(editing.id, { ...model, expectedRevision: editing.revision });
-      toast.success(t('userOrgs.toast.saved', { name: model.name }));
-    } else {
-      await createOrgType(model);
-      toast.success(t('userOrgs.toast.created', { name: model.name }));
+    try {
+      if (editing) {
+        // The type as it was when the dialog opened - `editing` is not refreshed while it is open - so a
+        // colleague's save in the meantime is refused rather than silently undone.
+        await updateOrgType(editing.id, { ...model, expectedRevision: editing.revision });
+        toast.success(t('userOrgs.toast.saved', { name: model.name }));
+      } else {
+        await createOrgType(model);
+        toast.success(t('userOrgs.toast.created', { name: model.name }));
+      }
+    } catch (e) {
+      // Refused because this page's copy of the type is out of date. The dialog says so and keeps what
+      // was typed; the list behind it is refreshed, so closing and reopening the type - as the message
+      // says to - opens it as it now is, instead of refusing the same save again until a page reload.
+      if (isStaleTypeRefusal(e)) await changed();
+      throw e;
     }
     setDialogOpen(false);
     setEditing(null);

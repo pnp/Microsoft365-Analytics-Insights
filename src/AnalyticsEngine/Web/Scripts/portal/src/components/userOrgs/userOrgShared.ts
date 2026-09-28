@@ -98,6 +98,15 @@ export function userOrgErrorMessage(error: unknown, t: TFunction, fallbackKey: T
 }
 
 /**
+ * Whether a refused save means the page's copy of the type is out of date: a colleague saved it after
+ * the dialog opened, or deleted it. Recognised by code, like `userOrgErrorMessage`.
+ */
+export function isStaleTypeRefusal(error: unknown): boolean {
+  const code = error instanceof Error ? (error as Error & { code?: unknown }).code : undefined;
+  return code === 'typeChangedElsewhere' || code === 'typeGone';
+}
+
+/**
  * A CSV import's status as a catalogue key.
  *
  * The status arrives from the server as a fixed token, not as text, so it has to be mapped to a

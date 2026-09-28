@@ -63,14 +63,17 @@ const INITIAL_POLL_DELAY_MS = 2000;
 const MAX_POLL_DELAY_MS = 30000;
 const HISTORY_TAKE = 10;
 
-const ROW_PROBLEM_KEYS: Record<UserOrgCsvRowProblemCode, TranslationKey> = {
+/** Each row problem the server can report (`UserOrgCsvProblemCodes`), as a catalogue key. */
+export const ROW_PROBLEM_KEYS: Record<UserOrgCsvRowProblemCode, TranslationKey> = {
   missingUserColumn: 'userOrgs.csv.problem.missingUserColumn',
   userEmptyOrTooLong: 'userOrgs.csv.problem.userEmptyOrTooLong',
   notAValidUpn: 'userOrgs.csv.problem.notAValidUpn',
+  tooManyValues: 'userOrgs.csv.problem.tooManyValues',
   unknownUser: 'userOrgs.csv.problem.unknownUser',
 };
 
-const BLOCKING_KEYS: Record<UserOrgCsvBlockingCode, TranslationKey> = {
+/** Each reason the server can refuse a whole file (`UserOrgCsvBlockingCodes`), as a catalogue key. */
+export const BLOCKING_KEYS: Record<UserOrgCsvBlockingCode, TranslationKey> = {
   notUtf8: 'userOrgs.csv.blocking.notUtf8',
   excelWorkbook: 'userOrgs.csv.blocking.excelWorkbook',
   notText: 'userOrgs.csv.blocking.notText',

@@ -180,7 +180,7 @@ export interface UserOrgCsvProblem {
 }
 
 /** Why a row will not be imported. Keep in step with `UserOrgCsvProblemCodes` on the server. */
-export type UserOrgCsvRowProblemCode = 'missingUserColumn' | 'userEmptyOrTooLong' | 'notAValidUpn' | 'unknownUser';
+export type UserOrgCsvRowProblemCode = 'missingUserColumn' | 'userEmptyOrTooLong' | 'notAValidUpn' | 'tooManyValues' | 'unknownUser';
 
 /** One row that will not be imported, for the downloadable list of rows to fix. */
 export interface UserOrgCsvUnusableRow {

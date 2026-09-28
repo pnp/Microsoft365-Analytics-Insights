@@ -122,8 +122,8 @@ namespace Common.Entities.UserOrgs
         {
             var watch = Stopwatch.StartNew();
 
-            var claimed = await _jobs.TryClaimJobAsync(jobId, cancellationToken).ConfigureAwait(false);
-            if (!claimed)
+            var claim = await _jobs.TryClaimJobAsync(jobId, cancellationToken).ConfigureAwait(false);
+            if (!claim.HasValue)
             {
                 // Somebody else got there first, or the job was already finished or cancelled. Either
                 // way this instance must not import the same file a second time.
@@ -155,7 +155,7 @@ namespace Common.Entities.UserOrgs
                     // to an admin otherwise - and its staged rows would sit in the database. Only a job
                     // still Pending or Running is rewritten, so this cannot overwrite the verdict of a
                     // replacement that already retired it, nor the success of a worker that applied it.
-                    await RecordFailureAsync(jobId, SupersededMessage, UserOrgImportErrorCodes.Superseded).ConfigureAwait(false);
+                    await RecordFailureAsync(jobId, SupersededMessage, UserOrgImportErrorCodes.Superseded, claim).ConfigureAwait(false);
 
                     var after = await TryGetJobAsync(jobId).ConfigureAwait(false);
                     Emit(UserOrgImportStages.Superseded, jobId, after ?? job, watch);
@@ -170,7 +170,7 @@ namespace Common.Entities.UserOrgs
                     await SwallowAsync(heartbeat).ConfigureAwait(false);
 
                     var code = ex.Code ?? UserOrgImportErrorCodes.Failed;
-                    await RecordFailureAsync(jobId, ex.Message, code).ConfigureAwait(false);
+                    await RecordFailureAsync(jobId, ex.Message, code, claim).ConfigureAwait(false);
 
                     var after = await TryGetJobAsync(jobId).ConfigureAwait(false);
                     Emit(UserOrgImportStages.Refused, jobId, after ?? job, watch, code);
@@ -189,7 +189,10 @@ namespace Common.Entities.UserOrgs
                     // a SQL or Graph exception can carry object names, index names, duplicate key values
                     // and identities. The full exception still reaches Application Insights through the
                     // caller, which is where an engineer should be reading it.
-                    await RecordFailureAsync(jobId, FailureMessage, UserOrgImportErrorCodes.Failed).ConfigureAwait(false);
+                    //
+                    // Fenced on this worker's claim: if it went quiet long enough to be taken over, the
+                    // worker that took the job over owns it now, and this failure is not its verdict.
+                    await RecordFailureAsync(jobId, FailureMessage, UserOrgImportErrorCodes.Failed, claim).ConfigureAwait(false);
 
                     // The one error that is not a failure: the connection dropped after the apply
                     // committed, so the answer never arrived. The apply records its success in its own
@@ -320,11 +323,11 @@ namespace Common.Entities.UserOrgs
             }
         }
 
-        private async Task RecordFailureAsync(int jobId, string message, string code)
+        private async Task RecordFailureAsync(int jobId, string message, string code, int? claimedAttempt)
         {
             try
             {
-                await _jobs.CompleteJobAsync(jobId, UserOrgImportStatus.Failed, message, CancellationToken.None, code)
+                await _jobs.CompleteJobAsync(jobId, UserOrgImportStatus.Failed, message, CancellationToken.None, code, claimedAttempt)
                     .ConfigureAwait(false);
             }
             catch (Exception)

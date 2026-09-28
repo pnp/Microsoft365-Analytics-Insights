@@ -186,6 +186,8 @@ export const userOrgs: Record<keyof typeof en, string> = {
   'userOrgs.csv.problem.missingUserColumn': 'falta la columna de usuario',
   'userOrgs.csv.problem.userEmptyOrTooLong': 'el nombre principal de usuario est\u00e1 vac\u00edo o es demasiado largo',
   'userOrgs.csv.problem.notAValidUpn': 'el valor de usuario no es un nombre principal de usuario v\u00e1lido',
+  'userOrgs.csv.problem.tooManyValues':
+    'la fila tiene m\u00e1s valores que las dem\u00e1s: escriba entre comillas dobles cualquier valor que contenga el separador',
   'userOrgs.csv.problem.unknownUser': 'el nombre principal de usuario no coincide con ning\u00fan usuario de esta base de datos',
   'userOrgs.csv.unusable.download.one': 'Descargar la 1 fila que no se puede importar (CSV)',
   'userOrgs.csv.unusable.download.other': 'Descargar las {count} filas que no se pueden importar (CSV)',

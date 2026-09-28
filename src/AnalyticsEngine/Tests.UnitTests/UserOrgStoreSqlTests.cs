@@ -1224,8 +1224,8 @@ VALUES ('{upn.Replace("'", "''")}', {(accountEnabled.HasValue ? (accountEnabled.
             var typeId = await _types.CreateAsync(CsvType("Team"));
             var jobId = await QueueJob(typeId, UserOrgImportMode.Merge);
 
-            Assert.IsTrue(await _jobs.TryClaimJobAsync(jobId));
-            Assert.IsFalse(await _jobs.TryClaimJobAsync(jobId), "A claimed job must not be claimable again.");
+            Assert.IsNotNull(await _jobs.TryClaimJobAsync(jobId));
+            Assert.IsNull(await _jobs.TryClaimJobAsync(jobId), "A claimed job must not be claimable again.");
 
             var job = await _jobs.GetJobAsync(jobId);
             Assert.AreEqual(UserOrgImportStatus.Running, job.Status);
@@ -1450,7 +1450,7 @@ VALUES ('{upn.Replace("'", "''")}', {(accountEnabled.HasValue ? (accountEnabled.
             var staleJob = await _jobs.GetJobAsync(stale);
             Assert.AreEqual(UserOrgImportStatus.Failed, staleJob.Status, "The abandoned job must not stay claimable.");
             StringAssert.Contains(staleJob.ErrorMessage, "overtaken");
-            Assert.IsFalse(
+            Assert.IsNull(
                 await _jobs.TryClaimJobAsync(stale),
                 "A superseded job must not be claimable by a late dispatch.");
 

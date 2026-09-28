@@ -46,6 +46,12 @@ namespace Common.Entities.UserOrgs
         public const string UserEmptyOrTooLong = "userEmptyOrTooLong";
         public const string NotAValidUpn = "notAValidUpn";
 
+        /// <summary>
+        /// The row carries text past the file's other rows - almost always a value holding the separator
+        /// without quotes, which reading only the chosen columns would import cut short.
+        /// </summary>
+        public const string TooManyValues = "tooManyValues";
+
         /// <summary>A well-formed row whose user matches nobody in the database. Decided in SQL, not by the parser.</summary>
         public const string UnknownUser = "unknownUser";
     }
@@ -510,6 +516,7 @@ namespace Common.Entities.UserOrgs
             var firstData = skip + (headerDetected ? 1 : 0);
             var dataLines = 0;
             var position = 0;
+            var expectedWidth = ExpectedRowWidth(sampleFields, headerDetected, userColumn.Value, valueColumn.Value);
 
             while (true)
             {
@@ -551,7 +558,7 @@ namespace Common.Entities.UserOrgs
                 }
 
                 dataLines++;
-                ReadRow(next.LineNumber, fields, userColumn.Value, valueColumn.Value, rows, problems, result);
+                ReadRow(next.LineNumber, fields, userColumn.Value, valueColumn.Value, expectedWidth, delimiter, rows, problems, result);
             }
 
             result.DataLinesRead = dataLines;
@@ -563,11 +570,59 @@ namespace Common.Entities.UserOrgs
             }
         }
 
+        /// <summary>
+        /// How many fields a row may carry text in before it is refused as <see cref="UserOrgCsvProblemCodes.TooManyValues"/>.
+        /// </summary>
+        /// <remarks>
+        /// A value holding the separator without quotes - <c>Retail, North</c> in a comma-separated file -
+        /// splits into one field more than its neighbours, and reading only the chosen columns would import
+        /// <c>Retail</c> for that person without a word, wherever the row sits in the file. So the width is
+        /// the widest a row may legitimately be: the header as written, since Excel writes a trailing
+        /// separator for every column it holds data in; the width most sample rows share, so a file whose
+        /// rows are all wider than its header is still read; and the columns being read.
+        /// </remarks>
+        private static int ExpectedRowWidth(List<List<string>> sampleFields, bool headerDetected, int userColumn, int valueColumn)
+        {
+            var width = Math.Max(userColumn, valueColumn) + 1;
+            if (headerDetected)
+            {
+                width = Math.Max(width, sampleFields[0].Count);
+            }
+
+            var usual = sampleFields
+                .Skip(headerDetected ? 1 : 0)
+                .Select(TextWidth)
+                .Where(w => w > 0)
+                .GroupBy(w => w)
+                .OrderByDescending(g => g.Count())
+                .ThenByDescending(g => g.Key)
+                .Select(g => g.Key)
+                .FirstOrDefault();
+
+            return Math.Max(width, usual);
+        }
+
+        /// <summary>How many fields a row carries text in: up to and including its last non-blank one.</summary>
+        private static int TextWidth(List<string> fields)
+        {
+            for (var i = fields.Count - 1; i >= 0; i--)
+            {
+                if (!string.IsNullOrWhiteSpace(fields[i]))
+                {
+                    return i + 1;
+                }
+            }
+
+            return 0;
+        }
+
         private static void ReadRow(
             int lineNumber,
             List<string> fields,
             int userColumn,
             int valueColumn,
+            int expectedWidth,
+            char delimiter,
             List<UserOrgStagedRow> rows,
             List<UserOrgCsvRowProblem> problems,
             UserOrgCsvParseResult result)
@@ -604,6 +659,20 @@ namespace Common.Entities.UserOrgs
                     + "column separator and that the user column really holds user principal names",
                     Shorten(upn),
                     Shorten(rawValue)));
+                return;
+            }
+
+            if (TextWidth(fields) > expectedWidth)
+            {
+                // Shown as the value and everything after it, which for a two-column file is the value as
+                // it was meant - "Retail, North" - so the admin can see what needs quoting.
+                problems.Add(new UserOrgCsvRowProblem(
+                    lineNumber,
+                    UserOrgCsvProblemCodes.TooManyValues,
+                    "the row has more values than the file's other rows - a value that contains the column "
+                    + "separator must be in double quotes",
+                    Shorten(upn),
+                    Shorten(string.Join(delimiter.ToString(), fields.Skip(Math.Min(valueColumn, fields.Count))))));
                 return;
             }
 

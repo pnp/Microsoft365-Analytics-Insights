@@ -458,6 +458,66 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void ARowWithMoreValuesThanTheOthersIsReportedNotCutShort()
+        {
+            // "Retail, North" without quotes splits into two fields, well past the rows the layout is read
+            // from. Reading only the chosen columns imported "Retail" for Alice, and reported nothing.
+            var lines = new StringBuilder("UPN,Team\r\n");
+            for (var i = 1; i <= 25; i++)
+            {
+                lines.Append("user").Append(i).Append("@contoso.com,Wholesale\r\n");
+            }
+
+            lines.Append("alice@contoso.com,Retail, North\r\n");
+            var result = Parse(lines.ToString());
+
+            Assert.IsNull(result.Blocking);
+            Assert.AreEqual(25, result.Rows.Count);
+            Assert.IsFalse(result.Rows.Any(r => r.Upn == "alice@contoso.com"), "Alice is not imported with half her value.");
+            var problem = result.Problems.Single();
+            Assert.AreEqual(UserOrgCsvProblemCodes.TooManyValues, problem.Code);
+            Assert.AreEqual(27, problem.LineNumber);
+            Assert.AreEqual("alice@contoso.com", problem.Upn);
+            StringAssert.Contains(problem.OrgValue, "Retail, North", "Shown as it was meant, so the admin can see what to quote.");
+        }
+
+        [TestMethod]
+        public void ARowWithMoreValuesAmongTheFirstRowsIsReportedToo()
+        {
+            // Inside the sample the extra field makes a third column, so the width is taken from the header
+            // and from what most rows carry - not from the widest row.
+            var result = Parse(
+                "UPN,Team\r\na@contoso.com,Retail, North\r\nb@contoso.com,Wholesale\r\nc@contoso.com,Ops\r\n",
+                null,
+                new UserOrgCsvParseOptions { OrgTypeName = "Team" });
+
+            Assert.IsNull(result.Blocking);
+            Assert.AreEqual(2, result.Rows.Count);
+            Assert.AreEqual(UserOrgCsvProblemCodes.TooManyValues, result.Problems.Single().Code);
+            Assert.AreEqual(2, result.Problems.Single().LineNumber);
+        }
+
+        [TestMethod]
+        public void ExtraSeparatorsAndConsistentlyWiderRowsAreStillRead()
+        {
+            // Trailing separators carry no text, and a file whose every row is wider than its header - an
+            // export whose last column has no heading - is consistent rather than ragged.
+            var trailing = Parse("UPN,Team\r\na@contoso.com,Retail,\r\nb@contoso.com,Ops,,\r\n");
+            Assert.IsNull(trailing.Blocking);
+            Assert.AreEqual(2, trailing.Rows.Count);
+            Assert.AreEqual(0, trailing.Problems.Count);
+
+            var wider = Parse(
+                "UPN,Team\r\na@contoso.com,Retail,note\r\nb@contoso.com,Ops,note\r\nc@contoso.com,HR,note\r\n",
+                null,
+                new UserOrgCsvParseOptions { OrgTypeName = "Team" });
+            Assert.IsNull(wider.Blocking);
+            Assert.AreEqual(3, wider.Rows.Count);
+            Assert.AreEqual(0, wider.Problems.Count);
+            Assert.AreEqual("Retail", wider.Rows[0].OrgValue);
+        }
+
+        [TestMethod]
         public void HonoursExcelsSeparatorLine()
         {
             var result = Parse("sep=;\r\nUPN;Department\r\na@contoso.com;Retail, North\r\n");
@@ -699,6 +759,9 @@ namespace Tests.UnitTests
             public int HeartbeatCalls;
             public Exception ApplyThrows;
 
+            /// <summary>Another instance claims the job while the apply runs, as a takeover of a quiet worker does.</summary>
+            public bool TakenOverDuringApply;
+
             /// <summary>The apply commits - the job says Succeeded - and then the answer is lost.</summary>
             public bool ApplyCommitsThenThrows;
             public TimeSpan ApplyDelay = TimeSpan.Zero;
@@ -708,6 +771,7 @@ namespace Tests.UnitTests
             public UserOrgImportStatus? CompletedStatus;
             public string CompletedError;
             public string CompletedCode;
+            public int? CompletedAttempt;
 
             public Task<int> CreateJobWithRowsAsync(UserOrgImportJob job, IReadOnlyList<UserOrgStagedRow> rows, CancellationToken cancellationToken = default(CancellationToken))
                 => Task.FromResult(Job.Id);
@@ -727,7 +791,7 @@ namespace Tests.UnitTests
             public Task<IReadOnlyList<UserOrgImportJob>> ListJobsAsync(int orgTypeId, int take, CancellationToken cancellationToken = default(CancellationToken))
                 => Task.FromResult<IReadOnlyList<UserOrgImportJob>>(new[] { Job });
 
-            public Task<bool> TryClaimJobAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
+            public Task<int?> TryClaimJobAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
             {
                 ClaimAttempts++;
                 if (ClaimSucceeds)
@@ -735,7 +799,7 @@ namespace Tests.UnitTests
                     Job.Status = UserOrgImportStatus.Running;
                     Job.Attempts++;
                 }
-                return Task.FromResult(ClaimSucceeds);
+                return Task.FromResult(ClaimSucceeds ? Job.Attempts : (int?)null);
             }
 
             public Task HeartbeatAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
@@ -751,6 +815,10 @@ namespace Tests.UnitTests
             public async Task<UserOrgImportJob> ApplyAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
             {
                 ApplyCalls++;
+                if (TakenOverDuringApply)
+                {
+                    Job.Attempts++;
+                }
                 if (ApplyThrows != null)
                 {
                     throw ApplyThrows;
@@ -777,7 +845,8 @@ namespace Tests.UnitTests
                 UserOrgImportStatus status,
                 string errorMessage,
                 CancellationToken cancellationToken = default(CancellationToken),
-                string errorCode = null)
+                string errorCode = null,
+                int? claimedAttempt = null)
             {
                 CompleteCalls++;
                 if (CompleteThrows != null)
@@ -787,9 +856,11 @@ namespace Tests.UnitTests
                 CompletedStatus = status;
                 CompletedError = errorMessage;
                 CompletedCode = errorCode;
+                CompletedAttempt = claimedAttempt;
 
-                // As the real store does: only a job that is still live is rewritten.
-                if (Job.Status == UserOrgImportStatus.Pending || Job.Status == UserOrgImportStatus.Running)
+                // As the real store does: only a job that is still live is rewritten, and only by its claim.
+                if ((Job.Status == UserOrgImportStatus.Pending || Job.Status == UserOrgImportStatus.Running)
+                    && (!claimedAttempt.HasValue || claimedAttempt.Value == Job.Attempts))
                 {
                     Job.Status = status;
                     Job.ErrorCode = errorCode;
@@ -912,6 +983,21 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task AWorkerTakenOverWhileItRanRecordsNothingOverTheClaimThatTookItOver()
+        {
+            // It went quiet long enough for another instance to claim the job, then faulted. The failure is
+            // fenced on this worker's own claim, so the takeover's is left to finish.
+            var store = new FakeJobStore { ApplyThrows = new InvalidOperationException("merge exploded"), TakenOverDuringApply = true };
+
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => new UserOrgImportRunner(store, new RecordingTelemetry()).RunAsync(1));
+
+            Assert.AreEqual(1, store.CompletedAttempt, "The failure names the claim that is reporting it.");
+            Assert.AreEqual(2, store.Job.Attempts);
+            Assert.AreEqual(UserOrgImportStatus.Running, store.Job.Status, "The claim that took over is untouched.");
+        }
+
+        [TestMethod]
         public async Task ARefusalIsRecordedWithItsCodeRatherThanThrown()
         {
             // The apply's own re-check refusing the import - the type changed, or it would now clear
@@ -979,10 +1065,10 @@ namespace Tests.UnitTests
             public Task<IReadOnlyList<UserOrgImportJob>> ListJobsAsync(int orgTypeId, int take, CancellationToken cancellationToken = default(CancellationToken))
                 => Task.FromResult<IReadOnlyList<UserOrgImportJob>>(new[] { _job });
 
-            public Task<bool> TryClaimJobAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
+            public Task<int?> TryClaimJobAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
             {
                 _job.Status = UserOrgImportStatus.Running;
-                return Task.FromResult(true);
+                return Task.FromResult<int?>(1);
             }
 
             public Task HeartbeatAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
@@ -996,7 +1082,8 @@ namespace Tests.UnitTests
                 UserOrgImportStatus status,
                 string errorMessage,
                 CancellationToken cancellationToken = default(CancellationToken),
-                string errorCode = null)
+                string errorCode = null,
+                int? claimedAttempt = null)
             {
                 CompletedStatus = status;
                 CompletedError = errorMessage;

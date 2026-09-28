@@ -279,10 +279,15 @@ namespace Common.Entities.UserOrgs
         /// <summary>
         /// Moves a job from <see cref="UserOrgImportStatus.Pending"/> to
         /// <see cref="UserOrgImportStatus.Running"/> - or takes over a Running job whose heartbeat has
-        /// gone stale - returning <c>false</c> if somebody else already claimed it. Atomic, so two web
-        /// instances cannot run the same import twice.
+        /// gone stale - returning the claim's attempt number, or <c>null</c> if somebody else already
+        /// claimed it. Atomic, so two web instances cannot run the same import twice.
         /// </summary>
-        Task<bool> TryClaimJobAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken));
+        /// <remarks>
+        /// The attempt number is the claim's identity. A takeover moves it, so a worker that was presumed
+        /// gone but was merely slow can be told apart from the one that took its job over - see
+        /// <see cref="CompleteJobAsync"/>'s <c>claimedAttempt</c>.
+        /// </remarks>
+        Task<int?> TryClaimJobAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken));
 
         /// <summary>Records that the worker is still alive.</summary>
         Task HeartbeatAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken));
@@ -299,12 +304,18 @@ namespace Common.Entities.UserOrgs
 
         /// <summary>Marks a job finished and discards its staged rows.</summary>
         /// <param name="errorCode">A key from <see cref="UserOrgImportErrorCodes"/> for a job that did not succeed.</param>
+        /// <param name="claimedAttempt">
+        /// The attempt number <see cref="TryClaimJobAsync"/> gave the worker reporting, or <c>null</c> not to
+        /// check. A worker taken over because it went quiet is merely slow, and its verdict is not the live
+        /// claim's: with this it changes nothing, and leaves the staged rows the live claim is working from.
+        /// </param>
         Task CompleteJobAsync(
             int jobId,
             UserOrgImportStatus status,
             string errorMessage,
             CancellationToken cancellationToken = default(CancellationToken),
-            string errorCode = null);
+            string errorCode = null,
+            int? claimedAttempt = null);
 
         /// <summary>
         /// Finds jobs whose worker died - a dispatch lost with the web process, or a stale heartbeat -

@@ -183,6 +183,8 @@ export const userOrgs = {
   'userOrgs.csv.problem.missingUserColumn': 'the user column is missing',
   'userOrgs.csv.problem.userEmptyOrTooLong': 'the user principal name is empty or too long',
   'userOrgs.csv.problem.notAValidUpn': 'the user value is not a valid user principal name',
+  'userOrgs.csv.problem.tooManyValues':
+    'the row has more values than the other rows - put a value that contains the separator in double quotes',
   'userOrgs.csv.problem.unknownUser': 'the user principal name does not match a user in this database',
   'userOrgs.csv.unusable.download.one': "Download the 1 row that can't be imported (CSV)",
   'userOrgs.csv.unusable.download.other': "Download the {count} rows that can't be imported (CSV)",

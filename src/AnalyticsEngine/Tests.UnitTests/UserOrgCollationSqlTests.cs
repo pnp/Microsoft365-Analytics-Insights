@@ -124,7 +124,7 @@ SELECT {c}, {typeId}, id FROM dbo.user_org_values WHERE org_type_id = {typeId} A
             Assert.AreEqual(1, summary.UnknownRows);
 
             await _jobs.CommitDraftAsync(draftId, typeId, UserOrgImportMode.Replace, int.MaxValue, Admin);
-            Assert.IsTrue(await _jobs.TryClaimJobAsync(draftId));
+            Assert.IsNotNull(await _jobs.TryClaimJobAsync(draftId));
             var job = await _jobs.ApplyAsync(draftId);
 
             Assert.AreEqual(UserOrgImportStatus.Succeeded, job.Status);

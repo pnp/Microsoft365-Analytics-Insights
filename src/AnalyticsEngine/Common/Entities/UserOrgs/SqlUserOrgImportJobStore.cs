@@ -242,18 +242,29 @@ ORDER BY queued_utc DESC, id DESC;";
         /// even if the first worker was merely slow rather than gone: both take the org type's
         /// application lock before applying, the apply refuses a job that is no longer Running, and the
         /// apply records its success in the same transaction as its changes - so whichever gets there
-        /// second finds the job already Succeeded and changes nothing.
+        /// second finds the job already Succeeded and changes nothing. Nor can the slow one end the
+        /// takeover by failing: its failure is fenced on the attempt number this returned it, which the
+        /// takeover moved.
         /// </para>
         /// </remarks>
-        public async Task<bool> TryClaimJobAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
+        /// <returns>The claim's attempt number, or <c>null</c> when the job could not be claimed.</returns>
+        public async Task<int?> TryClaimJobAsync(int jobId, CancellationToken cancellationToken = default(CancellationToken))
         {
+            // The attempt number comes back from the same statement that moves it, so the claim knows its
+            // own identity without a second read that a takeover could slip in front of. OUTPUT ... INTO,
+            // because a bare OUTPUT clause is refused on a table that has a trigger.
             const string sql = @"
+DECLARE @claimed TABLE (attempts tinyint NOT NULL);
+
 UPDATE dbo.user_org_import_jobs
 SET status = 2, started_utc = SYSUTCDATETIME(), heartbeat_utc = SYSUTCDATETIME(),
     attempts = CASE WHEN attempts < 255 THEN attempts + 1 ELSE attempts END
+OUTPUT INSERTED.attempts INTO @claimed
 WHERE id = @id
   AND (status = 1
-       OR (status = 2 AND ISNULL(heartbeat_utc, started_utc) < DATEADD(SECOND, -@staleSecs, SYSUTCDATETIME())));";
+       OR (status = 2 AND ISNULL(heartbeat_utc, started_utc) < DATEADD(SECOND, -@staleSecs, SYSUTCDATETIME())));
+
+SELECT attempts FROM @claimed;";
 
             using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
             using (var cmd = Command(connection, sql))
@@ -261,8 +272,8 @@ WHERE id = @id
                 cmd.Parameters.Add("@id", SqlDbType.Int).Value = jobId;
                 cmd.Parameters.Add("@staleSecs", SqlDbType.Int).Value =
                     (int)UserOrgImportRunner.StaleHeartbeatThreshold.TotalSeconds;
-                var affected = await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-                return affected == 1;
+                var attempt = await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+                return attempt == null || attempt == DBNull.Value ? (int?)null : Convert.ToInt32(attempt);
             }
         }
 
@@ -351,7 +362,8 @@ WHERE id = @id
             UserOrgImportStatus status,
             string errorMessage,
             CancellationToken cancellationToken = default(CancellationToken),
-            string errorCode = null)
+            string errorCode = null,
+            int? claimedAttempt = null)
         {
             // The staged rows are deleted on completion: they are a work queue, not a record. The job
             // row keeps the counts, so the audit trail survives without carrying a copy of every UPN in
@@ -361,17 +373,22 @@ WHERE id = @id
             // already reached a terminal status must not be rewritten - specifically, a worker that was
             // superseded because it went quiet (see CreateJobWithRowsAsync) must not be able to report
             // its own outcome over the top of that and leave the portal claiming two finished imports
-            // raced to the same result. The staging delete is deliberately left unconditional so the
-            // rows are cleaned up either way - including after an apply, which records its own success.
+            // raced to the same result. For the same reason a worker that was taken over reports nothing
+            // over the live claim (claimedAttempt). The staged rows go once nobody can still run the job -
+            // after this update, or after an apply that recorded its own success - and never while a live
+            // claim other than the one reporting is working from them.
             const string sql = @"
 UPDATE dbo.user_org_import_jobs
 SET status = @status,
     finished_utc = SYSUTCDATETIME(),
     error_code = @code,
     error_message = @error
-WHERE id = @id AND status IN (1, 2);
+WHERE id = @id AND status IN (1, 2)
+  AND (@attempt IS NULL OR attempts = @attempt);
 
-DELETE FROM dbo.user_org_import_staging WHERE job_id = @id;";
+DELETE FROM dbo.user_org_import_staging
+WHERE job_id = @id
+  AND NOT EXISTS (SELECT 1 FROM dbo.user_org_import_jobs WHERE id = @id AND status IN (1, 2));";
 
             using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
             using (var cmd = Command(connection, sql))
@@ -381,6 +398,8 @@ DELETE FROM dbo.user_org_import_staging WHERE job_id = @id;";
                 cmd.Parameters.Add("@code", SqlDbType.NVarChar, 64).Value = DbValue(errorCode);
                 cmd.Parameters.Add("@error", SqlDbType.NVarChar, 2000).Value =
                     DbValue(errorMessage == null ? null : Truncate(errorMessage, 2000));
+                cmd.Parameters.Add("@attempt", SqlDbType.Int).Value =
+                    claimedAttempt.HasValue ? (object)claimedAttempt.Value : DBNull.Value;
 
                 await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }

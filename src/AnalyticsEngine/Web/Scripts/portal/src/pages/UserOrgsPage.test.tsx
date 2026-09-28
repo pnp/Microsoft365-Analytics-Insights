@@ -159,6 +159,44 @@ describe('UserOrgsPage', () => {
     );
   });
 
+  it('opens the type as a colleague left it once their save has refused this one, so the retry goes through', async () => {
+    // Refused as typeChangedElsewhere, the message says to close the dialog and open the type again. That
+    // only helps if the list behind the dialog has caught up: otherwise the reopened dialog shows the old
+    // values, sends the old revision, and every retry is refused until the page is reloaded.
+    fetchOrgTypes
+      .mockResolvedValueOnce([orgType({ id: 4, name: 'Programme', source: 'csv', entraAttributeName: null, revision: 7 })])
+      .mockResolvedValue([orgType({ id: 4, name: 'Initiative', source: 'csv', entraAttributeName: null, revision: 8 })]);
+    updateOrgTypeMock
+      .mockRejectedValueOnce(
+        Object.assign(new Error('Someone else changed it.'), { code: 'typeChangedElsewhere', values: { name: 'Programmes' } }),
+      )
+      .mockResolvedValue(orgType({ id: 4, name: 'Initiative', source: 'csv', entraAttributeName: null, revision: 9 }));
+    const user = userEvent.setup();
+    renderWithProvider(<UserOrgsPage />);
+
+    await screen.findByRole('row', { name: /Programme/ });
+    await user.click(within(rowFor('Programme')).getByRole('button', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog', { hidden: true });
+    const name = within(dialog).getByLabelText(/^Name/);
+    await user.clear(name);
+    await user.type(name, 'Programmes');
+    await user.click(within(dialog).getByText('Save'));
+
+    expect(await within(dialog).findByText(/Someone else changed/)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/^Name/)).toHaveValue('Programmes');
+    await waitFor(() => expect(fetchOrgTypes).toHaveBeenCalledTimes(2));
+
+    await user.click(within(dialog).getByText('Cancel'));
+    await user.click(within(await screen.findByRole('row', { name: /Initiative/ })).getByRole('button', { name: 'Edit' }));
+    const reopened = await screen.findByRole('dialog', { hidden: true });
+    await waitFor(() => expect(within(reopened).getByLabelText(/^Name/)).toHaveValue('Initiative'));
+    await user.click(within(reopened).getByText('Save'));
+
+    await waitFor(() =>
+      expect(updateOrgTypeMock).toHaveBeenLastCalledWith(4, expect.objectContaining({ name: 'Initiative', expectedRevision: 8 })),
+    );
+  });
+
   it('keeps the file format one click away on the upload card', async () => {
     fetchOrgTypes.mockResolvedValue([
       orgType({ id: 2, name: 'Business Unit', source: 'csv', entraAttributeName: null }),
