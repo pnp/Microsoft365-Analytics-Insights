@@ -138,7 +138,10 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             // token, or the users skipped in that cycle are never re-read.
             var enabledChanged = existing.IsEnabled != type.IsEnabled;
 
-            await _types.UpdateAsync(type, sourceChanged, sourceChanged || enabledChanged, cancellationToken)
+            // The generation this was decided from, so an update overtaken by someone else's change -
+            // there are seconds of Graph probe between the read above and the write - is refused rather
+            // than applied with side effects decided for a row that no longer exists.
+            await _types.UpdateAsync(type, sourceChanged, sourceChanged || enabledChanged, cancellationToken, existing.SourceGeneration)
                 .ConfigureAwait(false);
 
             // Mirrors what the store just did, so the response does not claim a refresh for values the

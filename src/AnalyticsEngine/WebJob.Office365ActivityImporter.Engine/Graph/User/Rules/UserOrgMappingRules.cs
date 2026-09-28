@@ -53,11 +53,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// leaves them alone. This is the property that stops a routine delta cycle - which returns only
         /// changed users - from wiping the org values of the entire tenant.
         /// </para>
+        /// <para>
+        /// A value that comes back as a <b>list</b> - a multi-valued directory extension - produces no
+        /// update either, and its org type is added to <paramref name="listValuedOrgTypeIds"/>. A user
+        /// holds one value per org type, so there is nothing to store; but treating the list as "no
+        /// value" would clear everyone who has one.
+        /// </para>
         /// </remarks>
         public static IReadOnlyList<UserOrgAssignmentUpdate> BuildUpdates(
             IEnumerable<GraphUser> graphUsers,
             IReadOnlyList<UserOrgTypeAttribute> orgTypes,
-            IReadOnlyDictionary<string, int> userIdsByUpn)
+            IReadOnlyDictionary<string, int> userIdsByUpn,
+            ISet<int> listValuedOrgTypeIds = null)
         {
             var updates = new List<UserOrgAssignmentUpdate>();
 
@@ -88,7 +95,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         continue;
                     }
 
-                    var raw = UserOrgRules.ExtractRawValue(graphUser.AdditionalProperties, orgType.Spec);
+                    string raw;
+                    if (!UserOrgRules.TryExtractSingleValue(graphUser.AdditionalProperties, orgType.Spec, out raw))
+                    {
+                        listValuedOrgTypeIds?.Add(orgType.OrgTypeId);
+                        continue;
+                    }
+
                     updates.Add(new UserOrgAssignmentUpdate(
                         userId,
                         orgType.OrgTypeId,

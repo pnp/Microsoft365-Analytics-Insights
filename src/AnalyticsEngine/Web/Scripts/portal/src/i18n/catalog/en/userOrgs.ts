@@ -336,6 +336,8 @@ export const userOrgs = {
   'userOrgs.message.duplicateName': 'An organisation type called \u201c{name}\u201d already exists.',
   'userOrgs.message.invalidSource': 'An organisation type takes its values either from an Entra attribute or from a CSV file.',
   'userOrgs.message.typeGone': 'That organisation type no longer exists - it may have been deleted in another session.',
+  'userOrgs.message.typeChangedElsewhere':
+    'Someone else changed \u201c{name}\u201d while you were editing it, so your changes were not saved. Close this and open it again to see theirs.',
   'userOrgs.message.importRunningChange': 'An import for {name} is running. Wait for it to finish before changing the type.',
   'userOrgs.message.importRunningDelete':
     'An import for this organisation type is running. Wait for it to finish before deleting the type.',

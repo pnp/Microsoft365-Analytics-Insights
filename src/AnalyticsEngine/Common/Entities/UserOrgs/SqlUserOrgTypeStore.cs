@@ -241,7 +241,8 @@ VALUES (@name, @sourceKind, @attr, @enabled, SYSUTCDATETIME());";
             UserOrgType type,
             bool clearAssignments,
             bool bumpGeneration,
-            CancellationToken cancellationToken = default(CancellationToken))
+            CancellationToken cancellationToken = default(CancellationToken),
+            int? expectedGeneration = null)
         {
             Validate(type);
 
@@ -280,9 +281,20 @@ SET name = @name,
     -- Values discarded below mean there is nothing left that the last refresh vouched for. Disabling
     -- or renaming keeps the values, and so keeps the time they were last brought up to date.
     last_refreshed_utc = CASE WHEN @clearAssignments = 1 THEN NULL ELSE last_refreshed_utc END
-WHERE id = @id;
+WHERE id = @id
+  -- The caller decided whether to clear and bump from the row as it read it - before a Graph probe
+  -- that can take seconds. Another admin's change of source, attribute or enabled flag since then
+  -- moved the generation, and applying this update with side effects decided for the old row would
+  -- keep values from the wrong source, or discard the right ones.
+  AND (@expectedGeneration IS NULL OR source_generation = @expectedGeneration);
 
 SET @affected = @@ROWCOUNT;
+
+IF @affected = 0 AND EXISTS (SELECT 1 FROM dbo.user_org_types WHERE id = @id)
+BEGIN
+    RAISERROR('USERORG_TYPE_CHANGED', 16, 1);
+    RETURN;
+END
 
 IF @affected > 0 AND @clearAssignments = 1
 BEGIN
@@ -308,6 +320,8 @@ SELECT @affected;";
                         cmd.Parameters.Add("@id", SqlDbType.Int).Value = type.Id;
                         cmd.Parameters.Add("@clearAssignments", SqlDbType.Bit).Value = clearAssignments;
                         cmd.Parameters.Add("@bumpGeneration", SqlDbType.Bit).Value = bumpGeneration;
+                        cmd.Parameters.Add("@expectedGeneration", SqlDbType.Int).Value =
+                            expectedGeneration.HasValue ? (object)expectedGeneration.Value : DBNull.Value;
 
                         affected = Convert.ToInt32(
                             await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
@@ -334,6 +348,14 @@ SELECT @affected;";
                 throw new UserOrgValidationException(
                     $"An import for '{type.Name}' is running. Wait for it to finish before changing the type.",
                     UserOrgMessageCodes.ImportRunningChange,
+                    new Dictionary<string, object> { { "name", type.Name } },
+                    ex);
+            }
+            catch (SqlException ex) when (ex.Message.IndexOf("USERORG_TYPE_CHANGED", StringComparison.Ordinal) >= 0)
+            {
+                throw new UserOrgValidationException(
+                    $"Someone else changed '{type.Name}' while you were editing it. Close this and open it again to see their change.",
+                    UserOrgMessageCodes.TypeChangedElsewhere,
                     new Dictionary<string, object> { { "name", type.Name } },
                     ex);
             }

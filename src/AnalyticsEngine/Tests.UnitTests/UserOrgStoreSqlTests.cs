@@ -4,6 +4,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Tests.UnitTests
@@ -293,6 +294,72 @@ VALUES ('{upn.Replace("'", "''")}', {(accountEnabled.HasValue ? (accountEnabled.
             {
                 StringAssert.Contains(ex.Message, "no longer exists");
             }
+        }
+
+        [TestMethod]
+        public async Task Update_ReadBeforeSomeoneElseChangedTheTypeIsRefusedAndChangesNothing()
+        {
+            // Admin A reads a CSV type, then waits seconds on a Graph probe while switching it to Entra.
+            // Meanwhile admin B switches it to Entra themselves and imports its values. A's clear/bump
+            // were decided for the CSV row - applying them now would get B's type wrong.
+            var user = AddUser("a@contoso.com");
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var readByA = await _types.GetAsync(typeId);
+
+            var changedByB = await _types.GetAsync(typeId);
+            changedByB.SourceKind = UserOrgSourceKind.EntraAttribute;
+            changedByB.EntraAttributeName = "extensionAttribute1";
+            await _types.UpdateAsync(changedByB, true, true);
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, typeId, "From Entra") });
+
+            var fromA = new UserOrgType
+            {
+                Id = typeId,
+                Name = "Team renamed",
+                SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "extensionAttribute2",
+                IsEnabled = true,
+            };
+            UserOrgValidationException refusal = null;
+            try
+            {
+                await _types.UpdateAsync(fromA, true, true, CancellationToken.None, readByA.SourceGeneration);
+            }
+            catch (UserOrgValidationException ex)
+            {
+                refusal = ex;
+            }
+
+            Assert.IsNotNull(refusal, "An update decided from a stale read must be refused.");
+            Assert.AreEqual(UserOrgMessageCodes.TypeChangedElsewhere, refusal.Code);
+            Assert.AreEqual("Team renamed", refusal.Values["name"]);
+
+            var now = await _types.GetAsync(typeId);
+            Assert.AreEqual("Team", now.Name, "Nothing of A's update was applied.");
+            Assert.AreEqual("extensionAttribute1", now.EntraAttributeName);
+            Assert.AreEqual("From Entra", (await _assignments.GetForUserAsync(user)).Single().Value, "B's values were not cleared.");
+
+            await _types.UpdateAsync(fromA, true, true, CancellationToken.None, now.SourceGeneration);
+            Assert.AreEqual("extensionAttribute2", (await _types.GetAsync(typeId)).EntraAttributeName, "A read of the current row goes through.");
+        }
+
+        [TestMethod]
+        public async Task Update_ANameOnlyChangeByAnotherAdminDoesNotBlockAnEdit()
+        {
+            // The generation only moves when the source, attribute or enabled flag does - the changes the
+            // clear and bump are decided from. Two admins renaming the same type is last-writer-wins, as
+            // it always was.
+            var typeId = await _types.CreateAsync(CsvType("Team"));
+            var readByA = await _types.GetAsync(typeId);
+
+            var renamedByB = await _types.GetAsync(typeId);
+            renamedByB.Name = "Team (B)";
+            await _types.UpdateAsync(renamedByB, false, false);
+
+            readByA.Name = "Team (A)";
+            await _types.UpdateAsync(readByA, false, false, CancellationToken.None, readByA.SourceGeneration);
+
+            Assert.AreEqual("Team (A)", (await _types.GetAsync(typeId)).Name);
         }
 
         [TestMethod]

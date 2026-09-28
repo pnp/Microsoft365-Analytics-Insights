@@ -16,6 +16,7 @@ export const USER_ORG_MESSAGE_KEYS: Record<string, TranslationKey> = {
   duplicateName: 'userOrgs.message.duplicateName',
   invalidSource: 'userOrgs.message.invalidSource',
   typeGone: 'userOrgs.message.typeGone',
+  typeChangedElsewhere: 'userOrgs.message.typeChangedElsewhere',
   importRunningChange: 'userOrgs.message.importRunningChange',
   importRunningDelete: 'userOrgs.message.importRunningDelete',
   attributeRequired: 'userOrgs.message.attributeRequired',

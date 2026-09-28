@@ -275,7 +275,7 @@ namespace Tests.UnitTests
             public Task<int> CreateAsync(UserOrgType type, CancellationToken cancellationToken = default(CancellationToken))
                 => throw new NotSupportedException();
 
-            public Task UpdateAsync(UserOrgType type, bool clearAssignments, bool bumpGeneration, CancellationToken cancellationToken = default(CancellationToken))
+            public Task UpdateAsync(UserOrgType type, bool clearAssignments, bool bumpGeneration, CancellationToken cancellationToken = default(CancellationToken), int? expectedGeneration = null)
                 => throw new NotSupportedException();
 
             public Task DeleteAsync(int id, CancellationToken cancellationToken = default(CancellationToken))

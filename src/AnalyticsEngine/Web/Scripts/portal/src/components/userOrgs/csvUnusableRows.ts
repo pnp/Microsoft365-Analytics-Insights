@@ -17,6 +17,11 @@ export function csvDocument(rows: string[][]): string {
   return `\uFEFF${rows.map((row) => row.map(csvCell).join(',')).join('\r\n')}\r\n`;
 }
 
+/** More rows for a document started with `csvDocument` - for building a large one a page at a time. */
+export function csvRows(rows: string[][]): string {
+  return rows.map((row) => `${row.map(csvCell).join(',')}\r\n`).join('');
+}
+
 /** Builds the Excel-friendly UTF-8 CSV listing rows the server refused to import. */
 export function buildUnusableRowsCsv(
   rows: UserOrgCsvUnusableRow[],
@@ -39,9 +44,9 @@ export function unusableRowsFileName(originalName: string | null | undefined, fa
   return derivedFileName(originalName, fallbackBase, 'rows-to-fix');
 }
 
-/** Hands a CSV document to the browser as a download. */
-export function downloadCsv(csv: string, fileName: string): void {
-  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+/** Hands a CSV document to the browser as a download: one string, or its pieces in order. */
+export function downloadCsv(csv: string | string[], fileName: string): void {
+  const url = URL.createObjectURL(new Blob(Array.isArray(csv) ? csv : [csv], { type: 'text/csv;charset=utf-8' }));
   const link = document.createElement('a');
   link.href = url;
   link.download = fileName;

@@ -55,6 +55,7 @@
     <Compile Include="UserOrgImportFailureTests.cs" />
     <Compile Include="UserOrgImportLifecycleSqlTests.cs" />
     <Compile Include="UserOrgChangeLogTests.cs" />
+    <Compile Include="UserOrgCollationSqlTests.cs" />
     <Compile Include="UserOrgGraphProbeTests.cs" />
     <Compile Include="UserOrgMigrationScriptTests.cs" />
     <Compile Include="UserOrgMembershipServiceTests.cs" />

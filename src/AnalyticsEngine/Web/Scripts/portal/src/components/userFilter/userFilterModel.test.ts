@@ -3,10 +3,12 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { EMPTY_USER_FILTER, type UserFilter, type UserFilterClause } from '../../types/userFilter';
 import {
+  FIXED_VALUE_TOKENS,
   MAX_CLAUSES,
   MAX_TEXT_TERMS,
   MAX_TEXT_TERMS_PER_CLAUSE,
   MAX_VALUES_PER_CLAUSE,
+  MAX_VALUE_LENGTH,
   addClause,
   encodedFilterLength,
   fitsLimits,
@@ -122,10 +124,44 @@ describe('user filter structure', () => {
     expect(parseUserFilter(JSON.stringify(many))).toEqual(EMPTY_USER_FILTER);
   });
 
+  it('opens a link past any other server limit unfiltered, rather than as an error on every panel', () => {
+    const codes = (n: number) => Array.from({ length: n }, (_, i) => `${i}`);
+
+    expect(parseUserFilter(JSON.stringify([{ d: 'department', v: codes(MAX_VALUES_PER_CLAUSE) }])).clauses).toHaveLength(1);
+    expect(parseUserFilter(JSON.stringify([{ d: 'department', v: codes(MAX_VALUES_PER_CLAUSE + 1) }]))).toEqual(
+      EMPTY_USER_FILTER,
+    );
+    expect(parseUserFilter(JSON.stringify([{ d: 'userName', op: 'contains', v: codes(MAX_TEXT_TERMS_PER_CLAUSE + 1) }]))).toEqual(
+      EMPTY_USER_FILTER,
+    );
+    expect(parseUserFilter(JSON.stringify([{ d: 'department', v: ['x'.repeat(7000)] }]))).toEqual(EMPTY_USER_FILTER);
+    expect(parseUserFilter(JSON.stringify([{ d: 'org:3', v: ['x'.repeat(MAX_VALUE_LENGTH)] }])).clauses).toHaveLength(1);
+    expect(
+      parseUserFilter(JSON.stringify([{ d: 'org:3', v: ['x'.repeat(MAX_VALUE_LENGTH + 1)] }])),
+      'Wider than an organisation name, though far shorter than the link limit.',
+    ).toEqual(EMPTY_USER_FILTER);
+  });
+
   it('refuses a link carrying an incomplete condition, whose removal would move a group boundary', () => {
     expect(parseUserFilter('[{"d":"department","v":["Sales"]},{"j":"or","d":"country","v":[]},{"d":"jobTitle","v":["X"]}]')).toEqual(
       EMPTY_USER_FILTER,
     );
+  });
+
+  it('opens a link the server would refuse unfiltered, rather than quietly sending a different filter', () => {
+    // Dropping the part the server objects to would change what the link means - a value gone from a
+    // condition matches different people - so the whole link is treated as not made here.
+    expect(parseUserFilter('[{"d":"department","v":[1,"Sales"]}]'), 'A value that is not text.').toEqual(EMPTY_USER_FILTER);
+    expect(parseUserFilter('[{"d":"department","v":"Sales","n":true}]'), 'Values that are not a list.').toEqual(EMPTY_USER_FILTER);
+    expect(parseUserFilter('[{"d":"accountStatus","op":"contains","v":["en"]}]'), 'Text search on a fixed value.').toEqual(EMPTY_USER_FILTER);
+    expect(parseUserFilter('[{"d":"managementChain","op":"notContains","v":["a"]}]'), 'Text search on the hierarchy.').toEqual(EMPTY_USER_FILTER);
+    expect(parseUserFilter('[{"d":"userType","v":["contractor"]}]'), 'A token the server does not define.').toEqual(EMPTY_USER_FILTER);
+
+    expect(parseUserFilter('[{"d":"userType","v":["GUEST"]}]').clauses, 'Tokens compare case-insensitively, as on the server.').toHaveLength(1);
+    expect(parseUserFilter('[{"d":"accountStatus","op":"isNot","v":["disabled"]}]').clauses).toHaveLength(1);
+    expect(parseUserFilter('[{"d":"org:3","op":"contains","v":["retail"]}]').clauses).toHaveLength(1);
+    expect(parseUserFilter('[{"d":"department","n":true}]').clauses, 'No values at all is still "not set".').toHaveLength(1);
+    expect(parseUserFilter('[{"d":"department","v":null,"n":true}]').clauses, 'The server reads a null list as none.').toHaveLength(1);
   });
 
   it('replaces one condition without disturbing the others', () => {
@@ -255,11 +291,27 @@ describe('narrowing the whole filter to one value', () => {
     );
     const server = (name: string) => Number(new RegExp(`public const int ${name} = (\\d+);`).exec(codec)?.[1]);
 
-    expect({ MAX_CLAUSES, MAX_VALUES_PER_CLAUSE, MAX_TEXT_TERMS_PER_CLAUSE, MAX_TEXT_TERMS }).toEqual({
+    expect({ MAX_CLAUSES, MAX_VALUES_PER_CLAUSE, MAX_VALUE_LENGTH, MAX_TEXT_TERMS_PER_CLAUSE, MAX_TEXT_TERMS }).toEqual({
       MAX_CLAUSES: server('MaxClauses'),
       MAX_VALUES_PER_CLAUSE: server('MaxValuesPerClause'),
+      MAX_VALUE_LENGTH: server('MaxValueLength'),
       MAX_TEXT_TERMS_PER_CLAUSE: server('MaxTextTermsPerClause'),
       MAX_TEXT_TERMS: server('MaxTextTerms'),
+    });
+  });
+
+  it('knows the fixed values exactly as the server defines them', () => {
+    const dimensions = readFileSync(
+      join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'UserFilters', 'UserFilterDimensions.cs'),
+      'utf8',
+    );
+    const constant = (name: string) => new RegExp(`public const string ${name} = "([^"]+)";`).exec(dimensions)?.[1];
+    const list = (name: string) =>
+      (new RegExp(`${name} = new\\[\\] \\{ ([^}]+) \\}`).exec(dimensions)?.[1] ?? '').split(',').map((n) => constant(n.trim()));
+
+    expect(FIXED_VALUE_TOKENS).toEqual({
+      [constant('UserType') ?? 'missing']: list('UserTypes'),
+      [constant('AccountStatus') ?? 'missing']: list('AccountStatuses'),
     });
   });
 

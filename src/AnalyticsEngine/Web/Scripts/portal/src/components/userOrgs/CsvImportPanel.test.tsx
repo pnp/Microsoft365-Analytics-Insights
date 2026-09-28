@@ -3,7 +3,7 @@ import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import CsvImportPanel from './CsvImportPanel';
-import { buildUnusableRowsCsv } from './csvUnusableRows';
+import { buildUnusableRowsCsv, csvDocument, csvRows } from './csvUnusableRows';
 import type { UserOrgCsvPreview, UserOrgImportJob, UserOrgType } from '../../types/userOrgs';
 
 const mocks = vi.hoisted(() => ({
@@ -420,6 +420,20 @@ describe('CsvImportPanel', () => {
     );
 
     expect(csv).toBe('\uFEFFLine,User,Value,Reason\r\n2,\'+person@contoso.com,"A ""quoted""\r\nvalue",Unknown user\r\n');
+  });
+
+  it('builds the same document a page at a time as all at once', () => {
+    // How a long change list is downloaded without holding every row and the whole document at once.
+    const header = ['Line', 'User'];
+    const rows = [
+      ['2', '=cmd@contoso.com'],
+      ['3', 'A "quoted"\r\nvalue'],
+      ['4', 'Καλημέρα κόσμε'],
+    ];
+
+    expect(csvDocument([header]) + csvRows(rows.slice(0, 2)) + csvRows(rows.slice(2)) + csvRows([])).toBe(
+      csvDocument([header, ...rows]),
+    );
   });
 
   it('disables import when no rows match a user', async () => {

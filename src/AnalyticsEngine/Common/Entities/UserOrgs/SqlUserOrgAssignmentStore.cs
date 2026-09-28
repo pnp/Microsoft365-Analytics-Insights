@@ -35,12 +35,17 @@ namespace Common.Entities.UserOrgs
         /// double-apply at best and a primary key violation at worst. Callers de-duplicate with
         /// <see cref="UserOrgRules.DeduplicateUpdates"/>; this key means a caller that forgets fails
         /// immediately and obviously, at the bulk copy, instead of corrupting the merge.
+        ///
+        /// <c>COLLATE DATABASE_DEFAULT</c> because a temp table's text takes tempdb's collation - the
+        /// server's - and the merge compares it with <c>user_org_values.name</c>. On a database created
+        /// under another collation, which a restored or migrated one often is, every merge would fail
+        /// with Msg 468, "Cannot resolve the collation conflict".
         /// </remarks>
         internal const string CreateTempTableSql = @"
 CREATE TABLE " + TempTableName + @" (
     user_id     INT            NOT NULL,
     org_type_id INT            NOT NULL,
-    org_value   NVARCHAR(848)  NULL,
+    org_value   NVARCHAR(848)  COLLATE DATABASE_DEFAULT NULL,
     expected_generation INT    NULL,
     PRIMARY KEY CLUSTERED (user_id, org_type_id)
 );";
@@ -329,7 +334,9 @@ ORDER BY t.name;";
 
             using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
             {
-                using (var cmd = Command(connection, "CREATE TABLE #user_org_upn_probe (upn NVARCHAR(250) NOT NULL);"))
+                // The database's collation, not tempdb's, since the UPNs are compared with dbo.users:
+                // see CreateTempTableSql.
+                using (var cmd = Command(connection, "CREATE TABLE #user_org_upn_probe (upn NVARCHAR(250) COLLATE DATABASE_DEFAULT NOT NULL);"))
                 {
                     await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
                 }

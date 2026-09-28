@@ -477,6 +477,39 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void BuildUpdates_LeavesAListAloneRatherThanClearingIt()
+        {
+            // A multi-valued directory extension. A user holds one value per org type, so there is
+            // nothing to store - but reading the list as "no value" would clear everyone who has one.
+            const string listAttribute = "extension_0123456789abcdef0123456789abcdef_costCentres";
+            var graphUsers = new[]
+            {
+                User("a@contoso.com", @"{ """ + listAttribute + @""": [ ""CC-1"", ""CC-2"" ], ""employeeType"": ""Staff"" }"),
+                User("b@contoso.com", @"{ """ + listAttribute + @""": null }"),
+            };
+            var listValued = new HashSet<int>();
+
+            var updates = UserOrgMappingRules.BuildUpdates(
+                graphUsers,
+                new[] { Type(10, listAttribute), Type(11, "employeeType") },
+                Users(Pair("a@contoso.com", 1), Pair("b@contoso.com", 2)),
+                listValued);
+
+            CollectionAssert.AreEquivalent(new[] { 10 }, listValued.ToArray(), "The type is reported, so the import can say why.");
+            Assert.IsFalse(updates.Any(u => u.UserId == 1 && u.OrgTypeId == 10), "The list is left alone, not cleared.");
+            Assert.AreEqual("Staff", updates.Single(u => u.UserId == 1 && u.OrgTypeId == 11).OrgValue, "Other types are read as usual.");
+            Assert.IsNull(updates.Single(u => u.UserId == 2 && u.OrgTypeId == 10).OrgValue, "No value at all still clears.");
+
+            Assert.AreEqual(
+                updates.Count,
+                UserOrgMappingRules.BuildUpdates(
+                    graphUsers,
+                    new[] { Type(10, listAttribute), Type(11, "employeeType") },
+                    Users(Pair("a@contoso.com", 1), Pair("b@contoso.com", 2))).Count,
+                "Asking which types held lists is optional.");
+        }
+
+        [TestMethod]
         public void ParseOrgTypes_SkipsAndReportsTypesWhoseAttributeNoLongerParses()
         {
             IReadOnlyList<string> skipped;

@@ -21,9 +21,10 @@ namespace Tests.UnitTests
         /// A scratch database with production's <c>dbo.users</c> shape - <c>user_name varchar(250)</c>,
         /// because an Entra UPN is ASCII by policy - and the migration's own schema.
         /// </summary>
-        public static ScratchDatabase Create(string purpose)
+        /// <param name="collation">The database's collation, or <c>null</c> for the server's.</param>
+        public static ScratchDatabase Create(string purpose, string collation = null)
         {
-            var db = ScratchDatabase.Create(purpose);
+            var db = ScratchDatabase.Create(purpose, collation);
             db.Execute(@"
 CREATE TABLE dbo.user_departments (
     id int IDENTITY(1,1) NOT NULL CONSTRAINT PK_user_departments PRIMARY KEY CLUSTERED,
@@ -1259,6 +1260,102 @@ WHERE id = {draftId}");
                     Assert.IsFalse((text ?? string.Empty).Contains("Secret"), item.Stage);
                 }
             }
+        }
+
+        [TestMethod]
+        public async Task ARefusedChangeToTheTypesLeavesTheUserFilterDirectoryAlone()
+        {
+            // A refusal changed nothing, so throwing the snapshot away would only make every report
+            // reader pay for a full directory reload - 200,000 users' worth - per rejected click.
+            var invalidations = 0;
+            var controller = new AnalyticsWeb::Web.AnalyticsWeb.Controllers.UserOrgAPIController(
+                () => _service, () => throw new NotSupportedException(), () => invalidations++)
+            {
+                Request = new System.Net.Http.HttpRequestMessage(),
+                Configuration = new System.Web.Http.HttpConfiguration(),
+            };
+            controller.Request.Headers.Add("X-Requested-With", "XMLHttpRequest");
+            Func<Task<System.Web.Http.IHttpActionResult>, Task<int>> status = async call =>
+                (int)(await (await call).ExecuteAsync(CancellationToken.None)).StatusCode;
+
+            var blankName = new UserOrgTypeSaveModel { Name = " ", Source = "csv", IsEnabled = true };
+            Assert.AreEqual(400, await status(controller.CreateType(blankName, CancellationToken.None)));
+            Assert.AreEqual(0, invalidations, "A refused create.");
+
+            var team = new UserOrgTypeSaveModel { Name = "Team", Source = "csv", IsEnabled = true };
+            Assert.AreEqual(200, await status(controller.CreateType(team, CancellationToken.None)));
+            Assert.AreEqual(1, invalidations, "A created type is offered to the filter at once.");
+
+            Assert.AreNotEqual(200, await status(controller.CreateType(team, CancellationToken.None)), "The name is taken.");
+            Assert.AreNotEqual(200, await status(controller.UpdateType(987654, team, CancellationToken.None)), "No such type.");
+            Assert.AreEqual(1, invalidations, "Neither refusal touched the snapshot.");
+
+            var id = (await _types.GetAllAsync()).Single().Id;
+            Assert.AreEqual(200, await status(controller.DeleteType(id, CancellationToken.None)));
+            Assert.AreEqual(2, invalidations);
+        }
+
+        [TestMethod]
+        public async Task AnEditThatWaitedOnGraphIsRefusedIfTheTypeChangedMeanwhile()
+        {
+            // Admin A switches a CSV type to Entra; while their save waits on the Graph probe, admin B
+            // disables the type. A's clear and bump were decided for the enabled CSV row, so applying
+            // them now - clearing B's type's values - would be wrong. A is told instead.
+            var user = AddUser("a@contoso.com");
+            var typeId = await NewType();
+            await _assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(user, typeId, "Kept") });
+
+            var racing = new RacingGraph(async () =>
+            {
+                var current = await _types.GetAsync(typeId);
+                current.IsEnabled = false;
+                await _types.UpdateAsync(current, false, true);
+            });
+            var service = new UserOrgAdminService(
+                _types,
+                _assignments,
+                _jobs,
+                UserOrgStores.CreateUserLookup(_db.ConnectionString),
+                racing,
+                id => _dispatched.Add(id),
+                resumeGate: new UserOrgResumeGate());
+
+            var refusal = await Refused(() => service.UpdateAsync(
+                typeId,
+                new UserOrgTypeSaveModel { Name = "Team", Source = "entra", EntraAttributeName = "extensionAttribute1", IsEnabled = true },
+                CancellationToken.None));
+
+            Assert.AreEqual(1, racing.Calls, "The save really did wait on Graph.");
+            Assert.AreEqual(UserOrgMessageCodes.TypeChangedElsewhere, refusal.Code);
+            var now = await _types.GetAsync(typeId);
+            Assert.AreEqual(UserOrgSourceKind.CsvUpload, now.SourceKind, "B's change stands.");
+            Assert.IsFalse(now.IsEnabled);
+            Assert.AreEqual("Kept", (await _assignments.GetForUserAsync(user)).Single().Value, "A's clear did not run.");
+        }
+
+        /// <summary>A Graph probe that lets something else happen while it is being waited on.</summary>
+        private sealed class RacingGraph : IUserOrgGraphProbe
+        {
+            private readonly Func<Task> _meanwhile;
+
+            public RacingGraph(Func<Task> meanwhile)
+            {
+                _meanwhile = meanwhile;
+            }
+
+            public int Calls { get; private set; }
+
+            public async Task<UserOrgProbeOutcome> ResolveAsync(EntraOrgAttributeSpec spec, string upn, CancellationToken cancellationToken)
+            {
+                Calls++;
+                await _meanwhile();
+
+                // What Graph says for the synthetic probe user: the property is fine, the person does not exist.
+                return new UserOrgProbeOutcome { Succeeded = false, RejectedTheProperty = false };
+            }
+
+            public Task<UserOrgAttributeCatalogueModel> DiscoverAsync(CancellationToken cancellationToken)
+                => throw new NotSupportedException();
         }
 
         /// <summary>Previews, imports and applies a file through the service, then returns the job id.</summary>

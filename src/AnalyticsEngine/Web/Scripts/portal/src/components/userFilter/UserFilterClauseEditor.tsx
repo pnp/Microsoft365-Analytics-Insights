@@ -29,6 +29,7 @@ import type {
 import { dimensionLabel, operatorLabel, valueLabel } from './describeUserFilter';
 import {
   MANAGEMENT_CHAIN_DIMENSION,
+  MAX_VALUE_LENGTH,
   USER_NAME_DIMENSION,
   clauseIsComplete,
   isCustomDimension,
@@ -425,6 +426,7 @@ export default function UserFilterClauseEditor({
               <TagPickerInput
                 ref={valuesInput}
                 aria-label={textMatch ? t('userFilter.editor.terms') : t('userFilter.editor.values')}
+                maxLength={MAX_VALUE_LENGTH}
                 placeholder={
                   pickerSelection.length > 0
                     ? undefined

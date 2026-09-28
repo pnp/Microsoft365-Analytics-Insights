@@ -45,6 +45,24 @@ export const MANAGEMENT_CHAIN_DIMENSION: EntraDimensionKey = 'managementChain';
 export const CUSTOM_DIMENSION_PREFIX = 'org:';
 
 /**
+ * The values a fixed-value dimension accepts - `UserFilterTokens` on the server, which compares them
+ * case-insensitively. These dimensions' values are product tokens, not tenant data.
+ */
+export const FIXED_VALUE_TOKENS: Readonly<Record<string, readonly string[]>> = {
+  userType: ['member', 'guest'],
+  accountStatus: ['enabled', 'disabled'],
+};
+
+function fixedValueTokens(dimension: string): readonly string[] | null {
+  return Object.prototype.hasOwnProperty.call(FIXED_VALUE_TOKENS, dimension) ? FIXED_VALUE_TOKENS[dimension] : null;
+}
+
+/** Mirrors `UserFilterDimensions.SupportsTextMatch`: not on product tokens, nor on a hierarchy. */
+function supportsTextMatch(dimension: string): boolean {
+  return fixedValueTokens(dimension) === null && dimension !== MANAGEMENT_CHAIN_DIMENSION;
+}
+
+/**
  * The longest filter the page will send, measured URL-encoded. It rides on GET query strings - the
  * exports are plain links - and the web app allows 16 KB for those, so this leaves room for every
  * other parameter while keeping the portal, not the platform, as the thing that says "too long".
@@ -61,6 +79,9 @@ export const MAX_CLAUSES = 25;
  * the page can say why.
  */
 export const MAX_VALUES_PER_CLAUSE = 500;
+
+/** Mirrors `UserFilterCodec.MaxValueLength`: the widest value a condition may carry - a typed term included. */
+export const MAX_VALUE_LENGTH = 848;
 
 /**
  * Mirrors `UserFilterCodec.MaxTextTermsPerClause` and `MaxTextTerms`: each piece of text a "contains"
@@ -216,6 +237,7 @@ export function fitsLimits(filter: UserFilter): boolean {
   return (
     filter.clauses.length <= MAX_CLAUSES &&
     !hasTooManyValues(filter) &&
+    !hasTooWideValue(filter) &&
     !hasTooManyTextTerms(filter) &&
     encodedFilterLength(filter) <= MAX_ENCODED_FILTER_LENGTH
   );
@@ -224,6 +246,11 @@ export function fitsLimits(filter: UserFilter): boolean {
 /** Whether a condition has more values than the server accepts for one condition. */
 export function hasTooManyValues(filter: UserFilter): boolean {
   return filter.clauses.some((c) => c.values.length > MAX_VALUES_PER_CLAUSE);
+}
+
+/** Whether any value is wider than the server accepts - measured as it does, trimmed, in UTF-16 units. */
+function hasTooWideValue(filter: UserFilter): boolean {
+  return filter.clauses.some((c) => c.values.some((v) => v.trim().length > MAX_VALUE_LENGTH));
 }
 
 /** Whether the filter looks for more pieces of text than the server will search for. */
@@ -307,7 +334,16 @@ export function parseUserFilter(text: string | null | undefined): UserFilter {
     if (typeof item.d !== 'string' || !isKnownDimensionKey(item.d)) return EMPTY_USER_FILTER;
     const operator = (item.op ?? 'is') as UserFilterOperator;
     if (!OPERATORS.includes(operator)) return EMPTY_USER_FILTER;
-    const values = Array.isArray(item.v) ? item.v.filter((v): v is string => typeof v === 'string') : [];
+
+    // Refused rather than tidied, for the same reason as a truncation: the server rejects each of
+    // these, and quietly dropping the part it would reject sends a different filter from the link's.
+    if (item.v != null && !Array.isArray(item.v)) return EMPTY_USER_FILTER;
+    const rawValues: unknown[] = Array.isArray(item.v) ? item.v : [];
+    if (rawValues.some((v) => typeof v !== 'string')) return EMPTY_USER_FILTER;
+    const values = rawValues as string[];
+    if (isTextOperator(operator) && !supportsTextMatch(item.d)) return EMPTY_USER_FILTER;
+    const tokens = fixedValueTokens(item.d);
+    if (tokens && values.some((v) => v.trim() !== '' && !tokens.includes(v.trim().toLowerCase()))) return EMPTY_USER_FILTER;
 
     const clause: UserFilterClause = {
       join: item.j === 'or' ? 'or' : 'and',
@@ -323,7 +359,11 @@ export function parseUserFilter(text: string | null | undefined): UserFilter {
     clauses.push(clause);
   }
 
-  return normalise(clauses);
+  // The page never writes a filter the server would refuse - the editor stops the edit that would
+  // make one - so a link past any of its limits was not made here either, and opens unfiltered
+  // rather than as an error on every panel.
+  const filter = normalise(clauses);
+  return fitsLimits(filter) ? filter : EMPTY_USER_FILTER;
 }
 
 /** How long the filter is on a query string - see `MAX_ENCODED_FILTER_LENGTH`. */

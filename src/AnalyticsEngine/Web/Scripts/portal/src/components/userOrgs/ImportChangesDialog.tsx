@@ -26,7 +26,7 @@ import { SearchRegular } from '@fluentui/react-icons';
 import Spinner from '../Spinner';
 import { MAX_CHANGE_PAGE_SIZE, fetchImportChanges } from '../../api/userOrgsApi';
 import { formatDateParts, formatNumber, useT, type TFunction, type TranslationKey } from '../../i18n';
-import { csvDocument, derivedFileName, downloadCsv } from './csvUnusableRows';
+import { csvDocument, csvRows, derivedFileName, downloadCsv } from './csvUnusableRows';
 import type {
   UserOrgChange,
   UserOrgChangeKind,
@@ -107,6 +107,9 @@ function ChangesBody({ job, onDismiss }: { job: UserOrgImportJob; onDismiss: () 
   // Which load the list on screen came from. A new search replaces the list, so a "Show more" still
   // in flight from the old one must not append its page - or its continuation - to the new one.
   const generation = useRef(0);
+  // The download in progress, aborted when the dialog closes.
+  const exportAbort = useRef<AbortController | null>(null);
+  useEffect(() => () => exportAbort.current?.abort(), []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -151,37 +154,50 @@ function ChangesBody({ job, onDismiss }: { job: UserOrgImportJob; onDismiss: () 
   };
 
   // Every change, in pages of the most the server returns, into one CSV worded in the reader's language.
+  // Each page becomes a piece of CSV as it arrives and its rows are let go: a first import of a large
+  // tenant changes 200,000 people, and holding every row and then the whole document as one string as
+  // well would need twice the memory. Closing the dialog stops it, rather than a file appearing later.
   const downloadAll = async () => {
+    exportAbort.current?.abort();
+    const controller = new AbortController();
+    exportAbort.current = controller;
     setExporting(0);
     setExportFailed(false);
-    const rows: string[][] = [
-      [
-        t('userOrgs.changes.column.user'),
-        t('userOrgs.changes.column.before'),
-        t('userOrgs.changes.column.after'),
-        t('userOrgs.changes.column.change'),
-      ],
+    const parts: string[] = [
+      csvDocument([
+        [
+          t('userOrgs.changes.column.user'),
+          t('userOrgs.changes.column.before'),
+          t('userOrgs.changes.column.after'),
+          t('userOrgs.changes.column.change'),
+        ],
+      ]),
     ];
+    let written = 0;
     try {
       let continuation: string | null = null;
       do {
-        const page: UserOrgChangeLogPage = await fetchImportChanges(job.id, { continuation, pageSize: MAX_CHANGE_PAGE_SIZE });
+        const page: UserOrgChangeLogPage = await fetchImportChanges(
+          job.id,
+          { continuation, pageSize: MAX_CHANGE_PAGE_SIZE },
+          controller.signal,
+        );
+        if (controller.signal.aborted) return;
         if (page.status !== 'available') throw new Error(page.status);
-        for (const change of page.items) {
-          rows.push([change.upn, change.before ?? '', change.after ?? '', kindLabel(change.kind, t)]);
-        }
-        setExporting(rows.length - 1);
+        parts.push(
+          csvRows(page.items.map((change) => [change.upn, change.before ?? '', change.after ?? '', kindLabel(change.kind, t)])),
+        );
+        written += page.items.length;
+        setExporting(written);
         continuation = page.continuation;
       } while (continuation);
 
-      downloadCsv(
-        csvDocument(rows),
-        derivedFileName(job.fileName, t('userOrgs.changes.defaultFileName'), `changes-${job.id}`),
-      );
+      downloadCsv(parts, derivedFileName(job.fileName, t('userOrgs.changes.defaultFileName'), `changes-${job.id}`));
     } catch {
-      setExportFailed(true);
+      if (!controller.signal.aborted) setExportFailed(true);
     } finally {
-      setExporting(null);
+      if (!controller.signal.aborted) setExporting(null);
+      if (exportAbort.current === controller) exportAbort.current = null;
     }
   };
 

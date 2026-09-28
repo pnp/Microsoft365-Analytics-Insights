@@ -596,7 +596,9 @@ DROP TABLE #user_org_matched;";
 -- Resolve each UPN to a user, keeping the LAST line for a UPN the file lists more than once: a
 -- repeated person is treated as a correction, which is what an admin editing a spreadsheet expects.
 -- Partitioning uses the database collation, so two spellings differing only in case are one person.
-CREATE TABLE #user_org_matched (user_id INT NOT NULL PRIMARY KEY, org_value NVARCHAR(848) NULL);
+-- The value is kept in the database's collation too, not tempdb's: the apply compares it with
+-- user_org_values.name, which on a database collated unlike the server fails with Msg 468.
+CREATE TABLE #user_org_matched (user_id INT NOT NULL PRIMARY KEY, org_value NVARCHAR(848) COLLATE DATABASE_DEFAULT NULL);
 
 INSERT INTO #user_org_matched (user_id, org_value)
 SELECT u.id, latest.org_value

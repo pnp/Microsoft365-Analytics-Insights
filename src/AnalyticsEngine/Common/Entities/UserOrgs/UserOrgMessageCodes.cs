@@ -22,6 +22,7 @@ namespace Common.Entities.UserOrgs
         public const string DuplicateName = "duplicateName"; // name
         public const string InvalidSource = "invalidSource";
         public const string TypeGone = "typeGone";
+        public const string TypeChangedElsewhere = "typeChangedElsewhere"; // name
         public const string ImportRunningChange = "importRunningChange"; // name
         public const string ImportRunningDelete = "importRunningDelete";
 

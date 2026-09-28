@@ -1,6 +1,7 @@
 import { formatList, type TFunction, type TranslationKey } from '../../i18n';
 import type { UserFilter, UserFilterClause, UserFilterDimension, UserFilterOperator } from '../../types/userFilter';
 import {
+  FIXED_VALUE_TOKENS,
   MANAGEMENT_CHAIN_DIMENSION,
   groupClauseIndexes,
   isCustomDimension,
@@ -44,7 +45,7 @@ export const USER_FILTER_TOKEN_LABEL_KEYS: Record<string, TranslationKey> = {
 };
 
 /** The dimensions whose values are those tokens. */
-const FIXED_VALUE_DIMENSIONS = new Set<string>(['userType', 'accountStatus']);
+const FIXED_VALUE_DIMENSIONS = new Set<string>(Object.keys(FIXED_VALUE_TOKENS));
 
 /**
  * Where to find the administrator's name for a custom organisation type: the dimension list the

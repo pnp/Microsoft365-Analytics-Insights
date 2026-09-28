@@ -427,6 +427,26 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task ATypeWhoseAttributeHoldsAListClearsNobodyAndIsNotRecordedAsRefreshed()
+        {
+            // A multi-valued directory extension that got past the save-time test - saved against a user
+            // who had no value, say. Its "Last refreshed" going stale is what tells the admin to look.
+            const string listAttribute = "extension_0123456789abcdef0123456789abcdef_costCentres";
+            var orgTypes = new FakeUserOrgTypeStore(listAttribute, "extensionAttribute1");
+            var assignments = new FakeUserOrgAssignmentStore();
+            var user = NewGraphUser();
+            user.AdditionalProperties = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string, Newtonsoft.Json.Linq.JToken>>(
+                @"{ """ + listAttribute + @""": [ ""CC-1"", ""CC-2"" ], ""onPremisesExtensionAttributes"": { ""extensionAttribute1"": ""Retail"" } }");
+            var loader = new FakeUserMetadataLoader(new List<GraphUser> { user });
+
+            await RunImport(loader, orgTypes, assignments);
+
+            Assert.IsFalse(assignments.LastUpdates.Any(u => u.OrgTypeId == 1), "The list is not read as \"no value\": nobody is cleared.");
+            Assert.AreEqual("Retail", assignments.LastUpdates.Single(u => u.OrgTypeId == 2).OrgValue);
+            CollectionAssert.AreEquivalent(new[] { 2 }, orgTypes.RefreshCalls.Single().ExpectedGenerations.Keys.ToArray());
+        }
+
+        [TestMethod]
         public async Task FailingToRecordTheRefreshDoesNotFailTheImportOrWithholdTheToken()
         {
             // The values are already applied. A label that failed to update is not worth failing the
@@ -566,7 +586,7 @@ namespace Tests.UnitTests
             public Task<int> CreateAsync(UserOrgType type, CancellationToken cancellationToken = default(CancellationToken))
                 => Task.FromResult(0);
 
-            public Task UpdateAsync(UserOrgType type, bool clearAssignments, bool bumpGeneration, CancellationToken cancellationToken = default(CancellationToken))
+            public Task UpdateAsync(UserOrgType type, bool clearAssignments, bool bumpGeneration, CancellationToken cancellationToken = default(CancellationToken), int? expectedGeneration = null)
                 => Task.CompletedTask;
 
             public Task DeleteAsync(int id, CancellationToken cancellationToken = default(CancellationToken))

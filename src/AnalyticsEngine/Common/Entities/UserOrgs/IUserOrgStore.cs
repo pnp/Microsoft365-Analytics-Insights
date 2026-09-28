@@ -52,12 +52,21 @@ namespace Common.Entities.UserOrgs
         /// mid-cycle has its updates dropped but the cycle still commits its token, so without this
         /// re-enabling would rebuild the same cache key and resume past the users it skipped.
         /// </param>
-        /// <exception cref="UserOrgValidationException">The name is already taken, or the configuration is invalid.</exception>
+        /// <param name="expectedGeneration">
+        /// The <see cref="UserOrgType.SourceGeneration"/> the caller read when it decided
+        /// <paramref name="clearAssignments"/> and <paramref name="bumpGeneration"/>, or <c>null</c> not to
+        /// check. The generation moves on every change of source, attribute or enabled flag - exactly the
+        /// changes those two decisions depend on - so an update whose read has since gone stale is refused
+        /// with <see cref="UserOrgMessageCodes.TypeChangedElsewhere"/> rather than applied with the wrong
+        /// side effects.
+        /// </param>
+        /// <exception cref="UserOrgValidationException">The name is already taken, the configuration is invalid, or the type changed since it was read.</exception>
         Task UpdateAsync(
             UserOrgType type,
             bool clearAssignments,
             bool bumpGeneration,
-            CancellationToken cancellationToken = default(CancellationToken));
+            CancellationToken cancellationToken = default(CancellationToken),
+            int? expectedGeneration = null);
 
         /// <summary>
         /// Deletes an org type and everything hanging off it - assignments, values, import jobs and any

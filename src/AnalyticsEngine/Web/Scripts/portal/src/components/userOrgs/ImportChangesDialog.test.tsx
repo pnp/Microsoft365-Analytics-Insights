@@ -228,7 +228,31 @@ describe('ImportChangesDialog', () => {
     expect(csv).toContain('Usuario,Antes,Despu\u00e9s,Cambio\r\n');
     expect(csv).toContain("'=cmd@contoso.com,,X,A\u00f1adido");
     expect(csv).toContain('megan@contoso.com,CC-300,,Borrado');
-    expect(fetchImportChanges).toHaveBeenNthCalledWith(2, 42, { continuation: null, pageSize: 1000 });
-    expect(fetchImportChanges).toHaveBeenNthCalledWith(3, 42, { continuation: 'p2', pageSize: 1000 });
+    expect(fetchImportChanges).toHaveBeenNthCalledWith(2, 42, { continuation: null, pageSize: 1000 }, expect.anything());
+    expect(fetchImportChanges).toHaveBeenNthCalledWith(3, 42, { continuation: 'p2', pageSize: 1000 }, expect.anything());
+  });
+
+  it('stops a download when the dialog closes, and does not deliver the file afterwards', async () => {
+    const createObjectURL = vi.fn(() => 'blob:csv');
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+    let resolvePage!: (value: UserOrgChangeLogPage) => void;
+    let signal: AbortSignal | undefined;
+    fetchImportChanges
+      .mockResolvedValueOnce(page())
+      .mockImplementationOnce((_id: number, _query: unknown, s: AbortSignal) => {
+        signal = s;
+        return new Promise<UserOrgChangeLogPage>((resolve) => { resolvePage = resolve; });
+      });
+    const { rerender } = renderWithProvider(<ImportChangesDialog job={job()} onDismiss={vi.fn()} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Download all changes (CSV)' }));
+    rerender(<ImportChangesDialog job={null} onDismiss={vi.fn()} />);
+
+    expect(signal?.aborted, 'Closing the dialog stops the download.').toBe(true);
+    await act(async () => {
+      resolvePage(page({ continuation: null }));
+    });
+    expect(createObjectURL, 'No file appears after the dialog has gone.').not.toHaveBeenCalled();
   });
 });

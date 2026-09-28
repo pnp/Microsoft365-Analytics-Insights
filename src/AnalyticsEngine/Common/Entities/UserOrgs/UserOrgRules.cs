@@ -259,6 +259,29 @@ namespace Common.Entities.UserOrgs
             return TokenToValue(ExtractToken(graphProperties, spec));
         }
 
+        /// <summary>
+        /// The configured attribute's raw value for one user - <c>null</c> when the user has none - or
+        /// <c>false</c> when Graph returned a <b>list</b>, which is not "no value" but a value this type
+        /// cannot hold.
+        /// </summary>
+        /// <remarks>
+        /// The importer needs the difference. Read as "no value", a multi-valued directory extension
+        /// would clear every user who has one - quietly, and every cycle. Refused here, it leaves them
+        /// alone and says why.
+        /// </remarks>
+        public static bool TryExtractSingleValue(IDictionary<string, JToken> graphProperties, EntraOrgAttributeSpec spec, out string rawValue)
+        {
+            var token = ExtractToken(graphProperties, spec);
+            if (token != null && token.Type == JTokenType.Array)
+            {
+                rawValue = null;
+                return false;
+            }
+
+            rawValue = TokenToValue(token);
+            return true;
+        }
+
         /// <summary>The configured attribute's JSON token, or <c>null</c> when the user has none.</summary>
         private static JToken ExtractToken(IDictionary<string, JToken> graphProperties, EntraOrgAttributeSpec spec)
         {

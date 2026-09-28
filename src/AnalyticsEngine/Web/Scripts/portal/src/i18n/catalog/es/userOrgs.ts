@@ -343,6 +343,8 @@ export const userOrgs: Record<keyof typeof en, string> = {
     'Un tipo de organizaci\u00f3n toma sus valores de un atributo de Entra o de un archivo CSV.',
   'userOrgs.message.typeGone':
     'Ese tipo de organizaci\u00f3n ya no existe: es posible que se haya eliminado en otra sesi\u00f3n.',
+  'userOrgs.message.typeChangedElsewhere':
+    'Otra persona cambi\u00f3 \u00ab{name}\u00bb mientras usted lo editaba, as\u00ed que sus cambios no se han guardado. Cierre esta ventana y vuelva a abrirla para ver los suyos.',
   'userOrgs.message.importRunningChange':
     'Hay una importaci\u00f3n de {name} en curso. Espere a que termine antes de cambiar el tipo.',
   'userOrgs.message.importRunningDelete':

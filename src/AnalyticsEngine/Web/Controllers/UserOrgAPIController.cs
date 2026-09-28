@@ -49,15 +49,28 @@ namespace Web.AnalyticsWeb.Controllers
 
         private readonly Func<UserOrgAdminService> _serviceFactory;
         private readonly Func<UserOrgMembershipService> _membershipFactory;
+        private readonly Action _invalidateUserFilterDirectory;
 
         public UserOrgAPIController() : this(BuildService, BuildMembershipService)
         {
         }
 
         public UserOrgAPIController(Func<UserOrgAdminService> serviceFactory, Func<UserOrgMembershipService> membershipFactory)
+            : this(serviceFactory, membershipFactory, null)
+        {
+        }
+
+        /// <param name="invalidateUserFilterDirectory">
+        /// Makes the reports' user filter read the directory again; the process-wide cache when <c>null</c>.
+        /// </param>
+        internal UserOrgAPIController(
+            Func<UserOrgAdminService> serviceFactory,
+            Func<UserOrgMembershipService> membershipFactory,
+            Action invalidateUserFilterDirectory)
         {
             _serviceFactory = serviceFactory ?? throw new ArgumentNullException(nameof(serviceFactory));
             _membershipFactory = membershipFactory ?? throw new ArgumentNullException(nameof(membershipFactory));
+            _invalidateUserFilterDirectory = invalidateUserFilterDirectory ?? (() => CachedUserDirectorySource.Default.Invalidate());
         }
 
         private static UserOrgMembershipService BuildMembershipService()
@@ -150,9 +163,10 @@ namespace Web.AnalyticsWeb.Controllers
             var forged = RejectIfNotXhr();
             if (forged != null) return forged;
 
-            var result = await RunAsync(svc => svc.CreateAsync(model, cancellationToken), "create-type", cancellationToken).ConfigureAwait(false);
-            InvalidateUserFilterDirectory();
-            return result;
+            return await RunAsync(
+                svc => InvalidatingAfter(() => svc.CreateAsync(model, cancellationToken)),
+                "create-type",
+                cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>PUT api/UserOrg/types/{id}</summary>
@@ -163,9 +177,10 @@ namespace Web.AnalyticsWeb.Controllers
             var forged = RejectIfNotXhr();
             if (forged != null) return forged;
 
-            var result = await RunAsync(svc => svc.UpdateAsync(id, model, cancellationToken), "update-type", cancellationToken).ConfigureAwait(false);
-            InvalidateUserFilterDirectory();
-            return result;
+            return await RunAsync(
+                svc => InvalidatingAfter(() => svc.UpdateAsync(id, model, cancellationToken)),
+                "update-type",
+                cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>DELETE api/UserOrg/types/{id}</summary>
@@ -176,11 +191,44 @@ namespace Web.AnalyticsWeb.Controllers
             var forged = RejectIfNotXhr();
             if (forged != null) return forged;
 
-            var result = await RunAsync(async svc =>
+            return await RunAsync(
+                svc => InvalidatingAfter(async () =>
+                {
+                    await svc.DeleteAsync(id, cancellationToken).ConfigureAwait(false);
+                    return (object)new { deleted = true };
+                }),
+                "delete-type",
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Runs a change to the org types, then has the reports' user filter read the directory again -
+        /// unless the change was refused.
+        /// </summary>
+        /// <remarks>
+        /// A refusal (<see cref="UserOrgValidationException"/>: a name taken, a type gone, an import
+        /// running, an edit overtaken) changed nothing, so the snapshot is still right, and throwing it
+        /// away would cost every report reader a full directory reload - at 200,000 users, seconds of
+        /// SQL - for each rejected click. Any other failure leaves it unknown whether the change
+        /// committed, so the directory is read again to be sure.
+        /// </remarks>
+        private async Task<T> InvalidatingAfter<T>(Func<Task<T>> change)
+        {
+            T result;
+            try
             {
-                await svc.DeleteAsync(id, cancellationToken).ConfigureAwait(false);
-                return (object)new { deleted = true };
-            }, "delete-type", cancellationToken).ConfigureAwait(false);
+                result = await change().ConfigureAwait(false);
+            }
+            catch (UserOrgValidationException)
+            {
+                throw;
+            }
+            catch
+            {
+                InvalidateUserFilterDirectory();
+                throw;
+            }
+
             InvalidateUserFilterDirectory();
             return result;
         }
@@ -191,9 +239,9 @@ namespace Web.AnalyticsWeb.Controllers
         /// than when the cached snapshot next expires. Only this web process's cache is cleared; another
         /// scaled-out instance catches up when its own snapshot expires.
         /// </summary>
-        private static void InvalidateUserFilterDirectory()
+        private void InvalidateUserFilterDirectory()
         {
-            CachedUserDirectorySource.Default.Invalidate();
+            _invalidateUserFilterDirectory();
         }
 
         #endregion

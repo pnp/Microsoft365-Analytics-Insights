@@ -598,7 +598,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     }
                 }
 
-                var updates = UserOrgMappingRules.BuildUpdates(graphUsers, parsed, userIdsByUpn);
+                var listValued = new HashSet<int>();
+                var updates = UserOrgMappingRules.BuildUpdates(graphUsers, parsed, userIdsByUpn, listValued);
+                if (listValued.Count > 0)
+                {
+                    // Nobody's value was touched: a list is not "no value", and clearing everyone who has
+                    // one would be worse than useless. Nor is the type recorded as refreshed below, so its
+                    // "Last refreshed" time goes stale - which is what tells an administrator to look.
+                    var names = orgTypes
+                        .Where(t => t != null && listValued.Contains(t.Id))
+                        .Select(t => $"'{t.Name}' ({t.EntraAttributeName})");
+                    _logger.LogError(
+                        $"User import - skipping {listValued.Count} organisation type(s) whose Entra attribute holds a "
+                        + $"list of values rather than one: {string.Join(", ", names)}. A user can be in only one "
+                        + "organisation of each type, so these values cannot be imported. Point the type at a "
+                        + "single-valued attribute on the User organisations page.");
+                }
+
                 if (updates.Count > 0)
                 {
                     var result = await _orgAssignmentStore.MergeAsync(
@@ -625,11 +641,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
 
                 // Only the types this cycle actually read. One skipped as unparseable was not refreshed,
-                // and a reconfigured one is filtered out by the store's own fence.
+                // nor was one whose attribute turned out to hold lists, and a reconfigured one is filtered
+                // out by the store's own fence.
                 var refreshed = parsed
                     .Select(p => p.OrgTypeId)
                     .Distinct()
-                    .Where(expectedGenerations.ContainsKey)
+                    .Where(id => expectedGenerations.ContainsKey(id) && !listValued.Contains(id))
                     .ToDictionary(id => id, id => expectedGenerations[id]);
 
                 await RecordOrgTypesRefreshed(refreshed, cycleStartedUtc);
