@@ -202,6 +202,7 @@ describe('CsvImportPanel', () => {
     ['rowSpansLines', /Lines 7-9 were read as one row/i],
     ['oneColumn', /only one column/i],
     ['tooManyRows', /more than 10,000 rows/i],
+    ['tooManyColumns', /Line 7 has more than 10,000 columns/i],
     ['noRows', /no rows to import/i],
     ['noUsableRows', /None of the rows in this file can be used/i],
   ])('shows translated blocking text for %s and no import controls', async (code, message) => {
@@ -334,12 +335,12 @@ describe('CsvImportPanel', () => {
     expect(screen.getByLabelText('Value column')).toBeInTheDocument();
   });
 
-  it('keeps the preview, and the columns it used, when re-reading with other columns fails', async () => {
+  it('keeps the preview, and the columns it used, when the other columns are refused before anything is staged', async () => {
     previewCsv
       .mockResolvedValueOnce(
         preview({ columns: ['UserPrincipalName', 'Centre', 'Region'], columnCount: 3, userColumnIndex: 0, valueColumnIndex: 1 }),
       )
-      .mockRejectedValueOnce(new Error('Failed to reach the server.'));
+      .mockRejectedValueOnce(new mocks.UserOrgApiErrorCtor('server fallback', 400, 'typeDisabled', { name: 'Cost Centre' }));
 
     renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
     await chooseFile();
@@ -347,9 +348,38 @@ describe('CsvImportPanel', () => {
 
     await userEvent.selectOptions(screen.getByLabelText('Value column'), '2');
 
-    expect(await screen.findByText('Failed to reach the server.')).toBeInTheDocument();
+    expect(await screen.findByText('Cost Centre is disabled. Enable it before importing a file.')).toBeInTheDocument();
     expect(screen.getByText('alex.wilber@contoso.com')).toBeInTheDocument();
     expect((screen.getByLabelText('Value column') as HTMLSelectElement).value).toBe('1');
+    expect(screen.getByRole('button', { name: /^Import/ })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['a network failure', () => new Error('Failed to reach the server.'), 'Failed to reach the server.'],
+    [
+      'the new draft vanishing after it was staged',
+      () => new mocks.UserOrgApiErrorCtor('server fallback', 400, 'draftNotFound', null),
+      'This preview has expired or was already imported. Choose the file again.',
+    ],
+  ])('drops the preview when re-reading fails with %s, which may have replaced its draft', async (_case, failure, message) => {
+    // The server replaces this admin's earlier draft as soon as a newer preview is staged, so a preview
+    // put back after a lost reply held a draft that no longer existed - and its Import button failed.
+    previewCsv
+      .mockResolvedValueOnce(
+        preview({ columns: ['UserPrincipalName', 'Centre', 'Region'], columnCount: 3, userColumnIndex: 0, valueColumnIndex: 1 }),
+      )
+      .mockRejectedValueOnce(failure());
+
+    renderWithProvider(<CsvImportPanel orgType={orgType()} onImportFinished={vi.fn()} />);
+    await chooseFile();
+    await screen.findByText('alex.wilber@contoso.com');
+
+    await userEvent.selectOptions(screen.getByLabelText('Value column'), '2');
+
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.queryByText('alex.wilber@contoso.com')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Import/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear' })).toBeInTheDocument();
   });
 
   it('offers the column chooser for a two-column file in which no row could be read', async () => {

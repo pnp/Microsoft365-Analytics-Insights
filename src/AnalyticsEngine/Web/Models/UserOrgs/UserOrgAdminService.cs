@@ -485,7 +485,11 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                     Code = parsed.Blocking.Code,
                     Line = parsed.Blocking.Line,
                     LastLine = parsed.Blocking.LastLine,
-                    Max = parsed.Blocking.Code == UserOrgCsvBlockingCodes.TooManyRows ? UserOrgCsvParser.MaxDataLines : (int?)null,
+                    Max = parsed.Blocking.Code == UserOrgCsvBlockingCodes.TooManyRows
+                        ? UserOrgCsvParser.MaxDataLines
+                        : parsed.Blocking.Code == UserOrgCsvBlockingCodes.TooManyColumns
+                            ? UserOrgCsvParser.MaxColumns
+                            : (int?)null,
                 };
                 preview.TotalRows = parsed.Rows.Count;
                 preview.UnusableRows = parsed.Problems.Take(MaxUnusableRows).Select(ToUnusableRow).ToList();

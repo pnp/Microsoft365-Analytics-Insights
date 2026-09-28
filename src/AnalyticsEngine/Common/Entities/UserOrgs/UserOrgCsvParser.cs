@@ -80,6 +80,13 @@ namespace Common.Entities.UserOrgs
         public const string OneColumn = "oneColumn";
 
         public const string TooManyRows = "tooManyRows";
+
+        /// <summary>
+        /// A row with more columns than any spreadsheet can hold, so not a file of users and values - see
+        /// <see cref="UserOrgCsvParser.MaxColumns"/>.
+        /// </summary>
+        public const string TooManyColumns = "tooManyColumns";
+
         public const string NoRows = "noRows";
         public const string NoUsableRows = "noUsableRows";
     }
@@ -214,6 +221,20 @@ namespace Common.Entities.UserOrgs
         /// does have more rows finds out instead of quietly importing a prefix of their file.
         /// </remarks>
         public const int MaxDataLines = 500000;
+
+        /// <summary>
+        /// Most columns one row may have before the file is refused as
+        /// <see cref="UserOrgCsvBlockingCodes.TooManyColumns"/>.
+        /// </summary>
+        /// <remarks>
+        /// Above every spreadsheet's own limit - Excel's is 16,384 columns and Google Sheets' 18,278 - so
+        /// no export is refused, even one that writes every empty column up to the last one ever touched.
+        /// What it stops is a single long line of separators: an upload within the size limit can hold
+        /// millions of them, and everything the preview works out from the first rows - the header, the
+        /// columns it returns to the browser, which columns are in use - is sized by the widest row. Splitting
+        /// stops as soon as a row passes the limit, so such a row is never held as millions of fields.
+        /// </remarks>
+        public const int MaxColumns = 20000;
 
         private static readonly char[] CandidateDelimiters = { ',', ';', '\t', '|' };
 
@@ -429,6 +450,14 @@ namespace Common.Entities.UserOrgs
                 return;
             }
 
+            // Before anything below is sized by the widest row.
+            var tooWide = sampleFields.FindIndex(f => f.Count > MaxColumns);
+            if (tooWide >= 0)
+            {
+                result.Blocking = new UserOrgCsvBlocking(UserOrgCsvBlockingCodes.TooManyColumns, sample[skip + tooWide].LineNumber);
+                return;
+            }
+
             var columnCount = sampleFields.Max(f => f.Count);
             result.ColumnCount = columnCount;
 
@@ -542,6 +571,13 @@ namespace Common.Entities.UserOrgs
                 }
 
                 var fields = SplitRecord(next.Text, delimiter);
+                if (fields.Count > MaxColumns)
+                {
+                    // Refused, not skipped as an empty row: no spreadsheet writes a row this wide.
+                    result.Blocking = new UserOrgCsvBlocking(UserOrgCsvBlockingCodes.TooManyColumns, next.LineNumber);
+                    break;
+                }
+
                 if (fields.All(string.IsNullOrWhiteSpace))
                 {
                     // An empty spreadsheet row - ",,," - is not a row the admin wrote.
@@ -839,9 +875,19 @@ namespace Common.Entities.UserOrgs
                         continue;
                     }
 
-                    _current.Append(line);
-                    var text = _current.ToString();
-                    _current.Clear();
+                    // A record on one line - nearly every record - is that line, taken as it is rather than
+                    // copied through the builder and back.
+                    string text;
+                    if (_current.Length == 0)
+                    {
+                        text = line;
+                    }
+                    else
+                    {
+                        _current.Append(line);
+                        text = _current.ToString();
+                        _current.Clear();
+                    }
 
                     if (string.IsNullOrWhiteSpace(text))
                     {
@@ -929,11 +975,24 @@ namespace Common.Entities.UserOrgs
         }
 
         /// <summary>Splits one record into fields, honouring RFC 4180 quoting.</summary>
+        /// <remarks>
+        /// Stops once the record has more than <see cref="MaxColumns"/> fields, returning that many plus
+        /// one, so a line of millions of separators costs no more than a row just past the limit.
+        /// </remarks>
         internal static List<string> SplitRecord(string record, char delimiter)
         {
             var fields = new List<string>();
             if (record == null)
             {
+                return fields;
+            }
+
+            // Nothing to split or unquote: the record is its one field. Taken as it is rather than copied
+            // character by character - delimiter detection tries every candidate on every sampled record,
+            // and a long line would otherwise be copied once for each separator it does not contain.
+            if (record.IndexOf(delimiter) < 0 && record.IndexOf('"') < 0)
+            {
+                fields.Add(record);
                 return fields;
             }
 
@@ -972,6 +1031,10 @@ namespace Common.Entities.UserOrgs
                 {
                     fields.Add(field.ToString());
                     field.Clear();
+                    if (fields.Count > MaxColumns)
+                    {
+                        return fields;
+                    }
                 }
                 else
                 {

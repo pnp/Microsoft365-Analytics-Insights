@@ -385,6 +385,58 @@ namespace Tests.UnitTests
             Assert.AreEqual(2, reported.Count, "Each refused write is reported.");
         }
 
+        [TestMethod]
+        public async Task AReadTheTableRefusesIsReportedToo()
+        {
+            // Reads are how the holder learns that a client opened before shared-key access was turned off
+            // is refused for good: without the report it was asked again until the web app restarted.
+            var options = new Azure.Data.Tables.TableClientOptions();
+            options.Retry.MaxRetries = 0;
+            options.Retry.NetworkTimeout = TimeSpan.FromSeconds(5);
+            var client = new Azure.Data.Tables.TableClient(
+                new Uri("http://127.0.0.1:1/devstoreaccount1"),
+                TableStorageUserOrgChangeLog.TableName,
+                new Azure.Data.Tables.TableSharedKeyCredential("devstoreaccount1", Convert.ToBase64String(new byte[64])),
+                options);
+            var writes = new List<Exception>();
+            var reads = new List<Exception>();
+            var log = new TableStorageUserOrgChangeLog(client, writes.Add, reads.Add);
+
+            await Assert.ThrowsExceptionAsync<Azure.RequestFailedException>(
+                () => log.GetImportAsync("1-1", CancellationToken.None));
+            await Assert.ThrowsExceptionAsync<Azure.RequestFailedException>(
+                () => log.GetChangesAsync("1-1", null, null, 10, CancellationToken.None));
+            await Assert.ThrowsExceptionAsync<UserOrgValidationException>(
+                () => log.GetChangesAsync("1-1", null, "stale-continuation", 10, CancellationToken.None));
+
+            Assert.AreEqual(3, reads.Count, "Each refused read is reported - a stale page as much as any other.");
+            Assert.AreEqual(0, writes.Count);
+        }
+
+        [TestMethod]
+        public void OnlyARefusalThatOpeningTheTableAfreshCuresDropsTheClient()
+        {
+            // Shared-key access turned off since the client was opened: the factory falls back to the
+            // service principal, so the next attempt must open it afresh.
+            Assert.IsTrue(UserOrgChangeLogs.Reopens(
+                new Azure.RequestFailedException(403, "Key based authentication is not permitted.", "KeyBasedAuthenticationNotPermitted", null)));
+            Assert.IsTrue(UserOrgChangeLogs.Reopens(
+                new Azure.RequestFailedException(403, "Auth type disabled.", "AuthenticationTypeDisabled", null)));
+            Assert.IsTrue(UserOrgChangeLogs.Reopens(new AggregateException(
+                new Azure.RequestFailedException(403, "Key based authentication is not permitted.", "KeyBasedAuthenticationNotPermitted", null))));
+
+            // The table deleted since: created again.
+            Assert.IsTrue(UserOrgChangeLogs.Reopens(new Azure.RequestFailedException(404, "Not found.", "TableNotFound", null)));
+
+            // Nothing a fresh client changes: a missing role, a rotated key, a firewall.
+            Assert.IsFalse(UserOrgChangeLogs.Reopens(
+                new Azure.RequestFailedException(403, "Permission mismatch.", "AuthorizationPermissionMismatch", null)));
+            Assert.IsFalse(UserOrgChangeLogs.Reopens(
+                new Azure.RequestFailedException(403, "Authentication failed.", "AuthenticationFailed", null)));
+            Assert.IsFalse(UserOrgChangeLogs.Reopens(new Azure.RequestFailedException(0, "Connection refused.")));
+            Assert.IsFalse(UserOrgChangeLogs.Reopens(new InvalidOperationException("No usable credential.")));
+        }
+
         #endregion
     }
 }

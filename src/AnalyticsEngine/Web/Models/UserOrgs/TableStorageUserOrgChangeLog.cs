@@ -39,12 +39,18 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
         private readonly TableClient _table;
         private readonly Action<Exception> _onWriteFailed;
+        private readonly Action<Exception> _onReadFailed;
 
         /// <param name="onWriteFailed">Told when a write fails, so the caller can stop sending writes for a while.</param>
-        public TableStorageUserOrgChangeLog(TableClient table, Action<Exception> onWriteFailed = null)
+        /// <param name="onReadFailed">
+        /// Told when a read fails, so the caller can open the table afresh when asking again with this client
+        /// would only be refused again.
+        /// </param>
+        public TableStorageUserOrgChangeLog(TableClient table, Action<Exception> onWriteFailed = null, Action<Exception> onReadFailed = null)
         {
             _table = table ?? throw new ArgumentNullException(nameof(table));
             _onWriteFailed = onWriteFailed;
+            _onReadFailed = onReadFailed;
         }
 
         public UserOrgChangeLogStatus Destination => UserOrgChangeLogStatus.TableStorage;
@@ -104,9 +110,19 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
         private void WriteFailed(Exception ex)
         {
+            Report(_onWriteFailed, ex);
+        }
+
+        private void ReadFailed(Exception ex)
+        {
+            Report(_onReadFailed, ex);
+        }
+
+        private static void Report(Action<Exception> listener, Exception ex)
+        {
             try
             {
-                _onWriteFailed?.Invoke(ex);
+                listener?.Invoke(ex);
             }
             catch (Exception)
             {
@@ -121,10 +137,18 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 return null;
             }
 
-            var response = await _table
-                .GetEntityIfExistsAsync<TableEntity>(logId, UserOrgChangeLogKeys.SummaryRowKey, cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
-            return response.HasValue ? FromSummaryEntity(response.Value) : null;
+            try
+            {
+                var response = await _table
+                    .GetEntityIfExistsAsync<TableEntity>(logId, UserOrgChangeLogKeys.SummaryRowKey, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+                return response.HasValue ? FromSummaryEntity(response.Value) : null;
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException))
+            {
+                ReadFailed(ex);
+                throw;
+            }
         }
 
         public async Task<UserOrgChangeLogPage> GetChangesAsync(
@@ -151,15 +175,21 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 {
                     any = await enumerator.MoveNextAsync().ConfigureAwait(false);
                 }
-                catch (Exception ex) when (continuation != null && (ex is RequestFailedException || ex is ArgumentException || ex is FormatException))
+                catch (Exception ex) when (!(ex is OperationCanceledException))
                 {
-                    // A continuation the service does not recognise - edited, or from an older page. Asked
-                    // again rather than answered with a fault.
-                    throw new UserOrgValidationException(
-                        "That page of changes is no longer available. Open the change list again.",
-                        UserOrgImportRefusalCodes.ChangePageExpired,
-                        null,
-                        ex);
+                    ReadFailed(ex);
+                    if (continuation != null && (ex is RequestFailedException || ex is ArgumentException || ex is FormatException))
+                    {
+                        // A continuation the service does not recognise - edited, or from an older page. Asked
+                        // again rather than answered with a fault.
+                        throw new UserOrgValidationException(
+                            "That page of changes is no longer available. Open the change list again.",
+                            UserOrgImportRefusalCodes.ChangePageExpired,
+                            null,
+                            ex);
+                    }
+
+                    throw;
                 }
 
                 if (!any)

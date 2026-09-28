@@ -206,6 +206,7 @@ export type UserOrgCsvBlockingCode =
   | 'chooseColumns'
   | 'oneColumn'
   | 'tooManyRows'
+  | 'tooManyColumns'
   | 'noRows'
   | 'noUsableRows';
 
@@ -215,7 +216,7 @@ export interface UserOrgCsvBlocking {
   line: number | null;
   /** For `rowSpansLines`, the line the run-on row ends on. */
   lastLine: number | null;
-  /** For `tooManyRows`, the most rows one file may hold. */
+  /** For `tooManyRows`, the most rows one file may hold; for `tooManyColumns`, the most columns a row may have. */
   max: number | null;
 }
 

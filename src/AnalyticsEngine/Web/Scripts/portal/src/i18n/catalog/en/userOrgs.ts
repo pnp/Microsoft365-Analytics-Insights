@@ -212,6 +212,8 @@ export const userOrgs = {
     "This file has only one column. It needs two: each person's user principal name, and their value.",
   'userOrgs.csv.blocking.tooManyRows':
     'This file has more than {max} rows. Split it into smaller files and import them one at a time.',
+  'userOrgs.csv.blocking.tooManyColumns':
+    "Line {line} has more than {max} columns - more than any spreadsheet can hold - so this isn't a file of users and values. Check that you chose the right file, and that it was saved as a CSV.",
   'userOrgs.csv.blocking.noRows': 'This file has no rows to import.',
   'userOrgs.csv.blocking.noUsableRows': 'None of the rows in this file can be used.',
   'userOrgs.csv.blocking.generic': "This file can't be imported.",

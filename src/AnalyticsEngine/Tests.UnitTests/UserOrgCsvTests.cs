@@ -650,6 +650,80 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void ARowWiderThanAnySpreadsheetBlocksTheFile_WithoutBeingReadIntoMillionsOfFields()
+        {
+            // An upload within the size limit can hold millions of separators on one line, and the preview
+            // sizes its header, its column list and its used-column scan by the widest sampled row - so the
+            // row is refused, and splitting stops once it passes the limit.
+            var bytes = Encoding.UTF8.GetBytes(
+                "UPN,Team\r\na@contoso.com,Retail\r\n" + new string(',', 8000000) + "\r\nb@contoso.com,Ops\r\n");
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var result = ParseBytes(bytes);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.AreEqual(UserOrgCsvBlockingCodes.TooManyColumns, result.Blocking?.Code);
+            Assert.AreEqual(3, result.Blocking.Line);
+            Assert.IsTrue(allocated < 100L * 1024 * 1024,
+                $"Parsing an 8 MB line allocated {allocated / (1024 * 1024)} MB; it must not be held as millions of fields.");
+        }
+
+        [TestMethod]
+        public void ARowWiderThanAnySpreadsheetPastTheSampleBlocksTheFileToo()
+        {
+            var builder = new StringBuilder("UPN,Team\r\n");
+            for (var i = 0; i < 25; i++)
+            {
+                builder.Append("user").Append(i).Append("@contoso.com,Retail\r\n");
+            }
+
+            builder.Append(',', UserOrgCsvParser.MaxColumns).Append("\r\n");
+
+            var result = Parse(builder.ToString());
+
+            Assert.AreEqual(UserOrgCsvBlockingCodes.TooManyColumns, result.Blocking?.Code,
+                "Refused, not skipped: past the sampled rows a line of separators is otherwise read as an empty spreadsheet row.");
+            Assert.AreEqual(27, result.Blocking.Line);
+        }
+
+        [TestMethod]
+        public void AHeaderWiderThanAnySpreadsheetBlocksTheFileToo()
+        {
+            // The header is never read as a data row, so only the check on the sampled rows sees it - and
+            // it is the row the preview's column list is built from.
+            var result = Parse("UPN,Team" + new string(',', UserOrgCsvParser.MaxColumns) + "\r\na@contoso.com,Retail\r\n");
+
+            Assert.AreEqual(UserOrgCsvBlockingCodes.TooManyColumns, result.Blocking?.Code);
+            Assert.AreEqual(1, result.Blocking.Line);
+            Assert.IsNull(result.Columns, "Refused before a column list is built from it.");
+        }
+
+        [TestMethod]
+        public void ASeparatorARecordDoesNotContainLeavesItAsOneFieldWithoutCopyingIt()
+        {
+            // Delimiter detection splits every sampled record on every candidate: a long line must not be
+            // copied once for each separator it does not contain.
+            var record = "a@contoso.com,Retail";
+
+            Assert.AreSame(record, UserOrgCsvParser.SplitRecord(record, ';').Single());
+            CollectionAssert.AreEqual(new[] { "a@contoso.com", "Retail" }, UserOrgCsvParser.SplitRecord(record, ','));
+            CollectionAssert.AreEqual(new[] { "a;b" }, UserOrgCsvParser.SplitRecord("\"a;b\"", ';'), "Quoted, so still unquoted.");
+        }
+
+        [TestMethod]
+        public void ARowAtTheColumnLimitIsStillRead()
+        {
+            // Every spreadsheet's limit is below it, so an export that writes every empty column up to the
+            // last one ever touched is read as usual.
+            var trailing = new string(',', UserOrgCsvParser.MaxColumns - 2);
+            var result = Parse("UPN,Team" + trailing + "\r\na@contoso.com,Retail" + trailing + "\r\n");
+
+            Assert.IsNull(result.Blocking);
+            Assert.AreEqual(UserOrgCsvParser.MaxColumns, result.ColumnCount);
+            Assert.AreEqual("Retail", result.Rows.Single().OrgValue);
+        }
+
+        [TestMethod]
         public void AWellFormedFileIsNotFlaggedAsUnterminated()
         {
             var result = Parse("UPN,OrgName\r\na@contoso.com,\"Retail, North\"\r\nb@contoso.com,Ops\r\n");

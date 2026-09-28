@@ -108,7 +108,10 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                         config.ClientSecret);
 
                     TableStorageUserOrgChangeLog created = null;
-                    created = new TableStorageUserOrgChangeLog(client, ex => WriteFailed(created, ex));
+                    created = new TableStorageUserOrgChangeLog(
+                        client,
+                        ex => WriteFailed(created, ex),
+                        ex => ReadFailed(created, ex));
                     _table = created;
                     return _table;
                 }
@@ -123,21 +126,64 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
         /// <summary>
         /// A write the table refused: no more writes until <see cref="RetryAfter"/> has passed. The logs
-        /// wait, pending, in the outbox; reads carry on. A table deleted since it was opened is created
-        /// again by the next attempt.
+        /// wait, pending, in the outbox; reads carry on. When the refusal is one opening the table afresh
+        /// cures (<see cref="Reopens"/>), the next attempt opens it afresh.
         /// </summary>
         private static void WriteFailed(TableStorageUserOrgChangeLog table, Exception ex)
         {
             lock (Gate)
             {
                 _writesPausedUntilUtc = DateTime.UtcNow.Add(RetryAfter);
-                if (Status(ex) == 404 && ReferenceEquals(_table, table))
+                if (Reopens(ex) && ReferenceEquals(_table, table))
                 {
                     _table = null;
                 }
             }
 
             Record(ex);
+        }
+
+        /// <summary>
+        /// A read the table refused. Reads are not paused, so only a refusal opening the table afresh cures
+        /// changes anything - without it, a client opened with the account key before shared-key access was
+        /// turned off would be asked, and refused, until the web app restarted.
+        /// </summary>
+        private static void ReadFailed(TableStorageUserOrgChangeLog table, Exception ex)
+        {
+            if (!Reopens(ex))
+            {
+                return;
+            }
+
+            lock (Gate)
+            {
+                if (ReferenceEquals(_table, table))
+                {
+                    _table = null;
+                }
+            }
+
+            Record(ex);
+        }
+
+        /// <summary>
+        /// Whether a refusal is one that opening the table afresh cures: the table deleted since it was
+        /// opened, which the factory creates again, or the account's shared-key access turned off since,
+        /// which the factory answers by falling back to the service principal. Anything else - a firewall,
+        /// a missing role, a rotated key - would only be refused again.
+        /// </summary>
+        internal static bool Reopens(Exception ex)
+        {
+            for (var current = ex; current != null; current = current.InnerException)
+            {
+                var failed = current as Azure.RequestFailedException;
+                if (failed != null)
+                {
+                    return failed.Status == 404 || UserOrgChangeLogTableFactory.IsKeyAuthDisabled(failed);
+                }
+            }
+
+            return false;
         }
 
         private static void Record(Exception ex)
@@ -148,20 +194,6 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 Code = Classify(ex),
                 ExceptionType = ex.GetBaseException().GetType().Name,
             });
-        }
-
-        private static int? Status(Exception ex)
-        {
-            for (var current = ex; current != null; current = current.InnerException)
-            {
-                var failed = current as Azure.RequestFailedException;
-                if (failed != null)
-                {
-                    return failed.Status;
-                }
-            }
-
-            return null;
         }
 
         /// <summary>A stable reason, for telemetry - never the exception's message.</summary>

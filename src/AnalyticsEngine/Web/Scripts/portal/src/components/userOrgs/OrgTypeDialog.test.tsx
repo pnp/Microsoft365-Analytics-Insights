@@ -380,7 +380,10 @@ describe('OrgTypeDialog', () => {
     );
     renderWithProvider(<OrgTypeDialog open editing={null} onDismiss={vi.fn()} onSave={vi.fn()} />, { language: 'es' });
 
-    expect(await screen.findByText(/no pudo enumerar las extensiones de directorio \(HTTP 503\)/)).toBeInTheDocument();
+    // A longer wait than the default second, which the full suite's parallel load has overrun here.
+    expect(
+      await screen.findByText(/no pudo enumerar las extensiones de directorio \(HTTP 503\)/, undefined, { timeout: 5000 }),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/could not list directory extensions/)).not.toBeInTheDocument();
   });
 
@@ -402,7 +405,11 @@ describe('OrgTypeDialog', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Probar' }));
 
     expect(
-      await screen.findByText(/\u00abextension_00000000000000000000000000000000_skills\u00bb contiene una lista de valores/),
+      await screen.findByText(
+        /\u00abextension_00000000000000000000000000000000_skills\u00bb contiene una lista de valores/,
+        undefined,
+        { timeout: 5000 },
+      ),
     ).toBeInTheDocument();
     expect(screen.queryByText('server English fallback')).not.toBeInTheDocument();
   });

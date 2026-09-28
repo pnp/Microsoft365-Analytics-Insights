@@ -215,6 +215,8 @@ export const userOrgs: Record<keyof typeof en, string> = {
     'Este archivo tiene una sola columna. Necesita dos: el nombre principal de usuario de cada persona y su valor.',
   'userOrgs.csv.blocking.tooManyRows':
     'Este archivo tiene m\u00e1s de {max} filas. Div\u00eddalo en archivos m\u00e1s peque\u00f1os e imp\u00f3rtelos de uno en uno.',
+  'userOrgs.csv.blocking.tooManyColumns':
+    'La l\u00ednea {line} tiene m\u00e1s de {max} columnas (m\u00e1s de las que admite cualquier hoja de c\u00e1lculo), as\u00ed que este no es un archivo de usuarios y valores. Compruebe que ha elegido el archivo correcto y que se guard\u00f3 como CSV.',
   'userOrgs.csv.blocking.noRows': 'Este archivo no tiene filas que importar.',
   'userOrgs.csv.blocking.noUsableRows': 'No se puede usar ninguna fila de este archivo.',
   'userOrgs.csv.blocking.generic': 'Este archivo no se puede importar.',

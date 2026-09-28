@@ -82,6 +82,7 @@ export const BLOCKING_KEYS: Record<UserOrgCsvBlockingCode, TranslationKey> = {
   chooseColumns: 'userOrgs.csv.blocking.chooseColumns',
   oneColumn: 'userOrgs.csv.blocking.oneColumn',
   tooManyRows: 'userOrgs.csv.blocking.tooManyRows',
+  tooManyColumns: 'userOrgs.csv.blocking.tooManyColumns',
   noRows: 'userOrgs.csv.blocking.noRows',
   noUsableRows: 'userOrgs.csv.blocking.noUsableRows',
 };
@@ -256,17 +257,20 @@ export default function CsvImportPanel({ orgType, onImportFinished }: CsvImportP
       });
     } catch (e) {
       if (run !== previewRun.current) return;
-      if (previous) {
-        // A failed re-read with other columns keeps the preview the admin already has, and puts the
-        // column choice back to what that preview actually used - so what is shown, and what an
-        // import would commit, still agree.
+      if (previous && refusedBeforeStaging(e)) {
+        // A refusal given before anything was staged leaves the preview the admin already has - and
+        // its draft - as they were: kept, with the column choice put back to what that preview
+        // actually used, so what is shown and what an import would commit still agree.
         setPreview(previous);
         setColumns({
           userColumn: previous.userColumnIndex ?? undefined,
           valueColumn: previous.valueColumnIndex ?? undefined,
         });
       } else {
+        // Anything else may have come after the server staged the new columns, which replaces this
+        // admin's earlier draft - so the preview on screen could no longer be imported.
         setPreview(null);
+        setColumns({});
       }
       setError(apiErrorMessage(e, t));
     } finally {
@@ -1041,6 +1045,16 @@ function blockingMessage(preview: UserOrgCsvPreview, t: TFunction): string {
 
 function rowProblemMessage(code: string, fallback: string, t: TFunction): string {
   return isRowProblemCode(code) ? t(ROW_PROBLEM_KEYS[code]) : fallback;
+}
+
+/**
+ * Whether a failed preview was refused before the server staged anything: a coded refusal - the columns,
+ * the type, the upload - other than `draftNotFound`, which a preview answers with when its own new draft
+ * vanished after staging. A network failure, a server error or an uncoded reply may have come after the
+ * new draft replaced this admin's earlier one.
+ */
+function refusedBeforeStaging(error: unknown): boolean {
+  return error instanceof UserOrgApiError && error.status < 500 && !!error.code && error.code !== 'draftNotFound';
 }
 
 function apiErrorMessage(error: unknown, t: TFunction): string {
