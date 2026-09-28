@@ -268,6 +268,18 @@ namespace Common.Entities.UserOrgs
             }
         }
 
+        /// <summary>Distinct value names held right now, across every import - for tests of the cap.</summary>
+        internal int InternedValues
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _logs.Values.Sum(l => l.InternedCount);
+                }
+            }
+        }
+
         public Task AppendAsync(UserOrgChangeLogImport import, IReadOnlyList<UserOrgChangeRecord> changes, CancellationToken cancellationToken)
         {
             if (import == null)
@@ -281,6 +293,16 @@ namespace Common.Entities.UserOrgs
                 foreach (var change in changes ?? new UserOrgChangeRecord[0])
                 {
                     var key = UserOrgChangeLogKeys.ChangeRowKey(change.Upn, change.UserId);
+                    var replacing = log.Changes.ContainsKey(key);
+
+                    // Room is decided before anything is kept: a change that will not be stored must
+                    // not leave its values interned, or a large import of distinct values would hold
+                    // all of them in memory despite the cap.
+                    if (!replacing && _stored >= _maxChanges && !MakeRoom(log))
+                    {
+                        continue;
+                    }
+
                     var entry = new UserOrgChangeLogEntry
                     {
                         Upn = change.Upn,
@@ -289,14 +311,9 @@ namespace Common.Entities.UserOrgs
                         Kind = UserOrgChangeLogKeys.KindOf(change.OldValue, change.NewValue),
                     };
 
-                    if (log.Changes.ContainsKey(key))
+                    if (replacing)
                     {
                         log.Changes[key] = entry;
-                        continue;
-                    }
-
-                    if (_stored >= _maxChanges && !MakeRoom(log))
-                    {
                         continue;
                     }
 
@@ -469,6 +486,8 @@ namespace Common.Entities.UserOrgs
             public UserOrgChangeLogImport Summary;
 
             public long Order;
+
+            public int InternedCount => _names.Count;
 
             /// <summary>
             /// One copy of each value name per log. An import moves thousands of people between a few

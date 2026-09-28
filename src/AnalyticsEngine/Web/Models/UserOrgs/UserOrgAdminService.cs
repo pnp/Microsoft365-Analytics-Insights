@@ -56,7 +56,10 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         private readonly Action<int> _dispatchChangeLog;
 
         /// <param name="changeOutbox">Lists applied imports whose change log is still to be written, for the resume sweep.</param>
-        /// <param name="changeLogFor">The change log an import's list was written to, or null when that store is unreachable.</param>
+        /// <param name="changeLogFor">
+        /// The change log an import's list was written to, or null when that store is unreachable. For a
+        /// list still pending, where it would be written now - null while the configured store is down.
+        /// </param>
         /// <param name="dispatchChangeLog">Writes one import's change log in the background.</param>
         public UserOrgAdminService(
             IUserOrgTypeStore types,
@@ -82,7 +85,9 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             _telemetry = telemetry ?? NullUserOrgImportTelemetry.Instance;
             _resumeGate = resumeGate ?? UserOrgResumeGate.Shared;
             _changeOutbox = changeOutbox;
-            _changeLogFor = changeLogFor ?? (status => status == UserOrgChangeLogStatus.Memory ? InMemoryUserOrgChangeLog.Shared : null);
+            _changeLogFor = changeLogFor ?? (status => status == UserOrgChangeLogStatus.Memory || status == UserOrgChangeLogStatus.Pending
+                ? InMemoryUserOrgChangeLog.Shared
+                : null);
             _dispatchChangeLog = dispatchChangeLog;
         }
 
@@ -382,7 +387,8 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             string startedBy,
             int? userColumn,
             int? valueColumn,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            DateTime? requestedUtc = null)
         {
             if (userColumn.HasValue != valueColumn.HasValue
                 || (userColumn.HasValue && (userColumn.Value < 0 || valueColumn.Value < 0 || userColumn.Value == valueColumn.Value)))
@@ -454,6 +460,9 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                     OrgTypeId = orgTypeId,
                     FileName = fileName,
                     StartedBy = startedBy,
+                    // When the admin asked, not when the upload finished (see CreateDraftAsync); the
+                    // database's clock when the caller does not say.
+                    QueuedUtc = requestedUtc ?? default(DateTime),
                     RowsInvalid = parsed.Problems.Count,
                     ExpectedGeneration = type.SourceGeneration,
                 },
@@ -668,6 +677,18 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
 
             if (job.ChangeLogStatus.Value == UserOrgChangeLogStatus.Pending)
             {
+                if (_changeLogFor(UserOrgChangeLogStatus.Pending) == null)
+                {
+                    // Waiting for the storage account, which may take far longer than "a moment".
+                    model.Storage = "tableStorage";
+                    model.Status = "unavailable";
+                    return model;
+                }
+
+                // Being asked for is a reason to try the write again: one the store refused is otherwise
+                // retried only by the next sweep, and the admin waiting on this dialog should not have to
+                // reload the page for it. The lease makes a second writer harmless.
+                _dispatchChangeLog?.Invoke(jobId);
                 model.Status = "pending";
                 return model;
             }

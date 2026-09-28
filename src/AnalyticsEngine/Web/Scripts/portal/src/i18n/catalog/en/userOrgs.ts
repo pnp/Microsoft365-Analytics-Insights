@@ -290,7 +290,7 @@ export const userOrgs = {
   'userOrgs.changes.counts': '{added} added, {changed} changed, {cleared} cleared',
   'userOrgs.changes.storage.tableStorage': 'This change list is kept in Azure Table Storage.',
   'userOrgs.changes.storage.memory':
-    "This change list is kept in this web server's memory only, because no storage account is set up. It's lost when the web app restarts, and other web servers can't see it.",
+    "This change list is kept in this web server's memory only, because no storage account was set up when it was written. It's lost when the web app restarts, and other web servers can't see it.",
   'userOrgs.changes.truncated':
     'Only the first {stored} of {count} changes were kept: the in-memory change list is limited in size.',
   'userOrgs.changes.status.pending': 'The change list is still being written. Try again in a moment.',
@@ -340,6 +340,7 @@ export const userOrgs = {
   'userOrgs.message.importRunningDelete':
     'An import for this organisation type is running. Wait for it to finish before deleting the type.',
   'userOrgs.message.attributeRequired': 'An Entra attribute name is required.',
+  'userOrgs.message.attributeTooLong': 'An attribute name can be at most {max} characters.',
   'userOrgs.message.openExtension':
     "Open extensions (read with $expand=extensions) can't be used: Microsoft Graph does not support $expand on /users/delta, which is how this product tracks user changes. Use a directory extension, a schema extension, or one of the extensionAttribute1-15 slots instead.",
   'userOrgs.message.attributeHasSpaces':

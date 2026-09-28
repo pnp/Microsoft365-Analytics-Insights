@@ -16,6 +16,12 @@ namespace Common.Entities.UserOrgs
 
         /// <summary>There is nothing to write: the import did not apply, or its log is already written.</summary>
         NothingToWrite,
+
+        /// <summary>
+        /// The configured store cannot be reached. The log stays pending in the outbox and is written
+        /// when the store is back.
+        /// </summary>
+        StoreUnavailable,
     }
 
     /// <summary>
@@ -44,7 +50,10 @@ namespace Common.Entities.UserOrgs
         private readonly Func<IUserOrgChangeLog> _log;
         private readonly IUserOrgImportTelemetry _telemetry;
 
-        /// <param name="log">Chooses the store at write time: Table Storage when usable, otherwise memory.</param>
+        /// <param name="log">
+        /// Chooses the store at write time: Table Storage when configured, memory when not, and <c>null</c>
+        /// when the configured store cannot be reached right now.
+        /// </param>
         public UserOrgChangeLogShipper(
             IUserOrgImportJobStore jobs,
             IUserOrgChangeOutbox outbox,
@@ -83,6 +92,15 @@ namespace Common.Entities.UserOrgs
                     }
 
                     log = _log();
+                    if (log == null)
+                    {
+                        // Waiting is right; memory is not. The deployment has a store configured, so its
+                        // logs are meant to survive a restart, and a log written to memory now would not.
+                        // Recorded once per retry window where the store was found unreachable, not here
+                        // on every attempt.
+                        return UserOrgChangeLogShipOutcome.StoreUnavailable;
+                    }
+
                     var type = await _types.GetAsync(job.OrgTypeId, cancellationToken).ConfigureAwait(false);
                     var import = new UserOrgChangeLogImport
                     {

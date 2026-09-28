@@ -38,10 +38,13 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         private static readonly string[] ChangeColumns = { "Upn", "Before", "After", "Kind" };
 
         private readonly TableClient _table;
+        private readonly Action<Exception> _onWriteFailed;
 
-        public TableStorageUserOrgChangeLog(TableClient table)
+        /// <param name="onWriteFailed">Told when a write fails, so the caller can stop sending writes for a while.</param>
+        public TableStorageUserOrgChangeLog(TableClient table, Action<Exception> onWriteFailed = null)
         {
             _table = table ?? throw new ArgumentNullException(nameof(table));
+            _onWriteFailed = onWriteFailed;
         }
 
         public UserOrgChangeLogStatus Destination => UserOrgChangeLogStatus.TableStorage;
@@ -60,27 +63,55 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                 .Select(g => g.Last())
                 .ToList();
 
-            using (var gate = new SemaphoreSlim(Parallelism))
+            try
             {
-                var batches = new List<Task>();
-                for (var i = 0; i < entities.Count; i += MaxTransaction)
+                using (var gate = new SemaphoreSlim(Parallelism))
                 {
-                    var batch = entities.GetRange(i, Math.Min(MaxTransaction, entities.Count - i));
-                    batches.Add(SubmitAsync(batch, gate, cancellationToken));
-                }
+                    var batches = new List<Task>();
+                    for (var i = 0; i < entities.Count; i += MaxTransaction)
+                    {
+                        var batch = entities.GetRange(i, Math.Min(MaxTransaction, entities.Count - i));
+                        batches.Add(SubmitAsync(batch, gate, cancellationToken));
+                    }
 
-                await Task.WhenAll(batches).ConfigureAwait(false);
+                    await Task.WhenAll(batches).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException))
+            {
+                WriteFailed(ex);
+                throw;
             }
         }
 
-        public Task CompleteAsync(UserOrgChangeLogImport import, CancellationToken cancellationToken)
+        public async Task CompleteAsync(UserOrgChangeLogImport import, CancellationToken cancellationToken)
         {
             if (import == null)
             {
                 throw new ArgumentNullException(nameof(import));
             }
 
-            return _table.UpsertEntityAsync(ToSummaryEntity(import), TableUpdateMode.Replace, cancellationToken);
+            try
+            {
+                await _table.UpsertEntityAsync(ToSummaryEntity(import), TableUpdateMode.Replace, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException))
+            {
+                WriteFailed(ex);
+                throw;
+            }
+        }
+
+        private void WriteFailed(Exception ex)
+        {
+            try
+            {
+                _onWriteFailed?.Invoke(ex);
+            }
+            catch (Exception)
+            {
+                // Must never replace the failure being reported.
+            }
         }
 
         public async Task<UserOrgChangeLogImport> GetImportAsync(string logId, CancellationToken cancellationToken)

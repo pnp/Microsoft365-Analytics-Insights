@@ -53,6 +53,8 @@ const userFilter: Record<keyof typeof en, string> = {
   'userFilter.editor.tooLong': 'Este filtro es demasiado largo para aplicarlo. Use menos valores, una condición «contiene» o una organización personalizada.',
   'userFilter.editor.tooManyTerms':
     'Un filtro puede buscar como máximo {max} fragmentos de texto en total. Quite algunos o elija valores de una lista.',
+  'userFilter.editor.tooManyValues':
+    'Una condición puede tener como máximo {max} valores. Use una condición «contiene» o agrupe a estas personas en una organización personalizada.',
   'userFilter.editor.managementChainHint': 'Todas las personas que dependen de los responsables elegidos, directamente o a través de otros responsables. Los propios responsables no se incluyen.',
   'userFilter.editor.userNameHint': 'Compara con el nombre de inicio de sesión (nombre principal de usuario), como megan.bowen@contoso.com. Use «contiene» para buscar parte de un nombre o «es» para elegir personas concretas.',
   'userFilter.editor.unknownDimension': 'Este atributo ya no está disponible, así que nadie cumple una condición sobre él.',

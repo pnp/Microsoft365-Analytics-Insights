@@ -56,6 +56,13 @@ export const MAX_ENCODED_FILTER_LENGTH = 6000;
 export const MAX_CLAUSES = 25;
 
 /**
+ * Mirrors `UserFilterCodec.MaxValuesPerClause`. Values are picked one at a time, so a link is the
+ * likelier way to reach it than a hand - but a filter the server would refuse is refused here, where
+ * the page can say why.
+ */
+export const MAX_VALUES_PER_CLAUSE = 500;
+
+/**
  * Mirrors `UserFilterCodec.MaxTextTermsPerClause` and `MaxTextTerms`: each piece of text a "contains"
  * condition looks for is searched for in every distinct value - one per person for the user name - so
  * these are far lower than the number of values a condition may pick from a list.
@@ -208,9 +215,15 @@ export function withDimensionValue(filter: UserFilter, dimension: string, value:
 export function fitsLimits(filter: UserFilter): boolean {
   return (
     filter.clauses.length <= MAX_CLAUSES &&
+    !hasTooManyValues(filter) &&
     !hasTooManyTextTerms(filter) &&
     encodedFilterLength(filter) <= MAX_ENCODED_FILTER_LENGTH
   );
+}
+
+/** Whether a condition has more values than the server accepts for one condition. */
+export function hasTooManyValues(filter: UserFilter): boolean {
+  return filter.clauses.some((c) => c.values.length > MAX_VALUES_PER_CLAUSE);
 }
 
 /** Whether the filter looks for more pieces of text than the server will search for. */

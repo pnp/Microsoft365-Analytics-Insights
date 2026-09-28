@@ -236,6 +236,31 @@ DELETE FROM dbo.users;");
         }
 
         [TestMethod]
+        public async Task AnOlderPreviewFinishingLastLeavesTheNewerDraftAlone()
+        {
+            // A large file still uploading when its admin cleared it and chose a small one: the small
+            // one's draft is what the page shows, so the large one, finishing last, must not delete it.
+            var typeId = await NewType();
+            var type = await _types.GetAsync(typeId);
+            var now = DateTime.UtcNow;
+            Func<DateTime, Task<int>> draftAskedFor = asked => _jobs.CreateDraftAsync(
+                new UserOrgImportJob { OrgTypeId = typeId, StartedBy = Admin, QueuedUtc = asked, ExpectedGeneration = type.SourceGeneration },
+                new[] { new UserOrgStagedRow(2, "a@contoso.com", "X") });
+
+            var small = await draftAskedFor(now);
+            var large = await draftAskedFor(now.AddSeconds(-20));
+
+            Assert.IsNotNull(await _jobs.GetJobAsync(small), "The draft on screen survives.");
+            Assert.IsNotNull(await _jobs.GetJobAsync(large), "Left to expire, or to the next preview.");
+
+            var next = await draftAskedFor(now.AddSeconds(1));
+
+            Assert.IsNull(await _jobs.GetJobAsync(small));
+            Assert.IsNull(await _jobs.GetJobAsync(large));
+            Assert.IsNotNull(await _jobs.GetJobAsync(next));
+        }
+
+        [TestMethod]
         public async Task ExpiredDraftsAreThrownAway()
         {
             var typeId = await NewType();
@@ -735,6 +760,31 @@ WHERE id = {draftId}");
         }
 
         [TestMethod]
+        public async Task AStorageAccountThatCannotBeReachedLeavesTheListWaitingNotInMemory()
+        {
+            // The deployment configured a store, so its lists are meant to survive a restart. Writing one
+            // to memory because the account was briefly unreachable would lose it at the next recycle.
+            AddUser("a@contoso.com");
+            var typeId = await NewType();
+            var jobId = await Applied(typeId, UserOrgImportMode.Merge, new UserOrgStagedRow(2, "a@contoso.com", "X"));
+
+            Assert.AreEqual(
+                UserOrgChangeLogShipOutcome.StoreUnavailable,
+                await new UserOrgChangeLogShipper(_jobs, _outbox, _types, () => null).ShipAsync(jobId));
+
+            Assert.AreEqual(UserOrgChangeLogStatus.Pending, (await _jobs.GetJobAsync(jobId)).ChangeLogStatus);
+            Assert.AreEqual(1, Count($"SELECT COUNT(*) FROM dbo.user_org_import_changes WHERE job_id = {jobId}"), "Still safe in the outbox.");
+            using (var lease = await _outbox.TryLeaseAsync(jobId))
+            {
+                Assert.IsNotNull(lease, "The lease was released, so the next attempt can write it.");
+            }
+
+            var log = new InMemoryUserOrgChangeLog();
+            Assert.AreEqual(UserOrgChangeLogShipOutcome.Written, await Shipper(log).ShipAsync(jobId), "Written once the store is back.");
+            Assert.AreEqual(1, log.StoredChanges);
+        }
+
+        [TestMethod]
         public async Task DeletingTheOrgTypeTakesAnUnwrittenListWithIt()
         {
             AddUser("a@contoso.com");
@@ -911,7 +961,8 @@ WHERE id = {draftId}");
                 telemetry: _telemetry,
                 resumeGate: new UserOrgResumeGate(),
                 changeOutbox: _outbox,
-                changeLogFor: status => status == log.Destination ? log : null,
+                // A pending list has no store yet; asked about one, this says where it would be written now.
+                changeLogFor: status => status == log.Destination || status == UserOrgChangeLogStatus.Pending ? log : null,
                 dispatchChangeLog: id => _dispatchedChangeLogs.Add(id));
         }
 
@@ -1260,6 +1311,50 @@ WHERE id = {draftId}");
             // A store that cannot be reached right now.
             var unreachable = ServiceReadingFrom(new UnreachableLog());
             Assert.AreEqual("unavailable", (await unreachable.GetChangesAsync(jobId, null, null, 50, CancellationToken.None)).Status);
+        }
+
+        [TestMethod]
+        public async Task AskingForAListStillToBeWrittenTriesTheWriteAgain()
+        {
+            // A write the store refused is otherwise retried only by the next sweep - which the admin
+            // waiting on the dialog would have to reload the page to trigger.
+            AddUser("a@contoso.com");
+            var typeId = await NewType();
+            var jobId = await ImportThroughTheService(typeId, "UPN,Team\r\na@contoso.com,X\r\n");
+            _dispatchedChangeLogs.Clear();
+
+            var page = await _service.GetChangesAsync(jobId, null, null, 50, CancellationToken.None);
+
+            Assert.AreEqual("pending", page.Status);
+            CollectionAssert.AreEqual(new[] { jobId }, _dispatchedChangeLogs);
+        }
+
+        [TestMethod]
+        public async Task AListWaitingForTheStorageAccountSaysSoRatherThanStillBeingWritten()
+        {
+            // "Still being written, try again in a moment" would be untrue for as long as the account is
+            // unreachable, which can be hours.
+            AddUser("a@contoso.com");
+            var typeId = await NewType();
+            var jobId = await ImportThroughTheService(typeId, "UPN,Team\r\na@contoso.com,X\r\n");
+            _dispatchedChangeLogs.Clear();
+            var waiting = new UserOrgAdminService(
+                _types,
+                _assignments,
+                _jobs,
+                UserOrgStores.CreateUserLookup(_db.ConnectionString),
+                new NoGraph(),
+                id => _dispatched.Add(id),
+                resumeGate: new UserOrgResumeGate(),
+                changeOutbox: _outbox,
+                changeLogFor: status => null,
+                dispatchChangeLog: id => _dispatchedChangeLogs.Add(id));
+
+            var page = await waiting.GetChangesAsync(jobId, null, null, 50, CancellationToken.None);
+
+            Assert.AreEqual("unavailable", page.Status);
+            Assert.AreEqual("tableStorage", page.Storage);
+            Assert.AreEqual(0, _dispatchedChangeLogs.Count, "Nothing to try until the account is back.");
         }
 
         [TestMethod]

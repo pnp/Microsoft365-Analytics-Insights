@@ -202,6 +202,22 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task AChangeThatDoesNotFitHoldsNoMemory()
+        {
+            // The cap bounds memory only if a change that is dropped keeps nothing. Interning its values
+            // before deciding would hold every distinct value of a 500,000-row file of distinct values.
+            var log = new InMemoryUserOrgChangeLog(maxChanges: 2);
+            var changes = Enumerable.Range(1, 50)
+                .Select(i => Change(i, "u" + i + "@contoso.com", "Before " + i, "After " + i))
+                .ToArray();
+
+            await Write(log, "1-1", changes);
+
+            Assert.AreEqual(2, log.StoredChanges);
+            Assert.AreEqual(4, log.InternedValues, "Two changes stored, each with a before and an after - nothing for the 48 dropped.");
+        }
+
+        [TestMethod]
         public async Task AContinuationTheLogDidNotIssueIsRefused()
         {
             var log = new InMemoryUserOrgChangeLog();
@@ -288,6 +304,30 @@ namespace Tests.UnitTests
             Assert.AreEqual(
                 new Uri("https://contosoanalytics.table.core.windows.net"),
                 UserOrgChangeLogTableFactory.GetTableEndpoint(parts));
+        }
+
+        [TestMethod]
+        public async Task AWriteTheTableRefusesIsReportedSoWritesCanPause()
+        {
+            // Nothing listens on port 1, so every request fails at once - the shape of a firewall or a
+            // deleted account. The failure must still reach the caller: the log stays pending.
+            var options = new Azure.Data.Tables.TableClientOptions();
+            options.Retry.MaxRetries = 0;
+            options.Retry.NetworkTimeout = TimeSpan.FromSeconds(5);
+            var client = new Azure.Data.Tables.TableClient(
+                new Uri("http://127.0.0.1:1/devstoreaccount1"),
+                TableStorageUserOrgChangeLog.TableName,
+                new Azure.Data.Tables.TableSharedKeyCredential("devstoreaccount1", Convert.ToBase64String(new byte[64])),
+                options);
+            var reported = new List<Exception>();
+            var log = new TableStorageUserOrgChangeLog(client, reported.Add);
+
+            await Assert.ThrowsExceptionAsync<Azure.RequestFailedException>(
+                () => log.AppendAsync(Import("1-1"), new[] { Change(1, "a@contoso.com", null, "X") }, CancellationToken.None));
+            await Assert.ThrowsExceptionAsync<Azure.RequestFailedException>(
+                () => log.CompleteAsync(Import("1-1"), CancellationToken.None));
+
+            Assert.AreEqual(2, reported.Count, "Each refused write is reported.");
         }
 
         #endregion

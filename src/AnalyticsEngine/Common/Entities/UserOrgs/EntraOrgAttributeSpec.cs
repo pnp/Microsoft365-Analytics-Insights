@@ -96,6 +96,9 @@ namespace Common.Entities.UserOrgs
         private static readonly Regex SchemaExtensionPropertyPattern =
             new Regex(@"^[A-Za-z][A-Za-z0-9_]*$", RegexOptions.Compiled);
 
+        /// <summary>The longest attribute name that can be stored: <c>user_org_types.entra_attribute_name nvarchar(200)</c>.</summary>
+        public const int MaxNameLength = 200;
+
         private EntraOrgAttributeSpec(
             string canonical,
             EntraOrgAttributeKind kind,
@@ -175,6 +178,18 @@ namespace Common.Entities.UserOrgs
             }
 
             var trimmed = value.Trim();
+
+            // The column is nvarchar(200), and its parameter would silently cut a longer name to a
+            // different attribute - one nobody tested.
+            if (trimmed.Length > MaxNameLength)
+            {
+                failure = Fail(
+                    UserOrgMessageCodes.AttributeTooLong,
+                    $"An attribute name can be at most {MaxNameLength} characters.",
+                    "max",
+                    MaxNameLength);
+                return false;
+            }
 
             if (trimmed.IndexOf('/') >= 0)
             {
@@ -322,7 +337,7 @@ namespace Common.Entities.UserOrgs
             return true;
         }
 
-        private static EntraOrgAttributeParseFailure Fail(string code, string message, string valueName = null, string value = null)
+        private static EntraOrgAttributeParseFailure Fail(string code, string message, string valueName = null, object value = null)
         {
             return new EntraOrgAttributeParseFailure(code, message, valueName, value);
         }
@@ -468,7 +483,7 @@ namespace Common.Entities.UserOrgs
     /// <summary>Why an attribute name could not be parsed.</summary>
     public sealed class EntraOrgAttributeParseFailure
     {
-        public EntraOrgAttributeParseFailure(string code, string message, string valueName = null, string value = null)
+        public EntraOrgAttributeParseFailure(string code, string message, string valueName = null, object value = null)
         {
             Code = code;
             Message = message;

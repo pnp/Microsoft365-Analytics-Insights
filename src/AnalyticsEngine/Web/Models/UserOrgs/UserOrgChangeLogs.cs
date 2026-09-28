@@ -9,10 +9,11 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Azure Table Storage when the <c>Storage</c> connection string is set and the table can be reached;
-    /// otherwise <see cref="InMemoryUserOrgChangeLog.Shared"/>. A table that could not be reached is tried
-    /// again after <see cref="RetryAfter"/>, so a storage account that was briefly unreachable does not
-    /// leave this process logging to memory until it next restarts.
+    /// Azure Table Storage when the <c>Storage</c> connection string is set; <see cref="InMemoryUserOrgChangeLog.Shared"/>
+    /// only when it is not. A configured account that cannot be reached is never swapped for memory: the
+    /// log waits, pending, in the SQL outbox until the account is back, because quietly making volatile
+    /// a log the deployment set out to keep durably would lose it at the next restart. The account is
+    /// tried again after <see cref="RetryAfter"/>, not on every request.
     /// </para>
     /// <para>
     /// Reading always goes back to the store the job row says the log was written to - never "whichever
@@ -26,15 +27,41 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
         private static readonly object Gate = new object();
         private static TableStorageUserOrgChangeLog _table;
         private static DateTime _retryAfterUtc = DateTime.MinValue;
+        private static DateTime _writesPausedUntilUtc = DateTime.MinValue;
+        private static bool _notConfigured;
 
-        /// <summary>Where a new change log goes.</summary>
+        /// <summary>
+        /// Where a new change log goes, or <c>null</c> when the configured storage account cannot be
+        /// reached right now and the log must wait.
+        /// </summary>
         public static IUserOrgChangeLog ForWriting()
         {
-            return (IUserOrgChangeLog)TryGetTable() ?? InMemoryUserOrgChangeLog.Shared;
+            lock (Gate)
+            {
+                // A table that refused a write is given a rest rather than a write per sweep: every
+                // pending log would otherwise fail against it, loudly, each time the admin page loads.
+                if (DateTime.UtcNow < _writesPausedUntilUtc)
+                {
+                    return null;
+                }
+            }
+
+            var table = TryGetTable();
+            if (table != null)
+            {
+                return table;
+            }
+
+            lock (Gate)
+            {
+                return _notConfigured ? InMemoryUserOrgChangeLog.Shared : null;
+            }
         }
 
         /// <summary>
-        /// The store a change log was written to, or <c>null</c> when that store cannot be reached right now.
+        /// The store a change log was written to, or <c>null</c> when that store cannot be reached right
+        /// now. A log still <see cref="UserOrgChangeLogStatus.Pending"/> has no store yet: for it, this is
+        /// where it would be written now (<see cref="ForWriting"/>).
         /// </summary>
         public static IUserOrgChangeLog ForReading(UserOrgChangeLogStatus writtenTo)
         {
@@ -42,6 +69,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
             {
                 case UserOrgChangeLogStatus.TableStorage: return TryGetTable();
                 case UserOrgChangeLogStatus.Memory: return InMemoryUserOrgChangeLog.Shared;
+                case UserOrgChangeLogStatus.Pending: return ForWriting();
                 default: return null;
             }
         }
@@ -55,7 +83,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                     return _table;
                 }
 
-                if (DateTime.UtcNow < _retryAfterUtc)
+                if (_notConfigured || DateTime.UtcNow < _retryAfterUtc)
                 {
                     return null;
                 }
@@ -68,7 +96,7 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                     {
                         // Not configured, as opposed to unreachable: nothing will change until the app
                         // restarts with new settings, so do not keep asking.
-                        _retryAfterUtc = DateTime.MaxValue;
+                        _notConfigured = true;
                         return null;
                     }
 
@@ -79,21 +107,61 @@ namespace Web.AnalyticsWeb.Models.UserOrgs
                         config.ClientID,
                         config.ClientSecret);
 
-                    _table = new TableStorageUserOrgChangeLog(client);
+                    TableStorageUserOrgChangeLog created = null;
+                    created = new TableStorageUserOrgChangeLog(client, ex => WriteFailed(created, ex));
+                    _table = created;
                     return _table;
                 }
                 catch (Exception ex)
                 {
                     _retryAfterUtc = DateTime.UtcNow.Add(RetryAfter);
-                    UserOrgImportAppInsights.Default.Record(new UserOrgImportTelemetryEvent
-                    {
-                        Stage = UserOrgImportStages.ChangeLogStorageUnavailable,
-                        Code = Classify(ex),
-                        ExceptionType = ex.GetBaseException().GetType().Name,
-                    });
+                    Record(ex);
                     return null;
                 }
             }
+        }
+
+        /// <summary>
+        /// A write the table refused: no more writes until <see cref="RetryAfter"/> has passed. The logs
+        /// wait, pending, in the outbox; reads carry on. A table deleted since it was opened is created
+        /// again by the next attempt.
+        /// </summary>
+        private static void WriteFailed(TableStorageUserOrgChangeLog table, Exception ex)
+        {
+            lock (Gate)
+            {
+                _writesPausedUntilUtc = DateTime.UtcNow.Add(RetryAfter);
+                if (Status(ex) == 404 && ReferenceEquals(_table, table))
+                {
+                    _table = null;
+                }
+            }
+
+            Record(ex);
+        }
+
+        private static void Record(Exception ex)
+        {
+            UserOrgImportAppInsights.Default.Record(new UserOrgImportTelemetryEvent
+            {
+                Stage = UserOrgImportStages.ChangeLogStorageUnavailable,
+                Code = Classify(ex),
+                ExceptionType = ex.GetBaseException().GetType().Name,
+            });
+        }
+
+        private static int? Status(Exception ex)
+        {
+            for (var current = ex; current != null; current = current.InnerException)
+            {
+                var failed = current as Azure.RequestFailedException;
+                if (failed != null)
+                {
+                    return failed.Status;
+                }
+            }
+
+            return null;
         }
 
         /// <summary>A stable reason, for telemetry - never the exception's message.</summary>

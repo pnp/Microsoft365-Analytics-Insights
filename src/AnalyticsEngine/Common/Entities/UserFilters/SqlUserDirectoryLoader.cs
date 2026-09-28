@@ -109,29 +109,58 @@ END";
                 // statement reads the same moment. Azure SQL allows it by default; a database that does
                 // not is read as before.
                 var snapshot = await SnapshotIsolationAllowedAsync(connection, cancellationToken).ConfigureAwait(false);
-                using (var tx = snapshot ? connection.BeginTransaction(IsolationLevel.Snapshot) : null)
+                try
                 {
-                    using (var cmd = new SqlCommand(Sql, connection, tx) { CommandTimeout = CommandTimeoutSeconds })
-                    using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+                    using (var tx = snapshot ? connection.BeginTransaction(IsolationLevel.Snapshot) : null)
                     {
-                        await ReadAllAsync(reader, builder, cancellationToken).ConfigureAwait(false);
-                    }
-
-                    if (tx != null)
-                    {
-                        tx.Commit();
-
-                        // Older SQL Server versions do not reset the isolation level when a pooled
-                        // connection is reused, and the next user of this one expects READ COMMITTED.
-                        using (var reset = new SqlCommand("SET TRANSACTION ISOLATION LEVEL READ COMMITTED;", connection))
+                        using (var cmd = new SqlCommand(Sql, connection, tx) { CommandTimeout = CommandTimeoutSeconds })
+                        using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
                         {
-                            await reset.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                            await ReadAllAsync(reader, builder, cancellationToken).ConfigureAwait(false);
                         }
+
+                        tx?.Commit();
+                    }
+                }
+                finally
+                {
+                    if (snapshot)
+                    {
+                        await ResetIsolationLevelAsync(connection).ConfigureAwait(false);
                     }
                 }
             }
 
             return builder.Build(DateTime.UtcNow);
+        }
+
+        /// <summary>
+        /// Puts a pooled connection back to READ COMMITTED - after a failed load as well as a good one.
+        /// </summary>
+        /// <remarks>
+        /// SQL Server before 2014 does not reset the isolation level when a pooled connection is reused, and
+        /// the next user of this one expects READ COMMITTED. Best effort: after a fault the connection may
+        /// already be unusable, and that must not hide the fault that got it there.
+        /// </remarks>
+        private static async Task ResetIsolationLevelAsync(SqlConnection connection)
+        {
+            if (connection.State != ConnectionState.Open)
+            {
+                return;
+            }
+
+            try
+            {
+                using (var reset = new SqlCommand("SET TRANSACTION ISOLATION LEVEL READ COMMITTED;", connection))
+                {
+                    // Not the caller's token: a cancelled load still hands its connection back to the pool.
+                    await reset.ExecuteNonQueryAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+            }
+            catch (Exception)
+            {
+                // See the remarks.
+            }
         }
 
         private static async Task<bool> SnapshotIsolationAllowedAsync(SqlConnection connection, CancellationToken cancellationToken)

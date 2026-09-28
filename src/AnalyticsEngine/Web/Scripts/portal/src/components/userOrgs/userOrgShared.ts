@@ -19,6 +19,7 @@ export const USER_ORG_MESSAGE_KEYS: Record<string, TranslationKey> = {
   importRunningChange: 'userOrgs.message.importRunningChange',
   importRunningDelete: 'userOrgs.message.importRunningDelete',
   attributeRequired: 'userOrgs.message.attributeRequired',
+  attributeTooLong: 'userOrgs.message.attributeTooLong',
   openExtension: 'userOrgs.message.openExtension',
   attributeHasSpaces: 'userOrgs.message.attributeHasSpaces',
   badDirectoryExtension: 'userOrgs.message.badDirectoryExtension',

@@ -246,6 +246,7 @@ export default function OrgTypeDialog({ open, editing, onDismiss, onSave }: OrgT
                       onInput={(e) => setAttribute((e.target as HTMLInputElement).value)}
                       onOptionSelect={(_e, d) => setAttribute(d.optionValue ?? '')}
                       placeholder="extensionAttribute1"
+                      maxLength={200}
                     >
                       {attributeOptions.map((o) => (
                         <Option key={o} value={o}>

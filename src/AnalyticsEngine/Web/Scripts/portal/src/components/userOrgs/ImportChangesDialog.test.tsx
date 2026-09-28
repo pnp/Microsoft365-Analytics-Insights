@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import ImportChangesDialog from './ImportChangesDialog';
@@ -170,6 +170,39 @@ describe('ImportChangesDialog', () => {
     expect(screen.getByText('adele@contoso.com')).toBeInTheDocument();
     expect(fetchImportChanges).toHaveBeenLastCalledWith(42, { search: '', continuation: 'next-1', pageSize: 50 });
     expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
+  });
+
+  it('does not add a page that was still loading when a new search replaced the list', async () => {
+    let resolveMore!: (value: UserOrgChangeLogPage) => void;
+    fetchImportChanges
+      .mockResolvedValueOnce(page({ items: [page().items[0]], continuation: 'next-1' }))
+      .mockReturnValueOnce(new Promise<UserOrgChangeLogPage>((resolve) => { resolveMore = resolve; }))
+      .mockResolvedValueOnce(page({ items: [page().items[2]], continuation: null }));
+    renderWithProvider(<ImportChangesDialog job={job()} onDismiss={vi.fn()} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Show more' }));
+    await userEvent.type(screen.getByLabelText('Search by user principal name'), 'megan{Enter}');
+    expect(await screen.findByText('megan@contoso.com')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveMore(page({ items: [page().items[1]], continuation: 'next-2' }));
+    });
+
+    expect(screen.getByText('megan@contoso.com')).toBeInTheDocument();
+    expect(screen.queryByText('alex@contoso.com')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
+  });
+
+  it('says so when the list goes away between pages, rather than passing off what it has as all of it', async () => {
+    fetchImportChanges
+      .mockResolvedValueOnce(page({ storage: 'memory', items: [page().items[0]], continuation: 'next-1' }))
+      .mockResolvedValueOnce(page({ status: 'missing', storage: 'memory', summary: null, items: [], continuation: null }));
+    renderWithProvider(<ImportChangesDialog job={job({ changeLog: 'memory' })} onDismiss={vi.fn()} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Show more' }));
+
+    expect(await screen.findByText(/kept in memory and is no longer available/i)).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
   it('downloads every change as a CSV worded in the reader\u2019s language', async () => {

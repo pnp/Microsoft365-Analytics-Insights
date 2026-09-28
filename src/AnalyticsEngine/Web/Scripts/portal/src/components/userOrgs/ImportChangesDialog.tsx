@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Badge,
   Button,
@@ -104,16 +104,22 @@ function ChangesBody({ job, onDismiss }: { job: UserOrgImportJob; onDismiss: () 
   const [loaded, setLoaded] = useState<Loaded>(EMPTY);
   const [exporting, setExporting] = useState<number | null>(null);
   const [exportFailed, setExportFailed] = useState(false);
+  // Which load the list on screen came from. A new search replaces the list, so a "Show more" still
+  // in flight from the old one must not append its page - or its continuation - to the new one.
+  const generation = useRef(0);
 
   useEffect(() => {
     const controller = new AbortController();
+    const run = ++generation.current;
     setLoaded(EMPTY);
     fetchImportChanges(job.id, { search, pageSize: PAGE_SIZE }, controller.signal)
-      .then((page) =>
-        setLoaded({ page, items: page.items, continuation: page.continuation, loading: false, failed: false }),
-      )
+      .then((page) => {
+        if (run === generation.current) {
+          setLoaded({ page, items: page.items, continuation: page.continuation, loading: false, failed: false });
+        }
+      })
       .catch(() => {
-        if (!controller.signal.aborted) setLoaded({ ...EMPTY, loading: false, failed: true });
+        if (!controller.signal.aborted && run === generation.current) setLoaded({ ...EMPTY, loading: false, failed: true });
       });
     return () => controller.abort();
   }, [job.id, search, attempt]);
@@ -121,11 +127,20 @@ function ChangesBody({ job, onDismiss }: { job: UserOrgImportJob; onDismiss: () 
   const loadMore = async () => {
     const continuation = loaded.continuation;
     if (!continuation) return;
+    const run = generation.current;
     setLoaded((s) => ({ ...s, loading: true, failed: false }));
     try {
       const next = await fetchImportChanges(job.id, { search, continuation, pageSize: PAGE_SIZE });
+      if (run !== generation.current) return;
+      if (next.status !== 'available') {
+        // The list went away between pages - dropped from memory, or the storage account stopped
+        // answering. Said as such, not shown as though the pages already here were all of it.
+        setLoaded({ page: next, items: [], continuation: null, loading: false, failed: false });
+        return;
+      }
       setLoaded((s) => ({ ...s, items: [...s.items, ...next.items], continuation: next.continuation, loading: false }));
     } catch {
+      if (run !== generation.current) return;
       setLoaded((s) => ({ ...s, loading: false, failed: true }));
     }
   };

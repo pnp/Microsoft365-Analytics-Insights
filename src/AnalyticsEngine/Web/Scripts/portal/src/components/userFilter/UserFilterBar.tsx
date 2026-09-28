@@ -27,10 +27,12 @@ import { describeClause, describeUserFilter, dimensionLabel, operatorShortLabel,
 import {
   MAX_CLAUSES,
   MAX_TEXT_TERMS,
+  MAX_VALUES_PER_CLAUSE,
   addClause,
   fitsLimits,
   groupClauseIndexes,
   hasTooManyTextTerms,
+  hasTooManyValues,
   isCustomDimension,
   isTextOperator,
   newClause,
@@ -175,6 +177,9 @@ export default function UserFilterBar({ filter, onChange, echoNames }: UserFilte
 
   const tooLong = (candidate: UserFilter) => {
     if (fitsLimits(candidate)) return null;
+    if (hasTooManyValues(candidate)) {
+      return t('userFilter.editor.tooManyValues', { max: formatNumber(MAX_VALUES_PER_CLAUSE) });
+    }
     return hasTooManyTextTerms(candidate)
       ? t('userFilter.editor.tooManyTerms', { max: formatNumber(MAX_TEXT_TERMS) })
       : t('userFilter.editor.tooLong');

@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { EMPTY_USER_FILTER, type UserFilter, type UserFilterClause } from '../../types/userFilter';
 import {
+  MAX_CLAUSES,
   MAX_TEXT_TERMS,
   MAX_TEXT_TERMS_PER_CLAUSE,
+  MAX_VALUES_PER_CLAUSE,
   addClause,
   encodedFilterLength,
   fitsLimits,
   groupClauseIndexes,
   hasTooManyTextTerms,
+  hasTooManyValues,
   isEmptyFilter,
   parseUserFilter,
   removeClause,
@@ -226,6 +231,36 @@ describe('narrowing the whole filter to one value', () => {
       hasTooManyTextTerms({ clauses: [clause('department', terms(400, 'D'))] }),
       'Picked values are exact lookups, not searches.',
     ).toBe(false);
+  });
+
+  it('keeps a condition within the values the server accepts, however short they are', () => {
+    // 501 short codes fit comfortably under the URL limit, so length alone would let them through to
+    // a server that refuses every report request carrying them.
+    const codes = (n: number) => Array.from({ length: n }, (_, i) => `${i}`);
+    const within = { clauses: [clause('department', codes(MAX_VALUES_PER_CLAUSE))] };
+    const over = { clauses: [clause('department', codes(MAX_VALUES_PER_CLAUSE + 1))] };
+
+    expect(hasTooManyValues(within)).toBe(false);
+    expect(hasTooManyValues(over)).toBe(true);
+    expect(encodedFilterLength(over), 'Short enough that length is not what refuses it.').toBeLessThan(6000);
+    expect(fitsLimits(over)).toBe(false);
+  });
+
+  it('mirrors the server\u2019s limits exactly', () => {
+    // A portal limit above the server's lets through a filter every report request then refuses; one
+    // below it refuses a filter the server would run.
+    const codec = readFileSync(
+      join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'UserFilters', 'UserFilterCodec.cs'),
+      'utf8',
+    );
+    const server = (name: string) => Number(new RegExp(`public const int ${name} = (\\d+);`).exec(codec)?.[1]);
+
+    expect({ MAX_CLAUSES, MAX_VALUES_PER_CLAUSE, MAX_TEXT_TERMS_PER_CLAUSE, MAX_TEXT_TERMS }).toEqual({
+      MAX_CLAUSES: server('MaxClauses'),
+      MAX_VALUES_PER_CLAUSE: server('MaxValuesPerClause'),
+      MAX_TEXT_TERMS_PER_CLAUSE: server('MaxTextTermsPerClause'),
+      MAX_TEXT_TERMS: server('MaxTextTerms'),
+    });
   });
 
   it('reports the single value only when every group requires exactly it', () => {

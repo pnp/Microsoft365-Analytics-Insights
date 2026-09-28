@@ -214,7 +214,10 @@ namespace Common.Entities.UserOrgs
         /// </summary>
         /// <remarks>
         /// Also throws away expired drafts, and this admin's earlier drafts for the same org type, so
-        /// previewing a file repeatedly does not pile up copies of every UPN in it.
+        /// previewing a file repeatedly does not pile up copies of every UPN in it. "Earlier" means asked
+        /// for before this one: <paramref name="draft"/>'s <see cref="UserOrgImportJob.QueuedUtc"/> is when
+        /// the preview request arrived (now, when unset), so a slow preview finishing after a newer one
+        /// cannot throw the newer draft away.
         /// </remarks>
         Task<int> CreateDraftAsync(
             UserOrgImportJob draft,

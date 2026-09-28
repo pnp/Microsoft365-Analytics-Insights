@@ -293,7 +293,7 @@ export const userOrgs: Record<keyof typeof en, string> = {
   'userOrgs.changes.counts': '{added} a\u00f1adidos, {changed} modificados, {cleared} borrados',
   'userOrgs.changes.storage.tableStorage': 'Esta lista de cambios se guarda en Azure Table Storage.',
   'userOrgs.changes.storage.memory':
-    'Esta lista de cambios solo se guarda en la memoria de este servidor web, porque no hay ninguna cuenta de almacenamiento configurada. Se pierde cuando la aplicaci\u00f3n web se reinicia y los dem\u00e1s servidores web no pueden verla.',
+    'Esta lista de cambios solo se guarda en la memoria de este servidor web, porque no hab\u00eda ninguna cuenta de almacenamiento configurada cuando se escribi\u00f3. Se pierde cuando la aplicaci\u00f3n web se reinicia y los dem\u00e1s servidores web no pueden verla.',
   'userOrgs.changes.truncated':
     'Solo se conservaron los primeros {stored} de {count} cambios: la lista de cambios en memoria tiene un tama\u00f1o limitado.',
   'userOrgs.changes.status.pending':
@@ -348,6 +348,7 @@ export const userOrgs: Record<keyof typeof en, string> = {
   'userOrgs.message.importRunningDelete':
     'Hay una importaci\u00f3n de este tipo de organizaci\u00f3n en curso. Espere a que termine antes de eliminar el tipo.',
   'userOrgs.message.attributeRequired': 'El nombre del atributo de Entra es obligatorio.',
+  'userOrgs.message.attributeTooLong': 'El nombre de un atributo puede tener como m\u00e1ximo {max} caracteres.',
   'userOrgs.message.openExtension':
     'No se pueden usar extensiones abiertas (las que se leen con $expand=extensions): Microsoft Graph no admite $expand en /users/delta, que es como este producto sigue los cambios de los usuarios. Use una extensi\u00f3n de directorio, una extensi\u00f3n de esquema o una de las ranuras extensionAttribute1-15.',
   'userOrgs.message.attributeHasSpaces':

@@ -203,6 +203,23 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void ANameLongerThanTheColumnIsRefusedRatherThanCut()
+        {
+            // entra_attribute_name is nvarchar(200), and its parameter would silently cut a longer name
+            // down to a different attribute - one that was never tested against Graph.
+            const string container = "contoso_orgData.";
+            var longest = container + new string('p', EntraOrgAttributeSpec.MaxNameLength - container.Length);
+
+            Assert.AreEqual(longest, Parse("  " + longest + "  ").Canonical, "The limit applies to the trimmed name.");
+
+            EntraOrgAttributeSpec spec;
+            EntraOrgAttributeParseFailure failure;
+            Assert.IsFalse(EntraOrgAttributeSpec.TryParse(longest + "p", out spec, out failure));
+            Assert.AreEqual(UserOrgMessageCodes.AttributeTooLong, failure.Code);
+            Assert.AreEqual(EntraOrgAttributeSpec.MaxNameLength, failure.Values["max"], "The limit is a number the portal formats.");
+        }
+
+        [TestMethod]
         public void TheStringOverload_ReportsTheSameEnglishAsTheCodedOne()
         {
             EntraOrgAttributeSpec spec;

@@ -644,17 +644,22 @@ DECLARE @clearCount INT = CASE WHEN @mode = 1 THEN @replaceClears ELSE @mergeCle
             const string sql = @"
 SET NOCOUNT ON;
 
+-- When the preview was asked for. Only drafts asked for BEFORE it are its to replace: a large file
+-- still uploading when its admin cleared it and chose a smaller one must not, finishing last, throw
+-- away the draft of the file on screen.
+DECLARE @requested DATETIME2 = COALESCE(@requestedUtc, SYSUTCDATETIME());
+
 -- Throw away what nobody will import: drafts past their lifetime, and this admin's earlier previews of
 -- files for the same type. Previewing a file five times must not leave five copies of every UPN in it.
 DELETE FROM dbo.user_org_import_jobs
 WHERE status = 6
   AND (queued_utc < DATEADD(SECOND, -@draftLifetimeSecs, SYSUTCDATETIME())
-       OR (org_type_id = @orgTypeId AND started_by = @startedBy));
+       OR (org_type_id = @orgTypeId AND started_by = @startedBy AND queued_utc < @requested));
 
 INSERT INTO dbo.user_org_import_jobs
     (org_type_id, mode, status, file_name, started_by, queued_utc, rows_total, rows_invalid, expected_generation)
 OUTPUT INSERTED.id
-VALUES (@orgTypeId, 2, 6, @fileName, @startedBy, SYSUTCDATETIME(), @rowsTotal, @rowsInvalid, @expectedGeneration);";
+VALUES (@orgTypeId, 2, 6, @fileName, @startedBy, @requested, @rowsTotal, @rowsInvalid, @expectedGeneration);";
 
             using (var connection = await OpenAsync(cancellationToken).ConfigureAwait(false))
             using (var tx = connection.BeginTransaction())
@@ -671,6 +676,8 @@ VALUES (@orgTypeId, 2, 6, @fileName, @startedBy, SYSUTCDATETIME(), @rowsTotal, @
                         draft.ExpectedGeneration.HasValue ? (object)draft.ExpectedGeneration.Value : DBNull.Value;
                     cmd.Parameters.Add("@draftLifetimeSecs", SqlDbType.Int).Value =
                         (int)UserOrgImportJobLimits.DraftLifetime.TotalSeconds;
+                    cmd.Parameters.Add("@requestedUtc", SqlDbType.DateTime2).Value =
+                        draft.QueuedUtc == default(DateTime) ? (object)DBNull.Value : DateTime.SpecifyKind(draft.QueuedUtc, DateTimeKind.Utc);
 
                     draftId = Convert.ToInt32(await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
                 }

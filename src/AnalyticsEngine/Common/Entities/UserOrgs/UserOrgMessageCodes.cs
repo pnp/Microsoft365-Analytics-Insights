@@ -27,6 +27,7 @@ namespace Common.Entities.UserOrgs
 
         // Attribute names
         public const string AttributeRequired = "attributeRequired";
+        public const string AttributeTooLong = "attributeTooLong"; // max
         public const string OpenExtension = "openExtension";
         public const string AttributeHasSpaces = "attributeHasSpaces"; // attribute
         public const string BadDirectoryExtension = "badDirectoryExtension"; // attribute

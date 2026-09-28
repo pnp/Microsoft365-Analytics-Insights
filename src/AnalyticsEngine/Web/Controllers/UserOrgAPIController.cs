@@ -244,6 +244,10 @@ namespace Web.AnalyticsWeb.Controllers
             int? userColumn = null,
             int? valueColumn = null)
         {
+            // When the request arrived - before its body, which for a large file takes a while, was read.
+            // A preview replaces only this admin's drafts asked for before it (CreateDraftAsync).
+            var requestedUtc = System.Web.HttpContext.Current?.Timestamp.ToUniversalTime() ?? DateTime.UtcNow;
+
             var forged = RejectIfNotXhr();
             if (forged != null) return forged;
 
@@ -254,7 +258,7 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 var startedBy = User?.Identity?.Name ?? "unknown";
                 return await RunAsync(svc => svc.PreviewAsync(
-                    upload.File.Content, upload.File.FileName, orgTypeId, startedBy, userColumn, valueColumn, cancellationToken),
+                    upload.File.Content, upload.File.FileName, orgTypeId, startedBy, userColumn, valueColumn, cancellationToken, requestedUtc),
                     "preview-csv", cancellationToken).ConfigureAwait(false);
             }
         }
