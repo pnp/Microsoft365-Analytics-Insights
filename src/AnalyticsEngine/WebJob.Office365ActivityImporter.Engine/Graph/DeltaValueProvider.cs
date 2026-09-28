@@ -78,6 +78,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// <summary>
     /// In-process delta token provider. Used when no Redis connection string is provided.
     /// </summary>
+    /// <remarks>
+    /// Lives for one import cycle: <see cref="User.UserMetadataUpdater"/> builds a new one each time the
+    /// user metadata section runs, so a deployment without Redis enumerates every user every cycle, as it
+    /// always has, and nothing here carries a token from one cycle into the next. The key qualifier below
+    /// therefore only has to keep one cycle's attempts apart - the org-carrying request and its fallback.
+    /// </remarks>
     public class InProcessDeltaValueProvider : IDeltaValueProvider
     {
         private readonly AnalyticsLogger _logger;

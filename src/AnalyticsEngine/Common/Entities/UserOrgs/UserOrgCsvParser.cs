@@ -577,16 +577,19 @@ namespace Common.Entities.UserOrgs
         /// A value holding the separator without quotes - <c>Retail, North</c> in a comma-separated file -
         /// splits into one field more than its neighbours, and reading only the chosen columns would import
         /// <c>Retail</c> for that person without a word, wherever the row sits in the file. So the width is
-        /// the widest a row may legitimately be: the header as written, since Excel writes a trailing
-        /// separator for every column it holds data in; the width most sample rows share, so a file whose
-        /// rows are all wider than its header is still read; and the columns being read.
+        /// the widest a row may legitimately be: the columns the header names, counted to its last name and
+        /// not to its last separator - Excel writes a trailing separator on the header as well as the rows,
+        /// and counting it would let exactly one stray separator through on every row; the width most sample
+        /// rows share, so a file whose rows are all wider than its header is still read; and the columns
+        /// being read. When two widths are equally common the narrower wins: a file that cannot say which
+        /// is its real width has its wider rows reported, not imported cut short.
         /// </remarks>
         private static int ExpectedRowWidth(List<List<string>> sampleFields, bool headerDetected, int userColumn, int valueColumn)
         {
             var width = Math.Max(userColumn, valueColumn) + 1;
             if (headerDetected)
             {
-                width = Math.Max(width, sampleFields[0].Count);
+                width = Math.Max(width, TextWidth(sampleFields[0].Select(CleanHeader).ToList()));
             }
 
             var usual = sampleFields
@@ -595,19 +598,22 @@ namespace Common.Entities.UserOrgs
                 .Where(w => w > 0)
                 .GroupBy(w => w)
                 .OrderByDescending(g => g.Count())
-                .ThenByDescending(g => g.Key)
+                .ThenBy(g => g.Key)
                 .Select(g => g.Key)
                 .FirstOrDefault();
 
             return Math.Max(width, usual);
         }
 
-        /// <summary>How many fields a row carries text in: up to and including its last non-blank one.</summary>
+        /// <summary>
+        /// How many fields a row carries text in: up to and including its last one holding anything but
+        /// white space and the invisible characters the parser strips everywhere else.
+        /// </summary>
         private static int TextWidth(List<string> fields)
         {
             for (var i = fields.Count - 1; i >= 0; i--)
             {
-                if (!string.IsNullOrWhiteSpace(fields[i]))
+                if (!string.IsNullOrWhiteSpace(StripInvisible(fields[i])))
                 {
                     return i + 1;
                 }

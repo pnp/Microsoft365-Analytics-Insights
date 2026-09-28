@@ -498,6 +498,43 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void ARowWithOneValueTooManyIsReportedEvenWhenEveryLineEndsInASeparator()
+        {
+            // Excel writes the trailing separator on the header too. Counting the header to its last
+            // separator made the allowance three columns, so exactly one stray separator got through on
+            // every row of the commonest layout there is.
+            var lines = new StringBuilder("UPN,Department,\r\n");
+            for (var i = 1; i <= 25; i++)
+            {
+                lines.Append("user").Append(i).Append("@contoso.com,Wholesale,\r\n");
+            }
+
+            lines.Append("alice@contoso.com,Retail, North\r\n");
+            var result = Parse(lines.ToString());
+
+            Assert.IsNull(result.Blocking);
+            Assert.AreEqual(25, result.Rows.Count);
+            Assert.AreEqual(UserOrgCsvProblemCodes.TooManyValues, result.Problems.Single().Code);
+            Assert.AreEqual("alice@contoso.com", result.Problems.Single().Upn);
+        }
+
+        [TestMethod]
+        public void WhenTwoWidthsAreEquallyCommonTheWiderRowsAreReported()
+        {
+            // Two rows, one of them ragged: nothing says which width is the file's own. Imported at the
+            // wider one, Bob became "Retail" with no problem reported; reported, the admin sees why.
+            var result = Parse(
+                "UPN,Team\r\na@contoso.com,Wholesale\r\nb@contoso.com,Retail, North\r\n",
+                null,
+                new UserOrgCsvParseOptions { OrgTypeName = "Team" });
+
+            Assert.IsNull(result.Blocking);
+            Assert.AreEqual("a@contoso.com", result.Rows.Single().Upn);
+            Assert.AreEqual(UserOrgCsvProblemCodes.TooManyValues, result.Problems.Single().Code);
+            Assert.AreEqual(3, result.Problems.Single().LineNumber);
+        }
+
+        [TestMethod]
         public void ExtraSeparatorsAndConsistentlyWiderRowsAreStillRead()
         {
             // Trailing separators carry no text, and a file whose every row is wider than its header - an
@@ -515,6 +552,24 @@ namespace Tests.UnitTests
             Assert.AreEqual(3, wider.Rows.Count);
             Assert.AreEqual(0, wider.Problems.Count);
             Assert.AreEqual("Retail", wider.Rows[0].OrgValue);
+
+            // A column the header names may hold text on some rows only.
+            var named = Parse(
+                "UPN,Team,Notes\r\na@contoso.com,Retail\r\nb@contoso.com,Ops,started in May\r\n",
+                null,
+                new UserOrgCsvParseOptions { OrgTypeName = "Team" });
+            Assert.IsNull(named.Blocking);
+            Assert.AreEqual(2, named.Rows.Count);
+            Assert.AreEqual(0, named.Problems.Count);
+
+            // And a field holding nothing but a zero-width space or a stray byte order mark holds no text.
+            var invisible = Parse(
+                "UPN,Team\r\na@contoso.com,Retail\r\nb@contoso.com,Ops\r\nc@contoso.com,HR\r\nd@contoso.com,IT,\u200B\r\ne@contoso.com,Legal,\uFEFF\r\n",
+                null,
+                new UserOrgCsvParseOptions { OrgTypeName = "Team" });
+            Assert.IsNull(invisible.Blocking);
+            Assert.AreEqual(5, invisible.Rows.Count);
+            Assert.AreEqual(0, invisible.Problems.Count, "An invisible character is not a value.");
         }
 
         [TestMethod]

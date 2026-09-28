@@ -1775,4 +1775,85 @@ WHERE resource_type = 'APPLICATION' AND resource_database_id = DB_ID()
                 => throw new InvalidOperationException("unreachable");
         }
     }
+
+    /// <summary>The upload size limits, as the controller and the host apply them.</summary>
+    [TestClass]
+    public class UserOrgUploadLimitTests
+    {
+        private const int Limit = AnalyticsWeb::Web.AnalyticsWeb.Controllers.UserOrgAPIController.MaxUploadBytes;
+
+        /// <summary>
+        /// Posts a file as the portal does, as multipart form data, and says whether the controller read it
+        /// and moved on to the preview - which here is a service that is never built.
+        /// </summary>
+        private static async Task<(int Status, bool Read)> Upload(int fileBytes)
+        {
+            var read = false;
+            var controller = new AnalyticsWeb::Web.AnalyticsWeb.Controllers.UserOrgAPIController(
+                () => { read = true; throw new NotSupportedException("the preview is not under test"); },
+                () => throw new NotSupportedException(),
+                () => { })
+            {
+                Request = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Post, "http://localhost/api/UserOrg/preview-csv"),
+                Configuration = new System.Web.Http.HttpConfiguration(),
+            };
+            controller.Request.Headers.Add("X-Requested-With", "XMLHttpRequest");
+
+            var form = new System.Net.Http.MultipartFormDataContent();
+            form.Add(new System.Net.Http.ByteArrayContent(new byte[fileBytes]), "file", "orgs.csv");
+            controller.Request.Content = form;
+            Assert.IsTrue(form.Headers.ContentLength > fileBytes, "The request carries more than the file.");
+
+            var response = await (await controller.PreviewCsv(1, CancellationToken.None)).ExecuteAsync(CancellationToken.None);
+            return ((int)response.StatusCode, read);
+        }
+
+        [TestMethod]
+        public async Task AFileRightAtTheLimitIsReadEvenThoughItsRequestIsLarger()
+        {
+            // Measured against the whole request, its boundaries and part headers took it over, and it was
+            // refused as "larger than the 32 MB limit" when it was not.
+            var (status, read) = await Upload(Limit);
+
+            Assert.IsTrue(read, "Refused before it was read, with status " + status + ".");
+            Assert.AreNotEqual(413, status);
+        }
+
+        [TestMethod]
+        public async Task AFileOverTheLimitIsStillRefusedOnceItHasBeenRead()
+        {
+            var (status, read) = await Upload(Limit + 1);
+
+            Assert.AreEqual(413, status);
+            Assert.IsFalse(read, "Nothing was previewed.");
+        }
+
+        [TestMethod]
+        public void TheControllerAllowsTheRequestTheHostDoes()
+        {
+            // The host's refusal is a bare platform error page; the controller's is a translated message. So
+            // the host must let through every request the controller reads, and no more.
+            var directory = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
+            string config = null;
+            while (directory != null && config == null)
+            {
+                var candidate = Path.Combine(directory.FullName, "Web", "Web.Template.config");
+                config = File.Exists(candidate) ? File.ReadAllText(candidate) : null;
+                directory = directory.Parent;
+            }
+
+            Assert.IsNotNull(config, "Web.Template.config was not found.");
+            var request = AnalyticsWeb::Web.AnalyticsWeb.Controllers.UserOrgAPIController.MaxMultipartRequestBytes;
+            foreach (var route in new[] { "api/UserOrg/preview-csv", "api/UserOrg/import-csv" })
+            {
+                var location = System.Text.RegularExpressions.Regex.Match(
+                    config, "<location path=\"" + route + "\">(.*?)</location>", System.Text.RegularExpressions.RegexOptions.Singleline);
+                Assert.IsTrue(location.Success, route);
+                StringAssert.Contains(location.Groups[1].Value, "maxRequestLength=\"" + (request / 1024) + "\"", route);
+                StringAssert.Contains(location.Groups[1].Value, "maxAllowedContentLength=\"" + request + "\"", route);
+            }
+
+            Assert.IsTrue(request > Limit, "The request allowance must leave room for the multipart overhead.");
+        }
+    }
 }

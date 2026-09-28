@@ -45,6 +45,13 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>Largest upload accepted, before parsing. A 200,000-row file is well under this.</summary>
         internal const int MaxUploadBytes = 32 * 1024 * 1024;
 
+        /// <summary>
+        /// Largest multipart request read: a file at <see cref="MaxUploadBytes"/> plus its boundaries and
+        /// part headers. The same 36 MB the web.config allows the two upload routes, so neither the host -
+        /// which cannot explain itself - nor this controller turns away a file the limit accepts.
+        /// </summary>
+        internal const int MaxMultipartRequestBytes = 36 * 1024 * 1024;
+
         private const string RequestedWithHeader = "X-Requested-With";
 
         private readonly Func<UserOrgAdminService> _serviceFactory;
@@ -536,8 +543,13 @@ namespace Web.AnalyticsWeb.Controllers
                 return Rejected(orgTypeId, NoFile());
             }
 
+            // Only a request that cannot hold an acceptable file is turned away before it is read. A
+            // multipart body is the file plus its boundaries and part headers, so a file right at the limit
+            // arrives in a slightly larger request - measured against the whole request, it was refused as
+            // "larger than 32 MB" when it was not. The file itself is measured once it has been read, below.
+            var multipart = Request.Content.IsMimeMultipartContent();
             var length = Request.Content.Headers.ContentLength;
-            if (length.HasValue && length.Value > MaxUploadBytes)
+            if (length.HasValue && length.Value > (multipart ? MaxMultipartRequestBytes : MaxUploadBytes))
             {
                 return Rejected(orgTypeId, TooLarge(), UserOrgImportRefusalCodes.UploadTooLarge, length.Value);
             }
@@ -548,7 +560,7 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 string fileName;
                 byte[] bytes;
-                if (Request.Content.IsMimeMultipartContent())
+                if (multipart)
                 {
                     var provider = await Request.Content.ReadAsMultipartAsync().ConfigureAwait(false);
                     var part = provider.Contents.FirstOrDefault(c => c.Headers.ContentDisposition?.FileName != null)
