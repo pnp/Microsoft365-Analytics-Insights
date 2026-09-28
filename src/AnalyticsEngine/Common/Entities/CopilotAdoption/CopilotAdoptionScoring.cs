@@ -1218,6 +1218,30 @@ namespace Common.Entities.CopilotAdoption
         #region Cowork readiness
 
         /// <summary>
+        /// Whether a set of Cowork signals can be scored: there are none, or at least one of them has a
+        /// licensed-user row to take its Copilot fluency from.
+        /// </summary>
+        /// <remarks>
+        /// Not "are there any licensed-user rows": the licensed-user and Cowork queries keep different people
+        /// past their caps, so a slice can hold licensed rows only for people Cowork never reached and Cowork
+        /// signals only for people the licensed query never reached. Scored anyway, every row would read a
+        /// fluency of 0 it does not have. The one test the summary (<c>FinaliseCowork</c>) and the row and
+        /// export endpoints (<c>CopilotAdoptionScopeFilter.FilterRows</c>) both make, so they cannot disagree.
+        /// </remarks>
+        public static bool CoworkCanBeScored(
+            IReadOnlyCollection<CoworkReadinessSignalRow> signals,
+            IEnumerable<LicensedUserAdoptionRow> licensed)
+        {
+            if (signals == null || signals.Count == 0)
+            {
+                return true;
+            }
+
+            var licensedIds = new HashSet<int>((licensed ?? Enumerable.Empty<LicensedUserAdoptionRow>()).Select(u => u.UserId));
+            return signals.Any(s => licensedIds.Contains(s.UserId));
+        }
+
+        /// <summary>
         /// Scores a Copilot seat holder for Microsoft 365 Copilot Cowork readiness.
         ///
         /// <para>Cowork is an agentic delegation layer: you describe an outcome and it plans and runs

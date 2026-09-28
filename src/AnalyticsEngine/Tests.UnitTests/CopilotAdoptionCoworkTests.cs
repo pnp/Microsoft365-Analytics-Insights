@@ -1685,11 +1685,49 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, analysis.CoworkReadiness.Count);
         }
 
+        [TestMethod]
+        public void Cowork_ASliceWhoseLicensedAndCoworkPeopleNeverOverlapCannotBeScored()
+        {
+            // Both lists hold somebody - an older seat holder the licensed-user query reached, and a newer
+            // one only the Cowork assessment reached - but nobody is in both. "Any licensed-user row" called
+            // that scorable, and every Cowork row went out at a fluency of 0 as "build fluency first", in
+            // the summary and in the list and export alike.
+            var analysis = CappedAnalysisWithANewJoinerPastTheCap(withAColleagueCoworkNeverReached: true);
+            var service = new CopilotAdoptionService();
+            service.FinaliseSummary(analysis);
+            Assert.IsTrue(analysis.Summary.CoworkReadinessAvailable, "The tenant view still has someone in both lists.");
+
+            var scoped = CopilotAdoptionScopeFilter.Apply(
+                analysis, CopilotAdoptionScope.ForEmailDomain("fabrikam.com"), service.FinaliseSummary);
+
+            Assert.AreEqual(1, scoped.LicensedUsers.Count, "The slice has a licensed-user row - just not for anyone Cowork reached.");
+            Assert.IsFalse(scoped.Summary.CoworkReadinessAvailable);
+            Assert.AreEqual(1, scoped.Summary.WarningDetails.Single(d => d.Key == CopilotAdoptionWarningKeys.CoworkSliceBeyondLicensedCap).Values["total"]);
+            Assert.IsFalse(scoped.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.CoworkFluencyPartial));
+            Assert.AreEqual(0, scoped.CoworkReadiness.Count);
+
+            var listed = CopilotAdoptionScopeFilter.FilterRows(analysis, CopilotAdoptionScope.ForEmailDomain("fabrikam.com"));
+            Assert.AreEqual(0, listed.CoworkReadiness.Count, "The list and export agree with the summary.");
+        }
+
+        [TestMethod]
+        public void Cowork_CanBeScoredOnlyWhenSomeoneItReachedHasALicensedUserRow()
+        {
+            var reached = new List<CoworkReadinessSignalRow> { new CoworkReadinessSignalRow { UserId = 7 } };
+
+            Assert.IsTrue(CopilotAdoptionScoring.CoworkCanBeScored(new List<CoworkReadinessSignalRow>(), null), "Nothing to score is not a fault.");
+            Assert.IsFalse(CopilotAdoptionScoring.CoworkCanBeScored(reached, null));
+            Assert.IsFalse(CopilotAdoptionScoring.CoworkCanBeScored(reached, new[] { new LicensedUserAdoptionRow { UserId = 8 } }));
+            Assert.IsTrue(CopilotAdoptionScoring.CoworkCanBeScored(
+                reached, new[] { new LicensedUserAdoptionRow { UserId = 8 }, new LicensedUserAdoptionRow { UserId = 7 } }));
+        }
+
         /// <summary>
         /// A capped tenant analysis: one seat holder the licensed-user query reached, and one newer one past
-        /// its cap whom the Cowork assessment still reached - each in their own email domain.
+        /// its cap whom the Cowork assessment still reached - each in their own email domain. Optionally an
+        /// older colleague of the newer one, in the same domain, whom only the licensed-user query reached.
         /// </summary>
-        private static CopilotAdoptionAnalysis CappedAnalysisWithANewJoinerPastTheCap()
+        private static CopilotAdoptionAnalysis CappedAnalysisWithANewJoinerPastTheCap(bool withAColleagueCoworkNeverReached = false)
         {
             var assessed = HeavyCoordinator();
             assessed.UserId = 1;
@@ -1700,7 +1738,7 @@ namespace Tests.UnitTests
             newJoiner.UserPrincipalName = "noor.haddad@fabrikam.com";
             newJoiner.EmailDomain = "fabrikam.com";
 
-            return new CopilotAdoptionAnalysis
+            var analysis = new CopilotAdoptionAnalysis
             {
                 CoworkSignals = new List<CoworkReadinessSignalRow> { assessed, newJoiner },
                 LicensedUsers = new List<LicensedUserAdoptionRow>
@@ -1715,6 +1753,19 @@ namespace Tests.UnitTests
                 },
                 LicensedUsersCapped = true,
             };
+
+            if (withAColleagueCoworkNeverReached)
+            {
+                analysis.LicensedUsers.Add(new LicensedUserAdoptionRow
+                {
+                    UserId = 2,
+                    UserPrincipalName = "grace.okafor@fabrikam.com",
+                    EmailDomain = "fabrikam.com",
+                    AdoptionScore = 40,
+                });
+            }
+
+            return analysis;
         }
 
         #endregion

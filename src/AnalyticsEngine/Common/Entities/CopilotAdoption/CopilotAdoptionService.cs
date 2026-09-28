@@ -2108,10 +2108,14 @@ namespace Common.Entities.CopilotAdoption
             // rather than recalculated, so the two tabs cannot disagree about the same person.
             var licensed = analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>();
 
-            if (licensed.Count == 0)
+            // Scorable only when somebody the Cowork assessment reached has a licensed-user row to take
+            // fluency from - not merely when there are licensed-user rows: a slice of a capped analysis can
+            // hold older seat holders only the licensed query reached and newer ones only Cowork reached,
+            // with nobody in both. The row endpoints make the same test (CopilotAdoptionScopeFilter.FilterRows).
+            if (!CopilotAdoptionScoring.CoworkCanBeScored(signals, licensed))
             {
-                // Cowork signals exist but the licensed-user analysis produced nothing. That combination
-                // cannot occur naturally - CoworkReadinessSql semi-joins to seat holders, so signals imply
+                // Cowork signals exist but none of them has a licensed-user row. Uncapped, that cannot
+                // occur naturally - CoworkReadinessSql semi-joins to seat holders, so signals imply
                 // seat holders - which means the licensed-user step failed and SafeAsync degraded it to a
                 // warning. Publishing anyway would score every one of these people at zero fluency and band
                 // them "build fluency first": an unavailable input rendered as a measured verdict of "not
@@ -2127,10 +2131,10 @@ namespace Common.Entities.CopilotAdoption
                 // for its people, scored against a fluency of 0, and they must not outlive this verdict.
                 analysis.CoworkReadiness = new List<CoworkReadinessRow>();
 
-                // Except in a slice of an analysis whose licensed-user query stopped at its cap: the two
-                // queries keep different people past their caps - the licensed one by user id, Cowork by
-                // coordination load - so a view made up of the newest user records can hold Cowork signals
-                // and no licensed-user row at all, with both queries complete. Still unavailable, for the
+                // Except in an analysis whose licensed-user query stopped at its cap: the two queries keep
+                // different people past their caps - the licensed one by user id, Cowork by coordination
+                // load - so a view made up of the newest user records can hold Cowork signals and no
+                // licensed-user row for any of them, with both queries complete. Still unavailable, for the
                 // same reason, but blamed on the cap rather than on a failure nobody can find.
                 if (analysis.LicensedUsersCapped)
                 {

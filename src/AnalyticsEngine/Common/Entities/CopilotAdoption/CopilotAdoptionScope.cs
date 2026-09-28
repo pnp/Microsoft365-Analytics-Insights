@@ -191,13 +191,13 @@ namespace Common.Entities.CopilotAdoption
                 Opportunities = Narrow(analysis.Opportunities, o => o.UserId, o => o.EmailDomain, scope),
                 // The cap is applied to the tenant-wide ranking, so a narrowed list inherits it.
                 OpportunitiesCapped = analysis.OpportunitiesCapped,
-                // Withheld when the slice has Cowork signals but no licensed-user row, which is exactly when
-                // its summary says the tab cannot be scored (FinaliseCowork): every row here was scored
-                // against a fluency of 0 it does not have. The row and export endpoints read this list
-                // directly, so it has to agree with the summary here, not only there.
-                CoworkReadiness = coworkSignals.Count > 0 && licensedUsers.Count == 0
-                    ? new List<CoworkReadinessRow>()
-                    : Narrow(analysis.CoworkReadiness, c => c.UserId, c => c.EmailDomain, scope),
+                // Withheld when no Cowork signal in the slice has a licensed-user row, which is exactly when
+                // its summary says the tab cannot be scored (FinaliseCowork, through the same test): every
+                // row here was scored against a fluency of 0 it does not have. The row and export endpoints
+                // read this list directly, so it has to agree with the summary here, not only there.
+                CoworkReadiness = CopilotAdoptionScoring.CoworkCanBeScored(coworkSignals, licensedUsers)
+                    ? Narrow(analysis.CoworkReadiness, c => c.UserId, c => c.EmailDomain, scope)
+                    : new List<CoworkReadinessRow>(),
                 CoworkSignals = coworkSignals,
                 // Only a complete assessment can vouch for an empty slice. When the Cowork query hit its
                 // row cap, the people a slice selects may simply have been cut off, and "0 candidates"
