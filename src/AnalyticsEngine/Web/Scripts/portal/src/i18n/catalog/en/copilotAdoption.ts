@@ -49,6 +49,7 @@ export const copilotAdoption = {
   'copilotAdoption.page.errors.checkAvailability': 'Failed to check Copilot adoption availability.',
   'copilotAdoption.page.errors.loadSummary': 'Failed to load the adoption summary.',
   'copilotAdoption.page.controls.excelTooltipReady': 'The whole report - every figure, table and chart - as an Excel workbook with live, editable charts. Run it before and after an enablement programme to compare like for like.',
+  'copilotAdoption.page.controls.excelTooltipReadyNoPii': 'The aggregate report - without per-person sheets - as an Excel workbook with live, editable charts. Run it before and after an enablement programme to compare like for like.',
   'copilotAdoption.page.controls.excelTooltipLoading': 'Available once the analysis has finished loading.',
 
 

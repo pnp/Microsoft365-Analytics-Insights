@@ -45,6 +45,8 @@ import type {
   TeamsPeople,
 } from '../types/teamsExplorer';
 import { useT, type TranslationKey } from '../i18n';
+import { usePortalAccess } from '../access';
+import PiiHiddenNote from '../components/shared/PiiHiddenNote';
 
 /** The windows the API accepts. Anything else is snapped server-side, so these must agree with it. */
 const WINDOWS: { days: number; labelKey: TranslationKey }[] = [
@@ -105,6 +107,9 @@ const useStyles = makeStyles({
 export default function TeamsExplorerPage() {
   const styles = useStyles();
   const t = useT();
+  const access = usePortalAccess();
+  const canSeePii = access.seePii;
+  const visibleTabs = TABS.filter((tab) => canSeePii || tab.key !== 'people');
 
   const [days, setDays] = useState(28);
   const [groupBy, setGroupBy] = useState<TeamsGrouping>('department');
@@ -140,6 +145,12 @@ export default function TeamsExplorerPage() {
   useEffect(() => {
     setAdoption(null);
   }, [groupBy]);
+
+  useEffect(() => {
+    if (!canSeePii && selectedTab === 'people') {
+      setSelectedTab('overview');
+    }
+  }, [canSeePii, selectedTab]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -188,6 +199,7 @@ export default function TeamsExplorerPage() {
         case 'conversations':
           return fetchTeamsConversations(days, controller.signal).then(setConversations);
         case 'people':
+          if (!canSeePii) return Promise.resolve();
           return fetchTeamsPeople(days, controller.signal).then(setPeople);
         default:
           return fetchTeamsOverview(days, controller.signal).then(setOverview);
@@ -206,7 +218,7 @@ export default function TeamsExplorerPage() {
       });
 
     return () => controller.abort();
-  }, [selectedTab, days, groupBy, reloadToken, overview, adoption, meetings, collaboration, conversations, people]);
+  }, [selectedTab, days, groupBy, reloadToken, overview, adoption, meetings, collaboration, conversations, people, canSeePii]);
 
   const onTabSelect: SelectTabEventHandler = (_: any, d: any) => setSelectedTab(d.value as TabKey);
 
@@ -288,7 +300,7 @@ export default function TeamsExplorerPage() {
         onTabSelect={onTabSelect}
         aria-label={t('teamsExplorer.page.sectionsAria')}
       >
-        {TABS.map((tab) => (
+        {visibleTabs.map((tab) => (
           <Tab key={tab.key} value={tab.key}>
             {t(tab.labelKey)}
           </Tab>
@@ -316,7 +328,7 @@ export default function TeamsExplorerPage() {
         )}
 
         {selectedTab === 'meetings' && meetings && (
-          <MeetingsPanel data={meetings} callsAvailable={availability?.callsAvailable ?? true} />
+          <MeetingsPanel data={meetings} callsAvailable={availability?.callsAvailable ?? true} showPii={canSeePii} />
         )}
 
         {selectedTab === 'collaboration' && collaboration && (
@@ -332,15 +344,15 @@ export default function TeamsExplorerPage() {
 
         {selectedTab === 'conversations' && conversations && <ConversationsPanel data={conversations} />}
 
-        {selectedTab === 'people' && people && (
-          <PeoplePanel
-            data={people}
-            usageReportsAvailable={availability?.usageReportsAvailable ?? true}
-            onExportChampions={() => runExport('people')}
-            onExportDormant={() => runExport('dormant')}
-            exporting={exporting}
-          />
-        )}
+        {selectedTab === 'people' && (canSeePii && people ? (
+            <PeoplePanel
+              data={people}
+              usageReportsAvailable={availability?.usageReportsAvailable ?? true}
+              onExportChampions={() => runExport('people')}
+              onExportDormant={() => runExport('dormant')}
+              exporting={exporting}
+            />
+          ) : <PiiHiddenNote />)}
       </div>
 
       <Text size={200} className={styles.muted} style={{ marginTop: '20px', display: 'block' }}>

@@ -63,6 +63,8 @@ import {
   saveCsv,
   windowOfDays,
 } from '../components/agentCosts/agentCostShared';
+import { usePortalAccess } from '../access';
+import PiiHiddenNote from '../components/shared/PiiHiddenNote';
 
 const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
   { value: 7, labelKey: 'agentCosts.window.last7Days' },
@@ -248,6 +250,8 @@ export default function AgentCostsPage() {
   const styles = useStyles();
   const t = useT();
   const tNode = useTNode();
+  const access = usePortalAccess();
+  const canSeePii = access.seePii;
 
   const [days, setDays] = useState(30);
   const [availability, setAvailability] = useState<AgentCostAvailability | null>(null);
@@ -331,7 +335,7 @@ export default function AgentCostsPage() {
           fetchFilterOptions(filters, controller.signal),
           fetchSummary(filters, controller.signal),
           fetchTrend(filters, controller.signal),
-          fetchTopUsers(filters, 20, controller.signal),
+          canSeePii ? fetchTopUsers(filters, 20, controller.signal) : Promise.resolve([]),
         ]);
 
         if (cancelled) return;
@@ -353,7 +357,7 @@ export default function AgentCostsPage() {
       controller.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterSignature, reloadToken]);
+  }, [filterSignature, reloadToken, canSeePii]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -945,7 +949,10 @@ export default function AgentCostsPage() {
             )}
           </Card>
 
-          {/* Who is spending the credits. Copilot Studio only. */}
+          {/* Who is spending the credits. Copilot Studio only. Every row is a named person, so a
+              reader without the See PII permission gets the note instead - and the rows are never
+              requested (see the load above). */}
+          {canSeePii ? (
           <Card>
             <div className={styles.cardHead}>
               <div>
@@ -1007,6 +1014,7 @@ export default function AgentCostsPage() {
               </div>
             )}
           </Card>
+          ) : <PiiHiddenNote />}
 
           {/* Azure spend. */}
           <Card>

@@ -35,6 +35,7 @@ import {
   translatedCodeLabel,
   useTeamsStyles,
 } from './teamsShared';
+import PiiHiddenNote from '../shared/PiiHiddenNote';
 
 const useStyles = makeStyles({
   muted: {
@@ -55,10 +56,12 @@ const CALL_RECORDS_READ_ALL = 'CallRecords.Read.All';
 export default function MeetingsPanel({
   data,
   callsAvailable,
+  showPii,
 }: {
   data: TeamsMeetings;
   /** False when the calls import is off, so every figure here would be a true but useless zero. */
   callsAvailable: boolean;
+  showPii: boolean;
 }) {
   const styles = useStyles();
   const shared = useTeamsStyles();
@@ -293,23 +296,27 @@ export default function MeetingsPanel({
           />
         </SectionCard>
 
-        <SectionCard
-          title={t('teamsExplorer.meetings.topOrganisers.title')}
-          description={t('teamsExplorer.meetings.topOrganisers.description')}
-          query={queryFor(data.queries, 'calls-top-organisers')}
-          isEmpty={data.topOrganisers.length === 0}
-        >
-          <CategoryBarChart categories={toCategories(data.topOrganisers)} valueLabel={t('teamsExplorer.meetings.valueLabel.meetings')} />
-        </SectionCard>
+        {showPii ? (
+          <>
+            <SectionCard
+              title={t('teamsExplorer.meetings.topOrganisers.title')}
+              description={t('teamsExplorer.meetings.topOrganisers.description')}
+              query={queryFor(data.queries, 'calls-top-organisers')}
+              isEmpty={data.topOrganisers.length === 0}
+            >
+              <CategoryBarChart categories={toCategories(data.topOrganisers)} valueLabel={t('teamsExplorer.meetings.valueLabel.meetings')} />
+            </SectionCard>
 
-        <SectionCard
-          title={t('teamsExplorer.meetings.topAttendees.title')}
-          description={t('teamsExplorer.meetings.topAttendees.description')}
-          query={queryFor(data.queries, 'calls-top-attendees')}
-          isEmpty={data.topAttendees.length === 0}
-        >
-          <CategoryBarChart categories={toCategories(data.topAttendees)} valueLabel={t('teamsExplorer.meetings.valueLabel.meetings')} />
-        </SectionCard>
+            <SectionCard
+              title={t('teamsExplorer.meetings.topAttendees.title')}
+              description={t('teamsExplorer.meetings.topAttendees.description')}
+              query={queryFor(data.queries, 'calls-top-attendees')}
+              isEmpty={data.topAttendees.length === 0}
+            >
+              <CategoryBarChart categories={toCategories(data.topAttendees)} valueLabel={t('teamsExplorer.meetings.valueLabel.meetings')} />
+            </SectionCard>
+          </>
+        ) : <PiiHiddenNote />}
       </div>
 
       <div className={shared.stack}>

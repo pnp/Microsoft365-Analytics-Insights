@@ -4,6 +4,7 @@ import { HashRouter } from 'react-router-dom';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import App from './App';
 import { I18nProvider, detectLanguage, loadCatalog } from './i18n';
+import { PortalAccessProvider } from './access';
 import { restoreRouteAfterReauth } from './api/http';
 import './index.css';
 
@@ -36,9 +37,11 @@ void loadCatalog(language).then(() => {
     <StrictMode>
       <FluentProvider theme={webLightTheme} style={{ minHeight: '100vh' }}>
         <I18nProvider initialLanguage={language}>
-          <HashRouter>
-            <App />
-          </HashRouter>
+          <PortalAccessProvider>
+            <HashRouter>
+              <App />
+            </HashRouter>
+          </PortalAccessProvider>
         </I18nProvider>
       </FluentProvider>
     </StrictMode>,

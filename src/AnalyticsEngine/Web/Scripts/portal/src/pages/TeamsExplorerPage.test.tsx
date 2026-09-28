@@ -280,4 +280,33 @@ describe('TeamsExplorerPage', () => {
       await screen.findByText(/None of the Teams imports are switched on/),
     ).toBeInTheDocument();
   });
+
+  it('shows a reader without See PII no People tab and no named meeting leaderboards', async () => {
+    mockMeetings.mockResolvedValue(meetings({
+      topOrganisers: [{ name: 'organiser@contoso.com', count: 4, sharePct: null }],
+      topAttendees: [{ name: 'attendee@contoso.com', count: 9, sharePct: null }],
+    }));
+
+    renderWithProvider(<TeamsExplorerPage />, { access: { administration: true, seePii: false } });
+    await screen.findByText('Teams reach');
+
+    expect(screen.queryByRole('tab', { name: 'People' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Meetings & calls' }));
+    expect(await screen.findByText('Attendee hours')).toBeInTheDocument();
+    expect(screen.getByText('Individual details are hidden')).toBeInTheDocument();
+    expect(screen.queryByText('Top organisers')).not.toBeInTheDocument();
+    expect(screen.queryByText('Top attendees')).not.toBeInTheDocument();
+    expect(mockPeople).not.toHaveBeenCalled();
+  });
+
+  it('still shows the People tab and the leaderboards to a reader with See PII', async () => {
+    renderWithProvider(<TeamsExplorerPage />, { access: { administration: false, seePii: true } });
+    await screen.findByText('Teams reach');
+
+    expect(screen.getByRole('tab', { name: 'People' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Meetings & calls' }));
+    expect(await screen.findByText('Top organisers')).toBeInTheDocument();
+    expect(screen.queryByText('Individual details are hidden')).not.toBeInTheDocument();
+  });
 });

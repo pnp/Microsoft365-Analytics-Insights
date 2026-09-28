@@ -488,6 +488,38 @@ describe('OpportunitiesPanel sections and actions', () => {
   });
 });
 
+describe('OpportunitiesPanel without See PII', () => {
+  it('opens on the licence estimate, never asks for the candidates, and offers no list to open', async () => {
+    renderWithProvider(
+      <OpportunitiesPanel windowDays={28} summary={summary()} filterOptions={null} options={OPTIONS} canSeePii={false} />,
+    );
+
+    expect(screen.getByRole('tab', { name: 'Time saved', selected: true })).toBeTruthy();
+    expect(headline()).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'See the 10 people recommended' })).toBeNull();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('tab', { name: 'Candidates' }));
+    expect(within(screen.getByRole('tabpanel', { name: 'Candidates' })).getByText('Individual details are hidden')).toBeTruthy();
+    expect(fetchOpportunities).not.toHaveBeenCalled();
+  });
+
+  it('shows only the note when there is no estimate to lead with', () => {
+    renderWithProvider(
+      <OpportunitiesPanel
+        windowDays={28}
+        summary={summary({ licenceOpportunityEstimate: { ...RECOMMENDED, cohortUsers: 0 }, licenceChatUsersEstimate: undefined })}
+        filterOptions={null}
+        options={OPTIONS}
+        canSeePii={false}
+      />,
+    );
+
+    expect(screen.getByText('Individual details are hidden')).toBeTruthy();
+    expect(fetchOpportunities).not.toHaveBeenCalled();
+  });
+});
+
 describe('OpportunitiesPanel licence model', () => {
   it('recomputes the headline from the reader\u2019s own figure, and the sense check follows it', async () => {
     const user = userEvent.setup();

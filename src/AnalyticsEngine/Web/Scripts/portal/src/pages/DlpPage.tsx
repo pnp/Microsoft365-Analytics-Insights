@@ -22,6 +22,8 @@ import { fetchDlpAvailability, fetchDlpSummary } from '../api/dlpApi';
 import type { DlpAvailability, DlpImpactRow, DlpSummary } from '../types/dlp';
 import Spinner from '../components/Spinner';
 import { formatNumber, useT, type TFunction, type TranslationKey } from '../i18n';
+import { usePortalAccess } from '../access';
+import PiiHiddenNote from '../components/shared/PiiHiddenNote';
 
 const WINDOWS = [
   { days: 7, labelKey: 'dlp.period.last7Days' },
@@ -234,6 +236,7 @@ function ImpactTable({
 export default function DlpPage() {
   const styles = useStyles();
   const t = useT();
+  const { seePii } = usePortalAccess();
 
   const [days, setDays] = useState(28);
   const [reloadKey, setReloadKey] = useState(0);
@@ -362,14 +365,16 @@ export default function DlpPage() {
             showUsers
             expandable
           />
-          <ImpactTable
-            title={t('dlp.affected.people.title')}
-            description={t('dlp.affected.people.description')}
-            nameHeader={t('dlp.column.user')}
-            rows={summary.topUsers}
-            showUsers={false}
-            expandable
-          />
+          {seePii ? (
+            <ImpactTable
+              title={t('dlp.affected.people.title')}
+              description={t('dlp.affected.people.description')}
+              nameHeader={t('dlp.column.user')}
+              rows={summary.topUsers}
+              showUsers={false}
+              expandable
+            />
+          ) : <PiiHiddenNote />}
           <ImpactTable
             title={t('dlp.affected.policies.title')}
             description={t('dlp.affected.policies.description')}
