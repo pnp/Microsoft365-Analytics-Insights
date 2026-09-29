@@ -236,6 +236,23 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void CorrectingOnlyTheCasingOfAnAttributeKeepsTheToken()
+        {
+            // A save that only corrects an extension's casing keeps the type's values and its generation -
+            // it is the same attribute - and the values are read back ignoring case. Moving the key for it
+            // would re-read every user in the tenant, 200,000 of them on a large one, for nothing.
+            var asFirstTyped = GraphUserOrgSelection.FromTypes(
+                new[] { EntraType(1, "extension_0123456789abcdef0123456789abcdef_costcentre") });
+            var corrected = GraphUserOrgSelection.FromTypes(
+                new[] { EntraType(1, "extension_0123456789abcdef0123456789abcdef_CostCentre") });
+            var different = GraphUserOrgSelection.FromTypes(
+                new[] { EntraType(1, "extension_0123456789abcdef0123456789abcdef_division") });
+
+            Assert.AreEqual(asFirstTyped.DeltaKeyQualifier, corrected.DeltaKeyQualifier);
+            Assert.AreNotEqual(asFirstTyped.DeltaKeyQualifier, different.DeltaKeyQualifier, "A different attribute still moves it.");
+        }
+
+        [TestMethod]
         public void FromTypes_SelectsTheSamePropertiesAsFromAttributeNames()
         {
             var fromTypes = GraphUserOrgSelection.FromTypes(

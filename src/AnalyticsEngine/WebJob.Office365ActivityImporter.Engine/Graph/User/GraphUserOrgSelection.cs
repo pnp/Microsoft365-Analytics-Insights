@@ -131,9 +131,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 return None;
             }
 
+            // The attribute is compared the way a save compares it: ignoring case. A save that only corrects
+            // an extension's casing is not a change of source - UserOrgAdminService keeps its values and its
+            // generation, and they are read back ignoring case - so it must not throw the token away and
+            // re-read every user in the tenant either.
             var qualifierInputs = materialised
                 .Select(t => t.Id.ToString(CultureInfo.InvariantCulture)
-                    + ":" + (t.EntraAttributeName ?? string.Empty)
+                    + ":" + (t.EntraAttributeName ?? string.Empty).ToUpperInvariant()
                     + ":" + t.SourceGeneration.ToString(CultureInfo.InvariantCulture)
                     + ":" + t.CreatedUtc.Ticks.ToString(CultureInfo.InvariantCulture))
                 .OrderBy(s => s, StringComparer.Ordinal)

@@ -525,18 +525,73 @@ namespace Tests.UnitTests
             // extensionAttribute1-15 hold up to 1,024 characters and an org value 848. Shortened rather than
             // dropped, as a CSV's is - and said so, because values that differ only past the limit become one
             // organisation, and the save-time test only ever saw the one user it was run against.
-            const string greek = "Καλημέρα κόσμε ";
             var orgTypes = new FakeUserOrgTypeStore("extensionAttribute1");
             var assignments = new FakeUserOrgAssignmentStore();
+            var loader = new FakeUserMetadataLoader(new List<GraphUser> { UserWithAnOverLongValue() });
+
+            var traces = await RunImportRecordingTraces(loader, orgTypes, assignments);
+
+            var stored = assignments.LastUpdates.Single(u => u.OrgTypeId == 1).OrgValue;
+            Assert.AreEqual(UserOrgRules.MaxOrgValueLength, stored.Length, "Stored shortened, not dropped.");
+            CollectionAssert.AreEquivalent(
+                new[] { 1 },
+                orgTypes.RefreshCalls.Single().ExpectedGenerations.Keys.ToArray(),
+                "Its values were read and stored, so the type was refreshed.");
+
+            var warning = traces.Single(t => t.SeverityLevel == SeverityLevel.Warning && t.Message.Contains("shortened"));
+            StringAssert.Contains(warning.Message, "'Org 1' (extensionAttribute1): 1");
+            StringAssert.Contains(warning.Message, UserOrgRules.MaxOrgValueLength.ToString());
+            Assert.IsFalse(
+                traces.Any(t => t.Message.Contains(GreekWords.Trim())),
+                "Counts and configuration only: the value itself is tenant data, and no trace may quote it.");
+        }
+
+        [TestMethod]
+        public async Task AShortenedValueTheMergeFencedOutIsNotReportedAsStored()
+        {
+            // The type was repointed or disabled while this cycle was loading users, so the merge dropped its
+            // updates and stored nothing. The merge says how many it dropped, not whose, so no "shortened to
+            // fit" claim is made this cycle. The token is withheld, so the next cycle re-reads these users
+            // and reports what it actually stores.
+            var orgTypes = new FakeUserOrgTypeStore("extensionAttribute1");
+            var assignments = new FakeUserOrgAssignmentStore { FenceEverything = true };
+            var loader = new FakeUserMetadataLoader(new List<GraphUser> { UserWithAnOverLongValue() });
+
+            var traces = await RunImportRecordingTraces(loader, orgTypes, assignments);
+
+            Assert.IsTrue(
+                traces.Any(t => t.Message.Contains("reconfigured while this cycle was running")),
+                "The fence itself is reported.");
+            Assert.IsFalse(
+                traces.Any(t => t.Message.Contains("shortened")),
+                "Nothing was stored, so nothing is said to have been stored shortened.");
+            Assert.AreNotEqual(
+                "fake-new-delta",
+                await loader.DeltaValueProvider.GetDeltaToken(),
+                "The token is withheld, so the next cycle re-reads them.");
+        }
+
+        private const string GreekWords = "Καλημέρα κόσμε ";
+
+        /// <summary>A user whose extensionAttribute1 is 905 characters: over the 848 an org value can hold.</summary>
+        private static GraphUser UserWithAnOverLongValue()
+        {
             var user = NewGraphUser();
             user.AdditionalProperties = JsonConvert.DeserializeObject<Dictionary<string, Newtonsoft.Json.Linq.JToken>>(
                 JsonConvert.SerializeObject(new
                 {
-                    onPremisesExtensionAttributes = new { extensionAttribute1 = string.Concat(Enumerable.Repeat(greek, 60)) + "North" },
+                    onPremisesExtensionAttributes = new { extensionAttribute1 = string.Concat(Enumerable.Repeat(GreekWords, 60)) + "North" },
                 }));
-            var loader = new FakeUserMetadataLoader(new List<GraphUser> { user });
-            var channel = new RecordingTelemetryChannel();
+            return user;
+        }
 
+        /// <summary>Runs the import with a logger whose traces are kept, and returns them.</summary>
+        private static async Task<List<TraceTelemetry>> RunImportRecordingTraces(
+            FakeUserMetadataLoader loader,
+            IUserOrgTypeStore orgTypes,
+            IUserOrgAssignmentStore assignments)
+        {
+            var channel = new RecordingTelemetryChannel();
             using (var configuration = new TelemetryConfiguration
             {
                 TelemetryChannel = channel,
@@ -548,21 +603,7 @@ namespace Tests.UnitTests
                     orgTypes,
                     assignments,
                     logger: new AnalyticsLogger(new TelemetryClient(configuration), "Office365ActivityImporter"));
-
-                var stored = assignments.LastUpdates.Single(u => u.OrgTypeId == 1).OrgValue;
-                Assert.AreEqual(UserOrgRules.MaxOrgValueLength, stored.Length, "Stored shortened, not dropped.");
-                CollectionAssert.AreEquivalent(
-                    new[] { 1 },
-                    orgTypes.RefreshCalls.Single().ExpectedGenerations.Keys.ToArray(),
-                    "Its values were read and stored, so the type was refreshed.");
-
-                var traces = channel.Sent.OfType<TraceTelemetry>().ToList();
-                var warning = traces.Single(t => t.SeverityLevel == SeverityLevel.Warning && t.Message.Contains("shortened"));
-                StringAssert.Contains(warning.Message, "'Org 1' (extensionAttribute1): 1");
-                StringAssert.Contains(warning.Message, UserOrgRules.MaxOrgValueLength.ToString());
-                Assert.IsFalse(
-                    traces.Any(t => t.Message.Contains(greek.Trim())),
-                    "Counts and configuration only: the value itself is tenant data, and no trace may quote it.");
+                return channel.Sent.OfType<TraceTelemetry>().ToList();
             }
         }
 
@@ -787,6 +828,9 @@ namespace Tests.UnitTests
 
             public bool ThrowOnMerge { get; set; }
 
+            /// <summary>Answers as if every update's type had been reconfigured mid-cycle: nothing stored, all fenced out.</summary>
+            public bool FenceEverything { get; set; }
+
             public List<UserOrgAssignmentUpdate> LastUpdates { get; private set; } = new List<UserOrgAssignmentUpdate>();
 
             public Task<UserOrgMergeResult> MergeAsync(IReadOnlyList<UserOrgAssignmentUpdate> updates, UserOrgSourceKind? expectedSourceKind = null, IReadOnlyDictionary<int, int> expectedGenerations = null, CancellationToken cancellationToken = default(CancellationToken))
@@ -794,7 +838,9 @@ namespace Tests.UnitTests
                 MergeCalls++;
                 LastUpdates = updates.ToList();
                 if (ThrowOnMerge) throw new InvalidOperationException("simulated merge failure");
-                return Task.FromResult(new UserOrgMergeResult { Applied = updates.Count });
+                return Task.FromResult(FenceEverything
+                    ? new UserOrgMergeResult { FencedOut = updates.Count }
+                    : new UserOrgMergeResult { Applied = updates.Count });
             }
 
             public Task<IReadOnlyList<UserOrgValueForUser>> GetForUserAsync(int userId, CancellationToken cancellationToken = default(CancellationToken))

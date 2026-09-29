@@ -655,11 +655,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         + $"{result.Cleared.ToString("N0")} cleared, {result.ValuesCreated.ToString("N0")} new organisation value(s) "
                         + $"across {parsed.Count} organisation type(s).");
 
-                    if (shortened.Count > 0)
+                    // Stored shortened rather than dropped, as a CSV's are, but said so: values that differ only
+                    // past the limit are now one organisation, and the save-time test sees only the one user it
+                    // was run against. Counts and configuration only - the values are tenant data. And only when
+                    // the merge stored everything it was given: it reports how many updates it fenced out, not
+                    // whose, and a fenced value was never stored. That cycle withholds its delta token (below),
+                    // so the next one re-reads these users and reports what it actually stores.
+                    if (shortened.Count > 0 && result.FencedOut == 0)
                     {
-                        // Stored shortened rather than dropped, as a CSV's are, but said so: values that differ
-                        // only past the limit are now one organisation, and the save-time test sees only the one
-                        // user it was run against. Counts and configuration only - the values are tenant data.
                         var shortenedTypes = orgTypes
                             .Where(t => t != null && shortened.ContainsKey(t.Id))
                             .GroupBy(t => t.Id)
